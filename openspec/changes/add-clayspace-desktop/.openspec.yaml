@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-08-10
+goal: Ship a macOS/Linux 3D sculpting desktop app in Rust, rendering with
+  WebGPU, driving ClayCore's voxel/SDF/ZSketch engine through its C ABI
