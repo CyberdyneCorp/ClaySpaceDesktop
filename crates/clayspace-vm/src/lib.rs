@@ -7,9 +7,11 @@
 #![forbid(unsafe_code)]
 
 pub mod command;
+pub mod jobs;
 pub mod observable;
 pub mod sculpt_vm;
 
 pub use command::{Axis, Command, CommandQueue};
+pub use jobs::{Completion, Generation, JobRunner, Outcome, Progress, Reporter};
 pub use observable::{Observable, Watcher};
 pub use sculpt_vm::{LastAction, SculptViewModel};

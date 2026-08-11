@@ -16,4 +16,6 @@ pub mod tools;
 pub use sculpt::{
     EditOutcome, GestureSample, HistoryState, ModelError, SceneStats, SculptModel,
 };
-pub use tools::{BrushSettings, Representation, ToolKind, Unavailable, ViewPresetKind};
+pub use tools::{
+    BrushSettings, Falloff, Representation, Shaping, ToolKind, Unavailable, ViewPresetKind,
+};

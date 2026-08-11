@@ -242,13 +242,21 @@ impl SculptViewModel {
 
     fn ensure_tool_available(&mut self) -> Result<(), ModelError> {
         self.refresh_tool_status();
-        self.tool
-            .get()
-            .availability(
-                self.model.active_representation(),
-                self.model.active_layer_editable(),
-            )
-            .map_err(ModelError::Unavailable)
+        let tool = *self.tool.get();
+        tool.availability(
+            self.model.active_representation(),
+            self.model.active_layer_editable(),
+        )
+        .map_err(ModelError::Unavailable)?;
+
+        if !tool.is_stroke_tool() {
+            return Err(ModelError::Unavailable(
+                clayspace_model::Unavailable::WrongGesture {
+                    needs: "a shape on the frame",
+                },
+            ));
+        }
+        Ok(())
     }
 
     fn commit_stroke(&mut self) -> Result<(), ModelError> {

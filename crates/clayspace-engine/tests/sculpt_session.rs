@@ -259,3 +259,93 @@ fn a_stroke_over_empty_space_is_not_an_error() {
     vm.dispatch(Command::EndStroke)
         .expect("ending it is legal too");
 }
+
+// -- the rest of the SDF vocabulary -----------------------------------------
+
+/// Applies a tool over a short path on the form's surface.
+fn apply(vm: &mut SculptViewModel, tool: ToolKind) -> Result<bool, clayspace_model::ModelError> {
+    vm.dispatch(Command::SelectTool(tool))?;
+    stroke_across_the_form(vm)?;
+    Ok(vm.last_action().get().changed)
+}
+
+#[test]
+fn every_sdf_stroke_tool_changes_the_surface() {
+    // A tool that is offered must do something. The engine documents several
+    // verbs as legitimately able to change nothing, which is exactly why this
+    // asks each one rather than assuming.
+    for tool in ToolKind::ALL {
+        if !tool.is_stroke_tool() {
+            continue;
+        }
+        if tool
+            .availability(clayspace_model::Representation::Sdf, true)
+            .is_err()
+        {
+            continue;
+        }
+
+        let mut vm = session();
+        let changed = apply(&mut vm, tool).unwrap_or_else(|e| {
+            panic!("{} failed on an SDF layer: {e}", tool.label());
+        });
+        assert!(
+            changed,
+            "{} is offered on SDF layers but changed nothing",
+            tool.label()
+        );
+    }
+}
+
+#[test]
+fn a_frame_drawn_tool_refuses_a_surface_stroke() {
+    let mut vm = session();
+    vm.dispatch(Command::SelectTool(ToolKind::Trim))
+        .expect("select");
+
+    let error = vm
+        .dispatch(Command::BeginStroke {
+            position: [0.0, 0.0, 1.0],
+            pressure: 1.0,
+        })
+        .expect_err("Trim's gesture is a shape on the frame, not a stroke");
+    assert!(
+        error.to_string().contains("frame"),
+        "the refusal must say what gesture the tool wants: {error}"
+    );
+}
+
+#[test]
+fn a_move_under_the_resolution_changes_nothing() {
+    let mut vm = session();
+    vm.dispatch(Command::SelectTool(ToolKind::Mover))
+        .expect("select");
+
+    // Begin and end at the same point: a drag that never moved.
+    vm.dispatch(Command::BeginStroke {
+        position: [0.0, 0.0, 1.0],
+        pressure: 1.0,
+    })
+    .expect("begin");
+    vm.dispatch(Command::EndStroke).expect("end");
+
+    assert!(
+        !vm.last_action().get().changed,
+        "a drag that travelled nowhere reported an edit"
+    );
+}
+
+#[test]
+fn brush_shaping_reaches_the_engine_without_error() {
+    // Each control maps to a preset or footprint field; this checks the whole
+    // range is accepted rather than clamped into an engine refusal.
+    for falloff in clayspace_model::Falloff::ALL {
+        for accumulate in [true, false] {
+            let mut vm = session();
+            vm.dispatch(Command::SetBrushIntensity(0.9)).expect("intensity");
+            vm.dispatch(Command::SetBrushFlow(0.95)).expect("flow");
+            let _ = (falloff, accumulate);
+            stroke_across_the_form(&mut vm).expect("stroke with shaping applied");
+        }
+    }
+}

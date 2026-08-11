@@ -35,6 +35,47 @@ impl Item {
         Self::new(sys::clay_prim::CLAY_PRIM_SPHERE as i32, &[radius])
     }
 
+    /// Builds a swept-sphere chain — the primitive a snakehook resolves into.
+    ///
+    /// Its points are set separately, so it takes no parameters here.
+    pub fn stroke() -> Result<Self> {
+        Self::new(sys::clay_prim::CLAY_PRIM_STROKE as i32, &[])
+    }
+
+    /// The chain's control points, as `x y z r` quadruples.
+    ///
+    /// The radius travels with each point, which is what lets a tendril taper
+    /// toward its tip.
+    pub fn set_stroke_points(&mut self, points_xyzr: &[f32]) -> Result<()> {
+        if points_xyzr.len() % 4 != 0 {
+            return Err(crate::raw_failure(
+                "clay_item_set_stroke_points",
+                ErrorKind::InvalidArgument,
+            ));
+        }
+        // SAFETY: the engine reads `count` quadruples from the pointer, which
+        // is what the length check above guarantees.
+        check(
+            unsafe {
+                sys::clay_item_set_stroke_points(
+                    self.as_ptr(),
+                    points_xyzr.as_ptr(),
+                    points_xyzr.len() / 4,
+                )
+            },
+            "clay_item_set_stroke_points",
+        )
+    }
+
+    /// How wide the chain's links blend into one another.
+    pub fn set_stroke_blend_k(&mut self, k: f32) -> Result<()> {
+        // SAFETY: valid handle.
+        check(
+            unsafe { sys::clay_item_set_stroke_blend_k(self.as_ptr(), k) },
+            "clay_item_set_stroke_blend_k",
+        )
+    }
+
     pub(crate) fn from_raw(raw: *mut sys::clay_item, operation: &'static str) -> Result<Self> {
         NonNull::new(raw)
             .map(|raw| Self { raw })

@@ -10,7 +10,7 @@
 
 mod support;
 
-use clayspace_view::{Camera, GpuMesh, MatCap, Overlays, SymmetryAxis, ViewPreset};
+use clayspace_view::{BrushCursor, Camera, GpuMesh, MatCap, Overlays, SymmetryAxis, ViewPreset};
 use support::Harness;
 
 /// Enough of the frame changed that something was clearly drawn, rather than a
@@ -466,6 +466,70 @@ fn the_gizmo_reports_the_camera_orientation() {
     );
 
     harness.renderer.show_gizmo = false;
+    let _ = background;
+}
+
+#[test]
+fn the_brush_cursor_follows_the_surface_and_clears_off_it() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let background = harness.background();
+    let doc = support::sphere_document(1.0);
+    let mesh = support::mesh_document(&doc, 64);
+    let camera = support::framed_camera(&mesh);
+    let gpu_mesh = harness.upload(&mesh);
+
+    harness.renderer.set_cursor(&harness.gpu, None);
+    let without = harness.capture(&gpu_mesh, &camera, false, "12-cursor-off");
+
+    // On the near face of the sphere, where the camera can see it.
+    harness.renderer.set_cursor(
+        &harness.gpu,
+        Some(BrushCursor {
+            position: [0.0, 0.0, 1.0],
+            normal: [0.0, 0.0, 1.0],
+            radius: 0.35,
+        }),
+    );
+    let with = harness.capture(&gpu_mesh, &camera, false, "12-cursor-on");
+
+    let drawn = {
+        let mut count = 0usize;
+        for y in 0..with.height {
+            for x in 0..with.width {
+                if with.pixel(x, y) != without.pixel(x, y) {
+                    count += 1;
+                }
+            }
+        }
+        count
+    };
+    assert!(drawn > 100, "the brush cursor drew only {drawn} pixels");
+
+    // A larger brush must read as a larger ring.
+    harness.renderer.set_cursor(
+        &harness.gpu,
+        Some(BrushCursor {
+            position: [0.0, 0.0, 1.0],
+            normal: [0.0, 0.0, 1.0],
+            radius: 0.7,
+        }),
+    );
+    let larger = harness.capture(&gpu_mesh, &camera, false, "12-cursor-large");
+    assert!(
+        larger.mean_difference(&with) > 0.01,
+        "changing the brush size did not change the cursor"
+    );
+
+    // Off the surface, it must clear rather than hang at some depth.
+    harness.renderer.set_cursor(&harness.gpu, None);
+    let cleared = harness.capture(&gpu_mesh, &camera, false, "12-cursor-cleared");
+    assert!(
+        cleared.mean_difference(&without) < 0.001,
+        "clearing the cursor left it on screen"
+    );
+
     let _ = background;
 }
 

@@ -199,6 +199,21 @@ impl Default for Overlays {
     }
 }
 
+/// Where the brush is, and how big it reads on the surface.
+///
+/// The cursor is drawn in the scene rather than as a screen circle, so it
+/// shows the footprint the brush will actually cover — a screen circle would
+/// lie about a surface angled away from the camera.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BrushCursor {
+    /// The point on the surface under the pointer.
+    pub position: [f32; 3],
+    /// The surface normal there, which the ring is drawn perpendicular to.
+    pub normal: [f32; 3],
+    /// The brush radius in document units.
+    pub radius: f32,
+}
+
 /// Which plane the symmetry indicator sits on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymmetryAxis {
@@ -225,6 +240,7 @@ pub struct Renderer {
     /// geometry, since it would register as a difference of its own.
     pub show_gizmo: bool,
     overlay_mesh: GpuMesh,
+    cursor_mesh: GpuMesh,
     gizmo_mesh: GpuMesh,
     gizmo_camera_buffer: wgpu::Buffer,
     gizmo_bind_group: wgpu::BindGroup,
@@ -366,6 +382,7 @@ impl Renderer {
             background: Self::BACKGROUND,
             show_gizmo: false,
             overlay_mesh: GpuMesh::new(gpu),
+            cursor_mesh: GpuMesh::new(gpu),
             gizmo_mesh: {
                 let mut mesh = GpuMesh::new(gpu);
                 let (vertices, indices) = gizmo_geometry();
@@ -402,6 +419,22 @@ impl Renderer {
 
     pub fn format(&self) -> wgpu::TextureFormat {
         self.format
+    }
+
+    /// Places the brush cursor, or clears it when the pointer is off the
+    /// surface.
+    ///
+    /// Clearing rather than leaving the last position is the point: a ring
+    /// hanging in space at an arbitrary depth tells the user the brush would
+    /// land somewhere it would not.
+    pub fn set_cursor(&mut self, gpu: &Gpu, cursor: Option<BrushCursor>) {
+        match cursor {
+            Some(cursor) => {
+                let (vertices, indices) = cursor_geometry(cursor);
+                self.cursor_mesh.upload(gpu, &vertices, &indices);
+            }
+            None => self.cursor_mesh.upload(gpu, &[], &[]),
+        }
     }
 
     /// Rebuilds the overlay geometry for the current settings.
@@ -496,6 +529,17 @@ impl Renderer {
                 pass.set_vertex_buffer(0, mesh.vertices.slice(..));
                 pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+            }
+
+            // The brush cursor, over the surface it will act on.
+            if !self.cursor_mesh.is_empty() {
+                pass.set_pipeline(&self.overlay_pipeline);
+                pass.set_vertex_buffer(0, self.cursor_mesh.vertices.slice(..));
+                pass.set_index_buffer(
+                    self.cursor_mesh.indices.slice(..),
+                    wgpu::IndexFormat::Uint32,
+                );
+                pass.draw_indexed(0..self.cursor_mesh.index_count, 0, 0..1);
             }
 
             // The navigation gizmo, in its own corner viewport so it keeps a
@@ -718,6 +762,66 @@ fn overlay_geometry(overlays: Overlays, extent: f32) -> (Vec<Vertex>, Vec<u32>) 
     (vertices, indices)
 }
 
+/// A ring on the surface, plus a mark at its centre.
+///
+/// The accent colour, because this is the active brush — the one thing the
+/// design reserves it for.
+fn cursor_geometry(cursor: BrushCursor) -> (Vec<Vertex>, Vec<u32>) {
+    const SEGMENTS: usize = 48;
+
+    let centre = Vec3::from(cursor.position);
+    let normal = {
+        let n = Vec3::from(cursor.normal);
+        if n.length_squared() > 1e-6 {
+            n.normalize()
+        } else {
+            Vec3::Y
+        }
+    };
+    // Any pair perpendicular to the normal will do; picking the axis least
+    // aligned with it avoids a degenerate cross product.
+    let reference = if normal.x.abs() < 0.9 { Vec3::X } else { Vec3::Y };
+    let u = normal.cross(reference).normalize() * cursor.radius;
+    let v = normal.cross(u).normalize() * cursor.radius;
+
+    let color = palette::ACCENT;
+    let mut vertices = Vec::with_capacity(SEGMENTS + 4);
+    let mut indices = Vec::with_capacity(SEGMENTS * 2 + 4);
+
+    for i in 0..SEGMENTS {
+        let angle = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+        let (s, c) = angle.sin_cos();
+        // Lifted a hair along the normal so the ring is not swallowed by the
+        // surface it sits on.
+        let point = centre + u * c + v * s + normal * (cursor.radius * 0.02);
+        vertices.push(Vertex {
+            position: point.into(),
+            normal: normal.into(),
+            color,
+        });
+        indices.push(i as u32);
+        indices.push(((i + 1) % SEGMENTS) as u32);
+    }
+
+    // A small cross at the centre, so the exact point is readable when the
+    // ring is large.
+    let tick = cursor.radius * 0.12;
+    let base = vertices.len() as u32;
+    for (a, b) in [(u.normalize() * tick, -u.normalize() * tick), (v.normalize() * tick, -v.normalize() * tick)] {
+        let offset = normal * (cursor.radius * 0.02);
+        for point in [centre + a + offset, centre + b + offset] {
+            vertices.push(Vertex {
+                position: point.into(),
+                normal: normal.into(),
+                color,
+            });
+        }
+    }
+    indices.extend_from_slice(&[base, base + 1, base + 2, base + 3]);
+
+    (vertices, indices)
+}
+
 /// How much of the frame's height the gizmo occupies.
 const GIZMO_FRACTION: f32 = 0.18;
 
@@ -786,6 +890,44 @@ mod tests {
                  evaluating the field instead of drawing the mesh the engine produced"
             );
         }
+    }
+
+    #[test]
+    fn the_cursor_ring_lies_in_the_surface_plane() {
+        let cursor = BrushCursor {
+            position: [0.0, 1.0, 0.0],
+            normal: [0.0, 1.0, 0.0],
+            radius: 0.5,
+        };
+        let (vertices, indices) = cursor_geometry(cursor);
+        assert!(!vertices.is_empty());
+        assert_eq!(indices.len() % 2, 0, "line geometry needs index pairs");
+
+        // Every ring point must sit at the radius from the centre, in the
+        // plane the normal defines.
+        let centre = Vec3::from(cursor.position);
+        for vertex in vertices.iter().take(48) {
+            let offset = Vec3::from(vertex.position) - centre;
+            let in_plane = offset - Vec3::Y * offset.dot(Vec3::Y);
+            assert!(
+                (in_plane.length() - cursor.radius).abs() < 1e-3,
+                "a ring point sits at {} rather than the radius {}",
+                in_plane.length(),
+                cursor.radius
+            );
+        }
+    }
+
+    #[test]
+    fn a_degenerate_normal_still_produces_a_ring() {
+        // A pick can report a zero normal; the cursor must not vanish or
+        // produce NaN geometry because of it.
+        let (vertices, _) = cursor_geometry(BrushCursor {
+            position: [0.0; 3],
+            normal: [0.0; 3],
+            radius: 0.2,
+        });
+        assert!(vertices.iter().all(|v| v.position.iter().all(|c| c.is_finite())));
     }
 
     #[test]

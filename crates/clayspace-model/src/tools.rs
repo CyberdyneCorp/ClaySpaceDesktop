@@ -72,6 +72,8 @@ pub enum ToolKind {
 /// Why a tool cannot be used right now.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Unavailable {
+    /// The tool is driven by a different gesture than the one attempted.
+    WrongGesture { needs: &'static str },
     /// The verb exists on the other representation only.
     WrongRepresentation {
         needs: Representation,
@@ -92,6 +94,9 @@ impl std::fmt::Display for Unavailable {
                 needs.label(),
                 active.label()
             ),
+            Self::WrongGesture { needs } => {
+                write!(f, "draw {needs} rather than a stroke across the surface")
+            }
             Self::LayerProtected => f.write_str("this layer is locked"),
             Self::MeshLayer => {
                 f.write_str("mesh layers are carried, not sculpted")
@@ -223,6 +228,15 @@ impl ToolKind {
     pub fn is_mask_tool(self) -> bool {
         self == Self::Mascara
     }
+
+    /// Whether this tool is driven by a stroke across the surface.
+    ///
+    /// Trim is not: its gesture is a shape drawn on the view frame, resolved
+    /// into a prism that cuts through. Treating it as a surface stroke would
+    /// be a tool that looks available and does something else.
+    pub fn is_stroke_tool(self) -> bool {
+        self != Self::Trim
+    }
 }
 
 /// Which standard view is active. Mirrors the renderer's presets without the
@@ -267,6 +281,66 @@ pub struct BrushSettings {
     pub intensity: f32,
     /// How much of the stroke each stamp contributes, 0..=1.
     pub flow: f32,
+    /// Shaping controls, which the design's brush panel exposes.
+    pub shaping: Shaping,
+}
+
+/// How a stamp is shaped, beyond its size and strength.
+///
+/// Every field maps to a stroke-preset or brush-parameter field the engine
+/// already has. Nothing here is invented: a control with no engine counterpart
+/// would be a promise the tool cannot keep.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Shaping {
+    /// Positional jitter as a fraction of the radius — the design's "Ruído".
+    pub noise: f32,
+    /// How coverage falls off toward the footprint's edge — "Borda".
+    pub falloff: Falloff,
+    /// Whether overlapping stamps deposit twice — "Acumular".
+    pub accumulate: bool,
+    /// Lazy-mouse lag: 0 follows the pointer exactly — "Suavização".
+    pub smoothing: f32,
+    /// Mirror each stamp about the stroke — "Espelhamento".
+    pub mirror: bool,
+}
+
+impl Default for Shaping {
+    fn default() -> Self {
+        // The values the design's brush panel shows.
+        Self {
+            noise: 0.15,
+            falloff: Falloff::Smooth,
+            accumulate: true,
+            smoothing: 0.25,
+            mirror: false,
+        }
+    }
+}
+
+/// How coverage falls off toward a footprint's edge.
+///
+/// Mirrors the engine's set without the domain naming the engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Falloff {
+    /// Hard-edged, the usual brush.
+    Constant,
+    Linear,
+    #[default]
+    Smooth,
+    Gaussian,
+}
+
+impl Falloff {
+    pub const ALL: [Falloff; 4] = [Self::Constant, Self::Linear, Self::Smooth, Self::Gaussian];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Constant => "Dura",
+            Self::Linear => "Linear",
+            Self::Smooth => "Suave",
+            Self::Gaussian => "Gaussiana",
+        }
+    }
 }
 
 impl Default for BrushSettings {
@@ -278,6 +352,7 @@ impl Default for BrushSettings {
             size: 0.08,
             intensity: 0.65,
             flow: 0.80,
+            shaping: Shaping::default(),
         }
     }
 }
@@ -292,6 +367,11 @@ impl BrushSettings {
             size: self.size.clamp(0.001, 100.0),
             intensity: self.intensity.clamp(0.0, 1.0),
             flow: self.flow.clamp(0.01, 1.0),
+            shaping: Shaping {
+                noise: self.shaping.noise.clamp(0.0, 1.0),
+                smoothing: self.shaping.smoothing.clamp(0.0, 0.95),
+                ..self.shaping
+            },
         }
     }
 }
@@ -299,6 +379,15 @@ impl BrushSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_falloff_has_a_distinct_label() {
+        for (i, a) in Falloff::ALL.iter().enumerate() {
+            for b in Falloff::ALL.iter().skip(i + 1) {
+                assert_ne!(a.label(), b.label());
+            }
+        }
+    }
 
     #[test]
     fn every_tool_names_an_engine_verb() {
@@ -375,6 +464,19 @@ mod tests {
     }
 
     #[test]
+    fn trim_is_not_a_stroke_tool() {
+        assert!(
+            !ToolKind::Trim.is_stroke_tool(),
+            "Trim's gesture is a shape drawn on the frame, not a stroke"
+        );
+        for tool in ToolKind::ALL {
+            if tool != ToolKind::Trim {
+                assert!(tool.is_stroke_tool(), "{} is a stroke tool", tool.label());
+            }
+        }
+    }
+
+    #[test]
     fn every_tool_works_on_at_least_one_representation() {
         for tool in ToolKind::ALL {
             let usable = [Representation::Sdf, Representation::Voxel]
@@ -390,8 +492,18 @@ mod tests {
             size: -5.0,
             intensity: 4.0,
             flow: 0.0,
+            shaping: Shaping {
+                noise: 8.0,
+                smoothing: 1.0,
+                ..Default::default()
+            },
         }
         .sanitized();
+        assert!(settings.shaping.noise <= 1.0);
+        assert!(
+            settings.shaping.smoothing < 1.0,
+            "a lag of exactly 1 would leave the stroke never reaching the pointer"
+        );
         assert!(settings.size > 0.0, "a non-positive radius is rejected by the engine");
         assert!(settings.intensity <= 1.0);
         assert!(settings.flow > 0.0);

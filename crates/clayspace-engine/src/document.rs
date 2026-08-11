@@ -228,7 +228,13 @@ impl ClayDocument {
             // Flow is spacing: more flow means stamps closer together.
             spacing: (1.0 - brush.flow).clamp(0.05, 0.9),
             strength: brush.intensity,
-            accumulation: if tool == ToolKind::Camada {
+            // The design's Ruído, Suavização and Acumular, each landing on the
+            // preset field the engine already has for it.
+            jitter_position: brush.shaping.noise,
+            steady: brush.shaping.smoothing,
+            accumulation: if tool == ToolKind::Camada || !brush.shaping.accumulate {
+                // Camada is the clamped-accumulation tool by definition, and
+                // turning Acumular off means the same thing.
                 claycore::Accumulation::Clamped
             } else {
                 claycore::Accumulation::Buildup
@@ -296,6 +302,162 @@ impl ClayDocument {
         })
     }
 
+    /// The Move brush: a drag rather than a stamp.
+    ///
+    /// Nudges form rather than growing it — the engine is explicit that a
+    /// large pull buds rather than stretches, which is why Puxar exists.
+    fn move_surface_stroke(
+        &mut self,
+        brush: BrushSettings,
+        samples: &[GestureSample],
+    ) -> Result<EditOutcome, ModelError> {
+        let (first, last) = (samples[0], samples[samples.len() - 1]);
+        let displacement = [
+            last.position[0] - first.position[0],
+            last.position[1] - first.position[1],
+            last.position[2] - first.position[2],
+        ];
+        // A drag under the resolution moves nothing; reporting that as an edit
+        // would put an entry in the history for a gesture that did not land.
+        let travelled = displacement
+            .iter()
+            .map(|d| d * d)
+            .sum::<f32>()
+            .sqrt();
+        if travelled < 1e-4 {
+            return Ok(EditOutcome::NOTHING);
+        }
+
+        let layer = self.active_layer().id;
+        let brush = brush.sanitized();
+        let applied = self
+            .document
+            .move_surface(
+                layer,
+                first.position,
+                displacement,
+                claycore::MoveParams {
+                    radius: brush.size.max(1e-3),
+                    ease: 0,
+                    front_only: true,
+                },
+            )
+            .map_err(ModelError::engine)?;
+
+        if applied == 0 {
+            return Ok(EditOutcome::NOTHING);
+        }
+        self.refill(layer, &[])?;
+        Ok(EditOutcome {
+            changed: true,
+            dirty_bricks: self.dirty.len(),
+        })
+    }
+
+    /// Snakehook: a tendril along the drawn path, adding material.
+    fn snakehook_stroke(
+        &mut self,
+        brush: BrushSettings,
+        samples: &[GestureSample],
+    ) -> Result<EditOutcome, ModelError> {
+        if samples.len() < 2 {
+            return Ok(EditOutcome::NOTHING);
+        }
+        let brush = brush.sanitized();
+        let layer = self.active_layer().id;
+
+        // The path as control points, each carrying the radius at that point.
+        // Tapering toward the tip is what makes it read as a pulled tendril
+        // rather than a tube.
+        let mut points = Vec::with_capacity(samples.len() * 4);
+        for (index, sample) in samples.iter().enumerate() {
+            let t = index as f32 / (samples.len() - 1) as f32;
+            points.extend_from_slice(&sample.position);
+            points.push(brush.size * (1.0 - 0.7 * t));
+        }
+
+        let mut item = Item::stroke().map_err(ModelError::engine)?;
+        item.set_stroke_points(&points).map_err(ModelError::engine)?;
+        item.set_op(Op::Add).map_err(ModelError::engine)?;
+        item.set_stroke_blend_k(brush.size * 0.5)
+            .map_err(ModelError::engine)?;
+
+        let node = self
+            .document
+            .add_item(layer, &item)
+            .map_err(ModelError::engine)?;
+        self.refill(layer, &[node])?;
+        Ok(EditOutcome {
+            changed: true,
+            dirty_bricks: self.dirty.len(),
+        })
+    }
+
+    /// Smooth on the field side: sample the region into a volume, relax it,
+    /// and place the result.
+    ///
+    /// The engine is explicit that this bakes — relax works on a sampled
+    /// volume rather than on the live edit list.
+    fn relax_stroke(
+        &mut self,
+        brush: BrushSettings,
+        samples: &[GestureSample],
+    ) -> Result<EditOutcome, ModelError> {
+        let brush = brush.sanitized();
+        let layer = self.active_layer().id;
+
+        // The region the stroke covered, grown by the brush radius.
+        let mut min = [f32::INFINITY; 3];
+        let mut max = [f32::NEG_INFINITY; 3];
+        for sample in samples {
+            for axis in 0..3 {
+                min[axis] = min[axis].min(sample.position[axis] - brush.size);
+                max[axis] = max[axis].max(sample.position[axis] + brush.size);
+            }
+        }
+
+        let centre = [
+            (min[0] + max[0]) * 0.5,
+            (min[1] + max[1]) * 0.5,
+            (min[2] + max[2]) * 0.5,
+        ];
+
+        let mut volume = self
+            .document
+            .volume_from_region(
+                claycore::VolumeParams {
+                    cell_size: Some(brush.size * 0.25),
+                    ..Default::default()
+                },
+                min,
+                max,
+            )
+            .map_err(ModelError::engine)?;
+
+        volume
+            .relax(&claycore::RelaxParams {
+                strength: brush.intensity,
+                radius_cells: 1,
+                iterations: 2,
+                centre,
+                region_radius: brush.size,
+                falloff: brush.size * 0.5,
+                mask: self.mask.as_deref(),
+            })
+            .map_err(ModelError::engine)?;
+
+        volume.set_op(Op::Replace).map_err(ModelError::engine)?;
+        let node = self
+            .document
+            .add_item(layer, &volume)
+            .map_err(ModelError::engine)?;
+        self.refill(layer, &[node])?;
+        Ok(EditOutcome {
+            changed: true,
+            dirty_bricks: self.dirty.len(),
+        })
+    }
+
     /// Applies a stroke to a voxel layer, using the tool's own verb.
     fn stroke_voxel(
         &mut self,
@@ -316,7 +478,12 @@ impl ClayDocument {
         let params = BrushParams {
             size: ((brush.size / voxel_size).round() as i32).clamp(1, 64),
             shape: BrushShape::Sphere,
-            falloff: Falloff::Smooth,
+            falloff: match brush.shaping.falloff {
+                clayspace_model::Falloff::Constant => Falloff::Constant,
+                clayspace_model::Falloff::Linear => Falloff::Linear,
+                clayspace_model::Falloff::Smooth => Falloff::Smooth,
+                clayspace_model::Falloff::Gaussian => Falloff::Gaussian,
+            },
             strength: brush.intensity,
             seed: 0,
             mask: mask.as_deref(),
@@ -400,7 +567,16 @@ impl SculptModel for ClayDocument {
             .map_err(ModelError::Unavailable)?;
 
         match self.active_representation() {
-            Representation::Sdf => self.stroke_sdf(tool, brush, samples, symmetry),
+            Representation::Sdf => match tool {
+                // Drags the assembled surface: the gesture is a displacement,
+                // not a series of stamps.
+                ToolKind::Mover => self.move_surface_stroke(brush, samples),
+                // Pulls a lobe out along the path.
+                ToolKind::Puxar => self.snakehook_stroke(brush, samples),
+                // Bake-and-relax over the region the stroke covered.
+                ToolKind::Suavizar | ToolKind::Relaxar => self.relax_stroke(brush, samples),
+                _ => self.stroke_sdf(tool, brush, samples, symmetry),
+            },
             Representation::Voxel => self.stroke_voxel(tool, brush, samples),
             Representation::Mesh => Ok(EditOutcome::NOTHING),
         }
