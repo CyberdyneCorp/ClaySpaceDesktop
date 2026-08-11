@@ -257,6 +257,40 @@ impl BrickCache {
         )
     }
 
+    /// Marks what specific nodes reach.
+    ///
+    /// Bounded by the influence of those nodes rather than by the layer's
+    /// extent, which is what keeps a dab's cost proportional to the dab. A
+    /// layer whose content is spread far apart spans more bricks than any
+    /// cache can hold, and marking it whole is refused rather than attempted.
+    pub fn mark_dirty_nodes(
+        &mut self,
+        doc: &Document,
+        layer: LayerId,
+        nodes: &[crate::NodeId],
+    ) -> Result<usize> {
+        if nodes.is_empty() {
+            return Ok(0);
+        }
+        let raw: Vec<sys::clay_node_id> = nodes.iter().map(|n| n.0).collect();
+        let mut marked = 0usize;
+        // SAFETY: valid handles; `raw` holds `nodes.len()` ids.
+        check(
+            unsafe {
+                sys::clay_brick_cache_mark_dirty_nodes(
+                    self.raw.as_ptr(),
+                    doc.as_ptr(),
+                    layer.0,
+                    raw.as_ptr(),
+                    raw.len(),
+                    &mut marked,
+                )
+            },
+            "clay_brick_cache_mark_dirty_nodes",
+        )?;
+        Ok(marked)
+    }
+
     /// Marks everything a whole layer reaches.
     pub fn mark_dirty_layer(&mut self, doc: &Document, layer: LayerId) -> Result<()> {
         // SAFETY: both handles are valid; the document is only read.

@@ -44,7 +44,7 @@ pub use error::{ClayError, ErrorKind, Result};
 pub use mesh::{Mesh, MeshParams, MeshValidity, Mesher, VertexLayout};
 pub use pick::{Hit, Snapped};
 pub use reader::Reader;
-pub use sculpt::{MoveParams, RelaxParams, VolumeParams};
+pub use sculpt::{resolve_stroke, MoveParams, RelaxParams, VolumeParams};
 pub use voxel::{Cell, RepairReport, VoxelField, VoxelGrid, VoxelGridRef};
 
 use claycore_sys as sys;

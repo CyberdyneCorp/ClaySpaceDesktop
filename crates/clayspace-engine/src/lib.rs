@@ -12,6 +12,9 @@
 #![forbid(unsafe_code)]
 
 pub mod backend;
+pub mod document;
 
 pub use backend::{BackendPolicy, Operation, SelectionReason, UnavailableBackend};
+pub use document::ClayDocument;
+
 pub use claycore;

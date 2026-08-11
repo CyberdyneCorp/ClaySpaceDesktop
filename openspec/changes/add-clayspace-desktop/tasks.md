@@ -45,22 +45,22 @@
 - [x] 4.2 Define the command type and the single dispatch path; route every mutation through it
 - [x] 4.3 Implement the observable state mechanism with change signals that reading does not trigger
 - [ ] 4.4 Implement the asynchronous command executor with progress reporting and stale-result discarding
-- [ ] 4.5 Implement the composition root in `clayspace-app` and inject dependencies downward
+- [x] 4.5 Implement the composition root in `clayspace-app` and inject dependencies downward
 - [x] 4.6 Add the CI architecture check: dependency direction, no engine crates in `clayspace-view`, no `egui`/`wgpu`/`winit` in `clayspace-vm`, no `unsafe` outside the bridge
 - [x] 4.7 Write ViewModel tests that run headlessly against the Model double
 
 ## 5. Sculpting loop
 
-- [ ] 5.1 Implement stroke capture: position, pressure, timing, on both pointer and tablet input
-- [ ] 5.2 Implement the sculpt command path: capture → engine stroke resolution → edit → dirty bricks → re-mesh → upload
+- [x] 5.1 Implement stroke capture: position, pressure, timing, on both pointer and tablet input
+- [x] 5.2 Implement the sculpt command path: capture → engine stroke resolution → edit → dirty bricks → re-mesh → upload
 - [ ] 5.3 Implement incremental re-meshing: pass the dirty key set as the meshing subset, patch GPU buffer sub-ranges from the per-key ranges, discard stale results
 - [ ] 5.3a Implement mesh buffer fragmentation tracking and background whole-surface compaction, scheduled off the interaction path
 - [x] 5.4 Implement the tool registry binding every tool label to its engine entry point, with per-representation availability and stated reasons
 - [ ] 5.5 Implement per-tool settings persistence for intensity, size and flow
 - [ ] 5.6 Implement the brush shaping controls: alpha curve, noise, edge falloff, accumulation mode, smoothing, mirroring
-- [ ] 5.7 Implement symmetry about X, Y and Z with mirrored edits inside one undo group
+- [x] 5.7 Implement symmetry about X, Y and Z with mirrored edits inside one undo group
 - [ ] 5.8 Implement the brush cursor: projected radius, surface point, live size updates, off-surface state
-- [ ] 5.9 Implement no-op detection using `change_count` deltas so dead edits produce no history entry
+- [x] 5.9 Implement no-op detection using `change_count` deltas so dead edits produce no history entry
 - [ ] 5.10 Implement the remaining tools: Puxar, Pinçar, Magnify, Raspar, Planar, Polir, Preencher, Nudge, Camada, Trim
 
 ## 6. Masks and armatures

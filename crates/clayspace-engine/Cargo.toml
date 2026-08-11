@@ -13,3 +13,4 @@ clayspace-model = { path = "../clayspace-model" }
 
 [dev-dependencies]
 claycore = { workspace = true, features = ["test-support"] }
+clayspace-vm = { path = "../clayspace-vm" }

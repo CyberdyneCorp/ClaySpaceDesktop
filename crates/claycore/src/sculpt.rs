@@ -13,6 +13,34 @@ use crate::error::{check, Result};
 use crate::mask::MaskField;
 use crate::{Document, Item, LayerId, NodeId};
 
+/// How many stamps a stroke resolves into, without applying it.
+///
+/// Pure: the engine documents it as giving the same answer for the same input,
+/// which is what makes it usable for sizing a buffer.
+pub fn resolve_stroke(samples: &[StrokeSample], preset: &StrokePreset) -> Result<usize> {
+    if samples.is_empty() {
+        return Ok(0);
+    }
+    let flat = StrokeSample::flatten(samples);
+    let raw_preset = preset.to_raw();
+    let mut count = 0usize;
+    // SAFETY: a null stamp buffer selects the counting form, which this entry
+    // point does support.
+    check(
+        unsafe {
+            sys::clay_stroke_resolve(
+                flat.as_ptr(),
+                samples.len(),
+                &raw_preset,
+                std::ptr::null_mut(),
+                &mut count,
+            )
+        },
+        "clay_stroke_resolve",
+    )?;
+    Ok(count)
+}
+
 /// How a Move drag falls off across its region.
 #[derive(Debug, Clone, Copy)]
 pub struct MoveParams {
@@ -118,6 +146,12 @@ impl Document {
     ///
     /// `item` is the stamp shape each sample deposits. Returns the nodes the
     /// stroke created, which is what an undo group needs to know about.
+    ///
+    /// The node buffer is sized with [`resolve_stroke`], which is pure. The
+    /// apply entry point is emphatically **not** a size-query call — the
+    /// engine's header says it "applies the stroke exactly once, however it is
+    /// called" — so calling it twice to learn the count deposits the stroke
+    /// twice.
     pub fn apply_stroke(
         &mut self,
         layer: LayerId,
@@ -133,11 +167,14 @@ impl Document {
         let raw_preset = preset.to_raw();
         let mask_ptr = mask.map_or(std::ptr::null(), |m| m.as_ptr() as *const _);
 
-        // Size query first: the engine reports how many nodes the stroke will
-        // produce before writing any.
-        let mut count = 0usize;
-        // SAFETY: a null node buffer selects the counting form; every other
-        // argument is valid.
+        // An upper bound: a masked stamp emits no node, so the stroke may
+        // create fewer than this.
+        let capacity = resolve_stroke(samples, preset)?;
+        let mut nodes = vec![sys::clay_node_id::default(); capacity];
+        let mut count = capacity;
+
+        // SAFETY: `flat` is `samples.len() * 5` floats; `nodes` holds
+        // `capacity` ids and `count` carries that capacity in.
         check(
             unsafe {
                 sys::clay_layer_apply_stroke(
@@ -148,37 +185,19 @@ impl Document {
                     &raw_preset,
                     item.as_ptr(),
                     mask_ptr,
-                    std::ptr::null_mut(),
+                    if capacity == 0 {
+                        std::ptr::null_mut()
+                    } else {
+                        nodes.as_mut_ptr()
+                    },
                     &mut count,
                 )
             },
             "clay_layer_apply_stroke",
         )?;
 
-        if count == 0 {
-            return Ok(Vec::new());
-        }
-
-        let mut nodes = vec![sys::clay_node_id::default(); count];
-        // SAFETY: `nodes` holds `count` ids, which is what the counting call
-        // reported.
-        check(
-            unsafe {
-                sys::clay_layer_apply_stroke(
-                    self.as_ptr(),
-                    layer.0,
-                    flat.as_ptr(),
-                    samples.len(),
-                    &raw_preset,
-                    item.as_ptr(),
-                    mask_ptr,
-                    nodes.as_mut_ptr(),
-                    &mut count,
-                )
-            },
-            "clay_layer_apply_stroke",
-        )?;
-        nodes.truncate(count);
+        // `count` reports the true total even when the buffer was smaller.
+        nodes.truncate(count.min(capacity));
         Ok(nodes.into_iter().map(NodeId).collect())
     }
 

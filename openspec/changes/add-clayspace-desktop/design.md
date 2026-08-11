@@ -86,13 +86,18 @@ The chosen backend is displayed and overridable, because a user debugging a susp
 crates/
   claycore-sys/     generated FFI                     (unsafe)
   claycore/         safe wrapper                      (the only unsafe consumer)
-  clayspace-model/  domain: documents, tools, backends, IO
+  clayspace-model/  the domain: tools, interfaces, types. NO engine dependency.
+  clayspace-engine/ the ClayCore-backed implementations of those interfaces
   clayspace-vm/     ViewModels: observable state + commands. No egui, no wgpu.
   clayspace-view/   egui widgets + wgpu renderer. Reads VM state, emits commands.
   clayspace-app/    composition root, window, event loop
 ```
 
-The rule that makes this checkable: `clayspace-vm` does not depend on `egui` or `wgpu`, and `clayspace-view` does not depend on `claycore` or `claycore-sys`. Both are Cargo dependency facts, so CI asserts them with `cargo-deny`/`cargo tree` rather than with review.
+The rule that makes this checkable: `clayspace-vm` does not depend on `egui` or `wgpu`, and `clayspace-view` does not depend on `claycore` or `claycore-sys`. Both are Cargo dependency facts, so `tools/check_layering.py` asserts them in CI rather than review.
+
+**Why the domain and the engine adapter are separate crates.** The first attempt put both in `clayspace-model`, and the layering check failed on its first run: `view → vm → model → claycore` reaches the engine transitively, which the isolation rule forbids. There is no arrangement of the other crates that fixes that while the domain and engine access share a crate, so they were split. Only the composition root depends on `clayspace-engine`.
+
+The benefit is not only purity: the ViewModel tests build and run without compiling the C++ engine, which is the difference between a fast feedback loop and a slow one.
 
 egui is immediate-mode and has no data binding, so "ViewModel" here means an explicit state struct plus a command channel, not observers. A View function is `fn(&SculptViewModel, &mut Ui) -> Vec<Command>`: it may read ViewModel state and may emit commands, and it has no other way to affect anything. That is testable without a window, which is the property MVVM is being asked for.
 

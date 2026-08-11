@@ -1,17 +1,25 @@
 ## ADDED Requirements
 
 ### Requirement: The workspace is layered Model, ViewModel, View
-The application SHALL be organized into crates with a strict dependency direction: `clayspace-model` (domain and engine access) ← `clayspace-vm` (ViewModels) ← `clayspace-view` (interface and rendering) ← `clayspace-app` (composition root). No crate SHALL depend on a crate later in that order.
+The application SHALL be organized into crates with a strict dependency direction: `clayspace-model` (the domain) ← `clayspace-vm` (ViewModels) ← `clayspace-view` (interface and rendering) ← `clayspace-app` (composition root). No crate SHALL depend on a crate later in that order.
+
+Engine access SHALL live in a separate `clayspace-engine` crate that depends on the domain and on ClayCore, and on which only the composition root depends. The domain SHALL NOT depend on ClayCore.
+
+This separation is what makes the View's isolation achievable: a single crate holding both the domain and engine access would put ClayCore in the transitive dependencies of every layer above it, and no arrangement of the remaining crates could satisfy the isolation requirement below.
 
 #### Scenario: Dependency direction holds
 - **WHEN** the workspace dependency graph is inspected
 - **THEN** no edge runs from a Model crate to a ViewModel crate, or from a ViewModel crate to a View crate
 
+#### Scenario: The domain is free of the engine
+- **WHEN** the domain crate is built
+- **THEN** it compiles without ClayCore present, and the ViewModel tests run without the engine being built at all
+
 ### Requirement: The View layer cannot reach the engine
 `clayspace-view` SHALL NOT depend on `claycore` or `claycore-sys`, directly or transitively. No ClayCore type, handle, enum, or error SHALL appear in the View layer's API or implementation.
 
 #### Scenario: Engine dependency in the View fails CI
-- **WHEN** a dependency on `claycore` or `claycore-sys` is added to `clayspace-view`
+- **WHEN** a dependency on `claycore` or `claycore-sys` is added to `clayspace-view`, directly or through any intermediate crate
 - **THEN** the architecture check in CI fails, naming the forbidden edge
 
 #### Scenario: Engine data reaches the View as plain values

@@ -321,6 +321,7 @@ version = "0.1.0"
 dependencies = [
  "claycore",
  "clayspace-model",
+ "clayspace-vm",
 ]
 
 [[package]]
