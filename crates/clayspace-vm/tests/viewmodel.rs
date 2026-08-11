@@ -53,6 +53,7 @@ impl FakeModel {
                 triangles: 100,
                 vertices: 60,
                 objects: 1,
+                detail: clayspace_model::Detail::Full,
             },
         }
     }

@@ -78,10 +78,10 @@
 - [x] 7.2 Implement the layer stack: create, rename, reorder, remove, intensity, visibility
 - [x] 7.3 Implement the three protection states with refusal-and-reason on protected edits, and ghost exclusion from picking
 - [x] 7.4 Implement selection through the engine's attributed raycast, synchronized across viewport, tree and stack
-- [ ] 7.5 Implement layer transforms as single undo steps
-- [ ] 7.6 Implement the field report and consolidation flow with the cost estimate shown before confirmation
-- [ ] 7.7 Implement geometry statistics display, stating the resolution the counts describe
-- [ ] 7.8 Implement mesh layers as carried content with sculpting tools disabled and the reason stated
+- [x] 7.5 Implement layer transforms as single undo steps
+- [x] 7.6 Implement the field report and consolidation flow with the cost estimate shown before confirmation
+- [x] 7.7 Implement geometry statistics display, stating the resolution the counts describe
+- [x] 7.8 Implement mesh layers as carried content with sculpting tools disabled and the reason stated
 - [x] 7.9 Implement undo and redo over the engine's undo vocabulary, with stroke and drag coalescing
 - [x] 7.10 Implement undo groups for compound operations
 - [x] 7.11 Implement the history panel with named entries, current position and jump-to-entry
@@ -103,7 +103,7 @@
 
 - [x] 9.1 Implement the design tokens: palette, spacing scale, control sizing, radii; add a check that no literal colors exist in components
 - [x] 9.2 Implement typography: humanist sans for labels, monospaced for numeric readouts with fixed digit positions
-- [ ] 9.3 Implement the icon set at one stroke weight and optical size
+- [x] 9.3 Implement the icon set at one stroke weight and optical size
 - [x] 9.4 Implement the region layout: menu bar, tool rail, tool options bar, left region, viewport, right region, brush shelf, status area
 - [x] 9.5 Implement panel resize, collapse, layout persistence and reset-to-default
 - [x] 9.6 Implement the left region: scene tree, layer stack, sculpting settings (symmetry, resolution, smoothing, save preset)

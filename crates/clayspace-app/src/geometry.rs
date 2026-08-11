@@ -101,6 +101,14 @@ impl SurfaceGeometry {
         self.upload(gpu);
         let upload_time = started.elapsed();
 
+        // The interface reports what is on screen, so the counts come from
+        // what was actually built rather than from an estimate.
+        document.record_geometry(
+            self.triangle_count(),
+            self.vertex_count(),
+            clayspace_model::Detail::Full,
+        );
+
         let cost = SyncCost {
             keys: dirty.len(),
             mesh_time,

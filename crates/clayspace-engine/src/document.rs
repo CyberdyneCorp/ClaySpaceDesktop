@@ -257,20 +257,32 @@ impl ClayDocument {
         // would cost a full march on every edit.
         let bricks = self.cache.surface_bricks().map(|k| k.len()).unwrap_or(0);
         self.stats = SceneStats {
-            // Reported once the viewport meshes; until then the brick count is
-            // what is actually known.
+            // Reported once the viewport meshes; until then nothing has been
+            // built and the interface says so rather than showing a zero that
+            // reads as an empty document.
             triangles: self.stats.triangles,
             vertices: self.stats.vertices,
             objects: self.layers.len().max(1),
+            detail: if self.stats.triangles == 0 {
+                clayspace_model::Detail::Pending
+            } else {
+                self.stats.detail
+            },
         };
         let _ = bricks;
     }
 
     /// Records the geometry the viewport actually built, so the interface
     /// reports what is on screen rather than an estimate.
-    pub fn record_geometry(&mut self, triangles: usize, vertices: usize) {
+    pub fn record_geometry(
+        &mut self,
+        triangles: usize,
+        vertices: usize,
+        detail: clayspace_model::Detail,
+    ) {
         self.stats.triangles = triangles;
         self.stats.vertices = vertices;
+        self.stats.detail = detail;
     }
 
     /// Turns the domain's brush settings into the engine's stroke preset.
@@ -845,6 +857,82 @@ impl SceneModel for ClayDocument {
         Ok(())
     }
 
+    fn set_layer_transform(
+        &mut self,
+        key: LayerKey,
+        position: [f32; 3],
+        scale: f32,
+    ) -> Result<(), ModelError> {
+        let id = self.layer_id(key)?;
+        // One call, so one undo step however many items the layer holds.
+        self.document
+            .set_layer_transform(id, position, [0.0, 1.0, 0.0], 0.0, scale.max(1e-4))
+            .map_err(ModelError::engine)?;
+        self.refill(id, &[])?;
+        Ok(())
+    }
+
+    fn layer_cost(&self, key: LayerKey) -> Result<clayspace_model::LayerCost, ModelError> {
+        let id = self.layer_id(key)?;
+        // The threshold below which the engine advises collapsing. Its own
+        // note is that a chain of bakes steepens the field until a march takes
+        // many small steps; this is where that becomes visible.
+        let report = self
+            .document
+            .field_report(id, 0.5)
+            .map_err(ModelError::engine)?;
+        let state = self
+            .document
+            .consolidation_state(id)
+            .map_err(ModelError::engine)?;
+        let estimate = match state {
+            Some(cost) => cost.bytes,
+            None => self
+                .document
+                .consolidation_cost(id, self.consolidation_params(), None)
+                .map(|cost| cost.bytes)
+                .unwrap_or(0),
+        };
+
+        Ok(clayspace_model::LayerCost {
+            items: report.item_count,
+            safe_step_scale: report.safe_step_scale,
+            advises_consolidation: report.advises_consolidation,
+            estimated_bytes: estimate,
+            consolidated: state.is_some(),
+        })
+    }
+
+    fn consolidate_layer(&mut self, key: LayerKey) -> Result<(), ModelError> {
+        let id = self.layer_id(key)?;
+        self.document
+            .consolidate(id, self.consolidation_params(), None)
+            .map_err(ModelError::engine)?;
+        self.refill(id, &[])?;
+        Ok(())
+    }
+
+    fn add_mesh_layer(&mut self, name: &str) -> Result<LayerKey, ModelError> {
+        // Carried, not sculpted: the layer is recorded so the tools can refuse
+        // it by representation rather than by a special case.
+        let id = self
+            .document
+            .add_sdf_layer(name)
+            .map_err(ModelError::engine)?;
+        let key = self.take_key();
+        self.layers.push(Layer {
+            id,
+            key,
+            name: name.to_string(),
+            representation: Representation::Mesh,
+            grid: None,
+            visible: true,
+            protection: Protection::default(),
+            intensity: 100,
+        });
+        Ok(key)
+    }
+
     fn select_at(&mut self, origin: [f32; 3], direction: [f32; 3]) -> Option<LayerKey> {
         // Attributed, because a selection has to name what it selected. The
         // engine excludes ghosted layers from picking, so honouring ghost is
@@ -862,5 +950,21 @@ impl SceneModel for ClayDocument {
                 .map(|layer| layer.key)
         });
         self.selected
+    }
+}
+
+/// The scene operations that reach further into the engine.
+impl ClayDocument {
+    fn layer_id(&self, key: LayerKey) -> Result<LayerId, ModelError> {
+        self.index_of(key).map(|index| self.layers[index].id)
+    }
+
+    /// The spacing a collapse samples at.
+    ///
+    /// Taken from the brick cache, which is the one place that knows the scale
+    /// this document is being worked at. The engine cannot supply it: a layer
+    /// has no intrinsic scale the way a mesh's bounds give one.
+    fn consolidation_params(&self) -> claycore::ConsolidationParams {
+        claycore::ConsolidationParams::at(self.cache.config().voxel_size)
     }
 }

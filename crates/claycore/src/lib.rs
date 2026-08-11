@@ -18,6 +18,7 @@ mod authoring;
 mod backend;
 mod brick;
 mod brush;
+mod consolidate;
 mod buffer;
 mod descriptor;
 mod document;
@@ -38,6 +39,7 @@ pub use brick::{
 pub use brush::{
     Accumulation, BrushParams, BrushShape, Falloff, StrokePreset, StrokeSample,
 };
+pub use consolidate::{ConsolidationCost, ConsolidationParams, FieldReport};
 pub use document::{Document, Item, LayerId, NodeId};
 pub use mask::{ExtrudeSide, Mask, MaskExtrudeParams, MaskField, MaskRef};
 pub use error::{ClayError, ErrorKind, Result};

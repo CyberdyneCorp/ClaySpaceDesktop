@@ -527,6 +527,78 @@ mod scene {
     }
 
     #[test]
+    fn a_layer_transform_is_one_undo_step() {
+        let mut doc = document();
+        let key = doc.scene().active.expect("active");
+        let before = doc.history().depth;
+
+        doc.set_layer_transform(key, [0.5, 0.0, 0.0], 1.0)
+            .expect("place the layer");
+
+        assert_eq!(
+            doc.history().depth - before,
+            1,
+            "placing a layer must undo in one step however many items it holds"
+        );
+    }
+
+    #[test]
+    fn a_layer_reports_what_its_field_costs() {
+        let mut doc = document();
+        let key = doc.scene().active.expect("active");
+
+        let cost = doc.layer_cost(key).expect("field report");
+        assert!(cost.items > 0, "the starting form has an item");
+        assert!(
+            cost.safe_step_scale > 0.0 && cost.safe_step_scale <= 1.0,
+            "the safe step scale should be in (0, 1], got {}",
+            cost.safe_step_scale
+        );
+        assert!(!cost.consolidated, "a fresh layer is not collapsed");
+    }
+
+    #[test]
+    fn consolidation_is_never_performed_unasked() {
+        let mut doc = document();
+        let key = doc.scene().active.expect("active");
+
+        // Asking the cost must not collapse anything.
+        let before = doc.layer_cost(key).expect("cost");
+        let after = doc.layer_cost(key).expect("cost again");
+        assert!(!before.consolidated && !after.consolidated);
+        assert_eq!(before.items, after.items, "asking the cost changed the layer");
+
+        doc.consolidate_layer(key).expect("consolidate");
+        let collapsed = doc.layer_cost(key).expect("cost after");
+        assert!(
+            collapsed.consolidated,
+            "the layer did not report itself collapsed"
+        );
+    }
+
+    #[test]
+    fn a_mesh_layer_is_carried_and_refuses_every_tool() {
+        let mut doc = document();
+        let key = doc.add_mesh_layer("Referência").expect("carry a mesh");
+
+        let scene = doc.scene();
+        let layer = scene.layer(key).expect("the mesh layer");
+        assert_eq!(layer.representation, Representation::Mesh);
+
+        doc.set_active_layer(key).expect("activate");
+        for tool in ToolKind::ALL {
+            let error = tool
+                .availability(Representation::Mesh, true)
+                .expect_err("mesh layers are carried, not sculpted");
+            assert!(
+                error.to_string().contains("carried"),
+                "{} refused for the wrong reason: {error}",
+                tool.label()
+            );
+        }
+    }
+
+    #[test]
     fn an_unknown_layer_key_is_refused_rather_than_panicking() {
         let mut doc = document();
         let error = doc

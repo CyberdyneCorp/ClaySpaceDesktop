@@ -96,6 +96,25 @@ impl Scene {
     }
 }
 
+/// What a layer's field costs, and whether collapsing it is advised.
+///
+/// Reported before consolidation is offered, because it is expensive and the
+/// user decides — never performed unasked.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LayerCost {
+    /// How many items the layer's edit list holds.
+    pub items: i32,
+    /// Multiply a distance by this before stepping along a ray. A low value
+    /// means the field has steepened and a march takes many small steps.
+    pub safe_step_scale: f32,
+    /// Whether the engine advises collapsing the layer.
+    pub advises_consolidation: bool,
+    /// What consolidating would occupy, in bytes.
+    pub estimated_bytes: u64,
+    /// Whether it is already collapsed.
+    pub consolidated: bool,
+}
+
 /// What the interface can ask of the scene.
 ///
 /// Separate from [`crate::SculptModel`] because a scene panel and a brush are
@@ -120,6 +139,24 @@ pub trait SceneModel {
 
     /// What a click at a ray selects, honouring ghost and lock.
     fn select_at(&mut self, origin: [f32; 3], direction: [f32; 3]) -> Option<LayerKey>;
+
+    /// Places a whole layer. One undoable step, however many items it holds.
+    fn set_layer_transform(
+        &mut self,
+        key: LayerKey,
+        position: [f32; 3],
+        scale: f32,
+    ) -> Result<(), crate::ModelError>;
+
+    /// What a layer's field costs, for the consolidation flow.
+    fn layer_cost(&self, key: LayerKey) -> Result<LayerCost, crate::ModelError>;
+
+    /// Collapses a layer into one volume. Only ever called after the cost has
+    /// been shown and accepted.
+    fn consolidate_layer(&mut self, key: LayerKey) -> Result<(), crate::ModelError>;
+
+    /// Carries a mesh the document holds but never sculpts.
+    fn add_mesh_layer(&mut self, name: &str) -> Result<LayerKey, crate::ModelError>;
 }
 
 #[cfg(test)]

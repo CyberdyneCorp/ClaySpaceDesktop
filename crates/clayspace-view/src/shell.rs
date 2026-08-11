@@ -10,11 +10,12 @@
 //! along the trailing edge, and a status area.
 
 use clayspace_model::{
-    BrushSettings, Falloff, LayerKey, LayerSummary, Scene, SceneStats, ToolKind, ViewPresetKind,
+    BrushSettings, Falloff, LayerSummary, Scene, SceneStats, ToolKind, ViewPresetKind,
 };
 use clayspace_vm::{Axis, Command, CommandQueue};
 
 use crate::design::{size, space, type_scale, Tokens};
+use crate::icons::{self, Icon};
 use crate::strings::Strings;
 
 /// Everything a frame of interface needs to read.
@@ -302,10 +303,10 @@ pub fn left_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Command
                 .color(if selected { Tokens::text() } else { Tokens::text_dim() });
             ui.label(text);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(
-                    egui::RichText::new(if node.visible { "◉" } else { "○" })
-                        .size(type_scale::LABEL)
-                        .color(Tokens::text_dim()),
+                icons::button(
+                    ui,
+                    if node.visible { Icon::Visible } else { Icon::Hidden },
+                    node.visible,
                 );
             });
         });
@@ -357,18 +358,8 @@ fn layer_row(
         .inner_margin(egui::Margin::symmetric(space::SNUG as i8, space::TIGHT as i8))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                let eye = if layer.visible { "◉" } else { "○" };
-                if ui
-                    .add(
-                        egui::Button::new(
-                            egui::RichText::new(eye)
-                                .size(type_scale::LABEL)
-                                .color(Tokens::text_dim()),
-                        )
-                        .frame(false),
-                    )
-                    .clicked()
-                {
+                let eye = if layer.visible { Icon::Visible } else { Icon::Hidden };
+                if icons::button(ui, eye, layer.visible).clicked() {
                     queue.push(Command::SetLayerVisible(layer.key, !layer.visible));
                 }
 
@@ -383,13 +374,16 @@ fn layer_row(
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     numeric(ui, format!("{:>3}", layer.intensity));
-                    if let Some(refusal) = layer.protection.refusal() {
-                        ui.label(
-                            egui::RichText::new("⚿")
-                                .size(type_scale::LABEL)
-                                .color(Tokens::text_dim()),
-                        )
-                        .on_hover_text(refusal);
+                    if layer.protection.locked || layer.protection.ghost {
+                        let icon = if layer.protection.ghost {
+                            Icon::Ghost
+                        } else {
+                            Icon::Locked
+                        };
+                        let response = icons::button(ui, icon, false);
+                        if let Some(refusal) = layer.protection.refusal() {
+                            response.on_hover_text(refusal);
+                        }
                     }
                 });
             });
@@ -427,6 +421,15 @@ pub fn right_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
     });
 
     heading(ui, s.section_geometry);
+    // A count without its detail level reads as a smaller model, so where the
+    // viewport is not showing full resolution the interface says so.
+    if let Some(note) = state.stats.detail.note() {
+        ui.label(
+            egui::RichText::new(note)
+                .size(type_scale::LABEL)
+                .color(Tokens::accent()),
+        );
+    }
     readout(ui, s.label_polygons, thousands(state.stats.triangles));
     readout(ui, s.label_vertices, thousands(state.stats.vertices));
     readout(ui, s.label_triangles, thousands(state.stats.triangles));

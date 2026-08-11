@@ -8,7 +8,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use clayspace_model::{
-    LayerKey, LayerSummary, ModelError, Protection, Representation, Scene, SceneModel, SceneNode,
+    LayerCost, LayerKey, LayerSummary, ModelError, Protection, Representation, Scene, SceneModel,
+    SceneNode,
 };
 use clayspace_vm::{Command, SceneViewModel, Watcher};
 
@@ -166,6 +167,34 @@ impl SceneModel for FakeScene {
     fn select_at(&mut self, _origin: [f32; 3], _direction: [f32; 3]) -> Option<LayerKey> {
         self.selected = self.hit;
         self.selected
+    }
+
+    fn set_layer_transform(
+        &mut self,
+        _key: LayerKey,
+        _position: [f32; 3],
+        _scale: f32,
+    ) -> Result<(), ModelError> {
+        self.guard()
+    }
+
+    fn layer_cost(&self, _key: LayerKey) -> Result<LayerCost, ModelError> {
+        Ok(LayerCost {
+            items: 12,
+            safe_step_scale: 0.3,
+            advises_consolidation: true,
+            estimated_bytes: 4 * 1024 * 1024,
+            consolidated: false,
+        })
+    }
+
+    fn consolidate_layer(&mut self, _key: LayerKey) -> Result<(), ModelError> {
+        self.guard()
+    }
+
+    fn add_mesh_layer(&mut self, name: &str) -> Result<LayerKey, ModelError> {
+        self.guard()?;
+        self.add_layer(name, Representation::Mesh)
     }
 }
 

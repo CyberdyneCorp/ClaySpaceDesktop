@@ -95,6 +95,7 @@ fn state<'a>(strings: &'a Strings, scene: &'a Scene, materials: &'a [&'a str]) -
             triangles: 2_356_789,
             vertices: 1_178_394,
             objects: 5,
+            detail: clayspace_model::Detail::Full,
         },
         view_preset: ViewPresetKind::Perspective,
         material: "MatCap Cinza 01",

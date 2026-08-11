@@ -17,7 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 clayspace-engine = { path = "../clayspace-engine" }
-clayspace-model = { path = "../clayspace-model" }
+clayspace-model = { version = "0.1.0", path = "../clayspace-model" }
 clayspace-vm = { path = "../clayspace-vm" }
 clayspace-view = { path = "../clayspace-view" }
 winit = "0.30.13"

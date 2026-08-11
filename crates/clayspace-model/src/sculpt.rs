@@ -44,6 +44,38 @@ pub struct SceneStats {
     pub triangles: usize,
     pub vertices: usize,
     pub objects: usize,
+    /// Which detail the counts describe.
+    ///
+    /// Carried because the counts are of what is *drawn*, and the viewport may
+    /// be showing a reduced level of detail. A number presented without saying
+    /// which resolution it belongs to reads as a smaller model.
+    pub detail: Detail,
+}
+
+/// Which detail level a count describes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Detail {
+    /// The full-resolution surface.
+    #[default]
+    Full,
+    /// A reduced level, shown while the camera is far away.
+    Reduced,
+    /// Nothing has been meshed yet.
+    Pending,
+}
+
+impl Detail {
+    /// How the interface qualifies a count.
+    ///
+    /// `None` for the full-resolution case, because a count that needs no
+    /// qualification should not carry one.
+    pub fn note(self) -> Option<&'static str> {
+        match self {
+            Self::Full => None,
+            Self::Reduced => Some("detalhe reduzido"),
+            Self::Pending => Some("ainda não gerado"),
+        }
+    }
 }
 
 /// Whether undo and redo have anything to do.
