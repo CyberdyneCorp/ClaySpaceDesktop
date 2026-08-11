@@ -16,25 +16,38 @@ pub struct Gpu {
     pub device: Arc<wgpu::Device>,
     pub queue: Arc<wgpu::Queue>,
     adapter: Arc<wgpu::Adapter>,
+    /// The instance this device came from.
+    ///
+    /// A surface is an entry in the registry of the instance that created it,
+    /// so a device from a *different* instance cannot present it — the frame
+    /// panics with `Surface does not exist`. Threading one instance through
+    /// device and surface alike makes that unrepresentable rather than a rule
+    /// someone has to remember.
+    instance: Arc<wgpu::Instance>,
 }
 
 impl Gpu {
     /// Creates a device with no surface, for offscreen rendering and tests.
     pub async fn headless() -> Result<Self, GpuError> {
-        Self::create(None).await
+        Self::create(Arc::new(Self::new_instance()), None).await
+    }
+
+    /// The instance every device and surface in one session shares.
+    pub(crate) fn new_instance() -> wgpu::Instance {
+        wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::PRIMARY,
+            ..Default::default()
+        })
     }
 
     /// Creates a device able to present to `surface`.
-    pub async fn for_surface(surface: &wgpu::Surface<'_>) -> Result<Self, GpuError> {
-        Self::create(Some(surface)).await
-    }
-
-    async fn create(surface: Option<&wgpu::Surface<'_>>) -> Result<Self, GpuError> {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::PRIMARY,
-            ..Default::default()
-        });
-
+    ///
+    /// The surface must have been created from `instance`, and both are kept
+    /// alive by the returned `Gpu`.
+    pub(crate) async fn create(
+        instance: Arc<wgpu::Instance>,
+        surface: Option<&wgpu::Surface<'_>>,
+    ) -> Result<Self, GpuError> {
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
@@ -61,7 +74,15 @@ impl Gpu {
             adapter: Arc::new(adapter),
             device: Arc::new(device),
             queue: Arc::new(queue),
+            instance,
         })
+    }
+
+    /// The instance this device came from.
+    ///
+    /// Surfaces must be created from it, and must not outlive it.
+    pub fn instance(&self) -> &Arc<wgpu::Instance> {
+        &self.instance
     }
 
     /// The adapter this device came from, for surface configuration.

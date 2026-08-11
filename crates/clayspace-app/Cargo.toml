@@ -18,3 +18,10 @@ pollster = "1.0.1"
 [dev-dependencies]
 png = "0.18.1"
 pollster = "1.0.1"
+
+# Harness-free: macOS requires the event loop on the process main thread, and
+# libtest runs every #[test] on a spawned one. Without this the smoke test
+# cannot create a window at all.
+[[test]]
+name = "window_smoke"
+harness = false

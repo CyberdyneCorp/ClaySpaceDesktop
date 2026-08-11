@@ -15,6 +15,9 @@ pub struct WindowSurface {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     framebuffer: Framebuffer,
+    /// The same instance the device was made from, held so the surface cannot
+    /// outlive it.
+    _instance: Arc<wgpu::Instance>,
     /// Kept alive because the surface borrows from it.
     _window: Arc<Window>,
 }
@@ -22,15 +25,20 @@ pub struct WindowSurface {
 impl WindowSurface {
     /// Creates a surface and a device able to present to it.
     pub async fn new(window: Arc<Window>) -> Result<(Gpu, Self), crate::gpu::GpuError> {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::PRIMARY,
-            ..Default::default()
-        });
+        // ONE instance, used for both the surface and the device.
+        //
+        // The first version made two: this function created one for the
+        // surface, and the device constructor quietly created another for the
+        // adapter. Everything reported success and the first presented frame
+        // aborted with `Surface does not exist`, because a surface lives in
+        // the registry of the instance that made it and the device belonged to
+        // a different one.
+        let instance = Arc::new(Gpu::new_instance());
         let surface = instance
             .create_surface(window.clone())
             .map_err(|e| crate::gpu::GpuError::NoDevice(e.to_string()))?;
 
-        let gpu = Gpu::for_surface(&surface).await?;
+        let gpu = Gpu::create(instance.clone(), Some(&surface)).await?;
 
         let size = window.inner_size();
         let capabilities = surface.get_capabilities(gpu.adapter());
@@ -62,6 +70,7 @@ impl WindowSurface {
                 surface,
                 config,
                 framebuffer,
+                _instance: instance,
                 _window: window,
             },
         ))
