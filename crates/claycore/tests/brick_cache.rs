@@ -23,7 +23,10 @@ fn cache_config() -> BrickConfig {
 /// The same cache, carrying colour. Opting in at creation is the engine's
 /// rule: a colour lattice has to be evaluated to exist.
 fn colored_config() -> BrickConfig {
-    BrickConfig { colors: true, ..cache_config() }
+    BrickConfig {
+        colors: true,
+        ..cache_config()
+    }
 }
 
 fn sphere_document() -> (Document, claycore::LayerId) {
@@ -71,7 +74,11 @@ fn surface_bricks_are_enumerable_and_meshable() {
         .expect("mesh every surface brick");
 
     assert!(!mesh.is_empty(), "meshing surface bricks produced nothing");
-    assert_eq!(ranges.len(), keys.len(), "one range per key was not returned");
+    assert_eq!(
+        ranges.len(),
+        keys.len(),
+        "one range per key was not returned"
+    );
     assert!(mesh.normals().is_some(), "gradient normals were requested");
 
     // Every triangle must index a vertex that exists. The weld spans brick
@@ -87,7 +94,10 @@ fn surface_bricks_are_enumerable_and_meshable() {
 fn meshing_a_subset_costs_less_than_meshing_everything() {
     let (doc, cache) = filled_cache();
     let all = cache.surface_bricks().expect("surface bricks");
-    assert!(all.len() > 8, "need a scene with more bricks than a dab touches");
+    assert!(
+        all.len() > 8,
+        "need a scene with more bricks than a dab touches"
+    );
 
     let (whole, _) = cache
         .mesh(Some(&doc), BrickMeshParams::default(), &all)
@@ -151,7 +161,9 @@ fn an_apron_widens_every_brick_uniformly() {
     let config = cache.config();
 
     for apron in [1, 2] {
-        let samples = cache.read_bricks(sample, 0, apron, false).expect("read with apron");
+        let samples = cache
+            .read_bricks(sample, 0, apron, false)
+            .expect("read with apron");
         assert_eq!(samples.padded_dim, config.dim + 2 * apron);
         assert_eq!(
             samples.values.len(),
@@ -166,16 +178,22 @@ fn colour_is_opt_in_and_matches_the_distance_stride() {
     let (doc, layer) = sphere_document();
     let mut cache = BrickCache::new(colored_config()).expect("create colour cache");
     cache.mark_dirty_layer(&doc, layer).expect("mark layer");
-    cache.refill_all(&doc, None, 256).expect("refill with colour");
+    cache
+        .refill_all(&doc, None, 256)
+        .expect("refill with colour");
 
     let keys = cache.surface_bricks().expect("surface bricks");
     let sample = &keys[..keys.len().min(2)];
     let config = cache.config();
 
-    let without = cache.read_bricks(sample, 0, 1, false).expect("read without colour");
+    let without = cache
+        .read_bricks(sample, 0, 1, false)
+        .expect("read without colour");
     assert!(without.colors.is_none(), "colour was not requested");
 
-    let with = cache.read_bricks(sample, 0, 1, true).expect("read with colour");
+    let with = cache
+        .read_bricks(sample, 0, 1, true)
+        .expect("read with colour");
     let colors = with.colors.expect("colour was requested");
     assert_eq!(
         colors.len(),
@@ -218,7 +236,10 @@ fn the_cache_raycasts_the_surface_it_holds() {
     let miss = cache
         .raycast([10.0, 10.0, -5.0], [0.0, 0.0, 1.0])
         .expect("raycast that misses");
-    assert!(miss.is_none(), "a ray well outside the sphere reported a hit");
+    assert!(
+        miss.is_none(),
+        "a ray well outside the sphere reported a hit"
+    );
 }
 
 #[test]
@@ -286,14 +307,17 @@ fn vertices_copy_into_a_caller_layout_in_one_pass() {
     };
 
     let mut buffer = vec![0u8; mesh.vertex_count() * STRIDE];
-    mesh.copy_vertices(layout, &mut buffer).expect("copy vertices");
+    mesh.copy_vertices(layout, &mut buffer)
+        .expect("copy vertices");
 
     // The first vertex's position must match what the attribute array reports.
     let expected = mesh.positions()[0];
-    let actual: [f32; 3] = std::array::from_fn(|i| {
-        f32::from_le_bytes(buffer[i * 4..i * 4 + 4].try_into().unwrap())
-    });
-    assert_eq!(actual, expected, "the interleaved copy disagrees with the arrays");
+    let actual: [f32; 3] =
+        std::array::from_fn(|i| f32::from_le_bytes(buffer[i * 4..i * 4 + 4].try_into().unwrap()));
+    assert_eq!(
+        actual, expected,
+        "the interleaved copy disagrees with the arrays"
+    );
 
     let mut indices = vec![0u32; mesh.index_count()];
     mesh.copy_indices(&mut indices).expect("copy indices");

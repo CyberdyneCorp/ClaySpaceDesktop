@@ -59,11 +59,19 @@ fn the_ground_is_neutral_and_desaturated() {
         return;
     };
     let background = harness.background();
-    let (r, g, b) = (background[0] as i32, background[1] as i32, background[2] as i32);
+    let (r, g, b) = (
+        background[0] as i32,
+        background[1] as i32,
+        background[2] as i32,
+    );
 
     // The design calls for a desaturated ground so the material reads
     // truthfully. Any strong channel imbalance would tint the sculpt.
-    let spread = [r - g, g - b, r - b].map(i32::abs).into_iter().max().unwrap();
+    let spread = [r - g, g - b, r - b]
+        .map(i32::abs)
+        .into_iter()
+        .max()
+        .unwrap();
     assert!(
         spread <= 12,
         "the viewport ground {background:?} is tinted (channel spread {spread}), \
@@ -124,7 +132,9 @@ fn changing_material_does_not_change_geometry() {
 
     harness.renderer.set_matcap(&harness.gpu, MatCap::GreyClay);
     let grey = harness.capture(&gpu_mesh, &camera, false, "03-silhouette-grey");
-    harness.renderer.set_matcap(&harness.gpu, MatCap::Terracotta);
+    harness
+        .renderer
+        .set_matcap(&harness.gpu, MatCap::Terracotta);
     let warm = harness.capture(&gpu_mesh, &camera, false, "03-silhouette-terracotta");
 
     // Different colours, same silhouette: the count of non-background pixels
@@ -141,7 +151,7 @@ fn changing_material_does_not_change_geometry() {
 
 #[test]
 fn each_view_preset_shows_a_different_face() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(harness) = Harness::new() else {
         return;
     };
     let background = harness.background();
@@ -185,7 +195,7 @@ fn each_view_preset_shows_a_different_face() {
 
 #[test]
 fn an_orthographic_preset_removes_the_perspective_divide() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(harness) = Harness::new() else {
         return;
     };
 
@@ -230,8 +240,8 @@ fn framing_puts_the_subject_in_view_at_any_scale() {
         let camera = support::framed_camera(&mesh);
         let image = harness.capture_mesh(&mesh, &camera, name);
 
-        let coverage = image.pixels_differing_from(background, 6) as f64
-            / (image.width * image.height) as f64;
+        let coverage =
+            image.pixels_differing_from(background, 6) as f64 / (image.width * image.height) as f64;
         assert!(
             (0.05..0.85).contains(&coverage),
             "a sphere of radius {radius} framed to {:.0}% of the frame",
@@ -242,7 +252,7 @@ fn framing_puts_the_subject_in_view_at_any_scale() {
 
 #[test]
 fn an_empty_document_renders_the_ground_without_failing() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(harness) = Harness::new() else {
         return;
     };
     let background = harness.background();
@@ -394,8 +404,14 @@ fn overlays_stay_dimmer_than_the_sculpt() {
         }
     }
 
-    assert!(sculpt_count > 0, "no sculpt pixels were found to compare against");
-    assert!(brightest_overlay > 0.0, "no overlay pixels were drawn at all");
+    assert!(
+        sculpt_count > 0,
+        "no sculpt pixels were found to compare against"
+    );
+    assert!(
+        brightest_overlay > 0.0,
+        "no overlay pixels were drawn at all"
+    );
     let sculpt_mean = sculpt_total / sculpt_count as f64;
     assert!(
         brightest_overlay < sculpt_mean,
@@ -539,7 +555,7 @@ fn the_brush_cursor_follows_the_surface_and_clears_off_it() {
 
 #[test]
 fn orbiting_changes_the_view_and_stays_stable_at_the_pole() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(harness) = Harness::new() else {
         return;
     };
     let background = harness.background();

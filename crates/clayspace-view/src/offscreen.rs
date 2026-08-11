@@ -197,9 +197,7 @@ impl Image {
     pub fn pixels_differing_from(&self, background: [u8; 4], threshold: u8) -> usize {
         self.pixels
             .chunks_exact(4)
-            .filter(|p| {
-                (0..3).any(|i| p[i].abs_diff(background[i]) > threshold)
-            })
+            .filter(|p| (0..3).any(|i| p[i].abs_diff(background[i]) > threshold))
             .count()
     }
 
@@ -242,7 +240,11 @@ impl Image {
         let is_subject = |p: &[u8]| (0..3).any(|i| p[i].abs_diff(background[i]) > threshold);
 
         let (mut total, mut counted) = (0u64, 0usize);
-        for (a, b) in self.pixels.chunks_exact(4).zip(other.pixels.chunks_exact(4)) {
+        for (a, b) in self
+            .pixels
+            .chunks_exact(4)
+            .zip(other.pixels.chunks_exact(4))
+        {
             if is_subject(a) || is_subject(b) {
                 total += (0..3).map(|i| a[i].abs_diff(b[i]) as u64).sum::<u64>();
                 counted += 3;
@@ -273,7 +275,11 @@ impl Image {
         let is_subject = |p: &[u8]| (0..3).any(|i| p[i].abs_diff(background[i]) > threshold);
 
         let (mut changed, mut subject) = (0usize, 0usize);
-        for (a, b) in self.pixels.chunks_exact(4).zip(other.pixels.chunks_exact(4)) {
+        for (a, b) in self
+            .pixels
+            .chunks_exact(4)
+            .zip(other.pixels.chunks_exact(4))
+        {
             if !is_subject(a) && !is_subject(b) {
                 continue;
             }

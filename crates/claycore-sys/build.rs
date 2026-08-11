@@ -105,7 +105,8 @@ impl Backends {
 /// backend the caller asked for. With no features named, probe the platform.
 fn select_backends() -> Backends {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    let asked = |name: &str| std::env::var(format!("CARGO_FEATURE_{}", name.to_uppercase())).is_ok();
+    let asked =
+        |name: &str| std::env::var(format!("CARGO_FEATURE_{}", name.to_uppercase())).is_ok();
 
     let (metal_req, cuda_req, vulkan_req, opencl_req) = (
         asked("metal"),
@@ -118,15 +119,27 @@ fn select_backends() -> Backends {
     let mut b = Backends::default();
 
     if metal_req {
-        require(target_os == "macos" && has_metal(), "metal", "the Metal toolchain (Xcode command line tools) on macOS");
+        require(
+            target_os == "macos" && has_metal(),
+            "metal",
+            "the Metal toolchain (Xcode command line tools) on macOS",
+        );
         b.metal = true;
     }
     if cuda_req {
-        require(has_cuda(), "cuda", "the CUDA toolkit (nvcc on PATH, or CUDA_PATH set)");
+        require(
+            has_cuda(),
+            "cuda",
+            "the CUDA toolkit (nvcc on PATH, or CUDA_PATH set)",
+        );
         b.cuda = true;
     }
     if vulkan_req {
-        require(has_vulkan(), "vulkan", "the Vulkan SDK (VULKAN_SDK set, or vulkan discoverable by pkg-config)");
+        require(
+            has_vulkan(),
+            "vulkan",
+            "the Vulkan SDK (VULKAN_SDK set, or vulkan discoverable by pkg-config)",
+        );
         b.vulkan = true;
     }
     if opencl_req {
@@ -152,7 +165,10 @@ fn select_backends() -> Backends {
     }
     // Consumed by the crate to report what was compiled in, distinct from what
     // the engine registers at runtime.
-    println!("cargo:rustc-env=CLAYCORE_COMPILED_BACKENDS={}", names.join(","));
+    println!(
+        "cargo:rustc-env=CLAYCORE_COMPILED_BACKENDS={}",
+        names.join(",")
+    );
     b
 }
 
@@ -231,7 +247,12 @@ fn emit_link_flags(build_dir: &Path, b: &Backends) {
     let deps = build_dir.join("_deps");
     if deps.is_dir() {
         if let Ok(entries) = std::fs::read_dir(&deps) {
-            roots.extend(entries.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.is_dir()));
+            roots.extend(
+                entries
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.path())
+                    .filter(|p| p.is_dir()),
+            );
         }
     }
 
@@ -240,13 +261,17 @@ fn emit_link_flags(build_dir: &Path, b: &Backends) {
         collect_archives(root, &mut found, 0);
     }
 
-    for dir in dedup(found.iter().filter_map(|p| p.parent().map(Path::to_path_buf))) {
+    for dir in dedup(
+        found
+            .iter()
+            .filter_map(|p| p.parent().map(Path::to_path_buf)),
+    ) {
         println!("cargo:rustc-link-search=native={}", dir.display());
     }
 
     // claycore first: static link order matters for the transitive deps.
     println!("cargo:rustc-link-lib=static=claycore");
-    for name in dedup(found.iter().filter_map(archive_stem)) {
+    for name in dedup(found.iter().map(PathBuf::as_path).filter_map(archive_stem)) {
         if name != "claycore" {
             println!("cargo:rustc-link-lib=static={name}");
         }
@@ -286,7 +311,7 @@ fn collect_archives(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
     }
 }
 
-fn archive_stem(path: &PathBuf) -> Option<String> {
+fn archive_stem(path: &Path) -> Option<String> {
     let stem = path.file_stem()?.to_str()?;
     Some(stem.strip_prefix("lib").unwrap_or(stem).to_string())
 }
@@ -323,9 +348,18 @@ fn generate_bindings(engine: &Path) {
 
 fn emit_rerun_directives(engine: &Path) {
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed={}", engine.join("bindings/c/clay.h").display());
-    println!("cargo:rerun-if-changed={}", engine.join("bindings/c/clay_c.cpp").display());
-    println!("cargo:rerun-if-changed={}", engine.join("CMakeLists.txt").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        engine.join("bindings/c/clay.h").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        engine.join("bindings/c/clay_c.cpp").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        engine.join("CMakeLists.txt").display()
+    );
     for dir in ["include", "src", "backends", "cmake"] {
         let p = engine.join(dir);
         if p.is_dir() {

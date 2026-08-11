@@ -96,14 +96,16 @@ impl Default for BrushParams<'_> {
 }
 
 impl BrushParams<'_> {
-    pub(crate) fn to_raw(&self) -> sys::clay_brush_params {
+    pub(crate) fn to_raw(self) -> sys::clay_brush_params {
         let mut raw = sys::clay_brush_params::sized();
         raw.size = self.size;
         raw.shape = self.shape.raw();
         raw.falloff = self.falloff.raw();
         raw.strength = self.strength;
         raw.seed = self.seed;
-        raw.mask = self.mask.map_or(std::ptr::null(), |m| m.as_ptr() as *const _);
+        raw.mask = self
+            .mask
+            .map_or(std::ptr::null(), |m| m.as_ptr() as *const _);
         raw
     }
 }
@@ -226,7 +228,7 @@ impl Default for StrokePreset {
 }
 
 impl StrokePreset {
-    pub(crate) fn to_raw(&self) -> sys::clay_stroke_preset {
+    pub(crate) fn to_raw(self) -> sys::clay_stroke_preset {
         let mut raw = sys::clay_stroke_preset::sized();
         raw.radius = self.radius;
         raw.spacing = self.spacing;

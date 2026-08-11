@@ -71,10 +71,7 @@ fn where_a_dab_spends_its_time() {
         edit_times.push(started.elapsed());
 
         // Stage two: turning those bricks into something the GPU can draw.
-        if let Some(cost) = geometry
-            .sync(&harness.gpu, &mut document)
-            .expect("re-mesh")
-        {
+        if let Some(cost) = geometry.sync(&harness.gpu, &mut document).expect("re-mesh") {
             costs.push(cost);
         }
     }

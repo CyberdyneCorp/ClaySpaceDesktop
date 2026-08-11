@@ -35,14 +35,14 @@ fn main() {
     };
     report(&policy);
 
-    let document = match ClayDocument::new(policy.clone()).and_then(ClayDocument::with_starting_form)
-    {
-        Ok(document) => document,
-        Err(e) => {
-            eprintln!("the starting document could not be built: {e}");
-            return;
-        }
-    };
+    let document =
+        match ClayDocument::new(policy.clone()).and_then(ClayDocument::with_starting_form) {
+            Ok(document) => document,
+            Err(e) => {
+                eprintln!("the starting document could not be built: {e}");
+                return;
+            }
+        };
 
     let event_loop = EventLoop::new().expect("create the event loop");
     event_loop.set_control_flow(ControlFlow::Wait);
@@ -391,7 +391,8 @@ impl App {
             self.drag = Drag::None;
         }
 
-        if let (Some(point), Some(button), true) = (input.pointer, input.pressed, input.over_viewport)
+        if let (Some(point), Some(button), true) =
+            (input.pointer, input.pressed, input.over_viewport)
         {
             let on_surface = self.pick_at(point).is_some();
             let started = match button {
@@ -573,7 +574,10 @@ impl App {
         let scale = context.pixels_per_point();
         self.viewport = viewport;
 
-        drop(state);
+        // `state` borrowed the scene and the strings for the frame. It is not
+        // `Drop`, so calling `drop` on it did nothing but say so; letting the
+        // binding end is what actually returns the borrows.
+        let _ = &state;
         self.drive(&input);
         for command in queue.drain() {
             self.handle(command);
@@ -664,9 +668,12 @@ fn paint_interface(
 ) {
     let primitives = context.tessellate(output.shapes, pixels_per_point);
     for (id, delta) in &output.textures_delta.set {
-        graphics
-            .egui_renderer
-            .update_texture(&graphics.gpu.device, &graphics.gpu.queue, *id, delta);
+        graphics.egui_renderer.update_texture(
+            &graphics.gpu.device,
+            &graphics.gpu.queue,
+            *id,
+            delta,
+        );
     }
 
     let descriptor = egui_wgpu::ScreenDescriptor {

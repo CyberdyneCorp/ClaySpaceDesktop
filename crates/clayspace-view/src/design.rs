@@ -256,6 +256,11 @@ mod tests {
         assert!(scale.iter().all(|v| *v > 0.0));
     }
 
+    // These compare constants, which clippy notices. They stay as tests rather
+    // than `const _: () = assert!(..)` because the message is the point: when
+    // one fails it should say what rule of the design was broken, and a const
+    // assertion cannot carry one.
+    #[allow(clippy::assertions_on_constants)]
     #[test]
     fn headings_are_smaller_than_body_text() {
         assert!(

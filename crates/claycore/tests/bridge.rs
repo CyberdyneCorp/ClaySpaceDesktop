@@ -61,7 +61,9 @@ fn every_registered_backend_agrees_with_cpu() {
 
     let doc = unit_sphere_document();
     let points = probe_points();
-    let reference = doc.eval_points(Some(&Backend::Cpu), &points).expect("cpu reference");
+    let reference = doc
+        .eval_points(Some(&Backend::Cpu), &points)
+        .expect("cpu reference");
 
     for backend in &registered {
         let actual = match doc.eval_points(Some(backend), &points) {
@@ -93,11 +95,14 @@ fn a_document_round_trips_through_disk() {
     let before = {
         let doc = unit_sphere_document();
         doc.save(&path).expect("save document");
-        doc.eval_points(None, &points).expect("evaluate before save")
+        doc.eval_points(None, &points)
+            .expect("evaluate before save")
     };
 
     let reopened = Document::open(&path).expect("reopen document");
-    let after = reopened.eval_points(None, &points).expect("evaluate after load");
+    let after = reopened
+        .eval_points(None, &points)
+        .expect("evaluate after load");
 
     assert_eq!(before, after, "the reopened document evaluates differently");
 

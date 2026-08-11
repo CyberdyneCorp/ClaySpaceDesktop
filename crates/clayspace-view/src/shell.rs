@@ -258,7 +258,8 @@ pub fn options_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
         ui.add_space(space::PANEL);
         ui.vertical(|ui| {
             ui.set_width(180.0);
-            if let Some(value) = slider(ui, s.label_intensity, state.brush.intensity, 0.0..=1.0, 2) {
+            if let Some(value) = slider(ui, s.label_intensity, state.brush.intensity, 0.0..=1.0, 2)
+            {
                 queue.push(Command::SetBrushIntensity(value));
             }
         });
@@ -300,12 +301,20 @@ pub fn left_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Command
             let selected = state.scene.selected == Some(node.key);
             let text = egui::RichText::new(&node.name)
                 .size(type_scale::BODY)
-                .color(if selected { Tokens::text() } else { Tokens::text_dim() });
+                .color(if selected {
+                    Tokens::text()
+                } else {
+                    Tokens::text_dim()
+                });
             ui.label(text);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 icons::button(
                     ui,
-                    if node.visible { Icon::Visible } else { Icon::Hidden },
+                    if node.visible {
+                        Icon::Visible
+                    } else {
+                        Icon::Hidden
+                    },
                     node.visible,
                 );
             });
@@ -334,9 +343,17 @@ pub fn left_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Command
             let button = egui::Button::new(
                 egui::RichText::new(axis.label())
                     .size(type_scale::LABEL)
-                    .color(if on { Tokens::text() } else { Tokens::text_dim() }),
+                    .color(if on {
+                        Tokens::text()
+                    } else {
+                        Tokens::text_dim()
+                    }),
             )
-            .fill(if on { Tokens::raised() } else { Tokens::panel() });
+            .fill(if on {
+                Tokens::raised()
+            } else {
+                Tokens::panel()
+            });
             if ui.add(button).clicked() {
                 queue.push(Command::ToggleSymmetry(*axis));
             }
@@ -351,14 +368,25 @@ fn layer_row(
     queue: &mut CommandQueue,
 ) {
     let active = state.scene.active == Some(layer.key);
-    let fill = if active { Tokens::raised() } else { Tokens::panel() };
+    let fill = if active {
+        Tokens::raised()
+    } else {
+        Tokens::panel()
+    };
 
     egui::Frame::new()
         .fill(fill)
-        .inner_margin(egui::Margin::symmetric(space::SNUG as i8, space::TIGHT as i8))
+        .inner_margin(egui::Margin::symmetric(
+            space::SNUG as i8,
+            space::TIGHT as i8,
+        ))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                let eye = if layer.visible { Icon::Visible } else { Icon::Hidden };
+                let eye = if layer.visible {
+                    Icon::Visible
+                } else {
+                    Icon::Hidden
+                };
                 if icons::button(ui, eye, layer.visible).clicked() {
                     queue.push(Command::SetLayerVisible(layer.key, !layer.visible));
                 }
@@ -367,8 +395,15 @@ fn layer_row(
                     .size(type_scale::BODY)
                     // Selection is indicated by surface tone and weight, never
                     // by the accent — that marks the active brush alone.
-                    .color(if active { Tokens::text() } else { Tokens::text_dim() });
-                if ui.add(egui::Label::new(name).sense(egui::Sense::click())).clicked() {
+                    .color(if active {
+                        Tokens::text()
+                    } else {
+                        Tokens::text_dim()
+                    });
+                if ui
+                    .add(egui::Label::new(name).sense(egui::Sense::click()))
+                    .clicked()
+                {
                     queue.push(Command::SelectLayer(layer.key));
                 }
 
@@ -450,9 +485,17 @@ pub fn right_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
             let button = egui::Button::new(
                 egui::RichText::new(falloff.label())
                     .size(type_scale::LABEL)
-                    .color(if on { Tokens::text() } else { Tokens::text_dim() }),
+                    .color(if on {
+                        Tokens::text()
+                    } else {
+                        Tokens::text_dim()
+                    }),
             )
-            .fill(if on { Tokens::raised() } else { Tokens::panel() });
+            .fill(if on {
+                Tokens::raised()
+            } else {
+                Tokens::panel()
+            });
             if ui.add(button).clicked() {
                 queue.push(Command::SetBrushFalloff(falloff));
             }
@@ -490,7 +533,11 @@ pub fn brush_shelf(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
                     egui::RichText::new(tool.label())
                         .size(type_scale::LABEL)
                         // The accent, on the active brush and nowhere else.
-                        .color(if active { Tokens::accent() } else { Tokens::text_dim() }),
+                        .color(if active {
+                            Tokens::accent()
+                        } else {
+                            Tokens::text_dim()
+                        }),
                 );
                 if response.clicked() {
                     queue.push(Command::SelectTool(tool));
@@ -513,10 +560,7 @@ pub fn status_bar(ui: &mut egui::Ui, state: &ShellState<'_>) {
                 .size(type_scale::HEADING)
                 .color(Tokens::text_faint()),
         );
-        numeric(
-            ui,
-            format!("{} / {}", gigabytes(used), gigabytes(budget)),
-        );
+        numeric(ui, format!("{} / {}", gigabytes(used), gigabytes(budget)));
 
         // Approaching the budget changes state before it is exhausted, rather
         // than only at failure.
@@ -534,7 +578,11 @@ pub fn status_bar(ui: &mut egui::Ui, state: &ShellState<'_>) {
         ui.painter().rect_filled(
             filled,
             0.0,
-            if fraction > 0.85 { Tokens::accent() } else { Tokens::text_dim() },
+            if fraction > 0.85 {
+                Tokens::accent()
+            } else {
+                Tokens::text_dim()
+            },
         );
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -568,9 +616,17 @@ pub fn viewport_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comma
             let button = egui::Button::new(
                 egui::RichText::new(preset.label())
                     .size(type_scale::LABEL)
-                    .color(if on { Tokens::text() } else { Tokens::text_dim() }),
+                    .color(if on {
+                        Tokens::text()
+                    } else {
+                        Tokens::text_dim()
+                    }),
             )
-            .fill(if on { Tokens::raised() } else { Tokens::ground() });
+            .fill(if on {
+                Tokens::raised()
+            } else {
+                Tokens::ground()
+            });
             if ui.add(button).clicked() {
                 queue.push(Command::SetViewPreset(preset));
             }
@@ -600,7 +656,11 @@ fn paint_sphere(ui: &egui::Ui, rect: egui::Rect, tint: egui::Color32, active: bo
     }
 
     if active {
-        painter.circle_stroke(centre, radius + 3.0, egui::Stroke::new(1.5, Tokens::accent()));
+        painter.circle_stroke(
+            centre,
+            radius + 3.0,
+            egui::Stroke::new(1.5, Tokens::accent()),
+        );
     }
 }
 
@@ -645,7 +705,8 @@ mod tests {
         // The panels are fixed and the viewport absorbs the rest, so at the
         // smallest window the design targets there must still be a viewport.
         let width = 1280.0 - region::RAIL - region::LEFT - region::RIGHT;
-        let height = 800.0 - region::MENU_BAR - region::OPTIONS_BAR - region::SHELF - region::STATUS;
+        let height =
+            800.0 - region::MENU_BAR - region::OPTIONS_BAR - region::SHELF - region::STATUS;
         assert!(width > 400.0, "the viewport would be {width} wide");
         assert!(height > 300.0, "the viewport would be {height} tall");
     }

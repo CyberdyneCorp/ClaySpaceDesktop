@@ -143,7 +143,9 @@ fn fixture() -> (SculptViewModel, Rc<RefCell<Recorded>>) {
 }
 
 /// A ViewModel whose model is configured before it is handed over.
-fn fixture_with(configure: impl FnOnce(&mut FakeModel)) -> (SculptViewModel, Rc<RefCell<Recorded>>) {
+fn fixture_with(
+    configure: impl FnOnce(&mut FakeModel),
+) -> (SculptViewModel, Rc<RefCell<Recorded>>) {
     let recorded = Rc::new(RefCell::new(Recorded::default()));
     let mut model = FakeModel::new(recorded.clone());
     configure(&mut model);
@@ -288,8 +290,10 @@ fn ending_a_stroke_that_never_began_does_nothing() {
 fn symmetry_reaches_the_model_as_set() {
     let (mut vm, recorded) = fixture();
     // Nothing is mirrored to start with; turn on X and Z.
-    vm.dispatch(Command::ToggleSymmetry(Axis::X)).expect("symmetry");
-    vm.dispatch(Command::ToggleSymmetry(Axis::Z)).expect("symmetry");
+    vm.dispatch(Command::ToggleSymmetry(Axis::X))
+        .expect("symmetry");
+    vm.dispatch(Command::ToggleSymmetry(Axis::Z))
+        .expect("symmetry");
     draw(&mut vm, &[[0.0; 3], [0.1, 0.0, 0.0]]).expect("stroke");
 
     assert_eq!(recorded.borrow().strokes[0].2, [true, false, true]);
@@ -301,7 +305,8 @@ fn symmetry_reaches_the_model_as_set() {
 fn an_unavailable_tool_refuses_before_collecting_a_gesture() {
     // Raspar is voxel-side; the active layer is SDF.
     let (mut vm, recorded) = fixture();
-    vm.dispatch(Command::SelectTool(ToolKind::Raspar)).expect("select");
+    vm.dispatch(Command::SelectTool(ToolKind::Raspar))
+        .expect("select");
 
     let error = vm
         .dispatch(Command::BeginStroke {
@@ -314,16 +319,23 @@ fn an_unavailable_tool_refuses_before_collecting_a_gesture() {
         error.to_string().contains("voxel"),
         "the refusal must say what the tool needs: {error}"
     );
-    assert!(!vm.is_stroking(), "a refused stroke must not start collecting");
+    assert!(
+        !vm.is_stroking(),
+        "a refused stroke must not start collecting"
+    );
     assert!(recorded.borrow().strokes.is_empty());
 }
 
 #[test]
 fn the_status_explains_why_a_tool_is_unusable() {
     let (mut vm, _) = fixture();
-    assert!(vm.tool_status().get().is_none(), "Padrão works on an SDF layer");
+    assert!(
+        vm.tool_status().get().is_none(),
+        "Padrão works on an SDF layer"
+    );
 
-    vm.dispatch(Command::SelectTool(ToolKind::Preencher)).expect("select");
+    vm.dispatch(Command::SelectTool(ToolKind::Preencher))
+        .expect("select");
     let status = vm.tool_status().get().clone();
     assert!(
         status.is_some_and(|s| s.contains("voxel")),
@@ -346,15 +358,23 @@ fn a_protected_layer_refuses_every_tool() {
 #[test]
 fn a_voxel_layer_accepts_voxel_tools() {
     let (mut vm, recorded) = fixture_with(|model| model.representation = Representation::Voxel);
-    vm.dispatch(Command::SelectTool(ToolKind::Raspar)).expect("select");
-    assert!(vm.tool_status().get().is_none(), "scrape belongs on a voxel layer");
+    vm.dispatch(Command::SelectTool(ToolKind::Raspar))
+        .expect("select");
+    assert!(
+        vm.tool_status().get().is_none(),
+        "scrape belongs on a voxel layer"
+    );
     draw(&mut vm, &[[0.0; 3], [0.1, 0.0, 0.0]]).expect("stroke");
     assert!(
         !recorded.borrow().strokes.is_empty(),
         "the stroke never reached the model"
     );
     assert!(
-        recorded.borrow().strokes.iter().all(|s| s.0 == ToolKind::Raspar),
+        recorded
+            .borrow()
+            .strokes
+            .iter()
+            .all(|s| s.0 == ToolKind::Raspar),
         "every segment must carry the tool that was selected"
     );
 }
@@ -366,11 +386,13 @@ fn brush_settings_are_remembered_per_tool() {
     let (mut vm, _) = fixture();
     vm.dispatch(Command::SetBrushSize(0.5)).expect("size");
 
-    vm.dispatch(Command::SelectTool(ToolKind::Suavizar)).expect("select");
+    vm.dispatch(Command::SelectTool(ToolKind::Suavizar))
+        .expect("select");
     vm.dispatch(Command::SetBrushSize(0.1)).expect("size");
     assert_eq!(vm.brush().get().size, 0.1);
 
-    vm.dispatch(Command::SelectTool(ToolKind::Padrao)).expect("select");
+    vm.dispatch(Command::SelectTool(ToolKind::Padrao))
+        .expect("select");
     assert_eq!(
         vm.brush().get().size,
         0.5,
@@ -500,8 +522,14 @@ fn view_commands_never_touch_history_or_stats() {
         vm.dispatch(command).expect("view command");
     }
 
-    assert!(!history.take_change(vm.history()), "a view change entered the history");
-    assert!(!stats.take_change(vm.stats()), "a view change altered the statistics");
+    assert!(
+        !history.take_change(vm.history()),
+        "a view change entered the history"
+    );
+    assert!(
+        !stats.take_change(vm.stats()),
+        "a view change altered the statistics"
+    );
 }
 
 #[test]
@@ -510,7 +538,8 @@ fn the_view_preset_and_grid_are_observable() {
     let mut watcher = Watcher::new();
     watcher.accept(vm.view_preset());
 
-    vm.dispatch(Command::SetViewPreset(ViewPresetKind::Top)).expect("preset");
+    vm.dispatch(Command::SetViewPreset(ViewPresetKind::Top))
+        .expect("preset");
     assert!(watcher.take_change(vm.view_preset()));
     assert_eq!(*vm.view_preset().get(), ViewPresetKind::Top);
 
@@ -522,11 +551,13 @@ fn the_view_preset_and_grid_are_observable() {
 #[test]
 fn setting_the_preset_already_active_schedules_no_redraw() {
     let (mut vm, _) = fixture();
-    vm.dispatch(Command::SetViewPreset(ViewPresetKind::Top)).expect("preset");
+    vm.dispatch(Command::SetViewPreset(ViewPresetKind::Top))
+        .expect("preset");
     let mut watcher = Watcher::new();
     watcher.accept(vm.view_preset());
 
-    vm.dispatch(Command::SetViewPreset(ViewPresetKind::Top)).expect("preset again");
+    vm.dispatch(Command::SetViewPreset(ViewPresetKind::Top))
+        .expect("preset again");
     assert!(
         !watcher.take_change(vm.view_preset()),
         "an immediate-mode interface sets controls to their current value constantly; \
@@ -537,7 +568,12 @@ fn setting_the_preset_already_active_schedules_no_redraw() {
 #[test]
 fn an_idle_viewmodel_reports_no_changes() {
     let (vm, _) = fixture();
-    let mut watchers = (Watcher::new(), Watcher::new(), Watcher::new(), Watcher::new());
+    let mut watchers = (
+        Watcher::new(),
+        Watcher::new(),
+        Watcher::new(),
+        Watcher::new(),
+    );
     watchers.0.accept(vm.tool());
     watchers.1.accept(vm.brush());
     watchers.2.accept(vm.history());

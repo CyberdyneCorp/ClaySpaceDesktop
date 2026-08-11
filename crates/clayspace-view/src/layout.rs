@@ -173,7 +173,11 @@ mod tests {
         layout.resize(Panel::Right, 300.0);
         layout.set_collapsed(Panel::Right, true);
 
-        assert_eq!(layout.size(Panel::Right), 0.0, "the layout must give it nothing");
+        assert_eq!(
+            layout.size(Panel::Right),
+            0.0,
+            "the layout must give it nothing"
+        );
         assert_eq!(
             layout.stored_size(Panel::Right),
             300.0,

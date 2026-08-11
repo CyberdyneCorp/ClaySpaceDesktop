@@ -232,9 +232,8 @@ impl SurfaceGeometry {
         // — but a key that is being kept needs nothing built for it, and
         // building it anyway was most of the cost of meshing the whole
         // surface.
-        let wanted = |slot: usize| {
-            replace.is_none_or(|replace| replace.contains(&ranges[slot].key))
-        };
+        let wanted =
+            |slot: usize| replace.is_none_or(|replace| replace.contains(&ranges[slot].key));
         let mut owned: Vec<Vec<[u32; 3]>> = vec![Vec::new(); ranges.len()];
         for range in &ranges {
             let first = range.index_first as usize;
@@ -349,11 +348,7 @@ impl SurfaceGeometry {
     /// The compaction the specification calls for: per-key slots accumulate
     /// empty entries as the surface moves, and this is where they go. Off the
     /// interaction path — it costs a full re-mesh.
-    pub fn rebuild(
-        &mut self,
-        gpu: &Gpu,
-        document: &mut ClayDocument,
-    ) -> Result<(), ClayError> {
+    pub fn rebuild(&mut self, gpu: &Gpu, document: &mut ClayDocument) -> Result<(), ClayError> {
         let keys = document.cache().surface_bricks()?;
         self.keys.clear();
         if keys.is_empty() {
@@ -380,9 +375,7 @@ impl SurfaceGeometry {
     /// silently disagree with a full one, and comparing two of these says
     /// exactly which key lost or gained what — which a rendered difference
     /// cannot.
-    pub fn stored_triangles(
-        &self,
-    ) -> std::collections::BTreeMap<BrickKey, Vec<[[i32; 3]; 3]>> {
+    pub fn stored_triangles(&self) -> std::collections::BTreeMap<BrickKey, Vec<[[i32; 3]; 3]>> {
         self.keys
             .iter()
             // A key with no triangles draws nothing, and whether it holds an

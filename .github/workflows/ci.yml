@@ -1,0 +1,168 @@
+# The gate. Everything that has to hold before a change lands.
+#
+# The engine is a submodule built from source with CMake, so every job pays for
+# a C++20 build before it can compile a line of Rust. That is what the ccache
+# step is for; without it the matrix is dominated by rebuilding ClayCore four
+# times over.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # A backtrace on a CI failure costs nothing and saves a round trip.
+  RUST_BACKTRACE: 1
+
+jobs:
+  # The four configurations the specification names. CPU is always compiled
+  # into the engine, so the CPU-only rows are the ones that must pass
+  # everywhere; the accelerated rows are what the acceleration policy is for.
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      # One row failing should not hide the others: a Metal-only regression is
+      # worth seeing next to a green CPU run.
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS, CPU only
+            os: macos-14
+            features: ""
+          - name: macOS, Metal
+            os: macos-14
+            features: "--features clayspace-engine/metal"
+          - name: Linux, CPU only
+            os: ubuntu-24.04
+            features: ""
+          - name: Linux, Vulkan
+            os: ubuntu-24.04
+            features: "--features clayspace-engine/vulkan"
+            vulkan: true
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo and the engine build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+
+      # winit and wgpu need these to build on Linux even where no window is
+      # ever opened; rfd needs GTK for its fallback dialog.
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build \
+            libx11-dev libxkbcommon-dev libwayland-dev \
+            libgtk-3-dev
+
+      - name: Vulkan SDK
+        if: matrix.vulkan
+        run: |
+          sudo apt-get install -y --no-install-recommends \
+            libvulkan-dev vulkan-headers glslang-tools
+          # The engine's build script looks for VULKAN_SDK. The distribution
+          # packages install into /usr, which is a valid SDK root for its
+          # purposes.
+          echo "VULKAN_SDK=/usr" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: cargo build --workspace --all-targets ${{ matrix.features }}
+
+      # Visual tests ask for a headless GPU and skip when there is none; the
+      # window smoke asks for a display and skips likewise. Both report the
+      # skip rather than passing quietly, so a runner that *should* have a
+      # device shows up as a skip in the log rather than a false green.
+      - name: Test
+        run: cargo test --workspace ${{ matrix.features }}
+
+      # The budgets are a property of an optimised build. Measuring them in a
+      # debug build measures the profile, so the timing assertions only run
+      # here.
+      - name: Test (release)
+        run: cargo test --workspace --release ${{ matrix.features }}
+
+  lint:
+    name: Format, lint and audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: lint
+
+      - name: Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build \
+            libx11-dev libxkbcommon-dev libwayland-dev \
+            libgtk-3-dev
+
+      - name: Formatting
+        run: cargo fmt --all --check
+
+      # Warnings are errors here and nowhere else: a warning that survives a
+      # merge is a warning nobody will ever fix.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@cargo-deny
+
+      # Advisories and licences. Bans and sources are checked too, so a new
+      # dependency that duplicates an existing one, or comes from somewhere
+      # unexpected, is caught at the point it is added.
+      - name: Dependency audit
+        run: cargo deny check
+
+  layering:
+    name: Layering
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # The architecture the specification asks for, checked mechanically:
+      # the ViewModels cannot reach the engine, the view cannot reach the
+      # model, and unsafe stays in the two crates that are allowed it. This
+      # needs no build, so it is the fastest signal on a pull request.
+      - name: Check the layering rules
+        run: python3 tools/check_layering.py
+
+  openspec:
+    name: OpenSpec
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install -g @fission-ai/openspec@latest
+      # Strict: the specification and the code are supposed to describe the
+      # same application, and a change that drifts from its spec is a change
+      # whose intent has been lost.
+      - name: Validate the change and the specs
+        run: openspec validate --all --strict

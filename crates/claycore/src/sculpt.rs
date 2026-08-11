@@ -157,7 +157,7 @@ impl Default for FlattenParams<'_> {
 }
 
 impl FlattenParams<'_> {
-    fn to_raw(&self) -> sys::clay_flatten_params {
+    fn to_raw(self) -> sys::clay_flatten_params {
         let mut raw = sys::clay_flatten_params::sized();
         raw.plane_point = self.plane_point;
         raw.plane_normal = self.plane_normal;
@@ -170,13 +170,15 @@ impl FlattenParams<'_> {
             FlattenMode::CutOnly => 1,
             FlattenMode::FillOnly => 2,
         };
-        raw.mask = self.mask.map_or(std::ptr::null(), |m| m.as_ptr() as *const _);
+        raw.mask = self
+            .mask
+            .map_or(std::ptr::null(), |m| m.as_ptr() as *const _);
         raw
     }
 }
 
 impl RelaxParams<'_> {
-    fn to_raw(&self) -> sys::clay_relax_params {
+    fn to_raw(self) -> sys::clay_relax_params {
         let mut raw = sys::clay_relax_params::sized();
         raw.strength = self.strength;
         raw.radius_cells = self.radius_cells;
@@ -184,7 +186,9 @@ impl RelaxParams<'_> {
         raw.centre = self.centre;
         raw.region_radius = self.region_radius;
         raw.falloff = self.falloff;
-        raw.mask = self.mask.map_or(std::ptr::null(), |m| m.as_ptr() as *const _);
+        raw.mask = self
+            .mask
+            .map_or(std::ptr::null(), |m| m.as_ptr() as *const _);
         raw
     }
 }

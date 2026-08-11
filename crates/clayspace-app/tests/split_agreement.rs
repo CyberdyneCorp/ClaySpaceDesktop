@@ -28,9 +28,16 @@ fn an_incremental_sync_stores_what_a_rebuild_would() {
         .rebuild(&harness.gpu, &mut document)
         .expect("first mesh");
 
-    let dabs: usize = std::env::var("DABS").ok().and_then(|v| v.parse().ok()).unwrap_or(6);
+    let dabs: usize = std::env::var("DABS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(6);
     for i in 0..dabs {
-        let t = if dabs > 1 { i as f32 / (dabs - 1) as f32 } else { 0.5 };
+        let t = if dabs > 1 {
+            i as f32 / (dabs - 1) as f32
+        } else {
+            0.5
+        };
         let angle = (t - 0.5) * 1.0;
         let (s, c) = angle.sin_cos();
         document
@@ -45,9 +52,7 @@ fn an_incremental_sync_stores_what_a_rebuild_would() {
                 [false; 3],
             )
             .expect("stroke");
-        incremental
-            .sync(&harness.gpu, &mut document)
-            .expect("sync");
+        incremental.sync(&harness.gpu, &mut document).expect("sync");
     }
 
     let mut reference = SurfaceGeometry::new(&harness.gpu);
@@ -83,7 +88,11 @@ fn an_incremental_sync_stores_what_a_rebuild_would() {
     // Keys the sync holds that a rebuild does not know about at all.
     let orphans = mine.keys().filter(|k| !theirs.contains_key(*k)).count();
 
-    println!("\nkeys: {} rebuilt, {} after sync", theirs.len(), mine.len());
+    println!(
+        "\nkeys: {} rebuilt, {} after sync",
+        theirs.len(),
+        mine.len()
+    );
     println!("  differing keys : {keys_differing}");
     println!("  triangles missing from the sync : {missing}");
     println!("  triangles the sync has spare    : {extra}");
@@ -101,7 +110,10 @@ fn an_incremental_sync_stores_what_a_rebuild_would() {
     //
     // Measured for six dabs at the time of writing: 100 bricks, ~3500
     // triangles each way, out of 733 bricks and ~280k triangles.
-    assert_eq!(orphans, 0, "the sync holds geometry a rebuild does not know about");
+    assert_eq!(
+        orphans, 0,
+        "the sync holds geometry a rebuild does not know about"
+    );
     assert!(
         keys_differing < theirs.len() / 4,
         "{keys_differing} of {} bricks disagree with a rebuild — that is past a \

@@ -517,9 +517,12 @@ impl Renderer {
         // The scene's own rectangle decides the aspect, not the window's. A
         // ray is built from the same rectangle, so any disagreement here is a
         // pick that lands somewhere other than where the pixel was.
-        let scene = self
-            .scene_viewport
-            .unwrap_or([0.0, 0.0, framebuffer.width as f32, framebuffer.height as f32]);
+        let scene = self.scene_viewport.unwrap_or([
+            0.0,
+            0.0,
+            framebuffer.width as f32,
+            framebuffer.height as f32,
+        ]);
         let aspect = scene[2] / scene[3].max(1.0);
         let uniform = CameraUniform {
             view_projection: camera.view_projection(aspect).to_cols_array_2d(),
@@ -857,7 +860,11 @@ fn cursor_geometry(cursor: BrushCursor) -> (Vec<Vertex>, Vec<u32>) {
     };
     // Any pair perpendicular to the normal will do; picking the axis least
     // aligned with it avoids a degenerate cross product.
-    let reference = if normal.x.abs() < 0.9 { Vec3::X } else { Vec3::Y };
+    let reference = if normal.x.abs() < 0.9 {
+        Vec3::X
+    } else {
+        Vec3::Y
+    };
     let u = normal.cross(reference).normalize() * cursor.radius;
     let v = normal.cross(u).normalize() * cursor.radius;
 
@@ -890,7 +897,10 @@ fn cursor_geometry(cursor: BrushCursor) -> (Vec<Vertex>, Vec<u32>) {
     // ring is large.
     let tick = cursor.radius * 0.12;
     let base = vertices.len() as u32;
-    for (a, b) in [(u.normalize() * tick, -u.normalize() * tick), (v.normalize() * tick, -v.normalize() * tick)] {
+    for (a, b) in [
+        (u.normalize() * tick, -u.normalize() * tick),
+        (v.normalize() * tick, -v.normalize() * tick),
+    ] {
         let offset = normal * (cursor.radius * 0.02);
         for point in [centre + a + offset, centre + b + offset] {
             vertices.push(Vertex {
@@ -962,7 +972,10 @@ mod tests {
     fn no_symmetry_leaves_one_ring() {
         let cursors = mirrored_cursors(off_axis(), [false; 3]);
         assert_eq!(cursors.len(), 1);
-        assert!(!cursors[0].mirrored, "the pointer's own ring is not a mirror");
+        assert!(
+            !cursors[0].mirrored,
+            "the pointer's own ring is not a mirror"
+        );
     }
 
     #[test]
@@ -996,7 +1009,11 @@ mod tests {
 
         assert_eq!(mirror.position, [-0.3, 0.5, 0.7]);
         assert_eq!(mirror.normal, [-0.0, 0.0, 1.0]);
-        assert_eq!(mirror.radius, off_axis().radius, "a mirror is the same size");
+        assert_eq!(
+            mirror.radius,
+            off_axis().radius,
+            "a mirror is the same size"
+        );
     }
 
     #[test]
@@ -1068,7 +1085,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn the_vertex_layout_matches_what_the_engine_is_told() {
         // The engine writes into this layout by byte offset, so a change here
@@ -1086,8 +1102,16 @@ mod tests {
         // drift this project is built to avoid has started.
         let shader = include_str!("shaders/matcap.wgsl").to_lowercase();
         for forbidden in [
-            "sd_sphere", "sdsphere", "smin", "smooth_min", "sdbox", "sd_box",
-            "signed_distance", "raymarch", "sphere_trace", "ctape_eval",
+            "sd_sphere",
+            "sdsphere",
+            "smin",
+            "smooth_min",
+            "sdbox",
+            "sd_box",
+            "signed_distance",
+            "raymarch",
+            "sphere_trace",
+            "ctape_eval",
         ] {
             assert!(
                 !shader.contains(forbidden),
@@ -1134,7 +1158,9 @@ mod tests {
             radius: 0.2,
             mirrored: false,
         });
-        assert!(vertices.iter().all(|v| v.position.iter().all(|c| c.is_finite())));
+        assert!(vertices
+            .iter()
+            .all(|v| v.position.iter().all(|c| c.is_finite())));
     }
 
     #[test]
@@ -1167,7 +1193,10 @@ mod tests {
             },
             1.0,
         );
-        assert!(none.is_empty(), "overlays were built when none were requested");
+        assert!(
+            none.is_empty(),
+            "overlays were built when none were requested"
+        );
 
         let (grid, grid_indices) = overlay_geometry(
             Overlays {

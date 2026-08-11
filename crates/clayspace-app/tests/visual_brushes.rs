@@ -95,7 +95,12 @@ fn exercise(harness: &mut Harness, tool: ToolKind) -> Option<Outcome> {
 
     let name = format!("{tool:?}").to_lowercase();
     let background = harness.background();
-    let before = harness.capture(geometry.mesh(), &camera, false, &format!("brush-{name}-before"));
+    let before = harness.capture(
+        geometry.mesh(),
+        &camera,
+        false,
+        &format!("brush-{name}-before"),
+    );
 
     if let Err(refusal) = vm.dispatch(Command::SelectTool(tool)) {
         return Some(Outcome {
@@ -159,7 +164,9 @@ fn exercise(harness: &mut Harness, tool: ToolKind) -> Option<Outcome> {
             .with(|document| geometry.sync(&harness.gpu, document))
             .expect("re-mesh");
         if let Some(cost) = cost {
-            if worst_sync.is_none_or(|w| cost.mesh_time + cost.upload_time > w.mesh_time + w.upload_time) {
+            if worst_sync
+                .is_none_or(|w| cost.mesh_time + cost.upload_time > w.mesh_time + w.upload_time)
+            {
                 worst_sync = Some(cost);
             }
         }
@@ -177,7 +184,12 @@ fn exercise(harness: &mut Harness, tool: ToolKind) -> Option<Outcome> {
             .expect("final re-mesh");
     }
 
-    let after = harness.capture(geometry.mesh(), &camera, false, &format!("brush-{name}-after"));
+    let after = harness.capture(
+        geometry.mesh(),
+        &camera,
+        false,
+        &format!("brush-{name}-after"),
+    );
 
     Some(Outcome {
         tool,
@@ -208,8 +220,8 @@ fn every_brush_in_the_shelf_draws_something_worth_looking_at() {
     }
 
     println!(
-        "\n{:<12} {:>5} {:>9} {:>9} {:>6} {:>8} {:>8}  {}",
-        "tool", "segs", "changed", "worst ms", "keys", "mesh ms", "up ms", "refusal"
+        "\n{:<12} {:>5} {:>9} {:>9} {:>6} {:>8} {:>8}  refusal",
+        "tool", "segs", "changed", "worst ms", "keys", "mesh ms", "up ms"
     );
     for o in &outcomes {
         let (keys, mesh, up) = o.worst_sync.map_or((0, 0.0, 0.0), |c| {
@@ -220,7 +232,7 @@ fn every_brush_in_the_shelf_draws_something_worth_looking_at() {
             )
         });
         println!(
-            "{:<12} {:>5} {:>8.2}% {:>9.1} {:>6} {:>8.1} {:>8.1}  {}",
+            "{:<12} {:>5} {:>8.2}% {:>9.1} {:>6} {:>8.1} {:>8.1} {:>9}  {}",
             format!("{:?}", o.tool),
             o.segments,
             o.changed * 100.0,
@@ -228,6 +240,7 @@ fn every_brush_in_the_shelf_draws_something_worth_looking_at() {
             keys,
             mesh,
             up,
+            o.triangles,
             o.refused.as_deref().unwrap_or("")
         );
     }
@@ -273,7 +286,11 @@ fn every_brush_in_the_shelf_draws_something_worth_looking_at() {
     // The mask is the exception that has to be stated: it must report that it
     // did something while moving nothing at all.
     if let Some(mask) = outcomes.iter().find(|o| o.tool == ToolKind::Mascara) {
-        assert!(mask.refused.is_none(), "the mask tool refused: {:?}", mask.refused);
+        assert!(
+            mask.refused.is_none(),
+            "the mask tool refused: {:?}",
+            mask.refused
+        );
         assert!(
             mask.reported,
             "the mask painted nothing — it was mapped onto a deformation verb \
@@ -339,7 +356,11 @@ fn no_brush_stalls_the_stroke() {
             "{:<12} worst segment {:>7.1} ms{}",
             format!("{tool:?}"),
             worst.as_secs_f64() * 1000.0,
-            if STAMPING.contains(tool) { "" } else { "   (bake-and-replace)" }
+            if STAMPING.contains(tool) {
+                ""
+            } else {
+                "   (bake-and-replace)"
+            }
         );
     }
 

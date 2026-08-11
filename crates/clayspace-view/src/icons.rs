@@ -165,10 +165,8 @@ pub fn paint(painter: &egui::Painter, rect: egui::Rect, icon: Icon, tint: egui::
 
 /// Allocates space and draws an icon, returning the response.
 pub fn button(ui: &mut egui::Ui, icon: Icon, active: bool) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(size::ICON, size::ICON),
-        egui::Sense::click(),
-    );
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(size::ICON, size::ICON), egui::Sense::click());
     // Quiet at rest, brighter on hover: the same rule the rest of the
     // interface follows.
     let tint = if active || response.hovered() {
@@ -208,6 +206,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::assertions_on_constants)] // see design.rs
     #[test]
     fn the_set_shares_one_stroke_weight() {
         // The weight is a constant rather than a per-icon choice, which is

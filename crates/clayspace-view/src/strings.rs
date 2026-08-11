@@ -260,11 +260,7 @@ mod tests {
         for locale in Locale::ALL {
             let strings = Strings::for_locale(locale);
             for value in strings.all() {
-                assert!(
-                    !value.is_empty(),
-                    "{} has an empty string",
-                    locale.label()
-                );
+                assert!(!value.is_empty(), "{} has an empty string", locale.label());
             }
         }
     }
@@ -293,7 +289,11 @@ mod tests {
         assert_eq!(Locale::from_tag(""), Locale::default());
         assert_eq!(Locale::from_tag("pt-BR"), Locale::PtBr);
         assert_eq!(Locale::from_tag("en-GB"), Locale::EnUs);
-        assert_eq!(Locale::from_tag("EN-US"), Locale::EnUs, "tags are not case sensitive");
+        assert_eq!(
+            Locale::from_tag("EN-US"),
+            Locale::EnUs,
+            "tags are not case sensitive"
+        );
     }
 
     #[test]

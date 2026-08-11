@@ -18,8 +18,8 @@ mod authoring;
 mod backend;
 mod brick;
 mod brush;
-mod consolidate;
 mod buffer;
+mod consolidate;
 mod descriptor;
 mod document;
 mod error;
@@ -36,13 +36,11 @@ pub use brick::{
     BrickCache, BrickConfig, BrickKey, BrickMeshParams, BrickMeshRange, BrickRequest, BrickSamples,
     BrickState, BrickStats,
 };
-pub use brush::{
-    Accumulation, BrushParams, BrushShape, Falloff, StrokePreset, StrokeSample,
-};
+pub use brush::{Accumulation, BrushParams, BrushShape, Falloff, StrokePreset, StrokeSample};
 pub use consolidate::{ConsolidationCost, ConsolidationParams, FieldReport};
 pub use document::{Document, Item, LayerId, NodeId};
-pub use mask::{ExtrudeSide, Mask, MaskExtrudeParams, MaskField, MaskRef};
 pub use error::{ClayError, ErrorKind, Result};
+pub use mask::{ExtrudeSide, Mask, MaskExtrudeParams, MaskField, MaskRef};
 pub use mesh::{Mesh, MeshParams, MeshValidity, Mesher, VertexLayout};
 pub use pick::{Hit, Snapped};
 pub use reader::Reader;
@@ -94,7 +92,11 @@ pub fn version() -> Version {
     // SAFETY: three out-parameters, all valid for writes of i32. The call
     // cannot fail and has no other effect.
     unsafe { sys::clay_version(&mut major, &mut minor, &mut patch) };
-    Version { major, minor, patch }
+    Version {
+        major,
+        minor,
+        patch,
+    }
 }
 
 /// The engine ABI this crate was written against.

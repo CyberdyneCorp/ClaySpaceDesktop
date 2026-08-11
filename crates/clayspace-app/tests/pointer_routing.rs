@@ -24,7 +24,10 @@ const WINDOW: egui::Vec2 = egui::vec2(1280.0, 800.0);
 /// Two frames because egui lays panels out on one and hit-tests against that
 /// layout on the next; a single frame would report on a viewport that did not
 /// exist yet.
-fn route(pointer: egui::Pos2, buttons: &[egui::PointerButton]) -> (ViewportInput, egui::Rect, bool) {
+fn route(
+    pointer: egui::Pos2,
+    buttons: &[egui::PointerButton],
+) -> (ViewportInput, egui::Rect, bool) {
     let ctx = egui::Context::default();
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, WINDOW);
 
@@ -122,8 +125,14 @@ fn the_consumed_flag_would_have_swallowed_that_press() {
 fn a_press_on_a_panel_stays_on_the_panel() {
     for (name, pointer) in [
         ("left panel", egui::pos2(region::LEFT * 0.5, 400.0)),
-        ("right panel", egui::pos2(WINDOW.x - region::RIGHT * 0.5, 400.0)),
-        ("brush shelf", egui::pos2(640.0, WINDOW.y - region::STATUS - 20.0)),
+        (
+            "right panel",
+            egui::pos2(WINDOW.x - region::RIGHT * 0.5, 400.0),
+        ),
+        (
+            "brush shelf",
+            egui::pos2(640.0, WINDOW.y - region::STATUS - 20.0),
+        ),
         ("options bar", egui::pos2(640.0, region::MENU_BAR + 10.0)),
     ] {
         let (input, _, _) = route(pointer, &[egui::PointerButton::Primary]);

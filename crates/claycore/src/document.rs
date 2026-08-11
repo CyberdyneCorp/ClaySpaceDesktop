@@ -92,9 +92,9 @@ impl Item {
         // SAFETY: `params` is a valid slice for `params.len()` floats, and the
         // engine copies what it needs before returning.
         let raw = unsafe { sys::clay_item_create(prim, params.as_ptr(), params.len()) };
-        NonNull::new(raw).map(|raw| Self { raw }).ok_or_else(|| {
-            raw_failure("clay_item_create", ErrorKind::InvalidArgument)
-        })
+        NonNull::new(raw)
+            .map(|raw| Self { raw })
+            .ok_or_else(|| raw_failure("clay_item_create", ErrorKind::InvalidArgument))
     }
 
     /// Places the item at a world position.
@@ -223,7 +223,9 @@ impl Document {
             return Ok(distances);
         }
 
-        let name = backend.map(|b| cstring(b.as_str(), "clay_eval_points")).transpose()?;
+        let name = backend
+            .map(|b| cstring(b.as_str(), "clay_eval_points"))
+            .transpose()?;
         let name_ptr = name.as_ref().map_or(std::ptr::null(), |s| s.as_ptr());
 
         // SAFETY: `points` is `points.len() * 3` contiguous floats — `[f32; 3]`
@@ -253,7 +255,6 @@ impl Drop for Document {
         unsafe { sys::clay_document_destroy(self.raw.as_ptr()) };
     }
 }
-
 
 impl Document {
     /// The raw handle, for sibling modules in this crate only.

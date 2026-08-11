@@ -134,7 +134,9 @@ impl SceneModel for SharedDocument {
         position: [f32; 3],
         scale: f32,
     ) -> Result<(), ModelError> {
-        self.0.borrow_mut().set_layer_transform(key, position, scale)
+        self.0
+            .borrow_mut()
+            .set_layer_transform(key, position, scale)
     }
 
     fn layer_cost(&self, key: LayerKey) -> Result<LayerCost, ModelError> {

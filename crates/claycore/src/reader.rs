@@ -50,11 +50,7 @@ impl<'doc> Reader<'doc> {
     }
 
     /// Casts a ray and reports which layer and node it met.
-    pub fn raycast_attributed(
-        &self,
-        origin: [f32; 3],
-        direction: [f32; 3],
-    ) -> Result<Option<Hit>> {
+    pub fn raycast_attributed(&self, origin: [f32; 3], direction: [f32; 3]) -> Result<Option<Hit>> {
         self.doc.raycast_attributed(origin, direction)
     }
 

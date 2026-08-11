@@ -317,7 +317,12 @@ impl VoxelField {
     }
 
     /// Dilates for a positive amount, erodes for a negative one.
-    pub fn sculpt_inflate(&mut self, cell: Cell, brush: &BrushParams<'_>, amount: i32) -> Result<()> {
+    pub fn sculpt_inflate(
+        &mut self,
+        cell: Cell,
+        brush: &BrushParams<'_>,
+        amount: i32,
+    ) -> Result<()> {
         let raw = brush.to_raw();
         // SAFETY: as above.
         check(
@@ -473,6 +478,9 @@ impl VoxelField {
     ///
     /// The engine decodes no images: a caller with an alpha has already loaded
     /// it.
+    // Mirrors the C entry point's parameter list. Grouping them into a
+    // struct here would mean a second shape to keep in step with the ABI.
+    #[allow(clippy::too_many_arguments)]
     pub fn sculpt_carve_alpha(
         &mut self,
         cell: Cell,
@@ -603,11 +611,7 @@ impl VoxelField {
     }
 
     /// Pulls the masked patch off as a solid grid the caller owns.
-    pub fn mask_extrude(
-        &self,
-        mask: &MaskField,
-        params: MaskExtrudeParams,
-    ) -> Result<VoxelGrid> {
+    pub fn mask_extrude(&self, mask: &MaskField, params: MaskExtrudeParams) -> Result<VoxelGrid> {
         let raw_params = params.to_raw();
         let mut grid = std::ptr::null_mut();
         // SAFETY: both handles valid, descriptor sized; `grid` written only on

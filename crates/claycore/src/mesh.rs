@@ -169,7 +169,12 @@ impl Mesh {
         // SAFETY: the engine returns a pointer to `vertex_count * 3` floats
         // owned by this mesh and valid until it is destroyed. `[f32; 3]` has
         // the same layout as three consecutive floats.
-        unsafe { slice_of(sys::clay_mesh_positions(self.raw.as_ptr()), self.vertex_count()) }
+        unsafe {
+            slice_of(
+                sys::clay_mesh_positions(self.raw.as_ptr()),
+                self.vertex_count(),
+            )
+        }
     }
 
     /// Vertex normals, when the mesh carries them.
@@ -286,4 +291,3 @@ unsafe fn slice_of<'a>(ptr: *const f32, count: usize) -> &'a [[f32; 3]] {
     }
     std::slice::from_raw_parts(ptr as *const [f32; 3], count)
 }
-

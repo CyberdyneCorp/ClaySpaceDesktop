@@ -78,10 +78,7 @@ fn compare(a: &Image, b: &Image) -> (f64, u8) {
     for y in 0..a.height.min(b.height) {
         for x in 0..a.width.min(b.width) {
             let (pa, pb) = (a.pixel(x, y), b.pixel(x, y));
-            let gap = (0..3)
-                .map(|c| pa[c].abs_diff(pb[c]))
-                .max()
-                .unwrap_or(0);
+            let gap = (0..3).map(|c| pa[c].abs_diff(pb[c])).max().unwrap_or(0);
             if gap > 8 {
                 differing += 1;
                 worst = worst.max(gap);
@@ -96,7 +93,10 @@ fn compare(a: &Image, b: &Image) -> (f64, u8) {
 fn save_difference(a: &Image, b: &Image, name: &str) {
     let mut pixels = vec![0u8; a.pixels.len()];
     for i in (0..a.pixels.len()).step_by(4) {
-        let gap = (0..3).map(|c| a.pixels[i + c].abs_diff(b.pixels[i + c])).max().unwrap_or(0);
+        let gap = (0..3)
+            .map(|c| a.pixels[i + c].abs_diff(b.pixels[i + c]))
+            .max()
+            .unwrap_or(0);
         // Amplified: a two-level difference is invisible against black and is
         // exactly the kind that turns out to matter.
         let lit = gap.saturating_mul(8);
@@ -117,7 +117,7 @@ fn save_difference(a: &Image, b: &Image, name: &str) {
 
 #[test]
 fn an_incremental_stroke_draws_what_a_full_remesh_would() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(harness) = Harness::new() else {
         return;
     };
     let Some(mut document) = document() else {
@@ -192,7 +192,7 @@ fn an_incremental_stroke_draws_what_a_full_remesh_would() {
 fn many_strokes_do_not_accumulate_damage() {
     // One dab can hide a seam defect by luck of where it lands. A session's
     // worth of strokes across the surface cannot.
-    let Some(mut harness) = Harness::new() else {
+    let Some(harness) = Harness::new() else {
         return;
     };
     let Some(mut document) = document() else {
@@ -201,7 +201,9 @@ fn many_strokes_do_not_accumulate_damage() {
     let camera = framed(&document);
 
     let mut geometry = SurfaceGeometry::new(&harness.gpu);
-    geometry.rebuild(&harness.gpu, &mut document).expect("first mesh");
+    geometry
+        .rebuild(&harness.gpu, &mut document)
+        .expect("first mesh");
 
     for pass in 0..4 {
         let offset = pass as f32 * 0.11 - 0.16;
@@ -226,7 +228,9 @@ fn many_strokes_do_not_accumulate_damage() {
         geometry
             .sync(&harness.gpu, &mut document)
             .expect("incremental re-mesh");
-        geometry.settle(&harness.gpu, &mut document).expect("settle");
+        geometry
+            .settle(&harness.gpu, &mut document)
+            .expect("settle");
     }
 
     let incremental = harness.capture(geometry.mesh(), &camera, false, "18-many-incremental");
@@ -262,7 +266,7 @@ fn the_per_key_split_draws_what_the_engine_meshed() {
     // that compares them to each other sees nothing.
     //
     // So this compares against the engine's own mesh, uploaded whole.
-    let Some(mut harness) = Harness::new() else {
+    let Some(harness) = Harness::new() else {
         return;
     };
     let Some(mut document) = document() else {
@@ -272,7 +276,9 @@ fn the_per_key_split_draws_what_the_engine_meshed() {
     drag(&mut document);
 
     let mut geometry = SurfaceGeometry::new(&harness.gpu);
-    geometry.rebuild(&harness.gpu, &mut document).expect("rebuild");
+    geometry
+        .rebuild(&harness.gpu, &mut document)
+        .expect("rebuild");
     let split = harness.capture(geometry.mesh(), &camera, false, "19-split");
 
     // The same bricks, meshed by the engine and handed straight to the GPU.

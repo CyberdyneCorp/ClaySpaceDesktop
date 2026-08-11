@@ -135,9 +135,7 @@ impl std::fmt::Display for Unavailable {
                 write!(f, "draw {needs} rather than a stroke across the surface")
             }
             Self::LayerProtected => f.write_str("this layer is locked"),
-            Self::MeshLayer => {
-                f.write_str("mesh layers are carried, not sculpted")
-            }
+            Self::MeshLayer => f.write_str("mesh layers are carried, not sculpted"),
         }
     }
 }
@@ -220,15 +218,14 @@ impl ToolKind {
     fn requires(self) -> Requires {
         match self {
             // Both representations carry these.
-            Self::Padrao
-            | Self::Inflar
-            | Self::Suavizar
-            | Self::Mascara
-            | Self::Camada => Requires::Either,
+            Self::Padrao | Self::Inflar | Self::Suavizar | Self::Mascara | Self::Camada => {
+                Requires::Either
+            }
             // Field-side only: these act on the assembled surface or on a
             // sampled volume.
-            Self::Mover | Self::Puxar | Self::Planar | Self::Polir | Self::Relaxar
-            | Self::Trim => Requires::Sdf,
+            Self::Mover | Self::Puxar | Self::Planar | Self::Polir | Self::Relaxar | Self::Trim => {
+                Requires::Sdf
+            }
             // Voxel-side only: cell walks with no field equivalent yet.
             Self::Raspar | Self::Preencher | Self::Pincar | Self::Nudge => Requires::Voxel,
         }
@@ -477,9 +474,13 @@ mod tests {
 
     #[test]
     fn switching_to_a_supporting_layer_re_enables_a_tool() {
-        assert!(ToolKind::Raspar.availability(Representation::Sdf, true).is_err());
+        assert!(ToolKind::Raspar
+            .availability(Representation::Sdf, true)
+            .is_err());
         assert!(
-            ToolKind::Raspar.availability(Representation::Voxel, true).is_ok(),
+            ToolKind::Raspar
+                .availability(Representation::Voxel, true)
+                .is_ok(),
             "the tool must become available without being reselected"
         );
     }
@@ -550,7 +551,10 @@ mod tests {
             settings.shaping.smoothing < 1.0,
             "a lag of exactly 1 would leave the stroke never reaching the pointer"
         );
-        assert!(settings.size > 0.0, "a non-positive radius is rejected by the engine");
+        assert!(
+            settings.size > 0.0,
+            "a non-positive radius is rejected by the engine"
+        );
         assert!(settings.intensity <= 1.0);
         assert!(settings.flow > 0.0);
     }

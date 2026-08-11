@@ -22,16 +22,15 @@ use support::Harness;
 
 /// A scene with enough in it to fill the panels.
 fn scene() -> Scene {
-    let layer = |id: u64, name: &str, intensity: u8, visible: bool, protection: Protection| {
-        LayerSummary {
+    let layer =
+        |id: u64, name: &str, intensity: u8, visible: bool, protection: Protection| LayerSummary {
             key: LayerKey(id),
             name: name.to_string(),
             representation: Representation::Sdf,
             visible,
             protection,
             intensity,
-        }
-    };
+        };
     Scene {
         nodes: vec![
             SceneNode {
@@ -73,8 +72,23 @@ fn scene() -> Scene {
         layers: vec![
             layer(10, "Base", 100, true, Protection::default()),
             layer(11, "Forma_principal", 100, true, Protection::default()),
-            layer(12, "Poros", 70, true, Protection { ghost: false, locked: true }),
-            layer(13, "Detalhes_secundarios", 100, false, Protection::default()),
+            layer(
+                12,
+                "Poros",
+                70,
+                true,
+                Protection {
+                    ghost: false,
+                    locked: true,
+                },
+            ),
+            layer(
+                13,
+                "Detalhes_secundarios",
+                100,
+                false,
+                Protection::default(),
+            ),
         ],
         active: Some(LayerKey(11)),
         selected: Some(LayerKey(1)),
@@ -190,13 +204,8 @@ fn render_egui(
     output: egui::FullOutput,
     target: &OffscreenTarget,
 ) -> clayspace_view::Image {
-    let mut renderer = egui_wgpu::Renderer::new(
-        &harness.gpu.device,
-        OffscreenTarget::FORMAT,
-        None,
-        1,
-        false,
-    );
+    let mut renderer =
+        egui_wgpu::Renderer::new(&harness.gpu.device, OffscreenTarget::FORMAT, None, 1, false);
 
     let pixels_per_point = ctx.pixels_per_point();
     let primitives = ctx.tessellate(output.shapes, pixels_per_point);
@@ -208,13 +217,12 @@ fn render_egui(
         size_in_pixels: [target.width(), target.height()],
         pixels_per_point,
     };
-    let mut encoder =
-        harness
-            .gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("egui"),
-            });
+    let mut encoder = harness
+        .gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("egui"),
+        });
     renderer.update_buffers(
         &harness.gpu.device,
         &harness.gpu.queue,

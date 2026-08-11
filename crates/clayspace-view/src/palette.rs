@@ -77,6 +77,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::assertions_on_constants)] // see design.rs
     #[test]
     fn the_palette_is_dark_where_the_design_says_it_is() {
         for (name, color) in [

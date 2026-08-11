@@ -123,16 +123,18 @@ pub trait SceneModel {
     fn scene(&self) -> Scene;
 
     fn set_active_layer(&mut self, key: LayerKey) -> Result<(), crate::ModelError>;
-    fn set_layer_visible(&mut self, key: LayerKey, visible: bool)
-        -> Result<(), crate::ModelError>;
+    fn set_layer_visible(&mut self, key: LayerKey, visible: bool) -> Result<(), crate::ModelError>;
     fn set_layer_protection(
         &mut self,
         key: LayerKey,
         protection: Protection,
     ) -> Result<(), crate::ModelError>;
     fn rename_layer(&mut self, key: LayerKey, name: &str) -> Result<(), crate::ModelError>;
-    fn add_layer(&mut self, name: &str, representation: Representation)
-        -> Result<LayerKey, crate::ModelError>;
+    fn add_layer(
+        &mut self,
+        name: &str,
+        representation: Representation,
+    ) -> Result<LayerKey, crate::ModelError>;
     fn remove_layer(&mut self, key: LayerKey) -> Result<(), crate::ModelError>;
     /// Moves a layer to a position in the stack, which is its evaluation order.
     fn move_layer(&mut self, key: LayerKey, index: usize) -> Result<(), crate::ModelError>;

@@ -55,8 +55,9 @@ fn stamp(radius: f32) -> Item {
 
 /// Distance from the origin to the surface along `direction`.
 fn radius_along(cache: &BrickCache, direction: [f32; 3]) -> Option<f32> {
-    let n = (direction[0] * direction[0] + direction[1] * direction[1] + direction[2] * direction[2])
-        .sqrt();
+    let n =
+        (direction[0] * direction[0] + direction[1] * direction[1] + direction[2] * direction[2])
+            .sqrt();
     let u = direction.map(|c| c / n);
     cache
         .raycast(u.map(|c| c * 4.0), u.map(|c| -c))
@@ -66,8 +67,9 @@ fn radius_along(cache: &BrickCache, direction: [f32; 3]) -> Option<f32> {
 }
 
 fn doc_radius_along(doc: &Document, direction: [f32; 3]) -> Option<f32> {
-    let n = (direction[0] * direction[0] + direction[1] * direction[1] + direction[2] * direction[2])
-        .sqrt();
+    let n =
+        (direction[0] * direction[0] + direction[1] * direction[1] + direction[2] * direction[2])
+            .sqrt();
     let u = direction.map(|c| c / n);
     doc.raycast(u.map(|c| c * 4.0), u.map(|c| -c))
         .ok()
@@ -137,25 +139,19 @@ fn subset_meshing_reproduces_whole_surface_meshing() {
             })
         })
     };
-    let whole_inside: Vec<[f32; 3]> = whole
-        .positions()
-        .iter()
-        .copied()
-        .filter(inside)
-        .collect();
-    let subset_inside: Vec<[f32; 3]> = subset
-        .positions()
-        .iter()
-        .copied()
-        .filter(inside)
-        .collect();
+    let whole_inside: Vec<[f32; 3]> = whole.positions().iter().copied().filter(inside).collect();
+    let subset_inside: Vec<[f32; 3]> = subset.positions().iter().copied().filter(inside).collect();
 
     println!("\n--- subset vs whole meshing ---");
     println!("  dirty keys              : {}", dirty.len());
     println!("  ranges returned         : {}", ranges.len());
     println!("  whole mesh vertices     : {}", whole.vertex_count());
     println!("  subset mesh vertices    : {}", subset.vertex_count());
-    println!("  ...of which inside dirty: whole {} / subset {}", whole_inside.len(), subset_inside.len());
+    println!(
+        "  ...of which inside dirty: whole {} / subset {}",
+        whole_inside.len(),
+        subset_inside.len()
+    );
     println!(
         "  positions agree         : {}",
         fingerprint(&whole_inside) == fingerprint(&subset_inside)
@@ -212,8 +208,14 @@ fn subset_meshing_reproduces_whole_surface_meshing() {
     };
     let whole_touching = touching(&whole);
     let subset_touching = touching(&subset);
-    let only_whole = whole_touching.iter().filter(|t| !subset_touching.contains(t)).count();
-    let only_subset = subset_touching.iter().filter(|t| !whole_touching.contains(t)).count();
+    let only_whole = whole_touching
+        .iter()
+        .filter(|t| !subset_touching.contains(t))
+        .count();
+    let only_subset = subset_touching
+        .iter()
+        .filter(|t| !whole_touching.contains(t))
+        .count();
     println!(
         "  triangles touching     : whole {} / subset {}  ({only_whole} only in whole, {only_subset} only in subset)",
         whole_touching.len(),
@@ -227,7 +229,10 @@ fn subset_meshing_reproduces_whole_surface_meshing() {
         whole_faces.len(),
         subset_faces.len()
     );
-    println!("  triangles agree         : {}", whole_faces == subset_faces);
+    println!(
+        "  triangles agree         : {}",
+        whole_faces == subset_faces
+    );
 
     // They agree. This was very nearly filed as a ClayCore bug on the strength
     // of a visual artifact whose cause is ours — see `SurfaceGeometry::sync`.
@@ -382,7 +387,10 @@ fn op_add_ignores_the_stroke_presets_strength() {
     };
 
     println!("\n--- stroke_preset.strength ---");
-    println!("  {:>10} {:>12} {:>12}", "strength", "CLAY_OP_ADD", "CLAY_OP_RELIEF");
+    println!(
+        "  {:>10} {:>12} {:>12}",
+        "strength", "CLAY_OP_ADD", "CLAY_OP_RELIEF"
+    );
     let mut add = Vec::new();
     for strength in [0.0f32, 0.1, 0.5, 1.0] {
         let a = displacement(Op::Add, strength);
@@ -391,9 +399,7 @@ fn op_add_ignores_the_stroke_presets_strength() {
         add.push(a);
     }
 
-    let spread = add
-        .iter()
-        .fold(f32::NEG_INFINITY, |m, v| m.max(*v))
+    let spread = add.iter().fold(f32::NEG_INFINITY, |m, v| m.max(*v))
         - add.iter().fold(f32::INFINITY, |m, v| m.min(*v));
     assert!(
         spread < 1e-4,

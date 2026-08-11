@@ -225,8 +225,8 @@ impl Camera {
             (origin.into(), forward.into())
         } else {
             let tan = (self.fov_y * 0.5).tan();
-            let direction =
-                (forward + right * (ndc[0] * tan * aspect) + up * (ndc[1] * tan)).normalize_or_zero();
+            let direction = (forward + right * (ndc[0] * tan * aspect) + up * (ndc[1] * tan))
+                .normalize_or_zero();
             (eye.into(), direction.into())
         }
     }
@@ -251,10 +251,12 @@ mod tests {
     /// aspect. Both were internally consistent; together they disagreed, and
     /// the brush landed off to one side of the pointer.
     fn round_trip(preset: ViewPreset, aspect: f32, point: Vec3) -> f32 {
-        let mut camera = Camera::default();
+        let mut camera = Camera {
+            target: Vec3::ZERO,
+            distance: 4.0,
+            ..Camera::default()
+        };
         camera.apply_preset(preset);
-        camera.target = Vec3::ZERO;
-        camera.distance = 4.0;
 
         let clip = camera.view_projection(aspect) * point.extend(1.0);
         let ndc = [clip.x / clip.w, clip.y / clip.w];
@@ -299,9 +301,11 @@ mod tests {
         // Proof the test above can fail: build the ray with the window's
         // aspect where the pixel was projected with the viewport's, which is
         // exactly what the binary did.
-        let mut camera = Camera::default();
-        camera.target = Vec3::ZERO;
-        camera.distance = 4.0;
+        let camera = Camera {
+            target: Vec3::ZERO,
+            distance: 4.0,
+            ..Camera::default()
+        };
         let point = Vec3::new(0.6, 0.4, 0.2);
 
         let clip = camera.view_projection(1.265) * point.extend(1.0);
@@ -317,7 +321,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn pitch_never_reaches_the_pole() {
         let mut camera = Camera::default();
@@ -325,7 +328,10 @@ mod tests {
             camera.orbit(0.0, 1.0);
         }
         assert!(camera.pitch < std::f32::consts::FRAC_PI_2);
-        assert!(camera.view().is_finite(), "the view matrix degenerated at the pole");
+        assert!(
+            camera.view().is_finite(),
+            "the view matrix degenerated at the pole"
+        );
     }
 
     #[test]
@@ -333,7 +339,10 @@ mod tests {
         let mut camera = Camera::default();
         camera.frame_bounds(Vec3::ZERO, Vec3::ZERO);
         assert_eq!(camera.target, Vec3::ZERO);
-        assert!(camera.distance > 0.0, "an empty document must not put the camera at the origin");
+        assert!(
+            camera.distance > 0.0,
+            "an empty document must not put the camera at the origin"
+        );
     }
 
     #[test]
@@ -345,7 +354,10 @@ mod tests {
 
         camera.apply_preset(ViewPreset::Front);
 
-        assert_eq!(camera.distance, distance, "switching preset must not rezoom");
+        assert_eq!(
+            camera.distance, distance,
+            "switching preset must not rezoom"
+        );
         assert_eq!(camera.target, target, "switching preset must not recentre");
     }
 
@@ -356,11 +368,17 @@ mod tests {
 
         for preset in [ViewPreset::Front, ViewPreset::Side, ViewPreset::Top] {
             camera.apply_preset(preset);
-            assert!(preset.is_orthographic(), "{preset:?} should be orthographic");
+            assert!(
+                preset.is_orthographic(),
+                "{preset:?} should be orthographic"
+            );
             // An orthographic projection has no perspective divide, so the
             // bottom-right element stays 1.
             let projection = camera.projection(1.5);
-            assert_eq!(projection.w_axis.w, 1.0, "{preset:?} kept a perspective divide");
+            assert_eq!(
+                projection.w_axis.w, 1.0,
+                "{preset:?} kept a perspective divide"
+            );
         }
     }
 
@@ -417,7 +435,10 @@ mod tests {
         for _ in 0..500 {
             camera.zoom(1.0);
         }
-        assert!(camera.distance > 0.0, "zooming in must not reach or pass the target");
+        assert!(
+            camera.distance > 0.0,
+            "zooming in must not reach or pass the target"
+        );
 
         for _ in 0..500 {
             camera.zoom(-1.0);

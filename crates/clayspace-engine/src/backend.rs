@@ -99,10 +99,7 @@ impl BackendPolicy {
     pub fn from_available(available: Vec<Backend>, stored_override: Option<Backend>) -> Self {
         let (active, reason) = match stored_override {
             Some(wanted) if available.contains(&wanted) => (wanted, SelectionReason::Override),
-            Some(_) => (
-                Self::rank(&available),
-                SelectionReason::OverrideUnavailable,
-            ),
+            Some(_) => (Self::rank(&available), SelectionReason::OverrideUnavailable),
             None => (Self::rank(&available), SelectionReason::Automatic),
         };
         Self {
@@ -259,8 +256,7 @@ mod tests {
 
     #[test]
     fn an_unavailable_override_falls_back_and_says_so() {
-        let policy =
-            BackendPolicy::from_available(vec![Backend::Cpu], Some(Backend::Cuda));
+        let policy = BackendPolicy::from_available(vec![Backend::Cpu], Some(Backend::Cuda));
         assert_eq!(policy.active(), &Backend::Cpu);
         assert_eq!(
             policy.reason(),
@@ -275,8 +271,15 @@ mod tests {
         let err = policy
             .set_override(Backend::Cuda)
             .expect_err("cuda is not available");
-        assert!(err.to_string().contains("cpu"), "the message should list what is available: {err}");
-        assert_eq!(policy.active(), &Backend::Cpu, "the refusal must not change the active backend");
+        assert!(
+            err.to_string().contains("cpu"),
+            "the message should list what is available: {err}"
+        );
+        assert_eq!(
+            policy.active(),
+            &Backend::Cpu,
+            "the refusal must not change the active backend"
+        );
     }
 
     #[test]

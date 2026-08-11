@@ -28,10 +28,9 @@ fn fresh_document() -> Option<ClayDocument> {
 
 /// Where the surface sits along a direction — the fingerprint used throughout.
 fn radius_along(document: &ClayDocument, direction: [f32; 3]) -> Option<f32> {
-    let n = (direction[0] * direction[0]
-        + direction[1] * direction[1]
-        + direction[2] * direction[2])
-        .sqrt();
+    let n =
+        (direction[0] * direction[0] + direction[1] * direction[1] + direction[2] * direction[2])
+            .sqrt();
     let unit = direction.map(|c| c / n);
     document
         .pick(unit.map(|c| c * 4.0), unit.map(|c| -c))
@@ -90,7 +89,9 @@ fn a_failed_open_leaves_the_work_alone() {
     let layers_before = document.scene().layers.len();
 
     let missing = scratch("no-such-document.clayspace");
-    let error = document.open(&missing).expect_err("opening nothing succeeded");
+    let error = document
+        .open(&missing)
+        .expect_err("opening nothing succeeded");
     assert!(
         matches!(error, OpenError::NotFound(_)),
         "a missing file reported as {error:?}"

@@ -16,9 +16,7 @@ pub mod sculpt;
 pub mod tools;
 
 pub use document::{DocumentModel, OpenError};
-pub use scene::{
-    LayerCost, LayerKey, LayerSummary, Protection, Scene, SceneModel, SceneNode,
-};
+pub use scene::{LayerCost, LayerKey, LayerSummary, Protection, Scene, SceneModel, SceneNode};
 pub use sculpt::{
     Detail, EditOutcome, GestureSample, HistoryEntry, HistoryState, ModelError, SceneStats,
     SculptModel,

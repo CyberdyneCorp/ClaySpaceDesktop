@@ -126,10 +126,10 @@
 - [ ] 10.4 Implement the interface-thread blocking instrumentation with a 16 ms threshold
 - [ ] 10.5 Verify edit cost does not scale with scene size using the ten-times-larger comparison scene
 - [ ] 10.6 Verify memory returns to baseline across repeated open, sculpt, close cycles
-- [ ] 10.7 Add build features for the backends, with CPU always compiled in and clear failures for unavailable toolkits
-- [ ] 10.8 Set up the CI matrix: macOS CPU-only, macOS Metal, Linux CPU-only, Linux accelerated
-- [ ] 10.9 Add the OpenSpec strict validation job
-- [ ] 10.10 Add formatting, lint and dependency-audit gates
+- [x] 10.7 Add build features for the backends, with CPU always compiled in and clear failures for unavailable toolkits
+- [x] 10.8 Set up the CI matrix: macOS CPU-only, macOS Metal, Linux CPU-only, Linux accelerated
+- [x] 10.9 Add the OpenSpec strict validation job
+- [x] 10.10 Add formatting, lint and dependency-audit gates
 - [ ] 10.11 Embed the application version and pinned engine revision, and surface both in diagnostics
 - [ ] 10.12 Produce the macOS bundle and the Linux distributable, self-contained with respect to the engine
 - [ ] 10.13 Generate the attribution manifest and surface it in the application

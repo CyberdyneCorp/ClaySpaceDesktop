@@ -52,7 +52,8 @@ impl<T> Observable<T> {
     }
 
     fn bump(&self) {
-        self.revision.set(self.revision.get().wrapping_add(1).max(1));
+        self.revision
+            .set(self.revision.get().wrapping_add(1).max(1));
     }
 }
 
@@ -109,7 +110,10 @@ mod tests {
     fn reading_does_not_report_a_change() {
         let value = Observable::new(3);
         let mut watcher = Watcher::new();
-        assert!(watcher.take_change(&value), "the first read is always a change");
+        assert!(
+            watcher.take_change(&value),
+            "the first read is always a change"
+        );
 
         for _ in 0..100 {
             let _ = value.get();
@@ -128,7 +132,10 @@ mod tests {
 
         value.set(4);
         assert!(watcher.take_change(&value));
-        assert!(!watcher.take_change(&value), "the same change was reported twice");
+        assert!(
+            !watcher.take_change(&value),
+            "the same change was reported twice"
+        );
     }
 
     #[test]
@@ -156,7 +163,10 @@ mod tests {
 
         value.set(1);
         assert!(a.take_change(&value));
-        assert!(b.take_change(&value), "one watcher consumed another's change");
+        assert!(
+            b.take_change(&value),
+            "one watcher consumed another's change"
+        );
     }
 
     #[test]

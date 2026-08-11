@@ -201,7 +201,7 @@ fn the_engine_still_disagrees_about_jitter() {
         return;
     };
 
-    let mut document = document().expect("a document");
+    let _document = document().expect("a document");
     let brush = BrushSettings {
         shaping: Shaping {
             noise: 0.15,

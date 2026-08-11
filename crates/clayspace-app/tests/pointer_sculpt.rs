@@ -7,7 +7,7 @@
 
 use clayspace_app::{ray_at, SharedDocument};
 use clayspace_engine::{BackendPolicy, ClayDocument};
-use clayspace_model::{SculptModel, ToolKind};
+use clayspace_model::SculptModel;
 use clayspace_view::Camera;
 use clayspace_vm::{Axis, Command, SculptViewModel};
 
@@ -128,11 +128,10 @@ impl Fixture {
         let unit = direction.map(|c| c / length);
         let origin = unit.map(|c| c * 4.0);
         let inward = unit.map(|c| -c);
-        self.sculpt.pick(origin, inward).map(|hit| {
-            (hit[0] * hit[0] + hit[1] * hit[1] + hit[2] * hit[2]).sqrt()
-        })
+        self.sculpt
+            .pick(origin, inward)
+            .map(|hit| (hit[0] * hit[0] + hit[1] * hit[1] + hit[2] * hit[2]).sqrt())
     }
-
 }
 
 #[test]
@@ -200,10 +199,10 @@ fn a_position_outside_the_viewport_makes_no_ray() {
         return;
     };
     for outside in [
-        egui::pos2(100.0, 400.0),                    // left panel
-        egui::pos2(1200.0, 400.0),                   // right panel
-        egui::pos2(viewport().center().x, 40.0),     // menu bar
-        egui::pos2(viewport().center().x, 760.0),    // shelf
+        egui::pos2(100.0, 400.0),                 // left panel
+        egui::pos2(1200.0, 400.0),                // right panel
+        egui::pos2(viewport().center().x, 40.0),  // menu bar
+        egui::pos2(viewport().center().x, 760.0), // shelf
     ] {
         assert!(
             ray_at(&fixture.camera, viewport(), outside).is_none(),

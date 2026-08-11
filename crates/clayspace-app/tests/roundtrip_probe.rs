@@ -29,7 +29,10 @@ fn roundtrip(cell: f32) -> (f64, f64, usize) {
 
     let volume = doc
         .volume_from_region(
-            VolumeParams { cell_size: Some(cell), ..Default::default() },
+            VolumeParams {
+                cell_size: Some(cell),
+                ..Default::default()
+            },
             [-0.7, -0.4, 0.4],
             [0.7, 0.4, 1.3],
         )
@@ -55,7 +58,10 @@ fn roundtrip(cell: f32) -> (f64, f64, usize) {
 
 #[test]
 fn baking_a_region_and_replacing_it_changes_the_surface() {
-    println!("\n  {:>10} {:>12} {:>12}  {:>8}", "cell", "worst dev", "mean dev", "probes");
+    println!(
+        "\n  {:>10} {:>12} {:>12}  {:>8}",
+        "cell", "worst dev", "mean dev", "probes"
+    );
     for cell in [0.04f32, 0.02, 0.01, 0.005] {
         let (worst, mean, n) = roundtrip(cell);
         println!("  {cell:>10} {worst:>12.5} {mean:>12.5}  {n:>8}");

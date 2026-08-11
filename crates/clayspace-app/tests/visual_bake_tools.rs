@@ -17,16 +17,13 @@
 
 mod support;
 
+use clayspace_app::SharedDocument;
 use clayspace_app::SurfaceGeometry;
 use clayspace_engine::{BackendPolicy, ClayDocument};
-use clayspace_app::SharedDocument;
 use clayspace_model::{BrushSettings, GestureSample, SculptModel, ToolKind};
-use clayspace_vm::{Command, SculptViewModel};
 use clayspace_view::{Camera, Image};
+use clayspace_vm::{Command, SculptViewModel};
 use support::Harness;
-
-/// The cache's own sampling, which is what the viewport draws.
-const CACHE_VOXEL: f32 = 0.02;
 
 fn document() -> Option<ClayDocument> {
     let policy = BackendPolicy::discover(None).ok()?;
@@ -105,7 +102,12 @@ fn stroke_with(harness: &mut Harness, tool: ToolKind, name: &str) -> Option<(Ima
             .ok()?;
     }
     geometry.rebuild(&harness.gpu, &mut document).ok()?;
-    let before = harness.capture(geometry.mesh(), &camera, false, &format!("bake-{name}-before"));
+    let before = harness.capture(
+        geometry.mesh(),
+        &camera,
+        false,
+        &format!("bake-{name}-before"),
+    );
     let nodes_before = SculptModel::stats(&document).objects;
 
     // Then the tool under test, driven through the ViewModel exactly as a drag
@@ -134,8 +136,15 @@ fn stroke_with(harness: &mut Harness, tool: ToolKind, name: &str) -> Option<(Ima
     }
     vm.dispatch(Command::EndStroke).ok()?;
 
-    shared.with(|document| geometry.rebuild(&harness.gpu, document)).ok()?;
-    let after = harness.capture(geometry.mesh(), &camera, false, &format!("bake-{name}-after"));
+    shared
+        .with(|document| geometry.rebuild(&harness.gpu, document))
+        .ok()?;
+    let after = harness.capture(
+        geometry.mesh(),
+        &camera,
+        false,
+        &format!("bake-{name}-after"),
+    );
 
     let background = harness.background();
     let _ = nodes_before;
@@ -152,7 +161,10 @@ fn the_smoothing_tools_smooth_rather_than_crumble() {
         return;
     };
 
-    println!("\n{:<10} {:>12} {:>12}", "tool", "rough before", "rough after");
+    println!(
+        "\n{:<10} {:>12} {:>12}",
+        "tool", "rough before", "rough after"
+    );
     let mut worse = Vec::new();
     for tool in [
         ToolKind::Suavizar,

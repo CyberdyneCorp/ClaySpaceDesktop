@@ -143,7 +143,8 @@ impl NoticeBoard {
     pub fn clear(&mut self, place: Where) {
         let present = self.notices.get().iter().any(|n| n.place == place);
         if present {
-            self.notices.update(|notices| notices.retain(|n| n.place != place));
+            self.notices
+                .update(|notices| notices.retain(|n| n.place != place));
         }
     }
 
@@ -219,7 +220,10 @@ mod tests {
         board.post(Notice::refusal(Where::Tool, "second"));
 
         assert_eq!(board.notices().get().len(), 1, "refusals stacked up");
-        assert_eq!(board.at(Where::Tool).map(|n| n.message.as_str()), Some("second"));
+        assert_eq!(
+            board.at(Where::Tool).map(|n| n.message.as_str()),
+            Some("second")
+        );
     }
 
     #[test]
@@ -244,7 +248,10 @@ mod tests {
             used: 500,
             budget: 1000,
         });
-        assert!(board.at(Where::Status).is_none(), "half full is not a warning");
+        assert!(
+            board.at(Where::Status).is_none(),
+            "half full is not a warning"
+        );
 
         board.set_memory(MemoryState {
             used: 900,

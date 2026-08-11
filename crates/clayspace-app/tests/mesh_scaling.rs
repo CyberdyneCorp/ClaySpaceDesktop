@@ -112,7 +112,11 @@ fn what_the_brick_mesh_call_costs() {
         // normals — this is the same marching with the expensive attribute
         // switched off.
         let without = best_of(5, || {
-            cache.mesh(None, plain, &keys).expect("mesh").0.vertex_count()
+            cache
+                .mesh(None, plain, &keys)
+                .expect("mesh")
+                .0
+                .vertex_count()
         });
         println!(
             "  {count:>7} {:>14.2} {:>14.2} {:>10.3} {:>11.1}x",
@@ -132,16 +136,18 @@ fn what_the_brick_mesh_call_costs() {
             .0
             .vertex_count()
     });
-    println!("  {:>7} {:>14.2}  (all surface bricks)", all.len(), ms(whole));
+    println!(
+        "  {:>7} {:>14.2}  (all surface bricks)",
+        all.len(),
+        ms(whole)
+    );
 
     // Fixed overhead: what a one-key mesh costs against the per-key slope
     // measured at the top of the range.
     if let (Some(first), Some(last)) = (rows.first(), rows.last()) {
         let slope = (last.1 - first.1) / (last.0 - first.0).max(1) as f64;
         let fixed = first.1 - slope * first.0 as f64;
-        println!(
-            "\n  per-key slope {slope:.3} ms, fixed overhead {fixed:.2} ms per call"
-        );
+        println!("\n  per-key slope {slope:.3} ms, fixed overhead {fixed:.2} ms per call");
         println!(
             "  a 27-key dab would cost {:.2} ms of marching plus {fixed:.2} ms of overhead",
             slope * 27.0
@@ -204,7 +210,10 @@ fn what_applying_a_stroke_costs() {
     println!("\n--- a dab's engine-side edit, averaged over {samples} ---");
     println!("  clay_layer_apply_stroke        {:>7.2} ms", ms(apply) / n);
     println!("  mark_dirty_nodes + take_dirty  {:>7.2} ms", ms(mark) / n);
-    println!("  clay_brick_cache_refill        {:>7.2} ms", ms(refill) / n);
+    println!(
+        "  clay_brick_cache_refill        {:>7.2} ms",
+        ms(refill) / n
+    );
     println!("  bricks dirtied per dab         {:>7.1}", keys as f64 / n);
     println!(
         "  total                          {:>7.2} ms\n",
@@ -263,12 +272,12 @@ fn what_our_adapter_adds_on_top() {
     });
 
     println!("\n--- our adapter, per dab ---");
-    println!("  ClayDocument::apply_stroke   {:>7.2} ms", ms(total) / samples as f64);
-    println!("  ...of which building a stamp {:>7.2} ms", ms(build));
     println!(
-        "  raw engine sequence above    {:>7.2} ms\n",
-        1.05
+        "  ClayDocument::apply_stroke   {:>7.2} ms",
+        ms(total) / samples as f64
     );
+    println!("  ...of which building a stamp {:>7.2} ms", ms(build));
+    println!("  raw engine sequence above    {:>7.2} ms\n", 1.05);
 }
 
 #[test]

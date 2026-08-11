@@ -74,7 +74,9 @@ impl ClayDocument {
     /// Builds a document with one SDF layer holding a starting form.
     pub fn new(policy: BackendPolicy) -> Result<Self, ModelError> {
         let mut document = Document::new().map_err(ModelError::engine)?;
-        let id = document.add_sdf_layer("Forma").map_err(ModelError::engine)?;
+        let id = document
+            .add_sdf_layer("Forma")
+            .map_err(ModelError::engine)?;
         // No mirror to start with, though the design asks for X.
         //
         // The engine applies a layer mirror in its document field but not in
@@ -267,10 +269,7 @@ impl ClayDocument {
         let backend = self.policy.refill_backend().cloned();
         let mut dirty = Vec::new();
         loop {
-            let (requests, remaining) = self
-                .cache
-                .take_dirty(512)
-                .map_err(ModelError::engine)?;
+            let (requests, remaining) = self.cache.take_dirty(512).map_err(ModelError::engine)?;
             if requests.is_empty() {
                 break;
             }
@@ -507,11 +506,7 @@ impl ClayDocument {
         ];
         // A drag under the resolution moves nothing; reporting that as an edit
         // would put an entry in the history for a gesture that did not land.
-        let travelled = displacement
-            .iter()
-            .map(|d| d * d)
-            .sum::<f32>()
-            .sqrt();
+        let travelled = displacement.iter().map(|d| d * d).sum::<f32>().sqrt();
         if travelled < 1e-4 {
             return Ok(EditOutcome::NOTHING);
         }
@@ -578,7 +573,8 @@ impl ClayDocument {
         }
 
         let mut item = Item::stroke().map_err(ModelError::engine)?;
-        item.set_stroke_points(&points).map_err(ModelError::engine)?;
+        item.set_stroke_points(&points)
+            .map_err(ModelError::engine)?;
         item.set_op(Op::Add).map_err(ModelError::engine)?;
         item.set_stroke_blend_k(brush.size * 0.5)
             .map_err(ModelError::engine)?;
@@ -875,9 +871,7 @@ impl ClayDocument {
                 ToolKind::Suavizar | ToolKind::Relaxar => grid.sculpt_smooth(cell, &params),
                 ToolKind::Inflar => grid.sculpt_inflate(cell, &params, 1),
                 ToolKind::Pincar => grid.sculpt_pinch(cell, &params),
-                ToolKind::Raspar => {
-                    grid.sculpt_scrape(cell, &params, [0.0, 1.0, 0.0], 0.0)
-                }
+                ToolKind::Raspar => grid.sculpt_scrape(cell, &params, [0.0, 1.0, 0.0], 0.0),
                 ToolKind::Preencher => grid.sculpt_fill_cavities(cell, &params, 2),
                 ToolKind::Nudge => grid.sculpt_smudge(cell, &params, [1.0, 0.0, 0.0]),
                 // Anything else deposits material, which is what a default
@@ -1010,7 +1004,6 @@ impl SculptModel for ClayDocument {
 /// Kept so the routing type is visible to readers of this module's imports.
 const _: fn(Operation) -> &'static str = Operation::label;
 
-
 impl SceneModel for ClayDocument {
     fn scene(&self) -> Scene {
         // The tree mirrors the layer list for now: the engine's group
@@ -1094,9 +1087,7 @@ impl SceneModel for ClayDocument {
             .map_err(ModelError::engine)?;
         let key = self.take_key();
         let grid = match representation {
-            Representation::Voxel => {
-                Some(VoxelGrid::new(0.02).map_err(ModelError::engine)?)
-            }
+            Representation::Voxel => Some(VoxelGrid::new(0.02).map_err(ModelError::engine)?),
             _ => None,
         };
         self.layers.push(Layer {
@@ -1121,9 +1112,7 @@ impl SceneModel for ClayDocument {
             ));
         }
         let id = self.layers[index].id;
-        self.document
-            .remove_layer(id)
-            .map_err(ModelError::engine)?;
+        self.document.remove_layer(id).map_err(ModelError::engine)?;
         self.layers.remove(index);
         self.active = self.active.min(self.layers.len() - 1);
         if self.selected == Some(key) {
@@ -1311,7 +1300,9 @@ impl ClayDocument {
             _ => unreadable(e.to_string()),
         })?;
 
-        let ids = document.layer_ids().map_err(|e| unreadable(e.to_string()))?;
+        let ids = document
+            .layer_ids()
+            .map_err(|e| unreadable(e.to_string()))?;
         if ids.is_empty() {
             return Err(unreadable("it holds no layers".to_string()));
         }
@@ -1375,7 +1366,9 @@ impl ClayDocument {
 
         let ids: Vec<LayerId> = model.layers.iter().map(|layer| layer.id).collect();
         for id in ids {
-            model.refill(id, &[]).map_err(|e| unreadable(e.to_string()))?;
+            model
+                .refill(id, &[])
+                .map_err(|e| unreadable(e.to_string()))?;
         }
         model.refresh_stats();
         Ok(model)

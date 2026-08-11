@@ -107,7 +107,15 @@ fn relax_with(
     strength: f32,
     name: Option<&str>,
 ) -> Option<f64> {
-    relax_banded(harness, radius_cells, iterations, strength, None, None, name)
+    relax_banded(
+        harness,
+        radius_cells,
+        iterations,
+        strength,
+        None,
+        None,
+        name,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -187,9 +195,7 @@ fn how_wide_the_kernel_has_to_be() {
     };
     let camera = framed(&document);
     let mut geometry = SurfaceGeometry::new(&harness.gpu);
-    geometry
-        .rebuild(&harness.gpu, &mut document)
-        .expect("mesh");
+    geometry.rebuild(&harness.gpu, &mut document).expect("mesh");
     let before = harness.capture(geometry.mesh(), &camera, false, "relax-00-before");
     let baseline = roughness(&before, harness.background());
     println!("\nbumps as drawn: roughness {baseline:.2}");
@@ -213,8 +219,7 @@ fn how_wide_the_kernel_has_to_be() {
                 band.map_or("d".to_string(), |b| format!("{b}")),
                 padding.map_or("d".to_string(), |p| format!("{p}"))
             );
-            let Some(rough) =
-                relax_banded(&mut harness, 1, 0, 0.0, band, padding, Some(&name))
+            let Some(rough) = relax_banded(&mut harness, 1, 0, 0.0, band, padding, Some(&name))
             else {
                 return;
             };
@@ -227,7 +232,10 @@ fn how_wide_the_kernel_has_to_be() {
     }
     println!();
 
-    println!("  {:>7} {:>6} {:>6} {:>10}", "radius", "iters", "str", "roughness");
+    println!(
+        "  {:>7} {:>6} {:>6} {:>10}",
+        "radius", "iters", "str", "roughness"
+    );
     let mut best: Option<(i32, i32, f64)> = None;
     for radius_cells in [1, 3, 6, 9] {
         for iterations in [1, 2, 4] {
@@ -236,7 +244,10 @@ fn how_wide_the_kernel_has_to_be() {
             else {
                 return;
             };
-            println!("  {radius_cells:>7} {iterations:>6} {:>6.2} {rough:>10.2}", 0.65);
+            println!(
+                "  {radius_cells:>7} {iterations:>6} {:>6.2} {rough:>10.2}",
+                0.65
+            );
             if best.as_ref().is_none_or(|(_, _, b)| rough < *b) {
                 best = Some((radius_cells, iterations, rough));
             }

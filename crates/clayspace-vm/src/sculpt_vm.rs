@@ -5,8 +5,8 @@
 //! exercised in a test with no window and no GPU.
 
 use clayspace_model::{
-    BrushSettings, EditOutcome, GestureSample, HistoryState, ModelError, SceneStats,
-    SculptModel, ToolKind, ViewPresetKind,
+    BrushSettings, EditOutcome, GestureSample, HistoryState, ModelError, SceneStats, SculptModel,
+    ToolKind, ViewPresetKind,
 };
 
 use crate::command::{Axis, Command};
@@ -210,13 +210,9 @@ impl SculptViewModel {
             Command::SetBrushIntensity(value) => self.edit_brush(|b| b.intensity = value),
             Command::SetBrushFlow(value) => self.edit_brush(|b| b.flow = value),
             Command::SetBrushNoise(value) => self.edit_brush(|b| b.shaping.noise = value),
-            Command::SetBrushFalloff(falloff) => {
-                self.edit_brush(|b| b.shaping.falloff = falloff)
-            }
+            Command::SetBrushFalloff(falloff) => self.edit_brush(|b| b.shaping.falloff = falloff),
             Command::SetBrushAccumulate(on) => self.edit_brush(|b| b.shaping.accumulate = on),
-            Command::SetBrushSmoothing(value) => {
-                self.edit_brush(|b| b.shaping.smoothing = value)
-            }
+            Command::SetBrushSmoothing(value) => self.edit_brush(|b| b.shaping.smoothing = value),
 
             // Scene and layer commands are the SceneViewModel's; the sculpting
             // ViewModel ignores them rather than half-handling them.
@@ -366,12 +362,9 @@ impl SculptViewModel {
         // Undoing a gesture has to spend every entry it made, or the parts it
         // misses stay behind.
         let before = self.model.history().depth;
-        let outcome = self.model.apply_stroke(
-            tool,
-            *self.brush.get(),
-            pending,
-            *self.symmetry.get(),
-        );
+        let outcome =
+            self.model
+                .apply_stroke(tool, *self.brush.get(), pending, *self.symmetry.get());
         let recorded = self.model.history().depth.saturating_sub(before);
 
         // Marked applied whether or not the engine accepted them. Re-sending a
@@ -557,8 +550,7 @@ impl ActiveStroke {
     /// the result depend on the path, which is the only thing the sculptor
     /// controls.
     fn segment_is_worth_applying(&self, brush: &BrushSettings) -> bool {
-        self.applied < self.samples.len()
-            && self.travelled >= stamp_gap(brush) * STAMPS_PER_SEGMENT
+        self.applied < self.samples.len() && self.travelled >= stamp_gap(brush) * STAMPS_PER_SEGMENT
     }
 
     /// The samples not yet sent.

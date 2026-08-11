@@ -118,7 +118,8 @@ impl DocumentViewModel {
                 // The path is *not* adopted on failure: a document that failed
                 // to save must not look saved, and must not quietly retarget
                 // the next save at a file it could not write.
-                self.notice.set(Some(format!("não foi possível salvar: {e}")));
+                self.notice
+                    .set(Some(format!("não foi possível salvar: {e}")));
                 Err(e)
             }
         }

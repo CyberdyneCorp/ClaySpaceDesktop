@@ -32,9 +32,15 @@ pub enum Command {
 
     // -- the sculpting gesture -------------------------------------------
     /// A stroke began at a point on the surface.
-    BeginStroke { position: [f32; 3], pressure: f32 },
+    BeginStroke {
+        position: [f32; 3],
+        pressure: f32,
+    },
     /// The stroke continued. Samples accumulate until it ends.
-    ContinueStroke { position: [f32; 3], pressure: f32 },
+    ContinueStroke {
+        position: [f32; 3],
+        pressure: f32,
+    },
     /// The stroke ended and should be committed as one undoable edit.
     EndStroke,
     /// The stroke was abandoned before it committed.
@@ -191,7 +197,11 @@ mod tests {
             Command::SetBrushSize(20.0),
             Command::ToggleSymmetry(Axis::X),
         ] {
-            assert!(!command.touches_document(), "{} is not an edit", command.label());
+            assert!(
+                !command.touches_document(),
+                "{} is not an edit",
+                command.label()
+            );
         }
     }
 

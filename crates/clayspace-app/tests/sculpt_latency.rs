@@ -106,7 +106,7 @@ fn a_frame_with_no_edit_costs_nothing() {
 
 #[test]
 fn dab_latency_stays_inside_the_budget() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(harness) = Harness::new() else {
         return;
     };
     let mut document = document();
@@ -191,7 +191,7 @@ fn dab_latency_stays_inside_the_budget() {
 
 #[test]
 fn compaction_rebuilds_the_surface_without_changing_it() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(harness) = Harness::new() else {
         return;
     };
     let mut document = document();

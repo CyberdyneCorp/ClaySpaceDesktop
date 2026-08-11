@@ -88,7 +88,10 @@ fn a_stroke_changes_the_document_and_bounds_its_cost() {
     );
 
     let dirty = *vm.pending_remesh().get();
-    assert!(dirty > 0, "a stroke dirtied no bricks, so nothing would be re-meshed");
+    assert!(
+        dirty > 0,
+        "a stroke dirtied no bricks, so nothing would be re-meshed"
+    );
 }
 
 #[test]
@@ -106,10 +109,7 @@ fn a_whole_stroke_undoes_as_one_entry() {
     );
 
     vm.dispatch(Command::Undo).expect("undo");
-    assert!(
-        vm.last_action().get().changed,
-        "there was a stroke to undo"
-    );
+    assert!(vm.last_action().get().changed, "there was a stroke to undo");
     assert_eq!(
         vm.history().get().depth,
         before,
@@ -124,7 +124,10 @@ fn redo_restores_what_undo_removed() {
     let depth = vm.history().get().depth;
 
     vm.dispatch(Command::Undo).expect("undo");
-    assert!(vm.history().get().can_redo, "an undone stroke must be redoable");
+    assert!(
+        vm.history().get().can_redo,
+        "an undone stroke must be redoable"
+    );
 
     vm.dispatch(Command::Redo).expect("redo");
     assert_eq!(vm.history().get().depth, depth);
@@ -179,7 +182,8 @@ fn changing_symmetry_is_part_of_the_stroke_that_used_it() {
 
     // Now with the mirror changed, which the stroke writes as an extra engine
     // entry inside its first segment.
-    vm.dispatch(Command::ToggleSymmetry(Axis::Z)).expect("symmetry");
+    vm.dispatch(Command::ToggleSymmetry(Axis::Z))
+        .expect("symmetry");
     let before = vm.history().get().depth;
     stroke_across_the_form(&mut vm).expect("mirrored stroke");
     assert_eq!(
@@ -274,7 +278,8 @@ fn a_stroke_over_empty_space_is_not_an_error() {
                 pressure: 1.0,
             }
         };
-        vm.dispatch(command).expect("a stroke in empty space is legal");
+        vm.dispatch(command)
+            .expect("a stroke in empty space is legal");
     }
     vm.dispatch(Command::EndStroke)
         .expect("ending it is legal too");
@@ -362,7 +367,8 @@ fn brush_shaping_reaches_the_engine_without_error() {
     for falloff in clayspace_model::Falloff::ALL {
         for accumulate in [true, false] {
             let mut vm = session();
-            vm.dispatch(Command::SetBrushIntensity(0.9)).expect("intensity");
+            vm.dispatch(Command::SetBrushIntensity(0.9))
+                .expect("intensity");
             vm.dispatch(Command::SetBrushFlow(0.95)).expect("flow");
             let _ = (falloff, accumulate);
             stroke_across_the_form(&mut vm).expect("stroke with shaping applied");
@@ -389,7 +395,10 @@ mod scene {
     fn a_fresh_document_reports_one_layer() {
         let scene = document().scene();
         assert_eq!(scene.layers.len(), 1);
-        assert!(scene.active.is_some(), "something must be active to sculpt on");
+        assert!(
+            scene.active.is_some(),
+            "something must be active to sculpt on"
+        );
         assert_eq!(scene.nodes.len(), 1, "the tree must mirror what is there");
     }
 
@@ -499,9 +508,7 @@ mod scene {
     #[test]
     fn removing_a_layer_leaves_a_valid_active_one() {
         let mut doc = document();
-        let added = doc
-            .add_layer("Detalhe", Representation::Sdf)
-            .expect("add");
+        let added = doc.add_layer("Detalhe", Representation::Sdf).expect("add");
         doc.remove_layer(added).expect("remove");
 
         let scene = doc.scene();
@@ -564,7 +571,7 @@ mod scene {
 
     #[test]
     fn a_layer_reports_what_its_field_costs() {
-        let mut doc = document();
+        let doc = document();
         let key = doc.scene().active.expect("active");
 
         let cost = doc.layer_cost(key).expect("field report");
@@ -586,7 +593,10 @@ mod scene {
         let before = doc.layer_cost(key).expect("cost");
         let after = doc.layer_cost(key).expect("cost again");
         assert!(!before.consolidated && !after.consolidated);
-        assert_eq!(before.items, after.items, "asking the cost changed the layer");
+        assert_eq!(
+            before.items, after.items,
+            "asking the cost changed the layer"
+        );
 
         doc.consolidate_layer(key).expect("consolidate");
         let collapsed = doc.layer_cost(key).expect("cost after");

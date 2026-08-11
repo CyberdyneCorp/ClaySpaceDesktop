@@ -33,9 +33,7 @@ fn item_settings_reach_the_field() {
     cut.set_position([1.0, 0.0, 0.0]).expect("position");
     doc.add_item(layer, &cut).expect("place cut");
 
-    let inside_cut = doc
-        .eval_points(None, &[[1.0, 0.0, 0.0]])
-        .expect("evaluate")[0];
+    let inside_cut = doc.eval_points(None, &[[1.0, 0.0, 0.0]]).expect("evaluate")[0];
     assert!(
         inside_cut > 0.0,
         "the subtracted region should read as outside the surface, got {inside_cut}"
@@ -72,14 +70,20 @@ fn a_blend_widens_the_seam() {
 fn layer_protection_states_are_distinct() {
     let (mut doc, layer) = sphere_doc();
 
-    let ghost = Protection { ghost: true, locked: false };
+    let ghost = Protection {
+        ghost: true,
+        locked: false,
+    };
     doc.set_layer_protection(layer, ghost).expect("set ghost");
     let read = doc.layer_protection(layer).expect("read protection");
     assert_eq!(read, ghost);
     assert!(!read.is_pickable(), "a ghosted layer must not be pickable");
     assert!(!read.is_editable(), "a ghosted layer must not be editable");
 
-    let locked = Protection { ghost: false, locked: true };
+    let locked = Protection {
+        ghost: false,
+        locked: true,
+    };
     doc.set_layer_protection(layer, locked).expect("set locked");
     let read = doc.layer_protection(layer).expect("read protection");
     assert!(read.is_pickable(), "a locked layer stays pickable");
@@ -96,13 +100,22 @@ fn a_ghosted_layer_is_not_picked() {
         "the sphere should be picked before it is ghosted"
     );
 
-    doc.set_layer_protection(layer, Protection { ghost: true, locked: false })
-        .expect("ghost the layer");
+    doc.set_layer_protection(
+        layer,
+        Protection {
+            ghost: true,
+            locked: false,
+        },
+    )
+    .expect("ghost the layer");
 
     let hit = doc
         .raycast_attributed([0.0, 0.0, -5.0], [0.0, 0.0, 1.0])
         .expect("raycast");
-    assert!(hit.is_none(), "a ghosted layer must not be picked, got {hit:?}");
+    assert!(
+        hit.is_none(),
+        "a ghosted layer must not be picked, got {hit:?}"
+    );
 }
 
 #[test]
@@ -184,7 +197,10 @@ fn undo_state_reports_what_is_available() {
 
     doc.enable_undo().expect("enable");
     assert!(doc.undo_state().expect("state").enabled);
-    assert!(!doc.undo().expect("undo on an empty stack"), "nothing to undo yet");
+    assert!(
+        !doc.undo().expect("undo on an empty stack"),
+        "nothing to undo yet"
+    );
 }
 
 // -- voxels -----------------------------------------------------------------
@@ -231,7 +247,8 @@ fn sculpt_verbs_change_cells_and_report_it() {
     // And the interior really is a no-op: a fully occupied footprint has
     // nothing to dilate into.
     let settled = grid.change_count().expect("change count");
-    grid.sculpt_inflate([4, 4, 4], &brush, 1).expect("inflate the interior");
+    grid.sculpt_inflate([4, 4, 4], &brush, 1)
+        .expect("inflate the interior");
     assert_eq!(
         grid.change_count().expect("change count"),
         settled,
@@ -245,12 +262,16 @@ fn a_verb_that_changes_nothing_is_not_an_error() {
     let index = grid.palette_add([1.0, 1.0, 1.0]).expect("palette");
     grid.fill_box([0, 0, 0], [4, 4, 4], index).expect("fill");
 
-    let brush = BrushParams { size: 3, ..Default::default() };
+    let brush = BrushParams {
+        size: 3,
+        ..Default::default()
+    };
     let before = grid.change_count().expect("change count");
 
     // A footprint far from any material. The engine reports success; the
     // change count is what says nothing happened.
-    grid.sculpt_smooth([500, 500, 500], &brush).expect("smooth over empty space");
+    grid.sculpt_smooth([500, 500, 500], &brush)
+        .expect("smooth over empty space");
 
     assert_eq!(
         grid.change_count().expect("change count"),
@@ -265,7 +286,10 @@ fn a_sub_cell_grab_moves_nothing() {
     let index = grid.palette_add([1.0, 1.0, 1.0]).expect("palette");
     grid.fill_box([0, 0, 0], [4, 4, 4], index).expect("fill");
 
-    let brush = BrushParams { size: 6, ..Default::default() };
+    let brush = BrushParams {
+        size: 6,
+        ..Default::default()
+    };
     let before = grid.change_count().expect("change count");
 
     // Under half a cell on every axis: rounding is per axis, so this is dead.
@@ -296,7 +320,10 @@ fn resolution_levels_stack_without_re_authoring() {
 
     let fine = grid.level_voxel_size(level).expect("fine size");
     let coarse = grid.level_voxel_size(0).expect("coarse size");
-    assert!(fine < coarse, "the added level must be finer: {fine} vs {coarse}");
+    assert!(
+        fine < coarse,
+        "the added level must be finer: {fine} vs {coarse}"
+    );
 
     grid.set_active_level(0).expect("back to coarse");
     assert_eq!(
@@ -329,7 +356,10 @@ fn repair_reports_an_enclosed_void() {
 
     grid.repair_fill_voids(None).expect("fill voids");
     let after = grid.repair_report().expect("repair report");
-    assert!(after.airtight, "filling voids should leave it airtight: {after:?}");
+    assert!(
+        after.airtight,
+        "filling voids should leave it airtight: {after:?}"
+    );
 }
 
 // -- masks ------------------------------------------------------------------
@@ -344,7 +374,10 @@ fn a_mask_freezes_what_it_covers() {
     // Freeze the whole region the brush will cover.
     mask.fill([-10.0, -10.0, -10.0], [10.0, 10.0, 10.0], 1.0)
         .expect("fill mask");
-    assert!(!mask.is_empty().expect("empty"), "the mask should be painted");
+    assert!(
+        !mask.is_empty().expect("empty"),
+        "the mask should be painted"
+    );
 
     let brush = BrushParams {
         size: 6,
@@ -353,7 +386,8 @@ fn a_mask_freezes_what_it_covers() {
     };
 
     let before = grid.change_count().expect("change count");
-    grid.erase_brush([4, 4, 4], &brush).expect("erase under a full mask");
+    grid.erase_brush([4, 4, 4], &brush)
+        .expect("erase under a full mask");
     assert_eq!(
         grid.change_count().expect("change count"),
         before,
@@ -364,9 +398,13 @@ fn a_mask_freezes_what_it_covers() {
 #[test]
 fn mask_edits_compose() {
     let mut mask = Mask::new(0.1).expect("mask");
-    assert!(mask.is_empty().expect("empty"), "a fresh mask covers nothing");
+    assert!(
+        mask.is_empty().expect("empty"),
+        "a fresh mask covers nothing"
+    );
 
-    mask.fill([0.0, 0.0, 0.0], [0.5, 0.5, 0.5], 1.0).expect("fill");
+    mask.fill([0.0, 0.0, 0.0], [0.5, 0.5, 0.5], 1.0)
+        .expect("fill");
     let painted = mask.painted_count().expect("painted");
     assert!(painted > 0);
 
@@ -377,7 +415,10 @@ fn mask_edits_compose() {
     );
 
     mask.clear().expect("clear");
-    assert!(mask.is_empty().expect("empty"), "clear should unmask everything");
+    assert!(
+        mask.is_empty().expect("empty"),
+        "clear should unmask everything"
+    );
 }
 
 #[test]
@@ -425,11 +466,17 @@ fn a_stroke_resolves_into_ordinary_edits() {
         .apply_stroke(layer, &samples, &preset, &stamp, None)
         .expect("apply stroke");
 
-    assert!(!nodes.is_empty(), "a stroke over 1.2 units deposited no stamps");
+    assert!(
+        !nodes.is_empty(),
+        "a stroke over 1.2 units deposited no stamps"
+    );
 
     // The stroke ran along x, so the axis should now be inside the surface.
     let value = doc.eval_points(None, &[[0.0, 0.0, 0.0]]).expect("evaluate")[0];
-    assert!(value < 0.0, "the stroke left nothing on its own path: {value}");
+    assert!(
+        value < 0.0,
+        "the stroke left nothing on its own path: {value}"
+    );
 }
 
 #[test]
@@ -452,8 +499,12 @@ fn spacing_follows_arc_length_not_sample_count() {
         .map(|i| StrokeSample::at([i as f32 * 0.025, 0.0, 0.0], i as f32 * 0.005))
         .collect();
 
-    let a = doc.apply_stroke(layer, &coarse, &preset, &stamp, None).expect("coarse");
-    let b = doc.apply_stroke(layer, &fine, &preset, &stamp, None).expect("fine");
+    let a = doc
+        .apply_stroke(layer, &coarse, &preset, &stamp, None)
+        .expect("coarse");
+    let b = doc
+        .apply_stroke(layer, &fine, &preset, &stamp, None)
+        .expect("fine");
 
     let (a, b) = (a.len() as i32, b.len() as i32);
     assert!(
@@ -493,7 +544,7 @@ fn the_move_brush_drags_the_assembled_surface() {
 
 #[test]
 fn a_move_can_be_previewed_without_applying_it() {
-    let (mut doc, layer) = sphere_doc();
+    let (doc, layer) = sphere_doc();
     let probe = [[0.0f32, 1.1, 0.0]];
     let before = doc.eval_points(None, &probe).expect("evaluate")[0];
 
@@ -502,7 +553,11 @@ fn a_move_can_be_previewed_without_applying_it() {
             layer,
             [0.0, 1.0, 0.0],
             [0.0, 0.3, 0.0],
-            claycore::MoveParams { radius: 0.6, ease: 0, front_only: false },
+            claycore::MoveParams {
+                radius: 0.6,
+                ease: 0,
+                front_only: false,
+            },
             16,
         )
         .expect("preview");
@@ -527,7 +582,9 @@ fn several_threads_read_one_document_and_agree() {
         })
         .collect();
 
-    let expected = doc.eval_points(None, &points).expect("single-threaded reference");
+    let expected = doc
+        .eval_points(None, &points)
+        .expect("single-threaded reference");
     let reader = doc.reader();
 
     std::thread::scope(|scope| {

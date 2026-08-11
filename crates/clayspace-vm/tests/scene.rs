@@ -218,7 +218,8 @@ fn fixture_with(configure: impl FnOnce(&mut FakeScene)) -> (SceneViewModel, Rc<R
 #[test]
 fn selecting_a_layer_makes_it_active() {
     let (mut vm, calls) = fixture();
-    vm.dispatch(&Command::SelectLayer(LayerKey(2))).expect("select");
+    vm.dispatch(&Command::SelectLayer(LayerKey(2)))
+        .expect("select");
 
     assert_eq!(calls.borrow().activated, vec![LayerKey(2)]);
     assert_eq!(vm.scene().get().active, Some(LayerKey(2)));
@@ -253,7 +254,10 @@ fn a_new_layer_becomes_active_and_is_named_distinctly() {
 
     let names = calls.borrow().added.clone();
     assert_eq!(names.len(), 2);
-    assert_ne!(names[0], names[1], "two new layers were given the same name");
+    assert_ne!(
+        names[0], names[1],
+        "two new layers were given the same name"
+    );
     assert_eq!(vm.scene().get().layers.len(), 4);
 }
 
@@ -297,7 +301,8 @@ fn a_refusal_clears_once_something_succeeds() {
     // The next operation succeeds, so the stale reason must go.
     vm.refresh();
     let (mut vm, _) = fixture();
-    vm.dispatch(&Command::SelectLayer(LayerKey(2))).expect("select");
+    vm.dispatch(&Command::SelectLayer(LayerKey(2)))
+        .expect("select");
     assert!(vm.refusal().get().is_none());
 }
 
@@ -378,12 +383,14 @@ fn reading_the_scene_does_not_schedule_a_redraw() {
 #[test]
 fn a_change_that_changes_nothing_reports_nothing() {
     let (mut vm, _) = fixture();
-    vm.dispatch(&Command::SelectLayer(LayerKey(2))).expect("select");
+    vm.dispatch(&Command::SelectLayer(LayerKey(2)))
+        .expect("select");
     let mut watcher = Watcher::new();
     watcher.accept(vm.scene());
 
     // The same selection again.
-    vm.dispatch(&Command::SelectLayer(LayerKey(2))).expect("select again");
+    vm.dispatch(&Command::SelectLayer(LayerKey(2)))
+        .expect("select again");
     assert!(
         !watcher.take_change(vm.scene()),
         "reselecting the active layer scheduled a redraw"
@@ -396,7 +403,8 @@ fn commands_this_viewmodel_does_not_own_are_ignored() {
     let mut watcher = Watcher::new();
     watcher.accept(vm.scene());
 
-    vm.dispatch(&Command::Undo).expect("undo is not a scene command");
+    vm.dispatch(&Command::Undo)
+        .expect("undo is not a scene command");
     vm.dispatch(&Command::FrameAll).expect("nor is framing");
 
     assert!(calls.borrow().activated.is_empty());

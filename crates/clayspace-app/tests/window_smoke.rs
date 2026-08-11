@@ -79,7 +79,9 @@ impl ApplicationHandler for SmokeApp {
             .with_inner_size(winit::dpi::LogicalSize::new(320.0, 240.0));
         let window = match event_loop.create_window(attributes) {
             Ok(window) => Arc::new(window),
-            Err(e) => return self.fail(format!("the window could not be created: {e}"), event_loop),
+            Err(e) => {
+                return self.fail(format!("the window could not be created: {e}"), event_loop)
+            }
         };
 
         let (gpu, surface) = match pollster::block_on(WindowSurface::new(window.clone())) {

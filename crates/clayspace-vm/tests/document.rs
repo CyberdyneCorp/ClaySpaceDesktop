@@ -51,7 +51,10 @@ fn fixture() -> (DocumentViewModel, Rc<RefCell<Recorded>>) {
         save_fails: false,
         open_fails: None,
     };
-    (DocumentViewModel::new(Box::new(model), "Sem título"), recorded)
+    (
+        DocumentViewModel::new(Box::new(model), "Sem título"),
+        recorded,
+    )
 }
 
 fn refusing_to_open(failure: OpenError) -> DocumentViewModel {
@@ -83,14 +86,19 @@ fn editing_makes_it_modified_and_saving_makes_it_clean() {
     assert!(!*vm.modified().get(), "saving left it looking modified");
     assert_eq!(vm.guard(), Guard::Clear);
     assert_eq!(recorded.borrow().saved.len(), 1);
-    assert_eq!(vm.name().get(), "bust", "the title bar shows the file's name");
+    assert_eq!(
+        vm.name().get(),
+        "bust",
+        "the title bar shows the file's name"
+    );
     assert!(vm.has_path());
 }
 
 #[test]
 fn saving_over_the_known_path_needs_no_prompt() {
     let (mut vm, recorded) = fixture();
-    vm.save_as(Path::new("/tmp/bust.clayspace")).expect("save as");
+    vm.save_as(Path::new("/tmp/bust.clayspace"))
+        .expect("save as");
     vm.touched();
     vm.save().expect("save");
 
@@ -136,7 +144,10 @@ fn a_failed_save_does_not_look_like_a_saved_document() {
     vm.save_as(Path::new("/read-only/bust.clayspace"))
         .expect_err("the save should have failed");
 
-    assert!(*vm.modified().get(), "a failed save reported the document clean");
+    assert!(
+        *vm.modified().get(),
+        "a failed save reported the document clean"
+    );
     assert_eq!(vm.guard(), Guard::WouldLoseWork);
     assert!(!vm.has_path(), "a failed save adopted the path anyway");
     assert!(vm.notice().get().is_some(), "a failed save said nothing");
@@ -177,7 +188,8 @@ fn a_newer_document_says_so_rather_than_reading_as_damage() {
         path: PathBuf::from("/tmp/new.clayspace"),
         detail: "0.31 > 0.27".to_string(),
     });
-    vm.open(Path::new("/tmp/new.clayspace")).expect_err("refused");
+    vm.open(Path::new("/tmp/new.clayspace"))
+        .expect_err("refused");
 
     let notice = vm.notice().get().clone().expect("a notice");
     assert!(
