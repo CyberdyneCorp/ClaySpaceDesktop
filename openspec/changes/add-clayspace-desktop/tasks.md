@@ -137,5 +137,5 @@
 ## 11. Close-out
 
 - [ ] 11.1 Resolve the open questions in `design.md`: the Dinâmica panel scope, localization scope, and the default document representation
-- [ ] 11.2 Write the README covering prerequisites, submodule initialization, build, and the backend matrix
+- [x] 11.2 Write the README covering prerequisites, submodule initialization, build, and the backend matrix
 - [ ] 11.3 Run `openspec validate --all --strict` and the full test suite; archive the change
