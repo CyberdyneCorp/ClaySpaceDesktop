@@ -1,6 +1,6 @@
 [package]
 name = "clayspace-model"
-description = "Domain layer: documents, tools and acceleration policy over the engine."
+description = "Domain layer: the sculpting vocabulary and the interfaces the app is written against."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,4 +8,3 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-claycore.workspace = true

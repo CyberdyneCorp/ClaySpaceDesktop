@@ -1,0 +1,15 @@
+[package]
+name = "clayspace-engine"
+description = "The ClayCore-backed implementation of the domain's interfaces."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+claycore.workspace = true
+clayspace-model = { path = "../clayspace-model" }
+
+[dev-dependencies]
+claycore = { workspace = true, features = ["test-support"] }

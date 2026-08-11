@@ -305,6 +305,7 @@ dependencies = [
 name = "clayspace-app"
 version = "0.1.0"
 dependencies = [
+ "clayspace-engine",
  "clayspace-model",
  "clayspace-view",
  "clayspace-vm",
@@ -315,11 +316,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "clayspace-model"
+name = "clayspace-engine"
 version = "0.1.0"
 dependencies = [
  "claycore",
+ "clayspace-model",
 ]
+
+[[package]]
+name = "clayspace-model"
+version = "0.1.0"
 
 [[package]]
 name = "clayspace-view"

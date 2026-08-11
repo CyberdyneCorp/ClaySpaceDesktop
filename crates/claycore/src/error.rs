@@ -113,6 +113,24 @@ impl std::error::Error for ClayError {}
 
 pub type Result<T> = std::result::Result<T, ClayError>;
 
+#[cfg(feature = "test-support")]
+impl ClayError {
+    /// Builds an error of a given kind, for tests.
+    ///
+    /// Some engine errors cannot be produced on demand — `Unsupported` needs a
+    /// backend that declines the operation, which not every machine has. A
+    /// test that fabricates one by guessing at an input tests the guess
+    /// instead of the handling, which is how the first version of the
+    /// acceleration policy's tests came to assert against `NotFound`.
+    pub fn for_testing(kind: ErrorKind, operation: &'static str) -> Self {
+        Self {
+            kind,
+            operation,
+            detail: Some("synthesised for a test".to_string()),
+        }
+    }
+}
+
 /// Reads the engine's thread-local message for the failure that just happened.
 ///
 /// Called only from [`check`], immediately after the failing call, because the

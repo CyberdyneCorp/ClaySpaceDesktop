@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use clayspace_model::claycore::{self, Document, Mesh};
+use clayspace_engine::claycore::{self, Document, Mesh};
 use clayspace_view::{
     Camera, Gpu, GpuMesh, Overlays, Renderer, SurfaceLoss, Vertex, ViewPreset, WindowSurface,
 };

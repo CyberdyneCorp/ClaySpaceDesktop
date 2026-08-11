@@ -1,0 +1,124 @@
+//! What a ViewModel is allowed to ask of the document.
+//!
+//! Expressed as a trait so the ViewModel layer can be exercised against a
+//! double: no engine, no GPU, no window. The engine-backed implementation
+//! lives beside it, and the two are interchangeable by construction.
+
+use crate::tools::{BrushSettings, Representation, ToolKind};
+
+/// One sample of a sculpting gesture, as the input device reported it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GestureSample {
+    pub position: [f32; 3],
+    /// Reported pressure, normally 0..=1. Devices without a pressure axis
+    /// report 1.
+    pub pressure: f32,
+    /// Seconds since the stroke began.
+    pub time: f32,
+}
+
+/// What a completed edit did, as far as the interface needs to know.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EditOutcome {
+    /// Whether anything actually changed.
+    ///
+    /// The engine documents several verbs as legitimately able to change
+    /// nothing — a sub-cell drag, a stamp that misses every cell — so a
+    /// successful call is not evidence that an edit happened. A no-op adds no
+    /// history entry and does not mark the document modified.
+    pub changed: bool,
+    /// Bricks the edit dirtied, which is what the viewport must re-mesh.
+    pub dirty_bricks: usize,
+}
+
+impl EditOutcome {
+    pub const NOTHING: Self = Self {
+        changed: false,
+        dirty_bricks: 0,
+    };
+}
+
+/// What the interface reports about the document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SceneStats {
+    pub triangles: usize,
+    pub vertices: usize,
+    pub objects: usize,
+}
+
+/// Whether undo and redo have anything to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HistoryState {
+    pub can_undo: bool,
+    pub can_redo: bool,
+    pub depth: usize,
+}
+
+/// The operations a ViewModel performs on a document.
+///
+/// Deliberately small: it is the surface the interface needs, not the engine's.
+/// Everything here is expressed in domain terms, so no ClayCore type crosses
+/// into the layers above.
+pub trait SculptModel {
+    /// The representation of the layer edits currently go to.
+    fn active_representation(&self) -> Representation;
+
+    /// Whether the active layer accepts edits at all.
+    fn active_layer_editable(&self) -> bool;
+
+    /// Applies a completed gesture with the given tool.
+    ///
+    /// The whole gesture arrives at once so it becomes one undoable edit, and
+    /// so the engine's stroke engine decides stamp spacing from arc length
+    /// rather than from how many samples the device happened to deliver.
+    fn apply_stroke(
+        &mut self,
+        tool: ToolKind,
+        brush: BrushSettings,
+        samples: &[GestureSample],
+        symmetry: [bool; 3],
+    ) -> Result<EditOutcome, ModelError>;
+
+    /// Where a ray meets the surface, if anywhere.
+    fn pick(&self, origin: [f32; 3], direction: [f32; 3]) -> Option<[f32; 3]>;
+
+    fn undo(&mut self) -> Result<bool, ModelError>;
+    fn redo(&mut self) -> Result<bool, ModelError>;
+    fn history(&self) -> HistoryState;
+
+    fn stats(&self) -> SceneStats;
+
+    /// The document's bounds, for framing.
+    fn bounds(&self) -> Option<([f32; 3], [f32; 3])>;
+}
+
+/// Why an operation on the document failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModelError {
+    /// The tool cannot apply to the active layer.
+    Unavailable(crate::tools::Unavailable),
+    /// The engine refused, with its own description.
+    Engine(String),
+}
+
+impl std::fmt::Display for ModelError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unavailable(why) => write!(f, "{why}"),
+            Self::Engine(why) => f.write_str(why),
+        }
+    }
+}
+
+impl std::error::Error for ModelError {}
+
+impl ModelError {
+    /// Wraps whatever the engine said.
+    ///
+    /// The adapter performs this conversion, because the domain does not know
+    /// what an engine is. The message is the engine's own detail: a result
+    /// code is not something a user can act on.
+    pub fn engine(detail: impl std::fmt::Display) -> Self {
+        Self::Engine(detail.to_string())
+    }
+}

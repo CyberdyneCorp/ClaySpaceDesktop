@@ -9,6 +9,9 @@ repository.workspace = true
 
 [features]
 default = []
+# Exposes constructors for errors that cannot be produced on demand, so tests
+# exercise error handling rather than their own guess at an input.
+test-support = []
 metal = ["claycore-sys/metal"]
 cuda = ["claycore-sys/cuda"]
 vulkan = ["claycore-sys/vulkan"]

@@ -5,3 +5,11 @@
 //! is a Cargo dependency fact, which CI asserts rather than review.
 
 #![forbid(unsafe_code)]
+
+pub mod command;
+pub mod observable;
+pub mod sculpt_vm;
+
+pub use command::{Axis, Command, CommandQueue};
+pub use observable::{Observable, Watcher};
+pub use sculpt_vm::{LastAction, SculptViewModel};

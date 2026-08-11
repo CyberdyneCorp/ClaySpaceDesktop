@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
-use clayspace_model::claycore::{self, Document, Mesh, VertexLayout};
+use clayspace_engine::claycore::{self, Document, Mesh, VertexLayout};
 use clayspace_view::{Camera, Gpu, GpuMesh, Image, OffscreenTarget, Renderer, Vertex};
 
 /// Where captured frames are written.

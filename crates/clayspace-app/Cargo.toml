@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+clayspace-engine = { path = "../clayspace-engine" }
 clayspace-model = { path = "../clayspace-model" }
 clayspace-vm = { path = "../clayspace-vm" }
 clayspace-view = { path = "../clayspace-view" }

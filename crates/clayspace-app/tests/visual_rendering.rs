@@ -149,7 +149,7 @@ fn each_view_preset_shows_a_different_face() {
     let mut doc = support::sphere_document(1.0);
     {
         let layer = doc.add_sdf_layer("Arm").expect("layer");
-        let mut arm = clayspace_model::claycore::Item::sphere(0.45).expect("sphere");
+        let mut arm = clayspace_engine::claycore::Item::sphere(0.45).expect("sphere");
         arm.set_position([1.1, 0.35, 0.0]).expect("position");
         doc.add_item(layer, &arm).expect("place");
     }
@@ -189,10 +189,10 @@ fn an_orthographic_preset_removes_the_perspective_divide() {
 
     // Two identical spheres at different depths. Under perspective the far one
     // is smaller; under orthographic they match.
-    let mut doc = clayspace_model::claycore::Document::new().expect("document");
+    let mut doc = clayspace_engine::claycore::Document::new().expect("document");
     let layer = doc.add_sdf_layer("Pair").expect("layer");
     for z in [-1.6f32, 1.6] {
-        let mut item = clayspace_model::claycore::Item::sphere(0.5).expect("sphere");
+        let mut item = clayspace_engine::claycore::Item::sphere(0.5).expect("sphere");
         item.set_position([z * 0.9, 0.0, z]).expect("position");
         doc.add_item(layer, &item).expect("place");
     }
@@ -245,12 +245,12 @@ fn an_empty_document_renders_the_ground_without_failing() {
     };
     let background = harness.background();
 
-    let doc = clayspace_model::claycore::Document::new().expect("document");
+    let doc = clayspace_engine::claycore::Document::new().expect("document");
 
     // The engine refuses to mesh a document with nothing in it rather than
     // returning an empty mesh. That is a legitimate answer, and the viewport
     // has to treat it as "nothing to draw" and not as a failure.
-    let refused = doc.mesh(clayspace_model::claycore::MeshParams {
+    let refused = doc.mesh(clayspace_engine::claycore::MeshParams {
         resolution: 32,
         ..Default::default()
     });
@@ -479,7 +479,7 @@ fn orbiting_changes_the_view_and_stays_stable_at_the_pole() {
     let mut doc = support::sphere_document(1.0);
     {
         let layer = doc.add_sdf_layer("Nose").expect("layer");
-        let mut nose = clayspace_model::claycore::Item::sphere(0.4).expect("sphere");
+        let mut nose = clayspace_engine::claycore::Item::sphere(0.4).expect("sphere");
         nose.set_position([0.0, 0.2, 1.0]).expect("position");
         doc.add_item(layer, &nose).expect("place");
     }

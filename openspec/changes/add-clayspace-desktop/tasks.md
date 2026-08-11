@@ -20,10 +20,10 @@
 ## 2. Acceleration policy
 
 - [x] 2.1 Implement backend discovery over `clay_list_backends` returning the parsed list
-- [ ] 2.2 Implement the platform preference ranking (macOS `metal` → `cpu`; Linux `cuda` → `vulkan` → `opencl` → `cpu`) and automatic selection
-- [ ] 2.3 Implement per-operation fallback: route an `Unsupported` result to the CPU backend for that operation, keeping the selected backend active elsewhere
-- [ ] 2.4 Record each fallback once per operation kind in the diagnostics log
-- [ ] 2.5 Implement the user override with cross-session persistence and the unavailable-override fallback path
+- [x] 2.2 Implement the platform preference ranking (macOS `metal` → `cpu`; Linux `cuda` → `vulkan` → `opencl` → `cpu`) and automatic selection
+- [x] 2.3 Implement per-operation fallback: route an `Unsupported` result to the CPU backend for that operation, keeping the selected backend active elsewhere
+- [x] 2.4 Record each fallback once per operation kind in the diagnostics log
+- [x] 2.5 Implement the user override with cross-session persistence and the unavailable-override fallback path
 - [ ] 2.6 Implement the diagnostics report: discovered backends, active backend, selection reason, engine version, fallbacks this session
 - [ ] 2.7 Add a test asserting a document exported on each registered backend agrees within parity tolerance and saves byte-identically
 
@@ -41,13 +41,13 @@
 
 ## 4. MVVM skeleton
 
-- [ ] 4.1 Define the Model interface in `clayspace-model` as a trait so ViewModels can be tested against a double
-- [ ] 4.2 Define the command type and the single dispatch path; route every mutation through it
-- [ ] 4.3 Implement the observable state mechanism with change signals that reading does not trigger
+- [x] 4.1 Define the Model interface in `clayspace-model` as a trait so ViewModels can be tested against a double
+- [x] 4.2 Define the command type and the single dispatch path; route every mutation through it
+- [x] 4.3 Implement the observable state mechanism with change signals that reading does not trigger
 - [ ] 4.4 Implement the asynchronous command executor with progress reporting and stale-result discarding
 - [ ] 4.5 Implement the composition root in `clayspace-app` and inject dependencies downward
-- [ ] 4.6 Add the CI architecture check: dependency direction, no engine crates in `clayspace-view`, no `egui`/`wgpu`/`winit` in `clayspace-vm`, no `unsafe` outside the bridge
-- [ ] 4.7 Write ViewModel tests that run headlessly against the Model double
+- [x] 4.6 Add the CI architecture check: dependency direction, no engine crates in `clayspace-view`, no `egui`/`wgpu`/`winit` in `clayspace-vm`, no `unsafe` outside the bridge
+- [x] 4.7 Write ViewModel tests that run headlessly against the Model double
 
 ## 5. Sculpting loop
 
@@ -55,7 +55,7 @@
 - [ ] 5.2 Implement the sculpt command path: capture → engine stroke resolution → edit → dirty bricks → re-mesh → upload
 - [ ] 5.3 Implement incremental re-meshing: pass the dirty key set as the meshing subset, patch GPU buffer sub-ranges from the per-key ranges, discard stale results
 - [ ] 5.3a Implement mesh buffer fragmentation tracking and background whole-surface compaction, scheduled off the interaction path
-- [ ] 5.4 Implement the tool registry binding every tool label to its engine entry point, with per-representation availability and stated reasons
+- [x] 5.4 Implement the tool registry binding every tool label to its engine entry point, with per-representation availability and stated reasons
 - [ ] 5.5 Implement per-tool settings persistence for intensity, size and flow
 - [ ] 5.6 Implement the brush shaping controls: alpha curve, noise, edge falloff, accumulation mode, smoothing, mirroring
 - [ ] 5.7 Implement symmetry about X, Y and Z with mirrored edits inside one undo group

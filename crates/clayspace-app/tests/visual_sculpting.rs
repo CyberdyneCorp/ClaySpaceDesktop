@@ -17,7 +17,7 @@
 
 mod support;
 
-use clayspace_model::claycore::{
+use clayspace_engine::claycore::{
     BrushParams, BrushShape, Document, Falloff, Item, Mask, MoveParams, Op, StrokePreset,
     StrokeSample, VoxelGrid,
 };
@@ -59,7 +59,7 @@ fn before_and_after(
 /// its own op, so a subtract item placed in a fresh layer unions an empty
 /// field instead of cutting the ball — which is exactly what the first version
 /// of these tests did, and why they measured no change at all.
-fn ball() -> (Document, clayspace_model::claycore::LayerId) {
+fn ball() -> (Document, clayspace_engine::claycore::LayerId) {
     let mut doc = Document::new().expect("document");
     let layer = doc.add_sdf_layer("Forma").expect("layer");
     let item = Item::sphere(1.0).expect("sphere");
@@ -174,7 +174,7 @@ fn a_smooth_blend_softens_the_seam_between_two_forms() {
             let mut item = Item::sphere(0.7).expect("sphere");
             item.set_position([x, 0.0, 0.0]).expect("position");
             if let Some(k) = k {
-                item.set_blend(clayspace_model::claycore::Blend::Quadratic, k)
+                item.set_blend(clayspace_engine::claycore::Blend::Quadratic, k)
                     .expect("blend");
             }
             doc.add_item(layer, &item).expect("place");
@@ -217,7 +217,7 @@ fn mascara_extrude_pulls_a_patch_off_the_surface() {
             .mask_extrude(
                 layer,
                 &mask,
-                clayspace_model::claycore::MaskExtrudeParams {
+                clayspace_engine::claycore::MaskExtrudeParams {
                     thickness: 0.22,
                     border_round: 0.05,
                     ..Default::default()

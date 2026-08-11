@@ -67,6 +67,14 @@ impl Item {
     }
 }
 
+impl std::fmt::Debug for Item {
+    /// Opaque: an item builder holds engine state with no cheap summary, and
+    /// formatting one must not compile anything.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Item(..)")
+    }
+}
+
 impl Drop for Item {
     fn drop(&mut self) {
         // SAFETY: the handle is owned by this value, non-null, and released

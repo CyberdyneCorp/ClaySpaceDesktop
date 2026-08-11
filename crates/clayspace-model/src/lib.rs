@@ -1,9 +1,19 @@
-//! The Model layer: the domain, and the only layer that reaches the engine.
+//! The domain: what the application is about, in its own words.
 //!
-//! Everything above this sees domain types, never a ClayCore handle. That is
-//! what lets the ViewModel layer be tested against a double with no engine,
-//! no GPU and no window.
+//! Deliberately free of the engine. The interfaces here are what the layers
+//! above are written against, and the ClayCore-backed implementations live in
+//! `clayspace-engine` beside this crate rather than beneath it.
+//!
+//! That is what lets a View be unable to reach a ClayCore handle even in
+//! principle, and what lets the ViewModel tests run without building a C++
+//! engine first.
 
 #![forbid(unsafe_code)]
 
-pub use claycore;
+pub mod sculpt;
+pub mod tools;
+
+pub use sculpt::{
+    EditOutcome, GestureSample, HistoryState, ModelError, SceneStats, SculptModel,
+};
+pub use tools::{BrushSettings, Representation, ToolKind, Unavailable, ViewPresetKind};
