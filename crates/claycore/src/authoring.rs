@@ -320,9 +320,10 @@ impl Document {
     /// for consecutive ids and keeps the ones that answer, stopping after a run
     /// of misses long enough to clear any gap left by a removal.
     ///
-    /// It recovers ids and nothing else. Names, visibility and representation
-    /// have no getters, so a document that comes back from disk comes back
-    /// anonymous. Reported upstream; when enumeration lands this goes.
+    /// It recovers ids and nothing else. Names, visibility, representation and
+    /// stack order have no getters, so a document that comes back from disk
+    /// comes back anonymous and in creation order rather than the order it was
+    /// saved in. Filed as ClayCore #69; when enumeration lands this goes.
     pub fn layer_ids(&self) -> Result<Vec<LayerId>> {
         // Ids are handed out from 1 and monotonically, so a gap means a
         // removal rather than the end. Eight is well past the largest run of
