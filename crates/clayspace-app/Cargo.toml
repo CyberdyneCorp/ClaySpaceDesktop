@@ -11,3 +11,7 @@ repository.workspace = true
 clayspace-model = { path = "../clayspace-model" }
 clayspace-vm = { path = "../clayspace-vm" }
 clayspace-view = { path = "../clayspace-view" }
+
+[dev-dependencies]
+png = "0.18.1"
+pollster = "1.0.1"

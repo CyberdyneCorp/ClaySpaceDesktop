@@ -8,4 +8,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+bytemuck = { version = "1.25.2", features = ["derive"] }
 clayspace-vm = { path = "../clayspace-vm" }
+glam = "0.33.3"
+pollster = "1.0.1"
+wgpu = "24.0.5"
