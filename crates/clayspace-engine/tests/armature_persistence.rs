@@ -1,10 +1,11 @@
 //! Task 6.6: what survives saving a rig and opening it again.
 //!
 //! Two different things could be meant by "the armature persisted": the
-//! *surface* it produced, and the *tree* that produced it. The first is the
-//! engine's business and the second is ours, because the parent array cannot
-//! be read back out of the ABI. These tests state which is which rather than
-//! asserting the happier of the two and calling it done.
+//! *surface* it produced, and the *rig* that produced it. The first is the
+//! engine's business. The second cannot be recovered at all: a placed armature
+//! is write-only in the ABI — see `claycore_armature_readback.rs` — so neither
+//! the parents nor the positions come back. These tests state which is which
+//! rather than asserting the happier of the two and calling it done.
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{ArmatureModel, DocumentModel, SculptModel};
@@ -68,12 +69,11 @@ fn the_skinned_surface_survives_a_round_trip() {
 
 #[test]
 fn the_tree_does_not_survive_and_the_document_says_so() {
-    // The honest half. `clay_layer_stroke_points` reads positions and radii
-    // back, but there is no reader for the parent array, so the topology a
-    // rig *is* cannot be recovered from the file. Rather than invent a
-    // plausible tree — nearest-preceding-sphere chaining would produce one,
-    // and it would be wrong for any rig that branches — a reopened document
-    // reports no armature, and the surface stands on its own.
+    // The honest half. A placed armature answers nothing: the parent array
+    // has no reader, and `clay_layer_stroke_points` refuses the primitive, so
+    // not even the sphere positions come back. Rather than invent a plausible
+    // rig out of the meshed surface, a reopened document reports no armature
+    // and the surface stands on its own.
     //
     // This test is written to fail the day the ABI grows a reader. That is
     // the signal to recover the tree here instead of documenting its loss.

@@ -65,7 +65,7 @@ the signal to do it.
 | [#73](https://github.com/CyberdyneCorp/ClayCore/issues/73) gradient normals scale with document size | A dab is 4 ms on a fresh document and 120 ms after 192 edits | Workaround available: host-side normals. Not taken — see below |
 | [#67](https://github.com/CyberdyneCorp/ClayCore/issues/67) bake-and-replace corrugates the surface | Suavizar, Relaxar, Planar and Polir damage what they touch | Applied once per gesture rather than per segment, which halves it. Still visibly wrong |
 | [#69](https://github.com/CyberdyneCorp/ClayCore/issues/69) no layer enumeration | A reopened document loses layer names, visibility and **stack order** | Layer ids recovered by probing. Order loss is a silent correctness difference |
-| no armature topology readback | A saved rig comes back as surface without its tree, so it cannot be re-posed | Verified in `armature_persistence.rs`. Not yet filed; it belongs beside #69 |
+| a placed armature is write-only | A saved rig comes back as surface only, so it cannot be re-posed or edited | Verified in `claycore_armature_readback.rs`: `clay_layer_stroke_points` refuses the primitive, and nothing reads the parent array. Not yet filed; it belongs beside #69 |
 | [#64](https://github.com/CyberdyneCorp/ClayCore/issues/64) Metal 7–10× slower than CPU at refill | None — routed around | `BackendPolicy::refill_backend` returns CPU; `backend_choice.rs` fails when that flips |
 | [#63](https://github.com/CyberdyneCorp/ClayCore/issues/63) Metal absent on paravirtual GPUs | None for us | Not ours; kernel half fixed in 0.27.3 |
 
@@ -107,7 +107,9 @@ roughly 0.4 s, so a single gesture costs about 34 ms — each edit rewrites the
 armature node and refills the box it vacated, which is the price of a topology
 the ABI will not let us edit in place.
 
-The half that does not work is persistence of the *tree*. See the table above.
+The half that does not work is persistence of the rig itself. A placed
+armature cannot be read back at all — not the parents, and not the positions
+and radii either. See the table above.
 
 ## What is slow and why
 
