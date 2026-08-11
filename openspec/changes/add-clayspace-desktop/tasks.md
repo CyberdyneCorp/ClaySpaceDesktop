@@ -29,13 +29,13 @@
 
 ## 3. Rendering foundation
 
-- [ ] 3.1 Create the window and event loop, and initialize the wgpu device and surface independently of the engine backend
-- [ ] 3.2 Implement device-loss detection and resource recreation without losing the document
-- [ ] 3.3 Implement the mesh renderer: vertex/index buffers, per-draw uniforms, depth, and dynamic buffer growth
+- [x] 3.1 Create the window and event loop, and initialize the wgpu device and surface independently of the engine backend
+- [x] 3.2 Implement device-loss detection and resource recreation without losing the document
+- [x] 3.3 Implement the mesh renderer: vertex/index buffers, per-draw uniforms, depth, and dynamic buffer growth
 - [x] 3.4 Implement MatCap shading with a built-in material set and vertex-color modulation; verify no field math is present in any WGSL source
 - [x] 3.5 Implement the camera: orbit, pan, zoom, frame-all, frame-selection, and the empty-document default view
 - [x] 3.6 Implement the view presets with orthographic projection for the orthogonal views and framing preservation on switch
-- [ ] 3.7 Implement the navigation gizmo with per-axis activation
+- [x] 3.7 Implement the navigation gizmo with per-axis activation
 - [x] 3.8 Implement the ground grid and symmetry-plane overlays, excluded from export
 - [ ] 3.9 Implement LOD selection over the brick cache mips with restoration on approach
 

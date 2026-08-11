@@ -221,7 +221,13 @@ pub struct Renderer {
     /// The neutral, desaturated ground the design calls for. Never tinted:
     /// a coloured ground shifts the apparent value of the material.
     pub background: wgpu::Color,
+    /// Whether the orientation gizmo is drawn. Off for captures that compare
+    /// geometry, since it would register as a difference of its own.
+    pub show_gizmo: bool,
     overlay_mesh: GpuMesh,
+    gizmo_mesh: GpuMesh,
+    gizmo_camera_buffer: wgpu::Buffer,
+    gizmo_bind_group: wgpu::BindGroup,
 }
 
 impl Renderer {
@@ -290,12 +296,29 @@ impl Renderer {
             ..Default::default()
         });
 
+        let gizmo_camera_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("gizmo camera"),
+            size: std::mem::size_of::<CameraUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         let matcap = MatCap::default();
         let texture_view = upload_matcap(gpu, matcap);
         let bind_group = make_bind_group(
             gpu,
             &bind_group_layout,
             &camera_buffer,
+            &material_buffer,
+            &texture_view,
+            &sampler,
+        );
+        // The gizmo draws with its own view matrix but the same material and
+        // texture, so it needs its own bind group over a second camera buffer.
+        let gizmo_bind_group = make_bind_group(
+            gpu,
+            &bind_group_layout,
+            &gizmo_camera_buffer,
             &material_buffer,
             &texture_view,
             &sampler,
@@ -341,7 +364,16 @@ impl Renderer {
             matcap,
             format,
             background: Self::BACKGROUND,
+            show_gizmo: false,
             overlay_mesh: GpuMesh::new(gpu),
+            gizmo_mesh: {
+                let mut mesh = GpuMesh::new(gpu);
+                let (vertices, indices) = gizmo_geometry();
+                mesh.upload(gpu, &vertices, &indices);
+                mesh
+            },
+            gizmo_camera_buffer,
+            gizmo_bind_group,
         }
     }
 
@@ -403,6 +435,22 @@ impl Renderer {
             }),
         );
 
+        // The gizmo sits at a fixed distance looking at the origin, so it
+        // shows only which way the camera is pointed.
+        let mut gizmo_camera = *camera;
+        gizmo_camera.target = glam::Vec3::ZERO;
+        gizmo_camera.distance = 3.0;
+        gizmo_camera.preset = crate::camera::ViewPreset::Perspective;
+        let gizmo_uniform = CameraUniform {
+            view_projection: gizmo_camera.view_projection(1.0).to_cols_array_2d(),
+            view_rotation: gizmo_camera.view_rotation().to_cols_array_2d(),
+        };
+        gpu.queue.write_buffer(
+            &self.gizmo_camera_buffer,
+            0,
+            bytemuck::bytes_of(&gizmo_uniform),
+        );
+
         let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -448,6 +496,27 @@ impl Renderer {
                 pass.set_vertex_buffer(0, mesh.vertices.slice(..));
                 pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+            }
+
+            // The navigation gizmo, in its own corner viewport so it keeps a
+            // fixed size whatever the window does. It shares the camera's
+            // rotation and nothing else — it reports orientation, not position.
+            if self.show_gizmo && !self.gizmo_mesh.is_empty() {
+                let size = (framebuffer.height as f32 * GIZMO_FRACTION).min(120.0);
+                let margin = size * 0.25;
+                pass.set_viewport(
+                    framebuffer.width as f32 - size - margin,
+                    margin,
+                    size,
+                    size,
+                    0.0,
+                    1.0,
+                );
+                pass.set_bind_group(0, &self.gizmo_bind_group, &[]);
+                pass.set_pipeline(&self.overlay_pipeline);
+                pass.set_vertex_buffer(0, self.gizmo_mesh.vertices.slice(..));
+                pass.set_index_buffer(self.gizmo_mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..self.gizmo_mesh.index_count, 0, 0..1);
             }
         }
         gpu.queue.submit(Some(encoder.finish()));
@@ -649,6 +718,44 @@ fn overlay_geometry(overlays: Overlays, extent: f32) -> (Vec<Vertex>, Vec<u32>) 
     (vertices, indices)
 }
 
+/// How much of the frame's height the gizmo occupies.
+const GIZMO_FRACTION: f32 = 0.18;
+
+/// The three labelled axes, drawn as lines from the origin.
+///
+/// Each axis takes a distinct hue so the orientation is readable at a glance,
+/// and the negative half is drawn dimmer so front and back are separable.
+fn gizmo_geometry() -> (Vec<Vertex>, Vec<u32>) {
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+
+    let axes = [
+        (Vec3::X, [0.85f32, 0.22, 0.24]),
+        (Vec3::Y, [0.36, 0.72, 0.32]),
+        (Vec3::Z, [0.28, 0.48, 0.88]),
+    ];
+
+    for (direction, color) in axes {
+        for (end, shade) in [(direction, 1.0f32), (-direction, 0.25)] {
+            let base = vertices.len() as u32;
+            let tint = [color[0] * shade, color[1] * shade, color[2] * shade];
+            vertices.push(Vertex {
+                position: [0.0, 0.0, 0.0],
+                normal: [0.0, 1.0, 0.0],
+                color: tint,
+            });
+            vertices.push(Vertex {
+                position: (end * 0.9).into(),
+                normal: [0.0, 1.0, 0.0],
+                color: tint,
+            });
+            indices.extend_from_slice(&[base, base + 1]);
+        }
+    }
+
+    (vertices, indices)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -678,6 +785,27 @@ mod tests {
                 "the viewport shader contains `{forbidden}`, which means it is \
                  evaluating the field instead of drawing the mesh the engine produced"
             );
+        }
+    }
+
+    #[test]
+    fn the_gizmo_draws_three_axes_in_both_directions() {
+        let (vertices, indices) = gizmo_geometry();
+        // Three axes, positive and negative, two vertices each.
+        assert_eq!(vertices.len(), 12);
+        assert_eq!(indices.len(), 12);
+
+        // Each axis must be distinguishable by hue, or the gizmo reports
+        // nothing a glance can read.
+        let hues: Vec<[f32; 3]> = vertices
+            .chunks_exact(2)
+            .step_by(2)
+            .map(|pair| pair[0].color)
+            .collect();
+        for (i, a) in hues.iter().enumerate() {
+            for b in hues.iter().skip(i + 1) {
+                assert_ne!(a, b, "two gizmo axes share a colour");
+            }
         }
     }
 

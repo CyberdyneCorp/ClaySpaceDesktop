@@ -13,3 +13,4 @@ clayspace-vm = { path = "../clayspace-vm" }
 glam = "0.33.3"
 pollster = "1.0.1"
 wgpu = "24.0.5"
+winit = "0.30.13"

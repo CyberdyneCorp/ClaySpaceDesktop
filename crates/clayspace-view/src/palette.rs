@@ -20,6 +20,7 @@ pub const ACCENT: [f32; 3] = [0.693872, 0.174647, 0.068478];
 
 /// What each constant above was converted from, so the test can check them
 /// rather than trusting that someone did the arithmetic correctly.
+#[cfg(test)]
 const SOURCES: [(&str, u32, [f32; 3]); 5] = [
     ("GROUND", 0x23262B, GROUND),
     ("GRID_MINOR", 0x2E3238, GRID_MINOR),

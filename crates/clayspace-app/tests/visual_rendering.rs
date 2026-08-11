@@ -404,6 +404,72 @@ fn overlays_stay_dimmer_than_the_sculpt() {
 }
 
 #[test]
+fn the_gizmo_reports_the_camera_orientation() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let background = harness.background();
+    let doc = support::sphere_document(1.0);
+    let mesh = support::mesh_document(&doc, 64);
+    let gpu_mesh = harness.upload(&mesh);
+
+    let mut camera = support::framed_camera(&mesh);
+    harness.renderer.show_gizmo = false;
+    let without = harness.capture(&gpu_mesh, &camera, false, "11-gizmo-off");
+
+    harness.renderer.show_gizmo = true;
+    let with = harness.capture(&gpu_mesh, &camera, false, "11-gizmo-on");
+
+    // The gizmo is deliberately small, so a mean over the whole frame is the
+    // wrong measure — it is a few hundred pixels in 172,800. Count the pixels
+    // in the corner it occupies instead.
+    let changed_in = |a: &clayspace_view::Image, b: &clayspace_view::Image, x0, y0, x1, y1| {
+        let mut count = 0usize;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                if a.pixel(x, y) != b.pixel(x, y) {
+                    count += 1;
+                }
+            }
+        }
+        count
+    };
+
+    let corner = (with.width * 3 / 4, 0, with.width, with.height / 4);
+    let in_corner = changed_in(&with, &without, corner.0, corner.1, corner.2, corner.3);
+    assert!(
+        in_corner > 20,
+        "the gizmo drew only {in_corner} pixels in the corner it should occupy"
+    );
+
+    // And nowhere else: it must not overlap the sculpt.
+    let middle = changed_in(
+        &with,
+        &without,
+        with.width / 4,
+        with.height / 3,
+        with.width / 2,
+        with.height * 2 / 3,
+    );
+    assert_eq!(
+        middle, 0,
+        "the gizmo drew over the sculpt instead of staying in its corner"
+    );
+
+    // Orienting the camera must reorient it.
+    camera.orbit(1.4, 0.4);
+    let turned = harness.capture(&gpu_mesh, &camera, false, "11-gizmo-turned");
+    let gizmo_moved = changed_in(&turned, &with, corner.0, corner.1, corner.2, corner.3);
+    assert!(
+        gizmo_moved > 20,
+        "the gizmo did not follow the camera ({gizmo_moved} pixels changed)"
+    );
+
+    harness.renderer.show_gizmo = false;
+    let _ = background;
+}
+
+#[test]
 fn orbiting_changes_the_view_and_stays_stable_at_the_pole() {
     let Some(mut harness) = Harness::new() else {
         return;

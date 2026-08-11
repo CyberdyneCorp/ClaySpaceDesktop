@@ -15,7 +15,7 @@ use std::sync::Arc;
 pub struct Gpu {
     pub device: Arc<wgpu::Device>,
     pub queue: Arc<wgpu::Queue>,
-    adapter_info: wgpu::AdapterInfo,
+    adapter: Arc<wgpu::Adapter>,
 }
 
 impl Gpu {
@@ -58,10 +58,15 @@ impl Gpu {
             .map_err(|e| GpuError::NoDevice(e.to_string()))?;
 
         Ok(Self {
-            adapter_info: adapter.get_info(),
+            adapter: Arc::new(adapter),
             device: Arc::new(device),
             queue: Arc::new(queue),
         })
+    }
+
+    /// The adapter this device came from, for surface configuration.
+    pub fn adapter(&self) -> &wgpu::Adapter {
+        &self.adapter
     }
 
     /// Which adapter is rendering, for the diagnostics view.
@@ -69,10 +74,8 @@ impl Gpu {
     /// Distinct from the engine's evaluation backend: this is what draws, that
     /// is what evaluates, and they are chosen separately.
     pub fn adapter_description(&self) -> String {
-        format!(
-            "{} ({:?}, {:?})",
-            self.adapter_info.name, self.adapter_info.device_type, self.adapter_info.backend
-        )
+        let info = self.adapter.get_info();
+        format!("{} ({:?}, {:?})", info.name, info.device_type, info.backend)
     }
 }
 
