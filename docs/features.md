@@ -3,6 +3,12 @@
 What works today. Anything not listed here is not built yet — see
 [roadmap.md](roadmap.md).
 
+Four tools currently damage what they touch, and two controls do nothing.
+Neither is a gap in this application: both are engine defects, filed, and
+listed under *Known-degraded* at the end of this page. They are called out
+there rather than quietly omitted, because a tool that is offered and does the
+wrong thing is worse than one that is missing.
+
 Every tool names the ClayCore entry point it invokes, so a binding can be
 checked against the engine's own documentation without reading the
 implementation. A tool with no engine counterpart is not offered.
@@ -20,12 +26,12 @@ All fifteen are bound and each is covered by a before-and-after capture in
 | Mover | `clay_layer_move_surface` | SDF | Drags the assembled surface. Buds rather than stretches |
 | Pinçar | `clay_voxel_sculpt_pinch` | voxel | Moves surface cells toward the brush centre |
 | Raspar | `clay_voxel_sculpt_scrape` | voxel | Flattens and smooths from one snapshot |
-| Planar | `clay_item_volume_flatten`, cut-only | SDF | Planes without filling, which keeps a facet crisp |
+| Planar | `clay_item_volume_flatten_from`, cut-only | SDF | Planes without filling, which keeps a facet crisp |
 | Preencher | `clay_voxel_sculpt_fill_cavities` | voxel | Fills narrow pockets |
 | Camada | `clay_layer_apply_stroke`, clamped | both | A stroke that does not build up on itself |
 | Máscara | `clay_mask_apply_stroke` | both | Freezes a region against every verb |
 | Puxar | swept-sphere chain | SDF | Pulls a tendril out, tapering to its tip |
-| Polir | `clay_item_volume_flatten`, cut-only | SDF | hPolish |
+| Polir | `clay_item_volume_flatten_from`, cut-only | SDF | hPolish |
 | Relaxar | `clay_item_volume_relax` | SDF | Relax as a brush |
 | Nudge | `clay_voxel_sculpt_smudge` | voxel | Drags the surface skin, leaving the interior |
 | Trim | `clay_cut_create` | SDF | A shape drawn on the frame, cutting through |
@@ -143,3 +149,18 @@ physics controls are not shipped disabled; they are not shipped.
 carried, saved and exported, never sculpted.
 
 **Windows.** Out of scope for this change.
+
+
+## Known-degraded
+
+Offered, and not doing what they should. Each is an engine defect with a filed
+issue and a test that fails when it is fixed.
+
+| What | Effect | Issue |
+|---|---|---|
+| Suavizar, Relaxar, Planar, Polir | Corrugate the region they act on. The bake-and-replace round trip damages the surface before any verb is applied | [#67](https://github.com/CyberdyneCorp/ClayCore/issues/67) |
+| Ruído | Inert. Clamped to zero, because jitter interacts badly with the cache's narrow band | [#67](https://github.com/CyberdyneCorp/ClayCore/issues/67) |
+| Intensidade, on Add-based tools | No effect — a stroke at 0 deposits as much as one at 1. **Fixed upstream, awaiting a release** | [#61](https://github.com/CyberdyneCorp/ClayCore/issues/61) |
+| Simetria | Off by default. The layer mirror had no observable effect. **Fixed upstream, awaiting a release** | [#60](https://github.com/CyberdyneCorp/ClayCore/issues/60) |
+| Layer names after reopening | Lost, along with visibility and stack order. Ids are recovered by probing | [#69](https://github.com/CyberdyneCorp/ClayCore/issues/69) |
+| Seams while dragging | A stroke leaves faint slivers until the pointer comes up, when a full re-mesh clears them. **Fixed upstream, awaiting a release** | [#66](https://github.com/CyberdyneCorp/ClayCore/issues/66) |
