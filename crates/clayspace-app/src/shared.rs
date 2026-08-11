@@ -14,9 +14,9 @@ use std::rc::Rc;
 
 use clayspace_engine::ClayDocument;
 use clayspace_model::{
-    BrushSettings, DocumentModel, EditOutcome, GestureSample, HistoryState, LayerCost, LayerKey,
-    ModelError, OpenError, Protection, Representation, Scene, SceneModel, SceneStats, SculptModel,
-    ToolKind,
+    BrushSettings, DocumentModel, EditOutcome, ExtrudeSettings, GestureSample, HistoryState,
+    LayerCost, LayerKey, MaskModel, MaskOp, MaskState, ModelError, OpenError, Protection,
+    Representation, Scene, SceneModel, SceneStats, SculptModel, ToolKind,
 };
 
 /// A handle to the one document.
@@ -163,5 +163,19 @@ impl DocumentModel for SharedDocument {
 
     fn reset(&mut self) -> Result<(), ModelError> {
         self.0.borrow_mut().reset()
+    }
+}
+
+impl MaskModel for SharedDocument {
+    fn mask_state(&self) -> MaskState {
+        self.0.borrow().mask_state()
+    }
+
+    fn apply_mask_op(&mut self, op: MaskOp) -> Result<(), ModelError> {
+        self.0.borrow_mut().apply_mask_op(op)
+    }
+
+    fn extrude_mask(&mut self, settings: ExtrudeSettings) -> Result<(), ModelError> {
+        self.0.borrow_mut().extrude_mask(settings)
     }
 }

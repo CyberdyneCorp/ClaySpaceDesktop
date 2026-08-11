@@ -97,6 +97,13 @@ fn scene() -> Scene {
 
 fn state<'a>(strings: &'a Strings, scene: &'a Scene, materials: &'a [&'a str]) -> ShellState<'a> {
     ShellState {
+        // A mask with something in it, so the menu's enabled state is what the
+        // capture shows rather than a row of grey.
+        mask: clayspace_model::MaskState {
+            present: true,
+            painted_cells: 4096,
+        },
+        extrude: clayspace_model::ExtrudeSettings::default(),
         strings,
         document_name: "Cabeça_Estudo_v03",
         modified: true,

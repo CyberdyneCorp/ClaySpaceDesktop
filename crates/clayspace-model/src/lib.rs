@@ -11,11 +11,13 @@
 #![forbid(unsafe_code)]
 
 pub mod document;
+pub mod mask;
 pub mod scene;
 pub mod sculpt;
 pub mod tools;
 
 pub use document::{DocumentModel, OpenError};
+pub use mask::{ExtrudeSettings, ExtrudeSide, MaskModel, MaskOp, MaskState};
 pub use scene::{LayerCost, LayerKey, LayerSummary, Protection, Scene, SceneModel, SceneNode};
 pub use sculpt::{
     Detail, EditOutcome, GestureSample, HistoryEntry, HistoryState, ModelError, SceneStats,

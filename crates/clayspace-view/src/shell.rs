@@ -10,7 +10,8 @@
 //! along the trailing edge, and a status area.
 
 use clayspace_model::{
-    BrushSettings, Falloff, LayerSummary, Scene, SceneStats, ToolKind, ViewPresetKind,
+    BrushSettings, ExtrudeSettings, ExtrudeSide, Falloff, LayerSummary, MaskOp, MaskState, Scene,
+    SceneStats, ToolKind, ViewPresetKind,
 };
 use clayspace_vm::{Axis, Command, CommandQueue};
 
@@ -24,6 +25,10 @@ use crate::strings::Strings;
 /// rather than a dozen arguments keeps a View function's signature honest
 /// about being a function of state.
 pub struct ShellState<'a> {
+    /// What is frozen, for the mask menu.
+    pub mask: MaskState,
+    /// What an extrusion would use.
+    pub extrude: ExtrudeSettings,
     pub strings: &'a Strings,
     pub document_name: &'a str,
     pub modified: bool,
@@ -228,7 +233,42 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                 }
             });
             ui.menu_button(s.menu_dynamics, |_| {});
-            ui.menu_button(s.menu_masks, |_| {});
+            ui.menu_button(s.menu_masks, |ui| {
+                // Disabled rather than hidden: a menu whose entries come and
+                // go is harder to learn than one whose entries are sometimes
+                // grey, and the grey says *why* the tool is unavailable.
+                for op in [
+                    MaskOp::Invert,
+                    MaskOp::Expand(1),
+                    MaskOp::Contract(1),
+                    MaskOp::Smooth(1),
+                    MaskOp::InvertWithinBounds,
+                    MaskOp::Clear,
+                ] {
+                    let enabled = !op.needs_a_mask() || state.mask.is_active();
+                    if ui
+                        .add_enabled(enabled, egui::Button::new(op.label()))
+                        .clicked()
+                    {
+                        queue.push(Command::ApplyMaskOp(op));
+                        ui.close_menu();
+                    }
+                }
+                ui.separator();
+                for side in ExtrudeSide::ALL {
+                    let label = format!("{} — {}", s.action_extrude, side.label());
+                    if ui
+                        .add_enabled(state.mask.is_active(), egui::Button::new(label))
+                        .clicked()
+                    {
+                        queue.push(Command::ExtrudeMask(ExtrudeSettings {
+                            side,
+                            ..state.extrude
+                        }));
+                        ui.close_menu();
+                    }
+                }
+            });
             ui.menu_button(s.menu_window, |_| {});
             ui.menu_button(s.menu_help, |_| {});
         });

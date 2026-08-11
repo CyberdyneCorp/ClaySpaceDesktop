@@ -56,6 +56,7 @@ pub struct Strings {
     pub menu_brushes: &'static str,
     pub menu_dynamics: &'static str,
     pub menu_masks: &'static str,
+    pub action_extrude: &'static str,
     pub menu_window: &'static str,
     pub menu_help: &'static str,
 
@@ -106,6 +107,7 @@ const PT_BR: Strings = Strings {
     menu_brushes: "Pincéis",
     menu_dynamics: "Dinâmica",
     menu_masks: "Máscaras",
+    action_extrude: "Extrudar",
     menu_window: "Janela",
     menu_help: "Ajuda",
 
@@ -153,6 +155,7 @@ const EN_US: Strings = Strings {
     menu_brushes: "Brushes",
     menu_dynamics: "Dynamics",
     menu_masks: "Masks",
+    action_extrude: "Extrude",
     menu_window: "Window",
     menu_help: "Help",
 

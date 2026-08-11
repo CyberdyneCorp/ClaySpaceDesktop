@@ -4,7 +4,7 @@ Where the project stands, what is left, and what is still undecided. Task
 counts come from `openspec/changes/add-clayspace-desktop/tasks.md`, which is
 the authority.
 
-**88 of 109 tasks. Milestones 1 to 4 delivered; milestone 5 in progress.**
+**92 of 109 tasks. Milestones 1 to 4 delivered; milestone 5 in progress.**
 
 Engine pinned at ClayCore **0.27.3**. A dab is 15.8 ms median and 23.1 ms p95
 on a bare document, against a 50/100 ms budget — but 81 ms on the reference
@@ -30,7 +30,7 @@ why*.
 | 3. Rendering foundation | M2 | 8/9 |
 | 4. MVVM skeleton | M3 | 7/7 |
 | 5. Sculpting loop | M3 | 11/11 |
-| 6. Masks and armatures | M5 | **0/6** |
+| 6. Masks and armatures | M5 | **4/6** — armatures left |
 | 7. Scene, layers and history | M4 | 13/13 |
 | 8. Document lifecycle | M5 | **2/8** |
 | 9. Interface shell and design system | M4 | 16/16 |
@@ -72,41 +72,34 @@ the signal to do it.
 
 In the order I would take it. None of this waits on anyone.
 
-**1. Masks — group 6, tasks 6.1 to 6.4.** The `clay_mask_*` surface is complete
-and unblocked: paint, invert, clear, expand, contract, smooth, bounds, fill,
-`invert_within`, extrude, `to_field`. Máscara already paints a mask through
-`clay_mask_apply_stroke`. What is missing is the rest of the verbs and passing
-the active mask to *every* tool, which is the requirement that makes a frozen
-region actually resist.
-
-**2. Armatures — 6.5, 6.6.** `clay_layer_armature_edit` and
+**1. Armatures — 6.5, 6.6.** `clay_layer_armature_edit` and
 `clay_item_set_armature_parents` exist. 6.6 leans on the #69 probe to find
 layers after a reload, so it verifies less than it should until enumeration
 lands.
 
-**3. Autosave and recent files — 8.5, 8.7.** Pure host work, and autosave
+**2. Autosave and recent files — 8.5, 8.7.** Pure host work, and autosave
 matters more than usual while four tools can damage a surface.
 
-**4. Mesh import and export — 8.3, 8.4.** `clay_mesh_load` / `clay_mesh_save`,
+**3. Mesh import and export — 8.3, 8.4.** `clay_mesh_load` / `clay_mesh_save`,
 the mesher choice, and the merged export added in 0.27.0. FBX has a known
 engine quirk ([#38](https://github.com/CyberdyneCorp/ClayCore/issues/38),
 closed) worth re-checking on arrival.
 
-**5. Diagnostics — 2.6, 10.11.** Backends discovered, backend active, why it
+**4. Diagnostics — 2.6, 10.11.** Backends discovered, backend active, why it
 was chosen, engine revision, fallbacks this session. Small, and it is what
 turns a bug report from this application into something actionable.
 
-**6. Units and the working unit — 8.8.** Presentation-only switching.
+**5. Units and the working unit — 8.8.** Presentation-only switching.
 
-**7. Bundles and attribution — 10.12, 10.13.** The macOS bundle and the Linux
+**6. Bundles and attribution — 10.12, 10.13.** The macOS bundle and the Linux
 distributable, and the attribution manifest the licence policy in `deny.toml`
 is written against.
 
-**8. Interface-thread instrumentation — 10.4.** A 16 ms threshold with the
+**7. Interface-thread instrumentation — 10.4.** A 16 ms threshold with the
 operation responsible. Consolidation takes 6.4 s, so this has something real
 to catch.
 
-**9. LOD over brick mips — 3.9.** `read_bricks(lod)`, `build_mip` and
+**8. LOD over brick mips — 3.9.** `read_bricks(lod)`, `build_mip` and
 `current_lod` are all present.
 
 ## What is slow and why

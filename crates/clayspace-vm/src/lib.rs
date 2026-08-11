@@ -10,6 +10,7 @@ pub mod command;
 pub mod document_vm;
 pub mod history_vm;
 pub mod jobs;
+pub mod mask_vm;
 pub mod notice;
 pub mod observable;
 pub mod scene_vm;
@@ -24,3 +25,4 @@ pub use scene_vm::SceneViewModel;
 pub use sculpt_vm::{LastAction, SculptViewModel};
 
 pub use document_vm::{DocumentViewModel, Guard};
+pub use mask_vm::MaskViewModel;

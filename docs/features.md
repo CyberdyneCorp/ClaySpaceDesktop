@@ -29,7 +29,7 @@ All fifteen are bound and each is covered by a before-and-after capture in
 | Planar | `clay_item_volume_flatten_from`, cut-only | SDF | Planes without filling, which keeps a facet crisp |
 | Preencher | `clay_voxel_sculpt_fill_cavities` | voxel | Fills narrow pockets |
 | Camada | `clay_layer_apply_stroke`, clamped | both | A stroke that does not build up on itself |
-| Máscara | `clay_mask_apply_stroke` | both | Freezes a region against every verb |
+| Máscara | `clay_mask_apply_stroke` | both | Freezes a region against every verb. Invert, clear, expand, contract, smooth, bounded complement and extrude are in the Máscaras menu |
 | Puxar | swept-sphere chain | SDF | Pulls a tendril out, tapering to its tip |
 | Polir | `clay_item_volume_flatten_from`, cut-only | SDF | hPolish |
 | Relaxar | `clay_item_volume_relax` | SDF | Relax as a brush |

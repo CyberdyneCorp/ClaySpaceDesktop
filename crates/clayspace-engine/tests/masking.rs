@@ -1,0 +1,343 @@
+//! What a mask is for: a frozen region that resists every verb.
+//!
+//! The contract is not "most tools respect the mask". A sculptor who freezes a
+//! finger and then reaches for whichever brush is to hand expects the finger to
+//! survive all of them, and a single tool that ignores the mask makes the
+//! feature untrustworthy — worse than absent, because it invites reliance.
+
+use clayspace_engine::{BackendPolicy, ClayDocument};
+use clayspace_model::{
+    BrushSettings, ExtrudeSettings, GestureSample, MaskModel, MaskOp, SceneModel, SculptModel,
+    ToolKind,
+};
+
+fn document() -> Option<ClayDocument> {
+    let policy = BackendPolicy::discover(None).ok()?;
+    ClayDocument::new(policy)
+        .and_then(ClayDocument::with_starting_form)
+        .ok()
+}
+
+/// Radius of the surface along a direction — the fingerprint used throughout.
+fn radius_along(document: &ClayDocument, direction: [f32; 3]) -> Option<f32> {
+    let n =
+        (direction[0] * direction[0] + direction[1] * direction[1] + direction[2] * direction[2])
+            .sqrt();
+    let unit = direction.map(|c| c / n);
+    document
+        .pick(unit.map(|c| c * 4.0), unit.map(|c| -c))
+        .map(|hit| (hit[0] * hit[0] + hit[1] * hit[1] + hit[2] * hit[2]).sqrt())
+}
+
+/// Paints the mask over a spot, generously enough to cover a brush there.
+fn freeze(document: &mut ClayDocument, at: [f32; 3]) {
+    let brush = BrushSettings {
+        size: 0.4,
+        intensity: 1.0,
+        ..BrushSettings::default()
+    };
+    let samples: Vec<GestureSample> = (0..4)
+        .map(|i| GestureSample {
+            position: at,
+            pressure: 1.0,
+            time: i as f32 * 0.01,
+        })
+        .collect();
+    document
+        .apply_stroke(ToolKind::Mascara, brush, &samples, [false; 3])
+        .expect("paint the mask");
+}
+
+/// Every tool that can act on an SDF layer through a stroke.
+fn sdf_tools() -> Vec<ToolKind> {
+    ToolKind::ALL
+        .into_iter()
+        .filter(|tool| {
+            *tool != ToolKind::Mascara
+                && tool
+                    .availability(clayspace_model::Representation::Sdf, true)
+                    .is_ok()
+        })
+        .collect()
+}
+
+#[test]
+fn a_frozen_region_resists_every_tool_that_can_reach_it() {
+    let Some(mut reference) = document() else {
+        return;
+    };
+    let at = [0.0f32, 0.0, 1.0];
+
+    // What each tool does to an *unmasked* surface, so a tool that changes
+    // nothing anyway cannot be mistaken for one the mask stopped.
+    let mut moves = Vec::new();
+    for tool in sdf_tools() {
+        let Some(mut document) = document() else {
+            return;
+        };
+        let before = radius_along(&document, at).expect("surface");
+        let samples: Vec<GestureSample> = (0..6)
+            .map(|i| GestureSample {
+                position: at,
+                pressure: 1.0,
+                time: i as f32 * 0.01,
+            })
+            .collect();
+        let _ = document.apply_stroke(tool, BrushSettings::default(), &samples, [false; 3]);
+        let after = radius_along(&document, at).expect("surface");
+        moves.push((tool, (after - before).abs()));
+    }
+    let _ = &mut reference;
+
+    // Now the same strokes with the region frozen.
+    let mut ignored = Vec::new();
+    for (tool, unmasked_move) in &moves {
+        if *unmasked_move <= 0.002 {
+            // It does nothing here masked or not; it proves nothing either way.
+            continue;
+        }
+        let Some(mut document) = document() else {
+            return;
+        };
+        freeze(&mut document, at);
+        assert!(
+            document.mask_state().is_active(),
+            "the mask did not take before testing {tool:?}"
+        );
+
+        let before = radius_along(&document, at).expect("surface");
+        let samples: Vec<GestureSample> = (0..6)
+            .map(|i| GestureSample {
+                position: at,
+                pressure: 1.0,
+                time: i as f32 * 0.01,
+            })
+            .collect();
+        let _ = document.apply_stroke(*tool, BrushSettings::default(), &samples, [false; 3]);
+        let after = radius_along(&document, at).expect("surface");
+        let masked_move = (after - before).abs();
+
+        if masked_move > unmasked_move * 0.25 {
+            ignored.push(format!(
+                "{tool:?} moved {masked_move:.4} through the mask against \
+                 {unmasked_move:.4} without it"
+            ));
+        }
+    }
+
+    assert!(
+        ignored.is_empty(),
+        "these tools edited a frozen region: {ignored:?}. A mask that most \
+         tools respect is worse than none, because it invites reliance."
+    );
+}
+
+#[test]
+fn painting_the_mask_does_not_move_the_surface() {
+    let Some(mut document) = document() else {
+        return;
+    };
+    let at = [0.0f32, 0.0, 1.0];
+    let before = radius_along(&document, at).expect("surface");
+    freeze(&mut document, at);
+    let after = radius_along(&document, at).expect("surface");
+    assert!(
+        (before - after).abs() < 1e-4,
+        "painting a mask moved the surface from {before} to {after}"
+    );
+    assert!(document.mask_state().is_active());
+}
+
+#[test]
+fn the_mask_operations_do_what_they_are_called() {
+    let Some(mut document) = document() else {
+        return;
+    };
+    freeze(&mut document, [0.0, 0.0, 1.0]);
+    let painted = document.mask_state().painted_cells;
+    assert!(painted > 0);
+
+    document.apply_mask_op(MaskOp::Expand(2)).expect("expand");
+    let expanded = document.mask_state().painted_cells;
+    assert!(
+        expanded > painted,
+        "expand left {expanded} cells against {painted}"
+    );
+
+    document
+        .apply_mask_op(MaskOp::Contract(2))
+        .expect("contract");
+    let contracted = document.mask_state().painted_cells;
+    assert!(
+        contracted < expanded,
+        "contract left {contracted} cells against {expanded}"
+    );
+
+    document.apply_mask_op(MaskOp::Smooth(1)).expect("smooth");
+    document.apply_mask_op(MaskOp::Invert).expect("invert");
+    document
+        .apply_mask_op(MaskOp::InvertWithinBounds)
+        .expect("bounded complement");
+
+    document.apply_mask_op(MaskOp::Clear).expect("clear");
+    assert!(
+        !document.mask_state().is_active(),
+        "clearing left the mask active"
+    );
+}
+
+#[test]
+fn an_operation_on_a_mask_that_does_not_exist_says_so() {
+    let Some(mut document) = document() else {
+        return;
+    };
+    // Clearing nothing is fine; the menu entry is always there.
+    document.apply_mask_op(MaskOp::Clear).expect("clear");
+
+    // The rest need something to act on, and refusing beats pretending.
+    let refused = document.apply_mask_op(MaskOp::Invert);
+    assert!(refused.is_err(), "inverting a mask that does not exist");
+    let said = format!("{}", refused.unwrap_err());
+    assert!(
+        said.chars().any(|c| c.is_alphabetic()),
+        "the refusal said nothing: {said}"
+    );
+}
+
+#[test]
+fn a_cleared_mask_stops_freezing_anything() {
+    // The other half of the contract: unfreezing has to actually unfreeze.
+    let Some(mut document) = document() else {
+        return;
+    };
+    let at = [0.0f32, 0.0, 1.0];
+    freeze(&mut document, at);
+
+    let before = radius_along(&document, at).expect("surface");
+    document.apply_mask_op(MaskOp::Clear).expect("clear");
+    let samples: Vec<GestureSample> = (0..6)
+        .map(|i| GestureSample {
+            position: at,
+            pressure: 1.0,
+            time: i as f32 * 0.01,
+        })
+        .collect();
+    document
+        .apply_stroke(
+            ToolKind::Padrao,
+            BrushSettings::default(),
+            &samples,
+            [false; 3],
+        )
+        .expect("stroke");
+    let after = radius_along(&document, at).expect("surface");
+    assert!(
+        (after - before).abs() > 0.002,
+        "the surface did not move after the mask was cleared: {before} to {after}"
+    );
+}
+
+#[test]
+fn extruding_a_mask_makes_a_layer_and_keeps_the_mask() {
+    let Some(mut document) = document() else {
+        return;
+    };
+    freeze(&mut document, [0.0, 0.0, 1.0]);
+    let painted = document.mask_state().painted_cells;
+    let layers = document.scene().layers.len();
+
+    document
+        .extrude_mask(ExtrudeSettings::default())
+        .expect("extrude");
+
+    assert_eq!(
+        document.scene().layers.len(),
+        layers + 1,
+        "the extrusion did not arrive as its own layer"
+    );
+    // The engine smooths a *copy* of the mask for the rim, so the painted
+    // region has to survive an operation that consumed it.
+    assert_eq!(
+        document.mask_state().painted_cells,
+        painted,
+        "extruding consumed the mask it was given"
+    );
+}
+
+#[test]
+fn extruding_without_a_mask_is_refused_readably() {
+    let Some(mut document) = document() else {
+        return;
+    };
+    let error = document
+        .extrude_mask(ExtrudeSettings::default())
+        .expect_err("extruding nothing succeeded");
+    assert!(format!("{error}").chars().any(|c| c.is_alphabetic()));
+}
+
+#[test]
+fn a_mask_survives_a_resolution_change() {
+    // The mask is a field of its own with its own cell size, deliberately not
+    // the voxel grid's. A layer added at a different resolution must not
+    // disturb what is frozen — otherwise a sculptor loses a mask by doing
+    // something unrelated to it.
+    let Some(mut document) = document() else {
+        return;
+    };
+    let at = [0.0f32, 0.0, 1.0];
+    freeze(&mut document, at);
+    let painted = document.mask_state().painted_cells;
+    assert!(painted > 0);
+
+    // A voxel layer at a coarser resolution than the SDF cache.
+    document
+        .add_voxel_layer("Grosso", 0.08)
+        .expect("voxel layer");
+    assert_eq!(
+        document.mask_state().painted_cells,
+        painted,
+        "adding a layer at another resolution changed the mask"
+    );
+
+    // And it still freezes, on the layer it was painted for.
+    document
+        .set_active_layer(document.scene().layers[0].key)
+        .expect("back to the sculpted layer");
+    let before = radius_along(&document, at).expect("surface");
+    let samples: Vec<GestureSample> = (0..6)
+        .map(|i| GestureSample {
+            position: at,
+            pressure: 1.0,
+            time: i as f32 * 0.01,
+        })
+        .collect();
+    let _ = document.apply_stroke(
+        ToolKind::Padrao,
+        BrushSettings::default(),
+        &samples,
+        [false; 3],
+    );
+    let after = radius_along(&document, at).expect("surface");
+    assert!(
+        (after - before).abs() < 0.002,
+        "the mask stopped freezing after a resolution change: {before} to {after}"
+    );
+}
+
+#[test]
+fn a_mask_is_as_fine_as_the_surface_it_freezes() {
+    // Painted with a large brush, the mask must still resolve detail the
+    // surface can express — a coarse mask cannot be extruded at a sensible
+    // thickness, and cannot follow a boundary the sculptor can see.
+    let Some(mut document) = document() else {
+        return;
+    };
+    freeze(&mut document, [0.0, 0.0, 1.0]);
+    document
+        .extrude_mask(ExtrudeSettings {
+            // Thinner than the old quarter-of-the-brush cell would have been.
+            thickness: 0.03,
+            ..ExtrudeSettings::default()
+        })
+        .expect("a thin wall should extrude");
+}

@@ -8,13 +8,17 @@
 //! panel button that mean the same thing emit the *same* command, so they
 //! cannot drift apart.
 
-use clayspace_model::{Falloff, LayerKey, ToolKind, ViewPresetKind};
+use clayspace_model::{ExtrudeSettings, Falloff, LayerKey, MaskOp, ToolKind, ViewPresetKind};
 
 /// A change to the application or the document.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     // -- tools ------------------------------------------------------------
     SelectTool(ToolKind),
+    /// An operation on the mask itself, not through it.
+    ApplyMaskOp(MaskOp),
+    /// Pulls the masked patch off as its own layer.
+    ExtrudeMask(ExtrudeSettings),
     SetBrushSize(f32),
     SetBrushIntensity(f32),
     SetBrushFlow(f32),
@@ -90,6 +94,8 @@ impl Command {
     pub fn label(&self) -> &'static str {
         match self {
             Self::SelectTool(_) => "select tool",
+            Self::ApplyMaskOp(op) => op.label(),
+            Self::ExtrudeMask(_) => "extrude mask",
             Self::SetBrushSize(_) => "brush size",
             Self::SetBrushIntensity(_) => "brush intensity",
             Self::SetBrushFlow(_) => "brush flow",

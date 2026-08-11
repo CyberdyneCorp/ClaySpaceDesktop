@@ -9,9 +9,9 @@ use claycore::{
     LayerId, Mask, NodeId, Op, StrokePreset, VoxelGrid,
 };
 use clayspace_model::{
-    BrushSettings, DocumentModel, EditOutcome, GestureSample, HistoryState, LayerKey, LayerSummary,
-    ModelError, OpenError, Protection, Representation, Scene, SceneModel, SceneNode, SceneStats,
-    SculptModel, ToolKind,
+    BrushSettings, DocumentModel, EditOutcome, ExtrudeSettings, GestureSample, HistoryState,
+    LayerKey, LayerSummary, MaskModel, MaskOp, MaskState, ModelError, OpenError, Protection,
+    Representation, Scene, SceneModel, SceneNode, SceneStats, SculptModel, ToolKind,
 };
 
 use crate::backend::{BackendPolicy, Operation};
@@ -578,12 +578,39 @@ impl ClayDocument {
         let brush = brush.sanitized();
         let layer = self.active_layer().id;
 
+        // The mask, honoured here rather than by the engine.
+        //
+        // A mask reaches an SDF edit inside the stroke engine, where a stamp
+        // in a frozen region emits nothing. This verb does not go through the
+        // stroke engine — it authors a curve item and adds it — so
+        // `clay_layer_add_item` has nowhere to take a mask and the frozen
+        // region would be pulled like any other. Sampling the mask along the
+        // path and dropping the frozen samples is the same rule applied where
+        // this verb can apply it.
+        let live: Vec<&GestureSample> = match self.mask.as_ref() {
+            Some(mask) => {
+                let positions: Vec<[f32; 3]> = samples.iter().map(|s| s.position).collect();
+                let frozen = mask.sample_many(&positions).map_err(ModelError::engine)?;
+                samples
+                    .iter()
+                    .zip(frozen)
+                    .filter(|(_, value)| *value < 0.5)
+                    .map(|(sample, _)| sample)
+                    .collect()
+            }
+            None => samples.iter().collect(),
+        };
+        if live.len() < 2 {
+            // All of it, or all but a point, was frozen.
+            return Ok(EditOutcome::NOTHING);
+        }
+
         // The path as control points, each carrying the radius at that point.
         // Tapering toward the tip is what makes it read as a pulled tendril
         // rather than a tube.
-        let mut points = Vec::with_capacity(samples.len() * 4);
-        for (index, sample) in samples.iter().enumerate() {
-            let t = index as f32 / (samples.len() - 1) as f32;
+        let mut points = Vec::with_capacity(live.len() * 4);
+        for (index, sample) in live.iter().enumerate() {
+            let t = index as f32 / (live.len() - 1) as f32;
             points.extend_from_slice(&sample.position);
             points.push(brush.size * (1.0 - 0.7 * t));
         }
@@ -708,10 +735,15 @@ impl ClayDocument {
             .collect();
 
         if self.mask.is_none() {
-            // Cells about a quarter of the brush, so the smallest brush still
-            // paints something with an edge to it.
-            let cell = (brush.size * 0.25).max(0.005);
-            self.mask = Some(Mask::new(cell).map_err(ModelError::engine)?);
+            // The cache's own spacing, not a fraction of the brush.
+            //
+            // A quarter of the brush was tried: at the default brush that is a
+            // 0.1 cell, coarser than anything the surface can express, and
+            // `clay_document_mask_extrude` refuses a wall thinner than a cell —
+            // so a mask painted with a large brush could not be extruded at any
+            // sensible thickness. Matching the voxel size makes a mask as fine
+            // as the thing it freezes.
+            self.mask = Some(Mask::new(Self::VOXEL_SIZE).map_err(ModelError::engine)?);
         }
 
         let painted = {
@@ -1388,5 +1420,100 @@ impl ClayDocument {
         }
         model.refresh_stats();
         Ok(model)
+    }
+}
+
+impl MaskModel for ClayDocument {
+    fn mask_state(&self) -> MaskState {
+        match &self.mask {
+            Some(mask) => MaskState {
+                present: true,
+                painted_cells: mask.painted_count().unwrap_or(0),
+            },
+            None => MaskState::default(),
+        }
+    }
+
+    fn apply_mask_op(&mut self, op: MaskOp) -> Result<(), ModelError> {
+        // Clearing a mask that was never painted is a no-op rather than a
+        // refusal: the menu entry is always there, and pressing it on an empty
+        // mask should do the obvious nothing.
+        if matches!(op, MaskOp::Clear) {
+            self.mask = None;
+            return Ok(());
+        }
+
+        let Some(mask) = self.mask.as_mut() else {
+            return Err(ModelError::engine("não há máscara para editar"));
+        };
+
+        match op {
+            MaskOp::Invert => mask.invert().map_err(ModelError::engine),
+            MaskOp::Expand(steps) => mask.expand(steps.max(1)).map_err(ModelError::engine),
+            MaskOp::Contract(steps) => mask.contract(steps.max(1)).map_err(ModelError::engine),
+            MaskOp::Smooth(passes) => mask.smooth(passes.max(1)).map_err(ModelError::engine),
+            MaskOp::InvertWithinBounds => {
+                // Bounded by what the mask already covers, which is the whole
+                // point: inverting a sparse mask over infinite space would
+                // freeze the universe.
+                let Some((min, max)) = mask.bounds().map_err(ModelError::engine)? else {
+                    // Nothing painted, so nothing to be the complement of.
+                    return Ok(());
+                };
+                // `bounds` answers in cells and `invert_within` asks in world
+                // units. The box is grown by a cell on each side so the
+                // boundary cells are inside it rather than on its face.
+                let cell = mask.cell_size().map_err(ModelError::engine)?;
+                let low = min.map(|c| (c - 1) as f32 * cell);
+                let high = max.map(|c| (c + 1) as f32 * cell);
+                mask.invert_within(low, high).map_err(ModelError::engine)
+            }
+            MaskOp::Clear => unreachable!("handled above"),
+        }
+    }
+
+    fn extrude_mask(&mut self, settings: ExtrudeSettings) -> Result<(), ModelError> {
+        let settings = settings.sanitized();
+        let Some(mask) = self.mask.as_ref() else {
+            return Err(ModelError::engine("não há máscara para extrudar"));
+        };
+        if mask.painted_count().unwrap_or(0) == 0 {
+            return Err(ModelError::engine("a máscara está vazia"));
+        }
+
+        let layer = self.active_layer().id;
+        let item = self
+            .document
+            .mask_extrude(
+                layer,
+                mask,
+                claycore::MaskExtrudeParams {
+                    thickness: settings.thickness,
+                    side: match settings.side {
+                        clayspace_model::ExtrudeSide::Outward => claycore::ExtrudeSide::Outward,
+                        clayspace_model::ExtrudeSide::Inward => claycore::ExtrudeSide::Inward,
+                        clayspace_model::ExtrudeSide::Centred => claycore::ExtrudeSide::Centred,
+                    },
+                    threshold: None,
+                    border_round: settings.border_round,
+                    border_smooth: settings.border_smooth,
+                    cell_size: None,
+                },
+            )
+            .map_err(ModelError::engine)?;
+
+        // Into a layer of its own. An extrusion is a new piece of geometry, not
+        // an edit to the one it came from, and putting it in its own layer is
+        // what lets it be moved, hidden or thrown away afterwards.
+        let key = self.add_layer("Extrusão", Representation::Sdf)?;
+        let index = self.index_of(key)?;
+        let id = self.layers[index].id;
+        let node = self
+            .document
+            .add_item(id, &item)
+            .map_err(ModelError::engine)?;
+        self.refill(id, &[node])?;
+        self.refresh_stats();
+        Ok(())
     }
 }

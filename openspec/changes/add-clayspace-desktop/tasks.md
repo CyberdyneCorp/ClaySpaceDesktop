@@ -65,10 +65,10 @@
 
 ## 6. Masks and armatures
 
-- [ ] 6.1 Implement mask painting through the stroke engine, and pass the active mask to every verb
-- [ ] 6.2 Implement mask invert, clear, expand, contract, smooth and bounded complement
-- [ ] 6.3 Implement mask extrude with outward, inward and centred modes and a roundable rim
-- [ ] 6.4 Verify masks survive a resolution change and that a fully masked region resists every tool
+- [x] 6.1 Implement mask painting through the stroke engine, and pass the active mask to every verb
+- [x] 6.2 Implement mask invert, clear, expand, contract, smooth and bounded complement
+- [x] 6.3 Implement mask extrude with outward, inward and centred modes and a roundable rim
+- [x] 6.4 Verify masks survive a resolution change and that a fully masked region resists every tool
 - [ ] 6.5 Implement armature authoring: add, move, resize, reparent, remove, skin thickness, and symmetric authoring
 - [ ] 6.6 Verify armature persistence across save and reload
 

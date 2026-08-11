@@ -17,7 +17,8 @@ use clayspace_view::{
     SurfaceLoss, ViewPreset, WindowSurface,
 };
 use clayspace_vm::{
-    Axis, Command, CommandQueue, DocumentViewModel, Guard, SceneViewModel, SculptViewModel,
+    Axis, Command, CommandQueue, DocumentViewModel, Guard, MaskViewModel, SceneViewModel,
+    SculptViewModel,
 };
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -72,6 +73,7 @@ struct App {
     sculpt: SculptViewModel,
     scene: SceneViewModel,
     document_vm: DocumentViewModel,
+    mask: MaskViewModel,
     policy: BackendPolicy,
 
     camera: Camera,
@@ -109,11 +111,13 @@ impl App {
         let sculpt = SculptViewModel::new(Box::new(document.clone()));
         let scene = SceneViewModel::new(Box::new(document.clone()));
         let document_vm = DocumentViewModel::new(Box::new(document.clone()), "Sem título");
+        let mask = MaskViewModel::new(Box::new(document.clone()));
         Self {
             document,
             sculpt,
             scene,
             document_vm,
+            mask,
             policy,
             camera: Camera::default(),
             window: None,
@@ -260,6 +264,7 @@ impl App {
     /// Everything that has to catch up when the document underneath changes.
     fn after_document_replaced(&mut self) {
         self.scene.refresh();
+        self.mask.refresh();
         self.sculpt.forget_history();
         if let Some(graphics) = self.graphics.as_mut() {
             let gpu = graphics.gpu.clone();
@@ -441,8 +446,12 @@ impl App {
         if let Err(e) = self.scene.dispatch(&command) {
             eprintln!("{e}");
         }
+        self.mask.dispatch(&command);
         if command.touches_document() {
             self.scene.refresh();
+            // Painting a mask arrives as a stroke, which this ViewModel never
+            // sees, so it is told to look again rather than left stale.
+            self.mask.refresh();
             self.sync_geometry();
             // The title bar's "não salvo" is driven from here rather than
             // inferred inside the document ViewModel, which never sees a
@@ -505,6 +514,8 @@ impl App {
         let mut input = ViewportInput::default();
         let state = ShellState {
             strings: self.strings,
+            mask: *self.mask.state().get(),
+            extrude: *self.mask.extrude_settings().get(),
             document_name: document_name.as_str(),
             modified: *self.document_vm.modified().get(),
             tool: *self.sculpt.tool().get(),
