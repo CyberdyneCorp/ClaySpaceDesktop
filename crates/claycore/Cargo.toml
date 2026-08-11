@@ -1,0 +1,18 @@
+[package]
+name = "claycore"
+description = "Safe Rust wrapper over the ClayCore C ABI. The only crate that calls claycore-sys."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+metal = ["claycore-sys/metal"]
+cuda = ["claycore-sys/cuda"]
+vulkan = ["claycore-sys/vulkan"]
+opencl = ["claycore-sys/opencl"]
+
+[dependencies]
+claycore-sys.workspace = true

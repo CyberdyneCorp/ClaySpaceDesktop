@@ -1,10 +1,10 @@
 ## 1. Workspace and engine bridge
 
 - [ ] 1.1 Create the Cargo workspace with crates `claycore-sys`, `claycore`, `clayspace-model`, `clayspace-vm`, `clayspace-view`, `clayspace-app`; add `#![forbid(unsafe_code)]` to every crate except the first two
-- [ ] 1.2 Add ClayCore as a git submodule at `vendor/ClayCore` pinned to a commit at or after the 0.26.0 ABI; record the revision and document the clone instructions
-- [ ] 1.3 Write `claycore-sys/build.rs`: check CMake ≥ 3.24 and C++20 support with named errors, select the preset from target and probed toolchains, build and link the engine, emit rerun-if-changed for the submodule
-- [ ] 1.4 Generate bindings with `bindgen` from `vendor/ClayCore/bindings/c/clay.h`; verify no hand-written declarations exist in `claycore-sys`
-- [ ] 1.5 Implement the error layer in `claycore`: `clay_result` → `Result`, capturing `clay_last_error` at the failure site
+- [x] 1.2 Add ClayCore as a git submodule at `vendor/ClayCore` pinned to a commit at or after the 0.26.0 ABI; record the revision and document the clone instructions
+- [x] 1.3 Write `claycore-sys/build.rs`: check CMake ≥ 3.24 and C++20 support with named errors, select the preset from target and probed toolchains, build and link the engine, emit rerun-if-changed for the submodule
+- [x] 1.4 Generate bindings with `bindgen` from `vendor/ClayCore/bindings/c/clay.h`; verify no hand-written declarations exist in `claycore-sys`
+- [x] 1.5 Implement the error layer in `claycore`: `clay_result` → `Result`, capturing `clay_last_error` at the failure site
 - [ ] 1.6 Implement the size-query buffer helper once, and the descriptor-struct helper that sets `struct_size` from `size_of`
 - [ ] 1.7 Implement owned vs borrowed handle types (`Document`, `VoxelGrid` / `VoxelGridRef<'doc>`, mask, mesh, brick cache) with RAII release on the owned side only
 - [ ] 1.8 Implement the threading markers: `Document: Send + !Sync`, the snapshot reader guard, and the free-threaded batch evaluation entry point
@@ -19,7 +19,7 @@
 
 ## 2. Acceleration policy
 
-- [ ] 2.1 Implement backend discovery over `clay_list_backends` returning the parsed list
+- [x] 2.1 Implement backend discovery over `clay_list_backends` returning the parsed list
 - [ ] 2.2 Implement the platform preference ranking (macOS `metal` → `cpu`; Linux `cuda` → `vulkan` → `opencl` → `cpu`) and automatic selection
 - [ ] 2.3 Implement per-operation fallback: route an `Unsupported` result to the CPU backend for that operation, keeping the selected backend active elsewhere
 - [ ] 2.4 Record each fallback once per operation kind in the diagnostics log

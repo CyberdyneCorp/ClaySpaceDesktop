@@ -1,0 +1,21 @@
+[package]
+name = "claycore-sys"
+description = "Raw FFI bindings to the ClayCore C ABI. Generated; no hand-written declarations."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+links = "claycore"
+
+[features]
+# The CPU backend is always compiled in by the engine and is not a feature.
+default = []
+metal = []
+cuda = []
+vulkan = []
+opencl = []
+
+[build-dependencies]
+bindgen = "0.70"
+cmake = "0.1"

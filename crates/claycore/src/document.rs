@@ -1,0 +1,220 @@
+//! Documents, layers and the items placed in them.
+//!
+//! A [`Document`] owns its engine handle and releases it on drop. It is `Send`
+//! but not `Sync`: the engine's header states that calls on one handle are the
+//! host's to serialize, while the batched evaluation entry point is
+//! free-threaded against one const document. [`Document::eval_points`] takes
+//! `&self` accordingly; everything that mutates takes `&mut self`.
+
+use std::ffi::{c_char, CString};
+use std::path::Path;
+use std::ptr::NonNull;
+
+use claycore_sys as sys;
+
+use crate::error::{check, ClayError, ErrorKind, Result};
+use crate::Backend;
+
+/// A layer within a document. Borrowed: the document owns the layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LayerId(pub(crate) sys::clay_layer_id);
+
+/// A node placed in a layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NodeId(pub(crate) sys::clay_node_id);
+
+/// An item under construction, owned by the caller until it is added to a
+/// layer. Adding copies it, so one builder may be placed any number of times.
+pub struct Item {
+    raw: NonNull<sys::clay_item>,
+}
+
+impl Item {
+    /// Builds a sphere of the given radius.
+    pub fn sphere(radius: f32) -> Result<Self> {
+        Self::new(sys::clay_prim::CLAY_PRIM_SPHERE as i32, &[radius])
+    }
+
+    /// Builds any primitive from its parameter list. The engine documents the
+    /// expected count per primitive and rejects a wrong one.
+    pub fn new(prim: i32, params: &[f32]) -> Result<Self> {
+        // SAFETY: `params` is a valid slice for `params.len()` floats, and the
+        // engine copies what it needs before returning.
+        let raw = unsafe { sys::clay_item_create(prim, params.as_ptr(), params.len()) };
+        NonNull::new(raw).map(|raw| Self { raw }).ok_or_else(|| {
+            failure("clay_item_create", ErrorKind::InvalidArgument)
+        })
+    }
+
+    /// Places the item at a world position.
+    pub fn set_position(&mut self, position: [f32; 3]) -> Result<()> {
+        // SAFETY: the handle is non-null and owned here; `position` is three
+        // floats as the entry point requires.
+        check(
+            unsafe { sys::clay_item_set_position(self.raw.as_ptr(), position.as_ptr()) },
+            "clay_item_set_position",
+        )
+    }
+}
+
+impl Drop for Item {
+    fn drop(&mut self) {
+        // SAFETY: the handle is owned by this value, non-null, and released
+        // exactly once because `Item` is not `Copy` or `Clone`.
+        unsafe { sys::clay_item_destroy(self.raw.as_ptr()) };
+    }
+}
+
+/// A sculpting document: layers, the items in them, and the field they define.
+pub struct Document {
+    raw: NonNull<sys::clay_document>,
+}
+
+impl std::fmt::Debug for Document {
+    /// Deliberately opaque: the engine exposes no cheap summary of a document,
+    /// and formatting one must not compile a tape.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Document(..)")
+    }
+}
+
+// SAFETY: the engine's header states that a document may be moved between
+// threads and read from several at once, but that calls on one handle are the
+// host's to serialize. `Send` expresses the first; the absence of `Sync`
+// expresses the second, since `&Document` methods that reach the engine are
+// limited to the free-threaded batch entry points.
+unsafe impl Send for Document {}
+
+impl Document {
+    /// Creates an empty document.
+    pub fn new() -> Result<Self> {
+        // SAFETY: takes no arguments and returns either a fresh owned handle
+        // or null.
+        let raw = unsafe { sys::clay_document_create() };
+        NonNull::new(raw)
+            .map(|raw| Self { raw })
+            .ok_or_else(|| failure("clay_document_create", ErrorKind::Backend))
+    }
+
+    /// Opens a `.clayspace` document.
+    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let c_path = cstring(path.to_string_lossy().as_ref(), "clay_document_load")?;
+        let mut raw: *mut sys::clay_document = std::ptr::null_mut();
+        // SAFETY: `c_path` is NUL-terminated and outlives the call; `raw` is a
+        // valid out-parameter which the engine fills only on success.
+        check(
+            unsafe { sys::clay_document_load(c_path.as_ptr(), &mut raw) },
+            "clay_document_load",
+        )?;
+        NonNull::new(raw)
+            .map(|raw| Self { raw })
+            .ok_or_else(|| failure("clay_document_load", ErrorKind::Io))
+    }
+
+    /// Writes the document to a `.clayspace` file.
+    pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
+        let path = path.as_ref();
+        let c_path = cstring(path.to_string_lossy().as_ref(), "clay_document_save")?;
+        // SAFETY: the handle is valid; `c_path` is NUL-terminated and outlives
+        // the call.
+        check(
+            unsafe { sys::clay_document_save(self.raw.as_ptr(), c_path.as_ptr()) },
+            "clay_document_save",
+        )
+    }
+
+    /// Adds an SDF layer and returns its id.
+    pub fn add_sdf_layer(&mut self, name: &str) -> Result<LayerId> {
+        let c_name = cstring(name, "clay_add_sdf_layer")?;
+        let mut layer: sys::clay_layer_id = Default::default();
+        // SAFETY: the handle is valid and uniquely borrowed; `c_name` is
+        // NUL-terminated; `layer` is a valid out-parameter.
+        check(
+            unsafe { sys::clay_add_sdf_layer(self.raw.as_ptr(), c_name.as_ptr(), &mut layer) },
+            "clay_add_sdf_layer",
+        )?;
+        Ok(LayerId(layer))
+    }
+
+    /// Places an item in a layer. The item is copied, so the builder remains
+    /// usable afterwards.
+    pub fn add_item(&mut self, layer: LayerId, item: &Item) -> Result<NodeId> {
+        let mut node: sys::clay_node_id = Default::default();
+        // SAFETY: all three handles are valid; the engine copies the item and
+        // writes the new node id into `node` only on success.
+        check(
+            unsafe {
+                sys::clay_layer_add_item(self.raw.as_ptr(), layer.0, item.raw.as_ptr(), &mut node)
+            },
+            "clay_layer_add_item",
+        )?;
+        Ok(NodeId(node))
+    }
+
+    /// Evaluates the field at a batch of points.
+    ///
+    /// Takes `&self`: the engine documents this entry point as free-threaded
+    /// against one const document. `backend` selects where it runs; `None`
+    /// means the CPU reference path. Backend choice changes speed, never
+    /// results.
+    pub fn eval_points(&self, backend: Option<&Backend>, points: &[[f32; 3]]) -> Result<Vec<f32>> {
+        let mut distances = vec![0.0f32; points.len()];
+        if points.is_empty() {
+            return Ok(distances);
+        }
+
+        let name = backend.map(|b| cstring(b.as_str(), "clay_eval_points")).transpose()?;
+        let name_ptr = name.as_ref().map_or(std::ptr::null(), |s| s.as_ptr());
+
+        // SAFETY: `points` is `points.len() * 3` contiguous floats — `[f32; 3]`
+        // has no padding — and `distances` is `points.len()` floats. Colours
+        // are declined with a null pointer, which the entry point permits.
+        check(
+            unsafe {
+                sys::clay_eval_points(
+                    self.raw.as_ptr(),
+                    name_ptr,
+                    points.as_ptr() as *const f32,
+                    points.len(),
+                    distances.as_mut_ptr(),
+                    std::ptr::null_mut(),
+                )
+            },
+            "clay_eval_points",
+        )?;
+        Ok(distances)
+    }
+}
+
+impl Drop for Document {
+    fn drop(&mut self) {
+        // SAFETY: the handle is owned by this value and released exactly once,
+        // because `Document` is neither `Copy` nor `Clone`.
+        unsafe { sys::clay_document_destroy(self.raw.as_ptr()) };
+    }
+}
+
+/// A failure the engine reported by returning null rather than a result code.
+fn failure(operation: &'static str, kind: ErrorKind) -> ClayError {
+    let raw = match kind {
+        ErrorKind::InvalidArgument => sys::clay_result::CLAY_ERROR_INVALID_ARGUMENT,
+        ErrorKind::Io => sys::clay_result::CLAY_ERROR_IO,
+        _ => sys::clay_result::CLAY_ERROR_BACKEND,
+    };
+    match check(raw, operation) {
+        Err(e) => e,
+        Ok(()) => unreachable!("a failure code is not a success code"),
+    }
+}
+
+/// An interior NUL cannot reach the engine, so it is rejected here rather than
+/// silently truncating the caller's string.
+fn cstring(value: &str, operation: &'static str) -> Result<CString> {
+    CString::new(value).map_err(|_| failure(operation, ErrorKind::InvalidArgument))
+}
+
+/// Kept honest: `c_char` is the element type the entry points take.
+const _: () = {
+    let _ = std::mem::size_of::<c_char>();
+};
