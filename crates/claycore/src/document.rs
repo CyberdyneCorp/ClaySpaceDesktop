@@ -6,14 +6,14 @@
 //! free-threaded against one const document. [`Document::eval_points`] takes
 //! `&self` accordingly; everything that mutates takes `&mut self`.
 
-use std::ffi::{c_char, CString};
 use std::path::Path;
 use std::ptr::NonNull;
 
 use claycore_sys as sys;
 
-use crate::error::{check, ClayError, ErrorKind, Result};
-use crate::Backend;
+use crate::error::{check, ErrorKind, Result};
+use crate::mesh::{Mesh, MeshParams};
+use crate::{cstring, raw_failure, Backend};
 
 /// A layer within a document. Borrowed: the document owns the layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -42,7 +42,7 @@ impl Item {
         // engine copies what it needs before returning.
         let raw = unsafe { sys::clay_item_create(prim, params.as_ptr(), params.len()) };
         NonNull::new(raw).map(|raw| Self { raw }).ok_or_else(|| {
-            failure("clay_item_create", ErrorKind::InvalidArgument)
+            raw_failure("clay_item_create", ErrorKind::InvalidArgument)
         })
     }
 
@@ -93,7 +93,7 @@ impl Document {
         let raw = unsafe { sys::clay_document_create() };
         NonNull::new(raw)
             .map(|raw| Self { raw })
-            .ok_or_else(|| failure("clay_document_create", ErrorKind::Backend))
+            .ok_or_else(|| raw_failure("clay_document_create", ErrorKind::Backend))
     }
 
     /// Opens a `.clayspace` document.
@@ -109,7 +109,7 @@ impl Document {
         )?;
         NonNull::new(raw)
             .map(|raw| Self { raw })
-            .ok_or_else(|| failure("clay_document_load", ErrorKind::Io))
+            .ok_or_else(|| raw_failure("clay_document_load", ErrorKind::Io))
     }
 
     /// Writes the document to a `.clayspace` file.
@@ -195,26 +195,27 @@ impl Drop for Document {
     }
 }
 
-/// A failure the engine reported by returning null rather than a result code.
-fn failure(operation: &'static str, kind: ErrorKind) -> ClayError {
-    let raw = match kind {
-        ErrorKind::InvalidArgument => sys::clay_result::CLAY_ERROR_INVALID_ARGUMENT,
-        ErrorKind::Io => sys::clay_result::CLAY_ERROR_IO,
-        _ => sys::clay_result::CLAY_ERROR_BACKEND,
-    };
-    match check(raw, operation) {
-        Err(e) => e,
-        Ok(()) => unreachable!("a failure code is not a success code"),
+
+impl Document {
+    /// The raw handle, for sibling modules in this crate only.
+    pub(crate) fn as_ptr(&self) -> *mut sys::clay_document {
+        self.raw.as_ptr()
+    }
+
+    /// Meshes the whole document.
+    ///
+    /// This compiles a tape and marches the result, so it is the export path
+    /// rather than the interactive one. For display, mesh the brick cache's
+    /// dirty subset instead.
+    pub fn mesh(&self, params: MeshParams) -> Result<Mesh> {
+        let raw_params = params.to_raw();
+        let mut mesh = std::ptr::null_mut();
+        // SAFETY: the handle is valid, the descriptor carries its struct_size,
+        // and `mesh` is written only on success.
+        check(
+            unsafe { sys::clay_document_mesh(self.as_ptr(), &raw_params, &mut mesh) },
+            "clay_document_mesh",
+        )?;
+        Mesh::from_raw(mesh, "clay_document_mesh")
     }
 }
-
-/// An interior NUL cannot reach the engine, so it is rejected here rather than
-/// silently truncating the caller's string.
-fn cstring(value: &str, operation: &'static str) -> Result<CString> {
-    CString::new(value).map_err(|_| failure(operation, ErrorKind::InvalidArgument))
-}
-
-/// Kept honest: `c_char` is the element type the entry points take.
-const _: () = {
-    let _ = std::mem::size_of::<c_char>();
-};

@@ -5,16 +5,16 @@
 - [x] 1.3 Write `claycore-sys/build.rs`: check CMake ≥ 3.24 and C++20 support with named errors, select the preset from target and probed toolchains, build and link the engine, emit rerun-if-changed for the submodule
 - [x] 1.4 Generate bindings with `bindgen` from `vendor/ClayCore/bindings/c/clay.h`; verify no hand-written declarations exist in `claycore-sys`
 - [x] 1.5 Implement the error layer in `claycore`: `clay_result` → `Result`, capturing `clay_last_error` at the failure site
-- [ ] 1.6 Implement the size-query buffer helper once, and the descriptor-struct helper that sets `struct_size` from `size_of`
+- [x] 1.6 Implement the size-query buffer helper once, and the descriptor-struct helper that sets `struct_size` from `size_of`
 - [ ] 1.7 Implement owned vs borrowed handle types (`Document`, `VoxelGrid` / `VoxelGridRef<'doc>`, mask, mesh, brick cache) with RAII release on the owned side only
 - [ ] 1.8 Implement the threading markers: `Document: Send + !Sync`, the snapshot reader guard, and the free-threaded batch evaluation entry point
 - [ ] 1.9 Wrap the authoring surface: document, layers, groups, items, deformers, blends, transforms, mirrors, repetition
 - [ ] 1.10 Wrap the sculpting surface: stroke engine and presets, move brush, snakehook, cut tool, field relax/flatten/move-topological, consolidation
 - [ ] 1.11 Wrap the voxel surface: grids, resolution levels, all ten sculpt verbs, fills, palette, repair, `change_count`
 - [ ] 1.12 Wrap masks: create, paint, stroke, fill, invert, invert-within, expand, contract, smooth, to-field, extrude
-- [ ] 1.13 Wrap the brick cache: config, dirty marking, request drain, submit, readback (with apron and optional colour), surface bricks, stats, LOD mips, subset mesh with per-key ranges, single and batched raycast
-- [ ] 1.13a Wrap the layout-directed mesh copy (`clay_mesh_copy_vertices` / `_copy_indices`), rejecting layouts that name absent or overlapping attributes
-- [ ] 1.14 Wrap picking, meshing and file I/O
+- [x] 1.13 Wrap the brick cache: config, dirty marking, request drain, submit, readback (with apron and optional colour), surface bricks, stats, LOD mips, subset mesh with per-key ranges, single and batched raycast
+- [x] 1.13a Wrap the layout-directed mesh copy (`clay_mesh_copy_vertices` / `_copy_indices`), rejecting layouts that name absent or overlapping attributes
+- [x] 1.14 Wrap picking, meshing and file I/O
 - [ ] 1.15 Write the headless bridge test suite covering authoring, a stroke, a voxel verb, meshing, picking, save and reload; make it pass with no GPU and no display
 
 ## 2. Acceleration policy

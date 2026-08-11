@@ -15,15 +15,46 @@
 //! - No panic and no unwind crosses the C boundary.
 
 mod backend;
+mod brick;
 mod buffer;
+mod descriptor;
 mod document;
 mod error;
+mod mesh;
+mod pick;
 
 pub use backend::{backends, compiled_backends, Backend};
+pub use brick::{
+    BrickCache, BrickConfig, BrickKey, BrickMeshParams, BrickMeshRange, BrickRequest, BrickSamples,
+    BrickState, BrickStats,
+};
 pub use document::{Document, Item, LayerId, NodeId};
 pub use error::{ClayError, ErrorKind, Result};
+pub use mesh::{Mesh, MeshParams, MeshValidity, Mesher, VertexLayout};
+pub use pick::{Hit, Snapped};
 
 use claycore_sys as sys;
+
+/// Builds an error for a call that reported failure by returning null rather
+/// than a result code.
+pub(crate) fn raw_failure(operation: &'static str, kind: ErrorKind) -> ClayError {
+    let raw = match kind {
+        ErrorKind::InvalidArgument => sys::clay_result::CLAY_ERROR_INVALID_ARGUMENT,
+        ErrorKind::Io => sys::clay_result::CLAY_ERROR_IO,
+        ErrorKind::NotFound => sys::clay_result::CLAY_ERROR_NOT_FOUND,
+        _ => sys::clay_result::CLAY_ERROR_BACKEND,
+    };
+    match error::check(raw, operation) {
+        Err(e) => e,
+        Ok(()) => unreachable!("a failure code is not a success code"),
+    }
+}
+
+/// An interior NUL cannot reach the engine, so it is rejected here rather than
+/// silently truncating the caller's string.
+pub(crate) fn cstring(value: &str, operation: &'static str) -> Result<std::ffi::CString> {
+    std::ffi::CString::new(value).map_err(|_| raw_failure(operation, ErrorKind::InvalidArgument))
+}
 
 /// The engine version this build is linked against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
