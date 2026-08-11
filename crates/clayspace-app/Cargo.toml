@@ -7,6 +7,14 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lib]
+name = "clayspace_app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "clayspace-app"
+path = "src/main.rs"
+
 [dependencies]
 clayspace-engine = { path = "../clayspace-engine" }
 clayspace-model = { path = "../clayspace-model" }

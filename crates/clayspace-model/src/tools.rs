@@ -255,7 +255,13 @@ impl ViewPresetKind {
 /// left rather than a default.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BrushSettings {
-    /// Radius in document units.
+    /// Radius in **document units**, not pixels.
+    ///
+    /// The design's tool bar reads "Tamanho 38 px", which is a screen measure
+    /// that maps through the zoom; the engine takes a world radius. Treating
+    /// the number as world units directly gives a brush covering a third of a
+    /// unit-sized model — and re-meshing what such a dab dirties costs several
+    /// times the latency budget.
     pub size: f32,
     /// How hard each stamp bites, 0..=1.
     pub intensity: f32,
@@ -265,9 +271,11 @@ pub struct BrushSettings {
 
 impl Default for BrushSettings {
     fn default() -> Self {
-        // The values the design's tool options bar shows.
+        // Intensity and flow are the design's; the radius is a detail brush
+        // on a unit-scale model, which is what "38 px" amounts to at a normal
+        // framing.
         Self {
-            size: 0.38,
+            size: 0.08,
             intensity: 0.65,
             flow: 0.80,
         }

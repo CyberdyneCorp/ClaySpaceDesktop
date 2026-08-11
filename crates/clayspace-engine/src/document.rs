@@ -56,6 +56,10 @@ impl ClayDocument {
         document.enable_undo().map_err(ModelError::engine)?;
 
         let cache = BrickCache::new(BrickConfig {
+            // 8-cell bricks. 16 was tried: it covers the surface in a third
+            // as many keys but each holds eight times the cells, and a dilated
+            // dirty set then meshes more cells overall — 64 ms against 39 ms
+            // on the same edit.
             dim: 8,
             voxel_size: 0.02,
             band_voxels: 3,
@@ -146,21 +150,20 @@ impl ClayDocument {
         &self.layers[self.active]
     }
 
-    /// Refills the cache for what an edit reached, recording which keys moved
-    /// so the viewport can re-mesh exactly those.
+    /// Refills the cache for what an edit reached, recording exactly which
+    /// keys were dirty.
     ///
     /// Marking by *node* rather than by layer is what keeps this bounded. A
     /// layer's extent is the union of everything in it, which for content
     /// spread far apart spans more bricks than any cache can hold — the engine
     /// refuses such a region rather than attempting it, and rightly.
+    ///
+    /// The dirty set comes from the cache's own drain, not from diffing its
+    /// surface bricks before and after. The first version diffed, which after
+    /// the initial fill finds nothing new and so fell back to re-meshing every
+    /// surface brick: 1043 keys per dab instead of the influence bound, and a
+    /// 267 ms dab against a 50 ms budget.
     fn refill(&mut self, layer: LayerId, nodes: &[NodeId]) -> Result<(), ModelError> {
-        let before: std::collections::HashSet<BrickKey> = self
-            .cache
-            .surface_bricks()
-            .map_err(ModelError::engine)?
-            .into_iter()
-            .collect();
-
         if nodes.is_empty() {
             self.cache
                 .mark_dirty_layer(&self.document, layer)
@@ -172,21 +175,27 @@ impl ClayDocument {
         }
 
         let backend = self.policy.active().clone();
-        self.cache
-            .refill_all(&self.document, Some(&backend), 512)
-            .map_err(ModelError::engine)?;
+        let mut dirty = Vec::new();
+        loop {
+            let (requests, remaining) = self
+                .cache
+                .take_dirty(512)
+                .map_err(ModelError::engine)?;
+            if requests.is_empty() {
+                break;
+            }
+            dirty.extend(requests.iter().map(|request| request.key()));
+            self.cache
+                .refill(&self.document, Some(&backend), &requests)
+                .map_err(ModelError::engine)?;
+            if remaining == 0 {
+                break;
+            }
+        }
 
-        // Keys that are surface bricks now and were not before, plus any the
-        // refill touched. The cache reports surface bricks rather than a change
-        // set, so the union is re-meshed rather than a diff that could miss a
-        // brick that was already a surface brick and moved.
-        let after = self.cache.surface_bricks().map_err(ModelError::engine)?;
-        let appeared: Vec<BrickKey> = after
-            .iter()
-            .filter(|key| !before.contains(*key))
-            .copied()
-            .collect();
-        self.dirty = if appeared.is_empty() { after } else { appeared };
+        dirty.sort();
+        dirty.dedup();
+        self.dirty = dirty;
         Ok(())
     }
 

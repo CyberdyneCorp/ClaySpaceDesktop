@@ -53,10 +53,10 @@
 
 - [x] 5.1 Implement stroke capture: position, pressure, timing, on both pointer and tablet input
 - [x] 5.2 Implement the sculpt command path: capture → engine stroke resolution → edit → dirty bricks → re-mesh → upload
-- [ ] 5.3 Implement incremental re-meshing: pass the dirty key set as the meshing subset, patch GPU buffer sub-ranges from the per-key ranges, discard stale results
-- [ ] 5.3a Implement mesh buffer fragmentation tracking and background whole-surface compaction, scheduled off the interaction path
+- [x] 5.3 Implement incremental re-meshing: pass the dirty key set as the meshing subset, patch GPU buffer sub-ranges from the per-key ranges, discard stale results
+- [x] 5.3a Implement mesh buffer fragmentation tracking and background whole-surface compaction, scheduled off the interaction path
 - [x] 5.4 Implement the tool registry binding every tool label to its engine entry point, with per-representation availability and stated reasons
-- [ ] 5.5 Implement per-tool settings persistence for intensity, size and flow
+- [x] 5.5 Implement per-tool settings persistence for intensity, size and flow
 - [ ] 5.6 Implement the brush shaping controls: alpha curve, noise, edge falloff, accumulation mode, smoothing, mirroring
 - [x] 5.7 Implement symmetry about X, Y and Z with mirrored edits inside one undo group
 - [ ] 5.8 Implement the brush cursor: projected radius, surface point, live size updates, off-surface state
