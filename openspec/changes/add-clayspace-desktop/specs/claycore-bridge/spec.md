@@ -1,7 +1,11 @@
 ## ADDED Requirements
 
 ### Requirement: ClayCore is vendored at a pinned commit
-The application SHALL vendor ClayCore as a git submodule at `vendor/ClayCore`, pinned to an explicit commit. The pinned revision SHALL be recorded in the repository, and advancing it SHALL be a reviewed change rather than an automatic update.
+The application SHALL vendor ClayCore as a git submodule at `vendor/ClayCore`, pinned to an explicit commit at or after the 0.26.0 ABI, which is the first to carry subset meshing, the brick apron and colour lattice, layout-directed vertex copy, tape export and device adoption. The pinned revision SHALL be recorded in the repository, and advancing it SHALL be a reviewed change rather than an automatic update.
+
+#### Scenario: An engine older than the required ABI is refused
+- **WHEN** the pinned submodule predates the 0.26.0 entry points the application depends on
+- **THEN** the build fails at compile time on the missing or differently-shaped entry points, rather than at runtime
 
 #### Scenario: Clean clone builds the pinned engine
 - **WHEN** the repository is cloned with `--recurse-submodules` and built

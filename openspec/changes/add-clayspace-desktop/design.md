@@ -4,8 +4,8 @@ ClayCore is a headless C++20 library. It ships a stable C ABI (`bindings/c/clay.
 
 Three facts about ClayCore shape everything below:
 
-1. **Backends are runtime-registered and parity-gated.** CPU is compiled in unconditionally and *defines correctness*; Metal, CUDA and OpenCL register only where available and are held to 1e-4 relative on distances against the CPU scalar reference. Backend selection is a `const char*` argument on each evaluation call, `NULL` meaning `"cpu"`. The app therefore does not need to write a backend abstraction — it needs a *policy* over one that already exists.
-2. **The kernel dialect targets MSL, CUDA C, OpenCL C and C++ — not WGSL.** ClayCore ships its kernel headers precisely so hosts stop copying the math; `docs/06-host-gpu-previews.md` exists because ClaySpace's hand-written Metal preview used a smin of support `k` where `kernel/ops.h` uses `4k`, making every blend in the preview four times narrower than the real field. A WGSL raymarch preview would be that same bug, reintroduced in a language the shared headers cannot reach.
+1. **Backends are runtime-registered and parity-gated.** CPU is compiled in unconditionally and *defines correctness*; Metal, Vulkan, CUDA and OpenCL register only where available and are held to 1e-4 relative on distances against the CPU scalar reference. Backend selection is a `const char*` argument on each evaluation call, `NULL` meaning `"cpu"`. The app therefore does not need to write a backend abstraction — it needs a *policy* over one that already exists.
+2. **The kernel dialect targets MSL, CUDA C, OpenCL C and C++ — not WGSL.** ClayCore ships its kernel headers precisely so hosts stop copying the math; `docs/06-host-gpu-previews.md` exists because ClaySpace's hand-written Metal preview used a smin of support `k` where `kernel/ops.h` uses `4k`, making every blend in the preview four times narrower than the real field. A WGSL raymarch that evaluates the *tape* would be that same bug, reintroduced in a language the shared headers cannot reach. A WGSL raymarch over *sampled bricks* would not — see Decision 3.
 3. **The C ABI states its threading contract.** A document is safe to read from several threads at once and readers get a snapshot valid for the duration of their call; calls on a single mutable handle are the host's to serialize; the batched evaluation call is free-threaded against one const document.
 
 The application must also honour a supplied visual design: a near-invisible interface, desaturated neutral ground so the material reads truthfully, floating tool trays, and skeuomorphism confined to the brush swatches and the pressure control. The stated style ratio is 60 minimalism / 20 skeuomorphism / 10 space-UI / 10 HUD, and the single warm accent exists to mark one thing — the active brush.
@@ -50,13 +50,20 @@ The safe layer encodes contracts the C header states in prose:
 - **Buffers**: the size-query pattern (call with `NULL` to learn the size, call again to fill) is wrapped once, rather than at each of the dozens of call sites that use it.
 - **Threading**: `Document` is `Send` but not `Sync`; concurrent reads go through a `DocumentReader` snapshot guard that matches the ABI's stated snapshot semantics; the batch evaluation entry point takes `&Document` and is free-threaded.
 
-### Decision 3 — The viewport renders meshes; it does not raymarch the field
+### Decision 3 — The viewport renders meshes from the brick cache's dirty set
 
-wgpu draws triangles produced by ClayCore's own meshers. Interactive display uses the surface-nets preview mesher over the brick cache; export and final display use marching tetrahedra, which is watertight and 2-manifold by construction.
+wgpu draws triangles produced by ClayCore's own meshers. Interactive display uses the surface-nets preview mesher over the brick cache; export uses marching tetrahedra, which is watertight and 2-manifold by construction.
 
-*Alternatives considered.* A WGSL raymarch would give a live analytic surface with no meshing latency, and it is what the field representation invites. It also requires porting the kernel dialect to a fifth language that the shared headers cannot generate — which is precisely the drift ClayCore's `docs/06` documents having already caused once, in this exact engine, with this exact class of bug. If it is ever revisited, the precondition is non-negotiable and stated here: `clay parity-fixture` output must be asserted against the WGSL evaluator in CI, per-case, before the raymarch is allowed to draw anything a user could mistake for the document. Recorded as deferred, gated on that fixture.
+The path this depends on exists as of ClayCore 0.26.0 (issue #43, PR #52): `clay_brick_cache_mesh` now takes a `keys_xyz` + `key_count` subset and returns per-key `clay_brick_mesh_range` values, so a dab re-meshes only the bricks its influence bound dirtied and patches the matching sub-ranges of the GPU buffer. Their benchmark: **22.6 ms** to re-mesh 232 surface bricks against **0.64 ms** for the 8 a dab dirties. Vertex upload uses `clay_mesh_copy_vertices` with a `clay_vertex_layout`, writing our interleaved layout in one pass into a mapped buffer.
 
-*Consequence.* Brush feedback latency is meshing latency. This is why the brick cache's dirty set is load-bearing rather than an optimisation: a dab re-meshes the bricks its influence bound reaches, not the model. The `performance-budgets` capability puts a number on it.
+*Alternatives considered.* Two raymarch routes, both now real:
+
+- **Over the tape** (`clay_tape_export`, added in the same release) — analytic, exact, no meshing at all. Requires the kernel dialect in WGSL, which the shared headers cannot generate, which is the drift bug above. Still deferred, and the precondition is unchanged: `clay_parity_fixture_json` asserted per-case against the WGSL evaluator in CI before it draws anything a user could mistake for the document.
+- **Over sampled bricks** — a brick DDA with trilinear sampling of the fp16 lattice, which is what `clay_brick_cache_raycast` already does on CPU. This contains *no kernel math*, so it carries no drift risk, and ClayCore's `docs/06` now opens by recommending it as the cheaper of the two host routes. `read_bricks` gained an `apron` parameter and an opt-in RGBA8 colour lattice specifically to make it work.
+
+We take meshing for v1 because the subset path is measured inside our latency budget and needs no sparse-atlas machinery on our side. The volume route is the first thing to try if `performance-budgets` shows meshing dominating, or if polygonization artefacts become visible at working resolutions; it removes meshing from the interaction path entirely.
+
+*Consequence.* Brush feedback latency is meshing latency, bounded by the dirty set. One caveat ClayCore documented rather than engineered away: meshed vertices are welded on canonical lattice-edge keys and the weld **spans brick seams**, so a triangle in one key's index range may reference a vertex in an earlier key's vertex range. Sub-ranges may be overwritten — which is what makes incremental upload work — but not freed in isolation. Buffer compaction is therefore a periodic whole-mesh operation, not a per-dab one.
 
 ### Decision 4 — Backend policy, not backend abstraction
 
@@ -65,7 +72,9 @@ At startup the app calls `clay_list_backends` and ranks the result against a fix
 | Platform | Preference order |
 |---|---|
 | macOS | `metal` → `cpu` |
-| Linux | `cuda` → `opencl` → `cpu` |
+| Linux | `cuda` → `vulkan` → `opencl` → `cpu` |
+
+The `vulkan` backend has been registered in ClayCore since before we specified this and implements the full interface, so the Linux non-NVIDIA hole this ranking was originally written around does not exist: an AMD or Intel GPU gets Vulkan, not OpenCL's best-effort subset. CUDA stays first on NVIDIA as the more mature tier-2 path; if measurement shows Vulkan matching it, the two swap and nothing else changes.
 
 `cpu` is always present, so the list is never empty and startup cannot fail for want of a backend. Because some backends report `Unsupported` for some operations by design — OpenCL does not implement raycast, whose sphere-tracing utilities are templated C++ that OpenCL C cannot compile, and implements no device meshing — the policy is **per operation**, not per session: an `Unsupported` result is a fallback to CPU for that call, recorded once, never an error shown to the user.
 
@@ -89,11 +98,19 @@ egui is immediate-mode and has no data binding, so "ViewModel" here means an exp
 
 *Alternatives considered.* Slint offers real property binding and a more literal MVVM, but embedding a custom wgpu viewport is less proven there than in egui, and the viewport is the application. Iced's Elm architecture is clean but is a different pattern wearing MVVM's name.
 
-### Decision 6 — wgpu and ClayCore do not share GPU resources in v1
+### Decision 6 — v1 keeps the brick cache and pays one host copy; device injection is deferred
 
-On macOS both sit on Metal, and sharing an `MTLBuffer` between ClayCore's `metal-cpp` device and wgpu's device is possible in principle. In v1 mesh data crosses through host memory: ClayCore meshes into a CPU buffer, the app uploads to wgpu. Two devices, one staging copy.
+ClayCore 0.26.0 added device interop: `clay_device_adopt` takes our `MTLDevice` or `VkDevice` as a `void*` under a `clay_device_api` tag — no vendor header reaches `clay.h` — and `clay_brick_cache_eval_requests_device` / `clay_eval_grid_device` write evaluation output straight into our buffers. wgpu can yield the underlying device through `wgpu-hal`, so this is available to us on both platforms.
 
-*Rationale.* The two device handles are created by unrelated stacks with no shared-allocation contract between them, and wgpu deliberately does not expose a stable Metal interop surface. The copy is measurable and bounded (only dirty-brick geometry moves), so it is the right cost to pay before it is proven to be the bottleneck. If the `performance-budgets` measurements show the upload dominating, zero-copy interop becomes its own change with its own spec.
+We do not take it in v1. The header states the trade-off, and it is not a performance trade-off:
+
+> generations, staleness, band classification, fp16 quantization and the memory budget are host code over host memory […] If you want the cache's correctness, use `clay_brick_cache_read_bricks`; if you want no host copy, use this. **Both are complete paths; neither is both.**
+
+The device path bypasses the brick cache, so we would reimplement dirty generations, staleness, LOD, the memory budget and fp16 quantization ourselves. ClayCore notes that a second quantization implementation "is the thing most able to drift from us" — the same argument that produced this whole design. Trading a bounded memcpy for a reimplementation of the component whose correctness we are relying on is the wrong direction at this stage.
+
+So: `read_bricks` and `clay_mesh_copy_vertices` in v1, one copy on the dirty-brick path only. Device injection becomes its own change when `performance-budgets` shows the copy dominating — and per Decision 4's platform split it would land on Linux first, since ClayCore reports Vulkan adoption verified and **Metal adoption compiled but never run on Apple hardware**.
+
+*Alternatives considered.* Exporting shared allocations rather than sharing a device was the other half of what we asked for; ClayCore declined it deliberately, on the grounds that sharing an allocation needs external-memory extensions, matching physical devices and a per-API handle lifetime the ABI would own, where sharing a device needs none of those. That reasoning holds, and it means there is one interop path rather than two.
 
 ### Decision 7 — Brush names in the interface are a translation table, not new semantics
 
@@ -119,9 +136,11 @@ Where a verb exists on one representation only — `sculpt_carve_alpha` is voxel
 
 ## Risks / Trade-offs
 
-- **ClayCore is nine days old at the time of writing (v0.22.1, first commit 2026-08-03) and its roadmap places "make it sculptable" in Phase 1.** → The submodule pin is the stability boundary; upgrades are deliberate, reviewed changes with the parity fixture re-run. The app's spec states which engine capabilities it depends on, so a breaking upgrade surfaces as a spec conflict rather than a bug report.
-- **Meshing latency is brush latency** (Decision 3). → The brick cache dirty set bounds work to the influence bound; `performance-budgets` sets a measured ceiling; surface-nets preview is used interactively and marching tetrahedra only on commit/export.
-- **CUDA on Linux may be absent, mismatched, or newer than the toolkit.** ClayCore's own README notes an RTX 50-series card against CUDA 12.0 falls back to PTX-only with driver JIT. → Backend probing is runtime, CPU is always present, and the app reports which backend it actually got rather than which it hoped for.
+- **ClayCore is young and moving fast (0.26.0, first commit 2026-08-03), and its roadmap places "make it sculptable" in Phase 1.** → The submodule pin is the stability boundary; upgrades are deliberate, reviewed changes with the parity fixture re-run. The app's spec states which engine capabilities it depends on, so a breaking upgrade surfaces as a spec conflict rather than a bug report. 0.26.0 already carries one announced ABI break — four `clay_brick_cache_*` entry points gained parameters rather than `_colored`/`_apron`/`_subset` siblings — which is an arity change, so it fails at compile time and cannot be misread.
+- **Meshing latency is brush latency** (Decision 3). → The brick cache dirty set bounds work to the influence bound; `performance-budgets` sets a measured ceiling; surface-nets preview is used interactively and marching tetrahedra only on export. If the ceiling is missed, the brick-volume raymarch is the recorded escape route.
+- **Incremental mesh buffers fragment over a long session**, because welded vertices span brick seams so a key's range can be overwritten but not freed. → Compaction is a periodic whole-mesh re-mesh off the interaction path, budgeted in `performance-budgets` rather than left to grow.
+- **CUDA on Linux may be absent, mismatched, or newer than the toolkit.** ClayCore's own README notes an RTX 50-series card against CUDA 12.0 falls back to PTX-only with driver JIT. → Backend probing is runtime, Vulkan is a full-interface second tier on the same platform, CPU is always present, and the app reports which backend it actually got rather than which it hoped for.
+- **Metal device adoption has never run on Apple hardware** — ClayCore reports it as compiled and CI-checked but unexercised, and told us so rather than letting us find out. → Decision 6 defers device injection entirely, so v1 does not depend on it. When it is taken up, Linux/Vulkan leads and macOS follows behind a hardware test.
 - **`bindgen` regenerating against a moving header can silently change safe-wrapper assumptions.** → The safe layer has its own test suite against the pinned submodule, and CI fails on a bindgen diff that is not accompanied by a wrapper review.
 - **egui's immediate mode invites putting logic in the View.** → Enforced by the dependency rule in Decision 5: the View crate cannot reach ClayCore even if someone wants it to.
 - **The design's *Dinâmica* panel promises something the engine does not do.** → Addressed head-on in Non-Goals rather than shipped as dead controls. This is a design-vs-engine conflict the user should confirm, not one the implementation should paper over.

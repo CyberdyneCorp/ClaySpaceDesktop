@@ -12,15 +12,19 @@ On startup the application SHALL query the engine's registered backends via `cla
 - **THEN** the CPU backend is present, because the engine compiles it in unconditionally, and selection always has a candidate
 
 ### Requirement: Backend preference follows the platform
-The application SHALL rank discovered backends by a fixed per-platform preference and select the highest-ranked one available: on macOS `metal` then `cpu`; on Linux `cuda`, then `opencl`, then `cpu`.
+The application SHALL rank discovered backends by a fixed per-platform preference and select the highest-ranked one available: on macOS `metal` then `cpu`; on Linux `cuda`, then `vulkan`, then `opencl`, then `cpu`.
 
 #### Scenario: macOS prefers Metal
 - **WHEN** the application starts on macOS with the Metal backend registered
 - **THEN** `metal` is the active backend
 
 #### Scenario: Linux without CUDA falls to the next tier
-- **WHEN** the application starts on Linux with `opencl` and `cpu` registered and `cuda` absent
-- **THEN** `opencl` is the active backend
+- **WHEN** the application starts on Linux with `vulkan`, `opencl` and `cpu` registered and `cuda` absent
+- **THEN** `vulkan` is the active backend
+
+#### Scenario: A non-NVIDIA Linux GPU gets a full-interface backend
+- **WHEN** the application starts on Linux on an AMD or Intel GPU where `vulkan` is registered
+- **THEN** `vulkan` is active and raycast and meshing are served by it rather than falling back to CPU
 
 #### Scenario: No GPU backend at all
 - **WHEN** no GPU backend is registered on any supported platform

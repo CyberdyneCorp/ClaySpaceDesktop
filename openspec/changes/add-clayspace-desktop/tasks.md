@@ -1,7 +1,7 @@
 ## 1. Workspace and engine bridge
 
 - [ ] 1.1 Create the Cargo workspace with crates `claycore-sys`, `claycore`, `clayspace-model`, `clayspace-vm`, `clayspace-view`, `clayspace-app`; add `#![forbid(unsafe_code)]` to every crate except the first two
-- [ ] 1.2 Add ClayCore as a git submodule at `vendor/ClayCore` pinned to an explicit commit; record the revision and document the clone instructions
+- [ ] 1.2 Add ClayCore as a git submodule at `vendor/ClayCore` pinned to a commit at or after the 0.26.0 ABI; record the revision and document the clone instructions
 - [ ] 1.3 Write `claycore-sys/build.rs`: check CMake ≥ 3.24 and C++20 support with named errors, select the preset from target and probed toolchains, build and link the engine, emit rerun-if-changed for the submodule
 - [ ] 1.4 Generate bindings with `bindgen` from `vendor/ClayCore/bindings/c/clay.h`; verify no hand-written declarations exist in `claycore-sys`
 - [ ] 1.5 Implement the error layer in `claycore`: `clay_result` → `Result`, capturing `clay_last_error` at the failure site
@@ -12,14 +12,15 @@
 - [ ] 1.10 Wrap the sculpting surface: stroke engine and presets, move brush, snakehook, cut tool, field relax/flatten/move-topological, consolidation
 - [ ] 1.11 Wrap the voxel surface: grids, resolution levels, all ten sculpt verbs, fills, palette, repair, `change_count`
 - [ ] 1.12 Wrap masks: create, paint, stroke, fill, invert, invert-within, expand, contract, smooth, to-field, extrude
-- [ ] 1.13 Wrap the brick cache: config, dirty marking, request drain, submit, readback, surface bricks, stats, LOD mips, mesh, raycast
+- [ ] 1.13 Wrap the brick cache: config, dirty marking, request drain, submit, readback (with apron and optional colour), surface bricks, stats, LOD mips, subset mesh with per-key ranges, single and batched raycast
+- [ ] 1.13a Wrap the layout-directed mesh copy (`clay_mesh_copy_vertices` / `_copy_indices`), rejecting layouts that name absent or overlapping attributes
 - [ ] 1.14 Wrap picking, meshing and file I/O
 - [ ] 1.15 Write the headless bridge test suite covering authoring, a stroke, a voxel verb, meshing, picking, save and reload; make it pass with no GPU and no display
 
 ## 2. Acceleration policy
 
 - [ ] 2.1 Implement backend discovery over `clay_list_backends` returning the parsed list
-- [ ] 2.2 Implement the platform preference ranking (macOS `metal` → `cpu`; Linux `cuda` → `opencl` → `cpu`) and automatic selection
+- [ ] 2.2 Implement the platform preference ranking (macOS `metal` → `cpu`; Linux `cuda` → `vulkan` → `opencl` → `cpu`) and automatic selection
 - [ ] 2.3 Implement per-operation fallback: route an `Unsupported` result to the CPU backend for that operation, keeping the selected backend active elsewhere
 - [ ] 2.4 Record each fallback once per operation kind in the diagnostics log
 - [ ] 2.5 Implement the user override with cross-session persistence and the unavailable-override fallback path
@@ -52,7 +53,8 @@
 
 - [ ] 5.1 Implement stroke capture: position, pressure, timing, on both pointer and tablet input
 - [ ] 5.2 Implement the sculpt command path: capture → engine stroke resolution → edit → dirty bricks → re-mesh → upload
-- [ ] 5.3 Implement incremental re-meshing bounded by the dirty set, with stale-result discarding
+- [ ] 5.3 Implement incremental re-meshing: pass the dirty key set as the meshing subset, patch GPU buffer sub-ranges from the per-key ranges, discard stale results
+- [ ] 5.3a Implement mesh buffer fragmentation tracking and background whole-surface compaction, scheduled off the interaction path
 - [ ] 5.4 Implement the tool registry binding every tool label to its engine entry point, with per-representation availability and stated reasons
 - [ ] 5.5 Implement per-tool settings persistence for intensity, size and flow
 - [ ] 5.6 Implement the brush shaping controls: alpha curve, noise, edge falloff, accumulation mode, smoothing, mirroring
