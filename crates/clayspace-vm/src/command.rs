@@ -8,7 +8,7 @@
 //! panel button that mean the same thing emit the *same* command, so they
 //! cannot drift apart.
 
-use clayspace_model::{ToolKind, ViewPresetKind};
+use clayspace_model::{Falloff, LayerKey, ToolKind, ViewPresetKind};
 
 /// A change to the application or the document.
 #[derive(Debug, Clone, PartialEq)]
@@ -18,7 +18,17 @@ pub enum Command {
     SetBrushSize(f32),
     SetBrushIntensity(f32),
     SetBrushFlow(f32),
+    SetBrushNoise(f32),
+    SetBrushFalloff(Falloff),
+    SetBrushAccumulate(bool),
+    SetBrushSmoothing(f32),
     ToggleSymmetry(Axis),
+
+    // -- scene and layers -------------------------------------------------
+    SelectLayer(LayerKey),
+    SetLayerVisible(LayerKey, bool),
+    AddLayer,
+    RemoveLayer(LayerKey),
 
     // -- the sculpting gesture -------------------------------------------
     /// A stroke began at a point on the surface.
@@ -59,7 +69,14 @@ impl Command {
                 | Self::SetBrushSize(_)
                 | Self::SetBrushIntensity(_)
                 | Self::SetBrushFlow(_)
+                | Self::SetBrushNoise(_)
+                | Self::SetBrushFalloff(_)
+                | Self::SetBrushAccumulate(_)
+                | Self::SetBrushSmoothing(_)
                 | Self::ToggleSymmetry(_)
+                // Choosing which layer to work on changes nothing in the
+                // document; changing that layer does.
+                | Self::SelectLayer(_)
         )
     }
 
@@ -70,6 +87,14 @@ impl Command {
             Self::SetBrushSize(_) => "brush size",
             Self::SetBrushIntensity(_) => "brush intensity",
             Self::SetBrushFlow(_) => "brush flow",
+            Self::SetBrushNoise(_) => "brush noise",
+            Self::SetBrushFalloff(_) => "brush edge",
+            Self::SetBrushAccumulate(_) => "brush accumulation",
+            Self::SetBrushSmoothing(_) => "brush smoothing",
+            Self::SelectLayer(_) => "select layer",
+            Self::SetLayerVisible(..) => "layer visibility",
+            Self::AddLayer => "new layer",
+            Self::RemoveLayer(_) => "remove layer",
             Self::ToggleSymmetry(_) => "symmetry",
             Self::BeginStroke { .. } => "begin stroke",
             Self::ContinueStroke { .. } => "continue stroke",
@@ -167,6 +192,21 @@ mod tests {
             Command::ToggleSymmetry(Axis::X),
         ] {
             assert!(!command.touches_document(), "{} is not an edit", command.label());
+        }
+    }
+
+    #[test]
+    fn layer_changes_touch_the_document_but_selection_does_not() {
+        assert!(
+            !Command::SelectLayer(clayspace_model::LayerKey(1)).touches_document(),
+            "choosing which layer to work on is not itself an edit"
+        );
+        for command in [
+            Command::SetLayerVisible(clayspace_model::LayerKey(1), false),
+            Command::AddLayer,
+            Command::RemoveLayer(clayspace_model::LayerKey(1)),
+        ] {
+            assert!(command.touches_document(), "{} is an edit", command.label());
         }
     }
 

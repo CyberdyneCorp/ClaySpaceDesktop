@@ -25,6 +25,8 @@ wgpu = "24.0.5"
 pollster = "1.0.1"
 
 [dev-dependencies]
+egui = "0.31.1"
+egui-wgpu = "0.31.1"
 png = "0.18.1"
 pollster = "1.0.1"
 

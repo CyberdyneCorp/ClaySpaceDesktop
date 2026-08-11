@@ -12,14 +12,20 @@
 #![forbid(unsafe_code)]
 
 pub mod camera;
+pub mod design;
 pub mod gpu;
 pub mod matcap;
 pub mod offscreen;
 pub mod palette;
 pub mod renderer;
+pub mod shell;
+pub mod strings;
 pub mod window;
 
 pub use camera::{Camera, ViewPreset};
+pub use design::{contrast, Tokens};
+pub use shell::{apply_theme, ShellState};
+pub use strings::{Locale, Strings};
 pub use gpu::{Framebuffer, Gpu, GpuError};
 pub use matcap::MatCap;
 pub use offscreen::{Image, OffscreenTarget};

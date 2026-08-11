@@ -154,6 +154,21 @@ impl SculptViewModel {
             Command::SetBrushSize(size) => self.edit_brush(|b| b.size = size),
             Command::SetBrushIntensity(value) => self.edit_brush(|b| b.intensity = value),
             Command::SetBrushFlow(value) => self.edit_brush(|b| b.flow = value),
+            Command::SetBrushNoise(value) => self.edit_brush(|b| b.shaping.noise = value),
+            Command::SetBrushFalloff(falloff) => {
+                self.edit_brush(|b| b.shaping.falloff = falloff)
+            }
+            Command::SetBrushAccumulate(on) => self.edit_brush(|b| b.shaping.accumulate = on),
+            Command::SetBrushSmoothing(value) => {
+                self.edit_brush(|b| b.shaping.smoothing = value)
+            }
+
+            // Scene and layer commands are the SceneViewModel's; the sculpting
+            // ViewModel ignores them rather than half-handling them.
+            Command::SelectLayer(_)
+            | Command::SetLayerVisible(..)
+            | Command::AddLayer
+            | Command::RemoveLayer(_) => {}
             Command::ToggleSymmetry(axis) => {
                 let index = match axis {
                     Axis::X => 0,

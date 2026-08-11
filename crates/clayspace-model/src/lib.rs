@@ -10,9 +10,11 @@
 
 #![forbid(unsafe_code)]
 
+pub mod scene;
 pub mod sculpt;
 pub mod tools;
 
+pub use scene::{LayerKey, LayerSummary, Protection, Scene, SceneModel, SceneNode};
 pub use sculpt::{
     EditOutcome, GestureSample, HistoryState, ModelError, SceneStats, SculptModel,
 };

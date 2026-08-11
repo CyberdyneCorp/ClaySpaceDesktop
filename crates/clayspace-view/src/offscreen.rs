@@ -101,6 +101,14 @@ impl OffscreenTarget {
     }
 
     /// Copies the colour target into host memory.
+    ///
+    /// Public so a caller that painted the target itself — the interface, which
+    /// egui renders rather than this module — can read the result back.
+    pub fn read_back_public(&self, gpu: &Gpu) -> Image {
+        self.read_back(gpu)
+    }
+
+    /// Copies the colour target into host memory.
     fn read_back(&self, gpu: &Gpu) -> Image {
         let (width, height) = (self.width(), self.height());
 
