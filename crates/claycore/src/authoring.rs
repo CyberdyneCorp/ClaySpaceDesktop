@@ -313,6 +313,38 @@ impl Document {
     }
 
     /// A layer's protection state.
+    /// The layers this document holds, discovered by probing.
+    ///
+    /// The C ABI has no enumeration: a host knows the layers it created and,
+    /// after `clay_document_load`, knows nothing. So this asks `clay_layer_bounds`
+    /// for consecutive ids and keeps the ones that answer, stopping after a run
+    /// of misses long enough to clear any gap left by a removal.
+    ///
+    /// It recovers ids and nothing else. Names, visibility and representation
+    /// have no getters, so a document that comes back from disk comes back
+    /// anonymous. Reported upstream; when enumeration lands this goes.
+    pub fn layer_ids(&self) -> Result<Vec<LayerId>> {
+        // Ids are handed out from 1 and monotonically, so a gap means a
+        // removal rather than the end. Eight is well past the largest run of
+        // removals a session is likely to leave and still cheap.
+        const GAP: u32 = 8;
+        let mut found = Vec::new();
+        let mut misses = 0;
+        let mut candidate: sys::clay_layer_id = 1;
+        while misses < GAP {
+            let id = LayerId(candidate);
+            match self.layer_bounds(id) {
+                Ok(_) => {
+                    found.push(id);
+                    misses = 0;
+                }
+                Err(_) => misses += 1,
+            }
+            candidate += 1;
+        }
+        Ok(found)
+    }
+
     pub fn layer_protection(&self, layer: LayerId) -> Result<Protection> {
         let (mut ghost, mut locked) = (0i32, 0i32);
         // SAFETY: valid handle and two out-parameters.

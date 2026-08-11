@@ -26,6 +26,9 @@ pollster = "1.0.1"
 egui = "0.31.1"
 egui-wgpu = "0.31.1"
 egui-winit = "0.31.1"
+# Native open and save panels. macOS uses AppKit; Linux prefers the XDG
+# portal and falls back to GTK, so a Wayland session gets its own dialog.
+rfd = "0.15.4"
 
 [dev-dependencies]
 egui = "0.31.1"

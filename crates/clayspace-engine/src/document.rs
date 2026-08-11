@@ -9,8 +9,9 @@ use claycore::{
     LayerId, Mask, NodeId, Op, StrokePreset, VoxelGrid,
 };
 use clayspace_model::{
-    BrushSettings, EditOutcome, GestureSample, HistoryState, LayerKey, LayerSummary, ModelError,
-    Protection, Representation, Scene, SceneModel, SceneNode, SceneStats, SculptModel, ToolKind,
+    BrushSettings, DocumentModel, EditOutcome, GestureSample, HistoryState, LayerKey, LayerSummary,
+    ModelError, OpenError, Protection, Representation, Scene, SceneModel, SceneNode, SceneStats,
+    SculptModel, ToolKind,
 };
 
 use crate::backend::{BackendPolicy, Operation};
@@ -1266,5 +1267,117 @@ impl ClayDocument {
     /// has no intrinsic scale the way a mesh's bounds give one.
     fn consolidation_params(&self) -> claycore::ConsolidationParams {
         claycore::ConsolidationParams::at(self.cache.config().voxel_size)
+    }
+}
+
+impl DocumentModel for ClayDocument {
+    fn save(&mut self, path: &std::path::Path) -> Result<(), ModelError> {
+        self.document.save(path).map_err(ModelError::engine)
+    }
+
+    fn open(&mut self, path: &std::path::Path) -> Result<(), OpenError> {
+        // Built completely before anything here is touched. A failed open must
+        // leave the sculptor's work exactly as it was — losing it to a
+        // mistyped filename would be the worst bug this application could
+        // have.
+        let opened = Self::from_file(path, self.policy.clone())?;
+        *self = opened;
+        Ok(())
+    }
+
+    fn reset(&mut self) -> Result<(), ModelError> {
+        let fresh = Self::new(self.policy.clone()).and_then(Self::with_starting_form)?;
+        *self = fresh;
+        Ok(())
+    }
+}
+
+impl ClayDocument {
+    /// Reads a document from disk into a complete model.
+    fn from_file(path: &std::path::Path, policy: BackendPolicy) -> Result<Self, OpenError> {
+        let unreadable = |detail: String| OpenError::Unreadable {
+            path: path.to_path_buf(),
+            detail,
+        };
+
+        let document = Document::open(path).map_err(|e| match e.kind() {
+            claycore::ErrorKind::NotFound => OpenError::NotFound(path.to_path_buf()),
+            // The one failure a user can act on without help: the document is
+            // fine and this build is behind.
+            claycore::ErrorKind::ForwardVersion => OpenError::TooNew {
+                path: path.to_path_buf(),
+                detail: e.to_string(),
+            },
+            _ => unreadable(e.to_string()),
+        })?;
+
+        let ids = document.layer_ids().map_err(|e| unreadable(e.to_string()))?;
+        if ids.is_empty() {
+            return Err(unreadable("it holds no layers".to_string()));
+        }
+
+        // Ids and protection are all that survive: the ABI has no getter for a
+        // layer's name, visibility or representation, so a reopened document
+        // comes back anonymous and every layer is treated as SDF. Reported
+        // upstream; until then this is what a host can know.
+        let layers: Vec<Layer> = ids
+            .iter()
+            .enumerate()
+            .map(|(index, id)| Layer {
+                id: *id,
+                key: LayerKey(index as u64 + 1),
+                name: format!("Camada {}", index + 1),
+                representation: Representation::Sdf,
+                grid: None,
+                visible: true,
+                protection: document
+                    .layer_protection(*id)
+                    .map(|p| Protection {
+                        ghost: p.ghost,
+                        locked: p.locked,
+                    })
+                    .unwrap_or_default(),
+                intensity: 100,
+            })
+            .collect();
+
+        let cache = BrickCache::new(BrickConfig {
+            dim: 8,
+            voxel_size: Self::VOXEL_SIZE,
+            band_voxels: 3,
+            memory_budget: Some(512 * 1024 * 1024),
+            colors: false,
+        })
+        .map_err(|e| unreadable(e.to_string()))?;
+
+        let next_key = layers.len() as u64 + 1;
+        let mut model = Self {
+            document,
+            layers,
+            active: 0,
+            cache,
+            policy,
+            dirty: Vec::new(),
+            stats: SceneStats::default(),
+            mask: None,
+            symmetry: [false; 3],
+            next_key,
+            selected: None,
+        };
+
+        // Undo starts recording from here: opening is not something the user
+        // did to the document, and it must not be undoable back into an empty
+        // one.
+        model
+            .document
+            .enable_undo()
+            .map_err(|e| unreadable(e.to_string()))?;
+
+        let ids: Vec<LayerId> = model.layers.iter().map(|layer| layer.id).collect();
+        for id in ids {
+            model.refill(id, &[]).map_err(|e| unreadable(e.to_string()))?;
+        }
+        model.refresh_stats();
+        Ok(model)
     }
 }

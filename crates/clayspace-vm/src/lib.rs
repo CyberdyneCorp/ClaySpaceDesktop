@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 pub mod command;
+pub mod document_vm;
 pub mod history_vm;
 pub mod jobs;
 pub mod notice;
@@ -21,3 +22,5 @@ pub use notice::{MemoryState, Notice, NoticeBoard, Severity, Where};
 pub use observable::{Observable, Watcher};
 pub use scene_vm::SceneViewModel;
 pub use sculpt_vm::{LastAction, SculptViewModel};
+
+pub use document_vm::{DocumentViewModel, Guard};

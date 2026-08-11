@@ -172,6 +172,22 @@ impl SculptViewModel {
         self.model.pick(origin, direction)
     }
 
+    /// Drops the undo history, for when the document underneath is replaced.
+    ///
+    /// Opening a document or starting a new one must not leave undo able to
+    /// reach back into a document the user is no longer looking at — the
+    /// entries would apply to a document that is gone, and the counts would
+    /// spend undos the engine no longer has.
+    pub fn forget_history(&mut self) {
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.gesture_entries = 0;
+        self.stroke = None;
+        self.publish_history();
+        self.stats.set(self.model.stats());
+        self.last_action.set(LastAction::default());
+    }
+
     /// Clears the pending re-mesh count once the viewport has caught up.
     pub fn acknowledge_remesh(&mut self) {
         self.pending_remesh.set_if_changed(0);

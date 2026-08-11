@@ -14,8 +14,9 @@ use std::rc::Rc;
 
 use clayspace_engine::ClayDocument;
 use clayspace_model::{
-    BrushSettings, EditOutcome, GestureSample, HistoryState, LayerCost, LayerKey, ModelError,
-    Protection, Representation, Scene, SceneModel, SceneStats, SculptModel, ToolKind,
+    BrushSettings, DocumentModel, EditOutcome, GestureSample, HistoryState, LayerCost, LayerKey,
+    ModelError, OpenError, Protection, Representation, Scene, SceneModel, SceneStats, SculptModel,
+    ToolKind,
 };
 
 /// A handle to the one document.
@@ -146,5 +147,19 @@ impl SceneModel for SharedDocument {
 
     fn add_mesh_layer(&mut self, name: &str) -> Result<LayerKey, ModelError> {
         self.0.borrow_mut().add_mesh_layer(name)
+    }
+}
+
+impl DocumentModel for SharedDocument {
+    fn save(&mut self, path: &std::path::Path) -> Result<(), ModelError> {
+        self.0.borrow_mut().save(path)
+    }
+
+    fn open(&mut self, path: &std::path::Path) -> Result<(), OpenError> {
+        self.0.borrow_mut().open(path)
+    }
+
+    fn reset(&mut self) -> Result<(), ModelError> {
+        self.0.borrow_mut().reset()
     }
 }

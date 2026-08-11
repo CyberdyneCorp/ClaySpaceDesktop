@@ -16,7 +16,9 @@ use clayspace_view::{
     mirrored_cursors, BrushCursor, Camera, Gpu, Locale, MatCap, Overlays, Renderer, Strings,
     SurfaceLoss, ViewPreset, WindowSurface,
 };
-use clayspace_vm::{Axis, Command, CommandQueue, SceneViewModel, SculptViewModel};
+use clayspace_vm::{
+    Axis, Command, CommandQueue, DocumentViewModel, Guard, SceneViewModel, SculptViewModel,
+};
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -69,6 +71,7 @@ struct App {
     document: SharedDocument,
     sculpt: SculptViewModel,
     scene: SceneViewModel,
+    document_vm: DocumentViewModel,
     policy: BackendPolicy,
 
     camera: Camera,
@@ -105,10 +108,12 @@ impl App {
     fn new(document: SharedDocument, policy: BackendPolicy) -> Self {
         let sculpt = SculptViewModel::new(Box::new(document.clone()));
         let scene = SceneViewModel::new(Box::new(document.clone()));
+        let document_vm = DocumentViewModel::new(Box::new(document.clone()), "Sem título");
         Self {
             document,
             sculpt,
             scene,
+            document_vm,
             policy,
             camera: Camera::default(),
             window: None,
@@ -184,6 +189,90 @@ impl App {
             Ok(_) => self.sculpt.acknowledge_remesh(),
             Err(e) => eprintln!("the surface could not be re-meshed: {e}"),
         }
+    }
+
+    /// Saves, asking for a path when there is not one yet.
+    fn save(&mut self, ask_for_path: bool) {
+        let known = self.document_vm.path().get().clone();
+        let path = match (known, ask_for_path) {
+            (Some(path), false) => Some(path),
+            _ => rfd::FileDialog::new()
+                .set_title("Salvar escultura")
+                .add_filter("ClaySpace", &["clayspace"])
+                .set_file_name(format!("{}.clayspace", self.document_vm.name().get()))
+                .save_file(),
+        };
+        let Some(path) = path else {
+            return; // Cancelled. Not a failure, and nothing to report.
+        };
+        if let Err(e) = self.document_vm.save_as(&path) {
+            eprintln!("{e}");
+        }
+        self.request_redraw();
+    }
+
+    /// Opens a document, after asking about unsaved work.
+    fn open(&mut self) {
+        if self.document_vm.guard() == Guard::WouldLoseWork && !self.confirm_discarding_work() {
+            return;
+        }
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Abrir escultura")
+            .add_filter("ClaySpace", &["clayspace"])
+            .pick_file()
+        else {
+            return;
+        };
+        match self.document_vm.open(&path) {
+            Ok(()) => self.after_document_replaced(),
+            Err(e) => eprintln!("{e}"),
+        }
+        self.request_redraw();
+    }
+
+    /// Starts a new document, after asking about unsaved work.
+    fn new_document(&mut self) {
+        if self.document_vm.guard() == Guard::WouldLoseWork && !self.confirm_discarding_work() {
+            return;
+        }
+        match self.document_vm.new_document() {
+            Ok(()) => self.after_document_replaced(),
+            Err(e) => eprintln!("{e}"),
+        }
+        self.request_redraw();
+    }
+
+    /// Asks whether unsaved work may be thrown away.
+    ///
+    /// A native dialog rather than something drawn in the shell: this is the
+    /// one question in the application whose answer cannot be undone, and the
+    /// platform's own dialog is the one a user already knows how to read.
+    fn confirm_discarding_work(&self) -> bool {
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Warning)
+            .set_title("Alterações não salvas")
+            .set_description("A escultura tem alterações que não foram salvas. Descartar?")
+            .set_buttons(rfd::MessageButtons::YesNo)
+            .show()
+            == rfd::MessageDialogResult::Yes
+    }
+
+    /// Everything that has to catch up when the document underneath changes.
+    fn after_document_replaced(&mut self) {
+        self.scene.refresh();
+        self.sculpt.forget_history();
+        if let Some(graphics) = self.graphics.as_mut() {
+            let gpu = graphics.gpu.clone();
+            // A rebuild rather than a sync: nothing about the old document's
+            // dirty set describes the new one.
+            if let Err(e) = self
+                .document
+                .with(|document| graphics.geometry.rebuild(&gpu, document))
+            {
+                eprintln!("the surface could not be meshed: {e}");
+            }
+        }
+        self.frame_all();
     }
 
     /// Re-meshes the whole surface after a gesture, clearing the seams the
@@ -354,6 +443,10 @@ impl App {
         if command.touches_document() {
             self.scene.refresh();
             self.sync_geometry();
+            // The title bar's "não salvo" is driven from here rather than
+            // inferred inside the document ViewModel, which never sees a
+            // sculpting command and would have to guess.
+            self.document_vm.touched();
         }
         // The end of a gesture is where the fast path's approximation is paid
         // off: a full re-mesh, once, rather than the slivers it leaves along
@@ -402,6 +495,7 @@ impl App {
             .with(|document| document.cache().stats().ok())
             .map(|stats| (stats.memory_usage, stats.memory_budget.unwrap_or(0)))
             .unwrap_or((0, 0));
+        let document_name = self.document_vm.name().get().clone();
         let last = self.sculpt.last_action().get().clone();
         let history = *self.sculpt.history().get();
 
@@ -410,8 +504,8 @@ impl App {
         let mut input = ViewportInput::default();
         let state = ShellState {
             strings: self.strings,
-            document_name: "Sem título",
-            modified: history.depth > 0,
+            document_name: document_name.as_str(),
+            modified: *self.document_vm.modified().get(),
             tool: *self.sculpt.tool().get(),
             brush: *self.sculpt.brush().get(),
             tool_status: self.sculpt.tool_status().get().as_deref(),
@@ -661,7 +755,14 @@ impl ApplicationHandler for App {
         };
 
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                // The last chance to keep the work. Closing over unsaved edits
+                // without asking is the one mistake this application can make
+                // that a user cannot undo.
+                if self.document_vm.guard() == Guard::Clear || self.confirm_discarding_work() {
+                    event_loop.exit();
+                }
+            }
 
             WindowEvent::Resized(size) => {
                 if let Some(graphics) = self.graphics.as_mut() {
@@ -685,6 +786,25 @@ impl ApplicationHandler for App {
                 let PhysicalKey::Code(code) = event.physical_key else {
                     return;
                 };
+
+                // The file shortcuts, which take the platform's command
+                // modifier and so are handled before the bare-letter ones.
+                let modifiers = self
+                    .graphics
+                    .as_ref()
+                    .map(|g| g.egui_state.egui_ctx().input(|i| i.modifiers))
+                    .unwrap_or_default();
+                if modifiers.command {
+                    match code {
+                        KeyCode::KeyS if modifiers.shift => self.save(true),
+                        KeyCode::KeyS => self.save(false),
+                        KeyCode::KeyO => self.open(),
+                        KeyCode::KeyN => self.new_document(),
+                        _ => {}
+                    }
+                    return;
+                }
+
                 let command = match code {
                     KeyCode::Digit1 => Some(Command::SetViewPreset(ViewPresetKind::Perspective)),
                     KeyCode::Digit2 => Some(Command::SetViewPreset(ViewPresetKind::Front)),
