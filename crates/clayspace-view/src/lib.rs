@@ -35,5 +35,7 @@ pub use strings::{Locale, Strings};
 pub use gpu::{Framebuffer, Gpu, GpuError};
 pub use matcap::MatCap;
 pub use offscreen::{Image, OffscreenTarget};
-pub use renderer::{BrushCursor, GpuMesh, Overlays, Renderer, SymmetryAxis, Vertex};
+pub use renderer::{
+    mirrored_cursors, BrushCursor, GpuMesh, Overlays, Renderer, SymmetryAxis, Vertex,
+};
 pub use window::{SurfaceLoss, WindowSurface};

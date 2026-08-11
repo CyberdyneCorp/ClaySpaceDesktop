@@ -18,11 +18,14 @@ path = "src/main.rs"
 [dependencies]
 clayspace-engine = { path = "../clayspace-engine" }
 clayspace-model = { version = "0.1.0", path = "../clayspace-model" }
-clayspace-vm = { path = "../clayspace-vm" }
+clayspace-vm = { version = "0.1.0", path = "../clayspace-vm" }
 clayspace-view = { path = "../clayspace-view" }
 winit = "0.30.13"
 wgpu = "24.0.5"
 pollster = "1.0.1"
+egui = "0.31.1"
+egui-wgpu = "0.31.1"
+egui-winit = "0.31.1"
 
 [dev-dependencies]
 egui = "0.31.1"

@@ -10,7 +10,9 @@
 
 mod support;
 
-use clayspace_view::{BrushCursor, Camera, GpuMesh, MatCap, Overlays, SymmetryAxis, ViewPreset};
+use clayspace_view::{
+    mirrored_cursors, BrushCursor, Camera, GpuMesh, MatCap, Overlays, ViewPreset,
+};
 use support::Harness;
 
 /// Enough of the frame changed that something was clearly drawn, rather than a
@@ -284,7 +286,7 @@ fn overlays_draw_behind_the_sculpt_and_can_be_turned_off() {
         &harness.gpu,
         Overlays {
             grid: false,
-            symmetry_plane: None,
+            symmetry_planes: [false; 3],
         },
         3.0,
     );
@@ -295,7 +297,7 @@ fn overlays_draw_behind_the_sculpt_and_can_be_turned_off() {
         &harness.gpu,
         Overlays {
             grid: true,
-            symmetry_plane: None,
+            symmetry_planes: [false; 3],
         },
         3.0,
     );
@@ -309,7 +311,7 @@ fn overlays_draw_behind_the_sculpt_and_can_be_turned_off() {
         &harness.gpu,
         Overlays {
             grid: true,
-            symmetry_plane: Some(SymmetryAxis::X),
+            symmetry_planes: [true, false, false],
         },
         3.0,
     );
@@ -324,7 +326,7 @@ fn overlays_draw_behind_the_sculpt_and_can_be_turned_off() {
         &harness.gpu,
         Overlays {
             grid: false,
-            symmetry_plane: None,
+            symmetry_planes: [false; 3],
         },
         3.0,
     );
@@ -350,7 +352,7 @@ fn overlays_stay_dimmer_than_the_sculpt() {
         &harness.gpu,
         Overlays {
             grid: true,
-            symmetry_plane: Some(SymmetryAxis::X),
+            symmetry_planes: [true, false, false],
         },
         3.0,
     );
@@ -480,17 +482,18 @@ fn the_brush_cursor_follows_the_surface_and_clears_off_it() {
     let camera = support::framed_camera(&mesh);
     let gpu_mesh = harness.upload(&mesh);
 
-    harness.renderer.set_cursor(&harness.gpu, None);
+    harness.renderer.set_cursors(&harness.gpu, &[]);
     let without = harness.capture(&gpu_mesh, &camera, false, "12-cursor-off");
 
     // On the near face of the sphere, where the camera can see it.
-    harness.renderer.set_cursor(
+    harness.renderer.set_cursors(
         &harness.gpu,
-        Some(BrushCursor {
+        &[BrushCursor {
             position: [0.0, 0.0, 1.0],
             normal: [0.0, 0.0, 1.0],
             radius: 0.35,
-        }),
+            mirrored: false,
+        }],
     );
     let with = harness.capture(&gpu_mesh, &camera, false, "12-cursor-on");
 
@@ -508,13 +511,14 @@ fn the_brush_cursor_follows_the_surface_and_clears_off_it() {
     assert!(drawn > 100, "the brush cursor drew only {drawn} pixels");
 
     // A larger brush must read as a larger ring.
-    harness.renderer.set_cursor(
+    harness.renderer.set_cursors(
         &harness.gpu,
-        Some(BrushCursor {
+        &[BrushCursor {
             position: [0.0, 0.0, 1.0],
             normal: [0.0, 0.0, 1.0],
             radius: 0.7,
-        }),
+            mirrored: false,
+        }],
     );
     let larger = harness.capture(&gpu_mesh, &camera, false, "12-cursor-large");
     assert!(
@@ -523,7 +527,7 @@ fn the_brush_cursor_follows_the_surface_and_clears_off_it() {
     );
 
     // Off the surface, it must clear rather than hang at some depth.
-    harness.renderer.set_cursor(&harness.gpu, None);
+    harness.renderer.set_cursors(&harness.gpu, &[]);
     let cleared = harness.capture(&gpu_mesh, &camera, false, "12-cursor-cleared");
     assert!(
         cleared.mean_difference(&without) < 0.001,
@@ -569,5 +573,73 @@ fn orbiting_changes_the_view_and_stays_stable_at_the_pole() {
     assert!(
         pole.pixels_differing_from(background, 6) > DREW_SOMETHING,
         "the view degenerated at the pole and drew nothing"
+    );
+}
+
+#[test]
+fn symmetry_shows_every_place_the_stroke_will_land() {
+    // A cursor that shows one ring while the engine deposits two is telling
+    // the user the wrong thing about the next click. This captures what the
+    // mirrors actually look like so the cue can be judged, not just counted.
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let doc = support::sphere_document(1.0);
+    let mesh = support::mesh_document(&doc, 64);
+    let camera = support::framed_camera(&mesh);
+    let gpu_mesh = harness.upload(&mesh);
+
+    // Off to one side, so a mirror through x = 0 lands somewhere visibly
+    // different rather than on top of the original.
+    let pointer = BrushCursor {
+        position: [0.62, 0.30, 0.72],
+        normal: [0.62, 0.30, 0.72],
+        radius: 0.28,
+        mirrored: false,
+    };
+
+    harness
+        .renderer
+        .set_overlays(&harness.gpu, Overlays::default(), 2.0);
+    harness
+        .renderer
+        .set_cursors(&harness.gpu, &mirrored_cursors(pointer, [false; 3]));
+    let alone = harness.capture(&gpu_mesh, &camera, false, "16-symmetry-cursor-off");
+
+    let gpu = harness.gpu.clone();
+    harness.renderer.set_overlays(
+        &gpu,
+        Overlays {
+            grid: true,
+            symmetry_planes: [true, false, false],
+        },
+        2.0,
+    );
+    harness
+        .renderer
+        .set_cursors(&gpu, &mirrored_cursors(pointer, [true, false, false]));
+    let mirrored = harness.capture(&gpu_mesh, &camera, false, "16-symmetry-cursor-x");
+
+    assert!(
+        mirrored.mean_difference(&alone) > 0.001,
+        "turning symmetry on drew nothing new, so there is no cue that the \
+         stroke lands twice"
+    );
+
+    harness.renderer.set_overlays(
+        &gpu,
+        Overlays {
+            grid: true,
+            symmetry_planes: [true, true, false],
+        },
+        2.0,
+    );
+    harness
+        .renderer
+        .set_cursors(&gpu, &mirrored_cursors(pointer, [true, true, false]));
+    let both = harness.capture(&gpu_mesh, &camera, false, "16-symmetry-cursor-xy");
+    assert!(
+        both.mean_difference(&mirrored) > 0.001,
+        "the second mirror plane changed nothing on screen"
     );
 }

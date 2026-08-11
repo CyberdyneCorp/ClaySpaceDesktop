@@ -74,10 +74,19 @@ impl ClayDocument {
     pub fn new(policy: BackendPolicy) -> Result<Self, ModelError> {
         let mut document = Document::new().map_err(ModelError::engine)?;
         let id = document.add_sdf_layer("Forma").map_err(ModelError::engine)?;
-        // Before undo starts recording: the starting mirror is part of making
-        // the document, not something a user did. Setting it afterwards makes
-        // the first stroke cost two undos where later ones cost one.
-        let symmetry = [true, false, false];
+        // No mirror to start with, though the design asks for X.
+        //
+        // The engine applies a layer mirror in its document field but not in
+        // its brick evaluation — a cache rebuilt from scratch over the whole
+        // document still misses the mirrored half. The viewport meshes from
+        // the cache, so symmetry draws only the side under the pointer, and a
+        // sculptor watching one half of every stroke vanish is worse off than
+        // one who turned symmetry on deliberately. `cache_parity.rs` pins the
+        // defect; when it is fixed, this goes back to [true, false, false].
+        //
+        // Set before undo starts recording either way: the starting mirror is
+        // part of making the document, not something a user did.
+        let symmetry = [false, false, false];
         document
             .set_layer_mirror(id, symmetry, 0.0)
             .map_err(ModelError::engine)?;
@@ -89,7 +98,7 @@ impl ClayDocument {
             // dirty set then meshes more cells overall — 64 ms against 39 ms
             // on the same edit.
             dim: 8,
-            voxel_size: 0.02,
+            voxel_size: Self::VOXEL_SIZE,
             band_voxels: 3,
             memory_budget: Some(512 * 1024 * 1024),
             colors: false,
@@ -215,6 +224,19 @@ impl ClayDocument {
     /// the initial fill finds nothing new and so fell back to re-meshing every
     /// surface brick: 1043 keys per dab instead of the influence bound, and a
     /// 267 ms dab against a 50 ms budget.
+    /// Refills the cache for a bounded box of world space.
+    ///
+    /// For edits the engine reports as a count rather than as nodes — the
+    /// surface move is the one — where marking by layer would be correct but
+    /// ruinous. `Mover` did exactly that: every segment of a drag re-meshed
+    /// the whole surface, 5.6 seconds a segment against a 50 ms budget.
+    fn refill_region(&mut self, min: [f32; 3], max: [f32; 3]) -> Result<(), ModelError> {
+        self.cache
+            .mark_dirty(min, max)
+            .map_err(ModelError::engine)?;
+        self.drain_dirty()
+    }
+
     fn refill(&mut self, layer: LayerId, nodes: &[NodeId]) -> Result<(), ModelError> {
         if nodes.is_empty() {
             self.cache
@@ -226,7 +248,22 @@ impl ClayDocument {
                 .map_err(ModelError::engine)?;
         }
 
-        let backend = self.policy.active().clone();
+        self.drain_dirty()
+    }
+
+    /// Meshes and refills whatever is currently marked dirty.
+    fn drain_dirty(&mut self) -> Result<(), ModelError> {
+        // The CPU path, whatever the policy says is available.
+        //
+        // Measured on an M-series Mac: refilling a dab's 27 bricks takes
+        // 0.77 ms on the CPU and 5.61 ms on Metal, and a whole-model fill
+        // takes 322 ms against 3361 ms. Metal is slower at every batch size
+        // we tried, and it is not warmup — the first dab is not the slowest.
+        // Filed as ClayCore #64.
+        //
+        // `refill_backend` is where this decision lives so that it is one
+        // line to revert, and `backend_choice.rs` fails when the ratio flips.
+        let backend = self.policy.refill_backend().cloned();
         let mut dirty = Vec::new();
         loop {
             let (requests, remaining) = self
@@ -238,16 +275,22 @@ impl ClayDocument {
             }
             dirty.extend(requests.iter().map(|request| request.key()));
             self.cache
-                .refill(&self.document, Some(&backend), &requests)
+                .refill(&self.document, backend.as_ref(), &requests)
                 .map_err(ModelError::engine)?;
             if remaining == 0 {
                 break;
             }
         }
 
-        dirty.sort();
-        dirty.dedup();
-        self.dirty = dirty;
+        // Accumulated, not assigned. This set is pending work for the
+        // viewport and is only emptied by `take_dirty_keys`. Overwriting it
+        // dropped every edit that landed between two frames: the viewport
+        // re-meshed the last dab's neighbourhood and left the rest of the
+        // stroke as it was, which drew a closed outline of stale geometry
+        // around the edit. `visual_incremental` shows it.
+        self.dirty.extend(dirty);
+        self.dirty.sort();
+        self.dirty.dedup();
         Ok(())
     }
 
@@ -286,6 +329,52 @@ impl ClayDocument {
     }
 
     /// Turns the domain's brush settings into the engine's stroke preset.
+    /// Adds a prepared volume to the active layer. For tests that need to
+    /// drive the bake-and-replace path with parameters the tools do not
+    /// expose, so a sweep can find the ones that work.
+    pub fn add_volume_for_test(&mut self, volume: Item) -> Result<(), ModelError> {
+        let layer = self.active_layer().id;
+        let node = self
+            .document
+            .add_item(layer, &volume)
+            .map_err(ModelError::engine)?;
+        self.refill(layer, &[node])
+    }
+
+    /// The spacing a bake-and-replace tool samples the document at.
+    ///
+    /// Suavizar, Relaxar, Planar and Polir do not stamp: they sample a region
+    /// into a volume, modify it, and add it back with `Op::Replace`. Whatever
+    /// they do in between, the replacement can be no finer than this — so
+    /// sampling coarser than the brick cache draws at replaces a region of the
+    /// surface with a blockier version of itself, which is what made those
+    /// four crumble.
+    pub fn bake_cell_size(brush_size: f32) -> f32 {
+        let _ = brush_size;
+        Self::VOXEL_SIZE
+    }
+
+    /// The brick cache's sampling, which is what the viewport draws.
+    pub const VOXEL_SIZE: f32 = 0.02;
+
+    /// The most positional jitter we pass through to the engine.
+    ///
+    /// Zero, which means the design's Ruído control does not reach the engine.
+    ///
+    /// This was set after measuring a document/brick-cache disagreement on a
+    /// jittered stroke at 0.02 voxels with a 3-voxel band. It does **not**
+    /// reproduce at 0.01 voxels with a 6-voxel band, where the two agree to
+    /// within 0.002 — so the disagreement is about the narrow band being too
+    /// thin to carry the displacement, not about jitter, and the ClayCore bug
+    /// this once claimed does not exist. `claycore_repros.rs` holds the
+    /// measurement.
+    ///
+    /// It stays at zero for now because the cache we run is the thin-band one
+    /// and a stroke that vanishes is the worst failure this tool can have. The
+    /// honest fix is a band wide enough for the brush, not a clamp; that is
+    /// open work, and raising this is what should happen once it is done.
+    pub const MAX_JITTER: f32 = 0.0;
+
     fn preset(&self, brush: BrushSettings, tool: ToolKind) -> StrokePreset {
         let brush = brush.sanitized();
         StrokePreset {
@@ -295,7 +384,18 @@ impl ClayDocument {
             strength: brush.intensity,
             // The design's Ruído, Suavização and Acumular, each landing on the
             // preset field the engine already has for it.
-            jitter_position: brush.shaping.noise,
+            // Clamped to `MAX_JITTER`, because the engine's two evaluators
+            // disagree about a jittered stroke: it shows up in
+            // `Document::raycast` but not in the brick cache — not even in a
+            // cache built from scratch afterwards, so it is the brick
+            // evaluation itself and not the dirty marking. The viewport meshes
+            // from the cache, so such a stroke is invisible: the document
+            // grows, undo fills up, and the screen never changes. That is what
+            // shipped, with Ruído defaulting to 0.15.
+            //
+            // The clamp lives here rather than in the domain because it is a
+            // fact about this engine, not about brushes.
+            jitter_position: brush.shaping.noise.min(Self::MAX_JITTER),
             steady: brush.shaping.smoothing,
             accumulation: if tool == ToolKind::Camada || !brush.shaping.accumulate {
                 // Camada is the clamped-accumulation tool by definition, and
@@ -327,17 +427,39 @@ impl ClayDocument {
             })
             .collect();
 
-        let stamp = Item::sphere(brush.sanitized().size).map_err(ModelError::engine)?;
-        let mut stamp = stamp;
+        // Every tool that reaches here is a relief tool. There is no catch-all
+        // arm any more: the one that was here mapped anything unlisted to
+        // `Op::Add`, which adds a *sphere* — so the planing tools deposited
+        // blobs and nothing said so. A tool with no mapping now refuses.
+        let op = match tool {
+            ToolKind::Padrao | ToolKind::Camada | ToolKind::Inflar => Op::Relief,
+            other => {
+                return Err(ModelError::engine(format!(
+                    "{} has no mapping onto an SDF verb; it should not have \
+                     been offered on this layer",
+                    other.label()
+                )))
+            }
+        };
+
+        let mut stamp = Item::sphere(brush.sanitized().size).map_err(ModelError::engine)?;
+        stamp.set_op(op).map_err(ModelError::engine)?;
+        // For CLAY_OP_RELIEF the item is the *region* and `blend_k` is the
+        // amplitude the surface moves by along its own normal — not a
+        // smoothing distance. It was set to 40% of the radius, which measured
+        // as a displacement of about a sixth of the brush: a stroke that left
+        // the sphere looking untouched. The engine saturates the amplitude at
+        // roughly the radius, so that is what it is asked for, and `strength`
+        // scales it from there.
         stamp
-            .set_op(match tool {
-                ToolKind::Padrao | ToolKind::Camada | ToolKind::Inflar => Op::Relief,
-                ToolKind::Mascara => Op::Relief,
-                _ => Op::Add,
-            })
+            .set_blend(Blend::Quadratic, brush.sanitized().size)
             .map_err(ModelError::engine)?;
+        // The item's rounding is the falloff width, and it was never set at
+        // all. Measured, going from zero to the brush radius tripled the
+        // displacement — leaving it at zero was throwing away most of the
+        // brush as well as its soft edge.
         stamp
-            .set_blend(Blend::Quadratic, brush.sanitized().size * 0.4)
+            .set_rounding(brush.sanitized().size)
             .map_err(ModelError::engine)?;
 
         // The mirror is written only when it changes, so an unchanged setting
@@ -412,7 +534,20 @@ impl ClayDocument {
         if applied == 0 {
             return Ok(EditOutcome::NOTHING);
         }
-        self.refill(layer, &[])?;
+        // The box the move can have touched: the brush around where it started
+        // and around where it ended, and nothing else. `move_surface` reports a
+        // count rather than nodes, which is why this is computed here rather
+        // than asked for.
+        let reach = brush.size + travelled;
+        let mut min = [0.0f32; 3];
+        let mut max = [0.0f32; 3];
+        for axis in 0..3 {
+            let a = first.position[axis];
+            let b = a + displacement[axis];
+            min[axis] = a.min(b) - reach;
+            max[axis] = a.max(b) + reach;
+        }
+        self.refill_region(min, max)?;
         Ok(EditOutcome {
             changed: true,
             dirty_bricks: self.dirty.len(),
@@ -491,7 +626,7 @@ impl ClayDocument {
             .document
             .volume_from_region(
                 claycore::VolumeParams {
-                    cell_size: Some(brush.size * 0.25),
+                    cell_size: Some(Self::bake_cell_size(brush.size)),
                     ..Default::default()
                 },
                 min,
@@ -499,6 +634,20 @@ impl ClayDocument {
             )
             .map_err(ModelError::engine)?;
 
+        // One pass, at the brush's own radius about the gesture's centre.
+        //
+        // Three shapes were measured, on a deliberately bumpy surface, scored
+        // by how much neighbouring pixels disagree — a smoothing tool should
+        // leave that lower than it found it (4.9 before, in these units):
+        //
+        //   one pass at the brush radius   7   <- this
+        //   one pass over the whole gesture  13
+        //   one pass per sample              11
+        //
+        // Widening the region or repeating the pass both make it worse, which
+        // is not what one would guess. It is measured rather than reasoned,
+        // and the reason is not yet understood — see the note in
+        // `visual_bake_tools`.
         volume
             .relax(&claycore::RelaxParams {
                 strength: brush.intensity,
@@ -509,6 +658,153 @@ impl ClayDocument {
                 falloff: brush.size * 0.5,
                 mask: self.mask.as_deref(),
             })
+            .map_err(ModelError::engine)?;
+
+        volume.set_op(Op::Replace).map_err(ModelError::engine)?;
+        let node = self
+            .document
+            .add_item(layer, &volume)
+            .map_err(ModelError::engine)?;
+        self.refill(layer, &[node])?;
+        Ok(EditOutcome {
+            changed: true,
+            dirty_bricks: self.dirty.len(),
+        })
+    }
+
+    /// Paints the mask along the stroke — Máscara.
+    ///
+    /// Freezes a region against every verb, which is what a mask is for. It
+    /// was mapped onto `Op::Relief` and deformed the surface instead: the tool
+    /// that is supposed to protect the clay was denting it, and
+    /// [`ToolKind::engine_verb`] said `clay_mask_apply_stroke` all along.
+    fn mask_stroke(
+        &mut self,
+        brush: BrushSettings,
+        samples: &[GestureSample],
+    ) -> Result<EditOutcome, ModelError> {
+        let brush = brush.sanitized();
+        let preset = self.preset(brush, ToolKind::Mascara);
+        let stroke: Vec<claycore::StrokeSample> = samples
+            .iter()
+            .map(|s| claycore::StrokeSample {
+                position: s.position,
+                pressure: s.pressure,
+                time: s.time,
+            })
+            .collect();
+
+        if self.mask.is_none() {
+            // Cells about a quarter of the brush, so the smallest brush still
+            // paints something with an edge to it.
+            let cell = (brush.size * 0.25).max(0.005);
+            self.mask = Some(Mask::new(cell).map_err(ModelError::engine)?);
+        }
+
+        let painted = {
+            let mask = self.mask.as_mut().expect("just created");
+            mask.apply_stroke(
+                &stroke,
+                &preset,
+                brush.intensity,
+                BrushShape::Sphere,
+                Falloff::Smooth,
+            )
+            .map_err(ModelError::engine)?
+        };
+
+        // Nothing in the surface moved, and nothing needs re-meshing: a mask
+        // is state the *next* stroke reads.
+        Ok(EditOutcome {
+            changed: painted > 0,
+            dirty_bricks: 0,
+        })
+    }
+
+    /// Pulls the region the stroke covered onto a plane — Planar and Polir.
+    ///
+    /// Both were reaching for `clay_item_volume_flatten`, as
+    /// [`ToolKind::engine_verb`] says. It was not bound, and they fell through
+    /// a `_ => Op::Add` arm that added a sphere instead: a planing tool that
+    /// deposited a blob. The catch-all is gone with them.
+    ///
+    /// Cut-only, because a planing tool must remove what stands proud without
+    /// filling the hollows it is meant to reveal — two-sided flatten is a
+    /// different verb with a different name.
+    fn flatten_stroke(
+        &mut self,
+        brush: BrushSettings,
+        samples: &[GestureSample],
+    ) -> Result<EditOutcome, ModelError> {
+        let brush = brush.sanitized();
+        let layer = self.active_layer().id;
+
+        let mut min = [f32::INFINITY; 3];
+        let mut max = [f32::NEG_INFINITY; 3];
+        for sample in samples {
+            for axis in 0..3 {
+                min[axis] = min[axis].min(sample.position[axis] - brush.size);
+                max[axis] = max[axis].max(sample.position[axis] + brush.size);
+            }
+        }
+        let centre = [
+            (min[0] + max[0]) * 0.5,
+            (min[1] + max[1]) * 0.5,
+            (min[2] + max[2]) * 0.5,
+        ];
+
+        // The plane the stroke defines: through the middle of what it covered,
+        // facing the way the surface does there. Without a surface normal to
+        // read, the outward direction from the centre of the region is the
+        // best available answer and is right for a convex form.
+        let normal = {
+            let length =
+                (centre[0] * centre[0] + centre[1] * centre[1] + centre[2] * centre[2]).sqrt();
+            if length < 1e-5 {
+                [0.0, 1.0, 0.0]
+            } else {
+                [centre[0] / length, centre[1] / length, centre[2] / length]
+            }
+        };
+
+        // Sampled and flattened in one step, straight from the document.
+        //
+        // Baking with `volume_from_region` and then flattening the result was
+        // the first version, because `clay_item_volume_flatten_from` did not
+        // exist when this was written — it arrived in 0.27.0. The engine's own
+        // note on the difference: a volume reports a distance only inside the
+        // band it carries and a lower bound outside it, so a facet moving
+        // further than the band is placed against the bound and "a wrong shape
+        // [is] returned with CLAY_OK". A document has no band.
+        //
+        // One pass covering everything the gesture touched, for the same
+        // reason relax does. The plane stays put: a planing tool cuts to one
+        // plane, and that is what makes a facet.
+        let reach = (0..3)
+            .map(|axis| (max[axis] - min[axis]) * 0.5)
+            .fold(0.0f32, f32::max);
+        let mut volume = self
+            .document
+            .flatten_region(
+                &claycore::FlattenParams {
+                    plane_point: centre,
+                    plane_normal: normal,
+                    strength: brush.intensity,
+                    centre,
+                    // Required positive: with no region the engine replaces
+                    // the shape with a half-space, and a ball comes back a box.
+                    region_radius: reach + brush.size,
+                    falloff: brush.size * 0.5,
+                    mode: claycore::FlattenMode::CutOnly,
+                    mask: self.mask.as_deref(),
+                },
+                claycore::VolumeParams {
+                    cell_size: Some(Self::bake_cell_size(brush.size)),
+                    ..Default::default()
+                },
+                min,
+                max,
+            )
             .map_err(ModelError::engine)?;
 
         volume.set_op(Op::Replace).map_err(ModelError::engine)?;
@@ -640,6 +936,10 @@ impl SculptModel for ClayDocument {
                 ToolKind::Puxar => self.snakehook_stroke(brush, samples),
                 // Bake-and-relax over the region the stroke covered.
                 ToolKind::Suavizar | ToolKind::Relaxar => self.relax_stroke(brush, samples),
+                // Bake-and-flatten, cut-only.
+                ToolKind::Planar | ToolKind::Polir => self.flatten_stroke(brush, samples),
+                // Paints the freeze, and moves nothing.
+                ToolKind::Mascara => self.mask_stroke(brush, samples),
                 _ => self.stroke_sdf(tool, brush, samples, symmetry),
             },
             Representation::Voxel => self.stroke_voxel(tool, brush, samples),

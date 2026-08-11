@@ -72,6 +72,20 @@ pub struct BackendPolicy {
 }
 
 impl BackendPolicy {
+    /// Which backend to evaluate brick refills on, or `None` for the CPU.
+    ///
+    /// Deliberately not `active()`. Refill sits on the input-to-visible path,
+    /// and the accelerated backends are — today, measured — slower at it than
+    /// the CPU reference path: 5.61 ms against 0.77 ms for one dab on Metal,
+    /// and ten times worse on a whole-model fill. See ClayCore #64.
+    ///
+    /// `active()` still reports what the machine offers, because that is what
+    /// the status bar is telling the user about and it stays true. This is
+    /// only about which one does this particular job.
+    pub fn refill_backend(&self) -> Option<&Backend> {
+        None
+    }
+
     /// Discovers what this machine offers and applies `stored_override`.
     ///
     /// The CPU backend is compiled in unconditionally by the engine, so this

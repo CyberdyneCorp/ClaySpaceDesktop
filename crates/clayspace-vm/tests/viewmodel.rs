@@ -79,6 +79,14 @@ impl SculptModel for FakeModel {
             .borrow_mut()
             .strokes
             .push((tool, samples.to_vec(), symmetry, brush));
+        if self.outcome.changed {
+            // An edit that changed something is an entry, which is what the
+            // ViewModel counts to know how far an undo has to reach.
+            self.history.depth += 1;
+            self.history.can_undo = true;
+            self.history.redo_depth = 0;
+            self.history.can_redo = false;
+        }
         Ok(self.outcome)
     }
 
@@ -86,14 +94,32 @@ impl SculptModel for FakeModel {
         Some([0.0, 0.0, 1.0])
     }
 
+    // A real history, not a fixed answer. The ViewModel now spends as many
+    // model-level undos as the action cost, so a double that always says the
+    // same thing cannot tell a correct implementation from one that stops
+    // after the first step.
     fn undo(&mut self) -> Result<bool, ModelError> {
         self.recorded.borrow_mut().undos += 1;
-        Ok(self.history.can_undo)
+        if !self.history.can_undo {
+            return Ok(false);
+        }
+        self.history.depth -= 1;
+        self.history.redo_depth += 1;
+        self.history.can_undo = self.history.depth > 0;
+        self.history.can_redo = true;
+        Ok(true)
     }
 
     fn redo(&mut self) -> Result<bool, ModelError> {
         self.recorded.borrow_mut().redos += 1;
-        Ok(self.history.can_redo)
+        if !self.history.can_redo {
+            return Ok(false);
+        }
+        self.history.redo_depth -= 1;
+        self.history.depth += 1;
+        self.history.can_redo = self.history.redo_depth > 0;
+        self.history.can_undo = true;
+        Ok(true)
     }
 
     fn history(&self) -> HistoryState {
@@ -142,17 +168,43 @@ fn draw(vm: &mut SculptViewModel, points: &[[f32; 3]]) -> Result<(), ModelError>
 // -- strokes -----------------------------------------------------------------
 
 #[test]
-fn a_whole_stroke_reaches_the_model_as_one_edit() {
+fn a_stroke_reaches_the_model_as_it_is_drawn() {
+    // The sculptor watches the clay move under the pointer, so the gesture is
+    // sent in pieces rather than held until the release. What must not change
+    // is that every sample gets there, exactly once and in order.
     let (mut vm, recorded) = fixture();
-    draw(&mut vm, &[[0.0; 3], [0.1, 0.0, 0.0], [0.2, 0.0, 0.0]]).expect("stroke");
+    let path = [[0.0; 3], [0.1, 0.0, 0.0], [0.2, 0.0, 0.0]];
+    draw(&mut vm, &path).expect("stroke");
 
     let recorded = recorded.borrow();
-    assert_eq!(
-        recorded.strokes.len(),
-        1,
-        "a stroke must arrive as one edit, not one per sample"
+    assert!(
+        recorded.strokes.len() > 1,
+        "the whole gesture arrived as one edit, so nothing would have been \
+         visible until the pointer came up"
     );
-    assert_eq!(recorded.strokes[0].1.len(), 3, "every sample must be carried");
+
+    let carried: Vec<[f32; 3]> = recorded
+        .strokes
+        .iter()
+        .flat_map(|stroke| stroke.1.iter().map(|sample| sample.position))
+        .collect();
+    assert_eq!(
+        carried, path,
+        "the segments must carry every sample once, in order"
+    );
+}
+
+#[test]
+fn a_stroke_undoes_as_one_action_however_many_segments_it_took() {
+    let (mut vm, recorded) = fixture();
+    draw(&mut vm, &[[0.0; 3], [0.1, 0.0, 0.0], [0.2, 0.0, 0.0]]).expect("stroke");
+    assert!(recorded.borrow().strokes.len() > 1, "it was not segmented");
+
+    assert_eq!(
+        vm.history().get().depth,
+        1,
+        "a stroke the sculptor drew once must be one thing to undo"
+    );
 }
 
 #[test]
@@ -170,10 +222,17 @@ fn samples_carry_increasing_time_and_clamped_pressure() {
     .expect("continue");
     vm.dispatch(Command::EndStroke).expect("end");
 
+    // Flattened across segments: a live stroke arrives in pieces, and the
+    // ordering has to hold across the whole gesture rather than within one.
     let recorded = recorded.borrow();
-    let samples = &recorded.strokes[0].1;
+    let samples: Vec<_> = recorded
+        .strokes
+        .iter()
+        .flat_map(|stroke| stroke.1.iter())
+        .collect();
+    assert!(samples.len() >= 2, "both samples must reach the model");
     assert!(
-        samples[0].pressure <= 1.0 && samples[1].pressure >= 0.0,
+        samples.iter().all(|s| (0.0..=1.0).contains(&s.pressure)),
         "pressure must be clamped to what the engine expects"
     );
     assert!(
@@ -183,7 +242,7 @@ fn samples_carry_increasing_time_and_clamped_pressure() {
 }
 
 #[test]
-fn a_cancelled_stroke_never_reaches_the_model() {
+fn a_cancelled_stroke_is_taken_back_off_the_model() {
     let (mut vm, recorded) = fixture();
     vm.dispatch(Command::BeginStroke {
         position: [0.0; 3],
@@ -198,11 +257,24 @@ fn a_cancelled_stroke_never_reaches_the_model() {
     vm.dispatch(Command::CancelStroke).expect("cancel");
     vm.dispatch(Command::EndStroke).expect("end after cancel");
 
+    // A live stroke has already deposited by the time it is cancelled, so
+    // "never applied" is no longer available. What is owed instead is that it
+    // is taken back: as many undos as the gesture made entries.
+    let recorded = recorded.borrow();
     assert!(
-        recorded.borrow().strokes.is_empty(),
-        "a cancelled gesture was still applied"
+        !recorded.strokes.is_empty(),
+        "the gesture never reached the model, so it was not live"
+    );
+    assert_eq!(
+        recorded.undos,
+        recorded.strokes.len(),
+        "a cancelled gesture must be undone as far as it got"
     );
     assert!(!vm.is_stroking());
+    assert!(
+        !vm.history().get().can_undo,
+        "a cancelled gesture must leave nothing to undo"
+    );
 }
 
 #[test]
@@ -215,7 +287,8 @@ fn ending_a_stroke_that_never_began_does_nothing() {
 #[test]
 fn symmetry_reaches_the_model_as_set() {
     let (mut vm, recorded) = fixture();
-    // X is on by default; turn on Z as well.
+    // Nothing is mirrored to start with; turn on X and Z.
+    vm.dispatch(Command::ToggleSymmetry(Axis::X)).expect("symmetry");
     vm.dispatch(Command::ToggleSymmetry(Axis::Z)).expect("symmetry");
     draw(&mut vm, &[[0.0; 3], [0.1, 0.0, 0.0]]).expect("stroke");
 
@@ -276,7 +349,14 @@ fn a_voxel_layer_accepts_voxel_tools() {
     vm.dispatch(Command::SelectTool(ToolKind::Raspar)).expect("select");
     assert!(vm.tool_status().get().is_none(), "scrape belongs on a voxel layer");
     draw(&mut vm, &[[0.0; 3], [0.1, 0.0, 0.0]]).expect("stroke");
-    assert_eq!(recorded.borrow().strokes.len(), 1);
+    assert!(
+        !recorded.borrow().strokes.is_empty(),
+        "the stroke never reached the model"
+    );
+    assert!(
+        recorded.borrow().strokes.iter().all(|s| s.0 == ToolKind::Raspar),
+        "every segment must carry the tool that was selected"
+    );
 }
 
 // -- brush settings ----------------------------------------------------------
@@ -337,10 +417,15 @@ fn an_edit_that_changed_nothing_adds_no_history() {
 fn a_live_edit_schedules_a_remesh_bounded_by_what_it_dirtied() {
     let (mut vm, _) = fixture();
     draw(&mut vm, &[[0.0; 3], [0.1, 0.0, 0.0]]).expect("stroke");
+    // Per segment, because a live stroke reaches the model more than once and
+    // each piece dirties its own bricks. The bound that matters is that it
+    // follows what the edits reported rather than standing for the whole
+    // model.
+    let segments = 2;
     assert_eq!(
         *vm.pending_remesh().get(),
-        8,
-        "the re-mesh must be bounded by the bricks the edit dirtied"
+        8 * segments,
+        "the re-mesh must be bounded by the bricks the edits dirtied"
     );
 
     vm.acknowledge_remesh();
@@ -349,11 +434,30 @@ fn a_live_edit_schedules_a_remesh_bounded_by_what_it_dirtied() {
 
 #[test]
 fn undo_and_redo_reach_the_model() {
+    // Undo spends whatever the last action cost. With nothing drawn there is
+    // no action to spend, so the model is not touched — which is the point:
+    // undo is bounded by what this session did, not by what the document
+    // happens to have in its history from being built.
     let (mut vm, recorded) = fixture();
     vm.dispatch(Command::Undo).expect("undo");
+    assert_eq!(recorded.borrow().undos, 0, "there was nothing to undo");
+
+    draw(&mut vm, &[[0.0; 3], [0.1, 0.0, 0.0]]).expect("stroke");
+    let segments = recorded.borrow().strokes.len();
+
+    vm.dispatch(Command::Undo).expect("undo");
+    assert_eq!(
+        recorded.borrow().undos,
+        segments,
+        "undoing a stroke must spend every entry the stroke made"
+    );
+
     vm.dispatch(Command::Redo).expect("redo");
-    let recorded = recorded.borrow();
-    assert_eq!((recorded.undos, recorded.redos), (1, 1));
+    assert_eq!(
+        recorded.borrow().redos,
+        segments,
+        "redo must restore the whole action, not one segment of it"
+    );
 }
 
 #[test]

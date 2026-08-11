@@ -31,7 +31,17 @@ struct KeyGeometry {
 pub struct SyncCost {
     /// Keys re-meshed.
     pub keys: usize,
+    /// Everything between asking the cache for geometry and having it stored
+    /// per key: the engine's mesh call, the copy into our vertex layout, and
+    /// the per-key split. Broken out below.
     pub mesh_time: std::time::Duration,
+    /// The engine's own `clay_brick_cache_mesh`.
+    pub engine_mesh_time: std::time::Duration,
+    /// Copying the engine's mesh into the renderer's vertex layout.
+    pub read_time: std::time::Duration,
+    /// Splitting the triangles into per-key geometry so a dab can replace one.
+    pub split_time: std::time::Duration,
+    /// Concatenating the keys and handing the buffer to the GPU.
     pub upload_time: std::time::Duration,
     pub triangles: usize,
     pub vertices: usize,
@@ -45,6 +55,10 @@ pub struct SurfaceGeometry {
     /// Set when the keys have changed but the GPU buffer has not been rebuilt.
     dirty: bool,
     last_cost: Option<SyncCost>,
+    /// Stage timings from the last `remesh`, for `SyncCost`.
+    last_engine_mesh: std::time::Duration,
+    last_read: std::time::Duration,
+    last_split: std::time::Duration,
 }
 
 impl SurfaceGeometry {
@@ -54,6 +68,9 @@ impl SurfaceGeometry {
             mesh: GpuMesh::new(gpu),
             dirty: false,
             last_cost: None,
+            last_engine_mesh: std::time::Duration::ZERO,
+            last_read: std::time::Duration::ZERO,
+            last_split: std::time::Duration::ZERO,
         }
     }
 
@@ -86,15 +103,42 @@ impl SurfaceGeometry {
         if dirty.is_empty() {
             return Ok(None);
         }
-        // Re-mesh the dirty keys together with their face neighbours. A key
-        // meshed alone regenerates the triangles along its boundary, while the
-        // neighbour still holds its previous version of the same seam — which
-        // shows as a thin crack tracing the edit. Including the neighbours
-        // makes both sides of every seam come from the same call.
-        let dirty = dilate(&dirty);
+        // The edited region and one ring around it.
+        //
+        // Meshing a subset leaves faint seams along the edge of the edit, and
+        // `settle` clears them when the stroke ends. The cause is ours, not
+        // the engine's: `clay_brick_cache_mesh` given a key list was measured
+        // against the same call with none, and inside those bricks it returns
+        // identical vertex positions *and* identical triangles. What a subset
+        // cannot emit is a triangle reaching outside itself — and this drops
+        // exactly those, because it clears a key's stored geometry and rebuilds
+        // it from a mesh that could not contain them.
+        //
+        // The fix is to keep, rather than clear, the stored triangles whose
+        // vertices lie outside the meshed set; that needs per-vertex ownership
+        // recorded alongside the geometry. Until then the ring is a cheap
+        // reduction in how often it shows and `settle` is the guarantee.
+        //
+        // An earlier version of this comment blamed the engine. It was wrong,
+        // and it nearly became a filed bug.
+        // The edited region and one ring around it.
+        //
+        // Meshing a subset leaves the surface missing the triangles that
+        // straddle the subset's boundary — the engine emits only triangles
+        // wholly inside the keys it was given, and dilating the request just
+        // moves the boundary. Measured: 30 bricks disagree with a full rebuild
+        // after one dab, and that number is the same for one, two, three and
+        // four rings of dilation, and zero only when every surface brick is
+        // meshed. Filed as ClayCore #66.
+        //
+        // So the seams are unavoidable while the pointer is down, and
+        // `settle` pays them off when it comes up. The ring is here because a
+        // dab's own bricks alone leave a wider gap, not because it closes one.
+        let replace: std::collections::HashSet<BrickKey> = dirty.iter().copied().collect();
+        let meshed = dilate(&dirty, 1);
 
         let started = std::time::Instant::now();
-        self.remesh(document, &dirty)?;
+        self.remesh(document, &meshed, Some(&replace))?;
         let mesh_time = started.elapsed();
 
         let started = std::time::Instant::now();
@@ -110,7 +154,10 @@ impl SurfaceGeometry {
         );
 
         let cost = SyncCost {
-            keys: dirty.len(),
+            keys: meshed.len(),
+            engine_mesh_time: self.last_engine_mesh,
+            read_time: self.last_read,
+            split_time: self.last_split,
             mesh_time,
             upload_time,
             triangles: self.triangle_count(),
@@ -121,7 +168,18 @@ impl SurfaceGeometry {
     }
 
     /// Meshes a set of keys and replaces their stored geometry.
-    fn remesh(&mut self, document: &ClayDocument, keys: &[BrickKey]) -> Result<(), ClayError> {
+    /// Meshes `keys` and replaces the stored geometry of `replace`.
+    ///
+    /// `replace` of `None` means every meshed key, which is what a full
+    /// rebuild wants. A subset re-mesh passes a smaller set than it meshed —
+    /// see [`SurfaceGeometry::sync`] for why.
+    fn remesh(
+        &mut self,
+        document: &ClayDocument,
+        keys: &[BrickKey],
+        replace: Option<&std::collections::HashSet<BrickKey>>,
+    ) -> Result<(), ClayError> {
+        let engine_started = std::time::Instant::now();
         let (mesh, ranges) = document.cache().mesh(
             Some(document.document()),
             BrickMeshParams {
@@ -132,7 +190,12 @@ impl SurfaceGeometry {
             keys,
         )?;
 
+        self.last_engine_mesh = engine_started.elapsed();
+
+        let read_started = std::time::Instant::now();
         let (vertices, indices) = read_mesh(&mesh)?;
+        self.last_read = read_started.elapsed();
+        let split_started = std::time::Instant::now();
 
         // Each triangle is owned by exactly one key — the one whose vertex
         // range contains its first index — so the union of keys carries every
@@ -145,12 +208,33 @@ impl SurfaceGeometry {
         // brick boundary: the engine welds vertices across seams, so a great
         // many triangles reach outside. The capture showed a grid of holes
         // across the whole surface, which no count or timing would have named.
+        // Binary search, not a scan. Finding the owner is done once per
+        // triangle and the scan was linear in the number of keys, so the cost
+        // of a re-mesh grew with the *square* of the region: 24 segments of a
+        // stroke took 600 ms each with a few hundred keys in play.
+        let mut by_first: Vec<(u32, u32, usize)> = ranges
+            .iter()
+            .enumerate()
+            .map(|(slot, range)| (range.vertex_first, range.vertex_count, slot))
+            .collect();
+        by_first.sort_unstable();
         let owner_of = |index: u32| -> Option<usize> {
-            ranges.iter().position(|range| {
-                index >= range.vertex_first && index < range.vertex_first + range.vertex_count
-            })
+            // The last range starting at or before `index`, then a bounds
+            // check: ranges do not overlap, so at most one can contain it.
+            let at = by_first.partition_point(|(first, _, _)| *first <= index);
+            let (first, count, slot) = *by_first.get(at.checked_sub(1)?)?;
+            (index < first + count).then_some(slot)
         };
 
+        // Only triangles belonging to a key that is actually being replaced
+        // are collected. The scan still has to visit every triangle — a
+        // triangle listed under one key's index range can be owned by another
+        // — but a key that is being kept needs nothing built for it, and
+        // building it anyway was most of the cost of meshing the whole
+        // surface.
+        let wanted = |slot: usize| {
+            replace.is_none_or(|replace| replace.contains(&ranges[slot].key))
+        };
         let mut owned: Vec<Vec<[u32; 3]>> = vec![Vec::new(); ranges.len()];
         for range in &ranges {
             let first = range.index_first as usize;
@@ -160,20 +244,41 @@ impl SurfaceGeometry {
                 // Ownership follows the first vertex, so a triangle listed
                 // under two keys' index ranges is still stored once.
                 if let Some(owner) = owner_of(triangle[0]) {
-                    owned[owner].push(triangle);
+                    if wanted(owner) {
+                        owned[owner].push(triangle);
+                    }
                 }
             }
         }
 
-        for (slot, range) in ranges.iter().enumerate() {
-            let entry = self.keys.entry(range.key).or_default();
+        // `None` means replace everything this call meshed, which is what a
+        // full rebuild wants.
+        let to_replace: Vec<BrickKey> = match replace {
+            Some(replace) => replace.iter().copied().collect(),
+            None => ranges.iter().map(|range| range.key).collect(),
+        };
+        // A key's stored geometry is replaced outright rather than merged.
+        //
+        // Keeping the triangles a partial mesh could not have regenerated was
+        // tried — recording which brick owns each vertex, and holding on to
+        // any triangle referencing a vertex from a brick this call did not
+        // mesh. It never fires, and cannot: those triangles are exactly the
+        // ones the engine omits from a subset (ClayCore #66), so they are not
+        // in the stored geometry to be kept either. The machinery came out
+        // again rather than sitting there looking like it did something.
+        for key in &to_replace {
+            let slot = ranges.iter().position(|range| range.key == *key);
+            let entry = self.keys.entry(*key).or_default();
             entry.vertices.clear();
             entry.indices.clear();
 
-            let triangles = &owned[slot];
+            let Some(triangles) = slot.map(|slot| &owned[slot]) else {
+                // Asked for and not returned: the surface has left this brick.
+                // Cleared above, and kept as an empty slot so a later edit
+                // finds it.
+                continue;
+            };
             if triangles.is_empty() {
-                // A key that no longer crosses the surface keeps an empty slot
-                // rather than vanishing, so a later edit finds it.
                 continue;
             }
 
@@ -186,18 +291,21 @@ impl SurfaceGeometry {
                     entry.indices.push(index);
                 }
             }
-            entry.vertices.resize(local.len(), Vertex {
-                position: [0.0; 3],
-                normal: [0.0, 1.0, 0.0],
-                color: [1.0; 3],
-            });
+            entry.vertices.resize(
+                local.len(),
+                Vertex {
+                    position: [0.0; 3],
+                    normal: [0.0, 1.0, 0.0],
+                    color: [1.0; 3],
+                },
+            );
             for (global, index) in local {
                 if let Some(vertex) = vertices.get(global as usize) {
                     entry.vertices[index as usize] = *vertex;
                 }
             }
         }
-
+        self.last_split = split_started.elapsed();
         self.dirty = true;
         Ok(())
     }
@@ -225,6 +333,17 @@ impl SurfaceGeometry {
         self.dirty = false;
     }
 
+    /// Re-meshes the whole surface, removing what the fast path approximated.
+    ///
+    /// Called when a stroke ends. During the stroke [`SurfaceGeometry::sync`]
+    /// meshes only the edited region, which the engine does not mesh quite the
+    /// same way as it meshes everything; this is where that difference is
+    /// paid off. It costs a full re-mesh, which is affordable once per gesture
+    /// and not once per segment.
+    pub fn settle(&mut self, gpu: &Gpu, document: &mut ClayDocument) -> Result<(), ClayError> {
+        self.rebuild(gpu, document)
+    }
+
     /// Rebuilds every key from scratch.
     ///
     /// The compaction the specification calls for: per-key slots accumulate
@@ -233,17 +352,63 @@ impl SurfaceGeometry {
     pub fn rebuild(
         &mut self,
         gpu: &Gpu,
-        document: &ClayDocument,
+        document: &mut ClayDocument,
     ) -> Result<(), ClayError> {
         let keys = document.cache().surface_bricks()?;
         self.keys.clear();
         if keys.is_empty() {
             self.mesh.upload(gpu, &[], &[]);
+            document.take_dirty_keys();
             return Ok(());
         }
-        self.remesh(document, &keys)?;
+        self.remesh(document, &keys, None)?;
         self.upload(gpu);
+        // Drained, because everything it could name has just been meshed.
+        //
+        // Left undrained, the pending set from building the starting form —
+        // the whole layer — survived into the first `sync` of the session,
+        // which then dilated it and re-meshed 5832 keys for one dab. That was
+        // the 240 ms every tool reported as its worst segment, and it was the
+        // same 240 ms for the mask tool, which re-meshes nothing at all.
+        document.take_dirty_keys();
         Ok(())
+    }
+
+    /// The triangles stored against each key, quantised to world positions.
+    ///
+    /// Diagnostic. The per-key split is where an incremental re-mesh can
+    /// silently disagree with a full one, and comparing two of these says
+    /// exactly which key lost or gained what — which a rendered difference
+    /// cannot.
+    pub fn stored_triangles(
+        &self,
+    ) -> std::collections::BTreeMap<BrickKey, Vec<[[i32; 3]; 3]>> {
+        self.keys
+            .iter()
+            // A key with no triangles draws nothing, and whether it holds an
+            // empty slot or no slot at all is bookkeeping rather than
+            // geometry. Comparing those would report differences a viewer
+            // could never see.
+            .filter(|(_, geometry)| !geometry.indices.is_empty())
+            .map(|(key, geometry)| {
+                let mut triangles: Vec<[[i32; 3]; 3]> = geometry
+                    .indices
+                    .chunks_exact(3)
+                    .filter_map(|t| {
+                        let mut corners = [
+                            geometry.vertices.get(t[0] as usize)?.position,
+                            geometry.vertices.get(t[1] as usize)?.position,
+                            geometry.vertices.get(t[2] as usize)?.position,
+                        ]
+                        .map(|p| p.map(|c| (c * 4096.0).round() as i32));
+                        corners.sort_unstable();
+                        Some(corners)
+                    })
+                    .collect();
+                triangles.sort_unstable();
+                (*key, triangles)
+            })
+            .collect()
     }
 
     /// How much of the stored geometry is empty slots.
@@ -258,19 +423,24 @@ impl SurfaceGeometry {
     }
 }
 
-/// Grows a key set by its face neighbours.
+/// Grows a key set by every neighbour that shares any boundary with it.
 ///
-/// Face rather than the full 26-neighbourhood: a seam is shared across a face,
-/// and the corners cost six times as many keys for a boundary no triangle
-/// spans.
-fn dilate(keys: &[BrickKey]) -> Vec<BrickKey> {
+/// All twenty-six, not the six faces. Face-only was tried, reasoning that a
+/// seam is shared across a face and that corners cost six times the keys for
+/// a boundary no triangle spans. The second half of that is wrong: the engine
+/// welds vertices across seams, so a triangle at a brick corner can be owned
+/// by a diagonal neighbour, and a diagonal neighbour left out of the re-mesh
+/// keeps its stale copy of a vertex that has since moved. On screen that is a
+/// dark sliver at the corner of every brick the stroke crossed — visible in
+/// `visual_incremental`, and invisible to any count or timing.
+fn dilate(keys: &[BrickKey], rings: i32) -> Vec<BrickKey> {
     let mut grown: std::collections::HashSet<BrickKey> = keys.iter().copied().collect();
     for key in keys {
-        for axis in 0..3 {
-            for step in [-1, 1] {
-                let mut neighbour = *key;
-                neighbour[axis] += step;
-                grown.insert(neighbour);
+        for dx in -rings..=rings {
+            for dy in -rings..=rings {
+                for dz in -rings..=rings {
+                    grown.insert([key[0] + dx, key[1] + dy, key[2] + dz]);
+                }
             }
         }
     }

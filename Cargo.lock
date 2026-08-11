@@ -362,6 +362,7 @@ dependencies = [
  "clayspace-vm",
  "egui",
  "egui-wgpu",
+ "egui-winit",
  "png",
  "pollster",
  "wgpu",

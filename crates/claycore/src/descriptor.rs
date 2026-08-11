@@ -47,6 +47,7 @@ descriptors! {
     sys::clay_import_budget,
     sys::clay_move_params,
     sys::clay_relax_params,
+    sys::clay_flatten_params,
     sys::clay_volume_params,
     sys::clay_field_report,
     sys::clay_consolidation_params,

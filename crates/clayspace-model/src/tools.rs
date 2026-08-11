@@ -69,6 +69,43 @@ pub enum ToolKind {
     Trim,
 }
 
+impl ToolKind {
+    /// Whether the tool acts on the path rather than stamping along it.
+    ///
+    /// A stamping tool deposits at each position and a single position is a
+    /// complete instruction. A dragging tool is told *from where to where*, so
+    /// one position says nothing: [`ToolKind::Mover`] with a single sample has
+    /// no displacement and moves nothing.
+    ///
+    /// This matters because a live stroke is sent in segments as the pointer
+    /// travels. A segment for a dragging tool has to carry the position it
+    /// started from, or every segment is a gesture of length zero — which is
+    /// exactly what happened, and what
+    /// `every_sdf_stroke_tool_changes_the_surface` caught.
+    /// Whether the tool acts on a whole region rather than stamping into it.
+    ///
+    /// Suavizar, Relaxar, Planar and Polir sample the region a gesture covered
+    /// into a volume, modify that volume, and replace the region with it. That
+    /// is one operation on one region, and it does not decompose: applying it
+    /// to each segment of a stroke stacks a replacement per segment over
+    /// overlapping ground, and the seams between them read as a crumbling,
+    /// blocky patch. Measured, a stroke applied in eight segments left the
+    /// surface roughly twice as rough as the same stroke applied once.
+    ///
+    /// The cost is that these four do not preview while the pointer moves.
+    /// They land when it comes up.
+    pub fn is_region_based(self) -> bool {
+        matches!(
+            self,
+            Self::Suavizar | Self::Relaxar | Self::Planar | Self::Polir
+        )
+    }
+
+    pub fn is_path_driven(self) -> bool {
+        matches!(self, Self::Mover | Self::Puxar | Self::Nudge)
+    }
+}
+
 /// Why a tool cannot be used right now.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Unavailable {
@@ -306,9 +343,12 @@ pub struct Shaping {
 
 impl Default for Shaping {
     fn default() -> Self {
-        // The values the design's brush panel shows.
+        // The design's brush panel shows Ruído at 15%. It starts at zero
+        // instead: the engine's brick cache does not reproduce a stroke
+        // jittered that far, so a default brush with it on sculpts a document
+        // that never appears in the viewport. See `ClayDocument::preset`.
         Self {
-            noise: 0.15,
+            noise: 0.0,
             falloff: Falloff::Smooth,
             accumulate: true,
             smoothing: 0.25,
@@ -345,11 +385,17 @@ impl Falloff {
 
 impl Default for BrushSettings {
     fn default() -> Self {
-        // Intensity and flow are the design's; the radius is a detail brush
-        // on a unit-scale model, which is what "38 px" amounts to at a normal
-        // framing.
+        // Intensity and flow are the design's. The radius is not: it is the
+        // smallest brush the viewport can actually show, with headroom.
+        //
+        // 0.08 was tried, reading the design's "Tamanho 38 px" as a detail
+        // brush on a unit-scale model. It displaces about half of the brick
+        // cache's 0.02 voxel, which marching cubes rounds away — so a click
+        // changed the document and left the rendered mesh bit-identical
+        // everywhere except the pole, where the grid happens to align.
+        // Measured, the floor is 0.10; this sits well clear of it.
         Self {
-            size: 0.08,
+            size: 0.18,
             intensity: 0.65,
             flow: 0.80,
             shaping: Shaping::default(),

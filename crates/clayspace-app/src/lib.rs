@@ -6,5 +6,9 @@
 #![forbid(unsafe_code)]
 
 pub mod geometry;
+pub mod input;
+pub mod shared;
 
 pub use geometry::{SurfaceGeometry, SyncCost};
+pub use input::{ray_at, ViewportInput};
+pub use shared::SharedDocument;

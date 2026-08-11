@@ -46,7 +46,9 @@ pub use error::{ClayError, ErrorKind, Result};
 pub use mesh::{Mesh, MeshParams, MeshValidity, Mesher, VertexLayout};
 pub use pick::{Hit, Snapped};
 pub use reader::Reader;
-pub use sculpt::{resolve_stroke, MoveParams, RelaxParams, VolumeParams};
+pub use sculpt::{
+    resolve_stroke, FlattenMode, FlattenParams, MoveParams, RelaxParams, VolumeParams,
+};
 pub use voxel::{Cell, RepairReport, VoxelField, VoxelGrid, VoxelGridRef};
 
 use claycore_sys as sys;
@@ -103,8 +105,8 @@ pub fn version() -> Version {
 /// constant exists so that a mismatch can also be reported in diagnostics.
 pub const EXPECTED_ABI: Version = Version {
     major: 0,
-    minor: 26,
-    patch: 0,
+    minor: 27,
+    patch: 3,
 };
 
 #[cfg(test)]

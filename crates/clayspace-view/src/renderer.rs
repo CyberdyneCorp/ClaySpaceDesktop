@@ -187,14 +187,19 @@ fn bounds_of(vertices: &[Vertex]) -> Option<(Vec3, Vec3)> {
 #[derive(Debug, Clone, Copy)]
 pub struct Overlays {
     pub grid: bool,
-    pub symmetry_plane: Option<SymmetryAxis>,
+    /// Which mirror planes to draw, indexed X, Y, Z.
+    ///
+    /// A set rather than one axis: the document takes a mirror per axis and
+    /// more than one can be on at once, and an overlay that could only show
+    /// the first would quietly under-report the symmetry in force.
+    pub symmetry_planes: [bool; 3],
 }
 
 impl Default for Overlays {
     fn default() -> Self {
         Self {
             grid: true,
-            symmetry_plane: None,
+            symmetry_planes: [false; 3],
         }
     }
 }
@@ -212,6 +217,47 @@ pub struct BrushCursor {
     pub normal: [f32; 3],
     /// The brush radius in document units.
     pub radius: f32,
+    /// Whether this ring is a mirror of the pointer rather than the pointer.
+    ///
+    /// Symmetry means a stroke lands in more than one place, and a cursor that
+    /// only shows one of them is not telling the truth about what the next
+    /// click does. The mirrors are drawn dimmer so the ring under the hand is
+    /// still the one that reads first.
+    pub mirrored: bool,
+}
+
+impl BrushCursor {
+    /// This cursor reflected through the world plane normal to `axis`.
+    ///
+    /// The mirror is the document's: [`crate::SymmetryAxis`] planes pass
+    /// through the origin, which is what the layer mirror is set to.
+    pub fn mirror(self, axis: usize) -> Self {
+        let mut cursor = self;
+        cursor.position[axis] = -cursor.position[axis];
+        cursor.normal[axis] = -cursor.normal[axis];
+        cursor.mirrored = true;
+        cursor
+    }
+}
+
+/// Every place a stroke at `cursor` would land, given `symmetry`.
+///
+/// One ring per enabled combination — two mirrors give four, three give eight
+/// — because that is how many dabs the engine deposits.
+pub fn mirrored_cursors(cursor: BrushCursor, symmetry: [bool; 3]) -> Vec<BrushCursor> {
+    let mut cursors = vec![cursor];
+    for (axis, enabled) in symmetry.iter().enumerate() {
+        if !enabled {
+            continue;
+        }
+        cursors.extend(
+            cursors
+                .clone()
+                .into_iter()
+                .map(|existing| existing.mirror(axis)),
+        );
+    }
+    cursors
 }
 
 /// Which plane the symmetry indicator sits on.
@@ -241,6 +287,8 @@ pub struct Renderer {
     pub show_gizmo: bool,
     overlay_mesh: GpuMesh,
     cursor_mesh: GpuMesh,
+    /// The rectangle of the frame the scene is drawn into, in physical pixels.
+    scene_viewport: Option<[f32; 4]>,
     gizmo_mesh: GpuMesh,
     gizmo_camera_buffer: wgpu::Buffer,
     gizmo_bind_group: wgpu::BindGroup,
@@ -383,6 +431,7 @@ impl Renderer {
             show_gizmo: false,
             overlay_mesh: GpuMesh::new(gpu),
             cursor_mesh: GpuMesh::new(gpu),
+            scene_viewport: None,
             gizmo_mesh: {
                 let mut mesh = GpuMesh::new(gpu);
                 let (vertices, indices) = gizmo_geometry();
@@ -427,14 +476,26 @@ impl Renderer {
     /// Clearing rather than leaving the last position is the point: a ring
     /// hanging in space at an arbitrary depth tells the user the brush would
     /// land somewhere it would not.
-    pub fn set_cursor(&mut self, gpu: &Gpu, cursor: Option<BrushCursor>) {
-        match cursor {
-            Some(cursor) => {
-                let (vertices, indices) = cursor_geometry(cursor);
-                self.cursor_mesh.upload(gpu, &vertices, &indices);
-            }
-            None => self.cursor_mesh.upload(gpu, &[], &[]),
+    pub fn set_cursors(&mut self, gpu: &Gpu, cursors: &[BrushCursor]) {
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        for cursor in cursors {
+            let (ring, ring_indices) = cursor_geometry(*cursor);
+            let base = vertices.len() as u32;
+            vertices.extend(ring);
+            indices.extend(ring_indices.into_iter().map(|i| i + base));
         }
+        self.cursor_mesh.upload(gpu, &vertices, &indices);
+    }
+
+    /// Confines the scene to a rectangle of the frame, in physical pixels.
+    ///
+    /// The panels cover part of the window, and a scene drawn across the whole
+    /// framebuffer is centred on the window rather than on the hole the panels
+    /// left. `None` restores the full frame, which is what an offscreen
+    /// capture wants.
+    pub fn set_scene_viewport(&mut self, viewport: Option<[f32; 4]>) {
+        self.scene_viewport = viewport;
     }
 
     /// Rebuilds the overlay geometry for the current settings.
@@ -453,7 +514,13 @@ impl Renderer {
         mesh: &GpuMesh,
         has_vertex_colors: bool,
     ) {
-        let aspect = framebuffer.aspect();
+        // The scene's own rectangle decides the aspect, not the window's. A
+        // ray is built from the same rectangle, so any disagreement here is a
+        // pick that lands somewhere other than where the pixel was.
+        let scene = self
+            .scene_viewport
+            .unwrap_or([0.0, 0.0, framebuffer.width as f32, framebuffer.height as f32]);
+        let aspect = scene[2] / scene[3].max(1.0);
         let uniform = CameraUniform {
             view_projection: camera.view_projection(aspect).to_cols_array_2d(),
             view_rotation: camera.view_rotation().to_cols_array_2d(),
@@ -512,6 +579,7 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
+            pass.set_viewport(scene[0], scene[1], scene[2], scene[3], 0.0, 1.0);
             pass.set_bind_group(0, &self.bind_group, &[]);
 
             if !self.overlay_mesh.is_empty() {
@@ -546,11 +614,14 @@ impl Renderer {
             // fixed size whatever the window does. It shares the camera's
             // rotation and nothing else — it reports orientation, not position.
             if self.show_gizmo && !self.gizmo_mesh.is_empty() {
-                let size = (framebuffer.height as f32 * GIZMO_FRACTION).min(120.0);
+                // Anchored to the scene's rectangle, not the window's. Against
+                // the window it sat in the corner the right panel covers, so
+                // the gizmo was drawn every frame and never once visible.
+                let size = (scene[3] * GIZMO_FRACTION).min(120.0);
                 let margin = size * 0.25;
                 pass.set_viewport(
-                    framebuffer.width as f32 - size - margin,
-                    margin,
+                    scene[0] + scene[2] - size - margin,
+                    scene[1] + margin,
                     size,
                     size,
                     0.0,
@@ -725,12 +796,18 @@ fn overlay_geometry(overlays: Overlays, extent: f32) -> (Vec<Vertex>, Vec<u32>) 
         }
     }
 
-    if let Some(axis) = overlays.symmetry_plane {
+    for axis in [SymmetryAxis::X, SymmetryAxis::Y, SymmetryAxis::Z] {
+        if !overlays.symmetry_planes[axis as usize] {
+            continue;
+        }
         // The accent, because the symmetry plane is tool state rather than
         // scene furniture — but dimmed, since a reference overlay must not be
-        // the brightest thing on screen.
-        let color = palette::dimmed(palette::ACCENT, 0.25);
-        let steps = 8;
+        // the brightest thing on screen. At 0.25 over an eight-by-eight grid
+        // it was: the capture showed a bright orange wall with the sculpt
+        // behind it. Sparser and darker reads as "the mirror is here" without
+        // competing with the thing being sculpted.
+        let color = palette::dimmed(palette::ACCENT, 0.12);
+        let steps = 4;
         let step = extent * 2.0 / steps as f32;
         for i in 0..=steps {
             let t = -extent + i as f32 * step;
@@ -784,7 +861,13 @@ fn cursor_geometry(cursor: BrushCursor) -> (Vec<Vertex>, Vec<u32>) {
     let u = normal.cross(reference).normalize() * cursor.radius;
     let v = normal.cross(u).normalize() * cursor.radius;
 
-    let color = palette::ACCENT;
+    // A mirror is where the stroke also lands, not where the hand is. Dimming
+    // it keeps the two readable as different things at a glance.
+    let color = if cursor.mirrored {
+        palette::dimmed(palette::ACCENT, 0.45)
+    } else {
+        palette::ACCENT
+    };
     let mut vertices = Vec::with_capacity(SEGMENTS + 4);
     let mut indices = Vec::with_capacity(SEGMENTS * 2 + 4);
 
@@ -864,6 +947,128 @@ fn gizmo_geometry() -> (Vec<Vertex>, Vec<u32>) {
 mod tests {
     use super::*;
 
+    /// A cursor at a point that no mirror plane passes through, so a mirror is
+    /// always distinguishable from the original.
+    fn off_axis() -> BrushCursor {
+        BrushCursor {
+            position: [0.3, 0.5, 0.7],
+            normal: [0.0, 0.0, 1.0],
+            radius: 0.1,
+            mirrored: false,
+        }
+    }
+
+    #[test]
+    fn no_symmetry_leaves_one_ring() {
+        let cursors = mirrored_cursors(off_axis(), [false; 3]);
+        assert_eq!(cursors.len(), 1);
+        assert!(!cursors[0].mirrored, "the pointer's own ring is not a mirror");
+    }
+
+    #[test]
+    fn each_axis_doubles_the_rings() {
+        // A dab under symmetry lands in 2^n places, and the cursor has to show
+        // all of them or it is under-reporting what the click will do.
+        for (symmetry, expected) in [
+            ([true, false, false], 2),
+            ([true, true, false], 4),
+            ([true, true, true], 8),
+        ] {
+            let cursors = mirrored_cursors(off_axis(), symmetry);
+            assert_eq!(
+                cursors.len(),
+                expected,
+                "{symmetry:?} should place {expected} rings"
+            );
+        }
+    }
+
+    #[test]
+    fn a_mirror_is_the_reflection_through_the_origin_plane() {
+        // The document sets its layer mirror at offset 0.0, so the planes pass
+        // through the origin. A cursor mirrored anywhere else would show the
+        // stroke landing where it does not.
+        let cursors = mirrored_cursors(off_axis(), [true, false, false]);
+        let mirror = cursors
+            .iter()
+            .find(|c| c.mirrored)
+            .expect("a mirror was requested");
+
+        assert_eq!(mirror.position, [-0.3, 0.5, 0.7]);
+        assert_eq!(mirror.normal, [-0.0, 0.0, 1.0]);
+        assert_eq!(mirror.radius, off_axis().radius, "a mirror is the same size");
+    }
+
+    #[test]
+    fn exactly_one_ring_is_the_pointer() {
+        let cursors = mirrored_cursors(off_axis(), [true, true, true]);
+        let originals = cursors.iter().filter(|c| !c.mirrored).count();
+        assert_eq!(
+            originals, 1,
+            "the ring under the hand must be tellable from its mirrors"
+        );
+    }
+
+    #[test]
+    fn mirrors_are_drawn_dimmer_than_the_pointer() {
+        let (pointer, _) = cursor_geometry(off_axis());
+        let (mirror, _) = cursor_geometry(off_axis().mirror(0));
+
+        let brightness = |v: &[Vertex]| v[0].color.iter().sum::<f32>();
+        assert!(
+            brightness(&mirror) < brightness(&pointer),
+            "a mirror must not compete with the ring under the hand"
+        );
+    }
+
+    #[test]
+    fn every_ring_is_drawn() {
+        // The rings share one mesh, so the indices of the later ones have to be
+        // rebased. Getting that wrong draws the first ring several times.
+        let one = mirrored_cursors(off_axis(), [false; 3]);
+        let four = mirrored_cursors(off_axis(), [true, true, false]);
+
+        let count = |cursors: &[BrushCursor]| {
+            cursors
+                .iter()
+                .map(|c| cursor_geometry(*c).0.len())
+                .sum::<usize>()
+        };
+        assert_eq!(count(&four), 4 * count(&one));
+
+        let positions: Vec<[f32; 3]> = four.iter().map(|c| c.position).collect();
+        for (i, a) in positions.iter().enumerate() {
+            for b in positions.iter().skip(i + 1) {
+                assert_ne!(a, b, "two rings landed in the same place");
+            }
+        }
+    }
+
+    #[test]
+    fn every_symmetry_plane_is_drawn() {
+        let one = overlay_geometry(
+            Overlays {
+                grid: false,
+                symmetry_planes: [true, false, false],
+            },
+            1.0,
+        );
+        let all = overlay_geometry(
+            Overlays {
+                grid: false,
+                symmetry_planes: [true; 3],
+            },
+            1.0,
+        );
+        assert!(!one.0.is_empty(), "a requested plane was not drawn");
+        assert_eq!(
+            all.0.len(),
+            3 * one.0.len(),
+            "planes beyond the first were dropped"
+        );
+    }
+
+
     #[test]
     fn the_vertex_layout_matches_what_the_engine_is_told() {
         // The engine writes into this layout by byte offset, so a change here
@@ -898,6 +1103,7 @@ mod tests {
             position: [0.0, 1.0, 0.0],
             normal: [0.0, 1.0, 0.0],
             radius: 0.5,
+            mirrored: false,
         };
         let (vertices, indices) = cursor_geometry(cursor);
         assert!(!vertices.is_empty());
@@ -926,6 +1132,7 @@ mod tests {
             position: [0.0; 3],
             normal: [0.0; 3],
             radius: 0.2,
+            mirrored: false,
         });
         assert!(vertices.iter().all(|v| v.position.iter().all(|c| c.is_finite())));
     }
@@ -956,7 +1163,7 @@ mod tests {
         let (none, _) = overlay_geometry(
             Overlays {
                 grid: false,
-                symmetry_plane: None,
+                symmetry_planes: [false; 3],
             },
             1.0,
         );
@@ -965,7 +1172,7 @@ mod tests {
         let (grid, grid_indices) = overlay_geometry(
             Overlays {
                 grid: true,
-                symmetry_plane: None,
+                symmetry_planes: [false; 3],
             },
             1.0,
         );
@@ -975,7 +1182,7 @@ mod tests {
         let (both, _) = overlay_geometry(
             Overlays {
                 grid: true,
-                symmetry_plane: Some(SymmetryAxis::X),
+                symmetry_planes: [true, false, false],
             },
             1.0,
         );

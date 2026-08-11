@@ -153,33 +153,53 @@ fn a_mirrored_stroke_is_one_history_entry() {
 }
 
 #[test]
-fn changing_symmetry_costs_its_own_history_entry() {
-    // Worth pinning rather than assuming: a layer's mirror is document state
-    // in the engine, so toggling it is a change like any other. It is written
-    // only when it differs, so a run of strokes at one setting costs nothing
-    // extra.
+fn changing_symmetry_is_part_of_the_stroke_that_used_it() {
+    // The mirror is document state in the engine, so setting it is a change
+    // like any other and records its own entry. It is written by the first
+    // segment of the stroke that needs it, though, so from the sculptor's side
+    // it is not a separate thing they did — and one undo has to take it back
+    // along with the stroke, or the mirror silently outlives the edit.
     let mut vm = session();
 
     let before = vm.history().get().depth;
     stroke_across_the_form(&mut vm).expect("first stroke");
-    let per_stroke = vm.history().get().depth - before;
+    assert_eq!(
+        vm.history().get().depth - before,
+        1,
+        "a stroke is one action however many segments and entries it took"
+    );
 
     let before = vm.history().get().depth;
     stroke_across_the_form(&mut vm).expect("second stroke, same symmetry");
     assert_eq!(
         vm.history().get().depth - before,
-        per_stroke,
-        "an unchanged mirror was rewritten, costing a spurious entry"
+        1,
+        "an unchanged mirror was rewritten, costing a spurious action"
     );
 
+    // Now with the mirror changed, which the stroke writes as an extra engine
+    // entry inside its first segment.
+    vm.dispatch(Command::ToggleSymmetry(Axis::Z)).expect("symmetry");
     let before = vm.history().get().depth;
-    vm.dispatch(Command::ToggleSymmetry(Axis::X)).expect("toggle");
-    stroke_across_the_form(&mut vm).expect("stroke after toggling");
+    stroke_across_the_form(&mut vm).expect("mirrored stroke");
     assert_eq!(
         vm.history().get().depth - before,
-        per_stroke + 1,
-        "changing the mirror should cost exactly one entry beyond the stroke"
+        1,
+        "changing the mirror must not cost the sculptor a second undo"
     );
+
+    // And one undo takes the whole thing back, mirror write included. If the
+    // count were short, an entry would stay behind and the next undo would
+    // remove part of the *previous* stroke instead.
+    let bounds = vm.bounds().expect("bounds");
+    vm.dispatch(Command::Undo).expect("undo");
+    vm.dispatch(Command::Undo).expect("undo");
+    vm.dispatch(Command::Undo).expect("undo");
+    assert!(
+        !vm.history().get().can_undo,
+        "three strokes took more than three undos to remove"
+    );
+    let _ = bounds;
 }
 
 #[test]

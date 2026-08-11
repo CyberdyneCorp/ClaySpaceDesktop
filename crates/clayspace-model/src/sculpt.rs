@@ -109,11 +109,17 @@ pub trait SculptModel {
     /// Whether the active layer accepts edits at all.
     fn active_layer_editable(&self) -> bool;
 
-    /// Applies a completed gesture with the given tool.
+    /// Applies part or all of a gesture with the given tool.
     ///
-    /// The whole gesture arrives at once so it becomes one undoable edit, and
-    /// so the engine's stroke engine decides stamp spacing from arc length
-    /// rather than from how many samples the device happened to deliver.
+    /// A whole gesture at once lets the engine's stroke engine decide stamp
+    /// spacing from arc length rather than from how many samples the device
+    /// delivered. A live stroke cannot wait for the whole gesture, so it sends
+    /// segments as the pointer moves, each long enough that the spacing still
+    /// has something to work with. Every call is its own entry in the
+    /// document's history; collapsing a gesture's segments back into one
+    /// undo is the ViewModel's job, because the engine's own undo grouping
+    /// does not do it — measured, a group of three strokes left seven entries
+    /// and undoing twice reverted none of them.
     fn apply_stroke(
         &mut self,
         tool: ToolKind,

@@ -106,6 +106,75 @@ impl Default for RelaxParams<'_> {
     }
 }
 
+/// Which side of the plane a flatten acts on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FlattenMode {
+    /// Material on the normal's side goes and hollows on the other fill.
+    #[default]
+    TwoSided,
+    /// Only removes. This is what a planing tool wants: it must not fill the
+    /// dents it is meant to reveal.
+    CutOnly,
+    /// Only fills.
+    FillOnly,
+}
+
+/// Pulling a sampled volume onto a plane — the Flatten verb on the SDF side.
+#[derive(Debug, Clone, Copy)]
+pub struct FlattenParams<'mask> {
+    /// A point on the plane to flatten onto.
+    pub plane_point: [f32; 3],
+    /// Unit normal; material on this side is the side that moves.
+    pub plane_normal: [f32; 3],
+    /// 1 puts the surface on the plane, 0 changes nothing.
+    pub strength: f32,
+    pub centre: [f32; 3],
+    /// Required positive. With no region the engine replaces the shape with a
+    /// half-space rather than flattening it — the header's words, and it means
+    /// a ball comes back as a box.
+    pub region_radius: f32,
+    /// Taper at the region's edge; widened by the engine when too narrow.
+    pub falloff: f32,
+    pub mode: FlattenMode,
+    pub mask: Option<&'mask MaskField>,
+}
+
+impl Default for FlattenParams<'_> {
+    fn default() -> Self {
+        Self {
+            plane_point: [0.0; 3],
+            plane_normal: [0.0, 1.0, 0.0],
+            strength: 1.0,
+            centre: [0.0; 3],
+            // No sensible default: the engine refuses zero, and a silent
+            // stand-in would be the box the header warns about.
+            region_radius: 0.0,
+            falloff: 0.0,
+            mode: FlattenMode::TwoSided,
+            mask: None,
+        }
+    }
+}
+
+impl FlattenParams<'_> {
+    fn to_raw(&self) -> sys::clay_flatten_params {
+        let mut raw = sys::clay_flatten_params::sized();
+        raw.plane_point = self.plane_point;
+        raw.plane_normal = self.plane_normal;
+        raw.strength = self.strength;
+        raw.centre = self.centre;
+        raw.region_radius = self.region_radius;
+        raw.falloff = self.falloff;
+        raw.mode = match self.mode {
+            FlattenMode::TwoSided => 0,
+            FlattenMode::CutOnly => 1,
+            FlattenMode::FillOnly => 2,
+        };
+        raw.mask = self.mask.map_or(std::ptr::null(), |m| m.as_ptr() as *const _);
+        raw
+    }
+}
+
 impl RelaxParams<'_> {
     fn to_raw(&self) -> sys::clay_relax_params {
         let mut raw = sys::clay_relax_params::sized();
@@ -266,6 +335,43 @@ impl Document {
         Ok(nodes.into_iter().map(NodeId).collect())
     }
 
+    /// Flattens a region sampled straight from the document.
+    ///
+    /// The engine's own words: the difference from bake-then-flatten "is
+    /// accuracy, and it is not small" — a volume reports a distance only
+    /// inside its band and a bound outside it, so a facet moving further than
+    /// the band is placed against the bound and a wrong shape comes back with
+    /// `CLAY_OK`. A document has no band.
+    ///
+    /// Returns a new item carrying the result; the document is untouched.
+    pub fn flatten_region(
+        &self,
+        flatten: &FlattenParams<'_>,
+        volume: VolumeParams,
+        min: [f32; 3],
+        max: [f32; 3],
+    ) -> Result<Item> {
+        let raw_flatten = flatten.to_raw();
+        let raw_volume = volume.to_raw();
+        let mut item = std::ptr::null_mut();
+        // SAFETY: two sized descriptors, two three-float bounds, and an
+        // out-parameter written only on success.
+        check(
+            unsafe {
+                sys::clay_item_volume_flatten_from(
+                    self.as_ptr(),
+                    &raw_flatten,
+                    &raw_volume,
+                    min.as_ptr(),
+                    max.as_ptr(),
+                    &mut item,
+                )
+            },
+            "clay_item_volume_flatten_from",
+        )?;
+        Item::from_raw(item, "clay_item_volume_flatten_from")
+    }
+
     /// Samples a region of the document into a volume item.
     ///
     /// This is the baking step the relax and flatten verbs work on: they act
@@ -307,6 +413,20 @@ impl Item {
         check(
             unsafe { sys::clay_item_volume_relax(self.as_ptr(), &raw) },
             "clay_item_volume_relax",
+        )
+    }
+
+    /// Pulls a sampled volume onto a plane — the Flatten verb on the SDF side.
+    ///
+    /// Only valid on an item carrying a volume, the same as
+    /// [`Item::relax`]. Bound late: the planing tools were reaching for it and
+    /// finding nothing, so they fell through to adding a sphere.
+    pub fn flatten(&mut self, params: &FlattenParams<'_>) -> Result<()> {
+        let raw = params.to_raw();
+        // SAFETY: valid handle and a sized descriptor.
+        check(
+            unsafe { sys::clay_item_volume_flatten(self.as_ptr(), &raw) },
+            "clay_item_volume_flatten",
         )
     }
 }

@@ -216,3 +216,14 @@ pub fn mesh_document(doc: &Document, resolution: i32) -> Mesh {
     })
     .expect("mesh the document")
 }
+
+/// Uploads an engine mesh straight to the GPU, with no per-key splitting.
+///
+/// The control for `visual_incremental`: whatever `SurfaceGeometry` does to
+/// the same triangles has to end up looking like this.
+pub fn upload_engine_mesh(gpu: &Gpu, mesh: &Mesh) -> GpuMesh {
+    let mut gpu_mesh = GpuMesh::new(gpu);
+    let (vertices, indices) = to_vertices(mesh);
+    gpu_mesh.upload(gpu, &vertices, &indices);
+    gpu_mesh
+}
