@@ -17,6 +17,14 @@ path = "src/lib.rs"
 name = "clayspace-app"
 path = "src/main.rs"
 
+[features]
+default = []
+# The whole chain, so the binary can be built for a backend by name.
+metal = ["clayspace-engine/metal"]
+cuda = ["clayspace-engine/cuda"]
+vulkan = ["clayspace-engine/vulkan"]
+opencl = ["clayspace-engine/opencl"]
+
 [dependencies]
 clayspace-engine = { path = "../clayspace-engine" }
 clayspace-model = { version = "0.1.0", path = "../clayspace-model" }
