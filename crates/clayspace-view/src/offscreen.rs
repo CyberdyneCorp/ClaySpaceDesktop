@@ -246,6 +246,40 @@ impl Image {
         total as f64 / counted as f64
     }
 
+    /// The fraction of subject pixels that visibly changed.
+    ///
+    /// A mean is the wrong measure for a dent or a ridge: a real, obvious
+    /// local change averages away against the untouched surface around it.
+    /// This asks how much of the subject moved, which is what an eye judges.
+    pub fn changed_fraction_over_subject(
+        &self,
+        other: &Image,
+        background: [u8; 4],
+        threshold: u8,
+    ) -> f64 {
+        assert_eq!(
+            (self.width, self.height),
+            (other.width, other.height),
+            "images of different sizes cannot be compared"
+        );
+        let is_subject = |p: &[u8]| (0..3).any(|i| p[i].abs_diff(background[i]) > threshold);
+
+        let (mut changed, mut subject) = (0usize, 0usize);
+        for (a, b) in self.pixels.chunks_exact(4).zip(other.pixels.chunks_exact(4)) {
+            if !is_subject(a) && !is_subject(b) {
+                continue;
+            }
+            subject += 1;
+            if (0..3).any(|i| a[i].abs_diff(b[i]) > threshold) {
+                changed += 1;
+            }
+        }
+        if subject == 0 {
+            return 0.0;
+        }
+        changed as f64 / subject as f64
+    }
+
     /// The average colour of the whole frame, for coarse comparisons.
     pub fn mean_color(&self) -> [f64; 3] {
         let mut sums = [0u64; 3];
