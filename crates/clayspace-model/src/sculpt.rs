@@ -52,6 +52,17 @@ pub struct HistoryState {
     pub can_undo: bool,
     pub can_redo: bool,
     pub depth: usize,
+    /// How many entries can be redone.
+    pub redo_depth: usize,
+}
+
+/// One entry in the history, as the panel shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryEntry {
+    /// What the operation was, in the user's terms.
+    pub label: String,
+    /// Whether it is behind the current position — that is, undone.
+    pub undone: bool,
 }
 
 /// The operations a ViewModel performs on a document.

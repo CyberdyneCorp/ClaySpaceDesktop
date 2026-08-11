@@ -82,10 +82,10 @@
 - [ ] 7.6 Implement the field report and consolidation flow with the cost estimate shown before confirmation
 - [ ] 7.7 Implement geometry statistics display, stating the resolution the counts describe
 - [ ] 7.8 Implement mesh layers as carried content with sculpting tools disabled and the reason stated
-- [ ] 7.9 Implement undo and redo over the engine's undo vocabulary, with stroke and drag coalescing
-- [ ] 7.10 Implement undo groups for compound operations
-- [ ] 7.11 Implement the history panel with named entries, current position and jump-to-entry
-- [ ] 7.12 Implement the bounded history depth and the redo-branch discard with a visible outcome
+- [x] 7.9 Implement undo and redo over the engine's undo vocabulary, with stroke and drag coalescing
+- [x] 7.10 Implement undo groups for compound operations
+- [x] 7.11 Implement the history panel with named entries, current position and jump-to-entry
+- [x] 7.12 Implement the bounded history depth and the redo-branch discard with a visible outcome
 - [x] 7.13 Verify camera, view, material, layout and selection changes create no history entries
 
 ## 8. Document lifecycle

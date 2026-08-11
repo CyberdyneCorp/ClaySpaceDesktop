@@ -678,6 +678,7 @@ impl SculptModel for ClayDocument {
                 can_undo: state.undo_depth > 0,
                 can_redo: state.redo_depth > 0,
                 depth: state.undo_depth,
+                redo_depth: state.redo_depth,
             },
             Err(_) => HistoryState::default(),
         }

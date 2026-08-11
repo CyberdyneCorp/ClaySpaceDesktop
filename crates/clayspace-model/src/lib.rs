@@ -16,7 +16,7 @@ pub mod tools;
 
 pub use scene::{LayerKey, LayerSummary, Protection, Scene, SceneModel, SceneNode};
 pub use sculpt::{
-    EditOutcome, GestureSample, HistoryState, ModelError, SceneStats, SculptModel,
+    EditOutcome, GestureSample, HistoryEntry, HistoryState, ModelError, SceneStats, SculptModel,
 };
 pub use tools::{
     BrushSettings, Falloff, Representation, Shaping, ToolKind, Unavailable, ViewPresetKind,

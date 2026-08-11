@@ -47,6 +47,7 @@ impl FakeModel {
                 can_undo: true,
                 can_redo: false,
                 depth: 1,
+                redo_depth: 0,
             },
             stats: SceneStats {
                 triangles: 100,
@@ -361,6 +362,7 @@ fn an_undo_with_nothing_to_undo_changes_nothing() {
             can_undo: false,
             can_redo: false,
             depth: 0,
+            redo_depth: 0,
         }
     });
     let mut watcher = Watcher::new();
