@@ -105,15 +105,15 @@
 - [x] 9.2 Implement typography: humanist sans for labels, monospaced for numeric readouts with fixed digit positions
 - [ ] 9.3 Implement the icon set at one stroke weight and optical size
 - [x] 9.4 Implement the region layout: menu bar, tool rail, tool options bar, left region, viewport, right region, brush shelf, status area
-- [ ] 9.5 Implement panel resize, collapse, layout persistence and reset-to-default
+- [x] 9.5 Implement panel resize, collapse, layout persistence and reset-to-default
 - [x] 9.6 Implement the left region: scene tree, layer stack, sculpting settings (symmetry, resolution, smoothing, save preset)
 - [x] 9.7 Implement the right region: material inspector, geometry statistics, resolution controls, brush controls
 - [x] 9.8 Implement the brush shelf with skeuomorphic sphere previews and the accent on the active brush only
 - [x] 9.9 Implement the menu bar with shared command dispatch, shortcut display and matching disabled conditions
-- [ ] 9.10 Implement remappable shortcuts with conflict reporting
+- [x] 9.10 Implement remappable shortcuts with conflict reporting
 - [x] 9.11 Implement the status area: document name and modified state, unit, memory against budget with an early-warning state, active backend
-- [ ] 9.12 Implement budget-exhaustion handling with the shortfall shown and the document left intact
-- [ ] 9.13 Implement error presentation near the failing action with engine detail available in diagnostics
+- [x] 9.12 Implement budget-exhaustion handling with the shortfall shown and the document left intact
+- [x] 9.13 Implement error presentation near the failing action with engine detail available in diagnostics
 - [x] 9.14 Externalize all user-facing strings; ship pt-BR; implement locale fallback and long-label layout tolerance
 - [x] 9.15 Verify the contrast floors and that state is never conveyed by color alone
 - [x] 9.16 Verify the style budget: panels, buttons, sliders and menus carry no skeuomorphic treatment

@@ -9,6 +9,7 @@
 pub mod command;
 pub mod history_vm;
 pub mod jobs;
+pub mod notice;
 pub mod observable;
 pub mod scene_vm;
 pub mod sculpt_vm;
@@ -16,6 +17,7 @@ pub mod sculpt_vm;
 pub use command::{Axis, Command, CommandQueue};
 pub use history_vm::HistoryViewModel;
 pub use jobs::{Completion, Generation, JobRunner, Outcome, Progress, Reporter};
+pub use notice::{MemoryState, Notice, NoticeBoard, Severity, Where};
 pub use observable::{Observable, Watcher};
 pub use scene_vm::SceneViewModel;
 pub use sculpt_vm::{LastAction, SculptViewModel};

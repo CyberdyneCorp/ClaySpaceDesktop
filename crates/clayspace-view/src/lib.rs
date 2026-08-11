@@ -14,17 +14,21 @@
 pub mod camera;
 pub mod design;
 pub mod gpu;
+pub mod layout;
 pub mod matcap;
 pub mod offscreen;
 pub mod palette;
 pub mod renderer;
 pub mod shell;
+pub mod shortcuts;
 pub mod strings;
 pub mod window;
 
 pub use camera::{Camera, ViewPreset};
 pub use design::{contrast, Tokens};
+pub use layout::{Layout, Panel};
 pub use shell::{apply_theme, ShellState};
+pub use shortcuts::{Action, Chord, Conflict, Key, Shortcuts};
 pub use strings::{Locale, Strings};
 pub use gpu::{Framebuffer, Gpu, GpuError};
 pub use matcap::MatCap;
