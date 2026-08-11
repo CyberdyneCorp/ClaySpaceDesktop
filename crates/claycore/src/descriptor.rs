@@ -45,6 +45,9 @@ descriptors! {
     sys::clay_brick_config,
     sys::clay_brick_stats,
     sys::clay_import_budget,
+    sys::clay_move_params,
+    sys::clay_relax_params,
+    sys::clay_volume_params,
 }
 
 #[cfg(test)]

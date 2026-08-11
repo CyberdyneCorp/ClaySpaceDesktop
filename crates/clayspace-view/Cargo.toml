@@ -1,0 +1,11 @@
+[package]
+name = "clayspace-view"
+description = "The interface and renderer. Reads ViewModel state, emits commands."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+clayspace-vm = { path = "../clayspace-vm" }

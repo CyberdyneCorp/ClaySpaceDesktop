@@ -35,6 +35,16 @@ impl Item {
         Self::new(sys::clay_prim::CLAY_PRIM_SPHERE as i32, &[radius])
     }
 
+    pub(crate) fn from_raw(raw: *mut sys::clay_item, operation: &'static str) -> Result<Self> {
+        NonNull::new(raw)
+            .map(|raw| Self { raw })
+            .ok_or_else(|| raw_failure(operation, ErrorKind::InvalidArgument))
+    }
+
+    pub(crate) fn as_ptr(&self) -> *mut sys::clay_item {
+        self.raw.as_ptr()
+    }
+
     /// Builds any primitive from its parameter list. The engine documents the
     /// expected count per primitive and rejects a wrong one.
     pub fn new(prim: i32, params: &[f32]) -> Result<Self> {

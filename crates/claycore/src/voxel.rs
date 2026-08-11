@@ -1,0 +1,766 @@
+//! Palette-indexed voxel grids and the verbs that sculpt them.
+//!
+//! Every verb reads a snapshot of the region first, so a cell's outcome never
+//! depends on a neighbour the same call already changed.
+//!
+//! # Telling a live edit from a dead one
+//!
+//! Many verbs can be a valid call that changes nothing — a sub-cell grab, a
+//! dithered stamp that misses every cell it was offered, a footprint over
+//! empty space. None of that is an error. Compare [`VoxelField::change_count`]
+//! across the call to find out; `occupied_count` is not a substitute, because
+//! grab and magnify move material without adding any.
+//!
+//! # Owned and borrowed
+//!
+//! As with masks, a grid created standalone is owned and a grid obtained from
+//! a document layer is borrowed. [`VoxelGrid`] releases on drop;
+//! [`VoxelGridRef`] cannot outlive its document and has no destroy operation.
+
+use std::marker::PhantomData;
+use std::ops::{Deref, DerefMut};
+use std::ptr::NonNull;
+
+use claycore_sys as sys;
+
+use crate::brush::{BrushParams, StrokePreset, StrokeSample};
+use crate::descriptor::Descriptor;
+use crate::error::{check, ErrorKind, Result};
+use crate::mask::{MaskExtrudeParams, MaskField};
+use crate::mesh::Mesh;
+use crate::{raw_failure, Document, LayerId};
+
+/// A cell coordinate.
+pub type Cell = [i32; 3];
+
+/// What a pre-bake check found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RepairReport {
+    /// Empty regions the outside cannot reach.
+    pub enclosed_voids: usize,
+    /// Their total size in cells.
+    pub void_cells: usize,
+    pub largest_void: usize,
+    /// True when there are no enclosed voids at all.
+    pub airtight: bool,
+}
+
+/// Every operation a voxel grid supports, regardless of who owns it.
+#[repr(transparent)]
+pub struct VoxelField {
+    raw: NonNull<sys::clay_voxel_grid>,
+}
+
+impl VoxelField {
+    pub(crate) fn as_ptr(&self) -> *mut sys::clay_voxel_grid {
+        self.raw.as_ptr()
+    }
+
+    /// World units per cell at the active level.
+    pub fn voxel_size(&self) -> Result<f32> {
+        let mut value = 0.0f32;
+        // SAFETY: valid handle and out-parameter.
+        check(
+            unsafe { sys::clay_voxel_size(self.as_ptr(), &mut value) },
+            "clay_voxel_size",
+        )?;
+        Ok(value)
+    }
+
+    /// Cells currently occupied.
+    pub fn occupied_count(&self) -> Result<usize> {
+        let mut count = 0usize;
+        // SAFETY: valid handle and out-parameter.
+        check(
+            unsafe { sys::clay_voxel_occupied_count(self.as_ptr(), &mut count) },
+            "clay_voxel_occupied_count",
+        )?;
+        Ok(count)
+    }
+
+    /// Cell writes that actually changed a cell.
+    ///
+    /// Monotone, and meaningful only as a difference across a call. Pinch and
+    /// magnify may revisit a cell within one call, so for those it is an upper
+    /// bound rather than an exact tally.
+    pub fn change_count(&self) -> Result<u64> {
+        let mut count = 0u64;
+        // SAFETY: valid handle and out-parameter.
+        check(
+            unsafe { sys::clay_voxel_change_count(self.as_ptr(), &mut count) },
+            "clay_voxel_change_count",
+        )?;
+        Ok(count)
+    }
+
+    /// The occupied region, when anything is occupied.
+    pub fn bounds(&self) -> Result<Option<(Cell, Cell)>> {
+        let (mut min, mut max) = ([0i32; 3], [0i32; 3]);
+        let mut has = 0i32;
+        // SAFETY: two three-int out-parameters and a flag.
+        check(
+            unsafe {
+                sys::clay_voxel_bounds(self.as_ptr(), min.as_mut_ptr(), max.as_mut_ptr(), &mut has)
+            },
+            "clay_voxel_bounds",
+        )?;
+        Ok((has != 0).then_some((min, max)))
+    }
+
+    // -- palette ------------------------------------------------------------
+
+    /// Adds a colour and returns its index.
+    pub fn palette_add(&mut self, rgb: [f32; 3]) -> Result<i32> {
+        let mut index = 0i32;
+        // SAFETY: three-float input and a valid out-parameter.
+        check(
+            unsafe { sys::clay_voxel_palette_add(self.as_ptr(), rgb.as_ptr(), &mut index) },
+            "clay_voxel_palette_add",
+        )?;
+        Ok(index)
+    }
+
+    /// How many colours the palette holds, counting the unused empty slot at
+    /// index 0 — so a fresh grid reports 1.
+    pub fn palette_size(&self) -> Result<usize> {
+        let mut size = 0usize;
+        // SAFETY: valid handle and out-parameter.
+        check(
+            unsafe { sys::clay_voxel_palette_size(self.as_ptr(), &mut size) },
+            "clay_voxel_palette_size",
+        )?;
+        Ok(size)
+    }
+
+    /// A palette entry's colour.
+    pub fn palette_color(&self, index: i32) -> Result<[f32; 3]> {
+        let mut rgb = [0.0f32; 3];
+        // SAFETY: a three-float out-parameter.
+        check(
+            unsafe { sys::clay_voxel_palette_color(self.as_ptr(), index, rgb.as_mut_ptr()) },
+            "clay_voxel_palette_color",
+        )?;
+        Ok(rgb)
+    }
+
+    // -- resolution levels --------------------------------------------------
+
+    /// How many resolution levels the grid carries.
+    ///
+    /// The coarsest level is the one that was always there, so a grid with a
+    /// single level behaves exactly as it did before multi-resolution existed.
+    pub fn level_count(&self) -> Result<usize> {
+        let mut count = 0usize;
+        // SAFETY: valid handle and out-parameter.
+        check(
+            unsafe { sys::clay_voxel_level_count(self.as_ptr(), &mut count) },
+            "clay_voxel_level_count",
+        )?;
+        Ok(count)
+    }
+
+    /// Which level the verbs currently edit.
+    pub fn active_level(&self) -> Result<usize> {
+        let mut level = 0usize;
+        // SAFETY: valid handle and out-parameter.
+        check(
+            unsafe { sys::clay_voxel_active_level(self.as_ptr(), &mut level) },
+            "clay_voxel_active_level",
+        )?;
+        Ok(level)
+    }
+
+    /// Chooses which level the verbs edit.
+    pub fn set_active_level(&mut self, level: usize) -> Result<()> {
+        // SAFETY: valid handle.
+        check(
+            unsafe { sys::clay_voxel_set_active_level(self.as_ptr(), level) },
+            "clay_voxel_set_active_level",
+        )
+    }
+
+    /// Pushes a finer level and returns its index.
+    ///
+    /// Blocking a form out wants coarse cells and detailing wants fine ones;
+    /// this is how to get the second without paying for it everywhere.
+    pub fn add_level(&mut self) -> Result<usize> {
+        let mut level = 0usize;
+        // SAFETY: valid handle and out-parameter.
+        check(
+            unsafe { sys::clay_voxel_add_level(self.as_ptr(), &mut level) },
+            "clay_voxel_add_level",
+        )?;
+        Ok(level)
+    }
+
+    /// Discards the finest level.
+    pub fn drop_level(&mut self) -> Result<()> {
+        // SAFETY: valid handle.
+        check(
+            unsafe { sys::clay_voxel_drop_level(self.as_ptr()) },
+            "clay_voxel_drop_level",
+        )
+    }
+
+    /// World units per cell at a given level.
+    pub fn level_voxel_size(&self, level: usize) -> Result<f32> {
+        let mut value = 0.0f32;
+        // SAFETY: valid handle and out-parameter.
+        check(
+            unsafe { sys::clay_voxel_level_voxel_size(self.as_ptr(), level, &mut value) },
+            "clay_voxel_level_voxel_size",
+        )?;
+        Ok(value)
+    }
+
+    // -- direct cell edits --------------------------------------------------
+
+    /// The palette index at a cell, or `None` where it is empty.
+    ///
+    /// Index 0 is the engine's empty slot — never added, never matched, never
+    /// recoloured — so it is reported here as absence rather than as a colour.
+    pub fn get(&self, cell: Cell) -> Result<Option<i32>> {
+        let mut index = 0i32;
+        // SAFETY: three-int input and a valid out-parameter.
+        check(
+            unsafe { sys::clay_voxel_get(self.as_ptr(), cell.as_ptr(), &mut index) },
+            "clay_voxel_get",
+        )?;
+        Ok((index > 0).then_some(index))
+    }
+
+    /// Fills one cell.
+    pub fn set(&mut self, cell: Cell, index: i32) -> Result<()> {
+        // SAFETY: three-int input.
+        check(
+            unsafe { sys::clay_voxel_set(self.as_ptr(), cell.as_ptr(), index) },
+            "clay_voxel_set",
+        )
+    }
+
+    /// Empties one cell.
+    pub fn erase(&mut self, cell: Cell) -> Result<()> {
+        // SAFETY: three-int input.
+        check(
+            unsafe { sys::clay_voxel_erase(self.as_ptr(), cell.as_ptr()) },
+            "clay_voxel_erase",
+        )
+    }
+
+    /// Recolours an occupied cell without filling an empty one.
+    pub fn paint(&mut self, cell: Cell, index: i32) -> Result<()> {
+        // SAFETY: three-int input.
+        check(
+            unsafe { sys::clay_voxel_paint(self.as_ptr(), cell.as_ptr(), index) },
+            "clay_voxel_paint",
+        )
+    }
+
+    /// Fills an axis-aligned box of cells.
+    pub fn fill_box(&mut self, a: Cell, b: Cell, index: i32) -> Result<()> {
+        // SAFETY: two three-int inputs.
+        check(
+            unsafe { sys::clay_voxel_fill_box(self.as_ptr(), a.as_ptr(), b.as_ptr(), index) },
+            "clay_voxel_fill_box",
+        )
+    }
+
+    /// Fills a line of cells.
+    pub fn fill_line(&mut self, a: Cell, b: Cell, index: i32) -> Result<()> {
+        // SAFETY: two three-int inputs.
+        check(
+            unsafe { sys::clay_voxel_fill_line(self.as_ptr(), a.as_ptr(), b.as_ptr(), index) },
+            "clay_voxel_fill_line",
+        )
+    }
+
+    /// Fills with a brush footprint.
+    pub fn set_brush(&mut self, cell: Cell, brush: &BrushParams<'_>, index: i32) -> Result<()> {
+        let raw = brush.to_raw();
+        // SAFETY: three-int input and a descriptor with struct_size set.
+        check(
+            unsafe { sys::clay_voxel_set_brush(self.as_ptr(), cell.as_ptr(), &raw, index) },
+            "clay_voxel_set_brush",
+        )
+    }
+
+    /// Erases with a brush footprint.
+    pub fn erase_brush(&mut self, cell: Cell, brush: &BrushParams<'_>) -> Result<()> {
+        let raw = brush.to_raw();
+        // SAFETY: as `set_brush`.
+        check(
+            unsafe { sys::clay_voxel_erase_brush(self.as_ptr(), cell.as_ptr(), &raw) },
+            "clay_voxel_erase_brush",
+        )
+    }
+
+    /// Recolours with a brush footprint.
+    pub fn paint_brush(&mut self, cell: Cell, brush: &BrushParams<'_>, index: i32) -> Result<()> {
+        let raw = brush.to_raw();
+        // SAFETY: as `set_brush`.
+        check(
+            unsafe { sys::clay_voxel_paint_brush(self.as_ptr(), cell.as_ptr(), &raw, index) },
+            "clay_voxel_paint_brush",
+        )
+    }
+
+    // -- sculpting verbs ----------------------------------------------------
+
+    /// Majority filter over the 26-neighbourhood: spurs dissolve, notches fill.
+    pub fn sculpt_smooth(&mut self, cell: Cell, brush: &BrushParams<'_>) -> Result<()> {
+        let raw = brush.to_raw();
+        // SAFETY: three-int input and a sized descriptor.
+        check(
+            unsafe { sys::clay_voxel_sculpt_smooth(self.as_ptr(), cell.as_ptr(), &raw) },
+            "clay_voxel_sculpt_smooth",
+        )
+    }
+
+    /// Dilates for a positive amount, erodes for a negative one.
+    pub fn sculpt_inflate(&mut self, cell: Cell, brush: &BrushParams<'_>, amount: i32) -> Result<()> {
+        let raw = brush.to_raw();
+        // SAFETY: as above.
+        check(
+            unsafe { sys::clay_voxel_sculpt_inflate(self.as_ptr(), cell.as_ptr(), &raw, amount) },
+            "clay_voxel_sculpt_inflate",
+        )
+    }
+
+    /// Pulls the surface onto a plane through the brush centre. Two-sided.
+    pub fn sculpt_flatten(
+        &mut self,
+        cell: Cell,
+        brush: &BrushParams<'_>,
+        normal: [f32; 3],
+        offset_cells: f32,
+    ) -> Result<()> {
+        let raw = brush.to_raw();
+        // SAFETY: as above, plus a three-float normal.
+        check(
+            unsafe {
+                sys::clay_voxel_sculpt_flatten(
+                    self.as_ptr(),
+                    cell.as_ptr(),
+                    &raw,
+                    normal.as_ptr(),
+                    offset_cells,
+                )
+            },
+            "clay_voxel_sculpt_flatten",
+        )
+    }
+
+    /// Moves surface cells one step toward the brush centre.
+    pub fn sculpt_pinch(&mut self, cell: Cell, brush: &BrushParams<'_>) -> Result<()> {
+        let raw = brush.to_raw();
+        // SAFETY: as above.
+        check(
+            unsafe { sys::clay_voxel_sculpt_pinch(self.as_ptr(), cell.as_ptr(), &raw) },
+            "clay_voxel_sculpt_pinch",
+        )
+    }
+
+    /// The inverse of pinch, sharing its walk so the two cannot drift apart.
+    pub fn sculpt_magnify(&mut self, cell: Cell, brush: &BrushParams<'_>) -> Result<()> {
+        let raw = brush.to_raw();
+        // SAFETY: as above.
+        check(
+            unsafe { sys::clay_voxel_sculpt_magnify(self.as_ptr(), cell.as_ptr(), &raw) },
+            "clay_voxel_sculpt_magnify",
+        )
+    }
+
+    /// Translates occupancy through the same inverse map the SDF grab uses.
+    ///
+    /// Resampling is nearest-cell and rounds per axis, so a displacement under
+    /// half a cell on every axis moves nothing. A drag fed raw pointer deltas
+    /// is dead until the caller accumulates them past the voxel size.
+    pub fn sculpt_grab(
+        &mut self,
+        cell: Cell,
+        brush: &BrushParams<'_>,
+        displacement: [f32; 3],
+        front_only: bool,
+    ) -> Result<()> {
+        let raw = brush.to_raw();
+        // SAFETY: as above, plus a three-float displacement.
+        check(
+            unsafe {
+                sys::clay_voxel_sculpt_grab(
+                    self.as_ptr(),
+                    cell.as_ptr(),
+                    &raw,
+                    displacement.as_ptr(),
+                    i32::from(front_only),
+                )
+            },
+            "clay_voxel_sculpt_grab",
+        )
+    }
+
+    /// Flattens *and* smooths from one snapshot. Calling both in sequence is
+    /// not the same thing.
+    pub fn sculpt_scrape(
+        &mut self,
+        cell: Cell,
+        brush: &BrushParams<'_>,
+        normal: [f32; 3],
+        offset_cells: f32,
+    ) -> Result<()> {
+        let raw = brush.to_raw();
+        // SAFETY: as `sculpt_flatten`.
+        check(
+            unsafe {
+                sys::clay_voxel_sculpt_scrape(
+                    self.as_ptr(),
+                    cell.as_ptr(),
+                    &raw,
+                    normal.as_ptr(),
+                    offset_cells,
+                )
+            },
+            "clay_voxel_sculpt_scrape",
+        )
+    }
+
+    /// Drags surface material along a direction, leaving the interior.
+    ///
+    /// Grab moves a lump; smudge smears a skin.
+    pub fn sculpt_smudge(
+        &mut self,
+        cell: Cell,
+        brush: &BrushParams<'_>,
+        displacement: [f32; 3],
+    ) -> Result<()> {
+        let raw = brush.to_raw();
+        // SAFETY: as `sculpt_grab`.
+        check(
+            unsafe {
+                sys::clay_voxel_sculpt_smudge(
+                    self.as_ptr(),
+                    cell.as_ptr(),
+                    &raw,
+                    displacement.as_ptr(),
+                )
+            },
+            "clay_voxel_sculpt_smudge",
+        )
+    }
+
+    /// Fills narrow pockets.
+    ///
+    /// The rule is local, so it fills what is *narrow*, not what is enclosed:
+    /// a through-hole wider than one cell does not qualify. Use
+    /// [`Self::repair_fill_voids`] for sealed voids; neither substitutes for
+    /// the other.
+    pub fn sculpt_fill_cavities(
+        &mut self,
+        cell: Cell,
+        brush: &BrushParams<'_>,
+        passes: i32,
+    ) -> Result<()> {
+        let raw = brush.to_raw();
+        // SAFETY: as above.
+        check(
+            unsafe {
+                sys::clay_voxel_sculpt_fill_cavities(self.as_ptr(), cell.as_ptr(), &raw, passes)
+            },
+            "clay_voxel_sculpt_fill_cavities",
+        )
+    }
+
+    /// A caller-supplied scalar stamp modulating per-cell strength.
+    ///
+    /// The engine decodes no images: a caller with an alpha has already loaded
+    /// it.
+    pub fn sculpt_carve_alpha(
+        &mut self,
+        cell: Cell,
+        brush: &BrushParams<'_>,
+        alpha: &[f32],
+        width: i32,
+        height: i32,
+        direction: [f32; 3],
+        index: i32,
+    ) -> Result<()> {
+        let raw = brush.to_raw();
+        // SAFETY: `alpha` is `width * height` floats, which the caller states
+        // and the engine validates; direction is three floats.
+        check(
+            unsafe {
+                sys::clay_voxel_sculpt_carve_alpha(
+                    self.as_ptr(),
+                    cell.as_ptr(),
+                    &raw,
+                    alpha.as_ptr(),
+                    width,
+                    height,
+                    direction.as_ptr(),
+                    index,
+                )
+            },
+            "clay_voxel_sculpt_carve_alpha",
+        )
+    }
+
+    /// Applies a stroke, resolving it into stamps through the engine's stroke
+    /// engine. Returns how many stamps landed.
+    pub fn apply_stroke(
+        &mut self,
+        samples: &[StrokeSample],
+        preset: &StrokePreset,
+        index: i32,
+        shape: crate::brush::BrushShape,
+        falloff: crate::brush::Falloff,
+        mask: Option<&MaskField>,
+    ) -> Result<usize> {
+        if samples.is_empty() {
+            return Ok(0);
+        }
+        let flat = StrokeSample::flatten(samples);
+        let raw_preset = preset.to_raw();
+        let mut applied = 0usize;
+        // SAFETY: `flat` is `samples.len() * 5` floats; the preset carries its
+        // struct_size; the mask is either a valid handle or null.
+        check(
+            unsafe {
+                sys::clay_voxel_apply_stroke(
+                    self.as_ptr(),
+                    flat.as_ptr(),
+                    samples.len(),
+                    &raw_preset,
+                    index,
+                    crate::brush::shape_raw(shape),
+                    crate::brush::falloff_raw(falloff),
+                    mask.map_or(std::ptr::null(), |m| m.as_ptr() as *const _),
+                    &mut applied,
+                )
+            },
+            "clay_voxel_apply_stroke",
+        )?;
+        Ok(applied)
+    }
+
+    // -- repair -------------------------------------------------------------
+
+    /// What a pre-bake check wants to know, without performing the fix.
+    pub fn repair_report(&self) -> Result<RepairReport> {
+        let mut raw = sys::clay_repair_report::sized();
+        // SAFETY: valid handle and a descriptor with struct_size set.
+        check(
+            unsafe { sys::clay_voxel_repair_report(self.as_ptr(), &mut raw) },
+            "clay_voxel_repair_report",
+        )?;
+        Ok(RepairReport {
+            enclosed_voids: raw.enclosed_voids,
+            void_cells: raw.void_cells,
+            largest_void: raw.largest_void,
+            airtight: raw.airtight != 0,
+        })
+    }
+
+    /// Seals perforations. Only ever adds cells.
+    pub fn repair_close_holes(&mut self, passes: i32, mask: Option<&MaskField>) -> Result<()> {
+        // SAFETY: the mask is either a valid handle or null.
+        check(
+            unsafe {
+                sys::clay_voxel_repair_close_holes(
+                    self.as_ptr(),
+                    passes,
+                    mask.map_or(std::ptr::null(), |m| m.as_ptr() as *const _),
+                )
+            },
+            "clay_voxel_repair_close_holes",
+        )
+    }
+
+    /// Fills every empty cell the outside cannot reach. Enclosure is decided,
+    /// not guessed locally.
+    pub fn repair_fill_voids(&mut self, mask: Option<&MaskField>) -> Result<()> {
+        // SAFETY: as above.
+        check(
+            unsafe {
+                sys::clay_voxel_repair_fill_voids(
+                    self.as_ptr(),
+                    mask.map_or(std::ptr::null(), |m| m.as_ptr() as *const _),
+                )
+            },
+            "clay_voxel_repair_fill_voids",
+        )
+    }
+
+    // -- output -------------------------------------------------------------
+
+    /// Meshes the grid.
+    pub fn mesh(&self) -> Result<Mesh> {
+        let mut mesh = std::ptr::null_mut();
+        // SAFETY: valid handle; `mesh` written only on success.
+        check(
+            unsafe { sys::clay_voxel_mesh(self.as_ptr(), &mut mesh) },
+            "clay_voxel_mesh",
+        )?;
+        Mesh::from_raw(mesh, "clay_voxel_mesh")
+    }
+
+    /// Pulls the masked patch off as a solid grid the caller owns.
+    pub fn mask_extrude(
+        &self,
+        mask: &MaskField,
+        params: MaskExtrudeParams,
+    ) -> Result<VoxelGrid> {
+        let raw_params = params.to_raw();
+        let mut grid = std::ptr::null_mut();
+        // SAFETY: both handles valid, descriptor sized; `grid` written only on
+        // success and owned by the caller thereafter.
+        check(
+            unsafe {
+                sys::clay_voxel_mask_extrude(self.as_ptr(), mask.as_ptr(), &raw_params, &mut grid)
+            },
+            "clay_voxel_mask_extrude",
+        )?;
+        VoxelGrid::from_raw(grid, "clay_voxel_mask_extrude")
+    }
+}
+
+impl std::fmt::Debug for VoxelField {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VoxelField")
+            .field("occupied", &self.occupied_count().unwrap_or(0))
+            .finish()
+    }
+}
+
+/// A voxel grid the caller owns, released on drop.
+#[derive(Debug)]
+pub struct VoxelGrid {
+    inner: VoxelField,
+}
+
+// SAFETY: a grid is host memory the engine reaches only through this handle.
+unsafe impl Send for VoxelGrid {}
+
+impl VoxelGrid {
+    /// Creates a standalone grid.
+    pub fn new(voxel_size: f32) -> Result<Self> {
+        // SAFETY: returns an owned handle or null.
+        let raw = unsafe { sys::clay_voxel_grid_create(voxel_size) };
+        Self::from_raw(raw, "clay_voxel_grid_create")
+    }
+
+    fn from_raw(raw: *mut sys::clay_voxel_grid, operation: &'static str) -> Result<Self> {
+        NonNull::new(raw)
+            .map(|raw| Self {
+                inner: VoxelField { raw },
+            })
+            .ok_or_else(|| raw_failure(operation, ErrorKind::InvalidArgument))
+    }
+}
+
+impl Deref for VoxelGrid {
+    type Target = VoxelField;
+    fn deref(&self) -> &VoxelField {
+        &self.inner
+    }
+}
+
+impl DerefMut for VoxelGrid {
+    fn deref_mut(&mut self) -> &mut VoxelField {
+        &mut self.inner
+    }
+}
+
+impl Drop for VoxelGrid {
+    fn drop(&mut self) {
+        // SAFETY: owned handle, released exactly once. A grid borrowed from a
+        // document is a `VoxelGridRef`, which has no `Drop`.
+        unsafe { sys::clay_voxel_grid_destroy(self.inner.as_ptr()) };
+    }
+}
+
+/// A voxel grid belonging to a document, borrowed for as long as it lives.
+///
+/// Carries no destroy operation: the engine documents destroying a borrowed
+/// handle as an error, and here it is not expressible.
+#[derive(Debug)]
+pub struct VoxelGridRef<'doc> {
+    inner: VoxelField,
+    _doc: PhantomData<&'doc mut Document>,
+}
+
+impl VoxelGridRef<'_> {
+    fn from_raw(raw: *mut sys::clay_voxel_grid, operation: &'static str) -> Result<Self> {
+        NonNull::new(raw)
+            .map(|raw| Self {
+                inner: VoxelField { raw },
+                _doc: PhantomData,
+            })
+            .ok_or_else(|| raw_failure(operation, ErrorKind::NotFound))
+    }
+}
+
+impl Deref for VoxelGridRef<'_> {
+    type Target = VoxelField;
+    fn deref(&self) -> &VoxelField {
+        &self.inner
+    }
+}
+
+impl DerefMut for VoxelGridRef<'_> {
+    fn deref_mut(&mut self) -> &mut VoxelField {
+        &mut self.inner
+    }
+}
+
+impl Document {
+    /// Adds a voxel layer and lends back its grid.
+    pub fn add_voxel_layer(
+        &mut self,
+        name: &str,
+        voxel_size: f32,
+    ) -> Result<(LayerId, VoxelGridRef<'_>)> {
+        let c_name = crate::cstring(name, "clay_document_add_voxel_layer")?;
+        let mut layer: sys::clay_layer_id = Default::default();
+        let mut grid = std::ptr::null_mut();
+        // SAFETY: valid handle, NUL-terminated name, two out-parameters
+        // written only on success.
+        check(
+            unsafe {
+                sys::clay_document_add_voxel_layer(
+                    self.as_ptr(),
+                    c_name.as_ptr(),
+                    voxel_size,
+                    &mut layer,
+                    &mut grid,
+                )
+            },
+            "clay_document_add_voxel_layer",
+        )?;
+        Ok((
+            LayerId(layer),
+            VoxelGridRef::from_raw(grid, "clay_document_add_voxel_layer")?,
+        ))
+    }
+
+    /// The grid a named voxel layer already carries.
+    pub fn voxel_layer(&mut self, name: &str) -> Result<(LayerId, VoxelGridRef<'_>)> {
+        let c_name = crate::cstring(name, "clay_document_voxel_layer")?;
+        let mut layer: sys::clay_layer_id = Default::default();
+        let mut grid = std::ptr::null_mut();
+        // SAFETY: as above.
+        check(
+            unsafe {
+                sys::clay_document_voxel_layer(
+                    self.as_ptr(),
+                    c_name.as_ptr(),
+                    &mut layer,
+                    &mut grid,
+                )
+            },
+            "clay_document_voxel_layer",
+        )?;
+        Ok((
+            LayerId(layer),
+            VoxelGridRef::from_raw(grid, "clay_document_voxel_layer")?,
+        ))
+    }
+}

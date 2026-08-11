@@ -89,6 +89,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "clayspace-app"
+version = "0.1.0"
+dependencies = [
+ "clayspace-model",
+ "clayspace-view",
+ "clayspace-vm",
+]
+
+[[package]]
+name = "clayspace-model"
+version = "0.1.0"
+dependencies = [
+ "claycore",
+]
+
+[[package]]
+name = "clayspace-view"
+version = "0.1.0"
+dependencies = [
+ "clayspace-vm",
+]
+
+[[package]]
+name = "clayspace-vm"
+version = "0.1.0"
+dependencies = [
+ "clayspace-model",
+]
+
+[[package]]
 name = "cmake"
 version = "0.1.58"
 source = "registry+https://github.com/rust-lang/crates.io-index"

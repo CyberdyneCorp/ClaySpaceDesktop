@@ -14,24 +14,38 @@
 //!   document cannot outlive it and has no destroy operation.
 //! - No panic and no unwind crosses the C boundary.
 
+mod authoring;
 mod backend;
 mod brick;
+mod brush;
 mod buffer;
 mod descriptor;
 mod document;
 mod error;
+mod mask;
 mod mesh;
 mod pick;
+mod reader;
+mod sculpt;
+mod voxel;
 
+pub use authoring::{Blend, Op, Protection, UndoState};
 pub use backend::{backends, compiled_backends, Backend};
 pub use brick::{
     BrickCache, BrickConfig, BrickKey, BrickMeshParams, BrickMeshRange, BrickRequest, BrickSamples,
     BrickState, BrickStats,
 };
+pub use brush::{
+    Accumulation, BrushParams, BrushShape, Falloff, StrokePreset, StrokeSample,
+};
 pub use document::{Document, Item, LayerId, NodeId};
+pub use mask::{ExtrudeSide, Mask, MaskExtrudeParams, MaskField, MaskRef};
 pub use error::{ClayError, ErrorKind, Result};
 pub use mesh::{Mesh, MeshParams, MeshValidity, Mesher, VertexLayout};
 pub use pick::{Hit, Snapped};
+pub use reader::Reader;
+pub use sculpt::{MoveParams, RelaxParams, VolumeParams};
+pub use voxel::{Cell, RepairReport, VoxelField, VoxelGrid, VoxelGridRef};
 
 use claycore_sys as sys;
 

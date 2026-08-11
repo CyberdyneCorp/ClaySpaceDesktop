@@ -3,6 +3,10 @@ resolver = "2"
 members = [
     "crates/claycore-sys",
     "crates/claycore",
+    "crates/clayspace-model",
+    "crates/clayspace-vm",
+    "crates/clayspace-view",
+    "crates/clayspace-app",
 ]
 
 [workspace.package]

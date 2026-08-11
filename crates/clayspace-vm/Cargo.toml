@@ -1,0 +1,11 @@
+[package]
+name = "clayspace-vm"
+description = "ViewModels: observable state and commands. No interface or rendering dependency."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+clayspace-model = { path = "../clayspace-model" }

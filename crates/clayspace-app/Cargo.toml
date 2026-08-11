@@ -1,0 +1,13 @@
+[package]
+name = "clayspace-app"
+description = "Composition root: builds the layers and runs the window."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+clayspace-model = { path = "../clayspace-model" }
+clayspace-vm = { path = "../clayspace-vm" }
+clayspace-view = { path = "../clayspace-view" }
