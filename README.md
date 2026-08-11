@@ -38,8 +38,14 @@ Opens a window on a starting form.
 | `[` `]` | Brush smaller / larger |
 | `F` / `M` / `Esc` | Frame / cycle materials / quit |
 | `⌘S` `⇧⌘S` `⌘O` `⌘N` | Save, save as, open, new |
+| `A` | Rig with ZSpheres — see below |
 
 Closing over unsaved edits asks first.
+
+While rigging, the pointer means something else. **Escultura → Nova armadura**
+starts one; then drag out of a sphere to grow the next, Option-drag to move a
+sphere and everything under it, ⌘-drag to resize, `Delete` to remove a branch.
+A press on empty space still orbits.
 
 The full list of what works is in [docs/features.md](docs/features.md).
 

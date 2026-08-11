@@ -10,12 +10,14 @@
 
 #![forbid(unsafe_code)]
 
+pub mod armature;
 pub mod document;
 pub mod mask;
 pub mod scene;
 pub mod sculpt;
 pub mod tools;
 
+pub use armature::{Armature, ArmatureModel, NodeIndex, SkinSettings, Zsphere};
 pub use document::{DocumentModel, OpenError};
 pub use mask::{ExtrudeSettings, ExtrudeSide, MaskModel, MaskOp, MaskState};
 pub use scene::{LayerCost, LayerKey, LayerSummary, Protection, Scene, SceneModel, SceneNode};

@@ -31,7 +31,13 @@ pub struct ViewportInput {
     /// Wheel or trackpad scroll.
     pub scroll: f32,
     /// Whether the modifier that forces orbiting is held.
+    ///
+    /// While rigging this same key means "move this sphere rather than grow a
+    /// new one" — over a sphere it moves, over empty space it orbits, so one
+    /// key covers both without either meaning being taken away.
     pub orbit_modifier: bool,
+    /// Whether the platform's command modifier is held.
+    pub command_modifier: bool,
 }
 
 impl ViewportInput {
@@ -59,6 +65,7 @@ impl ViewportInput {
             // Option on a Mac, Alt elsewhere: the trackpad has no second
             // button worth reaching for.
             orbit_modifier: i.modifiers.alt,
+            command_modifier: i.modifiers.command,
         })
     }
 }

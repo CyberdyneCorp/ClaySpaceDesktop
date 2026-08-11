@@ -104,6 +104,16 @@ fn state<'a>(strings: &'a Strings, scene: &'a Scene, materials: &'a [&'a str]) -
             painted_cells: 4096,
         },
         extrude: clayspace_model::ExtrudeSettings::default(),
+        // A rig, mid-edit, so the capture shows the armature section and the
+        // menu entries that depend on it rather than a row of grey.
+        armature: clayspace_view::ArmatureState {
+            exists: true,
+            editing: true,
+            selection: true,
+            spheres: 12,
+            mirror: true,
+            skin: 1.0,
+        },
         strings,
         document_name: "Cabeça_Estudo_v03",
         modified: true,

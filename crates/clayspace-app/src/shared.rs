@@ -14,9 +14,10 @@ use std::rc::Rc;
 
 use clayspace_engine::ClayDocument;
 use clayspace_model::{
-    BrushSettings, DocumentModel, EditOutcome, ExtrudeSettings, GestureSample, HistoryState,
-    LayerCost, LayerKey, MaskModel, MaskOp, MaskState, ModelError, OpenError, Protection,
-    Representation, Scene, SceneModel, SceneStats, SculptModel, ToolKind,
+    Armature, ArmatureModel, BrushSettings, DocumentModel, EditOutcome, ExtrudeSettings,
+    GestureSample, HistoryState, LayerCost, LayerKey, MaskModel, MaskOp, MaskState, ModelError,
+    NodeIndex, OpenError, Protection, Representation, Scene, SceneModel, SceneStats, SculptModel,
+    SkinSettings, ToolKind,
 };
 
 /// A handle to the one document.
@@ -177,5 +178,55 @@ impl MaskModel for SharedDocument {
 
     fn extrude_mask(&mut self, settings: ExtrudeSettings) -> Result<(), ModelError> {
         self.0.borrow_mut().extrude_mask(settings)
+    }
+}
+
+impl ArmatureModel for SharedDocument {
+    fn armature(&self) -> Option<Armature> {
+        self.0.borrow().armature()
+    }
+
+    fn begin_armature(&mut self, position: [f32; 3], radius: f32) -> Result<(), ModelError> {
+        self.0.borrow_mut().begin_armature(position, radius)
+    }
+
+    fn add_zsphere(
+        &mut self,
+        parent: NodeIndex,
+        position: [f32; 3],
+        radius: f32,
+        mirrored: bool,
+    ) -> Result<NodeIndex, ModelError> {
+        self.0
+            .borrow_mut()
+            .add_zsphere(parent, position, radius, mirrored)
+    }
+
+    fn move_zsphere(&mut self, index: NodeIndex, delta: [f32; 3]) -> Result<(), ModelError> {
+        self.0.borrow_mut().move_zsphere(index, delta)
+    }
+
+    fn resize_zsphere(&mut self, index: NodeIndex, radius: f32) -> Result<(), ModelError> {
+        self.0.borrow_mut().resize_zsphere(index, radius)
+    }
+
+    fn reparent_zsphere(
+        &mut self,
+        index: NodeIndex,
+        new_parent: NodeIndex,
+    ) -> Result<(), ModelError> {
+        self.0.borrow_mut().reparent_zsphere(index, new_parent)
+    }
+
+    fn remove_zsphere(&mut self, index: NodeIndex) -> Result<(), ModelError> {
+        self.0.borrow_mut().remove_zsphere(index)
+    }
+
+    fn set_skin(&mut self, skin: SkinSettings) -> Result<(), ModelError> {
+        self.0.borrow_mut().set_skin(skin)
+    }
+
+    fn skin(&self) -> SkinSettings {
+        self.0.borrow().skin()
     }
 }

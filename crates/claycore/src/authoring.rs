@@ -7,6 +7,7 @@
 
 use claycore_sys as sys;
 
+use crate::document::ArmatureEdit;
 use crate::error::{check, Result};
 use crate::{Document, Item, LayerId, NodeId};
 
@@ -313,6 +314,107 @@ impl Document {
     }
 
     /// A layer's protection state.
+    /// One edit to a placed armature's tree.
+    ///
+    /// One undo step whatever the edit: the command underneath is a whole-tree
+    /// replace, which for an armature of tens of nodes costs less than granular
+    /// bookkeeping and has an exact inverse.
+    ///
+    /// `mirrored` applies to [`ArmatureEdit::AddChild`] only. It adds the
+    /// reflection through x = 0 in the same step, under the mirror of the
+    /// parent where there is one — a node on the plane is its own reflection
+    /// and is added once.
+    pub fn armature_edit(
+        &mut self,
+        layer: LayerId,
+        node: NodeId,
+        edit: ArmatureEdit,
+        target: u32,
+        mirrored: bool,
+    ) -> Result<()> {
+        let (op, value, radius) = match edit {
+            ArmatureEdit::AddChild { position, radius } => (0, position, radius),
+            // A delta, and the target's whole subtree travels with it: an arm
+            // hangs from a shoulder.
+            ArmatureEdit::Move { delta } => (1, delta, 0.0),
+            ArmatureEdit::SetRadius { radius } => (2, [0.0; 3], radius),
+            // The target and everything under it.
+            ArmatureEdit::Delete => (3, [0.0; 3], 0.0),
+        };
+        // SAFETY: valid handles and a three-float value the entry point reads
+        // according to `op`.
+        check(
+            unsafe {
+                sys::clay_layer_armature_edit(
+                    self.as_ptr(),
+                    layer.0,
+                    node.0,
+                    op,
+                    target,
+                    value.as_ptr(),
+                    radius,
+                    i32::from(mirrored),
+                )
+            },
+            "clay_layer_armature_edit",
+        )
+    }
+
+    /// A placed stroke or armature's control points, as `x y z r` quadruples.
+    ///
+    /// The engine's note: reading is not editing, so a ghosted, locked or
+    /// hidden layer answers normally.
+    pub fn stroke_points(&self, layer: LayerId, node: NodeId) -> Result<Vec<[f32; 4]>> {
+        let mut count: usize = 0;
+        // A first call with a null buffer asks how many there are.
+        // SAFETY: every out-parameter is optional and passed as null bar the
+        // count, which the entry point fills.
+        check(
+            unsafe {
+                sys::clay_layer_stroke_points(
+                    self.as_ptr(),
+                    layer.0,
+                    node.0,
+                    std::ptr::null_mut(),
+                    &mut count,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            },
+            "clay_layer_stroke_points",
+        )?;
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut flat = vec![0.0f32; count * 4];
+        // SAFETY: `flat` is sized to the count the call above reported.
+        check(
+            unsafe {
+                sys::clay_layer_stroke_points(
+                    self.as_ptr(),
+                    layer.0,
+                    node.0,
+                    flat.as_mut_ptr(),
+                    &mut count,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            },
+            "clay_layer_stroke_points",
+        )?;
+        Ok(flat
+            .chunks_exact(4)
+            .map(|p| [p[0], p[1], p[2], p[3]])
+            .collect())
+    }
+
     /// The layers this document holds, discovered by probing.
     ///
     /// The C ABI has no enumeration: a host knows the layers it created and,

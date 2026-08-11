@@ -68,6 +68,7 @@ pub struct Strings {
     pub section_geometry: &'static str,
     pub section_resolution: &'static str,
     pub section_brush_controls: &'static str,
+    pub section_armature: &'static str,
 
     // Labels
     pub label_intensity: &'static str,
@@ -89,11 +90,19 @@ pub struct Strings {
     pub label_units: &'static str,
     pub label_backend: &'static str,
     pub label_new_layer: &'static str,
+    pub label_spheres: &'static str,
+    pub label_skin: &'static str,
+    pub label_mirror_new: &'static str,
 
     // Actions and states
     pub action_undo: &'static str,
     pub action_redo: &'static str,
     pub action_frame_all: &'static str,
+    pub action_armature_new: &'static str,
+    pub action_armature_edit: &'static str,
+    pub action_armature_remove: &'static str,
+    /// What the pointer does while rigging, said once where it is needed.
+    pub hint_armature: &'static str,
     pub state_unsaved: &'static str,
     pub state_nothing_changed: &'static str,
 }
@@ -118,6 +127,7 @@ const PT_BR: Strings = Strings {
     section_geometry: "GEOMETRIA",
     section_resolution: "RESOLUÇÃO",
     section_brush_controls: "CONTROLES DE PINCEL",
+    section_armature: "ARMADURA",
 
     label_intensity: "Intensidade",
     label_size: "Tamanho",
@@ -138,10 +148,17 @@ const PT_BR: Strings = Strings {
     label_units: "Unidades",
     label_backend: "Aceleração",
     label_new_layer: "Nova camada",
+    label_spheres: "Esferas",
+    label_skin: "Pele",
+    label_mirror_new: "Espelhar novas",
 
     action_undo: "Desfazer",
     action_redo: "Refazer",
     action_frame_all: "Enquadrar tudo",
+    action_armature_new: "Nova armadura",
+    action_armature_edit: "Editar armadura",
+    action_armature_remove: "Remover esfera",
+    hint_armature: "Arraste de uma esfera para criar a seguinte · Alt arrasta · ⌘ redimensiona",
     state_unsaved: "não salvo",
     state_nothing_changed: "nada mudou",
 };
@@ -166,6 +183,7 @@ const EN_US: Strings = Strings {
     section_geometry: "GEOMETRY",
     section_resolution: "RESOLUTION",
     section_brush_controls: "BRUSH CONTROLS",
+    section_armature: "ARMATURE",
 
     label_intensity: "Intensity",
     label_size: "Size",
@@ -186,10 +204,17 @@ const EN_US: Strings = Strings {
     label_units: "Units",
     label_backend: "Acceleration",
     label_new_layer: "New layer",
+    label_spheres: "Spheres",
+    label_skin: "Skin",
+    label_mirror_new: "Mirror new",
 
     action_undo: "Undo",
     action_redo: "Redo",
     action_frame_all: "Frame all",
+    action_armature_new: "New armature",
+    action_armature_edit: "Edit armature",
+    action_armature_remove: "Remove sphere",
+    hint_armature: "Drag out of a sphere to grow the next · Alt moves · ⌘ resizes",
     state_unsaved: "unsaved",
     state_nothing_changed: "nothing changed",
 };
@@ -203,7 +228,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 43] {
+    pub fn all(&self) -> [&'static str; 48] {
         [
             self.menu_file,
             self.menu_edit,
@@ -221,6 +246,7 @@ impl Strings {
             self.section_geometry,
             self.section_resolution,
             self.section_brush_controls,
+            self.section_armature,
             self.label_intensity,
             self.label_size,
             self.label_flow,
@@ -240,16 +266,18 @@ impl Strings {
             self.label_units,
             self.label_backend,
             self.label_new_layer,
+            self.label_spheres,
+            self.label_skin,
+            self.label_mirror_new,
             self.action_undo,
             self.action_redo,
             self.action_frame_all,
+            self.action_armature_new,
+            self.action_armature_edit,
+            self.action_armature_remove,
+            self.hint_armature,
             self.state_unsaved,
             self.state_nothing_changed,
-            // Padding to a fixed size so adding a field is a compile error
-            // here rather than a silently untested string.
-            self.menu_file,
-            self.menu_edit,
-            self.menu_view,
         ]
     }
 }

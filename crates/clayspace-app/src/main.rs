@@ -10,15 +10,15 @@ use std::sync::Arc;
 
 use clayspace_app::{ray_at, SharedDocument, SurfaceGeometry, ViewportInput};
 use clayspace_engine::{claycore, BackendPolicy, ClayDocument};
-use clayspace_model::ViewPresetKind;
-use clayspace_view::shell::{self, region, ShellState};
+use clayspace_model::{SkinSettings, ViewPresetKind};
+use clayspace_view::shell::{self, region, ArmatureState, ShellState};
 use clayspace_view::{
-    mirrored_cursors, BrushCursor, Camera, Gpu, Locale, MatCap, Overlays, Renderer, Strings,
-    SurfaceLoss, ViewPreset, WindowSurface,
+    mirrored_cursors, ArmatureView, BrushCursor, Camera, Gpu, Locale, MatCap, Overlays, Renderer,
+    Strings, SurfaceLoss, ViewPreset, WindowSurface,
 };
 use clayspace_vm::{
-    Axis, Command, CommandQueue, DocumentViewModel, Guard, MaskViewModel, SceneViewModel,
-    SculptViewModel,
+    ArmatureViewModel, Axis, Command, CommandQueue, DocumentViewModel, Grab, Guard, MaskViewModel,
+    SceneViewModel, SculptViewModel,
 };
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -66,6 +66,8 @@ enum Drag {
     Sculpt,
     Orbit,
     Pan,
+    /// A ZSphere gesture. The plane it runs on is held alongside.
+    Rig,
 }
 
 struct App {
@@ -74,6 +76,7 @@ struct App {
     scene: SceneViewModel,
     document_vm: DocumentViewModel,
     mask: MaskViewModel,
+    armature: ArmatureViewModel,
     policy: BackendPolicy,
 
     camera: Camera,
@@ -94,6 +97,14 @@ struct App {
     viewport: Option<egui::Rect>,
     /// The symmetry the overlays were last built for.
     overlay_symmetry: [bool; 3],
+    /// Whether the pointer is rigging rather than sculpting.
+    rigging: bool,
+    /// The plane a rig gesture runs on: a point on it, and its normal.
+    ///
+    /// Fixed at the press rather than recomputed per sample. A plane that
+    /// re-derives itself from the moving pointer drifts, and the sphere slides
+    /// away from the cursor over a long drag.
+    rig_plane: Option<([f32; 3], [f32; 3])>,
     strings: &'static Strings,
 }
 
@@ -112,12 +123,14 @@ impl App {
         let scene = SceneViewModel::new(Box::new(document.clone()));
         let document_vm = DocumentViewModel::new(Box::new(document.clone()), "Sem título");
         let mask = MaskViewModel::new(Box::new(document.clone()));
+        let armature = ArmatureViewModel::new(Box::new(document.clone()));
         Self {
             document,
             sculpt,
             scene,
             document_vm,
             mask,
+            armature,
             policy,
             camera: Camera::default(),
             window: None,
@@ -126,6 +139,8 @@ impl App {
             hover: None,
             viewport: None,
             overlay_symmetry: [false; 3],
+            rigging: false,
+            rig_plane: None,
             strings: Strings::for_locale(Locale::default()),
         }
     }
@@ -265,6 +280,10 @@ impl App {
     fn after_document_replaced(&mut self) {
         self.scene.refresh();
         self.mask.refresh();
+        self.armature.refresh();
+        // Rigging is a mode over a rig that no longer exists. Leaving it on
+        // would hand the next click to a tree that was thrown away.
+        self.rigging = self.rigging && self.armature.is_rigging();
         self.sculpt.forget_history();
         if let Some(graphics) = self.graphics.as_mut() {
             let gpu = graphics.gpu.clone();
@@ -278,6 +297,17 @@ impl App {
             }
         }
         self.frame_all();
+    }
+
+    /// Everything that has to catch up after the rig changed outside a drag.
+    fn after_armature_edit(&mut self) {
+        self.settle_geometry();
+        self.scene.refresh();
+        self.document_vm.touched();
+        if let Some(notice) = self.armature.notice().get() {
+            eprintln!("{notice}");
+        }
+        self.request_redraw();
     }
 
     /// Re-meshes the whole surface after a gesture, clearing the seams the
@@ -316,6 +346,129 @@ impl App {
         // way it faces, and a ring in the view plane reads correctly from any
         // angle.
         Some((hit, [-direction[0], -direction[1], -direction[2]]))
+    }
+
+    /// Where a pointer ray meets the plane a rig gesture runs on.
+    ///
+    /// A rig lives in three dimensions and the pointer has two, so a gesture
+    /// needs a plane. This one faces the camera and passes through whatever was
+    /// grabbed, which is the plane a person is already picturing when they drag
+    /// a shoulder sideways.
+    fn on_rig_plane(&self, point: egui::Pos2) -> Option<[f32; 3]> {
+        let (anchor, normal) = self.rig_plane?;
+        let (origin, direction) = self.ray_at(point)?;
+        let slope: f32 = (0..3).map(|i| direction[i] * normal[i]).sum();
+        if slope.abs() < 1e-6 {
+            return None; // Looking along the plane; nothing to meet.
+        }
+        let reach: f32 = (0..3)
+            .map(|i| (anchor[i] - origin[i]) * normal[i])
+            .sum::<f32>()
+            / slope;
+        if reach <= 0.0 {
+            return None; // Behind the eye.
+        }
+        Some([
+            origin[0] + direction[0] * reach,
+            origin[1] + direction[1] * reach,
+            origin[2] + direction[2] * reach,
+        ])
+    }
+
+    /// Begins a rig gesture, if the press landed on a sphere.
+    ///
+    /// Returns whether it did: a press on empty space is left to fall through
+    /// to orbiting, so a rig can be turned to look at without leaving the mode.
+    fn begin_rig(&mut self, point: egui::Pos2, input: &ViewportInput) -> bool {
+        let Some((origin, direction)) = self.ray_at(point) else {
+            return false;
+        };
+        // The default is to grow, which is what makes rigging feel like
+        // drawing; holding the modifier takes hold instead.
+        let grab = self.armature.grab_at(
+            origin,
+            direction,
+            !input.orbit_modifier,
+            input.command_modifier,
+        );
+        let index = match grab {
+            Grab::Empty => return false,
+            Grab::Move(i) | Grab::Grow(i) | Grab::Resize(i) => i,
+        };
+        let Some(centre) = self
+            .armature
+            .tree()
+            .get()
+            .as_ref()
+            .and_then(|tree| tree.get(index).map(|sphere| sphere.position))
+        else {
+            return false;
+        };
+        // Facing the eye, through the sphere that was grabbed.
+        self.rig_plane = Some((centre, [-direction[0], -direction[1], -direction[2]]));
+        let at = self.on_rig_plane(point).unwrap_or(centre);
+        self.armature.press(grab, at);
+        true
+    }
+
+    /// The state the shell needs about the rig.
+    fn armature_state(&self) -> ArmatureState {
+        let tree = self.armature.tree().get();
+        ArmatureState {
+            exists: tree.is_some(),
+            editing: self.rigging,
+            selection: self.armature.selected().get().is_some(),
+            spheres: tree.as_ref().map(|t| t.nodes.len()).unwrap_or(0),
+            mirror: *self.armature.symmetric().get(),
+            skin: self.armature.skin().get().thickness,
+        }
+    }
+
+    /// Hands the viewport the rig to draw, or nothing when there is none.
+    fn sync_armature_view(&mut self) {
+        let Some(graphics) = self.graphics.as_mut() else {
+            return;
+        };
+        let gpu = graphics.gpu.clone();
+        let tree = self.armature.tree().get().clone();
+        // Drawn only while rigging: a rig is scaffolding, and leaving it over
+        // a finished sculpt would hide the surface it produced.
+        let Some(tree) = tree.filter(|_| self.rigging) else {
+            graphics.renderer.set_armature(
+                &gpu,
+                ArmatureView {
+                    spheres: &[],
+                    links: &[],
+                    selected: None,
+                    root: None,
+                },
+            );
+            return;
+        };
+
+        let thickness = self.armature.skin().get().thickness;
+        let spheres: Vec<([f32; 3], f32)> = tree
+            .nodes
+            .iter()
+            .map(|node| (node.position, node.radius * thickness))
+            .collect();
+        let links: Vec<(u32, u32)> = tree.links();
+        // Whichever is under the pointer wins the highlight; the selection is
+        // what a menu command would act on when nothing is hovered.
+        let selected = self
+            .armature
+            .hovered()
+            .get()
+            .or(*self.armature.selected().get());
+        graphics.renderer.set_armature(
+            &gpu,
+            ArmatureView {
+                spheres: &spheres,
+                links: &links,
+                selected,
+                root: (!spheres.is_empty()).then_some(0),
+            },
+        );
     }
 
     /// The rings to draw: the pointer's, plus one for every place symmetry
@@ -386,12 +539,30 @@ impl App {
         // Hover first, and unconditionally: the ring should follow the pointer
         // during a stroke as well as before one.
         if let Some(point) = input.pointer {
-            self.hover = self.pick_at(point);
+            if self.rigging {
+                // The brush ring has no meaning while rigging; the highlighted
+                // sphere is the cursor.
+                self.hover = None;
+                if let Some((origin, direction)) = self.ray_at(point) {
+                    self.armature.hover(origin, direction);
+                }
+            } else {
+                self.hover = self.pick_at(point);
+            }
         }
 
         if input.released && self.drag != Drag::None {
-            if self.drag == Drag::Sculpt {
-                self.apply(Command::EndStroke);
+            match self.drag {
+                Drag::Sculpt => self.apply(Command::EndStroke),
+                Drag::Rig => {
+                    self.armature.release();
+                    self.rig_plane = None;
+                    // The same debt the stroke path pays off at the end of a
+                    // gesture: the per-edit re-mesh leaves seams where the
+                    // refilled region met the rest.
+                    self.settle_geometry();
+                }
+                _ => {}
             }
             self.drag = Drag::None;
         }
@@ -399,8 +570,15 @@ impl App {
         if let (Some(point), Some(button), true) =
             (input.pointer, input.pressed, input.over_viewport)
         {
-            let on_surface = self.pick_at(point).is_some();
+            // Rigging takes the primary button first, and only where it lands
+            // on a sphere: everywhere else the camera keeps working, so a rig
+            // can be turned to look at without leaving the mode.
+            let rigged = self.rigging
+                && button == egui::PointerButton::Primary
+                && self.begin_rig(point, input);
+            let on_surface = !rigged && self.pick_at(point).is_some();
             let started = match button {
+                _ if rigged => Drag::Rig,
                 egui::PointerButton::Middle => Drag::Pan,
                 egui::PointerButton::Secondary => Drag::Orbit,
                 // On the surface it sculpts; off it, it orbits. That is
@@ -421,6 +599,15 @@ impl App {
                 Drag::Sculpt => {
                     if let Some(point) = input.pointer {
                         self.stroke_at(point, false);
+                    }
+                }
+                Drag::Rig => {
+                    if let Some(at) = input.pointer.and_then(|point| self.on_rig_plane(point)) {
+                        self.armature.drag(at);
+                        // Live, like a stroke: the surface follows the sphere
+                        // rather than appearing when the pointer comes up.
+                        self.sync_geometry();
+                        self.document_vm.touched();
                     }
                 }
                 Drag::Orbit => self
@@ -447,6 +634,12 @@ impl App {
             eprintln!("{e}");
         }
         self.mask.dispatch(&command);
+        // A rig belongs to a layer, so choosing another layer changes which
+        // one — or whether there is one at all.
+        if matches!(command, Command::SelectLayer(_)) {
+            self.armature.refresh();
+            self.rigging = self.rigging && self.armature.is_rigging();
+        }
         if command.touches_document() {
             self.scene.refresh();
             // Painting a mask arrives as a stroke, which this ViewModel never
@@ -515,6 +708,7 @@ impl App {
         let state = ShellState {
             strings: self.strings,
             mask: *self.mask.state().get(),
+            armature: self.armature_state(),
             extrude: *self.mask.extrude_settings().get(),
             document_name: document_name.as_str(),
             modified: *self.document_vm.modified().get(),
@@ -607,6 +801,7 @@ impl App {
             ]
         });
         self.sync_symmetry_overlay();
+        self.sync_armature_view();
 
         let graphics = self.graphics.as_mut().expect("graphics");
         let frame = match graphics.surface.acquire(&graphics.gpu) {
@@ -654,6 +849,41 @@ impl App {
                     graphics.renderer.set_matcap(&gpu, next);
                 }
                 self.request_redraw();
+            }
+            Command::NewArmature => {
+                // At the middle of what is already there, so the first sphere
+                // lands inside the model rather than at a world origin that
+                // may be nowhere near it.
+                let at = self
+                    .sculpt
+                    .bounds()
+                    .map(|(min, max)| {
+                        [
+                            (min[0] + max[0]) * 0.5,
+                            (min[1] + max[1]) * 0.5,
+                            (min[2] + max[2]) * 0.5,
+                        ]
+                    })
+                    .unwrap_or([0.0; 3]);
+                self.armature.begin(at);
+                self.rigging = self.armature.is_rigging();
+                self.after_armature_edit();
+            }
+            Command::ToggleArmatureEditing => {
+                self.rigging = !self.rigging && self.armature.is_rigging();
+                self.request_redraw();
+            }
+            Command::RemoveZsphere => {
+                self.armature.remove_selected();
+                self.after_armature_edit();
+            }
+            Command::SetArmatureMirror(on) => {
+                self.armature.set_symmetric(on);
+                self.request_redraw();
+            }
+            Command::SetSkinThickness(thickness) => {
+                self.armature.set_skin(SkinSettings { thickness });
+                self.after_armature_edit();
             }
             Command::SetViewPreset(preset) => {
                 self.camera.apply_preset(match preset {
@@ -828,6 +1058,10 @@ impl ApplicationHandler for App {
                     KeyCode::Digit2 => Some(Command::SetViewPreset(ViewPresetKind::Front)),
                     KeyCode::Digit3 => Some(Command::SetViewPreset(ViewPresetKind::Side)),
                     KeyCode::Digit4 => Some(Command::SetViewPreset(ViewPresetKind::Top)),
+                    KeyCode::KeyA => Some(Command::ToggleArmatureEditing),
+                    KeyCode::Delete | KeyCode::Backspace if self.rigging => {
+                        Some(Command::RemoveZsphere)
+                    }
                     KeyCode::KeyF => Some(Command::FrameAll),
                     KeyCode::KeyM => Some(Command::NextMaterial),
                     KeyCode::KeyX => Some(Command::ToggleSymmetry(Axis::X)),

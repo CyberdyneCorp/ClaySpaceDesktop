@@ -33,9 +33,9 @@ pub use layout::{Layout, Panel};
 pub use matcap::MatCap;
 pub use offscreen::{Image, OffscreenTarget};
 pub use renderer::{
-    mirrored_cursors, BrushCursor, GpuMesh, Overlays, Renderer, SymmetryAxis, Vertex,
+    mirrored_cursors, ArmatureView, BrushCursor, GpuMesh, Overlays, Renderer, SymmetryAxis, Vertex,
 };
-pub use shell::{apply_theme, ShellState};
+pub use shell::{apply_theme, ArmatureState, ShellState};
 pub use shortcuts::{Action, Chord, Conflict, Key, Shortcuts};
 pub use strings::{Locale, Strings};
 pub use window::{SurfaceLoss, WindowSurface};

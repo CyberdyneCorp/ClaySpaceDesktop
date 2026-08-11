@@ -214,9 +214,15 @@ impl SculptViewModel {
             Command::SetBrushAccumulate(on) => self.edit_brush(|b| b.shaping.accumulate = on),
             Command::SetBrushSmoothing(value) => self.edit_brush(|b| b.shaping.smoothing = value),
 
-            // Scene, layer and mask commands belong to other ViewModels; the
-            // sculpting one ignores them rather than half-handling them.
-            Command::ApplyMaskOp(_)
+            // Scene, layer, mask and armature commands belong to other
+            // ViewModels; the sculpting one ignores them rather than
+            // half-handling them.
+            Command::NewArmature
+            | Command::ToggleArmatureEditing
+            | Command::RemoveZsphere
+            | Command::SetArmatureMirror(_)
+            | Command::SetSkinThickness(_)
+            | Command::ApplyMaskOp(_)
             | Command::ExtrudeMask(_)
             | Command::SelectLayer(_)
             | Command::SetLayerVisible(..)

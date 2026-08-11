@@ -260,6 +260,19 @@ pub fn mirrored_cursors(cursor: BrushCursor, symmetry: [bool; 3]) -> Vec<BrushCu
     cursors
 }
 
+/// The rig as the viewport should draw it.
+#[derive(Debug, Clone, Copy)]
+pub struct ArmatureView<'a> {
+    /// Every sphere: position and radius.
+    pub spheres: &'a [([f32; 3], f32)],
+    /// Index pairs joined by a link.
+    pub links: &'a [(u32, u32)],
+    /// The one under the pointer or being dragged, drawn brighter.
+    pub selected: Option<u32>,
+    /// The root, which gets its own colour so a rig has a readable origin.
+    pub root: Option<u32>,
+}
+
 /// Which plane the symmetry indicator sits on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymmetryAxis {
@@ -287,6 +300,8 @@ pub struct Renderer {
     pub show_gizmo: bool,
     overlay_mesh: GpuMesh,
     cursor_mesh: GpuMesh,
+    /// The ZSphere rig, drawn over the surface it skins.
+    armature_mesh: GpuMesh,
     /// The rectangle of the frame the scene is drawn into, in physical pixels.
     scene_viewport: Option<[f32; 4]>,
     gizmo_mesh: GpuMesh,
@@ -431,6 +446,7 @@ impl Renderer {
             show_gizmo: false,
             overlay_mesh: GpuMesh::new(gpu),
             cursor_mesh: GpuMesh::new(gpu),
+            armature_mesh: GpuMesh::new(gpu),
             scene_viewport: None,
             gizmo_mesh: {
                 let mut mesh = GpuMesh::new(gpu);
@@ -486,6 +502,17 @@ impl Renderer {
             indices.extend(ring_indices.into_iter().map(|i| i + base));
         }
         self.cursor_mesh.upload(gpu, &vertices, &indices);
+    }
+
+    /// Draws the ZSphere rig: a ring per sphere and a line down each link.
+    ///
+    /// Rings rather than shaded balls, and drawn after the surface so they
+    /// read through it. ZBrush shows its ZSpheres over the preview for the
+    /// same reason: a rig you cannot see inside the skin is a rig you cannot
+    /// edit.
+    pub fn set_armature(&mut self, gpu: &Gpu, view: ArmatureView<'_>) {
+        let (vertices, indices) = armature_geometry(view);
+        self.armature_mesh.upload(gpu, &vertices, &indices);
     }
 
     /// Confines the scene to a rectangle of the frame, in physical pixels.
@@ -611,6 +638,17 @@ impl Renderer {
                     wgpu::IndexFormat::Uint32,
                 );
                 pass.draw_indexed(0..self.cursor_mesh.index_count, 0, 0..1);
+            }
+
+            // The rig, over the surface it skins.
+            if !self.armature_mesh.is_empty() {
+                pass.set_pipeline(&self.overlay_pipeline);
+                pass.set_vertex_buffer(0, self.armature_mesh.vertices.slice(..));
+                pass.set_index_buffer(
+                    self.armature_mesh.indices.slice(..),
+                    wgpu::IndexFormat::Uint32,
+                );
+                pass.draw_indexed(0..self.armature_mesh.index_count, 0, 0..1);
             }
 
             // The navigation gizmo, in its own corner viewport so it keeps a
@@ -911,6 +949,89 @@ fn cursor_geometry(cursor: BrushCursor) -> (Vec<Vertex>, Vec<u32>) {
         }
     }
     indices.extend_from_slice(&[base, base + 1, base + 2, base + 3]);
+
+    (vertices, indices)
+}
+
+/// Three rings and a cross per sphere, and a line per link.
+///
+/// Three rings rather than one: a single ring lies in the view plane and a rig
+/// then reads as flat, which is exactly the information a rig has to convey.
+fn armature_geometry(view: ArmatureView<'_>) -> (Vec<Vertex>, Vec<u32>) {
+    const SEGMENTS: usize = 24;
+    /// How far outside the skin the hoops sit.
+    ///
+    /// At a joint the skin *is* the sphere, so a hoop at the same radius is
+    /// coincident with the surface it exists to annotate and vanishes into it.
+    /// The first version drew rings flush and the rig was invisible over its
+    /// own skin — 0.097 of the frame covered with the scaffolding on, and
+    /// 0.097 with it off.
+    const PROUD: f32 = 1.05;
+    /// And a floor, so a small sphere is still ringed rather than swallowed by
+    /// the surface's own thickness.
+    const MARGIN: f32 = 0.01;
+    let mut vertices: Vec<Vertex> = Vec::new();
+    let mut indices: Vec<u32> = Vec::new();
+
+    let mut ring = |centre: Vec3, radius: f32, axis: usize, color: [f32; 3]| {
+        let base = vertices.len() as u32;
+        for i in 0..SEGMENTS {
+            let angle = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+            let (s, c) = angle.sin_cos();
+            let offset = match axis {
+                0 => Vec3::new(0.0, c, s),
+                1 => Vec3::new(c, 0.0, s),
+                _ => Vec3::new(c, s, 0.0),
+            };
+            vertices.push(Vertex {
+                position: (centre + offset * radius).into(),
+                normal: [0.0, 1.0, 0.0],
+                color,
+            });
+            indices.push(base + i as u32);
+            indices.push(base + ((i + 1) % SEGMENTS) as u32);
+        }
+    };
+
+    for (index, (position, radius)) in view.spheres.iter().enumerate() {
+        let index = index as u32;
+        // The selected sphere is the accent at full strength; the root is
+        // distinguished so a rig has a readable origin; the rest are quiet.
+        let color = if view.selected == Some(index) {
+            palette::ACCENT
+        } else if view.root == Some(index) {
+            palette::dimmed(palette::ACCENT, 0.7)
+        } else {
+            palette::dimmed(palette::FOREGROUND, 0.55)
+        };
+        let centre = Vec3::from(*position);
+        let hoop = radius * PROUD + MARGIN;
+        for axis in 0..3 {
+            ring(centre, hoop, axis, color);
+        }
+    }
+
+    // A line down each link, so the tree's shape is visible where the spheres
+    // are far apart.
+    for (child, parent) in view.links {
+        let (Some((a, _)), Some((b, _))) = (
+            view.spheres.get(*child as usize),
+            view.spheres.get(*parent as usize),
+        ) else {
+            continue;
+        };
+        let color = palette::dimmed(palette::ACCENT, 0.45);
+        let base = vertices.len() as u32;
+        for point in [Vec3::from(*a), Vec3::from(*b)] {
+            vertices.push(Vertex {
+                position: point.into(),
+                normal: [0.0, 1.0, 0.0],
+                color,
+            });
+        }
+        indices.push(base);
+        indices.push(base + 1);
+    }
 
     (vertices, indices)
 }

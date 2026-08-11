@@ -63,6 +63,36 @@ producing an error you cannot act on.
 Symmetry about X, Y and Z is applied through the layer's mirror, so both halves
 belong to one operation and undo together.
 
+## Armatures
+
+ZSpheres, with ZBrush's gesture: **drag out of a sphere to grow the next one.**
+There is no separate add mode — where the press lands decides what happens,
+which is what makes rigging feel like modelling rather than filling in a form.
+
+- Hold **Alt** over a sphere to move it instead. Everything under it comes
+  along, in the tree *and* in the surface: lift a shoulder and the arm follows.
+- Hold **⌘** to resize; the radius follows the distance from the sphere's
+  centre.
+- A press on empty space still orbits, so a rig can be turned to look at
+  without leaving the mode.
+- Mirrored authoring is on by default. One drag makes two limbs, and the
+  reflection hangs off the *parent's* reflection, so two arms end up on two
+  shoulders. A sphere on the mirror plane is added once, which is what stops a
+  spine growing two of everything.
+- The gesture plane faces the camera and passes through whatever was grabbed,
+  fixed at the press rather than re-derived per sample — a plane that follows
+  the pointer drifts, and the sphere slides away from the cursor.
+- Skin thickness is a multiplier over the authored radii, so the slider is
+  reversible and never rewrites the rig.
+- The scaffolding — three hoops per sphere, a line per link — draws only while
+  rigging, and sits slightly proud of the skin. Flush hoops are invisible,
+  because at a joint the skin *is* the sphere.
+- **Escultura** opens a rig; `A` toggles editing; `Delete` removes the selected
+  sphere and everything under it. The root refuses to be removed.
+
+Picking takes the sphere nearest the eye. Rigs overlap constantly — a shoulder
+sits inside a torso — and picking the far one makes a chest impossible to grab.
+
 ## Viewport
 
 - MatCap shading with five built-in materials, generated rather than shipped as
@@ -132,9 +162,8 @@ Backend choice affects speed, never results.
 
 ## Not built yet
 
-Documents cannot be saved or opened from the interface, there is no export
-dialog, panels cannot be resized or collapsed, shortcuts are fixed, and the
-scene tree and layer stack read a fixture rather than the live document. See
+There is no mesh import or export dialog, no autosave and no recent-file list,
+panels cannot be resized or collapsed, and shortcuts are fixed. See
 [roadmap.md](roadmap.md).
 
 ## Deliberately absent
@@ -163,4 +192,5 @@ issue and a test that fails when it is fixed.
 | Intensidade, on Add-based tools | No effect — a stroke at 0 deposits as much as one at 1. **Fixed upstream, awaiting a release** | [#61](https://github.com/CyberdyneCorp/ClayCore/issues/61) |
 | Simetria | Off by default. The layer mirror had no observable effect. **Fixed upstream, awaiting a release** | [#60](https://github.com/CyberdyneCorp/ClayCore/issues/60) |
 | Layer names after reopening | Lost, along with visibility and stack order. Ids are recovered by probing | [#69](https://github.com/CyberdyneCorp/ClayCore/issues/69) |
+| Armature trees after reopening | The skinned surface survives; the tree does not. `clay_layer_stroke_points` reads positions and radii back, but nothing reads the parent array, and a rig without its topology is not a rig. A reopened document reports no armature rather than inventing a plausible one | not yet filed |
 | Seams while dragging | A stroke leaves faint slivers until the pointer comes up, when a full re-mesh clears them. **Fixed upstream, awaiting a release** | [#66](https://github.com/CyberdyneCorp/ClayCore/issues/66) |

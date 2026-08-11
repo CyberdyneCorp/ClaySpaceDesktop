@@ -24,9 +24,29 @@ use crate::strings::Strings;
 /// Assembled by the composition root from the ViewModels. Passing one struct
 /// rather than a dozen arguments keeps a View function's signature honest
 /// about being a function of state.
+/// What the interface needs to know about the rig.
+///
+/// A summary rather than the tree itself: the shell draws no spheres — the
+/// viewport does — and handing it the tree would invite it to.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ArmatureState {
+    /// Whether the active layer has a rig at all.
+    pub exists: bool,
+    /// Whether the pointer is currently rigging rather than sculpting.
+    pub editing: bool,
+    /// Whether a sphere is selected, which is what makes removal meaningful.
+    pub selection: bool,
+    /// How many spheres, for the readout.
+    pub spheres: usize,
+    pub mirror: bool,
+    pub skin: f32,
+}
+
 pub struct ShellState<'a> {
     /// What is frozen, for the mask menu.
     pub mask: MaskState,
+    /// The rig, as the menu and the armature panel need it.
+    pub armature: ArmatureState,
     /// What an extrusion would use.
     pub extrude: ExtrudeSettings,
     pub strings: &'a Strings,
@@ -223,7 +243,36 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                     ui.close_menu();
                 }
             });
-            ui.menu_button(s.menu_sculpt, |_| {});
+            ui.menu_button(s.menu_sculpt, |ui| {
+                if ui.button(s.action_armature_new).clicked() {
+                    queue.push(Command::NewArmature);
+                    ui.close_menu();
+                }
+                // A checkbox rather than a button: this is the one mode in the
+                // application, and a mode you cannot see the state of is the
+                // kind that gets left on.
+                let mut editing = state.armature.editing;
+                if ui
+                    .add_enabled(
+                        state.armature.exists,
+                        egui::Checkbox::new(&mut editing, s.action_armature_edit),
+                    )
+                    .clicked()
+                {
+                    queue.push(Command::ToggleArmatureEditing);
+                    ui.close_menu();
+                }
+                if ui
+                    .add_enabled(
+                        state.armature.editing && state.armature.selection,
+                        egui::Button::new(s.action_armature_remove),
+                    )
+                    .clicked()
+                {
+                    queue.push(Command::RemoveZsphere);
+                    ui.close_menu();
+                }
+            });
             ui.menu_button(s.menu_brushes, |ui| {
                 for tool in ToolKind::ALL {
                     if ui.button(tool.label()).clicked() {
@@ -509,6 +558,36 @@ pub fn right_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
     readout(ui, s.label_vertices, thousands(state.stats.vertices));
     readout(ui, s.label_triangles, thousands(state.stats.triangles));
     readout(ui, s.label_objects, format!("{}", state.stats.objects));
+
+    if state.armature.exists {
+        heading(ui, s.section_armature);
+        readout(ui, s.label_spheres, format!("{}", state.armature.spheres));
+        if let Some(value) = slider(ui, s.label_skin, state.armature.skin, 0.5..=3.0, 2) {
+            queue.push(Command::SetSkinThickness(value));
+        }
+        let mut mirror = state.armature.mirror;
+        if ui.checkbox(&mut mirror, s.label_mirror_new).clicked() {
+            queue.push(Command::SetArmatureMirror(mirror));
+        }
+        if state.armature.editing {
+            // The gestures, where a person is when they need them. ZBrush
+            // teaches these by tutorial; one line costs nothing.
+            ui.label(
+                egui::RichText::new(s.hint_armature)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+            if ui
+                .add_enabled(
+                    state.armature.selection,
+                    egui::Button::new(s.action_armature_remove),
+                )
+                .clicked()
+            {
+                queue.push(Command::RemoveZsphere);
+            }
+        }
+    }
 
     heading(ui, s.section_brush_controls);
     if let Some(value) = slider(ui, s.label_noise, state.brush.shaping.noise, 0.0..=1.0, 2) {

@@ -19,6 +19,25 @@ use crate::{cstring, raw_failure, Backend};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LayerId(pub(crate) sys::clay_layer_id);
 
+/// One edit to a placed armature.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ArmatureEdit {
+    /// A new sphere under `target`.
+    AddChild {
+        position: [f32; 3],
+        radius: f32,
+    },
+    /// Moves `target` and its whole subtree by a delta.
+    Move {
+        delta: [f32; 3],
+    },
+    SetRadius {
+        radius: f32,
+    },
+    /// Removes `target` and everything under it.
+    Delete,
+}
+
 /// A node placed in a layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeId(pub(crate) sys::clay_node_id);
@@ -40,6 +59,54 @@ impl Item {
     /// Its points are set separately, so it takes no parameters here.
     pub fn stroke() -> Result<Self> {
         Self::new(sys::clay_prim::CLAY_PRIM_STROKE as i32, &[])
+    }
+
+    /// A tree of spheres, skinned by one sphere-swept cone per node-parent
+    /// pair — the engine's words, and ZBrush's ZSpheres.
+    ///
+    /// The nodes are the points [`Item::set_stroke_points`] takes; the tree is
+    /// the parent array beside them. An armature whose parents form a line is
+    /// a stroke and evaluates identically to one.
+    pub fn armature() -> Result<Self> {
+        Self::new(sys::clay_prim::CLAY_PRIM_ARMATURE as i32, &[])
+    }
+
+    /// One parent index per node; a node whose parent is itself is a root.
+    ///
+    /// An index outside the range, or a chain that closes a cycle, is refused
+    /// by the engine rather than accepted — a cycle would make the field
+    /// depend on traversal order rather than on the tree.
+    pub fn set_armature_parents(&mut self, parents: &[u32]) -> Result<()> {
+        // SAFETY: valid handle; `parents` holds exactly `len` indices.
+        check(
+            unsafe {
+                sys::clay_item_set_armature_parents(self.as_ptr(), parents.as_ptr(), parents.len())
+            },
+            "clay_item_set_armature_parents",
+        )
+    }
+
+    /// Appends one node under `parent`, or under the last node when `None`.
+    ///
+    /// `None` is what dragging a new sphere out of the previous one does.
+    pub fn add_child(
+        &mut self,
+        position: [f32; 3],
+        radius: f32,
+        parent: Option<u32>,
+    ) -> Result<()> {
+        // SAFETY: valid handle and a three-float position.
+        check(
+            unsafe {
+                sys::clay_item_add_child(
+                    self.as_ptr(),
+                    position.as_ptr(),
+                    radius,
+                    parent.map_or(-1, |p| p as i32),
+                )
+            },
+            "clay_item_add_child",
+        )
     }
 
     /// The chain's control points, as `x y z r` quadruples.

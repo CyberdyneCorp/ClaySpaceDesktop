@@ -9,9 +9,10 @@ use claycore::{
     LayerId, Mask, NodeId, Op, StrokePreset, VoxelGrid,
 };
 use clayspace_model::{
-    BrushSettings, DocumentModel, EditOutcome, ExtrudeSettings, GestureSample, HistoryState,
-    LayerKey, LayerSummary, MaskModel, MaskOp, MaskState, ModelError, OpenError, Protection,
-    Representation, Scene, SceneModel, SceneNode, SceneStats, SculptModel, ToolKind,
+    Armature, ArmatureModel, BrushSettings, DocumentModel, EditOutcome, ExtrudeSettings,
+    GestureSample, HistoryState, LayerKey, LayerSummary, MaskModel, MaskOp, MaskState, ModelError,
+    NodeIndex, OpenError, Protection, Representation, Scene, SceneModel, SceneNode, SceneStats,
+    SculptModel, SkinSettings, ToolKind,
 };
 
 use crate::backend::{BackendPolicy, Operation};
@@ -68,6 +69,20 @@ pub struct ClayDocument {
     /// different layer after a removal.
     next_key: u64,
     selected: Option<LayerKey>,
+    /// The armature on the active layer: which node carries it, and the tree.
+    ///
+    /// The tree is held here because the engine's parent array has no getter —
+    /// positions and radii read back, the topology does not. So this is the
+    /// record and the engine is written from it.
+    armature: Option<(LayerId, NodeId, Armature)>,
+    /// The box the placed armature last occupied.
+    ///
+    /// Kept because an edit that *shrinks* a rig leaves surface behind
+    /// otherwise: the new node's own region is refilled when it is placed, and
+    /// the bricks the old one used are never told anything changed. Removing an
+    /// arm left the arm on screen.
+    armature_bounds: Option<([f32; 3], [f32; 3])>,
+    skin: SkinSettings,
 }
 
 impl ClayDocument {
@@ -129,6 +144,9 @@ impl ClayDocument {
             symmetry,
             next_key: 2,
             selected: None,
+            armature: None,
+            armature_bounds: None,
+            skin: SkinSettings::default(),
         };
         model.refresh_stats();
         Ok(model)
@@ -1402,6 +1420,9 @@ impl ClayDocument {
             symmetry: [false; 3],
             next_key,
             selected: None,
+            armature: None,
+            armature_bounds: None,
+            skin: SkinSettings::default(),
         };
 
         // Undo starts recording from here: opening is not something the user
@@ -1515,5 +1536,217 @@ impl MaskModel for ClayDocument {
         self.refill(id, &[node])?;
         self.refresh_stats();
         Ok(())
+    }
+}
+
+impl ArmatureModel for ClayDocument {
+    fn armature(&self) -> Option<Armature> {
+        let (layer, _, tree) = self.armature.as_ref()?;
+        // Only while it still belongs to the layer being worked on: an
+        // armature on a hidden layer is not the one a click should edit.
+        (*layer == self.active_layer().id).then(|| tree.clone())
+    }
+
+    fn begin_armature(&mut self, position: [f32; 3], radius: f32) -> Result<(), ModelError> {
+        let layer = self.active_layer().id;
+        let tree = Armature::rooted(position, radius);
+        let node = self.place_armature(layer, &tree)?;
+        self.armature = Some((layer, node, tree));
+        Ok(())
+    }
+
+    fn add_zsphere(
+        &mut self,
+        parent: NodeIndex,
+        position: [f32; 3],
+        radius: f32,
+        mirrored: bool,
+    ) -> Result<NodeIndex, ModelError> {
+        let Some((_, _, tree)) = self.armature.as_mut() else {
+            return Err(ModelError::engine("não há armadura nesta camada"));
+        };
+        if tree.get(parent).is_none() {
+            return Err(ModelError::engine("essa esfera não existe"));
+        }
+        let index = tree.add_child(parent, position, radius);
+
+        // The reflection, in the same edit. The engine does this itself for a
+        // placed armature; the tree is mirrored here to match, since the host
+        // holds the topology.
+        if mirrored {
+            if let Some(reflected) = Armature::mirrored_position(position) {
+                // Under the mirror of the parent where there is one, which is
+                // what keeps two arms hanging off two shoulders rather than
+                // both off the same one.
+                let mirror_parent = self.mirror_of(parent).unwrap_or(parent);
+                if let Some((_, _, tree)) = self.armature.as_mut() {
+                    tree.add_child(mirror_parent, reflected, radius);
+                }
+            }
+        }
+
+        self.rewrite_armature()?;
+        Ok(index)
+    }
+
+    fn move_zsphere(&mut self, index: NodeIndex, delta: [f32; 3]) -> Result<(), ModelError> {
+        let Some((_, _, tree)) = self.armature.as_mut() else {
+            return Err(ModelError::engine("não há armadura nesta camada"));
+        };
+        tree.move_subtree(index, delta);
+        self.rewrite_armature()
+    }
+
+    fn resize_zsphere(&mut self, index: NodeIndex, radius: f32) -> Result<(), ModelError> {
+        let Some((_, _, tree)) = self.armature.as_mut() else {
+            return Err(ModelError::engine("não há armadura nesta camada"));
+        };
+        tree.set_radius(index, radius);
+        self.rewrite_armature()
+    }
+
+    fn reparent_zsphere(
+        &mut self,
+        index: NodeIndex,
+        new_parent: NodeIndex,
+    ) -> Result<(), ModelError> {
+        // Reparenting has no entry point of its own — the tree edits are add,
+        // move, set-radius and delete — so it is done by rewriting the whole
+        // node, which is what the engine does underneath for every one of them
+        // anyway.
+        let Some((_, _, tree)) = self.armature.as_mut() else {
+            return Err(ModelError::engine("não há armadura nesta camada"));
+        };
+        tree.reparent(index, new_parent)?;
+        self.rewrite_armature()
+    }
+
+    fn remove_zsphere(&mut self, index: NodeIndex) -> Result<(), ModelError> {
+        let Some((_, _, tree)) = self.armature.as_mut() else {
+            return Err(ModelError::engine("não há armadura nesta camada"));
+        };
+        if tree.nodes.len() <= 1 {
+            return Err(ModelError::engine(
+                "a armadura ficaria sem raiz; remova a camada",
+            ));
+        }
+        if index == 0 {
+            return Err(ModelError::engine("a raiz não pode ser removida"));
+        }
+        tree.remove(index);
+        self.rewrite_armature()
+    }
+
+    fn set_skin(&mut self, skin: SkinSettings) -> Result<(), ModelError> {
+        self.skin = skin;
+        if self.armature.is_some() {
+            self.rewrite_armature()?;
+        }
+        Ok(())
+    }
+
+    fn skin(&self) -> SkinSettings {
+        self.skin
+    }
+}
+
+impl ClayDocument {
+    /// Builds the item and places it, returning the node that carries it.
+    fn place_armature(&mut self, layer: LayerId, tree: &Armature) -> Result<NodeId, ModelError> {
+        let mut item = Item::armature().map_err(ModelError::engine)?;
+
+        // Radii scaled on the way out. The tree keeps what was authored, so
+        // moving the thickness slider is reversible and does not quietly
+        // rewrite the rig.
+        let points: Vec<f32> = tree
+            .nodes
+            .iter()
+            .flat_map(|n| {
+                [
+                    n.position[0],
+                    n.position[1],
+                    n.position[2],
+                    self.skin.radius_for(n.radius),
+                ]
+            })
+            .collect();
+        item.set_stroke_points(&points)
+            .map_err(ModelError::engine)?;
+
+        let parents: Vec<u32> = tree.nodes.iter().map(|n| n.parent).collect();
+        item.set_armature_parents(&parents)
+            .map_err(ModelError::engine)?;
+
+        // No blend term: `clay_item_set_stroke_blend_k` refuses an armature
+        // ("stroke points need CLAY_PRIM_STROKE"). The skin is the cones
+        // between the spheres, so thickness lives in the radii above.
+        item.set_op(Op::Add).map_err(ModelError::engine)?;
+
+        let node = self
+            .document
+            .add_item(layer, &item)
+            .map_err(ModelError::engine)?;
+        self.armature_bounds = Some(Self::armature_bounds(tree, self.skin));
+        self.refill(layer, &[node])?;
+        self.refresh_stats();
+        Ok(node)
+    }
+
+    /// The box a tree occupies, spheres and all.
+    fn armature_bounds(tree: &Armature, skin: SkinSettings) -> ([f32; 3], [f32; 3]) {
+        let mut min = [f32::INFINITY; 3];
+        let mut max = [f32::NEG_INFINITY; 3];
+        for node in &tree.nodes {
+            let r = skin.radius_for(node.radius);
+            for axis in 0..3 {
+                min[axis] = min[axis].min(node.position[axis] - r);
+                max[axis] = max[axis].max(node.position[axis] + r);
+            }
+        }
+        if !min[0].is_finite() {
+            return ([0.0; 3], [0.0; 3]);
+        }
+        (min, max)
+    }
+
+    /// Replaces the placed armature with what the tree now says.
+    ///
+    /// Every edit goes through here rather than through
+    /// `clay_layer_armature_edit`, for one reason: reparenting has no op there,
+    /// and a rig that could do four of its five edits one way and the fifth
+    /// another would be two code paths to keep in step. The engine's own
+    /// implementation of those ops is a whole-tree replace, so this costs what
+    /// they cost.
+    fn rewrite_armature(&mut self) -> Result<(), ModelError> {
+        let Some((layer, node, tree)) = self.armature.take() else {
+            return Ok(());
+        };
+        // Where it was, before it is replaced by where it now is.
+        let vacated = self.armature_bounds;
+
+        self.document
+            .remove_node(layer, node)
+            .map_err(ModelError::engine)?;
+        let fresh = self.place_armature(layer, &tree)?;
+        self.armature = Some((layer, fresh, tree));
+
+        // An edit that shrinks the rig leaves its old surface behind
+        // otherwise: placing the new node refills the region it occupies, and
+        // nothing tells the bricks the old one used that anything changed.
+        if let Some((min, max)) = vacated {
+            self.refill_region(min, max)?;
+        }
+        Ok(())
+    }
+
+    /// The node reflecting `index` through x = 0, if the tree holds one.
+    fn mirror_of(&self, index: NodeIndex) -> Option<NodeIndex> {
+        let (_, _, tree) = self.armature.as_ref()?;
+        let node = tree.get(index)?;
+        let target = Armature::mirrored_position(node.position)?;
+        tree.nodes
+            .iter()
+            .position(|other| (0..3).all(|axis| (other.position[axis] - target[axis]).abs() < 1e-4))
+            .map(|i| i as NodeIndex)
     }
 }

@@ -34,6 +34,20 @@ pub enum Command {
     AddLayer,
     RemoveLayer(LayerKey),
 
+    // -- armatures --------------------------------------------------------
+    /// Starts a rig on the active layer, replacing whatever it had.
+    NewArmature,
+    /// Turns rigging on and off. The pointer means different things in each,
+    /// so this is a mode — the one mode in the application, and the reason it
+    /// is stated in the menu rather than inferred.
+    ToggleArmatureEditing,
+    /// Removes the selected sphere and everything hanging off it.
+    RemoveZsphere,
+    /// Whether a new sphere is mirrored as it is added.
+    SetArmatureMirror(bool),
+    /// The skin thickness, as a multiplier on the authored radii.
+    SetSkinThickness(f32),
+
     // -- the sculpting gesture -------------------------------------------
     /// A stroke began at a point on the surface.
     BeginStroke {
@@ -85,8 +99,11 @@ impl Command {
                 | Self::SetBrushSmoothing(_)
                 | Self::ToggleSymmetry(_)
                 // Choosing which layer to work on changes nothing in the
-                // document; changing that layer does.
+                // document; changing that layer does. Entering rigging is the
+                // same: it changes what the pointer means, not the surface.
                 | Self::SelectLayer(_)
+                | Self::ToggleArmatureEditing
+                | Self::SetArmatureMirror(_)
         )
     }
 
@@ -108,6 +125,11 @@ impl Command {
             Self::AddLayer => "new layer",
             Self::RemoveLayer(_) => "remove layer",
             Self::ToggleSymmetry(_) => "symmetry",
+            Self::NewArmature => "new armature",
+            Self::ToggleArmatureEditing => "edit armature",
+            Self::RemoveZsphere => "remove zsphere",
+            Self::SetArmatureMirror(_) => "armature mirror",
+            Self::SetSkinThickness(_) => "skin thickness",
             Self::BeginStroke { .. } => "begin stroke",
             Self::ContinueStroke { .. } => "continue stroke",
             Self::EndStroke => "stroke",
