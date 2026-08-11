@@ -97,15 +97,15 @@ pub fn apply_theme(ctx: &egui::Context) {
 
     // Quiet at rest, gaining contrast on hover and while being adjusted.
     visuals.widgets.noninteractive.bg_fill = Tokens::panel();
-    visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, Tokens::text_dim());
+    visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0_f32, Tokens::text_dim());
     visuals.widgets.inactive.bg_fill = Tokens::raised();
-    visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, Tokens::text_dim());
+    visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0_f32, Tokens::text_dim());
     visuals.widgets.hovered.bg_fill = Tokens::raised();
-    visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, Tokens::text());
+    visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0_f32, Tokens::text());
     visuals.widgets.active.bg_fill = Tokens::raised();
-    visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, Tokens::text());
+    visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0_f32, Tokens::text());
     visuals.selection.bg_fill = Tokens::raised();
-    visuals.selection.stroke = egui::Stroke::new(1.0, Tokens::text());
+    visuals.selection.stroke = egui::Stroke::new(1.0_f32, Tokens::text());
 
     ctx.set_visuals(visuals);
 
@@ -659,7 +659,7 @@ fn paint_sphere(ui: &egui::Ui, rect: egui::Rect, tint: egui::Color32, active: bo
         painter.circle_stroke(
             centre,
             radius + 3.0,
-            egui::Stroke::new(1.5, Tokens::accent()),
+            egui::Stroke::new(1.5_f32, Tokens::accent()),
         );
     }
 }

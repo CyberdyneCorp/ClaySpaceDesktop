@@ -33,12 +33,14 @@ jobs:
           - name: macOS, CPU only
             os: macos-14
             features: ""
+            cpu_only: true
           - name: macOS, Metal
             os: macos-14
             features: "--features clayspace-engine/metal"
           - name: Linux, CPU only
             os: ubuntu-24.04
             features: ""
+            cpu_only: true
           - name: Linux, Vulkan
             os: ubuntu-24.04
             features: "--features clayspace-engine/vulkan"
@@ -50,6 +52,12 @@ jobs:
           submodules: recursive
 
       - uses: dtolnay/rust-toolchain@stable
+
+      # Without this the probe finds Metal on macOS and the "CPU only" row
+      # tests what the Metal row already tests.
+      - name: Ask for a CPU-only engine
+        if: matrix.cpu_only
+        run: echo "CLAYCORE_CPU_ONLY=1" >> "$GITHUB_ENV"
 
       - name: Cache cargo and the engine build
         uses: Swatinem/rust-cache@v2
@@ -70,8 +78,10 @@ jobs:
       - name: Vulkan SDK
         if: matrix.vulkan
         run: |
+          # `libvulkan-dev` carries the headers; there is no `vulkan-headers`
+          # package on Ubuntu 24.04, which is what the first attempt tried.
           sudo apt-get install -y --no-install-recommends \
-            libvulkan-dev vulkan-headers glslang-tools
+            libvulkan-dev glslang-tools spirv-tools
           # The engine's build script looks for VULKAN_SDK. The distribution
           # packages install into /usr, which is a valid SDK root for its
           # purposes.
@@ -92,6 +102,42 @@ jobs:
       # here.
       - name: Test (release)
         run: cargo test --workspace --release ${{ matrix.features }}
+
+  # Figures, not assertions. The gate is a *regression* against a recorded
+  # baseline — the specification asks for performance to be measured in CI
+  # rather than asserted there, and absolute budgets that hold on a developer's
+  # machine and not on a shared runner teach people to ignore the gate.
+  # Budget breaches are printed either way.
+  benchmark:
+    name: Performance
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: benchmark
+
+      - name: Measure
+        run: |
+          cargo run --release --bin bench -- \
+            --json "$RUNNER_TEMP/now.json" \
+            --baseline benchmarks/baseline-macos-aarch64.json \
+            | tee "$RUNNER_TEMP/report.txt"
+
+      # The figures outlive the run, so a regression can be looked at rather
+      # than re-measured.
+      - name: Keep the figures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/now.json
+            ${{ runner.temp }}/report.txt
 
   lint:
     name: Format, lint and audit

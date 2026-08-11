@@ -108,6 +108,16 @@ fn select_backends() -> Backends {
     let asked =
         |name: &str| std::env::var(format!("CARGO_FEATURE_{}", name.to_uppercase())).is_ok();
 
+    // A way to ask for no accelerated backend at all.
+    //
+    // Probing the platform is right for a developer build, and wrong for the
+    // CI row named "CPU only": on macOS the probe finds Metal and the row
+    // silently tests the same configuration as the row next to it. The CPU
+    // backend is compiled into the engine unconditionally, so this asks for
+    // nothing rather than for something absent.
+    println!("cargo:rerun-if-env-changed=CLAYCORE_CPU_ONLY");
+    let cpu_only = std::env::var_os("CLAYCORE_CPU_ONLY").is_some();
+
     let (metal_req, cuda_req, vulkan_req, opencl_req) = (
         asked("metal"),
         asked("cuda"),
@@ -117,6 +127,15 @@ fn select_backends() -> Backends {
     let any_requested = metal_req || cuda_req || vulkan_req || opencl_req;
 
     let mut b = Backends::default();
+
+    if cpu_only && any_requested {
+        // Contradictory. Refusing beats picking one silently: whichever way it
+        // went, the build would not be the one someone asked for.
+        panic!(
+            "\n\nCLAYCORE_CPU_ONLY is set and an accelerated backend feature was \
+             also requested.\n\nDrop one of the two.\n"
+        );
+    }
 
     if metal_req {
         require(
@@ -147,7 +166,7 @@ fn select_backends() -> Backends {
         b.opencl = true;
     }
 
-    if !any_requested {
+    if !any_requested && !cpu_only {
         // Default: take what this machine can actually build.
         match target_os.as_str() {
             "macos" => b.metal = has_metal(),

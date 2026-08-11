@@ -134,6 +134,22 @@ impl ClayDocument {
         Ok(model)
     }
 
+    /// Places a sphere of the given radius in the first layer.
+    ///
+    /// Separate from [`ClayDocument::with_starting_form`] because the
+    /// benchmark's reference scenes differ only in scale, and building them
+    /// through the same path as the application keeps them honest.
+    pub fn add_starting_sphere(&mut self, radius: f32) -> Result<(), ModelError> {
+        let layer = self.layers[0].id;
+        let body = Item::sphere(radius).map_err(ModelError::engine)?;
+        self.document
+            .add_item(layer, &body)
+            .map_err(ModelError::engine)?;
+        self.refill(layer, &[])?;
+        self.refresh_stats();
+        Ok(())
+    }
+
     /// Places a starting sphere so there is something to sculpt on.
     pub fn with_starting_form(mut self) -> Result<Self, ModelError> {
         let layer = self.layers[0].id;
