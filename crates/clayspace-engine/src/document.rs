@@ -9,8 +9,8 @@ use claycore::{
     LayerId, Mask, NodeId, Op, StrokePreset, VoxelGrid,
 };
 use clayspace_model::{
-    BrushSettings, EditOutcome, GestureSample, HistoryState, ModelError, Representation,
-    SceneStats, SculptModel, ToolKind,
+    BrushSettings, EditOutcome, GestureSample, HistoryState, LayerKey, LayerSummary, ModelError,
+    Protection, Representation, Scene, SceneModel, SceneNode, SceneStats, SculptModel, ToolKind,
 };
 
 use crate::backend::{BackendPolicy, Operation};
@@ -18,10 +18,34 @@ use crate::backend::{BackendPolicy, Operation};
 /// A layer the document holds, and what it is made of.
 struct Layer {
     id: LayerId,
+    /// A stable handle the interface uses. Engine ids are not guaranteed to
+    /// survive an edit, so the interface is given one that is.
+    key: LayerKey,
+    name: String,
     representation: Representation,
     /// Voxel layers carry their own grid; SDF layers do not.
     grid: Option<VoxelGrid>,
-    editable: bool,
+    visible: bool,
+    protection: Protection,
+    intensity: u8,
+}
+
+impl Layer {
+    fn summary(&self) -> LayerSummary {
+        LayerSummary {
+            key: self.key,
+            name: self.name.clone(),
+            representation: self.representation,
+            visible: self.visible,
+            protection: self.protection,
+            intensity: self.intensity,
+        }
+    }
+
+    /// Whether an edit may touch it: shown, not ghosted, not locked.
+    fn editable(&self) -> bool {
+        self.visible && self.protection.is_editable()
+    }
 }
 
 /// A ClayCore document driven by the domain's vocabulary.
@@ -39,6 +63,10 @@ pub struct ClayDocument {
     /// The mirror currently set on the active layer, so it is only rewritten
     /// when it actually changes.
     symmetry: [bool; 3],
+    /// Hands out layer keys. Monotone, so a key is never reused for a
+    /// different layer after a removal.
+    next_key: u64,
+    selected: Option<LayerKey>,
 }
 
 impl ClayDocument {
@@ -72,9 +100,13 @@ impl ClayDocument {
             document,
             layers: vec![Layer {
                 id,
+                key: LayerKey(1),
+                name: "Forma".to_string(),
                 representation: Representation::Sdf,
                 grid: None,
-                editable: true,
+                visible: true,
+                protection: Protection::default(),
+                intensity: 100,
             }],
             active: 0,
             cache,
@@ -83,6 +115,8 @@ impl ClayDocument {
             stats: SceneStats::default(),
             mask: None,
             symmetry,
+            next_key: 2,
+            selected: None,
         };
         model.refresh_stats();
         Ok(model)
@@ -136,14 +170,32 @@ impl ClayDocument {
             .add_sdf_layer(name)
             .map_err(ModelError::engine)?;
         let grid = VoxelGrid::new(voxel_size).map_err(ModelError::engine)?;
+        let key = self.take_key();
         self.layers.push(Layer {
             id,
+            key,
+            name: name.to_string(),
             representation: Representation::Voxel,
             grid: Some(grid),
-            editable: true,
+            visible: true,
+            protection: Protection::default(),
+            intensity: 100,
         });
         self.active = self.layers.len() - 1;
         Ok(())
+    }
+
+    fn take_key(&mut self) -> LayerKey {
+        let key = LayerKey(self.next_key);
+        self.next_key += 1;
+        key
+    }
+
+    fn index_of(&self, key: LayerKey) -> Result<usize, ModelError> {
+        self.layers
+            .iter()
+            .position(|layer| layer.key == key)
+            .ok_or_else(|| ModelError::engine("that layer is no longer in the document"))
     }
 
     fn active_layer(&self) -> &Layer {
@@ -199,6 +251,7 @@ impl ClayDocument {
         Ok(())
     }
 
+    /// Whether a layer contributes to the surface an edit would touch.
     fn refresh_stats(&mut self) {
         // Counted from the cache rather than by meshing the document, which
         // would cost a full march on every edit.
@@ -548,7 +601,7 @@ impl SculptModel for ClayDocument {
     }
 
     fn active_layer_editable(&self) -> bool {
-        self.active_layer().editable
+        self.active_layer().editable()
     }
 
     fn apply_stroke(
@@ -642,3 +695,171 @@ impl SculptModel for ClayDocument {
 
 /// Kept so the routing type is visible to readers of this module's imports.
 const _: fn(Operation) -> &'static str = Operation::label;
+
+
+impl SceneModel for ClayDocument {
+    fn scene(&self) -> Scene {
+        // The tree mirrors the layer list for now: the engine's group
+        // structure is reachable through the C ABI but the document here
+        // builds no groups, so a flat tree is the truthful picture rather
+        // than an invented hierarchy.
+        let nodes = self
+            .layers
+            .iter()
+            .map(|layer| SceneNode {
+                key: layer.key,
+                name: layer.name.clone(),
+                depth: 0,
+                visible: layer.visible,
+                expandable: false,
+            })
+            .collect();
+
+        Scene {
+            nodes,
+            layers: self.layers.iter().map(Layer::summary).collect(),
+            active: self.layers.get(self.active).map(|layer| layer.key),
+            selected: self.selected,
+        }
+    }
+
+    fn set_active_layer(&mut self, key: LayerKey) -> Result<(), ModelError> {
+        self.active = self.index_of(key)?;
+        self.selected = Some(key);
+        Ok(())
+    }
+
+    fn set_layer_visible(&mut self, key: LayerKey, visible: bool) -> Result<(), ModelError> {
+        let index = self.index_of(key)?;
+        let id = self.layers[index].id;
+        self.document
+            .set_layer_visible(id, visible)
+            .map_err(ModelError::engine)?;
+        self.layers[index].visible = visible;
+        // Hiding a layer removes its contribution, so the surface moves.
+        self.refill(id, &[])?;
+        Ok(())
+    }
+
+    fn set_layer_protection(
+        &mut self,
+        key: LayerKey,
+        protection: Protection,
+    ) -> Result<(), ModelError> {
+        let index = self.index_of(key)?;
+        let id = self.layers[index].id;
+        self.document
+            .set_layer_protection(
+                id,
+                claycore::Protection {
+                    ghost: protection.ghost,
+                    locked: protection.locked,
+                },
+            )
+            .map_err(ModelError::engine)?;
+        self.layers[index].protection = protection;
+        Ok(())
+    }
+
+    fn rename_layer(&mut self, key: LayerKey, name: &str) -> Result<(), ModelError> {
+        let index = self.index_of(key)?;
+        // The engine names a layer at creation and does not rename; the name
+        // the interface shows is the document's own record of it.
+        self.layers[index].name = name.to_string();
+        Ok(())
+    }
+
+    fn add_layer(
+        &mut self,
+        name: &str,
+        representation: Representation,
+    ) -> Result<LayerKey, ModelError> {
+        let id = self
+            .document
+            .add_sdf_layer(name)
+            .map_err(ModelError::engine)?;
+        let key = self.take_key();
+        let grid = match representation {
+            Representation::Voxel => {
+                Some(VoxelGrid::new(0.02).map_err(ModelError::engine)?)
+            }
+            _ => None,
+        };
+        self.layers.push(Layer {
+            id,
+            key,
+            name: name.to_string(),
+            representation,
+            grid,
+            visible: true,
+            protection: Protection::default(),
+            intensity: 100,
+        });
+        self.active = self.layers.len() - 1;
+        Ok(key)
+    }
+
+    fn remove_layer(&mut self, key: LayerKey) -> Result<(), ModelError> {
+        let index = self.index_of(key)?;
+        if self.layers.len() == 1 {
+            return Err(ModelError::engine(
+                "a document keeps at least one layer to sculpt on",
+            ));
+        }
+        let id = self.layers[index].id;
+        self.document
+            .remove_layer(id)
+            .map_err(ModelError::engine)?;
+        self.layers.remove(index);
+        self.active = self.active.min(self.layers.len() - 1);
+        if self.selected == Some(key) {
+            self.selected = None;
+        }
+        let active = self.active_layer().id;
+        self.refill(active, &[])?;
+        Ok(())
+    }
+
+    fn move_layer(&mut self, key: LayerKey, index: usize) -> Result<(), ModelError> {
+        let from = self.index_of(key)?;
+        let to = index.min(self.layers.len().saturating_sub(1));
+        if from == to {
+            return Ok(());
+        }
+        let id = self.layers[from].id;
+        self.document
+            .move_layer(id, to as i32)
+            .map_err(ModelError::engine)?;
+
+        let layer = self.layers.remove(from);
+        self.layers.insert(to, layer);
+        // The active index follows the layer it pointed at.
+        self.active = self
+            .layers
+            .iter()
+            .position(|layer| layer.key == key)
+            .unwrap_or(self.active.min(self.layers.len() - 1));
+        let active = self.active_layer().id;
+        self.refill(active, &[])?;
+        Ok(())
+    }
+
+    fn select_at(&mut self, origin: [f32; 3], direction: [f32; 3]) -> Option<LayerKey> {
+        // Attributed, because a selection has to name what it selected. The
+        // engine excludes ghosted layers from picking, so honouring ghost is
+        // not something this has to reimplement.
+        let hit = self
+            .document
+            .raycast_attributed(origin, direction)
+            .ok()
+            .flatten();
+
+        self.selected = hit.and_then(|hit| hit.layer).and_then(|id| {
+            self.layers
+                .iter()
+                .find(|layer| layer.id == id)
+                .map(|layer| layer.key)
+        });
+        self.selected
+    }
+}

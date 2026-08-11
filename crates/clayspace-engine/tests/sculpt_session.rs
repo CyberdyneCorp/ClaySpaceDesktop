@@ -349,3 +349,189 @@ fn brush_shaping_reaches_the_engine_without_error() {
         }
     }
 }
+
+// -- scene and layers against a real document --------------------------------
+
+mod scene {
+    use super::*;
+    use clayspace_model::{LayerKey, Protection, Representation, SceneModel};
+    use clayspace_vm::SceneViewModel;
+
+    fn document() -> ClayDocument {
+        let policy = BackendPolicy::discover(None).expect("backends");
+        ClayDocument::new(policy)
+            .expect("document")
+            .with_starting_form()
+            .expect("starting form")
+    }
+
+    #[test]
+    fn a_fresh_document_reports_one_layer() {
+        let scene = document().scene();
+        assert_eq!(scene.layers.len(), 1);
+        assert!(scene.active.is_some(), "something must be active to sculpt on");
+        assert_eq!(scene.nodes.len(), 1, "the tree must mirror what is there");
+    }
+
+    #[test]
+    fn adding_a_layer_makes_it_active_and_keeps_the_old_one() {
+        let mut doc = document();
+        let first = doc.scene().active.expect("active");
+        let added = doc
+            .add_layer("Detalhe", Representation::Sdf)
+            .expect("add a layer");
+
+        let scene = doc.scene();
+        assert_eq!(scene.layers.len(), 2);
+        assert_eq!(scene.active, Some(added));
+        assert!(
+            scene.layer(first).is_some(),
+            "adding a layer removed the one that was there"
+        );
+    }
+
+    #[test]
+    fn hiding_a_layer_removes_its_contribution() {
+        let mut doc = document();
+        let key = doc.scene().active.expect("active");
+
+        // Bounds are the wrong measure: the engine reports a layer's own
+        // extent whether or not it is shown, which is reasonable. What a user
+        // sees is whether the surface is still there to hit.
+        assert!(
+            doc.pick([0.0, 0.0, -5.0], [0.0, 0.0, 1.0]).is_some(),
+            "the starting form should be under the ray"
+        );
+
+        doc.set_layer_visible(key, false).expect("hide");
+        assert!(
+            doc.pick([0.0, 0.0, -5.0], [0.0, 0.0, 1.0]).is_none(),
+            "a hidden layer still contributed to the surface"
+        );
+
+        doc.set_layer_visible(key, true).expect("show");
+        assert!(
+            doc.pick([0.0, 0.0, -5.0], [0.0, 0.0, 1.0]).is_some(),
+            "showing the layer again did not bring the surface back"
+        );
+    }
+
+    #[test]
+    fn a_locked_layer_refuses_a_stroke_with_a_reason() {
+        let mut doc = document();
+        let key = doc.scene().active.expect("active");
+        doc.set_layer_protection(
+            key,
+            Protection {
+                ghost: false,
+                locked: true,
+            },
+        )
+        .expect("lock");
+
+        let mut vm = SculptViewModel::new(Box::new(doc));
+        let error = vm
+            .dispatch(Command::BeginStroke {
+                position: [0.0, 0.0, 1.0],
+                pressure: 1.0,
+            })
+            .expect_err("a locked layer accepts no edit");
+        assert!(error.to_string().contains("locked"), "{error}");
+    }
+
+    #[test]
+    fn a_ghosted_layer_is_not_picked() {
+        let mut doc = document();
+        let key = doc.scene().active.expect("active");
+
+        assert!(
+            doc.select_at([0.0, 0.0, -5.0], [0.0, 0.0, 1.0]).is_some(),
+            "the form should be picked before it is ghosted"
+        );
+
+        doc.set_layer_protection(
+            key,
+            Protection {
+                ghost: true,
+                locked: false,
+            },
+        )
+        .expect("ghost");
+
+        assert_eq!(
+            doc.select_at([0.0, 0.0, -5.0], [0.0, 0.0, 1.0]),
+            None,
+            "a ghosted layer was picked; the engine excludes them and this must follow"
+        );
+    }
+
+    #[test]
+    fn removing_the_only_layer_is_refused() {
+        let mut doc = document();
+        let key = doc.scene().active.expect("active");
+        let error = doc
+            .remove_layer(key)
+            .expect_err("a document keeps a layer to sculpt on");
+        assert!(error.to_string().contains("layer"), "{error}");
+        assert_eq!(doc.scene().layers.len(), 1);
+    }
+
+    #[test]
+    fn removing_a_layer_leaves_a_valid_active_one() {
+        let mut doc = document();
+        let added = doc
+            .add_layer("Detalhe", Representation::Sdf)
+            .expect("add");
+        doc.remove_layer(added).expect("remove");
+
+        let scene = doc.scene();
+        assert_eq!(scene.layers.len(), 1);
+        let active = scene.active.expect("something must stay active");
+        assert!(
+            scene.layer(active).is_some(),
+            "the active layer points at one that is gone"
+        );
+    }
+
+    #[test]
+    fn reordering_changes_evaluation_order() {
+        let mut doc = document();
+        let second = doc.add_layer("Segunda", Representation::Sdf).expect("add");
+
+        doc.move_layer(second, 0).expect("move to the bottom");
+        let scene = doc.scene();
+        assert_eq!(scene.layers[0].key, second);
+        assert_eq!(
+            scene.active,
+            Some(second),
+            "the active layer must follow the layer it pointed at, not its index"
+        );
+    }
+
+    #[test]
+    fn the_panels_see_edits_the_brush_made() {
+        // The two ViewModels share a document in the application; here they
+        // each hold one, so this checks the scene reflects its own model
+        // rather than a snapshot taken once at construction.
+        let doc = document();
+        let mut vm = SceneViewModel::new(Box::new(doc));
+        let before = vm.scene().get().layers.len();
+
+        vm.dispatch(&Command::AddLayer).expect("add");
+        vm.refresh();
+        assert_eq!(
+            vm.scene().get().layers.len(),
+            before + 1,
+            "the panel did not see a layer it had just created"
+        );
+    }
+
+    #[test]
+    fn an_unknown_layer_key_is_refused_rather_than_panicking() {
+        let mut doc = document();
+        let error = doc
+            .set_layer_visible(LayerKey(9999), false)
+            .expect_err("that layer does not exist");
+        assert!(error.to_string().contains("no longer"), "{error}");
+    }
+}

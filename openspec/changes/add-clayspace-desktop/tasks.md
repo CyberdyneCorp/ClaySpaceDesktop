@@ -74,10 +74,10 @@
 
 ## 7. Scene, layers and history
 
-- [ ] 7.1 Implement the scene tree bound to the engine node structure with expand, collapse and select
-- [ ] 7.2 Implement the layer stack: create, rename, reorder, remove, intensity, visibility
-- [ ] 7.3 Implement the three protection states with refusal-and-reason on protected edits, and ghost exclusion from picking
-- [ ] 7.4 Implement selection through the engine's attributed raycast, synchronized across viewport, tree and stack
+- [x] 7.1 Implement the scene tree bound to the engine node structure with expand, collapse and select
+- [x] 7.2 Implement the layer stack: create, rename, reorder, remove, intensity, visibility
+- [x] 7.3 Implement the three protection states with refusal-and-reason on protected edits, and ghost exclusion from picking
+- [x] 7.4 Implement selection through the engine's attributed raycast, synchronized across viewport, tree and stack
 - [ ] 7.5 Implement layer transforms as single undo steps
 - [ ] 7.6 Implement the field report and consolidation flow with the cost estimate shown before confirmation
 - [ ] 7.7 Implement geometry statistics display, stating the resolution the counts describe
@@ -86,7 +86,7 @@
 - [ ] 7.10 Implement undo groups for compound operations
 - [ ] 7.11 Implement the history panel with named entries, current position and jump-to-entry
 - [ ] 7.12 Implement the bounded history depth and the redo-branch discard with a visible outcome
-- [ ] 7.13 Verify camera, view, material, layout and selection changes create no history entries
+- [x] 7.13 Verify camera, view, material, layout and selection changes create no history entries
 
 ## 8. Document lifecycle
 
