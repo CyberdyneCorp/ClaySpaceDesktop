@@ -288,3 +288,110 @@ fn an_armature_belongs_to_the_layer_it_was_authored_on() {
         "another layer's rig showed up on this one"
     );
 }
+
+#[test]
+fn a_rig_edit_undoes_as_one_action() {
+    // A rewrite is a remove and a place, and a place is several items once
+    // there are negatives — so without grouping, one drag would need four
+    // undos to come back.
+    let Some(mut document) = document() else {
+        return;
+    };
+    document.begin_armature([0.0, 0.0, 0.0], 0.3).expect("root");
+    let before = document.history().depth;
+
+    document
+        .add_zsphere(0, [0.6, 0.0, 0.0], 0.2, false)
+        .expect("a child");
+    let after = document.history().depth;
+    assert_eq!(
+        after - before,
+        1,
+        "adding one sphere cost {} undo entries",
+        after - before
+    );
+
+    // And one undo takes it back, tree and surface together.
+    assert!(SculptModel::undo(&mut document).expect("undo"));
+    let tree = document.armature().expect("the rig is still there");
+    assert_eq!(tree.nodes.len(), 1, "the child survived the undo");
+    assert!(
+        !solid_at(&document, [0.6, 0.0, 0.0]),
+        "the child's surface survived the undo"
+    );
+}
+
+#[test]
+fn undoing_past_a_rigs_creation_leaves_no_ghost() {
+    // The failure this prevents: the tree is host state and undo is the
+    // engine's, so a rig undone out of existence could leave this holding a
+    // tree whose indices the next drag would write against.
+    let Some(mut document) = document() else {
+        return;
+    };
+    document.begin_armature([0.0, 0.0, 0.0], 0.3).expect("root");
+    document
+        .add_zsphere(0, [0.6, 0.0, 0.0], 0.2, false)
+        .expect("a child");
+
+    // Back past the child, then past the rig itself.
+    assert!(SculptModel::undo(&mut document).expect("undo the child"));
+    assert!(SculptModel::undo(&mut document).expect("undo the rig"));
+
+    assert!(
+        document.armature().is_none(),
+        "a rig that was undone away is still being reported"
+    );
+    assert!(
+        document.move_zsphere(0, [0.0, 1.0, 0.0]).is_err(),
+        "an undone rig still accepts edits"
+    );
+}
+
+#[test]
+fn redo_brings_the_rig_back_with_its_tree() {
+    let Some(mut document) = document() else {
+        return;
+    };
+    document.begin_armature([0.0, 0.0, 0.0], 0.3).expect("root");
+    document
+        .add_zsphere(0, [0.6, 0.0, 0.0], 0.2, false)
+        .expect("a child");
+    assert!(SculptModel::undo(&mut document).expect("undo"));
+    assert_eq!(document.armature().expect("a tree").nodes.len(), 1);
+
+    assert!(SculptModel::redo(&mut document).expect("redo"));
+    let tree = document.armature().expect("a tree");
+    assert_eq!(tree.nodes.len(), 2, "redo did not bring the child back");
+    assert_eq!(tree.nodes[1].parent, 0, "it came back detached");
+    assert!(solid_at(&document, [0.6, 0.0, 0.0]));
+}
+
+#[test]
+fn editing_a_rig_does_not_accumulate_nodes() {
+    // A rewrite removes what it placed. Tracking only the armature's own node
+    // left the negatives' cutter spheres behind, so an edited rig grew a
+    // subtraction per edit.
+    let Some(mut document) = document() else {
+        return;
+    };
+    document.begin_armature([0.0, 0.0, 0.0], 0.3).expect("root");
+    let tip = document
+        .add_zsphere(0, [0.8, 0.0, 0.0], 0.2, false)
+        .expect("a tip");
+    document
+        .set_zsphere_negative(tip, true)
+        .expect("a leaf can cut");
+
+    let after_first = document.stats().objects;
+    for step in 1..5 {
+        document
+            .move_zsphere(tip, [0.0, 0.02 * step as f32, 0.0])
+            .expect("nudge it");
+    }
+    assert_eq!(
+        document.stats().objects,
+        after_first,
+        "editing the rig left nodes behind"
+    );
+}

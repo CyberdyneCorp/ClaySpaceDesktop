@@ -551,8 +551,14 @@ impl App {
 
     /// Everything that has to catch up after the rig changed outside a drag.
     fn after_armature_edit(&mut self) {
+        // One undoable action. Each armature edit groups itself into a single
+        // engine entry, and the sculpting ViewModel owns the history that
+        // Cmd+Z reads — a sculptor has one undo and does not care which part
+        // of the application produced the thing they want back.
+        self.sculpt.record_external_action(1);
         self.settle_geometry();
         self.scene.refresh();
+        self.armature.refresh();
         self.document_vm.touched();
         if let Some(notice) = self.armature.notice().get() {
             eprintln!("{notice}");
@@ -971,6 +977,14 @@ impl App {
         // A rig belongs to a layer, so choosing another layer changes which
         // one — or whether there is one at all.
         if matches!(command, Command::SelectLayer(_)) {
+            self.armature.refresh();
+            self.rigging = self.rigging && self.armature.is_rigging();
+        }
+        // History moves the rig as surely as it moves the surface, and the
+        // tree the viewport draws is read from the document rather than kept
+        // alongside it — so an undone rig edit has to be looked up again or
+        // the scaffolding keeps showing the shape that was just taken back.
+        if matches!(command, Command::Undo | Command::Redo) {
             self.armature.refresh();
             self.rigging = self.rigging && self.armature.is_rigging();
         }

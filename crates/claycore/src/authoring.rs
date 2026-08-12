@@ -284,6 +284,31 @@ impl Document {
         })
     }
 
+    /// Opens an undo group, for a caller that cannot use [`Self::undo_group`].
+    ///
+    /// Prefer the closure form: it cannot leave a group open, and an open
+    /// group silently swallows every later edit into it. This pair exists for
+    /// the case the closure cannot express — a caller whose body needs a
+    /// mutable borrow of something that also owns this document, which the
+    /// closure's `&mut Self` argument makes impossible. Such a caller must
+    /// close the group on every path, including the failing one.
+    pub fn begin_undo_group(&mut self) -> Result<()> {
+        // SAFETY: valid handle.
+        check(
+            unsafe { sys::clay_document_begin_undo_group(self.as_ptr()) },
+            "clay_document_begin_undo_group",
+        )
+    }
+
+    /// Closes the group [`Self::begin_undo_group`] opened.
+    pub fn end_undo_group(&mut self) -> Result<()> {
+        // SAFETY: valid handle.
+        check(
+            unsafe { sys::clay_document_end_undo_group(self.as_ptr()) },
+            "clay_document_end_undo_group",
+        )
+    }
+
     /// Runs `edits` so that everything inside undoes as one step.
     ///
     /// Taking a closure rather than exposing begin and end separately means an

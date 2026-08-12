@@ -95,6 +95,12 @@ removed — still in the stack, one click from coming back.
 **Escultura** opens a rig; `A` toggles editing; `Delete` removes the selected
   sphere and everything under it. The root refuses to be removed.
 
+Every rig edit is one undoable action — growing a sphere, inserting a joint,
+moving a subtree, resizing, removing, making one negative, changing the skin.
+`Z` takes it back and `R` brings it forward, on the same history as sculpting,
+because a sculptor has one undo and does not care which part of the
+application produced the thing they want back.
+
 Picking takes the sphere nearest the eye. Rigs overlap constantly — a shoulder
 sits inside a torso — and picking the far one makes a chest impossible to grab.
 

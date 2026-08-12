@@ -82,7 +82,13 @@ pub struct ClayDocument {
     /// The tree is held here because the engine's parent array has no getter —
     /// positions and radii read back, the topology does not. So this is the
     /// record and the engine is written from it.
-    armature: Option<(LayerId, NodeId, Armature)>,
+    /// The rig: its layer, every node it placed, and the tree behind them.
+    ///
+    /// *Every* node, because a rig with negative spheres is more than one
+    /// item — the armature plus a subtractive sphere per cutter. Tracking only
+    /// the armature's own node left the cutters behind on each rewrite, so an
+    /// edited rig accumulated a subtraction per edit.
+    armature: Option<(LayerId, Vec<NodeId>, Armature)>,
     /// The box the placed armature last occupied.
     ///
     /// Kept because an edit that *shrinks* a rig leaves surface behind
@@ -1120,6 +1126,7 @@ impl SculptModel for ClayDocument {
             // Undo can move anything the layer holds, so the bound is the
             // layer rather than a node set.
             self.refill(layer, &[])?;
+            self.resync_armature();
         }
         Ok(moved)
     }
@@ -1129,6 +1136,7 @@ impl SculptModel for ClayDocument {
         if moved {
             let layer = self.active_layer().id;
             self.refill(layer, &[])?;
+            self.resync_armature();
         }
         Ok(moved)
     }
@@ -1607,7 +1615,10 @@ impl ClayDocument {
         for (index, id) in ids.into_iter().enumerate() {
             if let Some((node, tree)) = Self::recover_armature(&model.document, id) {
                 model.armature_bounds = Some(Self::armature_bounds(&tree, model.skin));
-                model.armature = Some((id, node, tree));
+                // Only the armature node: the cutters are separate items the
+                // reader cannot see, so a reopened rig's negatives are not
+                // ours to remove either. See ClayCore #99.
+                model.armature = Some((id, vec![node], tree));
                 // And that layer becomes the active one.
                 //
                 // `armature()` answers only for the active layer — deliberately,
@@ -1920,8 +1931,14 @@ impl ArmatureModel for ClayDocument {
         }
 
         let tree = Armature::rooted(position, radius);
-        let node = self.place_armature(layer, &tree)?;
-        self.armature = Some((layer, node, tree));
+        // Grouped for the same reason a rewrite is: making a rig adds a layer
+        // and places an item, and one Cmd+Z should take both back.
+        self.document
+            .begin_undo_group()
+            .map_err(ModelError::engine)?;
+        let placed = self.place_armature(layer, &tree);
+        self.document.end_undo_group().map_err(ModelError::engine)?;
+        self.armature = Some((layer, placed?, tree));
         Ok(())
     }
 
@@ -2041,7 +2058,13 @@ impl ArmatureModel for ClayDocument {
 
 impl ClayDocument {
     /// Builds the item and places it, returning the node that carries it.
-    fn place_armature(&mut self, layer: LayerId, tree: &Armature) -> Result<NodeId, ModelError> {
+    /// Places a rig and returns every node it made — the armature, and one
+    /// subtractive sphere per negative.
+    fn place_armature(
+        &mut self,
+        layer: LayerId,
+        tree: &Armature,
+    ) -> Result<Vec<NodeId>, ModelError> {
         // The spheres that add and the ones that cut go in as separate items.
         // The armature primitive is a stroke plus a tree with one op for the
         // whole thing, so a negative sphere cannot live in the same item as
@@ -2105,7 +2128,48 @@ impl ClayDocument {
         self.armature_bounds = Some(Self::armature_bounds(&positive, self.skin));
         self.refill(layer, &placed)?;
         self.refresh_stats();
-        Ok(node)
+        Ok(placed)
+    }
+
+    /// Re-reads the rig from the document after history moved underneath it.
+    ///
+    /// The tree is host state and undo is the engine's, so an undone rig edit
+    /// would otherwise leave the two disagreeing — the document holding one
+    /// shape and this holding the one that was just taken back, with the next
+    /// drag written against the wrong indices.
+    ///
+    /// Re-reading rather than keeping a parallel stack of snapshots: since
+    /// ClayCore 0.29.0 the document can be asked what the tree is (#77), so it
+    /// stays the single source of truth and there is no second history to keep
+    /// in step with the first.
+    fn resync_armature(&mut self) {
+        let Some(layer) = self.armature.as_ref().map(|(l, _, _)| *l) else {
+            return;
+        };
+        // Where the rig was before history moved it. Refilling the layer alone
+        // is not enough: a rig that shrank leaves surface outside its new
+        // bounds, and nothing marks those bricks — the same debt a rewrite
+        // pays with `refill_region`.
+        let vacated = self.armature_bounds;
+        match Self::recover_armature(&self.document, layer) {
+            Some((node, tree)) => {
+                self.armature_bounds = Some(Self::armature_bounds(&tree, self.skin));
+                self.armature = Some((layer, vec![node], tree));
+            }
+            // Undone past the rig's own creation: there is no armature now,
+            // and saying so is what stops the next click editing a ghost.
+            None => {
+                self.armature = None;
+                self.armature_bounds = None;
+            }
+        }
+        if let Some((min, max)) = vacated {
+            if let Err(e) = self.refill_region(min, max) {
+                // Not fatal: the geometry is stale rather than wrong, and the
+                // next edit or settle clears it. Worth saying, though.
+                eprintln!("a região da armadura não pôde ser remalhada: {e}");
+            }
+        }
     }
 
     /// Finds a layer's armature and reads its tree back.
@@ -2201,16 +2265,30 @@ impl ClayDocument {
     /// implementation of those ops is a whole-tree replace, so this costs what
     /// they cost.
     fn rewrite_armature(&mut self) -> Result<(), ModelError> {
-        let Some((layer, node, tree)) = self.armature.take() else {
+        let Some((layer, nodes, tree)) = self.armature.take() else {
             return Ok(());
         };
         // Where it was, before it is replaced by where it now is.
         let vacated = self.armature_bounds;
 
+        // One undoable action, however many engine commands it takes. A rig
+        // edit is a remove and a place — and a place is several items once
+        // there are negatives — so without the group a single drag would need
+        // four undos to come back.
         self.document
-            .remove_node(layer, node)
+            .begin_undo_group()
             .map_err(ModelError::engine)?;
-        let fresh = self.place_armature(layer, &tree)?;
+        let result = (|| -> Result<Vec<NodeId>, ModelError> {
+            for node in &nodes {
+                self.document
+                    .remove_node(layer, *node)
+                    .map_err(ModelError::engine)?;
+            }
+            self.place_armature(layer, &tree)
+        })();
+        self.document.end_undo_group().map_err(ModelError::engine)?;
+
+        let fresh = result?;
         self.armature = Some((layer, fresh, tree));
 
         // An edit that shrinks the rig leaves its old surface behind

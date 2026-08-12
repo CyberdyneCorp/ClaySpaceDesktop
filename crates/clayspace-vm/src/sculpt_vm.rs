@@ -439,6 +439,25 @@ impl SculptViewModel {
         Ok(())
     }
 
+    /// Records an undoable action this ViewModel did not perform.
+    ///
+    /// Rigging goes through its own ViewModel but shares this history, because
+    /// a sculptor has one Cmd+Z and does not care which part of the
+    /// application produced the thing they want back. The armature edits group
+    /// themselves into one engine entry each, so the count is one; passing it
+    /// explicitly keeps the accounting in the one place that understands it.
+    ///
+    /// Clears the redo stack for the same reason any new action does: history
+    /// branched, and the old forward path is no longer reachable.
+    pub fn record_external_action(&mut self, entries: usize) {
+        if entries == 0 {
+            return;
+        }
+        self.undo_stack.push(entries);
+        self.redo_stack.clear();
+        self.publish_history();
+    }
+
     /// Banks the gesture's entries as one undoable action.
     fn close_gesture(&mut self) {
         let entries = std::mem::take(&mut self.gesture_entries);
