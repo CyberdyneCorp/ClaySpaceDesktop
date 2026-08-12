@@ -10,8 +10,9 @@
 //! along the trailing edge, and a status area.
 
 use clayspace_model::{
-    BrushSettings, Diagnostics, ExtrudeSettings, ExtrudeSide, Falloff, LayerSummary, MaskOp,
-    MaskState, RecentDocuments, Scene, SceneStats, ToolKind, Units, ViewPresetKind,
+    BrushSettings, Diagnostics, ExportMesher, ExportSettings, ExportWarning, ExtrudeSettings,
+    ExtrudeSide, Falloff, ImportAs, ImportSettings, LayerSummary, MaskOp, MaskState,
+    RecentDocuments, Scene, SceneStats, ToolKind, Units, ViewPresetKind,
 };
 use clayspace_vm::{Axis, Command, CommandQueue};
 
@@ -49,6 +50,13 @@ pub struct ShellState<'a> {
     pub armature: ArmatureState,
     /// Documents opened lately, most recent first.
     pub recent: &'a [std::path::PathBuf],
+    /// The exchange panels: whether they are open, and what they would do.
+    pub show_import: bool,
+    pub show_export: bool,
+    pub import: ImportSettings,
+    pub export: ExportSettings,
+    /// What the export as configured would give up.
+    pub export_warnings: &'a [ExportWarning],
     /// This build and this machine.
     pub diagnostics: &'a Diagnostics,
     /// Whether the diagnostics window is open.
@@ -258,6 +266,15 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                 }
                 if ui.button(s.action_save_as).clicked() {
                     queue.push(Command::SaveAs);
+                    ui.close_menu();
+                }
+                ui.separator();
+                if ui.button(s.action_import).clicked() {
+                    queue.push(Command::ToggleImport);
+                    ui.close_menu();
+                }
+                if ui.button(s.action_export).clicked() {
+                    queue.push(Command::ToggleExport);
                     ui.close_menu();
                 }
                 ui.separator();
@@ -655,6 +672,136 @@ pub fn diagnostics_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &m
     // they emit the same command rather than each owning a copy of the state.
     if !open {
         queue.push(Command::ToggleDiagnostics);
+    }
+}
+
+/// Bringing geometry in.
+///
+/// A panel rather than a bare file dialog, because the one real decision —
+/// whether the model becomes a reference or becomes clay — cannot be made
+/// after the fact, and a native dialog has nowhere to ask it.
+pub fn import_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    if !state.show_import {
+        return;
+    }
+    let s = state.strings;
+    let mut open = true;
+    let mut settings = state.import;
+    egui::Window::new(s.action_import)
+        .open(&mut open)
+        .resizable(false)
+        .collapsible(false)
+        .show(ctx, |ui| {
+            ui.set_min_width(320.0);
+            ui.label(
+                egui::RichText::new(s.label_import_as)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+            for becomes in ImportAs::ALL {
+                if ui
+                    .radio(settings.becomes == becomes, becomes.label())
+                    .on_hover_text(becomes.detail())
+                    .clicked()
+                {
+                    settings.becomes = becomes;
+                }
+            }
+            if let Some(value) = slider(ui, s.label_scale, settings.scale, 0.01..=100.0, 2) {
+                settings.scale = value;
+            }
+            if settings != state.import {
+                queue.push(Command::SetImportSettings(settings));
+            }
+            ui.add_space(space::SNUG);
+            if ui.button(s.action_choose_file).clicked() {
+                queue.push(Command::RunImport);
+            }
+        });
+    if !open {
+        queue.push(Command::ToggleImport);
+    }
+}
+
+/// Writing geometry out, and saying beforehand what will not survive.
+pub fn export_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    if !state.show_export {
+        return;
+    }
+    let s = state.strings;
+    let mut open = true;
+    let mut settings = state.export;
+    egui::Window::new(s.action_export)
+        .open(&mut open)
+        .resizable(false)
+        .collapsible(false)
+        .show(ctx, |ui| {
+            ui.set_min_width(340.0);
+            ui.label(
+                egui::RichText::new(s.label_mesher)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+            for mesher in ExportMesher::ALL {
+                let response = ui.radio(settings.mesher == mesher, mesher.label());
+                let response = match mesher.caveat() {
+                    Some(caveat) => response.on_hover_text(caveat),
+                    None => response,
+                };
+                if response.clicked() {
+                    settings.mesher = mesher;
+                }
+            }
+            if let Some(value) = slider(
+                ui,
+                s.label_export_resolution,
+                settings.resolution,
+                0.005..=0.2,
+                3,
+            ) {
+                settings.resolution = value;
+            }
+
+            // Decimation is off by default and expressed as a ratio, so the
+            // checkbox and the slider are one control: unticking it means
+            // "keep every triangle" rather than "keep 100% of them", which is
+            // the same file by a slower route.
+            let mut decimating = settings.decimate_to.is_some();
+            if ui.checkbox(&mut decimating, s.label_decimate).clicked() {
+                settings.decimate_to = decimating.then_some(0.5);
+            }
+            if let Some(ratio) = settings.decimate_to {
+                // "Manter", not "Reduzir" again: the value is the share of
+                // triangles kept, and labelling both the checkbox and the
+                // slider the same way reads as one control repeated.
+                if let Some(value) = slider(ui, s.label_keep, ratio, 0.05..=0.95, 2) {
+                    settings.decimate_to = Some(value);
+                }
+            }
+            if settings != state.export {
+                queue.push(Command::SetExportSettings(settings));
+            }
+
+            // Before the write, not after. Every one of these is knowable now
+            // and otherwise found out by opening the file somewhere else.
+            if !state.export_warnings.is_empty() {
+                heading(ui, s.section_warnings);
+                for warning in state.export_warnings {
+                    ui.label(
+                        egui::RichText::new(&warning.message)
+                            .size(type_scale::LABEL)
+                            .color(Tokens::accent()),
+                    );
+                }
+            }
+
+            ui.add_space(space::SNUG);
+            if ui.button(s.action_choose_file).clicked() {
+                queue.push(Command::RunExport);
+            }
+        });
+    if !open {
+        queue.push(Command::ToggleExport);
     }
 }
 

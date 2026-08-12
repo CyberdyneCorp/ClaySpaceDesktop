@@ -160,11 +160,40 @@ Backend choice affects speed, never results.
   state. It is written only when it actually differs, so a run of strokes at
   one setting costs nothing extra.
 
+## Geometry in and out
+
+**Importing** asks one real question — reference or clay — because it cannot be
+asked afterwards. A *reference* keeps the triangles verbatim on a layer of its
+own: a scan, a scale reference, a kit part, geometry that has to leave as what
+it came in as. *Clay* resamples into a field and is sculptable from then on.
+
+- OBJ, PLY and FBX. **GLB is export-only** — the engine writes it and does not
+  read it — so the import dialog does not offer it and a GLB passed in anyway
+  is refused by name.
+- A vertex and triangle ceiling is checked against the file's *declared* counts
+  before anything is allocated, which is the point: a malformed file can claim
+  a billion triangles. The default is well under the engine's own 50M, because
+  a ceiling that is never reached is not a ceiling.
+- A uniform import scale is baked into the stored geometry, so a unit
+  conversion is resolved once rather than approximated by a layer transform.
+
+**Exporting** meshes the field *and* every visible mesh layer — meshing the
+field alone would silently leave every imported reference out of the file.
+Mesher, cell size and decimation are chosen in the panel, and the watertight
+mesher is the default because an export usually leaves for something that will
+print or subdivide it.
+
+What the write will give up is said beforehand rather than discovered in the
+file: PLY has no texture coordinates, FBX does not carry vertex colour, the
+fast mesher is not manifold, dual contouring is experimental upstream, and a
+mesh layer without normals costs the whole export its normals — the engine's
+concat rule, which drops any attribute that is present on some inputs and
+absent on others.
+
 ## Not built yet
 
-There is no mesh import or export dialog, no autosave and no recent-file list,
-panels cannot be resized or collapsed, and shortcuts are fixed. See
-[roadmap.md](roadmap.md).
+Panels cannot be resized or collapsed, shortcuts are fixed, and there is no
+level-of-detail switching in the viewport. See [roadmap.md](roadmap.md).
 
 ## Deliberately absent
 

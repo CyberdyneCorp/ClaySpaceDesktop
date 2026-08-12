@@ -11,8 +11,9 @@ use std::ptr::NonNull;
 
 use claycore_sys as sys;
 
+use crate::descriptor::Descriptor;
 use crate::error::{check, ErrorKind, Result};
-use crate::mesh::{Mesh, MeshParams};
+use crate::mesh::{Mesh, MeshLayerDesc, MeshParams};
 use crate::{cstring, raw_failure, Backend};
 
 /// A layer within a document. Borrowed: the document owns the layer.
@@ -344,5 +345,60 @@ impl Document {
             "clay_document_mesh",
         )?;
         Mesh::from_raw(mesh, "clay_document_mesh")
+    }
+
+    /// Meshes the field and appends every *visible* mesh layer under its own
+    /// transform, indices rebased.
+    ///
+    /// The export path, as against [`Document::mesh`], which means "mesh the
+    /// field" and keeps meaning exactly that. The engine's attribute rule
+    /// applies: an attribute present on some inputs and absent on others is
+    /// dropped from the result rather than padded, so the meshed field's
+    /// normals are lost to a mesh layer that has none.
+    pub fn mesh_combined(&self, params: MeshParams) -> Result<Mesh> {
+        let raw_params = params.to_raw();
+        let mut mesh = std::ptr::null_mut();
+        // SAFETY: the handle is valid, the descriptor carries its struct_size,
+        // and `mesh` is written only on success.
+        check(
+            unsafe { sys::clay_document_mesh_combined(self.as_ptr(), &raw_params, &mut mesh) },
+            "clay_document_mesh_combined",
+        )?;
+        Mesh::from_raw(mesh, "clay_document_mesh_combined")
+    }
+
+    /// Attaches an already-loaded mesh as a layer, copying its geometry.
+    ///
+    /// A mesh layer is carried rather than evaluated: it is not compiled into
+    /// a tape, takes no part in a blend and is not pickable. That is what a
+    /// scan or a scale reference needs — geometry that leaves the pipeline as
+    /// what it entered as.
+    pub fn attach_mesh_layer(&mut self, mesh: &Mesh, desc: &MeshLayerDesc) -> Result<LayerId> {
+        let name = crate::cstring(&desc.name, "clay_document_add_mesh_layer")?;
+        let mut raw = sys::clay_mesh_layer_desc::sized();
+        raw.name = name.as_ptr();
+        raw.max_vertices = desc.max_vertices;
+        raw.max_triangles = desc.max_triangles;
+        raw.import_scale = desc.import_scale;
+
+        let mut layer = 0;
+        // The engine borrows the attached mesh back; we do not keep it, since
+        // the document owns the copy from here on.
+        let mut borrowed = std::ptr::null_mut();
+        // SAFETY: every pointer is valid for the call, the name outlives it,
+        // and both out-parameters are written only on success.
+        check(
+            unsafe {
+                sys::clay_document_add_mesh_layer(
+                    self.as_ptr(),
+                    mesh.as_ptr(),
+                    &raw,
+                    &mut layer,
+                    &mut borrowed,
+                )
+            },
+            "clay_document_add_mesh_layer",
+        )?;
+        Ok(LayerId(layer))
     }
 }

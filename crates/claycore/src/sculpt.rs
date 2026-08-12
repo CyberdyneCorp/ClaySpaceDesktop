@@ -407,6 +407,23 @@ impl Document {
 }
 
 impl Item {
+    /// Samples a loaded mesh into a volume item, so it can be sculpted.
+    ///
+    /// The other way to bring a model in. A mesh *layer* keeps the triangles
+    /// verbatim and cannot be sculpted; this resamples them into a field and
+    /// gives up the original geometry in exchange for being clay.
+    pub fn volume_from_mesh(mesh: &crate::Mesh, params: VolumeParams) -> Result<Item> {
+        let raw = params.to_raw();
+        let mut item = std::ptr::null_mut();
+        // SAFETY: a valid mesh handle, a sized descriptor, and an
+        // out-parameter written only on success.
+        check(
+            unsafe { sys::clay_item_volume_from_mesh(mesh.as_ptr(), &raw, &mut item) },
+            "clay_item_volume_from_mesh",
+        )?;
+        Item::from_raw(item, "clay_item_volume_from_mesh")
+    }
+
     /// Relaxes a sampled volume in place — the Smooth verb on the SDF side.
     ///
     /// Only valid on an item carrying a volume, which is what

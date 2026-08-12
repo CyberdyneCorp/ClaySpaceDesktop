@@ -13,7 +13,8 @@ use std::time::Instant;
 use clayspace_app::{ray_at, SessionStore, SharedDocument, SurfaceGeometry, ViewportInput};
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
-    AutosavePolicy, Diagnostics, RecentDocuments, Recovery, SkinSettings, Units, ViewPresetKind,
+    AutosavePolicy, Diagnostics, ExchangeModel, ExportSettings, ExportWarning, Format,
+    ImportSettings, RecentDocuments, Recovery, SkinSettings, Units, ViewPresetKind,
 };
 use clayspace_view::shell::{self, region, ArmatureState, ShellState};
 use clayspace_view::{
@@ -121,6 +122,11 @@ struct App {
     quit_requested: bool,
     /// The document's scale, and what lengths are shown in.
     units: Units,
+    /// The exchange panels and what they would do.
+    show_import: bool,
+    show_export: bool,
+    import: ImportSettings,
+    export: ExportSettings,
     /// The plane a rig gesture runs on: a point on it, and its normal.
     ///
     /// Fixed at the press rather than recomputed per sample. A plane that
@@ -184,6 +190,10 @@ impl App {
             pending_recovery,
             quit_requested: false,
             units: Units::default(),
+            show_import: false,
+            show_export: false,
+            import: ImportSettings::default(),
+            export: ExportSettings::default(),
             rig_plane: None,
             strings: Strings::for_locale(Locale::default()),
         }
@@ -409,6 +419,57 @@ impl App {
         if let Some(store) = &self.store {
             store.end_session();
         }
+    }
+
+    /// Asks for a file and brings it in.
+    fn import_mesh(&mut self) {
+        // Only the formats the engine actually reads. GLB is written and not
+        // read, and offering it here would be a dialog that leads to a
+        // refusal.
+        let readable: Vec<&str> = Format::ALL
+            .into_iter()
+            .filter(|format| format.can_import())
+            .map(|format| format.extension())
+            .collect();
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Importar malha")
+            .add_filter("Malhas", &readable)
+            .pick_file()
+        else {
+            return;
+        };
+        match self.document.import_mesh(&path, self.import) {
+            Ok(()) => {
+                self.show_import = false;
+                self.scene.refresh();
+                self.document_vm.touched();
+                self.after_document_replaced();
+            }
+            Err(e) => eprintln!("não foi possível importar: {e}"),
+        }
+        self.request_redraw();
+    }
+
+    /// Asks for a file and writes the document into it.
+    fn export_mesh(&mut self) {
+        let writable: Vec<&str> = Format::ALL
+            .into_iter()
+            .filter(|format| format.can_export())
+            .map(|format| format.extension())
+            .collect();
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Exportar malha")
+            .add_filter("Malhas", &writable)
+            .set_file_name(format!("{}.obj", self.document_vm.name().get()))
+            .save_file()
+        else {
+            return;
+        };
+        match self.document.export_mesh(&path, self.export) {
+            Ok(()) => self.show_export = false,
+            Err(e) => eprintln!("não foi possível exportar: {e}"),
+        }
+        self.request_redraw();
     }
 
     /// Asks whether unsaved work may be thrown away.
@@ -868,6 +929,11 @@ impl App {
         let history = *self.sculpt.history().get();
 
         let diagnostics = self.diagnostics();
+        // Assembled for the format the last export used, so the panel says
+        // something before a file has been chosen. Re-checked against the
+        // actual extension when the write happens.
+        let export_warnings =
+            ExportWarning::for_export(Format::Obj, self.export, self.document.has_mesh_layers());
         let mut queue = CommandQueue::new();
         let mut viewport = None;
         let mut input = ViewportInput::default();
@@ -876,6 +942,11 @@ impl App {
             mask: *self.mask.state().get(),
             armature: self.armature_state(),
             recent: self.recent.paths(),
+            show_import: self.show_import,
+            show_export: self.show_export,
+            import: self.import,
+            export: self.export,
+            export_warnings: &export_warnings,
             diagnostics: &diagnostics,
             show_diagnostics: self.show_diagnostics,
             diagnostics_copied: self.diagnostics_copied,
@@ -928,6 +999,8 @@ impl App {
                         .show(ui, |ui| shell::right_panel(ui, &state, &mut queue));
                 });
             shell::diagnostics_window(ctx, &state, &mut queue);
+            shell::import_window(ctx, &state, &mut queue);
+            shell::export_window(ctx, &state, &mut queue);
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
                 .show(ctx, |ui| {
@@ -1042,6 +1115,24 @@ impl App {
             Command::Save => self.save(false),
             Command::SaveAs => self.save(true),
             Command::Quit => self.quit_requested = true,
+            Command::ToggleImport => {
+                self.show_import = !self.show_import;
+                self.request_redraw();
+            }
+            Command::ToggleExport => {
+                self.show_export = !self.show_export;
+                self.request_redraw();
+            }
+            Command::SetImportSettings(settings) => {
+                self.import = settings;
+                self.request_redraw();
+            }
+            Command::SetExportSettings(settings) => {
+                self.export = settings;
+                self.request_redraw();
+            }
+            Command::RunImport => self.import_mesh(),
+            Command::RunExport => self.export_mesh(),
             Command::NextDisplayUnit => {
                 // Presentation only. Nothing in the document is touched, so
                 // this neither marks it modified nor enters the history.

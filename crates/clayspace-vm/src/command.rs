@@ -10,7 +10,10 @@
 
 use std::path::PathBuf;
 
-use clayspace_model::{ExtrudeSettings, Falloff, LayerKey, MaskOp, ToolKind, ViewPresetKind};
+use clayspace_model::{
+    ExportSettings, ExtrudeSettings, Falloff, ImportSettings, LayerKey, MaskOp, ToolKind,
+    ViewPresetKind,
+};
 
 /// A change to the application or the document.
 #[derive(Debug, Clone, PartialEq)]
@@ -47,6 +50,15 @@ pub enum Command {
     Save,
     SaveAs,
     Quit,
+    /// Shows or hides the import and export panels.
+    ToggleImport,
+    ToggleExport,
+    SetImportSettings(ImportSettings),
+    SetExportSettings(ExportSettings),
+    /// Asks for a file and brings it in with the settings as they stand.
+    RunImport,
+    /// Asks for a file and writes it with the settings as they stand.
+    RunExport,
 
     // -- armatures --------------------------------------------------------
     /// Starts a rig on the active layer, replacing whatever it had.
@@ -123,6 +135,16 @@ impl Command {
                 | Self::Save
                 | Self::SaveAs
                 | Self::Quit
+                | Self::ToggleImport
+                | Self::ToggleExport
+                | Self::SetImportSettings(_)
+                | Self::SetExportSettings(_)
+                // Import *does* change the document, but it goes through the
+                // composition root's own path — dialog, then model — and
+                // marks the document itself. Routing it through the ordinary
+                // edit path as well would double the entry.
+                | Self::RunImport
+                | Self::RunExport
                 | Self::SelectTool(_)
                 | Self::SetBrushSize(_)
                 | Self::SetBrushIntensity(_)
@@ -180,6 +202,12 @@ impl Command {
             Self::Save => "save",
             Self::SaveAs => "save as",
             Self::Quit => "quit",
+            Self::ToggleImport => "import panel",
+            Self::ToggleExport => "export panel",
+            Self::SetImportSettings(_) => "import settings",
+            Self::SetExportSettings(_) => "export settings",
+            Self::RunImport => "import",
+            Self::RunExport => "export",
             Self::NextDisplayUnit => "display unit",
             Self::ToggleDiagnostics => "diagnostics",
             Self::CopyDiagnostics => "copy diagnostics",

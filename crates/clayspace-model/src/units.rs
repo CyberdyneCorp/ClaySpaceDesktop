@@ -169,11 +169,16 @@ mod tests {
     #[test]
     fn a_coarser_unit_earns_more_decimals() {
         // Two decimals of metres rounds a whole head to 0.15.
-        let mut units = Units::default();
-        units.display = Unit::Metre;
-        assert_eq!(units.format(15.0), "0.150 m");
-        units.display = Unit::Inch;
-        assert_eq!(units.format(2.54), "1.00 in");
+        let metres = Units {
+            display: Unit::Metre,
+            ..Default::default()
+        };
+        assert_eq!(metres.format(15.0), "0.150 m");
+        let inches = Units {
+            display: Unit::Inch,
+            ..Default::default()
+        };
+        assert_eq!(inches.format(2.54), "1.00 in");
     }
 
     #[test]

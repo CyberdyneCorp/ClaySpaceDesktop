@@ -98,6 +98,9 @@ fn scene() -> Scene {
 /// Documents the file menu offers to reopen.
 static RECENT: &[std::path::PathBuf] = &[];
 
+/// What the export panel would warn about.
+static WARNINGS: &[clayspace_model::ExportWarning] = &[];
+
 /// The report the diagnostics window shows, with a fallback in it so the
 /// interesting branch is the one captured.
 fn diagnostics() -> clayspace_model::Diagnostics {
@@ -165,6 +168,11 @@ fn state<'a>(
         units: clayspace_model::Units::default(),
         last_action: Some(("Padrão", true)),
         recent: RECENT,
+        show_import: false,
+        show_export: false,
+        import: clayspace_model::ImportSettings::default(),
+        export: clayspace_model::ExportSettings::default(),
+        export_warnings: WARNINGS,
         diagnostics,
         show_diagnostics: false,
         diagnostics_copied: false,
@@ -230,6 +238,8 @@ fn capture_shell(harness: &Harness, state: &ShellState<'_>, name: &str) -> clays
                 });
             });
         shell::diagnostics_window(ctx, state, &mut queue);
+        shell::import_window(ctx, state, &mut queue);
+        shell::export_window(ctx, state, &mut queue);
     };
 
     // Two passes, not one. An auto-sized `egui::Area` — which is what a window
@@ -517,4 +527,65 @@ fn the_diagnostics_window_carries_what_an_issue_needs() {
         text.contains("metal declined raycast"),
         "the fallback is missing:\n{text}"
     );
+}
+
+#[test]
+fn the_export_panel_says_what_will_not_survive_the_write() {
+    // Captured because the warnings are the point of the panel: if they run
+    // off the edge or read as decoration, no assertion will notice.
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let settings = clayspace_model::ExportSettings {
+        mesher: clayspace_model::ExportMesher::Fast,
+        decimate_to: Some(0.4),
+        ..Default::default()
+    };
+    let warnings =
+        clayspace_model::ExportWarning::for_export(clayspace_model::Format::Ply, settings, true);
+    assert_eq!(warnings.len(), 3, "{warnings:?}");
+
+    let mut open = state(strings, &scene, &materials, &report);
+    open.show_export = true;
+    open.export = settings;
+    open.export_warnings = &warnings;
+    let shown = capture_shell(&harness, &open, "65-export");
+
+    let closed = state(strings, &scene, &materials, &report);
+    let hidden = capture_shell(&harness, &closed, "65-export-closed");
+    let changed = (0..shown.height)
+        .flat_map(|y| (0..shown.width).map(move |x| (x, y)))
+        .filter(|(x, y)| {
+            let (a, b) = (hidden.pixel(*x, *y), shown.pixel(*x, *y));
+            (0..3).map(|c| a[c].abs_diff(b[c])).max().unwrap_or(0) > 8
+        })
+        .count();
+    assert!(changed > 5_000, "the panel drew almost nothing: {changed}");
+}
+
+#[test]
+fn the_import_panel_names_the_choice_that_cannot_be_undone() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let mut open = state(strings, &scene, &materials, &report);
+    open.show_import = true;
+    capture_shell(&harness, &open, "65-import");
+
+    // Reference or clay is the decision the panel exists for, and both have
+    // to say what they mean.
+    for becomes in clayspace_model::ImportAs::ALL {
+        assert!(!becomes.label().is_empty());
+        assert!(!becomes.detail().is_empty());
+    }
 }

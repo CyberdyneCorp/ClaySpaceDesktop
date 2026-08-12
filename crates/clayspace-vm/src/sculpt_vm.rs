@@ -223,6 +223,12 @@ impl SculptViewModel {
             | Command::Save
             | Command::SaveAs
             | Command::Quit
+            | Command::ToggleImport
+            | Command::ToggleExport
+            | Command::SetImportSettings(_)
+            | Command::SetExportSettings(_)
+            | Command::RunImport
+            | Command::RunExport
             | Command::NewArmature
             | Command::ToggleArmatureEditing
             | Command::RemoveZsphere

@@ -5,14 +5,16 @@
 //! holds.
 
 use claycore::{
-    Blend, BrickCache, BrickConfig, BrickKey, BrushParams, BrushShape, Document, Falloff, Item,
-    LayerId, Mask, NodeId, Op, StrokePreset, VoxelGrid,
+    Blend, BrickCache, BrickConfig, BrickKey, BrushParams, BrushShape, Document, Falloff,
+    ImportBudget, Item, LayerId, Mask, Mesh, MeshLayerDesc, MeshParams, Mesher, NodeId, Op,
+    StrokePreset, VolumeParams, VoxelGrid,
 };
 use clayspace_model::{
-    Armature, ArmatureModel, BrushSettings, DocumentModel, EditOutcome, ExtrudeSettings,
-    GestureSample, HistoryState, LayerKey, LayerSummary, MaskModel, MaskOp, MaskState, ModelError,
-    NodeIndex, OpenError, Protection, Representation, Scene, SceneModel, SceneNode, SceneStats,
-    SculptModel, SkinSettings, ToolKind,
+    Armature, ArmatureModel, BrushSettings, DocumentModel, EditOutcome, ExchangeModel,
+    ExportMesher, ExportSettings, ExtrudeSettings, Format, GestureSample, HistoryState, ImportAs,
+    ImportSettings, LayerKey, LayerSummary, MaskModel, MaskOp, MaskState, ModelError, NodeIndex,
+    OpenError, Protection, Representation, Scene, SceneModel, SceneNode, SceneStats, SculptModel,
+    SkinSettings, ToolKind,
 };
 
 use crate::backend::{BackendPolicy, Operation};
@@ -1441,6 +1443,156 @@ impl ClayDocument {
         }
         model.refresh_stats();
         Ok(model)
+    }
+}
+
+impl ExchangeModel for ClayDocument {
+    fn import_mesh(
+        &mut self,
+        path: &std::path::Path,
+        settings: ImportSettings,
+    ) -> Result<(), ModelError> {
+        // The format is checked before the engine is asked, so an unreadable
+        // one is refused by name rather than by a decoder error naming a
+        // library the sculptor has never heard of.
+        match Format::of(path) {
+            Some(format) if format.can_import() => {}
+            Some(format) => {
+                return Err(ModelError::engine(format!(
+                    "o motor não lê {}; ele grava esse formato mas não o importa",
+                    format.extension().to_uppercase()
+                )))
+            }
+            None => return Err(ModelError::engine("formato desconhecido")),
+        }
+
+        // The budget is checked against the file's declared counts before
+        // anything is allocated, which is the point: a malformed file can
+        // claim a billion triangles.
+        let mesh = Mesh::load_within(
+            path,
+            ImportBudget {
+                max_vertices: settings.max_vertices,
+                max_triangles: settings.max_triangles,
+            },
+        )
+        .map_err(ModelError::engine)?;
+
+        let name = path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Importado".to_string());
+
+        match settings.becomes {
+            ImportAs::Reference => self.attach_reference(&mesh, &name, settings),
+            ImportAs::Clay => self.sample_into_clay(&mesh, &name, settings),
+        }
+    }
+
+    fn export_mesh(
+        &mut self,
+        path: &std::path::Path,
+        settings: ExportSettings,
+    ) -> Result<(), ModelError> {
+        if Format::of(path).is_none() {
+            return Err(ModelError::engine("formato desconhecido"));
+        }
+        let params = MeshParams {
+            voxel_size: Some(settings.resolution.max(1e-4)),
+            resolution: 128,
+            decimate_ratio: settings.decimate_to,
+            mesher: match settings.mesher {
+                ExportMesher::Watertight => Mesher::MarchingTetrahedra,
+                ExportMesher::Fast => Mesher::SurfaceNets,
+                ExportMesher::Sharp => Mesher::DualContouring,
+            },
+        };
+        // Combined rather than `mesh`: the field alone would silently leave
+        // every imported reference layer out of the file.
+        let mesh = self
+            .document
+            .mesh_combined(params)
+            .map_err(ModelError::engine)?;
+        mesh.save(path).map_err(ModelError::engine)
+    }
+
+    fn has_mesh_layers(&self) -> bool {
+        self.layers
+            .iter()
+            .any(|layer| layer.representation == Representation::Mesh)
+    }
+}
+
+impl ClayDocument {
+    /// Carries a mesh verbatim, on a layer of its own.
+    fn attach_reference(
+        &mut self,
+        mesh: &Mesh,
+        name: &str,
+        settings: ImportSettings,
+    ) -> Result<(), ModelError> {
+        let id = self
+            .document
+            .attach_mesh_layer(
+                mesh,
+                &MeshLayerDesc {
+                    name: name.to_string(),
+                    max_vertices: settings.max_vertices,
+                    max_triangles: settings.max_triangles,
+                    import_scale: settings.scale,
+                },
+            )
+            .map_err(ModelError::engine)?;
+
+        let key = self.take_key();
+        self.layers.push(Layer {
+            id,
+            key,
+            name: name.to_string(),
+            // Recorded as a mesh so the tools refuse it by representation
+            // rather than by a special case. A mesh layer is not evaluated,
+            // and nothing here pretends otherwise.
+            representation: Representation::Mesh,
+            grid: None,
+            visible: true,
+            protection: Protection::default(),
+            intensity: 100,
+        });
+        self.refresh_stats();
+        Ok(())
+    }
+
+    /// Samples a mesh into a field, on a layer of its own, so it can be
+    /// sculpted from then on.
+    fn sample_into_clay(
+        &mut self,
+        mesh: &Mesh,
+        name: &str,
+        settings: ImportSettings,
+    ) -> Result<(), ModelError> {
+        let mut item = Item::volume_from_mesh(
+            mesh,
+            VolumeParams {
+                // The cache's own cell size, scaled the way the geometry is:
+                // sampling finer than the brick cache can hold would cost time
+                // for detail that is discarded on the first refill.
+                cell_size: Some(Self::VOXEL_SIZE / settings.scale.max(1e-3)),
+                band: None,
+                padding: None,
+            },
+        )
+        .map_err(ModelError::engine)?;
+        item.set_op(Op::Add).map_err(ModelError::engine)?;
+
+        let layer = self.add_layer(name, Representation::Sdf)?;
+        let id = self.layer_id(layer)?;
+        let node = self
+            .document
+            .add_item(id, &item)
+            .map_err(ModelError::engine)?;
+        self.refill(id, &[node])?;
+        self.refresh_stats();
+        Ok(())
     }
 }
 

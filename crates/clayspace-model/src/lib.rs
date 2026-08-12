@@ -13,6 +13,7 @@
 pub mod armature;
 pub mod diagnostics;
 pub mod document;
+pub mod exchange;
 pub mod mask;
 pub mod scene;
 pub mod sculpt;
@@ -23,6 +24,9 @@ pub mod units;
 pub use armature::{Armature, ArmatureModel, NodeIndex, SkinSettings, Zsphere};
 pub use diagnostics::{Diagnostics, DiagnosticsModel, Fallback};
 pub use document::{DocumentModel, OpenError};
+pub use exchange::{
+    ExchangeModel, ExportMesher, ExportSettings, ExportWarning, Format, ImportAs, ImportSettings,
+};
 pub use mask::{ExtrudeSettings, ExtrudeSide, MaskModel, MaskOp, MaskState};
 pub use scene::{LayerCost, LayerKey, LayerSummary, Protection, Scene, SceneModel, SceneNode};
 pub use sculpt::{

@@ -14,10 +14,10 @@ use std::rc::Rc;
 
 use clayspace_engine::ClayDocument;
 use clayspace_model::{
-    Armature, ArmatureModel, BrushSettings, DocumentModel, EditOutcome, ExtrudeSettings,
-    GestureSample, HistoryState, LayerCost, LayerKey, MaskModel, MaskOp, MaskState, ModelError,
-    NodeIndex, OpenError, Protection, Representation, Scene, SceneModel, SceneStats, SculptModel,
-    SkinSettings, ToolKind,
+    Armature, ArmatureModel, BrushSettings, DocumentModel, EditOutcome, ExchangeModel,
+    ExportSettings, ExtrudeSettings, GestureSample, HistoryState, ImportSettings, LayerCost,
+    LayerKey, MaskModel, MaskOp, MaskState, ModelError, NodeIndex, OpenError, Protection,
+    Representation, Scene, SceneModel, SceneStats, SculptModel, SkinSettings, ToolKind,
 };
 
 /// A handle to the one document.
@@ -228,5 +228,27 @@ impl ArmatureModel for SharedDocument {
 
     fn skin(&self) -> SkinSettings {
         self.0.borrow().skin()
+    }
+}
+
+impl ExchangeModel for SharedDocument {
+    fn import_mesh(
+        &mut self,
+        path: &std::path::Path,
+        settings: ImportSettings,
+    ) -> Result<(), ModelError> {
+        self.0.borrow_mut().import_mesh(path, settings)
+    }
+
+    fn export_mesh(
+        &mut self,
+        path: &std::path::Path,
+        settings: ExportSettings,
+    ) -> Result<(), ModelError> {
+        self.0.borrow_mut().export_mesh(path, settings)
+    }
+
+    fn has_mesh_layers(&self) -> bool {
+        self.0.borrow().has_mesh_layers()
     }
 }
