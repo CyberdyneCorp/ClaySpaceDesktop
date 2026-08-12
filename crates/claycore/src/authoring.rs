@@ -360,6 +360,69 @@ impl Document {
         )
     }
 
+    /// A placed armature's parent array, one index per node.
+    ///
+    /// The topology half, and the one that makes a reloaded rig posable: the
+    /// indices are the ones [`Document::armature_edit`] takes, so a host reads
+    /// the tree, picks a subtree and edits by index. Positions alone cannot
+    /// be turned back into a rig — a branch is not recoverable by guessing.
+    ///
+    /// Added in ClayCore 0.29.0, closing #77.
+    pub fn armature_parents(&self, layer: LayerId, node: NodeId) -> Result<Vec<u32>> {
+        let mut count: usize = 0;
+        // A first call with a null buffer asks how many there are.
+        // SAFETY: the count is the only out-parameter written on this call.
+        check(
+            unsafe {
+                sys::clay_layer_armature_parents(
+                    self.as_ptr(),
+                    layer.0,
+                    node.0,
+                    std::ptr::null_mut(),
+                    &mut count,
+                )
+            },
+            "clay_layer_armature_parents",
+        )?;
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut parents = vec![0u32; count];
+        // SAFETY: `parents` is sized to the count the call above reported.
+        check(
+            unsafe {
+                sys::clay_layer_armature_parents(
+                    self.as_ptr(),
+                    layer.0,
+                    node.0,
+                    parents.as_mut_ptr(),
+                    &mut count,
+                )
+            },
+            "clay_layer_armature_parents",
+        )?;
+        parents.truncate(count);
+        Ok(parents)
+    }
+
+    /// Which primitive a placed node carries.
+    ///
+    /// The dual of `clay_layer_children`: between the two, every node answers
+    /// exactly one question. A group carries no primitive and is refused.
+    ///
+    /// Added in ClayCore 0.29.0. Before it, a host that reopened a document
+    /// could not tell a rig from a stroke.
+    pub fn node_prim(&self, layer: LayerId, node: NodeId) -> Result<i32> {
+        let mut prim = 0;
+        // SAFETY: a valid handle and an out-parameter written on success.
+        check(
+            unsafe { sys::clay_layer_node_prim(self.as_ptr(), layer.0, node.0, &mut prim) },
+            "clay_layer_node_prim",
+        )?;
+        Ok(prim)
+    }
+
     /// A placed stroke or armature's control points, as `x y z r` quadruples.
     ///
     /// The engine's note: reading is not editing, so a ghosted, locked or

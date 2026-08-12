@@ -1,7 +1,12 @@
-//! An armature is write-only. A repro against the C ABI, not a test of our
-//! model, so it says exactly what upstream would have to reproduce.
+//! What a placed armature reads back.
 //!
-//! Kept isolated from the application's own types for the same reason.
+//! Filed as ClayCore #77 when the answer was "nothing", and fixed in 0.29.0:
+//! `clay_layer_stroke_points` now serves the xyzr half of an armature instead
+//! of refusing it, and `clay_layer_armature_parents` is the topology half.
+//!
+//! These now assert the fix rather than the defect, which is what stops a
+//! regression going unnoticed — a test deleted the day its bug is fixed
+//! protects nothing.
 
 use clayspace_engine::claycore::{Document, Item, LayerId, NodeId, Op};
 
@@ -27,27 +32,24 @@ fn authored() -> Option<(Document, LayerId, NodeId)> {
 }
 
 #[test]
-fn nothing_about_a_placed_armature_can_be_read_back() {
+fn a_placed_armature_reads_back_the_points_it_was_authored_with() {
     let Some((document, layer, node)) = authored() else {
         return;
     };
-
-    // Not the parents, which have no reader at all — and not the positions
-    // and radii either. `clay_layer_stroke_points` is the readback for the
-    // setter an armature shares, and it refuses the primitive outright:
-    //
-    //   curve points need CLAY_PRIM_STROKE or CLAY_PRIM_SWEPT
-    //
-    // So an armature is write-only in both halves. A host that reopens a
-    // document has the skinned surface and nothing else.
-    let refusal = document
+    let points = document
         .stroke_points(layer, node)
-        .expect_err("an armature answered; recover the tree instead of this");
-    let detail = format!("{refusal}");
-    assert!(
-        detail.contains("CLAY_PRIM_STROKE"),
-        "the refusal changed shape: {detail}"
-    );
+        .expect("an armature's points are readable since 0.29.0");
+    assert_eq!(points.len(), 4);
+    for (i, point) in points.iter().enumerate() {
+        for c in 0..4 {
+            assert!(
+                (point[c] - POINTS[i * 4 + c]).abs() < 1e-6,
+                "point {i} channel {c}: {} against {}",
+                point[c],
+                POINTS[i * 4 + c]
+            );
+        }
+    }
 }
 
 #[test]
@@ -79,18 +81,36 @@ fn a_stroke_on_the_same_call_answers_normally() {
 }
 
 #[test]
-fn the_abi_has_no_armature_reader_at_all() {
-    // Stated as a grep over the header so it fails when one is added, rather
-    // than sitting in a comment nobody rechecks. Both halves count: a reader
-    // for the parents, or `clay_layer_stroke_points` learning the primitive.
-    let header = include_str!("../../../vendor/ClayCore/bindings/c/clay.h");
-    let readers: Vec<&str> = header
-        .lines()
-        .filter(|line| line.contains("armature") && line.contains("out_"))
-        .collect();
-    assert!(
-        readers.is_empty(),
-        "the ABI grew an armature reader: {readers:?} — recover the tree on \
-         load instead of leaving this note"
+fn the_topology_reads_back_too_including_a_branch() {
+    // The half that made the difference. Positions alone cannot be turned back
+    // into a rig: node 3 hangs off node 1, not node 2, and no amount of
+    // nearest-sphere guessing recovers that.
+    let Some((document, layer, node)) = authored() else {
+        return;
+    };
+    let parents = document
+        .armature_parents(layer, node)
+        .expect("the parent array is readable since 0.29.0");
+    assert_eq!(parents, PARENTS, "the branch did not survive the round trip");
+}
+
+#[test]
+fn a_reopened_document_can_tell_an_armature_from_a_stroke() {
+    // The other half of finding a rig again: `clay_layer_node_prim` says what
+    // a placed node carries, which nothing in the ABI answered before.
+    let Some((mut document, layer, armature)) = authored() else {
+        return;
+    };
+    let mut stroke = Item::stroke().expect("a stroke item");
+    stroke
+        .set_stroke_points(&[0.0, 2.0, 0.0, 0.2, 0.4, 2.0, 0.0, 0.2])
+        .expect("points");
+    stroke.set_op(Op::Add).expect("op");
+    let stroke_node = document.add_item(layer, &stroke).expect("add");
+
+    assert_ne!(
+        document.node_prim(layer, armature).expect("armature prim"),
+        document.node_prim(layer, stroke_node).expect("stroke prim"),
+        "a rig and a stroke report the same primitive"
     );
 }
