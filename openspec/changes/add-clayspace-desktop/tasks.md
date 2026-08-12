@@ -24,7 +24,7 @@
 - [x] 2.3 Implement per-operation fallback: route an `Unsupported` result to the CPU backend for that operation, keeping the selected backend active elsewhere
 - [x] 2.4 Record each fallback once per operation kind in the diagnostics log
 - [x] 2.5 Implement the user override with cross-session persistence and the unavailable-override fallback path
-- [ ] 2.6 Implement the diagnostics report: discovered backends, active backend, selection reason, engine version, fallbacks this session
+- [x] 2.6 Implement the diagnostics report: discovered backends, active backend, selection reason, engine version, fallbacks this session
 - [ ] 2.7 Add a test asserting a document exported on each registered backend agrees within parity tolerance and saves byte-identically
 
 ## 3. Rendering foundation
@@ -130,7 +130,7 @@
 - [x] 10.8 Set up the CI matrix: macOS CPU-only, macOS Metal, Linux CPU-only, Linux accelerated
 - [x] 10.9 Add the OpenSpec strict validation job
 - [x] 10.10 Add formatting, lint and dependency-audit gates
-- [ ] 10.11 Embed the application version and pinned engine revision, and surface both in diagnostics
+- [x] 10.11 Embed the application version and pinned engine revision, and surface both in diagnostics
 - [ ] 10.12 Produce the macOS bundle and the Linux distributable, self-contained with respect to the engine
 - [ ] 10.13 Generate the attribution manifest and surface it in the application
 

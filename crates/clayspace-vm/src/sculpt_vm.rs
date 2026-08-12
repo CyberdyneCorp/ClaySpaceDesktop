@@ -289,7 +289,10 @@ impl SculptViewModel {
             }
             // Framing and material are the renderer's business; the ViewModel
             // records nothing for them because they change no state it owns.
-            Command::FrameAll | Command::NextMaterial => {}
+            Command::FrameAll
+            | Command::NextMaterial
+            | Command::ToggleDiagnostics
+            | Command::CopyDiagnostics => {}
         }
         Ok(())
     }

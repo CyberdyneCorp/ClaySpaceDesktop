@@ -10,8 +10,8 @@
 //! along the trailing edge, and a status area.
 
 use clayspace_model::{
-    BrushSettings, ExtrudeSettings, ExtrudeSide, Falloff, LayerSummary, MaskOp, MaskState, Scene,
-    SceneStats, ToolKind, ViewPresetKind,
+    BrushSettings, Diagnostics, ExtrudeSettings, ExtrudeSide, Falloff, LayerSummary, MaskOp,
+    MaskState, Scene, SceneStats, ToolKind, ViewPresetKind,
 };
 use clayspace_vm::{Axis, Command, CommandQueue};
 
@@ -47,6 +47,12 @@ pub struct ShellState<'a> {
     pub mask: MaskState,
     /// The rig, as the menu and the armature panel need it.
     pub armature: ArmatureState,
+    /// This build and this machine.
+    pub diagnostics: &'a Diagnostics,
+    /// Whether the diagnostics window is open.
+    pub show_diagnostics: bool,
+    /// Whether the report was just put on the clipboard, for the confirmation.
+    pub diagnostics_copied: bool,
     /// What an extrusion would use.
     pub extrude: ExtrudeSettings,
     pub strings: &'a Strings,
@@ -319,7 +325,12 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                 }
             });
             ui.menu_button(s.menu_window, |_| {});
-            ui.menu_button(s.menu_help, |_| {});
+            ui.menu_button(s.menu_help, |ui| {
+                if ui.button(s.action_diagnostics).clicked() {
+                    queue.push(Command::ToggleDiagnostics);
+                    ui.close_menu();
+                }
+            });
         });
 
         // The document, on the trailing edge as the design places it.
@@ -513,6 +524,83 @@ fn layer_row(
             });
         });
     ui.add_space(space::HAIR);
+}
+
+/// The diagnostics report, as a window rather than a panel.
+///
+/// A window because it is read rarely and copied whole: docking it would cost
+/// a permanent strip of the interface for something a person opens twice a
+/// year, and then only when something has already gone wrong.
+///
+/// Every value is a readout the reader can compare against an issue, and the
+/// copy button takes the lot. A report that has to be retyped is one that
+/// arrives with a digit wrong.
+pub fn diagnostics_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    if !state.show_diagnostics {
+        return;
+    }
+    let s = state.strings;
+    let mut open = true;
+    egui::Window::new(s.action_diagnostics)
+        .open(&mut open)
+        .resizable(false)
+        .collapsible(false)
+        .show(ctx, |ui| {
+            ui.set_min_width(360.0);
+            let d = state.diagnostics;
+
+            heading(ui, s.section_diagnostics);
+            readout(ui, "Aplicação", d.app_version.clone());
+            readout(ui, "Motor", d.engine_version.clone());
+            readout(ui, "Revisão", d.engine_revision.clone());
+            readout(ui, "Plataforma", d.platform.clone());
+
+            heading(ui, s.label_backend);
+            readout(ui, "Disponíveis", d.backends.join(", "));
+            readout(
+                ui,
+                "Ativo",
+                format!("{} — {}", d.active_backend, d.selection),
+            );
+            if let Some(renderer) = &d.renderer {
+                readout(ui, "Vídeo", renderer.clone());
+            }
+
+            // Fallbacks are listed even when there are none. Silence here reads
+            // as "the panel is broken" rather than as "nothing fell back", and
+            // a reader cannot tell the two apart.
+            if d.fallbacks.is_empty() {
+                readout(ui, "Alternativas", "nenhuma nesta sessão");
+            } else {
+                for fallback in &d.fallbacks {
+                    readout(
+                        ui,
+                        "Alternativa",
+                        format!("{} recusou {}", fallback.declined_by, fallback.operation),
+                    );
+                }
+            }
+
+            ui.add_space(space::SNUG);
+            ui.horizontal(|ui| {
+                if ui.button(s.action_copy).clicked() {
+                    queue.push(Command::CopyDiagnostics);
+                }
+                if state.diagnostics_copied {
+                    ui.label(
+                        egui::RichText::new(s.state_copied)
+                            .size(type_scale::LABEL)
+                            .color(Tokens::accent()),
+                    );
+                }
+            });
+        });
+
+    // The window's own close button and the menu entry mean the same thing, so
+    // they emit the same command rather than each owning a copy of the state.
+    if !open {
+        queue.push(Command::ToggleDiagnostics);
+    }
 }
 
 /// Material, geometry, resolution and brush controls.

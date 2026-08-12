@@ -69,6 +69,7 @@ pub struct Strings {
     pub section_resolution: &'static str,
     pub section_brush_controls: &'static str,
     pub section_armature: &'static str,
+    pub section_diagnostics: &'static str,
 
     // Labels
     pub label_intensity: &'static str,
@@ -98,6 +99,9 @@ pub struct Strings {
     pub action_undo: &'static str,
     pub action_redo: &'static str,
     pub action_frame_all: &'static str,
+    pub action_diagnostics: &'static str,
+    pub action_copy: &'static str,
+    pub state_copied: &'static str,
     pub action_armature_new: &'static str,
     pub action_armature_edit: &'static str,
     pub action_armature_remove: &'static str,
@@ -128,6 +132,7 @@ const PT_BR: Strings = Strings {
     section_resolution: "RESOLUÇÃO",
     section_brush_controls: "CONTROLES DE PINCEL",
     section_armature: "ARMADURA",
+    section_diagnostics: "DIAGNÓSTICO",
 
     label_intensity: "Intensidade",
     label_size: "Tamanho",
@@ -155,6 +160,9 @@ const PT_BR: Strings = Strings {
     action_undo: "Desfazer",
     action_redo: "Refazer",
     action_frame_all: "Enquadrar tudo",
+    action_diagnostics: "Diagnóstico",
+    action_copy: "Copiar relatório",
+    state_copied: "copiado",
     action_armature_new: "Nova armadura",
     action_armature_edit: "Editar armadura",
     action_armature_remove: "Remover esfera",
@@ -184,6 +192,7 @@ const EN_US: Strings = Strings {
     section_resolution: "RESOLUTION",
     section_brush_controls: "BRUSH CONTROLS",
     section_armature: "ARMATURE",
+    section_diagnostics: "DIAGNOSTICS",
 
     label_intensity: "Intensity",
     label_size: "Size",
@@ -211,6 +220,9 @@ const EN_US: Strings = Strings {
     action_undo: "Undo",
     action_redo: "Redo",
     action_frame_all: "Frame all",
+    action_diagnostics: "Diagnostics",
+    action_copy: "Copy report",
+    state_copied: "copied",
     action_armature_new: "New armature",
     action_armature_edit: "Edit armature",
     action_armature_remove: "Remove sphere",
@@ -228,7 +240,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 48] {
+    pub fn all(&self) -> [&'static str; 52] {
         [
             self.menu_file,
             self.menu_edit,
@@ -247,6 +259,7 @@ impl Strings {
             self.section_resolution,
             self.section_brush_controls,
             self.section_armature,
+            self.section_diagnostics,
             self.label_intensity,
             self.label_size,
             self.label_flow,
@@ -272,6 +285,9 @@ impl Strings {
             self.action_undo,
             self.action_redo,
             self.action_frame_all,
+            self.action_diagnostics,
+            self.action_copy,
+            self.state_copied,
             self.action_armature_new,
             self.action_armature_edit,
             self.action_armature_remove,

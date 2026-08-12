@@ -18,6 +18,7 @@ fn main() {
         .unwrap_or_else(|_| manifest.join("../../vendor/ClayCore"));
 
     check_submodule(&engine);
+    record_revision(&engine);
     check_cmake();
 
     let backends = select_backends();
@@ -25,6 +26,33 @@ fn main() {
     emit_link_flags(&build_dir, &backends);
     generate_bindings(&engine);
     emit_rerun_directives(&engine);
+}
+
+/// Stamps the vendored engine's revision into the build.
+///
+/// The version string alone is not enough to identify an engine: two builds
+/// can both say 0.27.3 and differ by a commit. This project has already filed
+/// a round of issues against a stale engine for exactly that reason, so the
+/// revision travels with the binary and into the diagnostics report.
+///
+/// `--long` so the hash is always present: without it a checkout sitting
+/// exactly on a tag reports only the tag, which is the version we already
+/// have and not the commit we wanted.
+///
+/// A source tree with no git — a vendored tarball, a package build — reports
+/// so rather than failing: the revision is a diagnostic, not a requirement.
+fn record_revision(engine: &Path) {
+    let described = Command::new("git")
+        .args(["-C"])
+        .arg(engine)
+        .args(["describe", "--always", "--dirty", "--tags", "--long"])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .filter(|revision| !revision.is_empty())
+        .unwrap_or_else(|| "unknown (no git checkout)".to_string());
+    println!("cargo::rustc-env=CLAYCORE_REVISION={described}");
 }
 
 /// A clone without `--recurse-submodules` is the most likely first failure.

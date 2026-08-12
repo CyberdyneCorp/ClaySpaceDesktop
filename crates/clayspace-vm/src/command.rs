@@ -74,6 +74,11 @@ pub enum Command {
     FrameAll,
     NextMaterial,
     ToggleGrid,
+    /// Shows or hides the diagnostics report.
+    ToggleDiagnostics,
+    /// Puts the report on the clipboard, which is the whole point of having
+    /// one: a person pastes it into an issue rather than transcribing it.
+    CopyDiagnostics,
 }
 
 impl Command {
@@ -89,6 +94,8 @@ impl Command {
                 | Self::FrameAll
                 | Self::NextMaterial
                 | Self::ToggleGrid
+                | Self::ToggleDiagnostics
+                | Self::CopyDiagnostics
                 | Self::SelectTool(_)
                 | Self::SetBrushSize(_)
                 | Self::SetBrushIntensity(_)
@@ -140,6 +147,8 @@ impl Command {
             Self::FrameAll => "frame all",
             Self::NextMaterial => "material",
             Self::ToggleGrid => "grid",
+            Self::ToggleDiagnostics => "diagnostics",
+            Self::CopyDiagnostics => "copy diagnostics",
         }
     }
 }

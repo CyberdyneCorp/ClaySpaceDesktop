@@ -99,6 +99,11 @@ pub fn version() -> Version {
     }
 }
 
+/// The vendored engine's git revision, as this build was compiled against it.
+pub fn revision() -> &'static str {
+    sys::CLAYCORE_REVISION
+}
+
 /// The engine ABI this crate was written against.
 ///
 /// The engine's own header warns that while the major version is 0, a minor

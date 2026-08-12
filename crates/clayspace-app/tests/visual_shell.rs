@@ -95,7 +95,31 @@ fn scene() -> Scene {
     }
 }
 
-fn state<'a>(strings: &'a Strings, scene: &'a Scene, materials: &'a [&'a str]) -> ShellState<'a> {
+/// The report the diagnostics window shows, with a fallback in it so the
+/// interesting branch is the one captured.
+fn diagnostics() -> clayspace_model::Diagnostics {
+    clayspace_model::Diagnostics {
+        app_version: "ClaySpaceDesktop 0.1.0".into(),
+        engine_version: "claycore 0.27.3".into(),
+        engine_revision: "v0.27.3-0-g804fc9d".into(),
+        platform: "macos aarch64".into(),
+        backends: vec!["cpu".into(), "metal".into()],
+        active_backend: "metal".into(),
+        selection: "escolha automática".into(),
+        fallbacks: vec![clayspace_model::Fallback {
+            operation: "raycast".into(),
+            declined_by: "metal".into(),
+        }],
+        renderer: Some("Apple M3 Max — Metal".into()),
+    }
+}
+
+fn state<'a>(
+    strings: &'a Strings,
+    scene: &'a Scene,
+    materials: &'a [&'a str],
+    diagnostics: &'a clayspace_model::Diagnostics,
+) -> ShellState<'a> {
     ShellState {
         // A mask with something in it, so the menu's enabled state is what the
         // capture shows rather than a row of grey.
@@ -137,6 +161,9 @@ fn state<'a>(strings: &'a Strings, scene: &'a Scene, materials: &'a [&'a str]) -
         backend: "metal",
         units: "mm",
         last_action: Some(("Padrão", true)),
+        diagnostics,
+        show_diagnostics: false,
+        diagnostics_copied: false,
     }
 }
 
@@ -155,7 +182,7 @@ fn capture_shell(harness: &Harness, state: &ShellState<'_>, name: &str) -> clays
     shell::apply_theme(&ctx);
 
     let mut queue = CommandQueue::new();
-    let raw_input = egui::RawInput {
+    let raw_input = || egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(
             egui::Pos2::ZERO,
             egui::vec2(SHELL_WIDTH as f32, SHELL_HEIGHT as f32),
@@ -163,7 +190,7 @@ fn capture_shell(harness: &Harness, state: &ShellState<'_>, name: &str) -> clays
         ..Default::default()
     };
 
-    let output = ctx.run(raw_input, |ctx| {
+    let mut build = |ctx: &egui::Context| {
         egui::TopBottomPanel::top("menu")
             .exact_height(region::MENU_BAR)
             .show(ctx, |ui| shell::menu_bar(ui, state, &mut queue));
@@ -198,7 +225,16 @@ fn capture_shell(harness: &Harness, state: &ShellState<'_>, name: &str) -> clays
                     shell::viewport_bar(ui, state, &mut queue);
                 });
             });
-    });
+        shell::diagnostics_window(ctx, state, &mut queue);
+    };
+
+    // Two passes, not one. An auto-sized `egui::Area` — which is what a window
+    // is — spends its first frame measuring and paints nothing, so a
+    // single-pass capture of the diagnostics window came back byte-identical
+    // to one with the window closed. The panels do not need this; the window
+    // does, and one capture path is better than two.
+    let first = ctx.run(raw_input(), &mut build);
+    let output = ctx.run(raw_input(), &mut build);
 
     // The interface must not have mutated anything to draw itself; commands
     // are the only channel out, and nothing was clicked.
@@ -209,7 +245,9 @@ fn capture_shell(harness: &Harness, state: &ShellState<'_>, name: &str) -> clays
     );
 
     let target = OffscreenTarget::new(&harness.gpu, SHELL_WIDTH, SHELL_HEIGHT);
-    let image = render_egui(harness, &ctx, output, &target);
+    // The font atlas arrives in the first pass's deltas, so both are applied
+    // and only the second is tessellated.
+    let image = render_egui(harness, &ctx, [first, output], &target);
     support::save(&image, name);
     image
 }
@@ -218,17 +256,21 @@ fn capture_shell(harness: &Harness, state: &ShellState<'_>, name: &str) -> clays
 fn render_egui(
     harness: &Harness,
     ctx: &egui::Context,
-    output: egui::FullOutput,
+    passes: [egui::FullOutput; 2],
     target: &OffscreenTarget,
 ) -> clayspace_view::Image {
     let mut renderer =
         egui_wgpu::Renderer::new(&harness.gpu.device, OffscreenTarget::FORMAT, None, 1, false);
 
     let pixels_per_point = ctx.pixels_per_point();
-    let primitives = ctx.tessellate(output.shapes, pixels_per_point);
-    for (id, delta) in &output.textures_delta.set {
-        renderer.update_texture(&harness.gpu.device, &harness.gpu.queue, *id, delta);
+    let [first, output] = passes;
+    // Every pass's textures, only the last pass's shapes.
+    for pass in [&first, &output] {
+        for (id, delta) in &pass.textures_delta.set {
+            renderer.update_texture(&harness.gpu.device, &harness.gpu.queue, *id, delta);
+        }
     }
+    let primitives = ctx.tessellate(output.shapes, pixels_per_point);
 
     let descriptor = egui_wgpu::ScreenDescriptor {
         size_in_pixels: [target.width(), target.height()],
@@ -283,7 +325,8 @@ fn the_shell_draws_every_region() {
     let strings = Strings::for_locale(Locale::PtBr);
     let scene = scene();
     let materials = ["MatCap Cinza 01", "MatCap Cinza 02", "Gesso"];
-    let state = state(strings, &scene, &materials);
+    let report = diagnostics();
+    let state = state(strings, &scene, &materials, &report);
 
     let image = capture_shell(&harness, &state, "60-shell-pt-br");
 
@@ -321,7 +364,8 @@ fn the_interface_is_readable_where_it_is_quiet() {
     let strings = Strings::for_locale(Locale::PtBr);
     let scene = scene();
     let materials = ["MatCap Cinza 01"];
-    let state = state(strings, &scene, &materials);
+    let report = diagnostics();
+    let state = state(strings, &scene, &materials, &report);
     let image = capture_shell(&harness, &state, "61-shell-contrast");
 
     // Panels must be distinguishable from the viewport ground.
@@ -347,7 +391,8 @@ fn the_shell_renders_in_every_locale() {
     let mut captured = Vec::new();
     for locale in Locale::ALL {
         let strings = Strings::for_locale(locale);
-        let state = state(strings, &scene, &materials);
+        let report = diagnostics();
+        let state = state(strings, &scene, &materials, &report);
         let name = format!("62-shell-{:?}", locale).to_lowercase();
         captured.push((locale, capture_shell(&harness, &state, &name)));
     }
@@ -370,11 +415,13 @@ fn the_active_tool_is_the_only_thing_wearing_the_accent() {
     let scene = scene();
     let materials = ["MatCap Cinza 01"];
 
-    let mut first = state(strings, &scene, &materials);
+    let report = diagnostics();
+    let mut first = state(strings, &scene, &materials, &report);
     first.tool = ToolKind::Padrao;
     let a = capture_shell(&harness, &first, "63-accent-padrao");
 
-    let mut second = state(strings, &scene, &materials);
+    let report = diagnostics();
+    let mut second = state(strings, &scene, &materials, &report);
     second.tool = ToolKind::Suavizar;
     let b = capture_shell(&harness, &second, "63-accent-suavizar");
 
@@ -421,5 +468,49 @@ fn the_active_tool_is_the_only_thing_wearing_the_accent() {
     assert!(
         moved > 200,
         "changing the active tool moved only {moved} pixels in the brush shelf"
+    );
+}
+
+#[test]
+fn the_diagnostics_window_carries_what_an_issue_needs() {
+    // Captured because this is the one panel whose job is to be *read* by
+    // someone who is already having a bad day. If the revision wraps or the
+    // fallback line runs off the edge, an assertion will not notice.
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let mut open = state(strings, &scene, &materials, &report);
+    open.show_diagnostics = true;
+    let shown = capture_shell(&harness, &open, "64-diagnostics");
+
+    let closed = state(strings, &scene, &materials, &report);
+    let hidden = capture_shell(&harness, &closed, "64-diagnostics-closed");
+
+    let changed = (0..shown.height)
+        .flat_map(|y| (0..shown.width).map(move |x| (x, y)))
+        .filter(|(x, y)| {
+            let (a, b) = (hidden.pixel(*x, *y), shown.pixel(*x, *y));
+            (0..3).map(|c| a[c].abs_diff(b[c])).max().unwrap_or(0) > 8
+        })
+        .count();
+    assert!(
+        changed > 5_000,
+        "the window drew almost nothing: {changed} pixels"
+    );
+
+    // And the report behind it is the thing that gets pasted.
+    let text = report.to_report();
+    assert!(
+        text.contains("g804fc9d"),
+        "the revision is missing:\n{text}"
+    );
+    assert!(
+        text.contains("metal declined raycast"),
+        "the fallback is missing:\n{text}"
     );
 }

@@ -363,3 +363,43 @@ mod tests {
         ClayError::for_testing(claycore::ErrorKind::InvalidArgument, "test")
     }
 }
+
+impl SelectionReason {
+    /// Why this backend, in the words the diagnostics panel shows.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Automatic => "escolha automática",
+            Self::Override => "escolhido manualmente",
+            Self::OverrideUnavailable => "escolha manual indisponível; automática",
+        }
+    }
+}
+
+impl BackendPolicy {
+    /// This build and this machine, as a report.
+    ///
+    /// Built here rather than in the composition root because everything in it
+    /// but the graphics adapter is this layer's own knowledge, and a report
+    /// assembled from several places is one that goes stale in one of them.
+    /// The renderer is filled in afterwards by whoever has a device.
+    pub fn diagnostics(&self) -> clayspace_model::Diagnostics {
+        clayspace_model::Diagnostics {
+            app_version: format!("ClaySpaceDesktop {}", env!("CARGO_PKG_VERSION")),
+            engine_version: format!("claycore {}", claycore::version()),
+            engine_revision: claycore::revision().to_string(),
+            platform: format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+            backends: self.available.iter().map(ToString::to_string).collect(),
+            active_backend: self.active.to_string(),
+            selection: self.reason.label().to_string(),
+            fallbacks: self
+                .fallbacks
+                .iter()
+                .map(|(operation, backend)| clayspace_model::Fallback {
+                    operation: operation.label().to_string(),
+                    declined_by: backend.to_string(),
+                })
+                .collect(),
+            renderer: None,
+        }
+    }
+}

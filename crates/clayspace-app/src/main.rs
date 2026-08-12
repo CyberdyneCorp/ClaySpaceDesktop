@@ -9,8 +9,8 @@
 use std::sync::Arc;
 
 use clayspace_app::{ray_at, SharedDocument, SurfaceGeometry, ViewportInput};
-use clayspace_engine::{claycore, BackendPolicy, ClayDocument};
-use clayspace_model::{SkinSettings, ViewPresetKind};
+use clayspace_engine::{BackendPolicy, ClayDocument};
+use clayspace_model::{Diagnostics, SkinSettings, ViewPresetKind};
 use clayspace_view::shell::{self, region, ArmatureState, ShellState};
 use clayspace_view::{
     mirrored_cursors, ArmatureView, BrushCursor, Camera, Gpu, Locale, MatCap, Overlays, Renderer,
@@ -51,12 +51,13 @@ fn main() {
     event_loop.run_app(&mut app).expect("run the application");
 }
 
+/// The same report the diagnostics window shows, on the way up.
+///
+/// Printed from the one value rather than assembled again here: a startup
+/// banner that drifts from the panel is worse than no banner, because the two
+/// disagree in a bug report.
 fn report(policy: &BackendPolicy) {
-    println!("ClaySpaceDesktop {}", env!("CARGO_PKG_VERSION"));
-    println!("  engine   : claycore {}", claycore::version());
-    let names: Vec<_> = policy.available().iter().map(ToString::to_string).collect();
-    println!("  backends : {}", names.join(", "));
-    println!("  active   : {} ({:?})", policy.active(), policy.reason());
+    print!("{}", policy.diagnostics().to_report());
 }
 
 /// What the pointer is doing.
@@ -99,6 +100,10 @@ struct App {
     overlay_symmetry: [bool; 3],
     /// Whether the pointer is rigging rather than sculpting.
     rigging: bool,
+    /// Whether the diagnostics window is open, and whether the last thing that
+    /// happened in it was a copy.
+    show_diagnostics: bool,
+    diagnostics_copied: bool,
     /// The plane a rig gesture runs on: a point on it, and its normal.
     ///
     /// Fixed at the press rather than recomputed per sample. A plane that
@@ -140,6 +145,8 @@ impl App {
             viewport: None,
             overlay_symmetry: [false; 3],
             rigging: false,
+            show_diagnostics: false,
+            diagnostics_copied: false,
             rig_plane: None,
             strings: Strings::for_locale(Locale::default()),
         }
@@ -409,6 +416,21 @@ impl App {
         let at = self.on_rig_plane(point).unwrap_or(centre);
         self.armature.press(grab, at);
         true
+    }
+
+    /// This build and this machine, as the window shows it.
+    ///
+    /// Rebuilt each frame rather than cached: it is a handful of string
+    /// allocations against a frame that meshes a surface, and a cached report
+    /// is one that goes stale precisely when a fallback happens — which is the
+    /// moment it exists for.
+    fn diagnostics(&self) -> Diagnostics {
+        let mut report = self.policy.diagnostics();
+        report.renderer = self
+            .graphics
+            .as_ref()
+            .map(|graphics| graphics.gpu.adapter_description());
+        report
     }
 
     /// The state the shell needs about the rig.
@@ -702,6 +724,7 @@ impl App {
         let last = self.sculpt.last_action().get().clone();
         let history = *self.sculpt.history().get();
 
+        let diagnostics = self.diagnostics();
         let mut queue = CommandQueue::new();
         let mut viewport = None;
         let mut input = ViewportInput::default();
@@ -709,6 +732,9 @@ impl App {
             strings: self.strings,
             mask: *self.mask.state().get(),
             armature: self.armature_state(),
+            diagnostics: &diagnostics,
+            show_diagnostics: self.show_diagnostics,
+            diagnostics_copied: self.diagnostics_copied,
             extrude: *self.mask.extrude_settings().get(),
             document_name: document_name.as_str(),
             modified: *self.document_vm.modified().get(),
@@ -757,6 +783,7 @@ impl App {
                     egui::ScrollArea::vertical()
                         .show(ui, |ui| shell::right_panel(ui, &state, &mut queue));
                 });
+            shell::diagnostics_window(ctx, &state, &mut queue);
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
                 .show(ctx, |ui| {
@@ -785,6 +812,14 @@ impl App {
         let _ = &state;
         self.drive(&input);
         for command in queue.drain() {
+            if matches!(command, Command::CopyDiagnostics) {
+                // The clipboard belongs to the platform, so it is reached here
+                // rather than from a View that is meant to emit commands and
+                // nothing else.
+                context.copy_text(diagnostics.to_report());
+                self.diagnostics_copied = true;
+                continue;
+            }
             self.handle(command);
         }
 
@@ -850,6 +885,14 @@ impl App {
                 }
                 self.request_redraw();
             }
+            Command::ToggleDiagnostics => {
+                self.show_diagnostics = !self.show_diagnostics;
+                // The confirmation belongs to one visit. Leaving it set means
+                // the window reopens claiming a copy that never happened.
+                self.diagnostics_copied = false;
+                self.request_redraw();
+            }
+            Command::CopyDiagnostics => {}
             Command::NewArmature => {
                 // At the middle of what is already there, so the first sphere
                 // lands inside the model rather than at a world origin that
