@@ -222,3 +222,90 @@ fn starting_over_gives_back_the_starting_form() {
         "a reset document's history is not a fresh document's"
     );
 }
+
+#[test]
+fn a_reopened_document_keeps_its_layers_as_they_were() {
+    // ClayCore #69, from this side. Until 0.29.0 there was no enumeration at
+    // all: this host probed consecutive ids for one that answered
+    // `clay_layer_bounds`, regenerated names, treated every layer as SDF, and
+    // — the half that is a correctness bug rather than a cosmetic one — lost
+    // stack order, so a reopened document could evaluate differently from the
+    // one saved.
+    let Some(mut document) = fresh_document() else {
+        return;
+    };
+
+    let detail = document
+        .add_layer("Detalhe_fino", clayspace_model::Representation::Sdf)
+        .expect("a second layer");
+    document
+        .add_voxel_layer("Voxels", 0.05)
+        .expect("a voxel layer");
+    document
+        .set_layer_visible(detail, false)
+        .expect("hide the detail layer");
+
+    // Deliberately not the order they were added in: order is the thing most
+    // likely to be lost, so the test has to make it distinguishable.
+    let voxels = document
+        .scene()
+        .layers
+        .iter()
+        .find(|l| l.name == "Voxels")
+        .map(|l| l.key)
+        .expect("the voxel layer is in the scene");
+    document.move_layer(voxels, 0).expect("move to the bottom");
+
+    let before: Vec<(String, clayspace_model::Representation, bool)> = document
+        .scene()
+        .layers
+        .iter()
+        .map(|l| (l.name.clone(), l.representation, l.visible))
+        .collect();
+
+    let path = scratch("layers-roundtrip.clayspace");
+    document.save(&path).expect("save");
+    document.open(&path).expect("open");
+
+    let after: Vec<(String, clayspace_model::Representation, bool)> = document
+        .scene()
+        .layers
+        .iter()
+        .map(|l| (l.name.clone(), l.representation, l.visible))
+        .collect();
+
+    // Names, stack order and visibility, which is what #69 bought.
+    let names = |rows: &[(String, clayspace_model::Representation, bool)]| {
+        rows.iter()
+            .map(|(name, _, visible)| (name.clone(), *visible))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        names(&after),
+        names(&before),
+        "a reopened document does not hold the layers it was saved with"
+    );
+
+    // Representation is the exception, and it is ours rather than the
+    // engine's. `ClayDocument::add_voxel_layer` creates an *SDF* layer in the
+    // document and keeps a standalone `VoxelGrid` beside it — see the comment
+    // there — so the engine has never been told the layer is a voxel one, and
+    // reports SDF perfectly correctly. Which means the grid is not in the
+    // document at all and voxel work does not survive a save.
+    //
+    // #69 did not cause that; it made it visible, because representation was
+    // unreadable before. Asserted here as the current behaviour so the fix —
+    // going through `clay_document_add_voxel_layer`, which is bound already —
+    // announces itself rather than passing silently.
+    let voxel_row = after
+        .iter()
+        .find(|(name, _, _)| name == "Voxels")
+        .expect("the voxel layer is still there by name");
+    assert_eq!(
+        voxel_row.1,
+        clayspace_model::Representation::Sdf,
+        "a voxel layer now round trips as one — go through \
+         clay_document_add_voxel_layer and delete this note"
+    );
+    let _ = std::fs::remove_file(&path);
+}

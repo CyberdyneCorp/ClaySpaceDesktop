@@ -43,6 +43,37 @@ pub enum ArmatureEdit {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeId(pub(crate) sys::clay_node_id);
 
+impl NodeId {
+    /// A layer's root, which is the group every top-level node hangs under.
+    ///
+    /// The one node id a host can name without having been handed it, and
+    /// therefore where enumerating a reloaded layer starts.
+    pub const ROOT: Self = Self(0);
+
+    /// The raw id, for a host that has to log or compare one.
+    pub fn get(self) -> u32 {
+        self.0
+    }
+
+    /// A node id a host is probing for rather than holding.
+    ///
+    /// Nothing in the ABI enumerates a layer's nodes, so a host that reopened
+    /// a document and wants to find one has to ask about ids it has not been
+    /// handed. `Document::node_prim` makes that a checkable question.
+    pub fn from_raw(id: u32) -> Self {
+        Self(id)
+    }
+}
+
+/// The primitive values `Document::node_prim` reports, for the few a host has
+/// to recognise by name.
+pub mod prim {
+    use claycore_sys as sys;
+
+    pub const ARMATURE: i32 = sys::clay_prim::CLAY_PRIM_ARMATURE as i32;
+    pub const STROKE: i32 = sys::clay_prim::CLAY_PRIM_STROKE as i32;
+}
+
 /// An item under construction, owned by the caller until it is added to a
 /// layer. Adding copies it, so one builder may be placed any number of times.
 pub struct Item {

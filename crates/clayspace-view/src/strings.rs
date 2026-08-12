@@ -1,10 +1,10 @@
 //! Every word the interface shows.
 //!
 //! Externalised so that no user-facing string is written inline, and so a
-//! second locale is a table rather than a rewrite. The design is Portuguese
-//! throughout, which is the default; English is carried alongside it because a
-//! tool sold beyond one market needs the fallback path to have been exercised
-//! rather than assumed.
+//! further locale is a table rather than a rewrite. The design is Portuguese
+//! throughout, which is the default; English and Spanish are carried alongside
+//! it because a tool sold beyond one market needs the fallback path to have
+//! been exercised rather than assumed.
 
 /// Which language the interface is presented in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -13,10 +13,14 @@ pub enum Locale {
     #[default]
     PtBr,
     EnUs,
+    /// Latin American Spanish rather than Castilian: the design is Brazilian,
+    /// so the market next door is the one this reaches first, and its
+    /// vocabulary is the one those artists already use.
+    Es419,
 }
 
 impl Locale {
-    pub const ALL: [Locale; 2] = [Self::PtBr, Self::EnUs];
+    pub const ALL: [Locale; 3] = [Self::PtBr, Self::EnUs, Self::Es419];
 
     /// Picks a locale from a system tag, falling back to the default.
     ///
@@ -29,6 +33,10 @@ impl Locale {
             Self::PtBr
         } else if tag.starts_with("en") {
             Self::EnUs
+        } else if tag.starts_with("es") {
+            // Every Spanish tag, Castilian included: a Madrid interface in
+            // Latin American Spanish is read; one in Portuguese is not.
+            Self::Es419
         } else {
             Self::default()
         }
@@ -38,6 +46,7 @@ impl Locale {
         match self {
             Self::PtBr => "Português (Brasil)",
             Self::EnUs => "English (US)",
+            Self::Es419 => "Español (Latinoamérica)",
         }
     }
 }
@@ -288,16 +297,103 @@ const EN_US: Strings = Strings {
     state_nothing_changed: "nothing changed",
 };
 
+/// The Latin American Spanish strings.
+const ES_419: Strings = Strings {
+    menu_file: "Archivo",
+    menu_edit: "Editar",
+    menu_view: "Vista",
+    menu_sculpt: "Escultura",
+    menu_brushes: "Pinceles",
+    menu_dynamics: "Dinámica",
+    menu_masks: "Máscaras",
+    action_extrude: "Extruir",
+    menu_window: "Ventana",
+    menu_help: "Ayuda",
+
+    section_scene: "ESCENA",
+    section_layers: "CAPAS",
+    section_sculpt_settings: "AJUSTES DE ESCULTURA",
+    section_material: "MATERIAL",
+    section_geometry: "GEOMETRÍA",
+    section_resolution: "RESOLUCIÓN",
+    section_brush_controls: "CONTROLES DE PINCEL",
+    // "Esqueleto", not "Armadura": armadura reads as armour outside of
+    // structural engineering, and Spanish-speaking riggers learned the term
+    // from Blender.
+    section_armature: "ESQUELETO",
+    section_diagnostics: "DIAGNÓSTICO",
+
+    label_intensity: "Intensidad",
+    label_size: "Tamaño",
+    label_flow: "Flujo",
+    label_symmetry: "Simetría",
+    label_resolution: "Resolución",
+    label_smoothing: "Suavizado",
+    label_voxel_size: "Tamaño del vóxel",
+    label_noise: "Ruido",
+    label_edge: "Borde",
+    label_accumulate: "Acumular",
+    // "Reflejo" rather than "Simetría", which the axis toggles already carry;
+    // the two are separate controls and must not read as one.
+    label_mirror: "Reflejo",
+    label_polygons: "Polígonos",
+    label_vertices: "Vértices",
+    label_triangles: "Triángulos",
+    label_objects: "Objetos",
+    label_memory: "MEMORIA",
+    label_units: "Unidades",
+    label_backend: "Aceleración",
+    label_new_layer: "Nueva capa",
+    label_spheres: "Esferas",
+    label_skin: "Piel",
+    label_mirror_new: "Reflejar nuevas",
+
+    action_undo: "Deshacer",
+    action_redo: "Rehacer",
+    action_frame_all: "Encuadrar todo",
+    action_new: "Nuevo",
+    action_open: "Abrir…",
+    action_open_recent: "Abrir reciente",
+    action_save: "Guardar",
+    action_save_as: "Guardar como…",
+    action_import: "Importar malla…",
+    action_export: "Exportar malla…",
+    action_choose_file: "Elegir archivo…",
+    label_import_as: "Traer como",
+    label_scale: "Escala",
+    label_mesher: "Mallador",
+    label_export_resolution: "Celda",
+    label_decimate: "Reducir triángulos",
+    // The share of triangles that survives, so a different verb from the
+    // checkbox above it; repeating "Reducir" would read as one control twice.
+    label_keep: "Conservar",
+    section_warnings: "ADVERTENCIAS",
+    action_quit: "Salir",
+    state_no_recent: "sin documentos recientes",
+    action_diagnostics: "Diagnóstico",
+    action_attribution: "Atribuciones",
+    action_copy: "Copiar informe",
+    state_copied: "copiado",
+    action_armature_new: "Nuevo esqueleto",
+    action_armature_edit: "Editar esqueleto",
+    action_armature_remove: "Eliminar esfera",
+    hint_armature: "Arrastra desde una esfera para crear la siguiente · Alt mueve · ⌘ redimensiona",
+    hint_units: "Haz clic para cambiar la unidad. Solo cambia la lectura; no se reescala nada.",
+    state_unsaved: "sin guardar",
+    state_nothing_changed: "nada cambió",
+};
+
 impl Strings {
     pub fn for_locale(locale: Locale) -> &'static Strings {
         match locale {
             Locale::PtBr => &PT_BR,
             Locale::EnUs => &EN_US,
+            Locale::Es419 => &ES_419,
         }
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 71] {
+    pub fn all(&self) -> [&'static str; 72] {
         [
             self.menu_file,
             self.menu_edit,
@@ -306,6 +402,7 @@ impl Strings {
             self.menu_brushes,
             self.menu_dynamics,
             self.menu_masks,
+            self.action_extrude,
             self.menu_window,
             self.menu_help,
             self.section_scene,
@@ -391,19 +488,24 @@ mod tests {
     #[test]
     fn the_locales_actually_differ() {
         // A table copied rather than translated is worse than none: it looks
-        // localised and is not.
-        let pt = Strings::for_locale(Locale::PtBr);
-        let en = Strings::for_locale(Locale::EnUs);
-        let differing = pt
-            .all()
-            .iter()
-            .zip(en.all().iter())
-            .filter(|(a, b)| a != b)
-            .count();
-        assert!(
-            differing > 30,
-            "only {differing} strings differ between the locales"
-        );
+        // localised and is not. Every pair, because languages as close as
+        // Portuguese and Spanish are where a copied table would hide.
+        for (index, first) in Locale::ALL.iter().enumerate() {
+            for second in &Locale::ALL[index + 1..] {
+                let differing = Strings::for_locale(*first)
+                    .all()
+                    .iter()
+                    .zip(Strings::for_locale(*second).all().iter())
+                    .filter(|(a, b)| a != b)
+                    .count();
+                assert!(
+                    differing > 30,
+                    "only {differing} strings differ between {} and {}",
+                    first.label(),
+                    second.label()
+                );
+            }
+        }
     }
 
     #[test]
@@ -412,6 +514,12 @@ mod tests {
         assert_eq!(Locale::from_tag(""), Locale::default());
         assert_eq!(Locale::from_tag("pt-BR"), Locale::PtBr);
         assert_eq!(Locale::from_tag("en-GB"), Locale::EnUs);
+        assert_eq!(Locale::from_tag("es-MX"), Locale::Es419);
+        assert_eq!(
+            Locale::from_tag("es-ES"),
+            Locale::Es419,
+            "Castilian reads the Latin American table rather than Portuguese"
+        );
         assert_eq!(
             Locale::from_tag("EN-US"),
             Locale::EnUs,

@@ -7,3 +7,10 @@
 
 # Produced by tools/bundle.py
 /target/dist/
+
+# Agent worktrees, which are checkouts rather than tracked content.
+.claude/worktrees/
+
+# Python bytecode from the packaging scripts.
+__pycache__/
+*.pyc

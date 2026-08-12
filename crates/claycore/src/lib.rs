@@ -30,7 +30,7 @@ mod reader;
 mod sculpt;
 mod voxel;
 
-pub use authoring::{Blend, Op, Protection, UndoState};
+pub use authoring::{Blend, LayerInfo, LayerRepresentation, Op, Protection, UndoState};
 pub use backend::{backends, compiled_backends, Backend};
 pub use brick::{
     BrickCache, BrickConfig, BrickKey, BrickMeshParams, BrickMeshRange, BrickRequest, BrickSamples,
@@ -38,7 +38,7 @@ pub use brick::{
 };
 pub use brush::{Accumulation, BrushParams, BrushShape, Falloff, StrokePreset, StrokeSample};
 pub use consolidate::{ConsolidationCost, ConsolidationParams, FieldReport};
-pub use document::{ArmatureEdit, Document, Item, LayerId, NodeId};
+pub use document::{prim, ArmatureEdit, Document, Item, LayerId, NodeId};
 pub use error::{ClayError, ErrorKind, Result};
 pub use mask::{ExtrudeSide, Mask, MaskExtrudeParams, MaskField, MaskRef};
 pub use mesh::{ImportBudget, Mesh, MeshLayerDesc, MeshParams, MeshValidity, Mesher, VertexLayout};

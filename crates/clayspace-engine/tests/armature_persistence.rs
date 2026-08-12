@@ -1,11 +1,9 @@
 //! Task 6.6: what survives saving a rig and opening it again.
 //!
 //! Two different things could be meant by "the armature persisted": the
-//! *surface* it produced, and the *rig* that produced it. The first is the
-//! engine's business. The second cannot be recovered at all: a placed armature
-//! is write-only in the ABI — see `claycore_armature_readback.rs` — so neither
-//! the parents nor the positions come back. These tests state which is which
-//! rather than asserting the happier of the two and calling it done.
+//! *surface* it produced, and the *rig* that produced it. Both survive since
+//! ClayCore 0.29.0 (#77) — before it a placed armature was write-only, so a
+//! reopened document held a skinned shape nobody could pose again.
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{ArmatureModel, DocumentModel, SculptModel};
@@ -68,37 +66,46 @@ fn the_skinned_surface_survives_a_round_trip() {
 }
 
 #[test]
-fn the_tree_does_not_survive_and_the_document_says_so() {
-    // The honest half. A placed armature answers nothing: the parent array
-    // has no reader, and `clay_layer_stroke_points` refuses the primitive, so
-    // not even the sphere positions come back. Rather than invent a plausible
-    // rig out of the meshed surface, a reopened document reports no armature
-    // and the surface stands on its own.
-    //
-    // This test is written to fail the day the ABI grows a reader. That is
-    // the signal to recover the tree here instead of documenting its loss.
+fn the_tree_comes_back_with_its_topology() {
+    // Positions are the easy half. The parent array is what makes a reloaded
+    // rig posable, and what no amount of nearest-sphere guessing recovers.
     let Some(mut document) = document() else {
         return;
     };
     let path = scratch("tree");
     saved(&mut document, &path);
-    assert_eq!(document.armature().expect("a tree").nodes.len(), 3);
+    let before = document.armature().expect("a tree");
+    assert_eq!(before.nodes.len(), 3);
 
     let mut reopened = document;
     reopened.open(&path).expect("open");
 
-    assert!(
-        reopened.armature().is_none(),
-        "a tree came back; recover it properly rather than leaving this note"
-    );
+    let after = reopened.armature().expect("the rig came back");
+    assert_eq!(after.nodes.len(), before.nodes.len());
+    for (index, (was, now)) in before.nodes.iter().zip(after.nodes.iter()).enumerate() {
+        assert_eq!(now.parent, was.parent, "node {index} lost its parent");
+        for axis in 0..3 {
+            assert!(
+                (now.position[axis] - was.position[axis]).abs() < 1e-4,
+                "node {index} moved on {axis}: {:?} against {:?}",
+                now.position,
+                was.position
+            );
+        }
+        assert!(
+            (now.radius - was.radius).abs() < 1e-4,
+            "node {index} changed radius: {} against {}",
+            now.radius,
+            was.radius
+        );
+    }
     let _ = std::fs::remove_file(&path);
 }
 
 #[test]
-fn rigging_a_reopened_document_starts_a_new_tree_rather_than_editing_a_ghost() {
-    // The failure this prevents: a rig authored after a reload silently
-    // editing indices into a tree the host no longer has. Beginning a rig
-    // replaces whatever the layer held, which is a visible, undoable act.
+fn a_reopened_rig_can_be_posed() {
+    // The point of recovering the tree at all: moving a shoulder after a
+    // reload has to carry the arm, exactly as it did before the save.
     let Some(mut document) = document() else {
         return;
     };
@@ -107,13 +114,14 @@ fn rigging_a_reopened_document_starts_a_new_tree_rather_than_editing_a_ghost() {
     let mut reopened = document;
     reopened.open(&path).expect("open");
 
-    assert!(reopened.move_zsphere(1, [0.0, 1.0, 0.0]).is_err());
+    reopened.move_zsphere(1, [0.0, 1.0, 0.0]).expect("pose it");
 
-    reopened
-        .begin_armature([0.0, 1.5, 0.0], 0.3)
-        .expect("a fresh rig");
     let tree = reopened.armature().expect("a tree");
-    assert_eq!(tree.nodes.len(), 1);
-    assert!(solid_at(&reopened, [0.0, 1.5, 0.0]));
+    assert_eq!(tree.nodes[1].position[1], 1.0, "the shoulder did not move");
+    assert_eq!(tree.nodes[2].position[1], 1.0, "the elbow stayed behind");
+    assert!(
+        solid_at(&reopened, [1.0, 1.0, 0.0]),
+        "the arm's surface did not follow the shoulder after a reload"
+    );
     let _ = std::fs::remove_file(&path);
 }

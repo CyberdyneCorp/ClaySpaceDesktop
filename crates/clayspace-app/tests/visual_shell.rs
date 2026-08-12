@@ -416,12 +416,17 @@ fn the_shell_renders_in_every_locale() {
     }
 
     // A locale whose labels are longer must not blank the interface or push a
-    // region off screen; the frames differ but both draw.
-    let (first, second) = (&captured[0].1, &captured[1].1);
-    assert!(
-        first.mean_difference(second) > 0.1,
-        "the two locales rendered identically, so the strings are not reaching the interface"
-    );
+    // region off screen; the frames differ but all of them draw.
+    for (index, (first_locale, first)) in captured.iter().enumerate() {
+        for (second_locale, second) in &captured[index + 1..] {
+            assert!(
+                first.mean_difference(second) > 0.1,
+                "{} and {} rendered identically, so the strings are not reaching the interface",
+                first_locale.label(),
+                second_locale.label()
+            );
+        }
+    }
 }
 
 #[test]

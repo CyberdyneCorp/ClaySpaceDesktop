@@ -1439,28 +1439,46 @@ impl ClayDocument {
             return Err(unreadable("it holds no layers".to_string()));
         }
 
-        // Ids and protection are all that survive: the ABI has no getter for a
-        // layer's name, visibility or representation, so a reopened document
-        // comes back anonymous and every layer is treated as SDF. Reported
-        // upstream; until then this is what a host can know.
+        // Everything a layer is, read back rather than regenerated.
+        //
+        // `layer_ids` answers in stack order — evaluation order — which is the
+        // half that matters for correctness: a document reopened in id order
+        // could evaluate differently from the one saved. Names, visibility and
+        // representation used to be lost too, so a reopened document came back
+        // anonymous with every layer treated as SDF. ClayCore 0.29.0 exposes
+        // all of it (#69).
         let layers: Vec<Layer> = ids
             .iter()
             .enumerate()
-            .map(|(index, id)| Layer {
-                id: *id,
-                key: LayerKey(index as u64 + 1),
-                name: format!("Camada {}", index + 1),
-                representation: Representation::Sdf,
-                grid: None,
-                visible: true,
-                protection: document
-                    .layer_protection(*id)
-                    .map(|p| Protection {
-                        ghost: p.ghost,
-                        locked: p.locked,
-                    })
-                    .unwrap_or_default(),
-                intensity: 100,
+            .map(|(index, id)| {
+                let info = document.layer_info(*id).ok();
+                let representation = match info.map(|i| i.representation) {
+                    Some(claycore::LayerRepresentation::Voxel) => Representation::Voxel,
+                    Some(claycore::LayerRepresentation::Mesh) => Representation::Mesh,
+                    _ => Representation::Sdf,
+                };
+                Layer {
+                    id: *id,
+                    key: LayerKey(index as u64 + 1),
+                    // A layer that was never named comes back empty rather
+                    // than absent, and an unnamed row in the stack is worse to
+                    // work with than a numbered one.
+                    name: document
+                        .layer_name(*id)
+                        .ok()
+                        .filter(|name| !name.is_empty())
+                        .unwrap_or_else(|| format!("Camada {}", index + 1)),
+                    representation,
+                    grid: None,
+                    visible: info.map(|i| i.visible).unwrap_or(true),
+                    protection: info
+                        .map(|i| Protection {
+                            ghost: i.protection.ghost,
+                            locked: i.protection.locked,
+                        })
+                        .unwrap_or_default(),
+                    intensity: 100,
+                }
             })
             .collect();
 
@@ -1500,11 +1518,23 @@ impl ClayDocument {
             .map_err(|e| unreadable(e.to_string()))?;
 
         let ids: Vec<LayerId> = model.layers.iter().map(|layer| layer.id).collect();
-        for id in ids {
+        for id in ids.clone() {
             model
                 .refill(id, &[])
                 .map_err(|e| unreadable(e.to_string()))?;
         }
+
+        // The rig, if the document carries one. Before ClayCore 0.29.0 a
+        // placed armature was write-only, so a reopened document held the
+        // skinned surface and nothing that could pose it (#77).
+        for id in ids {
+            if let Some((node, tree)) = Self::recover_armature(&model.document, id) {
+                model.armature_bounds = Some(Self::armature_bounds(&tree, model.skin));
+                model.armature = Some((id, node, tree));
+                break;
+            }
+        }
+
         model.refresh_stats();
         Ok(model)
     }
@@ -1909,6 +1939,67 @@ impl ClayDocument {
         self.refill(layer, &[node])?;
         self.refresh_stats();
         Ok(node)
+    }
+
+    /// Finds a layer's armature and reads its tree back.
+    ///
+    /// Node ids are probed rather than enumerated, because nothing in the ABI
+    /// lists a layer's nodes: `clay_layer_children` answers for a group and a
+    /// layer's root is not one. The probe is a *checkable* guess, unlike the
+    /// one that used to find layers — `clay_layer_node_prim` says exactly what
+    /// each id carries, so a hit is certain and only a miss is possible. What
+    /// it can miss is a rig placed beyond a long run of removed nodes, which
+    /// costs the tree and not the surface.
+    fn recover_armature(document: &Document, layer: LayerId) -> Option<(NodeId, Armature)> {
+        const GAP: u32 = 16;
+
+        let mut misses = 0;
+        let mut candidate = 1u32;
+        while misses < GAP {
+            let node = NodeId::from_raw(candidate);
+            match document.node_prim(layer, node) {
+                Ok(prim) if prim == claycore::prim::ARMATURE => {
+                    if let Some(tree) = Self::read_armature(document, layer, node) {
+                        return Some((node, tree));
+                    }
+                    misses = 0;
+                }
+                Ok(_) => misses = 0,
+                Err(_) => misses += 1,
+            }
+            candidate += 1;
+        }
+        None
+    }
+
+    /// The tree behind a placed armature node.
+    ///
+    /// Radii are divided by the skin thickness on the way in, because
+    /// `place_armature` multiplies by it on the way out — the tree keeps what
+    /// was authored so the thickness slider stays reversible. A document is
+    /// loaded with the default thickness, so this is a division by one today
+    /// and correct if that ever stops being true.
+    fn read_armature(document: &Document, layer: LayerId, node: NodeId) -> Option<Armature> {
+        let points = document.stroke_points(layer, node).ok()?;
+        let parents = document.armature_parents(layer, node).ok()?;
+        if points.is_empty() || parents.len() != points.len() {
+            return None;
+        }
+        let skin = SkinSettings::default();
+        let nodes = points
+            .iter()
+            .zip(parents.iter())
+            .map(|(point, parent)| clayspace_model::Zsphere {
+                position: [point[0], point[1], point[2]],
+                radius: if skin.thickness > 0.0 {
+                    point[3] / skin.thickness
+                } else {
+                    point[3]
+                },
+                parent: *parent,
+            })
+            .collect();
+        Some(Armature { nodes })
     }
 
     /// The box a tree occupies, spheres and all.

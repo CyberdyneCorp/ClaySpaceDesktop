@@ -7,6 +7,7 @@
 
 use claycore_sys as sys;
 
+use crate::descriptor::Descriptor;
 use crate::document::ArmatureEdit;
 use crate::error::{check, Result};
 use crate::{Document, Item, LayerId, NodeId};
@@ -91,6 +92,44 @@ impl Blend {
 ///
 /// The three states are distinct on purpose: a ghosted layer is visible but
 /// neither pickable nor editable, while a locked one is still pickable.
+/// What a layer holds, which decides which verbs can reach it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayerRepresentation {
+    Sdf,
+    Voxel,
+    Mesh,
+}
+
+impl LayerRepresentation {
+    fn from_raw(raw: i32) -> Self {
+        match raw {
+            r if r == sys::clay_layer_representation::CLAY_LAYER_VOXEL as i32 => Self::Voxel,
+            r if r == sys::clay_layer_representation::CLAY_LAYER_MESH as i32 => Self::Mesh,
+            // An unknown value from a newer engine is treated as the edit tree
+            // rather than refused: the layer is still there and still
+            // evaluates, and guessing wrong costs a tool availability rather
+            // than a document.
+            _ => Self::Sdf,
+        }
+    }
+}
+
+/// Everything about one layer that has a fixed size.
+///
+/// Added in ClayCore 0.29.0 (#69). Before it, a reopened document knew ids and
+/// protection and nothing else — so names were regenerated, voxel layers were
+/// mistaken for SDF ones, and stack order was lost, which is the half that
+/// could make a reopened document evaluate differently from the one saved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LayerInfo {
+    pub id: LayerId,
+    pub representation: LayerRepresentation,
+    /// Position in evaluation order — what `clay_document_move_layer` sets.
+    pub stack_index: i32,
+    pub visible: bool,
+    pub protection: Protection,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Protection {
     pub ghost: bool,
@@ -406,6 +445,46 @@ impl Document {
         Ok(parents)
     }
 
+    /// A group's children, in order.
+    ///
+    /// A node that is not a group is refused, which is also how a host that
+    /// reloaded a document tells a group from an item.
+    pub fn children(&self, layer: LayerId, node: NodeId) -> Result<Vec<NodeId>> {
+        let mut count: usize = 0;
+        // SAFETY: the count is the only out-parameter written on this call.
+        check(
+            unsafe {
+                sys::clay_layer_children(
+                    self.as_ptr(),
+                    layer.0,
+                    node.0,
+                    std::ptr::null_mut(),
+                    &mut count,
+                )
+            },
+            "clay_layer_children",
+        )?;
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        let mut ids = vec![0u32; count];
+        // SAFETY: `ids` is sized to the count the call above reported.
+        check(
+            unsafe {
+                sys::clay_layer_children(
+                    self.as_ptr(),
+                    layer.0,
+                    node.0,
+                    ids.as_mut_ptr(),
+                    &mut count,
+                )
+            },
+            "clay_layer_children",
+        )?;
+        ids.truncate(count);
+        Ok(ids.into_iter().map(NodeId).collect())
+    }
+
     /// Which primitive a placed node carries.
     ///
     /// The dual of `clay_layer_children`: between the two, every node answers
@@ -489,26 +568,91 @@ impl Document {
     /// stack order have no getters, so a document that comes back from disk
     /// comes back anonymous and in creation order rather than the order it was
     /// saved in. Filed as ClayCore #69; when enumeration lands this goes.
+    /// Every layer, in **stack order** — index 0 is evaluated first.
+    ///
+    /// Until ClayCore 0.29.0 there was no enumeration at all, and this probed
+    /// consecutive ids for one that answered `clay_layer_bounds`, tolerating a
+    /// run of eight misses before giving up. That guessed: a document with
+    /// nine removals in a row came back short, and the order was the id order
+    /// rather than the evaluation order — so a reopened document could
+    /// evaluate differently from the one saved. See ClayCore #69.
     pub fn layer_ids(&self) -> Result<Vec<LayerId>> {
-        // Ids are handed out from 1 and monotonically, so a gap means a
-        // removal rather than the end. Eight is well past the largest run of
-        // removals a session is likely to leave and still cheap.
-        const GAP: u32 = 8;
-        let mut found = Vec::new();
-        let mut misses = 0;
-        let mut candidate: sys::clay_layer_id = 1;
-        while misses < GAP {
-            let id = LayerId(candidate);
-            match self.layer_bounds(id) {
-                Ok(_) => {
-                    found.push(id);
-                    misses = 0;
-                }
-                Err(_) => misses += 1,
-            }
-            candidate += 1;
+        let mut count: usize = 0;
+        // SAFETY: a valid handle and one out-parameter.
+        check(
+            unsafe { sys::clay_document_layer_count(self.as_ptr(), &mut count) },
+            "clay_document_layer_count",
+        )?;
+
+        let mut ids = Vec::with_capacity(count);
+        for index in 0..count {
+            let mut id = 0;
+            // SAFETY: the index is below the count the call above reported.
+            check(
+                unsafe { sys::clay_document_layer_at(self.as_ptr(), index, &mut id) },
+                "clay_document_layer_at",
+            )?;
+            ids.push(LayerId(id));
         }
-        Ok(found)
+        Ok(ids)
+    }
+
+    /// Everything about one layer that has a fixed size.
+    pub fn layer_info(&self, layer: LayerId) -> Result<LayerInfo> {
+        let mut raw = sys::clay_layer_info::sized();
+        // SAFETY: a sized output descriptor the library fills.
+        check(
+            unsafe { sys::clay_document_layer_info(self.as_ptr(), layer.0, &mut raw) },
+            "clay_document_layer_info",
+        )?;
+        Ok(LayerInfo {
+            id: LayerId(raw.id),
+            representation: LayerRepresentation::from_raw(raw.representation),
+            stack_index: raw.stack_index,
+            visible: raw.visible != 0,
+            protection: Protection {
+                ghost: raw.ghost != 0,
+                locked: raw.locked != 0,
+            },
+        })
+    }
+
+    /// The layer's name.
+    ///
+    /// A string rather than a [`LayerInfo`] field because it is the one layer
+    /// property without a fixed size.
+    pub fn layer_name(&self, layer: LayerId) -> Result<String> {
+        let mut size: usize = 0;
+        // A first call with a null buffer asks how many bytes, NUL included.
+        // SAFETY: the size is the only out-parameter written on this call.
+        check(
+            unsafe {
+                sys::clay_layer_name(self.as_ptr(), layer.0, std::ptr::null_mut(), &mut size)
+            },
+            "clay_layer_name",
+        )?;
+        if size <= 1 {
+            return Ok(String::new());
+        }
+
+        let mut bytes = vec![0u8; size];
+        // SAFETY: `bytes` is sized to what the call above asked for.
+        check(
+            unsafe {
+                sys::clay_layer_name(
+                    self.as_ptr(),
+                    layer.0,
+                    bytes.as_mut_ptr() as *mut std::os::raw::c_char,
+                    &mut size,
+                )
+            },
+            "clay_layer_name",
+        )?;
+        // The engine writes UTF-8 and NUL-terminates; the name is trusted to
+        // be what a host set, so a lossy conversion cannot lose anything a
+        // round trip put there.
+        let end = bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len());
+        Ok(String::from_utf8_lossy(&bytes[..end]).into_owned())
     }
 
     pub fn layer_protection(&self, layer: LayerId) -> Result<Protection> {

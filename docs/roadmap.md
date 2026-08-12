@@ -182,7 +182,16 @@ a gate that is red the day it is installed is one people learn to ignore.
 These change what gets built, and are better settled early than late. They are
 task 11.1, and they gate archiving the change.
 
-**The Dinâmica panel.** The design shows gravity at −9.81, rigidity and
+**~~The Dinâmica panel.~~ Settled: out of scope.** The design shows gravity,
+rigidity and damping; ClayCore has no solver and proposes none, so the panel
+ships as voxel size and the resolution stack. Soft-body simulation is not
+being scoped as part of this change.
+
+**~~Localisation scope.~~ Settled: three locales.** en-US, pt-BR and es-419
+(Latin American Spanish, to pair with Brazilian Portuguese). All three are
+carried and each gets a rendered capture.
+
+**The Dinâmica panel — superseded, kept for the record.** The design shows gravity at −9.81, rigidity and
 damping. ClayCore has no solver and its roadmap proposes none. The panel
 currently ships as voxel size and the multi-resolution level stack, which is
 what "Dinâmica: Ligada" means operationally. Confirm that, or scope soft-body
