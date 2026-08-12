@@ -117,12 +117,24 @@ and radii either. See the table above.
 
 ## What is slow and why
 
-A dab costs 14.4 ms on a fresh document and 86 ms on the reference scene, and
-a *mirrored* segment costs 98 ms against 28 ms unmirrored. Neither difference
-is the edit — the bricks re-meshed are identical — both are
-[#73](https://github.com/CyberdyneCorp/ClayCore/issues/73), which is fixed on
-ClayCore's `main` and not in 0.28.0. Measured at a fixed 80 bricks while the
-document grows from 1 node to 193:
+Sculpting is not what costs. Splitting one segment after 96 edits, over 80
+bricks:
+
+| stage | cost |
+|---|---|
+| the edit — stroke, mark dirty, refill | 1.09 ms |
+| mesh, face normals | 7.71 ms |
+| mesh, gradient normals | 83.22 ms |
+
+91% of a segment was one call's gradient-normal term —
+[#73](https://github.com/CyberdyneCorp/ClayCore/issues/73), fixed on ClayCore's
+`main` and not in 0.28.0. So the drag no longer pays it: `sync` shades with
+face normals and `SurfaceGeometry::refine` buys the gradient back over the
+gesture's own keys when the pointer comes up. A dab went 86 ms → 12 ms.
+
+The underlying scaling is unchanged, and it is still worth fixing upstream —
+the release pass pays it, and it grows with the document. Measured at a fixed
+80 bricks while the document grows from 1 node to 193:
 
 | stage | 1 node | 193 nodes |
 |---|---|---|
@@ -141,11 +153,9 @@ face normals takes the same measurement from 53 ms to 4 ms. Not taken, because
 field gradients are better normals than face averages on a narrow band, and
 the trade deserves a decision rather than a commit.
 
-**Symmetry costs what it costs, for now.** Turning the mirror on triples the
-keys a segment re-meshes — 170 to 526 for one dab — because each half is
-dilated by a ring of its own, and meshing is the term #73 inflates. It is on
-because the design asks for it and the engine now honours it; the fix that
-brings it back down is already merged upstream.
+**Symmetry triples the keys a segment re-meshes** — 170 to 526 for one dab,
+because each half is dilated by a ring of its own. That is now affordable; it
+was not before the shading split.
 
 **Offer consolidation.** `clay_layer_consolidation_cost` already reports
 `advises_consolidation: true` at 203 items, and consolidating takes a dab from
