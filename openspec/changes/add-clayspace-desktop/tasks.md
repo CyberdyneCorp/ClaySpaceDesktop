@@ -25,7 +25,7 @@
 - [x] 2.4 Record each fallback once per operation kind in the diagnostics log
 - [x] 2.5 Implement the user override with cross-session persistence and the unavailable-override fallback path
 - [x] 2.6 Implement the diagnostics report: discovered backends, active backend, selection reason, engine version, fallbacks this session
-- [ ] 2.7 Add a test asserting a document exported on each registered backend agrees within parity tolerance and saves byte-identically
+- [x] 2.7 Add a test asserting a document exported on each registered backend agrees within parity tolerance and saves byte-identically
 
 ## 3. Rendering foundation
 
@@ -91,7 +91,7 @@
 ## 8. Document lifecycle
 
 - [x] 8.1 Implement open and save through the engine's document I/O, with the newer-version refusal path
-- [ ] 8.2 Verify cross-platform byte-identical documents in CI
+- [x] 8.2 Verify cross-platform byte-identical documents in CI — the `document-bytes` matrix and the job that compares the digests. The macOS half stays red until [#71](https://github.com/CyberdyneCorp/ClayCore/issues/71)
 - [x] 8.3 Implement mesh import for OBJ, PLY, FBX and GLB with the engine's guardrails and the raised-ceiling path — GLB excepted: `clay_mesh_save` writes it and `clay_mesh_load` does not read it, so it is offered on export only and refused by name on import
 - [x] 8.4 Implement export with mesher choice, resolution, decimation and attribute-support warnings; default to the watertight mesher
 - [x] 8.5 Implement autosave recovery state, crash detection and the recovery offer

@@ -197,6 +197,77 @@ jobs:
       - name: Check the layering rules
         run: python3 tools/check_layering.py
 
+  # Task 8.2: the same document, authored from nothing on each platform, has to
+  # be the same file. A document is an edit list — it records what was asked
+  # for, not what any backend computed — so a difference here would mean the
+  # serializer is picking up something platform-shaped, which is the kind of
+  # defect that only shows up when someone opens a colleague's file.
+  document-bytes:
+    name: Document bytes (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      # CPU only on both, so the comparison is between platforms rather than
+      # between one platform's accelerator and another's.
+      - run: echo "CLAYCORE_CPU_ONLY=1" >> "$GITHUB_ENV"
+      - name: Install the Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libgtk-3-dev
+      - uses: Swatinem/rust-cache@v2
+      - name: Write the canonical document
+        run: cargo run -q -p clayspace-app --release --bin canonical -- canonical.clayspace
+      - name: Take its digest
+        run: |
+          if command -v sha256sum >/dev/null; then
+            sha256sum canonical.clayspace | awk '{print $1}' > digest.txt
+          else
+            shasum -a 256 canonical.clayspace | awk '{print $1}' > digest.txt
+          fi
+          cat digest.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: document-digest-${{ matrix.os }}
+          path: digest.txt
+
+  document-bytes-agree:
+    name: Documents agree across platforms
+    runs-on: ubuntu-24.04
+    needs: document-bytes
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: document-digest-*
+          path: digests
+      - name: Compare the digests
+        run: |
+          set -eu
+          found=$(find digests -name digest.txt | sort)
+          echo "$found" | while read -r file; do
+            echo "$(dirname "$file"): $(cat "$file")"
+          done
+          count=$(echo "$found" | wc -l | tr -d ' ')
+          if [ "$count" -lt 2 ]; then
+            echo "only $count platform reported a digest; nothing to compare" >&2
+            exit 1
+          fi
+          unique=$(cat $found | sort -u | wc -l | tr -d ' ')
+          if [ "$unique" -ne 1 ]; then
+            echo "the canonical document is not byte-identical across platforms" >&2
+            exit 1
+          fi
+          echo "byte-identical across $count platforms"
+
   packaging:
     name: Packaging
     runs-on: ubuntu-24.04
