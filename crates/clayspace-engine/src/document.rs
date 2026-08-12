@@ -1401,7 +1401,7 @@ impl SceneModel for ClayDocument {
 
 /// The scene operations that reach further into the engine.
 impl ClayDocument {
-    fn layer_id(&self, key: LayerKey) -> Result<LayerId, ModelError> {
+    pub fn layer_id(&self, key: LayerKey) -> Result<LayerId, ModelError> {
         self.index_of(key).map(|index| self.layers[index].id)
     }
 
@@ -1604,10 +1604,18 @@ impl ClayDocument {
         // The rig, if the document carries one. Before ClayCore 0.29.0 a
         // placed armature was write-only, so a reopened document held the
         // skinned surface and nothing that could pose it (#77).
-        for id in ids {
+        for (index, id) in ids.into_iter().enumerate() {
             if let Some((node, tree)) = Self::recover_armature(&model.document, id) {
                 model.armature_bounds = Some(Self::armature_bounds(&tree, model.skin));
                 model.armature = Some((id, node, tree));
+                // And that layer becomes the active one.
+                //
+                // `armature()` answers only for the active layer — deliberately,
+                // so switching layers cannot hand the next click someone else's
+                // rig — so recovering a tree onto an inactive layer recovers it
+                // into somewhere nothing can see it. Reopening a document that
+                // holds a rig should put you on the rig.
+                model.active = index;
                 break;
             }
         }
@@ -1874,7 +1882,43 @@ impl ArmatureModel for ClayDocument {
     }
 
     fn begin_armature(&mut self, position: [f32; 3], radius: f32) -> Result<(), ModelError> {
-        let layer = self.active_layer().id;
+        // A rig gets a layer of its own.
+        //
+        // It used to go on the active layer, which in the application is the
+        // starting form — so the first ZSphere unioned into a sphere that was
+        // already there, and rigging looked and behaved like ordinary
+        // sculpting with a lump in the middle. The visual test did not catch
+        // it because it built on an empty document; the application never has
+        // one.
+        //
+        // A layer is also the right unit: in ZBrush a ZSphere armature is its
+        // own tool, not something added to the model you were sculpting, and
+        // giving it a layer is how that reads here — visible, hideable, and
+        // removable without touching the sculpt.
+        let key = self.add_layer("Armadura", Representation::Sdf)?;
+        let layer = self.layer_id(key)?;
+
+        // And everything else steps out of the way.
+        //
+        // In ZBrush a ZSphere armature is its own *tool*: you are not looking
+        // at the model you were sculpting while you build one. Here the
+        // starting form is a sphere of radius 1 at the origin, so a rig grown
+        // at the origin is simply inside it — the first thing anyone tries
+        // produces a lump and no visible rig.
+        //
+        // Hidden rather than removed: the sculpt is still in the document,
+        // still in the layer stack, and one click brings it back. Removing it
+        // would be a destructive answer to a presentation problem.
+        let others: Vec<LayerKey> = self
+            .layers
+            .iter()
+            .filter(|other| other.key != key)
+            .map(|other| other.key)
+            .collect();
+        for other in others {
+            self.set_layer_visible(other, false)?;
+        }
+
         let tree = Armature::rooted(position, radius);
         let node = self.place_armature(layer, &tree)?;
         self.armature = Some((layer, node, tree));

@@ -87,7 +87,12 @@ which is what makes rigging feel like modelling rather than filling in a form.
 - The scaffolding — three hoops per sphere, a line per link — draws only while
   rigging, and sits slightly proud of the skin. Flush hoops are invisible,
   because at a joint the skin *is* the sphere.
-- **Escultura** opens a rig; `A` toggles editing; `Delete` removes the selected
+- Starting a rig gives it a **layer of its own** and hides the others, which is
+what ZBrush does by making a ZSphere its own tool: you are not looking at the
+model you were sculpting while you build one. The sculpt is hidden rather than
+removed — still in the stack, one click from coming back.
+
+**Escultura** opens a rig; `A` toggles editing; `Delete` removes the selected
   sphere and everything under it. The root refuses to be removed.
 
 Picking takes the sphere nearest the eye. Rigs overlap constantly — a shoulder
