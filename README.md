@@ -40,7 +40,9 @@ Opens a window on a starting form.
 | `⌘S` `⇧⌘S` `⌘O` `⌘N` | Save, save as, open, new |
 | `A` | Rig with ZSpheres — see below |
 
-Closing over unsaved edits asks first.
+Closing over unsaved edits asks first, and a session that ends any other way
+offers its work back on the next run. **Arquivo** carries the whole lifecycle
+including *Abrir recente*, which prunes documents that are no longer there.
 
 While rigging, the pointer means something else. **Escultura → Nova armadura**
 starts one; then drag out of a sphere to grow the next, Option-drag to move a

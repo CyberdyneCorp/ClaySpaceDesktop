@@ -95,6 +95,9 @@ fn scene() -> Scene {
     }
 }
 
+/// Documents the file menu offers to reopen.
+static RECENT: &[std::path::PathBuf] = &[];
+
 /// The report the diagnostics window shows, with a fallback in it so the
 /// interesting branch is the one captured.
 fn diagnostics() -> clayspace_model::Diagnostics {
@@ -161,6 +164,7 @@ fn state<'a>(
         backend: "metal",
         units: "mm",
         last_action: Some(("Padrão", true)),
+        recent: RECENT,
         diagnostics,
         show_diagnostics: false,
         diagnostics_copied: false,

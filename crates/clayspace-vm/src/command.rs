@@ -8,6 +8,8 @@
 //! panel button that mean the same thing emit the *same* command, so they
 //! cannot drift apart.
 
+use std::path::PathBuf;
+
 use clayspace_model::{ExtrudeSettings, Falloff, LayerKey, MaskOp, ToolKind, ViewPresetKind};
 
 /// A change to the application or the document.
@@ -33,6 +35,18 @@ pub enum Command {
     SetLayerVisible(LayerKey, bool),
     AddLayer,
     RemoveLayer(LayerKey),
+
+    // -- documents --------------------------------------------------------
+    // Handled by the composition root rather than a ViewModel: each one may
+    // need a file dialog, and a ViewModel that could open one would be a
+    // ViewModel that needs a window to test.
+    NewDocument,
+    OpenDocument,
+    /// Opens a document straight from the recent list.
+    OpenRecent(PathBuf),
+    Save,
+    SaveAs,
+    Quit,
 
     // -- armatures --------------------------------------------------------
     /// Starts a rig on the active layer, replacing whatever it had.
@@ -96,6 +110,15 @@ impl Command {
                 | Self::ToggleGrid
                 | Self::ToggleDiagnostics
                 | Self::CopyDiagnostics
+                // Document lifecycle is not an edit. Opening replaces the
+                // document wholesale and saving changes nothing in it, so
+                // neither belongs in the undo history or the modified mark.
+                | Self::NewDocument
+                | Self::OpenDocument
+                | Self::OpenRecent(_)
+                | Self::Save
+                | Self::SaveAs
+                | Self::Quit
                 | Self::SelectTool(_)
                 | Self::SetBrushSize(_)
                 | Self::SetBrushIntensity(_)
@@ -147,6 +170,12 @@ impl Command {
             Self::FrameAll => "frame all",
             Self::NextMaterial => "material",
             Self::ToggleGrid => "grid",
+            Self::NewDocument => "new document",
+            Self::OpenDocument => "open document",
+            Self::OpenRecent(_) => "open recent",
+            Self::Save => "save",
+            Self::SaveAs => "save as",
+            Self::Quit => "quit",
             Self::ToggleDiagnostics => "diagnostics",
             Self::CopyDiagnostics => "copy diagnostics",
         }

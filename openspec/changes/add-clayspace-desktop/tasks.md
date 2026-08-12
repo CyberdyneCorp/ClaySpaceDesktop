@@ -94,9 +94,9 @@
 - [ ] 8.2 Verify cross-platform byte-identical documents in CI
 - [ ] 8.3 Implement mesh import for OBJ, PLY, FBX and GLB with the engine's guardrails and the raised-ceiling path
 - [ ] 8.4 Implement export with mesher choice, resolution, decimation and attribute-support warnings; default to the watertight mesher
-- [ ] 8.5 Implement autosave recovery state, crash detection and the recovery offer
+- [x] 8.5 Implement autosave recovery state, crash detection and the recovery offer
 - [x] 8.6 Implement the unsaved-changes decision on close and on quit
-- [ ] 8.7 Implement the recent documents list with missing-file pruning
+- [x] 8.7 Implement the recent documents list with missing-file pruning
 - [ ] 8.8 Implement the document working unit and presentation-only unit switching
 
 ## 9. Interface shell and design system

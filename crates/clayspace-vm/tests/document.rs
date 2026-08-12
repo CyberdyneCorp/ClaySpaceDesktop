@@ -229,3 +229,79 @@ fn the_guard_is_what_stands_between_work_and_losing_it() {
     vm.new_document().expect("new");
     assert_eq!(vm.guard(), Guard::Clear);
 }
+
+#[test]
+fn an_autosave_does_not_make_the_document_look_saved() {
+    // The failure this prevents is the expensive one: an autosave succeeds,
+    // the title drops "não salvo", and the sculptor closes over work that
+    // exists only in a file they have never seen.
+    let recorded = Rc::new(RefCell::new(Recorded::default()));
+    let mut vm = DocumentViewModel::new(
+        Box::new(FakeDocument {
+            recorded: recorded.clone(),
+            save_fails: false,
+            open_fails: None,
+        }),
+        "Sem título",
+    );
+    vm.touched();
+    assert!(*vm.modified().get());
+
+    vm.autosave_to(Path::new("/tmp/recuperação.clayspace"))
+        .expect("autosave");
+
+    assert!(
+        *vm.modified().get(),
+        "an autosave cleared the modified mark"
+    );
+    assert!(!vm.has_path(), "an autosave became the document's own path");
+    assert_eq!(vm.guard(), Guard::WouldLoseWork);
+    assert_eq!(
+        recorded.borrow().saved,
+        [PathBuf::from("/tmp/recuperação.clayspace")]
+    );
+}
+
+#[test]
+fn recovered_work_is_unsaved_work_and_has_nowhere_to_go_yet() {
+    let recorded = Rc::new(RefCell::new(Recorded::default()));
+    let mut vm = DocumentViewModel::new(
+        Box::new(FakeDocument {
+            recorded: recorded.clone(),
+            save_fails: false,
+            open_fails: None,
+        }),
+        "Sem título",
+    );
+
+    vm.recover(Path::new("/tmp/recuperação.clayspace"), "Recuperado")
+        .expect("recover");
+
+    assert_eq!(vm.name().get(), "Recuperado");
+    assert!(*vm.modified().get(), "recovered work is not saved work");
+    assert!(
+        !vm.has_path(),
+        "the next save would overwrite the recovery file"
+    );
+    assert_eq!(
+        recorded.borrow().opened,
+        [PathBuf::from("/tmp/recuperação.clayspace")]
+    );
+}
+
+#[test]
+fn a_recovery_that_fails_leaves_the_document_alone() {
+    let recorded = Rc::new(RefCell::new(Recorded::default()));
+    let mut vm = DocumentViewModel::new(
+        Box::new(FakeDocument {
+            recorded,
+            save_fails: false,
+            open_fails: Some(OpenError::NotFound(PathBuf::from("/gone"))),
+        }),
+        "Sem título",
+    );
+
+    assert!(vm.recover(Path::new("/gone"), "Recuperado").is_err());
+    assert_eq!(vm.name().get(), "Sem título");
+    assert!(vm.notice().get().is_some(), "the failure was silent");
+}

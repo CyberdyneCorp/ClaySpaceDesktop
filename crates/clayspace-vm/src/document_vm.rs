@@ -144,6 +144,37 @@ impl DocumentViewModel {
         }
     }
 
+    /// Writes a copy for recovery, without changing what the document is.
+    ///
+    /// Deliberately neither adopts the path nor clears `modified`: an autosave
+    /// is not a save. A document that looked saved because an autosave
+    /// succeeded would let a sculptor close over work that only exists in a
+    /// file they have never seen and cannot find.
+    pub fn autosave_to(&mut self, path: &Path) -> Result<(), ModelError> {
+        self.model.save(path)
+    }
+
+    /// Opens a recovery file, which must not become the document's own path.
+    ///
+    /// The sculptor never chose that path, so the next save has to ask where
+    /// to put it. And the document is modified by definition — recovered work
+    /// is work that was never saved.
+    pub fn recover(&mut self, path: &Path, name: &str) -> Result<(), OpenError> {
+        match self.model.open(path) {
+            Ok(()) => {
+                self.path.set(None);
+                self.name.set(name.to_string());
+                self.modified.set(true);
+                self.notice.set_if_changed(None);
+                Ok(())
+            }
+            Err(e) => {
+                self.notice.set(Some(e.to_string()));
+                Err(e)
+            }
+        }
+    }
+
     /// Starts a new document.
     pub fn new_document(&mut self) -> Result<(), ModelError> {
         self.model.reset()?;

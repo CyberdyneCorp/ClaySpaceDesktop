@@ -16,6 +16,7 @@ pub mod document;
 pub mod mask;
 pub mod scene;
 pub mod sculpt;
+pub mod session;
 pub mod tools;
 
 pub use armature::{Armature, ArmatureModel, NodeIndex, SkinSettings, Zsphere};
@@ -27,6 +28,7 @@ pub use sculpt::{
     Detail, EditOutcome, GestureSample, HistoryEntry, HistoryState, ModelError, SceneStats,
     SculptModel,
 };
+pub use session::{AutosavePolicy, RecentDocuments, Recovery};
 pub use tools::{
     BrushSettings, Falloff, Representation, Shaping, ToolKind, Unavailable, ViewPresetKind,
 };

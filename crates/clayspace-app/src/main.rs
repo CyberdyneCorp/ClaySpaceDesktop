@@ -6,11 +6,15 @@
 
 #![forbid(unsafe_code)]
 
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
-use clayspace_app::{ray_at, SharedDocument, SurfaceGeometry, ViewportInput};
+use clayspace_app::{ray_at, SessionStore, SharedDocument, SurfaceGeometry, ViewportInput};
 use clayspace_engine::{BackendPolicy, ClayDocument};
-use clayspace_model::{Diagnostics, SkinSettings, ViewPresetKind};
+use clayspace_model::{
+    AutosavePolicy, Diagnostics, RecentDocuments, Recovery, SkinSettings, ViewPresetKind,
+};
 use clayspace_view::shell::{self, region, ArmatureState, ShellState};
 use clayspace_view::{
     mirrored_cursors, ArmatureView, BrushCursor, Camera, Gpu, Locale, MatCap, Overlays, Renderer,
@@ -104,6 +108,17 @@ struct App {
     /// happened in it was a copy.
     show_diagnostics: bool,
     diagnostics_copied: bool,
+
+    /// Where session state lives, when this machine has somewhere to put it.
+    store: Option<SessionStore>,
+    recent: RecentDocuments,
+    autosave: AutosavePolicy,
+    /// When the last autosave was written, or when the session began.
+    saved_at: Instant,
+    /// What the previous session left, until it has been offered.
+    pending_recovery: Recovery,
+    /// Set by the menu's Sair, acted on where the event loop can be exited.
+    quit_requested: bool,
     /// The plane a rig gesture runs on: a point on it, and its normal.
     ///
     /// Fixed at the press rather than recomputed per sample. A plane that
@@ -129,6 +144,19 @@ impl App {
         let document_vm = DocumentViewModel::new(Box::new(document.clone()), "Sem título");
         let mask = MaskViewModel::new(Box::new(document.clone()));
         let armature = ArmatureViewModel::new(Box::new(document.clone()));
+
+        // Read before the marker for this session is written, or every run
+        // would find its own marker and offer to recover from itself.
+        let store = SessionStore::discover();
+        let (recent, pending_recovery) = match &store {
+            Some(store) => {
+                let leftovers = store.recovery();
+                store.begin_session();
+                (store.load_recent(), leftovers)
+            }
+            None => (RecentDocuments::default(), Recovery::Nothing),
+        };
+
         Self {
             document,
             sculpt,
@@ -147,6 +175,12 @@ impl App {
             rigging: false,
             show_diagnostics: false,
             diagnostics_copied: false,
+            store,
+            recent,
+            autosave: AutosavePolicy::default(),
+            saved_at: Instant::now(),
+            pending_recovery,
+            quit_requested: false,
             rig_plane: None,
             strings: Strings::for_locale(Locale::default()),
         }
@@ -231,8 +265,15 @@ impl App {
         let Some(path) = path else {
             return; // Cancelled. Not a failure, and nothing to report.
         };
-        if let Err(e) = self.document_vm.save_as(&path) {
-            eprintln!("{e}");
+        match self.document_vm.save_as(&path) {
+            Ok(()) => {
+                self.remember(&path);
+                // The autosave clock restarts from a real save: the point is
+                // how long work has been at risk, not how long the timer has
+                // been running.
+                self.saved_at = Instant::now();
+            }
+            Err(e) => eprintln!("{e}"),
         }
         self.request_redraw();
     }
@@ -249,9 +290,28 @@ impl App {
         else {
             return;
         };
-        match self.document_vm.open(&path) {
-            Ok(()) => self.after_document_replaced(),
-            Err(e) => eprintln!("{e}"),
+        self.open_path(&path);
+    }
+
+    /// Opens a known path, after the caller has cleared unsaved work.
+    fn open_path(&mut self, path: &std::path::Path) {
+        match self.document_vm.open(path) {
+            Ok(()) => {
+                self.remember(path);
+                self.saved_at = Instant::now();
+                self.after_document_replaced();
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                // A document that could not be opened should not stay in the
+                // list offering to fail again. The store prunes missing files
+                // on the way in; this covers the rest — permissions, a
+                // corrupt file, a version this build cannot read.
+                self.recent.prune(|candidate| candidate != path);
+                if let Some(store) = &self.store {
+                    store.save_recent(&self.recent);
+                }
+            }
         }
         self.request_redraw();
     }
@@ -266,6 +326,86 @@ impl App {
             Err(e) => eprintln!("{e}"),
         }
         self.request_redraw();
+    }
+
+    /// Offers back what a session that did not close left behind.
+    ///
+    /// Once, at the start, and only where there is something to offer. A
+    /// declined offer takes the file with it: asking again next time about
+    /// work the sculptor has already said they do not want is nagging.
+    fn offer_recovery(&mut self) {
+        let Some(path) = self.pending_recovery.path().map(PathBuf::from) else {
+            return;
+        };
+        self.pending_recovery = Recovery::Nothing;
+
+        let wanted = rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Warning)
+            .set_title("Trabalho recuperado")
+            .set_description(
+                "A sessão anterior terminou inesperadamente. Recuperar o que \
+                 estava aberto?",
+            )
+            .set_buttons(rfd::MessageButtons::YesNo)
+            .show()
+            == rfd::MessageDialogResult::Yes;
+
+        if !wanted {
+            if let Some(store) = &self.store {
+                store.discard_recovery();
+            }
+            return;
+        }
+        match self.document_vm.recover(&path, "Recuperado") {
+            Ok(()) => self.after_document_replaced(),
+            Err(e) => eprintln!("{e}"),
+        }
+        self.request_redraw();
+    }
+
+    /// Writes the recovery file, when one is due.
+    ///
+    /// Failure is reported to the log and nowhere else. An autosave that could
+    /// not be written is worth knowing about; interrupting a sculptor to say
+    /// so, mid-stroke, is not.
+    fn maybe_autosave(&mut self) {
+        let Some(store) = self.store.clone() else {
+            return;
+        };
+        if !self
+            .autosave
+            .is_due(self.saved_at.elapsed(), *self.document_vm.modified().get())
+        {
+            return;
+        }
+        // Stamped before the attempt, not after: a save that keeps failing
+        // must not retry on every wake-up.
+        self.saved_at = Instant::now();
+        if let Err(e) = self.document_vm.autosave_to(&store.autosave_path()) {
+            eprintln!("a recuperação automática falhou: {e}");
+        }
+    }
+
+    /// How long the event loop may sleep before an autosave could be due.
+    fn autosave_deadline(&self) -> Option<Instant> {
+        self.autosave
+            .next_in(self.saved_at.elapsed(), *self.document_vm.modified().get())
+            .map(|wait| Instant::now() + wait)
+    }
+
+    /// Records a document in the recent list and writes it out.
+    fn remember(&mut self, path: &std::path::Path) {
+        self.recent.remember(path);
+        if let Some(store) = &self.store {
+            store.save_recent(&self.recent);
+        }
+    }
+
+    /// Everything that has to happen before the process ends.
+    fn end_session(&self) {
+        if let Some(store) = &self.store {
+            store.end_session();
+        }
     }
 
     /// Asks whether unsaved work may be thrown away.
@@ -732,6 +872,7 @@ impl App {
             strings: self.strings,
             mask: *self.mask.state().get(),
             armature: self.armature_state(),
+            recent: self.recent.paths(),
             diagnostics: &diagnostics,
             show_diagnostics: self.show_diagnostics,
             diagnostics_copied: self.diagnostics_copied,
@@ -885,6 +1026,19 @@ impl App {
                 }
                 self.request_redraw();
             }
+            Command::NewDocument => self.new_document(),
+            Command::OpenDocument => self.open(),
+            Command::OpenRecent(path) => {
+                if self.document_vm.guard() == Guard::WouldLoseWork
+                    && !self.confirm_discarding_work()
+                {
+                    return;
+                }
+                self.open_path(&path);
+            }
+            Command::Save => self.save(false),
+            Command::SaveAs => self.save(true),
+            Command::Quit => self.quit_requested = true,
             Command::ToggleDiagnostics => {
                 self.show_diagnostics = !self.show_diagnostics;
                 // The confirmation belongs to one visit. Leaving it set means
@@ -1008,6 +1162,27 @@ fn paint_interface(
 }
 
 impl ApplicationHandler for App {
+    /// Sleeps until there is something to do, or until an autosave is due.
+    ///
+    /// `Wait` alone would be right for an application that only acts on input,
+    /// and wrong for this one: the case autosave exists for is a sculptor who
+    /// edits and then walks away, which produces no further events at all.
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.quit_requested {
+            self.quit_requested = false;
+            if self.document_vm.guard() == Guard::Clear || self.confirm_discarding_work() {
+                self.end_session();
+                event_loop.exit();
+                return;
+            }
+        }
+        self.maybe_autosave();
+        event_loop.set_control_flow(match self.autosave_deadline() {
+            Some(deadline) => ControlFlow::WaitUntil(deadline),
+            None => ControlFlow::Wait,
+        });
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.graphics.is_some() {
             return;
@@ -1024,6 +1199,8 @@ impl ApplicationHandler for App {
             event_loop.exit();
             return;
         }
+        // After the window, so the dialog has something to sit in front of.
+        self.offer_recovery();
         self.request_redraw();
     }
 
@@ -1051,6 +1228,9 @@ impl ApplicationHandler for App {
                 // without asking is the one mistake this application can make
                 // that a user cannot undo.
                 if self.document_vm.guard() == Guard::Clear || self.confirm_discarding_work() {
+                    // Clearing the marker is what makes the *next* run silent.
+                    // Left behind, an ordinary quit looks like a crash.
+                    self.end_session();
                     event_loop.exit();
                 }
             }
@@ -1118,7 +1298,14 @@ impl ApplicationHandler for App {
                         Some(Command::SetBrushSize(self.sculpt.brush().get().size * 1.25))
                     }
                     KeyCode::Escape => {
-                        event_loop.exit();
+                        // The same question the close button asks, for the
+                        // same reason.
+                        if self.document_vm.guard() == Guard::Clear
+                            || self.confirm_discarding_work()
+                        {
+                            self.end_session();
+                            event_loop.exit();
+                        }
                         None
                     }
                     _ => None,

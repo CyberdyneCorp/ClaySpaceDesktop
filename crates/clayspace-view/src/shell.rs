@@ -11,7 +11,7 @@
 
 use clayspace_model::{
     BrushSettings, Diagnostics, ExtrudeSettings, ExtrudeSide, Falloff, LayerSummary, MaskOp,
-    MaskState, Scene, SceneStats, ToolKind, ViewPresetKind,
+    MaskState, RecentDocuments, Scene, SceneStats, ToolKind, ViewPresetKind,
 };
 use clayspace_vm::{Axis, Command, CommandQueue};
 
@@ -47,6 +47,8 @@ pub struct ShellState<'a> {
     pub mask: MaskState,
     /// The rig, as the menu and the armature panel need it.
     pub armature: ArmatureState,
+    /// Documents opened lately, most recent first.
+    pub recent: &'a [std::path::PathBuf],
     /// This build and this machine.
     pub diagnostics: &'a Diagnostics,
     /// Whether the diagnostics window is open.
@@ -220,7 +222,49 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
     ui.horizontal(|ui| {
         ui.add_space(space::SNUG);
         egui::menu::bar(ui, |ui| {
-            ui.menu_button(s.menu_file, |_| {});
+            ui.menu_button(s.menu_file, |ui| {
+                if ui.button(s.action_new).clicked() {
+                    queue.push(Command::NewDocument);
+                    ui.close_menu();
+                }
+                if ui.button(s.action_open).clicked() {
+                    queue.push(Command::OpenDocument);
+                    ui.close_menu();
+                }
+                ui.menu_button(s.action_open_recent, |ui| {
+                    if state.recent.is_empty() {
+                        // Disabled rather than absent: an empty submenu that
+                        // vanishes reads as a broken menu, and this says why.
+                        ui.add_enabled(false, egui::Button::new(s.state_no_recent));
+                        return;
+                    }
+                    for path in state.recent {
+                        let label = RecentDocuments::label(path);
+                        if ui
+                            .button(label)
+                            .on_hover_text(path.to_string_lossy())
+                            .clicked()
+                        {
+                            queue.push(Command::OpenRecent(path.clone()));
+                            ui.close_menu();
+                        }
+                    }
+                });
+                ui.separator();
+                if ui.button(s.action_save).clicked() {
+                    queue.push(Command::Save);
+                    ui.close_menu();
+                }
+                if ui.button(s.action_save_as).clicked() {
+                    queue.push(Command::SaveAs);
+                    ui.close_menu();
+                }
+                ui.separator();
+                if ui.button(s.action_quit).clicked() {
+                    queue.push(Command::Quit);
+                    ui.close_menu();
+                }
+            });
             ui.menu_button(s.menu_edit, |ui| {
                 if ui
                     .add_enabled(state.can_undo, egui::Button::new(s.action_undo))

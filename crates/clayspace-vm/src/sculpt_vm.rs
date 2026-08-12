@@ -217,7 +217,13 @@ impl SculptViewModel {
             // Scene, layer, mask and armature commands belong to other
             // ViewModels; the sculpting one ignores them rather than
             // half-handling them.
-            Command::NewArmature
+            Command::NewDocument
+            | Command::OpenDocument
+            | Command::OpenRecent(_)
+            | Command::Save
+            | Command::SaveAs
+            | Command::Quit
+            | Command::NewArmature
             | Command::ToggleArmatureEditing
             | Command::RemoveZsphere
             | Command::SetArmatureMirror(_)
