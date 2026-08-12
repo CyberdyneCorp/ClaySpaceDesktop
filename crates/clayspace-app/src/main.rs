@@ -826,9 +826,10 @@ impl App {
                 Drag::Rig => {
                     self.armature.release();
                     self.rig_plane = None;
-                    // The same debt the stroke path pays off at the end of a
-                    // gesture: the per-edit re-mesh leaves seams where the
-                    // refilled region met the rest.
+                    // Rigging rewrites the armature node outright and refills
+                    // the box it vacated, so unlike a stroke it can leave slots
+                    // for bricks the surface has moved out of. Compaction, not
+                    // seams — and once per gesture, with the pointer up.
                     self.settle_geometry();
                 }
                 _ => {}
@@ -929,13 +930,13 @@ impl App {
             // sculpting command and would have to guess.
             self.document_vm.touched();
         }
-        // The end of a gesture is where the fast path's approximation is paid
-        // off: a full re-mesh, once, rather than the slivers it leaves along
-        // the seams of the edit. Affordable here because the pointer is up and
-        // nobody is waiting on the next sample.
-        if matches!(command, Command::EndStroke | Command::CancelStroke) {
-            self.settle_geometry();
-        }
+        // No settle at the end of a gesture any more. `sync` used to leave
+        // seams — the engine omitted triangles straddling a subset request —
+        // and a full re-mesh paid them off when the pointer came up. ClayCore
+        // 0.28.0 emits the straddlers (#66), and `settle_needed.rs` holds the
+        // incremental surface to being triangle-for-triangle what a rebuild
+        // would produce. Re-meshing the world after every stroke would now be
+        // work with nothing to show for it.
         self.request_redraw();
     }
 

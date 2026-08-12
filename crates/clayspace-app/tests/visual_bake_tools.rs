@@ -192,14 +192,26 @@ fn the_smoothing_tools_smooth_rather_than_crumble() {
     // 9 against a baseline of 4.9. They are region operations now, applied
     // once per gesture.
     //
-    // What is left: the region is replaced with a volume sampled at the
-    // cache's own spacing, and the boundary of that box is visible — inside it
-    // the field is trilinear over a grid, outside it is analytic, and the two
-    // do not meet. That is the faint rectangle in the captures, and it is why
-    // the number is 7 rather than below 4.9. Widening the treated region or
-    // repeating the pass both make it worse, measured; the fix is likely to be
-    // a blended replace rather than a hard one, and is open work.
-    let ceiling = 8.0;
+    // What was left, and is now fixed: the region was replaced with a hard
+    // CLAY_OP_REPLACE, which held both fields live at the boundary. The baked
+    // volume tied with the field beneath it at every sample plane, and the
+    // branch switching between two fields that touch rippled the *normals* at
+    // the cell wavelength — the zero set was exact and the shading was not,
+    // which is why this measures a rendered image rather than probing the
+    // surface. That note guessed "a blended replace rather than a hard one",
+    // which is exactly what ClayCore 0.28.0 delivered: `clay_volume_params`
+    // gained a feather, and these four tools now bake with one.
+    //
+    // Measured on this machine, same stroke, only the feather changing:
+    //
+    //   hard replace (0.27 and before)   7.00
+    //   feathered (0.28)                 5.00   <- this
+    //   untouched baseline               4.88
+    //
+    // The ceiling is set to catch a regression to the hard replace with room
+    // to spare, rather than to pin 5.00 exactly — the residue is a couple of
+    // percent over the baseline and not worth a brittle bound.
+    let ceiling = 5.5;
     let over: Vec<String> = worse
         .iter()
         .filter(|(_, _, after)| *after > ceiling)

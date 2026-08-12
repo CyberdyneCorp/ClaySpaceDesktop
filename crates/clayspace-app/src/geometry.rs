@@ -123,19 +123,23 @@ impl SurfaceGeometry {
         // and it nearly became a filed bug.
         // The edited region and one ring around it.
         //
-        // Meshing a subset leaves the surface missing the triangles that
-        // straddle the subset's boundary — the engine emits only triangles
-        // wholly inside the keys it was given, and dilating the request just
-        // moves the boundary. Measured: 30 bricks disagree with a full rebuild
-        // after one dab, and that number is the same for one, two, three and
-        // four rings of dilation, and zero only when every surface brick is
-        // meshed. Filed as ClayCore #66.
+        // Everything requested is also replaced, which is what makes the
+        // incremental surface exact.
         //
-        // So the seams are unavoidable while the pointer is down, and
-        // `settle` pays them off when it comes up. The ring is here because a
-        // dab's own bricks alone leave a wider gap, not because it closes one.
-        let replace: std::collections::HashSet<BrickKey> = dirty.iter().copied().collect();
+        // Until ClayCore 0.28.0 a subset mesh emitted only triangles wholly
+        // inside the keys it was given, so a stroke left seams that no amount
+        // of dilation closed and `settle` had to re-mesh the world when the
+        // pointer came up (#66). A subset now returns every triangle with at
+        // least one corner in a requested brick — but attributed to the
+        // lowest *requested* key owning a corner, which is request-relative.
+        //
+        // That is why the replaced set has to be the whole request rather than
+        // the dirty core: a straddling triangle can be attributed to a key in
+        // the ring, and replacing only the core would drop it. Measured over
+        // six dabs, the difference is 153 triangles missing against a rebuild
+        // versus none at all; `settle_needed.rs` is that measurement.
         let meshed = dilate(&dirty, 1);
+        let replace: std::collections::HashSet<BrickKey> = meshed.iter().copied().collect();
 
         let started = std::time::Instant::now();
         self.remesh(document, &meshed, Some(&replace))?;
@@ -261,10 +265,11 @@ impl SurfaceGeometry {
         // Keeping the triangles a partial mesh could not have regenerated was
         // tried — recording which brick owns each vertex, and holding on to
         // any triangle referencing a vertex from a brick this call did not
-        // mesh. It never fires, and cannot: those triangles are exactly the
-        // ones the engine omits from a subset (ClayCore #66), so they are not
-        // in the stored geometry to be kept either. The machinery came out
-        // again rather than sitting there looking like it did something.
+        // mesh. It never fired: before 0.28.0 those triangles were exactly the
+        // ones the engine omitted from a subset (#66), so they were not in the
+        // stored geometry to be kept either; since 0.28.0 they are returned.
+        // The machinery came out rather than sitting there looking like it did
+        // something.
         for key in &to_replace {
             let slot = ranges.iter().position(|range| range.key == *key);
             let entry = self.keys.entry(*key).or_default();
@@ -332,13 +337,18 @@ impl SurfaceGeometry {
         self.dirty = false;
     }
 
-    /// Re-meshes the whole surface, removing what the fast path approximated.
+    /// Re-meshes the whole surface and compacts the per-key slots.
     ///
-    /// Called when a stroke ends. During the stroke [`SurfaceGeometry::sync`]
-    /// meshes only the edited region, which the engine does not mesh quite the
-    /// same way as it meshes everything; this is where that difference is
-    /// paid off. It costs a full re-mesh, which is affordable once per gesture
-    /// and not once per segment.
+    /// No longer needed to close seams. Until ClayCore 0.28.0 a subset mesh
+    /// omitted straddling triangles (#66), so every gesture ended with a full
+    /// re-mesh to pay off what the fast path had approximated; `sync` is exact
+    /// now, held to that by `settle_needed.rs`.
+    ///
+    /// What is left is compaction: slots for bricks the surface has moved out
+    /// of are kept empty rather than removed, so a long session accumulates
+    /// them. That is bookkeeping rather than something a viewer can see, so it
+    /// belongs somewhere deliberate — a document being replaced, an armature
+    /// rewritten — and not on the end of every stroke.
     pub fn settle(&mut self, gpu: &Gpu, document: &mut ClayDocument) -> Result<(), ClayError> {
         self.rebuild(gpu, document)
     }

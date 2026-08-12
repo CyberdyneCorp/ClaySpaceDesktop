@@ -92,12 +92,12 @@ impl SculptViewModel {
             tool: Observable::new(ToolKind::Padrao),
             brushes: [BrushSettings::default(); ToolKind::ALL.len()],
             brush: Observable::new(BrushSettings::default()),
-            // Off, matching the document the engine adapter builds. These two
+            // X on, matching the document the engine adapter builds. These two
             // are separate pieces of state and they must not start out
             // disagreeing: the ViewModel is what the options bar shows, and a
             // bar reading "X on" over a document with no mirror is a lie
             // before the user has touched anything.
-            symmetry: Observable::new([false, false, false]),
+            symmetry: Observable::new([true, false, false]),
             view_preset: Observable::new(ViewPresetKind::Perspective),
             grid: Observable::new(true),
             history: Observable::new(history),

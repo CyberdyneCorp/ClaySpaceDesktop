@@ -212,23 +212,17 @@ fn a_position_outside_the_viewport_makes_no_ray() {
 }
 
 #[test]
-fn symmetry_reaches_the_document_but_not_yet_the_viewport() {
-    // Symmetry is wired correctly on our side and lands in the document. It
-    // does not reach the screen: the engine applies a layer mirror in its
-    // document field but not in its brick evaluation, and the viewport meshes
-    // from the cache. A cache rebuilt from scratch over the whole document
-    // still misses the mirrored half, so this is not our dirty marking.
-    //
-    // Stated as a test rather than a comment so it announces itself when the
-    // engine is fixed. At that point: turn the starting mirror back on in
-    // `ClayDocument::new`, and rewrite this to assert both sides move.
+fn symmetry_reaches_the_viewport() {
+    // It did not, for the whole of 0.26 and 0.27: `clay_set_layer_mirror`
+    // stored the plane but per-item participation defaulted to excluded, so
+    // the mirror was dead and a stroke moved only the side it was drawn on.
+    // ClayCore 0.28.0 makes participation default to mirrored (#60), and this
+    // test — which used to assert the far side stayed *still* — now asserts
+    // that both sides move.
     let Some(mut fixture) = Fixture::new() else {
         return;
     };
-    fixture
-        .sculpt
-        .dispatch(Command::ToggleSymmetry(Axis::X))
-        .expect("symmetry");
+    // X is on from the start, as the design asks.
     assert_eq!(*fixture.sculpt.symmetry().get(), [true, false, false]);
 
     let at = viewport().center() + egui::vec2(70.0, 0.0);
@@ -253,26 +247,34 @@ fn symmetry_reaches_the_document_but_not_yet_the_viewport() {
         "the stroke did not move the side it was drawn on"
     );
 
+    // The whole point: the far side moves too, and it moves through the brick
+    // cache the viewport meshes from rather than only in the document field.
     let far_moved = (fixture.radius_along(mirrored).expect("far") - far_before).abs();
     assert!(
-        far_moved < 0.002,
-        "the mirrored half now reaches the viewport, moving by {far_moved}. \
-         The engine has been fixed: restore the starting mirror in \
-         ClayDocument::new and make this assert that both sides move."
+        far_moved > 0.002,
+        "the mirrored half did not reach the viewport; it moved by {far_moved}"
     );
 }
 
 #[test]
 fn without_symmetry_only_the_drawn_side_moves() {
-    // The default: no mirror, so a stroke on one side leaves the other alone.
+    // The other half of the pair: turn the mirror off and a stroke on one side
+    // leaves the other alone. Worth keeping now that the mirror works, because
+    // "always mirrors" and "never mirrors" fail this suite identically
+    // otherwise.
     let Some(mut fixture) = Fixture::new() else {
         return;
     };
     assert_eq!(
         *fixture.sculpt.symmetry().get(),
-        [false, false, false],
+        [true, false, false],
         "the interface and the document must start out agreeing"
     );
+    fixture
+        .sculpt
+        .dispatch(Command::ToggleSymmetry(Axis::X))
+        .expect("symmetry off");
+    assert_eq!(*fixture.sculpt.symmetry().get(), [false, false, false]);
 
     let at = viewport().center() + egui::vec2(70.0, 0.0);
     let target = fixture.pick(at).expect("that point is on the model");

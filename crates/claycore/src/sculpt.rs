@@ -202,6 +202,17 @@ pub struct VolumeParams {
     pub band: Option<f32>,
     /// How far past the bounds to sample; `None` means the band.
     pub padding: Option<f32>,
+    /// How far inside the box a `CLAY_OP_REPLACE` placement crossfades into
+    /// the field around it, in world units. `None` is the hard replace.
+    ///
+    /// This is what stops a bake-and-replace round trip corrugating the
+    /// surface. A hard replace holds *both* fields live at the boundary, and
+    /// branch-switching between two fields that touch is what ripples the
+    /// normals at the cell wavelength — the zero set is exact and the shading
+    /// is not. With a feather, the inside is the volume, the outside is the
+    /// original field, and the two crossfade. About one band is the engine's
+    /// stated sweet spot. See ClayCore #67.
+    pub feather: Option<f32>,
 }
 
 impl VolumeParams {
@@ -210,6 +221,7 @@ impl VolumeParams {
         raw.cell_size = self.cell_size.unwrap_or(0.0);
         raw.band = self.band.unwrap_or(0.0);
         raw.padding = self.padding.unwrap_or(0.0);
+        raw.feather = self.feather.unwrap_or(0.0);
         raw
     }
 }
@@ -374,6 +386,46 @@ impl Document {
             "clay_item_volume_flatten_from",
         )?;
         Item::from_raw(item, "clay_item_volume_flatten_from")
+    }
+
+    /// The document-sourced relax, and the counterpart to
+    /// [`Document::flatten_region`].
+    ///
+    /// Added in ClayCore 0.28.0 as part of the #67 fix. Before it, smoothing
+    /// meant baking a volume and relaxing that volume — two calls, and an
+    /// invitation to relax something that was itself derived from another
+    /// volume, where the band inaccuracy compounds. This samples the document
+    /// exactly as a bake would and relaxes those samples in place, so inside
+    /// the band the result is identical to bake-then-relax without the round
+    /// trip.
+    ///
+    /// Returns a new item carrying the result; the document is untouched.
+    pub fn relax_region(
+        &self,
+        relax: &RelaxParams<'_>,
+        volume: VolumeParams,
+        min: [f32; 3],
+        max: [f32; 3],
+    ) -> Result<Item> {
+        let raw_relax = relax.to_raw();
+        let raw_volume = volume.to_raw();
+        let mut item = std::ptr::null_mut();
+        // SAFETY: two sized descriptors, two three-float bounds, and an
+        // out-parameter written only on success.
+        check(
+            unsafe {
+                sys::clay_item_volume_relax_from(
+                    self.as_ptr(),
+                    &raw_relax,
+                    &raw_volume,
+                    min.as_ptr(),
+                    max.as_ptr(),
+                    &mut item,
+                )
+            },
+            "clay_item_volume_relax_from",
+        )?;
+        Item::from_raw(item, "clay_item_volume_relax_from")
     }
 
     /// Samples a region of the document into a volume item.

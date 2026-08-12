@@ -248,15 +248,20 @@ carried, saved and exported, never sculpted.
 
 ## Known-degraded
 
-Offered, and not doing what they should. Each is an engine defect with a filed
-issue and a test that fails when it is fixed.
+Offered, and not doing what they should. Each has a test that fails when it is
+fixed, so this list shrinks by being noticed rather than by being remembered.
+
+ClayCore 0.28.0 emptied most of it: the layer mirror works, `CLAY_OP_ADD`
+honours stroke strength, a subset mesh emits its straddlers, and the
+bake-and-replace tools no longer corrugate. Suavizar and Relaxar are now
+*subtle* rather than damaging — what is left is what relax actually does,
+which is sub-cell smoothing that takes the edge off rather than removing a
+dent.
 
 | What | Effect | Issue |
 |---|---|---|
-| Suavizar, Relaxar, Planar, Polir | Corrugate the region they act on. The bake-and-replace round trip damages the surface before any verb is applied | [#67](https://github.com/CyberdyneCorp/ClayCore/issues/67) |
-| Ruído | Inert. Clamped to zero, because jitter interacts badly with the cache's narrow band | [#67](https://github.com/CyberdyneCorp/ClayCore/issues/67) |
-| Intensidade, on Add-based tools | No effect — a stroke at 0 deposits as much as one at 1. **Fixed upstream, awaiting a release** | [#61](https://github.com/CyberdyneCorp/ClayCore/issues/61) |
-| Simetria | Off by default. The layer mirror had no observable effect. **Fixed upstream, awaiting a release** | [#60](https://github.com/CyberdyneCorp/ClayCore/issues/60) |
+| Ruído | Inert. Clamped to zero, because jitter interacts badly with the cache's narrow band | ours, not the engine's |
+| Dab latency with symmetry on | A mirrored stroke edits two patches, so a segment costs ~98 ms against ~28 ms unmirrored. Nearly all of it is meshing | [#73](https://github.com/CyberdyneCorp/ClayCore/issues/73), fixed upstream and not in 0.28.0 |
 | Layer names after reopening | Lost, along with visibility and stack order. Ids are recovered by probing | [#69](https://github.com/CyberdyneCorp/ClayCore/issues/69) |
 | Armature trees after reopening | The skinned surface survives; the rig does not. A placed armature is write-only in both halves — `clay_layer_stroke_points` refuses the primitive ("curve points need CLAY_PRIM_STROKE or CLAY_PRIM_SWEPT"), and there is no reader for the parent array at all. A reopened document reports no armature rather than inventing a plausible one | [#77](https://github.com/CyberdyneCorp/ClayCore/issues/77) |
-| Seams while dragging | A stroke leaves faint slivers until the pointer comes up, when a full re-mesh clears them. **Fixed upstream, awaiting a release** | [#66](https://github.com/CyberdyneCorp/ClayCore/issues/66) |
+

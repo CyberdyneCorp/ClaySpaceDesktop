@@ -6,10 +6,11 @@ the authority.
 
 **106 of 109 tasks. Milestones 1 to 4 delivered; milestone 5 all but closed.**
 
-Engine pinned at ClayCore **0.27.3**. A dab is 15.8 ms median and 23.1 ms p95
-on a bare document, against a 50/100 ms budget — but 81 ms on the reference
-scene, for a reason that is upstream and understood; see *What is slow and
-why*.
+Engine pinned at ClayCore **0.28.0**, at the tag rather than at `main` — the
+tag is a release, `main` is where they are still working. A dab is 14.4 ms on a
+bare document against a 50 ms budget, and 86 ms on the reference scene for a
+reason that is upstream and understood; see *What is slow and why*. Startup to
+first document is **11.6 ms**, down from 68.5.
 
 ## Milestones
 
@@ -51,30 +52,40 @@ Every other open upstream issue degrades something already built rather than
 stopping something next. CI is the exception, where the macOS rows cannot pass
 until the engine compiles on the CI compiler.
 
-### Upstream: fixed on `main`, awaiting a release
+### Taken up in 0.28.0
 
-These are merged in ClayCore and not yet tagged. Each one lets us delete a
-workaround; the tests named will start failing when the fix arrives, which is
-the signal to do it.
+Five issues filed from this work were released, and each one flipped a test
+here rather than being noticed by reading a changelog. That is the mechanism
+working: the repro that documents a defect fails the day it stops being one.
 
-| Issue | What it unblocks here | Test that flips |
-|---|---|---|
-| [#60](https://github.com/CyberdyneCorp/ClayCore/issues/60) layer mirror had no effect | Turn the starting symmetry back on | `claycore_repros::the_layer_mirror_has_no_observable_effect` |
-| [#61](https://github.com/CyberdyneCorp/ClayCore/issues/61) `CLAY_OP_ADD` ignored stroke strength | Intensidade starts working for the Add-based tools | `claycore_repros::op_add_ignores_the_stroke_presets_strength` |
-| [#62](https://github.com/CyberdyneCorp/ClayCore/issues/62) relief amplitude undocumented | Nothing to undo — the mapping is already correct, this makes it checkable | — |
-| [#66](https://github.com/CyberdyneCorp/ClayCore/issues/66) subset meshing omitted straddlers | Drop the whole-surface `settle` after every stroke, and the mid-drag seams with it | `claycore_repros::subset_meshing_reproduces_whole_surface_meshing` |
+| Issue | What it changed here |
+|---|---|
+| [#60](https://github.com/CyberdyneCorp/ClayCore/issues/60) layer mirror had no effect | **X symmetry is on by default**, as the design always asked. Costs latency — see below |
+| [#61](https://github.com/CyberdyneCorp/ClayCore/issues/61) `CLAY_OP_ADD` ignored stroke strength | **Intensidade works** on every tool, not just the Relief-based ones. No code change: the slider was already mapped to `strength` |
+| [#62](https://github.com/CyberdyneCorp/ClayCore/issues/62) relief amplitude undocumented | Nothing to undo; the mapping was already right, and is now checkable |
+| [#64](https://github.com/CyberdyneCorp/ClayCore/issues/64) Metal 7–10× slower at refill | **Refill routes to the GPU above 16 bricks.** Startup to first document went 68.5 ms → 11.6 ms |
+| [#66](https://github.com/CyberdyneCorp/ClayCore/issues/66) subset meshing omitted straddlers | **The whole-surface `settle` after every stroke is gone.** An incremental sync is now triangle-for-triangle what a rebuild produces |
+| [#67](https://github.com/CyberdyneCorp/ClayCore/issues/67) bake-and-replace corrugated | **The four damaging tools stopped damaging.** `clay_volume_params.feather` crossfades the replace; measured roughness 7.00 → 5.00 against a 4.88 baseline |
+
+### Upstream: fixed on `main`, not in 0.28.0
+
+Merged after the tag. We are pinned to the release, so these are still ahead of
+us — and one of them is the CI blocker.
+
+| Issue | What it would unblock |
+|---|---|
+| [#71](https://github.com/CyberdyneCorp/ClayCore/issues/71) AppleClang | The three macOS CI jobs |
+| [#73](https://github.com/CyberdyneCorp/ClayCore/issues/73) gradient normals scale with the document | The dab latency, which symmetry has just tripled |
+| [#69](https://github.com/CyberdyneCorp/ClayCore/issues/69) no layer enumeration | Layer names, visibility and stack order across a reload |
 
 ### Upstream: still open
 
 | Issue | Effect here | Our position |
 |---|---|---|
-| [#71](https://github.com/CyberdyneCorp/ClayCore/issues/71) 0.27.3 will not build with AppleClang | **The macOS CI rows fail**, including the new document-bytes one | One character upstream; we are not patching a vendored engine |
 | no LOD meshing | **Blocks 3.9.** Mips build and read; nothing meshes them | Not yet filed. `claycore_lod.rs` is the repro |
-| [#73](https://github.com/CyberdyneCorp/ClayCore/issues/73) gradient normals scale with document size | A dab is 4 ms on a fresh document and 120 ms after 192 edits | Workaround available: host-side normals. Not taken — see below |
-| [#67](https://github.com/CyberdyneCorp/ClayCore/issues/67) bake-and-replace corrugates the surface | Suavizar, Relaxar, Planar and Polir damage what they touch | Applied once per gesture rather than per segment, which halves it. Still visibly wrong |
+| [#73](https://github.com/CyberdyneCorp/ClayCore/issues/73) gradient normals scale with document size | A dab is 4 ms on a fresh document and 120 ms after 192 edits, and symmetry doubles the region | **Fixed on `main`, not in 0.28.0.** Workaround available: host-side normals. Not taken |
 | [#69](https://github.com/CyberdyneCorp/ClayCore/issues/69) no layer enumeration | A reopened document loses layer names, visibility and **stack order** | Layer ids recovered by probing. Order loss is a silent correctness difference |
 | [#77](https://github.com/CyberdyneCorp/ClayCore/issues/77) a placed armature is write-only | A saved rig comes back as surface only, so it cannot be re-posed or edited | Verified in `claycore_armature_readback.rs`: `clay_layer_stroke_points` refuses the primitive, and nothing reads the parent array. The armature-shaped instance of #16 |
-| [#64](https://github.com/CyberdyneCorp/ClayCore/issues/64) Metal 7–10× slower than CPU at refill | None — routed around | `BackendPolicy::refill_backend` returns CPU; `backend_choice.rs` fails when that flips |
 | [#63](https://github.com/CyberdyneCorp/ClayCore/issues/63) Metal absent on paravirtual GPUs | None for us | Not ours; kernel half fixed in 0.27.3 |
 
 ## What is left
@@ -106,10 +117,12 @@ and radii either. See the table above.
 
 ## What is slow and why
 
-A dab costs 15.8 ms on a fresh document and 81 ms on the reference scene. The
-difference is not the edit — the bricks re-meshed are identical — it is
-[#73](https://github.com/CyberdyneCorp/ClayCore/issues/73). Measured at a fixed
-80 bricks while the document grows from 1 node to 193:
+A dab costs 14.4 ms on a fresh document and 86 ms on the reference scene, and
+a *mirrored* segment costs 98 ms against 28 ms unmirrored. Neither difference
+is the edit — the bricks re-meshed are identical — both are
+[#73](https://github.com/CyberdyneCorp/ClayCore/issues/73), which is fixed on
+ClayCore's `main` and not in 0.28.0. Measured at a fixed 80 bricks while the
+document grows from 1 node to 193:
 
 | stage | 1 node | 193 nodes |
 |---|---|---|
@@ -121,12 +134,18 @@ Marching is flat. Refill is flat. Only the gradient scales, and it scales with
 the document rather than the region — the nodes in that measurement are at the
 opposite pole from the bricks being meshed.
 
-Two things could be done here without waiting:
+One of these was taken in 0.28.0 and one still could be:
 
 **Host-side normals.** Meshing with `gradient_normals: false` and averaging
 face normals takes the same measurement from 53 ms to 4 ms. Not taken, because
 field gradients are better normals than face averages on a narrow band, and
 the trade deserves a decision rather than a commit.
+
+**Symmetry costs what it costs, for now.** Turning the mirror on triples the
+keys a segment re-meshes — 170 to 526 for one dab — because each half is
+dilated by a ring of its own, and meshing is the term #73 inflates. It is on
+because the design asks for it and the engine now honours it; the fix that
+brings it back down is already merged upstream.
 
 **Offer consolidation.** `clay_layer_consolidation_cost` already reports
 `advises_consolidation: true` at 203 items, and consolidating takes a dab from
@@ -167,12 +186,11 @@ Shipping one or both is a product decision, not an architectural one.
 verbs exist on one representation only, so this decides what the first minute
 of the application feels like.
 
-**Whether to withhold the four bake-and-replace tools.** Suavizar, Relaxar,
-Planar and Polir corrugate what they touch ([#67](https://github.com/CyberdyneCorp/ClayCore/issues/67)).
-Withholding them on SDF layers would leave Planar and Polir with nowhere to
-run, since they are SDF-only. Shipping a tool that damages a sculpt and
-withdrawing two buttons are both defensible; doing neither by default is what
-happens today.
+**~~Whether to withhold the four bake-and-replace tools.~~ Settled by 0.28.0.**
+They corrugated what they touched; the feathered replace fixed it, and all four
+now leave the clay beside the stroke alone. What is left is not a decision but
+a matter of character: Suavizar and Relaxar are subtle, because relax moves the surface by
+less than a cell per pass and the cache's cell is 0.02.
 
 ## Known costs and escape routes
 

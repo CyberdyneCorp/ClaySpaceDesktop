@@ -148,6 +148,12 @@ fn relax_banded(
                 cell_size: Some(CELL),
                 band,
                 padding,
+                // The sweep is about what relax itself does to a baked
+                // volume, so the replace stays hard here: a feather would
+                // change the control — bake and put straight back — from a
+                // no-op into a crossfade, and the point of the control is
+                // that it touches nothing.
+                feather: None,
             },
             min,
             max,

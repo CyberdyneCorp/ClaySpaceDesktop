@@ -1,10 +1,14 @@
 //! Which backend refill should run on.
 //!
-//! `BackendPolicy::refill_backend` returns the CPU today because the
-//! accelerated backends are slower at this verb — see ClayCore #64. That is a
-//! measurement, not a principle, so it is checked rather than asserted in a
-//! comment: when the engine's Metal path gets faster, this fails and the
-//! choice should be revisited.
+//! `BackendPolicy::refill_backend` routes by batch size. Before ClayCore
+//! 0.28.0 it refused the accelerated backends outright, because the Metal path
+//! paid a full device round trip per brick and sat 7–10× behind the CPU at
+//! every size (#64). Batched into one dispatch it is now roughly twice as fast
+//! at a dab, so the decision became a threshold.
+//!
+//! That is a measurement, not a principle, and it is checked rather than
+//! asserted in a comment: this fails if the ratio flips back, or if the
+//! threshold stops matching what the machine actually does.
 
 use std::time::{Duration, Instant};
 
@@ -89,7 +93,10 @@ fn refill_runs_on_whichever_backend_is_actually_faster() {
         gpu.as_secs_f64() * 1000.0
     );
 
-    let chosen_is_cpu = policy.refill_backend().is_none();
+    // A dab is about 27 bricks, which is over the threshold, so this is the
+    // batch size the routing decision is really about.
+    let dab = 27;
+    let chosen_is_cpu = policy.refill_backend(dab).is_none();
     if cpu <= gpu {
         assert!(
             chosen_is_cpu,
@@ -100,10 +107,35 @@ fn refill_runs_on_whichever_backend_is_actually_faster() {
         assert!(
             !chosen_is_cpu,
             "{accelerated} now refills a dab in {gpu:?} against the CPU's \
-             {cpu:?} — ClayCore #64 is fixed, so `refill_backend` should hand \
-             the work back to it"
+             {cpu:?}, and yet refill is still routed to the CPU"
         );
     }
+}
+
+#[test]
+fn a_handful_of_residual_bricks_stays_on_the_cpu() {
+    // The other half of the threshold. A device submission costs about
+    // 0.25 ms whatever it carries, and a stroke's last drain is often a few
+    // bricks — which the CPU does in a hundredth of that.
+    let Ok(policy) = BackendPolicy::discover(None) else {
+        return;
+    };
+    for bricks in [0, 1, 4, BackendPolicy::GPU_CROSSOVER_BRICKS - 1] {
+        assert!(
+            policy.refill_backend(bricks).is_none(),
+            "{bricks} bricks were routed off the CPU, under a threshold of {}",
+            BackendPolicy::GPU_CROSSOVER_BRICKS
+        );
+    }
+}
+
+#[test]
+fn a_cpu_only_machine_is_never_routed_anywhere_else() {
+    // There is nowhere else to route to, and asking for a backend the machine
+    // does not have would be an error rather than a slow path.
+    let policy =
+        BackendPolicy::from_available(vec![clayspace_engine::claycore::Backend::Cpu], None);
+    assert!(policy.refill_backend(100_000).is_none());
 }
 
 #[test]

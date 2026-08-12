@@ -289,14 +289,16 @@ fn ending_a_stroke_that_never_began_does_nothing() {
 #[test]
 fn symmetry_reaches_the_model_as_set() {
     let (mut vm, recorded) = fixture();
-    // Nothing is mirrored to start with; turn on X and Z.
+    // X is on to start with, as the design asks and as the document the
+    // engine adapter builds has it. Toggling X turns it *off*, and Z on.
+    assert_eq!(*vm.symmetry().get(), [true, false, false]);
     vm.dispatch(Command::ToggleSymmetry(Axis::X))
         .expect("symmetry");
     vm.dispatch(Command::ToggleSymmetry(Axis::Z))
         .expect("symmetry");
     draw(&mut vm, &[[0.0; 3], [0.1, 0.0, 0.0]]).expect("stroke");
 
-    assert_eq!(recorded.borrow().strokes[0].2, [true, false, true]);
+    assert_eq!(recorded.borrow().strokes[0].2, [false, false, true]);
 }
 
 // -- tool availability -------------------------------------------------------

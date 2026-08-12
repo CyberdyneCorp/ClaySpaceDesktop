@@ -72,19 +72,36 @@ pub struct BackendPolicy {
 }
 
 impl BackendPolicy {
-    /// Which backend to evaluate brick refills on, or `None` for the CPU.
+    /// Which backend to evaluate a batch of brick refills on, or `None` for
+    /// the CPU.
     ///
-    /// Deliberately not `active()`. Refill sits on the input-to-visible path,
-    /// and the accelerated backends are — today, measured — slower at it than
-    /// the CPU reference path: 5.61 ms against 0.77 ms for one dab on Metal,
-    /// and ten times worse on a whole-model fill. See ClayCore #64.
+    /// Routed by batch size, which is what the engine's own header asks for.
+    /// A device submission has a fixed cost — about 0.25 ms on an M-series Mac
+    /// — that the batch has to earn back, so a handful of residual bricks are
+    /// cheaper on the CPU however fast the GPU is once it starts.
+    ///
+    /// This used to return `None` unconditionally: before ClayCore 0.28.0 the
+    /// Metal path paid a full round trip *per brick* and sat 7–10× behind the
+    /// CPU at every size (#64). Batched into one dispatch it is now roughly
+    /// 2× ahead at a dab and far more on a whole-model fill, so the decision
+    /// is a threshold rather than a refusal.
     ///
     /// `active()` still reports what the machine offers, because that is what
-    /// the status bar is telling the user about and it stays true. This is
-    /// only about which one does this particular job.
-    pub fn refill_backend(&self) -> Option<&Backend> {
-        None
+    /// the status bar tells the user about. This is only about which backend
+    /// does this particular job.
+    pub fn refill_backend(&self, bricks: usize) -> Option<&Backend> {
+        (bricks >= Self::GPU_CROSSOVER_BRICKS && self.active != Backend::Cpu)
+            .then_some(&self.active)
     }
+
+    /// How many bricks a batch needs before an accelerated backend pays.
+    ///
+    /// Measured by the engine at brick dim 8 on an M-series Mac, which is the
+    /// cache configuration this application uses: below about sixteen bricks
+    /// the CPU wins, at a dab's twenty-seven Metal is roughly twice as fast.
+    /// Worth re-measuring on a device that is not an M-series Mac —
+    /// `backend_choice.rs` is what would notice.
+    pub const GPU_CROSSOVER_BRICKS: usize = 16;
 
     /// Discovers what this machine offers and applies `stored_override`.
     ///

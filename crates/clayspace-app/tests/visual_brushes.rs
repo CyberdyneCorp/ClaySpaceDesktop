@@ -72,6 +72,29 @@ fn subject_change(before: &Image, after: &Image, background: [u8; 4]) -> f64 {
     moved as f64 / subject as f64
 }
 
+/// Dents the front of the form, so a smoothing tool has work to do.
+fn roughen(document: &SharedDocument) {
+    let mut document = document.clone();
+    let brush = clayspace_model::BrushSettings {
+        size: 0.09,
+        ..Default::default()
+    };
+    for step in 0..14 {
+        let t = step as f32 / 13.0;
+        let (s, c) = (t * std::f32::consts::TAU * 1.5).sin_cos();
+        let _ = document.apply_stroke(
+            ToolKind::Padrao,
+            brush,
+            &[clayspace_model::GestureSample {
+                position: [(t - 0.5) * 0.9, s * 0.12, 0.98 + c * 0.02],
+                pressure: 1.0,
+                time: t,
+            }],
+            [false; 3],
+        );
+    }
+}
+
 /// Draws one arc across the front of the form, through the whole application
 /// path, and reports what happened.
 fn exercise(harness: &mut Harness, tool: ToolKind) -> Option<Outcome> {
@@ -86,6 +109,17 @@ fn exercise(harness: &mut Harness, tool: ToolKind) -> Option<Outcome> {
     match SculptModel::bounds(&document) {
         Some((min, max)) => camera.frame_bounds(min.into(), max.into()),
         None => camera.frame_default(),
+    }
+
+    // A smoothing tool needs something to smooth. On a perfect sphere
+    // Suavizar and Relaxar are entitled to do nothing, and until ClayCore
+    // 0.28.0 they appeared to change 15% of the subject — but that was the
+    // bake round trip corrugating the whole region, not smoothing. With the
+    // feathered replace the corrugation is gone, and so is the "change" it was
+    // being credited with. So the two of them get a bumpy surface to work on,
+    // which is what makes "did it do anything" a real question for them.
+    if matches!(tool, ToolKind::Suavizar | ToolKind::Relaxar) {
+        roughen(&document);
     }
 
     let mut geometry = SurfaceGeometry::new(&harness.gpu);
@@ -270,12 +304,27 @@ fn every_brush_in_the_shelf_draws_something_worth_looking_at() {
     // when the engine reads it as the amplitude, and never set the rounding
     // that is the falloff width — measured, a full stroke moved a tenth of one
     // percent of the subject and looked untouched.
+    //
+    // The two smoothing tools have their own floor, and it is lower for a
+    // reason worth writing down. They used to move 15% of the subject — but
+    // that was the bake round trip corrugating the whole baked box, not
+    // smoothing (ClayCore #67). With the feathered replace in 0.28.0 the
+    // corrugation is gone, and what is left is what relax actually does: the
+    // engine moves the surface by less than a cell per pass and cannot walk
+    // outside the band it baked with, so at a 0.02 cell it takes the
+    // high-frequency edge off rather than removing a dent. That is subtle by
+    // design, and 0.55% of the subject is what it measures. Whether it is
+    // *useful* is the roughness question, which `visual_bake_tools` asks.
+    let floor = |tool: ToolKind| match tool {
+        ToolKind::Suavizar | ToolKind::Relaxar => 0.002,
+        _ => 0.01,
+    };
     for o in &outcomes {
         if o.refused.is_some() || !moves_the_surface(o.tool) {
             continue;
         }
         assert!(
-            o.changed > 0.01,
+            o.changed > floor(o.tool),
             "{:?} moved only {:.2}% of the subject over a whole stroke, which \
              reads as a brush that barely works",
             o.tool,
@@ -368,9 +417,22 @@ fn no_brush_stalls_the_stroke() {
         return;
     }
 
+    // These went up when X symmetry was turned on. ClayCore 0.28.0 made the
+    // layer mirror work (#60), the design asks for X, so it is on — and a
+    // mirrored stroke edits two patches instead of one. Measured on the same
+    // stroke, only the mirror changing:
+    //
+    //   Padrao   28.3 ms over 170 keys  ->  97.6 ms over 526 keys
+    //   Puxar   256.6 ms over 2448      -> 580.8 ms over 4608
+    //
+    // Better than three times the keys rather than twice, because each patch
+    // is dilated by a ring of its own. Nearly all of it is meshing, and
+    // meshing is dominated by gradient normals scaling with the document
+    // rather than the region (#73) — which is fixed upstream and not in
+    // 0.28.0. These fences move back down when that lands.
     let ceiling = |tool: &ToolKind| {
         if STAMPING.contains(tool) {
-            Duration::from_millis(100)
+            Duration::from_millis(150)
         } else {
             // Not a target, a fence. It is roughly where these sit today, so
             // it catches a regression without pretending the current cost is

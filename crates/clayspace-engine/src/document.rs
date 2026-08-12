@@ -94,19 +94,18 @@ impl ClayDocument {
         let id = document
             .add_sdf_layer("Forma")
             .map_err(ModelError::engine)?;
-        // No mirror to start with, though the design asks for X.
+        // X, as the design asks for.
         //
-        // The engine applies a layer mirror in its document field but not in
-        // its brick evaluation — a cache rebuilt from scratch over the whole
-        // document still misses the mirrored half. The viewport meshes from
-        // the cache, so symmetry draws only the side under the pointer, and a
-        // sculptor watching one half of every stroke vanish is worse off than
-        // one who turned symmetry on deliberately. `cache_parity.rs` pins the
-        // defect; when it is fixed, this goes back to [true, false, false].
+        // This was off for the whole of 0.26 and 0.27: `clay_set_layer_mirror`
+        // stored the plane, but per-item participation defaulted to *excluded*,
+        // so the sequence every host writes — set the mirror, add items —
+        // mirrored nothing, and a sculptor would have watched half of every
+        // stroke vanish. ClayCore 0.28.0 makes participation default to
+        // mirrored (#60), and `claycore_repros.rs` is what noticed.
         //
         // Set before undo starts recording either way: the starting mirror is
         // part of making the document, not something a user did.
-        let symmetry = [false, false, false];
+        let symmetry = [true, false, false];
         document
             .set_layer_mirror(id, symmetry, 0.0)
             .map_err(ModelError::engine)?;
@@ -297,17 +296,11 @@ impl ClayDocument {
 
     /// Meshes and refills whatever is currently marked dirty.
     fn drain_dirty(&mut self) -> Result<(), ModelError> {
-        // The CPU path, whatever the policy says is available.
-        //
-        // Measured on an M-series Mac: refilling a dab's 27 bricks takes
-        // 0.77 ms on the CPU and 5.61 ms on Metal, and a whole-model fill
-        // takes 322 ms against 3361 ms. Metal is slower at every batch size
-        // we tried, and it is not warmup — the first dab is not the slowest.
-        // Filed as ClayCore #64.
-        //
-        // `refill_backend` is where this decision lives so that it is one
-        // line to revert, and `backend_choice.rs` fails when the ratio flips.
-        let backend = self.policy.refill_backend().cloned();
+        // Routed per batch rather than once for the whole drain: a stroke's
+        // last iteration is often a handful of residual bricks, and those are
+        // cheaper on the CPU than the fixed cost of a device submission.
+        // `refill_backend` holds the threshold, and `backend_choice.rs` fails
+        // if the measured ratio ever flips back.
         let mut dirty = Vec::new();
         loop {
             let (requests, remaining) = self.cache.take_dirty(512).map_err(ModelError::engine)?;
@@ -315,6 +308,7 @@ impl ClayDocument {
                 break;
             }
             dirty.extend(requests.iter().map(|request| request.key()));
+            let backend = self.policy.refill_backend(requests.len()).cloned();
             self.cache
                 .refill(&self.document, backend.as_ref(), &requests)
                 .map_err(ModelError::engine)?;
@@ -687,18 +681,6 @@ impl ClayDocument {
             (min[2] + max[2]) * 0.5,
         ];
 
-        let mut volume = self
-            .document
-            .volume_from_region(
-                claycore::VolumeParams {
-                    cell_size: Some(Self::bake_cell_size(brush.size)),
-                    ..Default::default()
-                },
-                min,
-                max,
-            )
-            .map_err(ModelError::engine)?;
-
         // One pass, at the brush's own radius about the gesture's centre.
         //
         // Three shapes were measured, on a deliberately bumpy surface, scored
@@ -713,16 +695,28 @@ impl ClayDocument {
         // is not what one would guess. It is measured rather than reasoned,
         // and the reason is not yet understood — see the note in
         // `visual_bake_tools`.
-        volume
-            .relax(&claycore::RelaxParams {
-                strength: brush.intensity,
-                radius_cells: 1,
-                iterations: 2,
-                centre,
-                region_radius: brush.size,
-                falloff: brush.size * 0.5,
-                mask: self.mask.as_deref(),
-            })
+        let cell = Self::bake_cell_size(brush.size);
+        // The verb still acts at the brush's radius about the gesture; only
+        // the sampled box grows, so the crossfade has untouched clay to land
+        // in.
+        let (mut min, mut max) = (min, max);
+        Self::grown_for_feather(&mut min, &mut max, cell);
+        let mut volume = self
+            .document
+            .relax_region(
+                &claycore::RelaxParams {
+                    strength: brush.intensity,
+                    radius_cells: 1,
+                    iterations: 2,
+                    centre,
+                    region_radius: brush.size,
+                    falloff: brush.size * 0.5,
+                    mask: self.mask.as_deref(),
+                },
+                Self::bake_volume(cell),
+                min,
+                max,
+            )
             .map_err(ModelError::engine)?;
 
         volume.set_op(Op::Replace).map_err(ModelError::engine)?;
@@ -853,6 +847,11 @@ impl ClayDocument {
         let reach = (0..3)
             .map(|axis| (max[axis] - min[axis]) * 0.5)
             .fold(0.0f32, f32::max);
+        // As for relax: the box grows so the crossfade lands outside what the
+        // verb touched, and the verb's own region_radius is unchanged.
+        let cell = Self::bake_cell_size(brush.size);
+        let (mut min, mut max) = (min, max);
+        Self::grown_for_feather(&mut min, &mut max, cell);
         let mut volume = self
             .document
             .flatten_region(
@@ -868,10 +867,7 @@ impl ClayDocument {
                     mode: claycore::FlattenMode::CutOnly,
                     mask: self.mask.as_deref(),
                 },
-                claycore::VolumeParams {
-                    cell_size: Some(Self::bake_cell_size(brush.size)),
-                    ..Default::default()
-                },
+                Self::bake_volume(cell),
                 min,
                 max,
             )
@@ -1322,6 +1318,53 @@ impl ClayDocument {
         self.index_of(key).map(|index| self.layers[index].id)
     }
 
+    /// How a bake-and-replace verb samples the document.
+    ///
+    /// The feather is the whole of ClayCore #67. A hard `CLAY_OP_REPLACE`
+    /// holds *both* fields live at the boundary: the baked volume ties with
+    /// the field beneath it at every sample plane, and branch-switching
+    /// between two fields that touch ripples the normals at the cell
+    /// wavelength. The zero set was exact and the shading was not, which is
+    /// why Suavizar, Relaxar, Planar and Polir corrugated everything they
+    /// touched. With a feather the inside is the volume, the outside is the
+    /// original field, and the two crossfade.
+    ///
+    /// One band is the engine's stated sweet spot, and the band defaults to
+    /// three cells — so the feather is three cells too. Wider costs the
+    /// document's safe step scale; narrower brings the tie back.
+    fn bake_volume(cell: f32) -> claycore::VolumeParams {
+        claycore::VolumeParams {
+            cell_size: Some(cell),
+            feather: Some(Self::feather_for(cell)),
+            ..Default::default()
+        }
+    }
+
+    /// The crossfade margin, and how far the sampled box must grow to hold it.
+    ///
+    /// One band — the engine's stated sweet spot, and the band defaults to
+    /// three cells.
+    fn feather_for(cell: f32) -> f32 {
+        cell * 3.0
+    }
+
+    /// Grows a bake region so the crossfade lands in clay the verb never
+    /// reached.
+    ///
+    /// The feather is measured *inward* from the box faces, so a box sized to
+    /// the verb's own reach spends its whole margin crossfading away the very
+    /// thing the verb did. Measured: Suavizar and Relaxar went from changing
+    /// 15% of the subject to changing nothing at all. Padding by twice the
+    /// feather puts the whole crossfade outside the verb's reach, which is
+    /// what the engine means by "bake with a band that covers the verb".
+    fn grown_for_feather(min: &mut [f32; 3], max: &mut [f32; 3], cell: f32) {
+        let margin = Self::feather_for(cell) * 2.0;
+        for axis in 0..3 {
+            min[axis] -= margin;
+            max[axis] += margin;
+        }
+    }
+
     /// The spacing a collapse samples at.
     ///
     /// Taken from the brick cache, which is the one place that knows the scale
@@ -1584,6 +1627,9 @@ impl ClayDocument {
                 cell_size: Some(Self::VOXEL_SIZE / settings.scale.max(1e-3)),
                 band: None,
                 padding: None,
+                // No feather: an imported mesh is placed with `Op::Add`, and
+                // the engine ignores the feather for every op but replace.
+                feather: None,
             },
         )
         .map_err(ModelError::engine)?;

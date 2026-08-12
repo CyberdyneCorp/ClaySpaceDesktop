@@ -8,8 +8,12 @@
 //! Subset meshing and jitter were both about to be filed as engine bugs on the
 //! strength of a visual artifact; measured properly, subset meshing agrees
 //! with whole meshing exactly, and the jitter disagreement was the narrow band
-//! being too thin for the brush. Only the mirror (#60) and `CLAY_OP_ADD`
-//! ignoring `strength` (#61) are engine bugs.
+//! being too thin for the brush.
+//!
+//! The mirror (#60) and `CLAY_OP_ADD` ignoring `strength` (#61) *were* engine
+//! bugs, and ClayCore 0.28.0 fixed both. These two now assert the fixed
+//! behaviour, which is what stops a later regression going unnoticed — a test
+//! deleted the day its bug is fixed protects nothing.
 //!
 //! ```sh
 //! cargo test -p clayspace-app --test claycore_repros --release -- --nocapture
@@ -250,8 +254,12 @@ fn subset_meshing_reproduces_whole_surface_meshing() {
 }
 
 #[test]
-fn the_layer_mirror_has_no_observable_effect() {
+fn the_layer_mirror_reaches_the_far_side() {
     // clay_layer_set_mirror against clay_brick_cache_refill.
+    //
+    // Filed as #60 and fixed in 0.28.0: the plane was stored, but per-item
+    // participation defaulted to *excluded*, so the sequence every host writes
+    // — set the mirror, add items — mirrored nothing.
     let (mut doc, layer) = sphere();
     doc.set_layer_mirror(layer, [true, false, false], 0.0)
         .expect("mirror");
@@ -298,15 +306,26 @@ fn the_layer_mirror_has_no_observable_effect() {
 
     let far_in_document = doc_radius_along(&doc, mirrored).expect("document");
     let far_in_cache = radius_along(&fresh, mirrored).expect("cache");
-    // Filed as ClayCore #60. The mirror is accepted and changes nothing — not
-    // in the document, not in the cache, and not for a plain placed item
-    // either. When this starts failing the engine has been fixed, and
-    // ClaySpace's starting symmetry can go back on.
     let near = doc_radius_along(&doc, at).expect("near");
+
+    // Both halves, and in the cache as well as the document: the viewport
+    // meshes from the cache, so a mirror that reached only the document field
+    // would still draw half of every stroke.
     assert!(
-        (far_in_document - 1.0).abs() < 0.02 && (near - 1.0).abs() > 0.02,
-        "the layer mirror now reaches the far side (near {near}, far \
-         {far_in_document}, cache {far_in_cache}) — see ClayCore #60"
+        (near - 1.0).abs() > 0.02,
+        "the stroke did not raise the side it was drawn on ({near})"
+    );
+    assert!(
+        (far_in_document - 1.0).abs() > 0.02,
+        "the layer mirror does not reach the far side of the document ({far_in_document})"
+    );
+    assert!(
+        (far_in_cache - 1.0).abs() > 0.02,
+        "the layer mirror does not reach the brick cache ({far_in_cache})"
+    );
+    assert!(
+        (far_in_document - near).abs() < 0.02,
+        "the two halves disagree: near {near}, far {far_in_document}"
     );
 }
 
@@ -357,9 +376,13 @@ fn a_jittered_stroke_reaches_a_cache_with_a_wide_enough_band() {
 }
 
 #[test]
-fn op_add_ignores_the_stroke_presets_strength() {
+fn op_add_honours_the_stroke_presets_strength() {
     // clay_stroke_preset.strength against CLAY_OP_ADD, and against
     // CLAY_OP_RELIEF for contrast.
+    //
+    // Filed as #61 and fixed in 0.28.0: strength was consumed only where
+    // `blend.k` is an amplitude, so an add stamp at strength 0 deposited the
+    // same as one at 1 and the Intensidade slider did nothing on most tools.
     let displacement = |op: Op, strength: f32| {
         let (mut doc, layer) = sphere();
         let before = radius_along(&filled(&doc), [0.0, 0.0, 1.0]).expect("before");
@@ -399,11 +422,24 @@ fn op_add_ignores_the_stroke_presets_strength() {
         add.push(a);
     }
 
+    // Monotonic, and zero at zero: the engine's contract is that 0 authors no
+    // node, 1 is bit-identical to the old behaviour, and it rises in between.
+    assert!(
+        add[0].abs() < 1e-4,
+        "strength 0 still deposited {} — it should author nothing",
+        add[0]
+    );
+    for pair in add.windows(2) {
+        assert!(
+            pair[1] >= pair[0] - 1e-4,
+            "the response is not monotonic: {pair:?}"
+        );
+    }
     let spread = add.iter().fold(f32::NEG_INFINITY, |m, v| m.max(*v))
         - add.iter().fold(f32::INFINITY, |m, v| m.min(*v));
     assert!(
-        spread < 1e-4,
-        "CLAY_OP_ADD now responds to strength (spread {spread}) — the tools \
-         that use it can stop ignoring Intensidade"
+        spread > 1e-3,
+        "CLAY_OP_ADD is flat against strength again (spread {spread}); \
+         Intensidade would silently stop working"
     );
 }
