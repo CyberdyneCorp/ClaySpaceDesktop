@@ -941,7 +941,23 @@ impl ClayDocument {
                 ToolKind::Inflar => grid.sculpt_inflate(cell, &params, 1),
                 ToolKind::Pincar => grid.sculpt_pinch(cell, &params),
                 ToolKind::Raspar => grid.sculpt_scrape(cell, &params, [0.0, 1.0, 0.0], 0.0),
-                ToolKind::Preencher => grid.sculpt_fill_cavities(cell, &params, 2),
+                // At full strength, whatever Intensidade says.
+                //
+                // Every voxel verb dithers its writes against a hash of the
+                // cell coordinate when strength is below 1 — that is how a
+                // soft stamp works on binary occupancy. For a *repair* verb
+                // that is incoherent: Preencher closes a one-cell hole or it
+                // does not, and dithering means it scatters the very repairs
+                // it was asked to make. Measured, with the same perforated
+                // material: 0 cells closed at the default intensity, 6 at
+                // full strength. `voxel_tools.rs` is the regression.
+                ToolKind::Preencher => {
+                    let solid = BrushParams {
+                        strength: 1.0,
+                        ..params
+                    };
+                    grid.sculpt_fill_cavities(cell, &solid, 2)
+                }
                 ToolKind::Nudge => grid.sculpt_smudge(cell, &params, [1.0, 0.0, 0.0]),
                 // Anything else deposits material, which is what a default
                 // brush does on a voxel grid.
