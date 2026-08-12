@@ -135,6 +135,22 @@ def main() -> int:
                 "ATTRIBUTION.md is out of date. Run: python3 tools/attribution.py",
                 file=sys.stderr,
             )
+            # The difference, not just its existence. This check first failed
+            # for a reason no local run could reproduce — the manifest was
+            # host-dependent — and "it differs" sent me guessing instead of
+            # looking.
+            import difflib
+
+            diff = difflib.unified_diff(
+                current.splitlines(),
+                rendered.splitlines(),
+                fromfile="committed",
+                tofile="generated here",
+                lineterm="",
+                n=1,
+            )
+            for line in list(diff)[:60]:
+                print(line, file=sys.stderr)
             return 1
         print(f"Attribution manifest is current ({rendered.count('|') // 3} entries).")
         return 0

@@ -3,8 +3,14 @@
 use claycore::Backend;
 use clayspace_engine::{BackendPolicy, Operation, SelectionReason};
 
+/// A policy whose active backend does not depend on the host.
+///
+/// `from_available` ranks by *this platform's* preference order, and Metal is
+/// not in Linux's — so a fixture built from `[Cpu, Metal]` picks Metal on
+/// macOS and Cpu on Linux, and any assertion about the active backend is a
+/// statement about the runner. An explicit override removes the question.
 fn policy() -> BackendPolicy {
-    BackendPolicy::from_available(vec![Backend::Cpu, Backend::Metal], None)
+    BackendPolicy::from_available(vec![Backend::Cpu, Backend::Metal], Some(Backend::Metal))
 }
 
 #[test]
@@ -16,6 +22,7 @@ fn the_report_identifies_the_build_and_the_machine() {
     assert!(report.platform.contains(std::env::consts::OS));
     assert_eq!(report.backends, vec!["cpu", "metal"]);
     assert_eq!(report.active_backend, "metal");
+    assert_eq!(policy().reason(), SelectionReason::Override);
 }
 
 #[test]
@@ -32,13 +39,19 @@ fn the_engine_revision_is_a_real_one_where_there_is_a_checkout() {
 
 #[test]
 fn a_manual_choice_reads_differently_from_an_automatic_one() {
-    let mut chosen = policy();
+    // Built without an override, so this one *is* the platform's ranking —
+    // which is the point of the comparison, and why it does not assert which
+    // backend won.
+    let automatic = BackendPolicy::from_available(vec![Backend::Cpu, Backend::Metal], None);
+    let mut chosen = automatic.clone();
     chosen.set_override(Backend::Cpu).expect("cpu is available");
+
+    assert_eq!(chosen.diagnostics().active_backend, "cpu");
+    assert_eq!(chosen.reason(), SelectionReason::Override);
     assert_ne!(
         chosen.diagnostics().selection,
-        policy().diagnostics().selection
+        automatic.diagnostics().selection
     );
-    assert_eq!(chosen.diagnostics().active_backend, "cpu");
 }
 
 #[test]
