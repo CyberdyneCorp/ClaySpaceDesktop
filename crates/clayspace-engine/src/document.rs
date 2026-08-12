@@ -193,6 +193,56 @@ impl ClayDocument {
     }
 
     /// The brick cache the viewport re-meshes from.
+    /// Builds the mips covering the surface, and says how many are ready.
+    ///
+    /// The half of level of detail that is ours to do. A coarse brick is
+    /// buildable only when all eight of its children are evaluated *and*
+    /// clean, so this is called when a gesture ends rather than during one —
+    /// dirtying any child drops its mip, and rebuilding them mid-stroke would
+    /// be work thrown away on the next sample.
+    ///
+    /// Nothing consumes these yet: `clay_brick_cache_mesh` takes no level, so
+    /// a mip can be built and read and not drawn (ClayCore #93). Keeping them
+    /// current means the day that call grows a level, the coarse surface is
+    /// already there to mesh.
+    pub fn build_mips(&mut self) -> Result<usize, ModelError> {
+        let keys = self.cache.surface_bricks().map_err(ModelError::engine)?;
+
+        // Each coarse brick covers a 2x2x2 block, so the surface's coarse keys
+        // are its fine keys halved — deduplicated, because eight fine bricks
+        // map to one coarse.
+        let mut coarse: Vec<BrickKey> = keys
+            .iter()
+            .map(|key| {
+                [
+                    key[0].div_euclid(2),
+                    key[1].div_euclid(2),
+                    key[2].div_euclid(2),
+                ]
+            })
+            .collect();
+        coarse.sort_unstable();
+        coarse.dedup();
+
+        let mut built = 0;
+        for key in coarse {
+            // `false` is an ordinary "not yet" — some child is dirty or
+            // unevaluated — rather than a failure, and is the common answer
+            // while a stroke is still settling.
+            if self.cache.build_mip(key).map_err(ModelError::engine)? {
+                built += 1;
+            }
+        }
+        Ok(built)
+    }
+
+    /// Whether a coarse region has a mip to draw.
+    pub fn coarse_lod(&self, coarse_key: BrickKey) -> Result<i32, ModelError> {
+        self.cache
+            .current_lod(coarse_key)
+            .map_err(ModelError::engine)
+    }
+
     /// The cache, for the few callers that need to build a mip.
     pub fn cache_mut(&mut self) -> &mut BrickCache {
         &mut self.cache

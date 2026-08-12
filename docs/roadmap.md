@@ -82,7 +82,9 @@ us — and one of them is the CI blocker.
 
 | Issue | Effect here | Our position |
 |---|---|---|
-| no LOD meshing | **Blocks 3.9.** Mips build and read; nothing meshes them | Not yet filed. `claycore_lod.rs` is the repro |
+| [#93](https://github.com/CyberdyneCorp/ClayCore/issues/93) no LOD meshing | **Blocks the last of 3.9.** Mips build and read; nothing meshes them | Filed. The host halves are built — policy and maintenance — so this is one call away |
+| [#91](https://github.com/CyberdyneCorp/ClayCore/issues/91) no node enumeration | Finding a reloaded rig needs an id probe | Filed. A *checkable* probe, unlike the old layer one |
+| [#92](https://github.com/CyberdyneCorp/ClayCore/issues/92) no layer rename | A rename is lost on save | Filed. Visible only now that names read back |
 | [#73](https://github.com/CyberdyneCorp/ClayCore/issues/73) gradient normals scale with document size | A dab is 4 ms on a fresh document and 120 ms after 192 edits, and symmetry doubles the region | **Fixed on `main`, not in 0.28.0.** Workaround available: host-side normals. Not taken |
 | [#69](https://github.com/CyberdyneCorp/ClayCore/issues/69) no layer enumeration | A reopened document loses layer names, visibility and **stack order** | Layer ids recovered by probing. Order loss is a silent correctness difference |
 | [#77](https://github.com/CyberdyneCorp/ClayCore/issues/77) a placed armature is write-only | A saved rig comes back as surface only, so it cannot be re-posed or edited | Verified in `claycore_armature_readback.rs`: `clay_layer_stroke_points` refuses the primitive, and nothing reads the parent array. The armature-shaped instance of #16 |

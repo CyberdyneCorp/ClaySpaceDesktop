@@ -551,6 +551,23 @@ impl App {
         self.timed("re-malha final", Self::settle_geometry_now);
     }
 
+    /// Brings the coarse levels up to date, once the surface has settled.
+    ///
+    /// Here rather than in `sync` because a coarse brick is buildable only
+    /// when all eight of its children are evaluated *and* clean: dirtying any
+    /// child drops its mip, so building them mid-stroke is work thrown away on
+    /// the next sample.
+    ///
+    /// Nothing draws them yet — `clay_brick_cache_mesh` takes no level, see
+    /// ClayCore #93 — so this is maintenance against the day it does.
+    fn build_mips(&mut self) {
+        self.timed("níveis de detalhe", |app| {
+            if let Err(e) = app.document.with(|document| document.build_mips()) {
+                eprintln!("os níveis de detalhe não puderam ser construídos: {e}");
+            }
+        });
+    }
+
     /// Re-shades what the gesture touched, at full quality.
     fn refine_geometry(&mut self) {
         self.timed("sombreamento final", |app| {
@@ -958,6 +975,7 @@ impl App {
         // this gesture touched.
         if matches!(command, Command::EndStroke | Command::CancelStroke) {
             self.refine_geometry();
+            self.build_mips();
         }
         self.request_redraw();
     }

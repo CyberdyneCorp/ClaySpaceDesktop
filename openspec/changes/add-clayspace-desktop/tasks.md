@@ -37,7 +37,7 @@
 - [x] 3.6 Implement the view presets with orthographic projection for the orthogonal views and framing preservation on switch
 - [x] 3.7 Implement the navigation gizmo with per-axis activation
 - [x] 3.8 Implement the ground grid and symmetry-plane overlays, excluded from export
-- [ ] 3.9 Implement LOD selection over the brick cache mips with restoration on approach — **blocked upstream**: `clay_brick_cache_build_mip` and `read_bricks(lod)` exist, but `clay_brick_cache_mesh` takes no level, so a mip can be built and read and not meshed. See `claycore_lod.rs`
+- [ ] 3.9 Implement LOD selection over the brick cache mips with restoration on approach — the host halves are done: `DetailPolicy` decides with hysteresis, `ClayDocument::build_mips` keeps the coarse levels ready at each gesture end. **Drawing one is blocked upstream** ([#93](https://github.com/CyberdyneCorp/ClayCore/issues/93)): `clay_brick_cache_mesh` takes no level. `claycore_lod.rs` holds both halves and the gap
 
 ## 4. MVVM skeleton
 
