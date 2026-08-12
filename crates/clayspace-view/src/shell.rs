@@ -638,6 +638,16 @@ pub fn diagnostics_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &m
                 readout(ui, "Vídeo", renderer.clone());
             }
 
+            // The stalls, which are what "it stutters" turns into. Listed even
+            // when there are none, for the same reason as the fallbacks below.
+            if d.stalls.is_empty() {
+                readout(ui, "Travamentos", "nenhum acima de um quadro");
+            } else {
+                for stall in &d.stalls {
+                    readout(ui, "Travamento", stall.clone());
+                }
+            }
+
             // Fallbacks are listed even when there are none. Silence here reads
             // as "the panel is broken" rather than as "nothing fell back", and
             // a reader cannot tell the two apart.

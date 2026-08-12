@@ -48,6 +48,13 @@ pub struct Diagnostics {
     /// report that cannot be produced until the GPU is up is no use for
     /// diagnosing a GPU that did not come up.
     pub renderer: Option<String>,
+
+    /// Operations that held the interface thread longer than a frame.
+    ///
+    /// In the report because "it stutters" is the most common thing a user
+    /// says and the least actionable, and this turns it into a name and a
+    /// number.
+    pub stalls: Vec<String>,
 }
 
 impl Diagnostics {
@@ -75,6 +82,13 @@ impl Diagnostics {
         );
         if let Some(renderer) = &self.renderer {
             line("renderer", renderer);
+        }
+        if self.stalls.is_empty() {
+            line("stalls", "none over one frame");
+        } else {
+            for stall in &self.stalls {
+                line("stall", stall);
+            }
         }
         if self.fallbacks.is_empty() {
             line("fallbacks", "none this session");
@@ -110,6 +124,7 @@ mod tests {
             selection: "automática".into(),
             fallbacks: Vec::new(),
             renderer: Some("Apple M3 Max (Metal)".into()),
+            stalls: Vec::new(),
         }
     }
 
@@ -159,6 +174,20 @@ mod tests {
         assert!(!text.contains("renderer"), "{text}");
         // And still carries the part that diagnoses why there is no window.
         assert!(text.contains("backends"), "{text}");
+    }
+
+    #[test]
+    fn a_stall_reaches_the_report_because_it_stutters_is_not_actionable() {
+        let mut diagnostics = sample();
+        diagnostics.stalls.push("consolidar 6400 ms".into());
+        let text = diagnostics.to_report();
+        assert!(text.contains("stall: consolidar 6400 ms"), "{text}");
+        assert!(!text.contains("none over one frame"));
+    }
+
+    #[test]
+    fn a_smooth_session_says_so_rather_than_staying_silent() {
+        assert!(sample().to_report().contains("none over one frame"));
     }
 
     #[test]

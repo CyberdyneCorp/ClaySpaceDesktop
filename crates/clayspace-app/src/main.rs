@@ -13,7 +13,7 @@ use std::time::Instant;
 use clayspace_app::{ray_at, SessionStore, SharedDocument, SurfaceGeometry, ViewportInput};
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
-    AutosavePolicy, Diagnostics, ExchangeModel, ExportSettings, ExportWarning, Format,
+    AutosavePolicy, Diagnostics, ExchangeModel, ExportSettings, ExportWarning, Format, FrameLog,
     ImportSettings, RecentDocuments, Recovery, SkinSettings, Units, ViewPresetKind,
 };
 use clayspace_view::shell::{self, region, ArmatureState, ShellState};
@@ -122,6 +122,8 @@ struct App {
     quit_requested: bool,
     /// The document's scale, and what lengths are shown in.
     units: Units,
+    /// What has held the interface thread longer than a frame.
+    stalls: FrameLog,
     /// The exchange panels and what they would do.
     show_import: bool,
     show_export: bool,
@@ -190,6 +192,7 @@ impl App {
             pending_recovery,
             quit_requested: false,
             units: Units::default(),
+            stalls: FrameLog::default(),
             show_import: false,
             show_export: false,
             import: ImportSettings::default(),
@@ -251,6 +254,10 @@ impl App {
 
     /// Re-meshes whatever the document reports as dirty.
     fn sync_geometry(&mut self) {
+        self.timed("re-malha", Self::sync_geometry_now);
+    }
+
+    fn sync_geometry_now(&mut self) {
         let Some(graphics) = self.graphics.as_mut() else {
             return;
         };
@@ -438,7 +445,8 @@ impl App {
         else {
             return;
         };
-        match self.document.import_mesh(&path, self.import) {
+        let settings = self.import;
+        match self.timed("importar", |app| app.document.import_mesh(&path, settings)) {
             Ok(()) => {
                 self.show_import = false;
                 self.scene.refresh();
@@ -465,7 +473,8 @@ impl App {
         else {
             return;
         };
-        match self.document.export_mesh(&path, self.export) {
+        let settings = self.export;
+        match self.timed("exportar", |app| app.document.export_mesh(&path, settings)) {
             Ok(()) => self.show_export = false,
             Err(e) => eprintln!("não foi possível exportar: {e}"),
         }
@@ -524,6 +533,10 @@ impl App {
     /// Re-meshes the whole surface after a gesture, clearing the seams the
     /// per-segment path leaves.
     fn settle_geometry(&mut self) {
+        self.timed("re-malha final", Self::settle_geometry_now);
+    }
+
+    fn settle_geometry_now(&mut self) {
         let Some(graphics) = self.graphics.as_mut() else {
             return;
         };
@@ -634,7 +647,27 @@ impl App {
             .graphics
             .as_ref()
             .map(|graphics| graphics.gpu.adapter_description());
+        report.stalls = self.stalls.lines();
         report
+    }
+
+    /// Runs something on the interface thread and records it if it stalls.
+    ///
+    /// Every heavy operation the pointer can reach goes through this. The
+    /// name matters more than the number: "it stutters" is the most common
+    /// thing a user reports and the least actionable, and a named operation
+    /// with a millisecond count is a bug report.
+    fn timed<T>(&mut self, operation: &str, work: impl FnOnce(&mut Self) -> T) -> T {
+        let started = Instant::now();
+        let outcome = work(self);
+        let took = started.elapsed();
+        if self.stalls.record(operation, took) {
+            eprintln!(
+                "a interface travou: {operation} {:.0} ms",
+                took.as_secs_f64() * 1000.0
+            );
+        }
+        outcome
     }
 
     /// The state the shell needs about the rig.
@@ -851,6 +884,15 @@ impl App {
 
     /// Dispatches a command to whichever ViewModel owns it.
     fn apply(&mut self, command: Command) {
+        // Timed by the command's own name, so a stall is reported as the thing
+        // the sculptor asked for rather than as an internal function. The
+        // re-mesh inside it is timed separately and shows up beside it, which
+        // is what says *which half* was slow.
+        let label = command.label();
+        self.timed(label, |app| app.apply_now(command));
+    }
+
+    fn apply_now(&mut self, command: Command) {
         if let Err(e) = self.sculpt.dispatch(command.clone()) {
             // A refusal is not swallowed; the tool status carries the reason
             // to the options bar, and this records it for the log.

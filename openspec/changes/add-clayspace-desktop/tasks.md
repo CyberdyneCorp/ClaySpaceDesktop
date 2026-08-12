@@ -123,7 +123,7 @@
 - [x] 10.1 Define the reference document and reference machine configuration per platform
 - [x] 10.2 Implement the benchmark harness for dab latency, frame time, edit locality, startup and memory
 - [x] 10.3 Measure and record baseline figures; wire the budgets as a CI gate reporting before and after
-- [ ] 10.4 Implement the interface-thread blocking instrumentation with a 16 ms threshold
+- [x] 10.4 Implement the interface-thread blocking instrumentation with a 16 ms threshold
 - [x] 10.5 Verify edit cost does not scale with scene size using the ten-times-larger comparison scene
 - [x] 10.6 Verify memory returns to baseline across repeated open, sculpt, close cycles
 - [x] 10.7 Add build features for the backends, with CPU always compiled in and clear failures for unavailable toolkits

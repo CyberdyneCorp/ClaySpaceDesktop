@@ -117,6 +117,7 @@ fn diagnostics() -> clayspace_model::Diagnostics {
             declined_by: "metal".into(),
         }],
         renderer: Some("Apple M3 Max — Metal".into()),
+        stalls: vec!["consolidar 6400 ms".into(), "re-malha 45 ms (×12)".into()],
     }
 }
 
