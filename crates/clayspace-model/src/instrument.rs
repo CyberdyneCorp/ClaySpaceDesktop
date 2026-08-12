@@ -113,7 +113,9 @@ impl FrameLog {
                 count: 1,
             }),
         }
-        self.stalls.sort_by(|a, b| b.took.cmp(&a.took));
+        // Worst first, so the panel opens on the thing worth fixing.
+        self.stalls
+            .sort_by_key(|stall| std::cmp::Reverse(stall.took));
         true
     }
 
