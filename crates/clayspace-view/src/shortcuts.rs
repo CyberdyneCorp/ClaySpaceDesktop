@@ -51,13 +51,25 @@ impl Chord {
     pub fn label(self) -> String {
         let mut text = String::new();
         if self.command {
-            text.push_str(if cfg!(target_os = "macos") { "⌘" } else { "Ctrl+" });
+            text.push_str(if cfg!(target_os = "macos") {
+                "⌘"
+            } else {
+                "Ctrl+"
+            });
         }
         if self.shift {
-            text.push_str(if cfg!(target_os = "macos") { "⇧" } else { "Shift+" });
+            text.push_str(if cfg!(target_os = "macos") {
+                "⇧"
+            } else {
+                "Shift+"
+            });
         }
         if self.alt {
-            text.push_str(if cfg!(target_os = "macos") { "⌥" } else { "Alt+" });
+            text.push_str(if cfg!(target_os = "macos") {
+                "⌥"
+            } else {
+                "Alt+"
+            });
         }
         text.push_str(self.key.label());
         text
@@ -154,7 +166,12 @@ pub struct Conflict {
 
 impl std::fmt::Display for Conflict {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} is already bound to {:?}", self.chord.label(), self.held_by)
+        write!(
+            f,
+            "{} is already bound to {:?}",
+            self.chord.label(),
+            self.held_by
+        )
     }
 }
 
@@ -243,7 +260,9 @@ impl Shortcuts {
 
     /// Every binding, for the preferences list.
     pub fn all(&self) -> impl Iterator<Item = (Chord, Action)> + '_ {
-        self.bindings.iter().map(|(chord, action)| (*chord, *action))
+        self.bindings
+            .iter()
+            .map(|(chord, action)| (*chord, *action))
     }
 }
 

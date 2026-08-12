@@ -205,6 +205,32 @@ impl Camera {
         self.distance = (radius / (self.fov_y * 0.5).sin()).max(radius * 1.5) * 1.1;
     }
 
+    /// The world-space ray through a point on screen.
+    ///
+    /// `ndc` is in -1..=1 with y up, which is what the viewport hands over
+    /// after converting from pixels. This is how a pointer becomes something
+    /// the engine can pick with.
+    pub fn ray_through(&self, ndc: [f32; 2], aspect: f32) -> ([f32; 3], [f32; 3]) {
+        let eye = self.eye();
+        let forward = (self.target - eye).normalize_or_zero();
+        let right = forward.cross(self.up()).normalize_or_zero();
+        let up = right.cross(forward);
+
+        if self.preset.is_orthographic() {
+            // Parallel rays offset across the view plane, rather than a fan
+            // from a point: an orthographic pick must not converge.
+            let half_height = self.distance * (self.fov_y * 0.5).tan();
+            let origin =
+                eye + right * (ndc[0] * half_height * aspect) + up * (ndc[1] * half_height);
+            (origin.into(), forward.into())
+        } else {
+            let tan = (self.fov_y * 0.5).tan();
+            let direction = (forward + right * (ndc[0] * tan * aspect) + up * (ndc[1] * tan))
+                .normalize_or_zero();
+            (eye.into(), direction.into())
+        }
+    }
+
     /// The framing an empty document gets.
     pub fn frame_default(&mut self) {
         self.target = Vec3::ZERO;
@@ -216,6 +242,85 @@ impl Camera {
 mod tests {
     use super::*;
 
+    /// A ray must come back through the pixel that produced it.
+    ///
+    /// This is the invariant that ties picking to what is on screen. It was
+    /// broken in the shipped binary in a way no single-component test could
+    /// see: the ray was built from the viewport rectangle the panels left,
+    /// while the scene was drawn across the whole window with the window's
+    /// aspect. Both were internally consistent; together they disagreed, and
+    /// the brush landed off to one side of the pointer.
+    fn round_trip(preset: ViewPreset, aspect: f32, point: Vec3) -> f32 {
+        let mut camera = Camera {
+            target: Vec3::ZERO,
+            distance: 4.0,
+            ..Camera::default()
+        };
+        camera.apply_preset(preset);
+
+        let clip = camera.view_projection(aspect) * point.extend(1.0);
+        let ndc = [clip.x / clip.w, clip.y / clip.w];
+
+        let (origin, direction) = camera.ray_through(ndc, aspect);
+        let (origin, direction) = (Vec3::from(origin), Vec3::from(direction));
+
+        // Distance from the point to the ray: the projection of the offset
+        // that is perpendicular to the direction.
+        let offset = point - origin;
+        (offset - direction * offset.dot(direction)).length()
+    }
+
+    #[test]
+    fn a_ray_returns_through_the_pixel_it_came_from() {
+        for preset in [
+            ViewPreset::Perspective,
+            ViewPreset::Front,
+            ViewPreset::Side,
+            ViewPreset::Top,
+        ] {
+            // Several aspects, because the defect was an aspect mismatch and a
+            // square viewport would have hidden it.
+            for aspect in [1.0, 1.265, 1.6, 2.4] {
+                for point in [
+                    Vec3::new(0.0, 0.0, 0.0),
+                    Vec3::new(0.6, 0.4, 0.2),
+                    Vec3::new(-0.9, 0.3, -0.5),
+                ] {
+                    let miss = round_trip(preset, aspect, point);
+                    assert!(
+                        miss < 1e-3,
+                        "{preset:?} at aspect {aspect} missed {point} by {miss}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_wrong_aspect_misses() {
+        // Proof the test above can fail: build the ray with the window's
+        // aspect where the pixel was projected with the viewport's, which is
+        // exactly what the binary did.
+        let camera = Camera {
+            target: Vec3::ZERO,
+            distance: 4.0,
+            ..Camera::default()
+        };
+        let point = Vec3::new(0.6, 0.4, 0.2);
+
+        let clip = camera.view_projection(1.265) * point.extend(1.0);
+        let ndc = [clip.x / clip.w, clip.y / clip.w];
+        let (origin, direction) = camera.ray_through(ndc, 1.6);
+        let (origin, direction) = (Vec3::from(origin), Vec3::from(direction));
+
+        let offset = point - origin;
+        let miss = (offset - direction * offset.dot(direction)).length();
+        assert!(
+            miss > 0.05,
+            "a mismatched aspect missed by only {miss}, so the round trip              above proves nothing"
+        );
+    }
+
     #[test]
     fn pitch_never_reaches_the_pole() {
         let mut camera = Camera::default();
@@ -223,7 +328,10 @@ mod tests {
             camera.orbit(0.0, 1.0);
         }
         assert!(camera.pitch < std::f32::consts::FRAC_PI_2);
-        assert!(camera.view().is_finite(), "the view matrix degenerated at the pole");
+        assert!(
+            camera.view().is_finite(),
+            "the view matrix degenerated at the pole"
+        );
     }
 
     #[test]
@@ -231,7 +339,10 @@ mod tests {
         let mut camera = Camera::default();
         camera.frame_bounds(Vec3::ZERO, Vec3::ZERO);
         assert_eq!(camera.target, Vec3::ZERO);
-        assert!(camera.distance > 0.0, "an empty document must not put the camera at the origin");
+        assert!(
+            camera.distance > 0.0,
+            "an empty document must not put the camera at the origin"
+        );
     }
 
     #[test]
@@ -243,7 +354,10 @@ mod tests {
 
         camera.apply_preset(ViewPreset::Front);
 
-        assert_eq!(camera.distance, distance, "switching preset must not rezoom");
+        assert_eq!(
+            camera.distance, distance,
+            "switching preset must not rezoom"
+        );
         assert_eq!(camera.target, target, "switching preset must not recentre");
     }
 
@@ -254,11 +368,17 @@ mod tests {
 
         for preset in [ViewPreset::Front, ViewPreset::Side, ViewPreset::Top] {
             camera.apply_preset(preset);
-            assert!(preset.is_orthographic(), "{preset:?} should be orthographic");
+            assert!(
+                preset.is_orthographic(),
+                "{preset:?} should be orthographic"
+            );
             // An orthographic projection has no perspective divide, so the
             // bottom-right element stays 1.
             let projection = camera.projection(1.5);
-            assert_eq!(projection.w_axis.w, 1.0, "{preset:?} kept a perspective divide");
+            assert_eq!(
+                projection.w_axis.w, 1.0,
+                "{preset:?} kept a perspective divide"
+            );
         }
     }
 
@@ -275,12 +395,50 @@ mod tests {
     }
 
     #[test]
+    fn a_ray_through_the_centre_looks_at_the_target() {
+        let camera = Camera::default();
+        let (origin, direction) = camera.ray_through([0.0, 0.0], 1.5);
+        let origin = Vec3::from(origin);
+        let direction = Vec3::from(direction);
+
+        // The centre ray must reach the target.
+        let toward_target = (camera.target - origin).normalize();
+        assert!(
+            direction.dot(toward_target) > 0.999,
+            "the centre ray does not point at what the camera is looking at"
+        );
+    }
+
+    #[test]
+    fn rays_fan_out_under_perspective_and_stay_parallel_under_orthographic() {
+        let mut camera = Camera::default();
+        let (_, left) = camera.ray_through([-0.8, 0.0], 1.5);
+        let (_, right) = camera.ray_through([0.8, 0.0], 1.5);
+        assert!(
+            Vec3::from(left).dot(Vec3::from(right)) < 0.999,
+            "perspective rays did not diverge"
+        );
+
+        camera.apply_preset(ViewPreset::Front);
+        let (origin_a, dir_a) = camera.ray_through([-0.8, 0.0], 1.5);
+        let (origin_b, dir_b) = camera.ray_through([0.8, 0.0], 1.5);
+        assert!(
+            Vec3::from(dir_a).dot(Vec3::from(dir_b)) > 0.999,
+            "orthographic rays converged, so a pick would land in the wrong place"
+        );
+        assert_ne!(origin_a, origin_b, "orthographic rays share an origin");
+    }
+
+    #[test]
     fn zoom_is_multiplicative_and_bounded() {
         let mut camera = Camera::default();
         for _ in 0..500 {
             camera.zoom(1.0);
         }
-        assert!(camera.distance > 0.0, "zooming in must not reach or pass the target");
+        assert!(
+            camera.distance > 0.0,
+            "zooming in must not reach or pass the target"
+        );
 
         for _ in 0..500 {
             camera.zoom(-1.0);

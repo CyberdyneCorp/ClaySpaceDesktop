@@ -7,6 +7,7 @@
 
 use claycore_sys as sys;
 
+use crate::document::ArmatureEdit;
 use crate::error::{check, Result};
 use crate::{Document, Item, LayerId, NodeId};
 
@@ -313,6 +314,203 @@ impl Document {
     }
 
     /// A layer's protection state.
+    /// One edit to a placed armature's tree.
+    ///
+    /// One undo step whatever the edit: the command underneath is a whole-tree
+    /// replace, which for an armature of tens of nodes costs less than granular
+    /// bookkeeping and has an exact inverse.
+    ///
+    /// `mirrored` applies to [`ArmatureEdit::AddChild`] only. It adds the
+    /// reflection through x = 0 in the same step, under the mirror of the
+    /// parent where there is one — a node on the plane is its own reflection
+    /// and is added once.
+    pub fn armature_edit(
+        &mut self,
+        layer: LayerId,
+        node: NodeId,
+        edit: ArmatureEdit,
+        target: u32,
+        mirrored: bool,
+    ) -> Result<()> {
+        let (op, value, radius) = match edit {
+            ArmatureEdit::AddChild { position, radius } => (0, position, radius),
+            // A delta, and the target's whole subtree travels with it: an arm
+            // hangs from a shoulder.
+            ArmatureEdit::Move { delta } => (1, delta, 0.0),
+            ArmatureEdit::SetRadius { radius } => (2, [0.0; 3], radius),
+            // The target and everything under it.
+            ArmatureEdit::Delete => (3, [0.0; 3], 0.0),
+        };
+        // SAFETY: valid handles and a three-float value the entry point reads
+        // according to `op`.
+        check(
+            unsafe {
+                sys::clay_layer_armature_edit(
+                    self.as_ptr(),
+                    layer.0,
+                    node.0,
+                    op,
+                    target,
+                    value.as_ptr(),
+                    radius,
+                    i32::from(mirrored),
+                )
+            },
+            "clay_layer_armature_edit",
+        )
+    }
+
+    /// A placed armature's parent array, one index per node.
+    ///
+    /// The topology half, and the one that makes a reloaded rig posable: the
+    /// indices are the ones [`Document::armature_edit`] takes, so a host reads
+    /// the tree, picks a subtree and edits by index. Positions alone cannot
+    /// be turned back into a rig — a branch is not recoverable by guessing.
+    ///
+    /// Added in ClayCore 0.29.0, closing #77.
+    pub fn armature_parents(&self, layer: LayerId, node: NodeId) -> Result<Vec<u32>> {
+        let mut count: usize = 0;
+        // A first call with a null buffer asks how many there are.
+        // SAFETY: the count is the only out-parameter written on this call.
+        check(
+            unsafe {
+                sys::clay_layer_armature_parents(
+                    self.as_ptr(),
+                    layer.0,
+                    node.0,
+                    std::ptr::null_mut(),
+                    &mut count,
+                )
+            },
+            "clay_layer_armature_parents",
+        )?;
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut parents = vec![0u32; count];
+        // SAFETY: `parents` is sized to the count the call above reported.
+        check(
+            unsafe {
+                sys::clay_layer_armature_parents(
+                    self.as_ptr(),
+                    layer.0,
+                    node.0,
+                    parents.as_mut_ptr(),
+                    &mut count,
+                )
+            },
+            "clay_layer_armature_parents",
+        )?;
+        parents.truncate(count);
+        Ok(parents)
+    }
+
+    /// Which primitive a placed node carries.
+    ///
+    /// The dual of `clay_layer_children`: between the two, every node answers
+    /// exactly one question. A group carries no primitive and is refused.
+    ///
+    /// Added in ClayCore 0.29.0. Before it, a host that reopened a document
+    /// could not tell a rig from a stroke.
+    pub fn node_prim(&self, layer: LayerId, node: NodeId) -> Result<i32> {
+        let mut prim = 0;
+        // SAFETY: a valid handle and an out-parameter written on success.
+        check(
+            unsafe { sys::clay_layer_node_prim(self.as_ptr(), layer.0, node.0, &mut prim) },
+            "clay_layer_node_prim",
+        )?;
+        Ok(prim)
+    }
+
+    /// A placed stroke or armature's control points, as `x y z r` quadruples.
+    ///
+    /// The engine's note: reading is not editing, so a ghosted, locked or
+    /// hidden layer answers normally.
+    pub fn stroke_points(&self, layer: LayerId, node: NodeId) -> Result<Vec<[f32; 4]>> {
+        let mut count: usize = 0;
+        // A first call with a null buffer asks how many there are.
+        // SAFETY: every out-parameter is optional and passed as null bar the
+        // count, which the entry point fills.
+        check(
+            unsafe {
+                sys::clay_layer_stroke_points(
+                    self.as_ptr(),
+                    layer.0,
+                    node.0,
+                    std::ptr::null_mut(),
+                    &mut count,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            },
+            "clay_layer_stroke_points",
+        )?;
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut flat = vec![0.0f32; count * 4];
+        // SAFETY: `flat` is sized to the count the call above reported.
+        check(
+            unsafe {
+                sys::clay_layer_stroke_points(
+                    self.as_ptr(),
+                    layer.0,
+                    node.0,
+                    flat.as_mut_ptr(),
+                    &mut count,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            },
+            "clay_layer_stroke_points",
+        )?;
+        Ok(flat
+            .chunks_exact(4)
+            .map(|p| [p[0], p[1], p[2], p[3]])
+            .collect())
+    }
+
+    /// The layers this document holds, discovered by probing.
+    ///
+    /// The C ABI has no enumeration: a host knows the layers it created and,
+    /// after `clay_document_load`, knows nothing. So this asks `clay_layer_bounds`
+    /// for consecutive ids and keeps the ones that answer, stopping after a run
+    /// of misses long enough to clear any gap left by a removal.
+    ///
+    /// It recovers ids and nothing else. Names, visibility, representation and
+    /// stack order have no getters, so a document that comes back from disk
+    /// comes back anonymous and in creation order rather than the order it was
+    /// saved in. Filed as ClayCore #69; when enumeration lands this goes.
+    pub fn layer_ids(&self) -> Result<Vec<LayerId>> {
+        // Ids are handed out from 1 and monotonically, so a gap means a
+        // removal rather than the end. Eight is well past the largest run of
+        // removals a session is likely to leave and still cheap.
+        const GAP: u32 = 8;
+        let mut found = Vec::new();
+        let mut misses = 0;
+        let mut candidate: sys::clay_layer_id = 1;
+        while misses < GAP {
+            let id = LayerId(candidate);
+            match self.layer_bounds(id) {
+                Ok(_) => {
+                    found.push(id);
+                    misses = 0;
+                }
+                Err(_) => misses += 1,
+            }
+            candidate += 1;
+        }
+        Ok(found)
+    }
+
     pub fn layer_protection(&self, layer: LayerId) -> Result<Protection> {
         let (mut ghost, mut locked) = (0i32, 0i32);
         // SAFETY: valid handle and two out-parameters.

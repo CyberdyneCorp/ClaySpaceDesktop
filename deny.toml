@@ -1,0 +1,81 @@
+# What may come into the build, and on what terms.
+#
+# Checked in CI by `cargo deny check`. The point is not to make dependencies
+# hard to add — it is that adding one should be a decision someone made rather
+# than something that arrived with a transitive bump.
+
+[graph]
+# Only what we actually ship. macOS and Linux are the supported platforms; the
+# specification says so and the window and dialog crates pull in a great deal
+# of Windows-only tree that would otherwise be audited for nothing.
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+]
+
+[advisories]
+# An advisory against something we ship fails the build. There are no
+# exceptions listed because there are none; when one is needed it belongs here
+# with a reason and a date, not as a global downgrade.
+yanked = "deny"
+
+# Each entry is a decision with a reason, not a way to quieten the check.
+# Both are unmaintained-crate notices rather than vulnerabilities, both arrive
+# through egui and winit rather than through anything we chose, and neither has
+# a safe upgrade at the versions those pin.
+ignore = [
+    # Reached via egui/epaint and winit's Wayland decorations. The advisory's
+    # own suggestion is to move to `skrifa`, which is egui's call to make, not
+    # ours. Revisit on the next egui bump.
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained; no upgrade at egui 0.31's pin" },
+    # A proc-macro helper, build-time only, reached transitively.
+    { id = "RUSTSEC-2024-0436", reason = "paste unmaintained; build-time only, no runtime exposure" },
+]
+
+[licenses]
+# Permissive licences only. The application is distributed as a binary with an
+# attribution manifest, and a copyleft dependency would change what that
+# distribution means — a decision to take deliberately rather than discover.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "MPL-2.0",
+    "CC0-1.0",
+    "Unlicense",
+    "BSL-1.0",
+    # Fonts. egui ships default faces under these, and both are satisfied by
+    # redistributing the licence text — which is what the attribution manifest
+    # (task 10.13) is for. Neither reaches our own code.
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+# Two versions of the same crate is usually a bump someone half-finished. It is
+# a warning rather than an error because the graphics stack routinely carries
+# transitional duplicates that are not ours to resolve.
+multiple-versions = "warn"
+wildcards = "deny"
+# Our own crates depend on each other by path with no version, which is a
+# wildcard by cargo-deny's reading and exactly what a workspace should do. It
+# only permits this for crates marked `publish = false`, which ours are: this
+# is an application, not a set of libraries anyone should depend on. The ban
+# stays in force for third-party wildcards, which are the ones that make a
+# build unreproducible.
+allow-wildcard-paths = true
+# Nothing is banned outright yet. When something is, the reason goes here.
+deny = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -118,6 +118,52 @@ pub struct Mesh {
 // mutates it through no other handle.
 unsafe impl Send for Mesh {}
 
+/// What an importer is allowed to decode.
+///
+/// Checked against the file's *declared* counts before anything is allocated,
+/// which is the point: a malformed or hostile file can claim a billion
+/// triangles, and the check has to happen before the allocation rather than
+/// after it. Zero means the library's own default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ImportBudget {
+    pub max_vertices: u64,
+    pub max_triangles: u64,
+}
+
+impl ImportBudget {
+    fn to_raw(self) -> sys::clay_import_budget {
+        let mut raw = sys::clay_import_budget::sized();
+        raw.max_vertices = self.max_vertices;
+        raw.max_triangles = self.max_triangles;
+        raw
+    }
+}
+
+/// How a mesh is attached to a document as a layer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeshLayerDesc {
+    pub name: String,
+    /// This layer's own ceiling, which is a different question from what a
+    /// file may decode into. Zero means the library's default.
+    pub max_vertices: u64,
+    pub max_triangles: u64,
+    /// Uniform scale baked into the stored vertices, so a unit conversion is
+    /// resolved once at import rather than approximated by a layer transform.
+    /// Non-uniform scale is not expressible and is not approximated.
+    pub import_scale: f32,
+}
+
+impl MeshLayerDesc {
+    pub fn named(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            max_vertices: 0,
+            max_triangles: 0,
+            import_scale: 1.0,
+        }
+    }
+}
+
 impl Mesh {
     pub(crate) fn from_raw(raw: *mut sys::clay_mesh, operation: &'static str) -> Result<Self> {
         NonNull::new(raw)
@@ -125,10 +171,20 @@ impl Mesh {
             .ok_or_else(|| raw_failure(operation, ErrorKind::Backend))
     }
 
+    /// The raw handle, for calls that take a mesh.
+    pub(crate) fn as_ptr(&self) -> *mut sys::clay_mesh {
+        self.raw.as_ptr()
+    }
+
     /// Reads a mesh from a file. Format follows the extension.
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
+        Self::load_within(path, ImportBudget::default())
+    }
+
+    /// Reads a mesh, refusing one that declares more than `budget` allows.
+    pub fn load_within(path: impl AsRef<Path>, budget: ImportBudget) -> Result<Self> {
         let c_path = crate::cstring(path.as_ref().to_string_lossy().as_ref(), "clay_mesh_load")?;
-        let budget = sys::clay_import_budget::sized();
+        let budget = budget.to_raw();
         let mut raw = std::ptr::null_mut();
         // SAFETY: path is NUL-terminated and outlives the call; budget is a
         // versioned descriptor with struct_size set; raw is a valid
@@ -169,7 +225,12 @@ impl Mesh {
         // SAFETY: the engine returns a pointer to `vertex_count * 3` floats
         // owned by this mesh and valid until it is destroyed. `[f32; 3]` has
         // the same layout as three consecutive floats.
-        unsafe { slice_of(sys::clay_mesh_positions(self.raw.as_ptr()), self.vertex_count()) }
+        unsafe {
+            slice_of(
+                sys::clay_mesh_positions(self.raw.as_ptr()),
+                self.vertex_count(),
+            )
+        }
     }
 
     /// Vertex normals, when the mesh carries them.
@@ -286,4 +347,3 @@ unsafe fn slice_of<'a>(ptr: *const f32, count: usize) -> &'a [[f32; 3]] {
     }
     std::slice::from_raw_parts(ptr as *const [f32; 3], count)
 }
-

@@ -88,7 +88,10 @@ fn a_stroke_changes_the_document_and_bounds_its_cost() {
     );
 
     let dirty = *vm.pending_remesh().get();
-    assert!(dirty > 0, "a stroke dirtied no bricks, so nothing would be re-meshed");
+    assert!(
+        dirty > 0,
+        "a stroke dirtied no bricks, so nothing would be re-meshed"
+    );
 }
 
 #[test]
@@ -106,10 +109,7 @@ fn a_whole_stroke_undoes_as_one_entry() {
     );
 
     vm.dispatch(Command::Undo).expect("undo");
-    assert!(
-        vm.last_action().get().changed,
-        "there was a stroke to undo"
-    );
+    assert!(vm.last_action().get().changed, "there was a stroke to undo");
     assert_eq!(
         vm.history().get().depth,
         before,
@@ -124,7 +124,10 @@ fn redo_restores_what_undo_removed() {
     let depth = vm.history().get().depth;
 
     vm.dispatch(Command::Undo).expect("undo");
-    assert!(vm.history().get().can_redo, "an undone stroke must be redoable");
+    assert!(
+        vm.history().get().can_redo,
+        "an undone stroke must be redoable"
+    );
 
     vm.dispatch(Command::Redo).expect("redo");
     assert_eq!(vm.history().get().depth, depth);
@@ -153,33 +156,54 @@ fn a_mirrored_stroke_is_one_history_entry() {
 }
 
 #[test]
-fn changing_symmetry_costs_its_own_history_entry() {
-    // Worth pinning rather than assuming: a layer's mirror is document state
-    // in the engine, so toggling it is a change like any other. It is written
-    // only when it differs, so a run of strokes at one setting costs nothing
-    // extra.
+fn changing_symmetry_is_part_of_the_stroke_that_used_it() {
+    // The mirror is document state in the engine, so setting it is a change
+    // like any other and records its own entry. It is written by the first
+    // segment of the stroke that needs it, though, so from the sculptor's side
+    // it is not a separate thing they did — and one undo has to take it back
+    // along with the stroke, or the mirror silently outlives the edit.
     let mut vm = session();
 
     let before = vm.history().get().depth;
     stroke_across_the_form(&mut vm).expect("first stroke");
-    let per_stroke = vm.history().get().depth - before;
+    assert_eq!(
+        vm.history().get().depth - before,
+        1,
+        "a stroke is one action however many segments and entries it took"
+    );
 
     let before = vm.history().get().depth;
     stroke_across_the_form(&mut vm).expect("second stroke, same symmetry");
     assert_eq!(
         vm.history().get().depth - before,
-        per_stroke,
-        "an unchanged mirror was rewritten, costing a spurious entry"
+        1,
+        "an unchanged mirror was rewritten, costing a spurious action"
     );
 
+    // Now with the mirror changed, which the stroke writes as an extra engine
+    // entry inside its first segment.
+    vm.dispatch(Command::ToggleSymmetry(Axis::Z))
+        .expect("symmetry");
     let before = vm.history().get().depth;
-    vm.dispatch(Command::ToggleSymmetry(Axis::X)).expect("toggle");
-    stroke_across_the_form(&mut vm).expect("stroke after toggling");
+    stroke_across_the_form(&mut vm).expect("mirrored stroke");
     assert_eq!(
         vm.history().get().depth - before,
-        per_stroke + 1,
-        "changing the mirror should cost exactly one entry beyond the stroke"
+        1,
+        "changing the mirror must not cost the sculptor a second undo"
     );
+
+    // And one undo takes the whole thing back, mirror write included. If the
+    // count were short, an entry would stay behind and the next undo would
+    // remove part of the *previous* stroke instead.
+    let bounds = vm.bounds().expect("bounds");
+    vm.dispatch(Command::Undo).expect("undo");
+    vm.dispatch(Command::Undo).expect("undo");
+    vm.dispatch(Command::Undo).expect("undo");
+    assert!(
+        !vm.history().get().can_undo,
+        "three strokes took more than three undos to remove"
+    );
+    let _ = bounds;
 }
 
 #[test]
@@ -254,7 +278,8 @@ fn a_stroke_over_empty_space_is_not_an_error() {
                 pressure: 1.0,
             }
         };
-        vm.dispatch(command).expect("a stroke in empty space is legal");
+        vm.dispatch(command)
+            .expect("a stroke in empty space is legal");
     }
     vm.dispatch(Command::EndStroke)
         .expect("ending it is legal too");
@@ -342,7 +367,8 @@ fn brush_shaping_reaches_the_engine_without_error() {
     for falloff in clayspace_model::Falloff::ALL {
         for accumulate in [true, false] {
             let mut vm = session();
-            vm.dispatch(Command::SetBrushIntensity(0.9)).expect("intensity");
+            vm.dispatch(Command::SetBrushIntensity(0.9))
+                .expect("intensity");
             vm.dispatch(Command::SetBrushFlow(0.95)).expect("flow");
             let _ = (falloff, accumulate);
             stroke_across_the_form(&mut vm).expect("stroke with shaping applied");
@@ -369,7 +395,10 @@ mod scene {
     fn a_fresh_document_reports_one_layer() {
         let scene = document().scene();
         assert_eq!(scene.layers.len(), 1);
-        assert!(scene.active.is_some(), "something must be active to sculpt on");
+        assert!(
+            scene.active.is_some(),
+            "something must be active to sculpt on"
+        );
         assert_eq!(scene.nodes.len(), 1, "the tree must mirror what is there");
     }
 
@@ -479,9 +508,7 @@ mod scene {
     #[test]
     fn removing_a_layer_leaves_a_valid_active_one() {
         let mut doc = document();
-        let added = doc
-            .add_layer("Detalhe", Representation::Sdf)
-            .expect("add");
+        let added = doc.add_layer("Detalhe", Representation::Sdf).expect("add");
         doc.remove_layer(added).expect("remove");
 
         let scene = doc.scene();
@@ -544,7 +571,7 @@ mod scene {
 
     #[test]
     fn a_layer_reports_what_its_field_costs() {
-        let mut doc = document();
+        let doc = document();
         let key = doc.scene().active.expect("active");
 
         let cost = doc.layer_cost(key).expect("field report");
@@ -566,7 +593,10 @@ mod scene {
         let before = doc.layer_cost(key).expect("cost");
         let after = doc.layer_cost(key).expect("cost again");
         assert!(!before.consolidated && !after.consolidated);
-        assert_eq!(before.items, after.items, "asking the cost changed the layer");
+        assert_eq!(
+            before.items, after.items,
+            "asking the cost changed the layer"
+        );
 
         doc.consolidate_layer(key).expect("consolidate");
         let collapsed = doc.layer_cost(key).expect("cost after");

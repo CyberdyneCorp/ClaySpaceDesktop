@@ -55,15 +55,11 @@ impl SceneViewModel {
     pub fn dispatch(&mut self, command: &Command) -> Result<(), ModelError> {
         let outcome = match command {
             Command::SelectLayer(key) => self.model.set_active_layer(*key),
-            Command::SetLayerVisible(key, visible) => {
-                self.model.set_layer_visible(*key, *visible)
-            }
+            Command::SetLayerVisible(key, visible) => self.model.set_layer_visible(*key, *visible),
             Command::AddLayer => {
                 self.created += 1;
                 let name = format!("Camada {}", self.created + 1);
-                self.model
-                    .add_layer(&name, Representation::Sdf)
-                    .map(|_| ())
+                self.model.add_layer(&name, Representation::Sdf).map(|_| ())
             }
             Command::RemoveLayer(key) => self.model.remove_layer(*key),
             // Not this ViewModel's business.

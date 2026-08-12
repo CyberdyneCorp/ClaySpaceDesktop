@@ -26,11 +26,17 @@ fn main() {
         Ok(found) => {
             println!(
                 "registered       : {}",
-                found.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
+                found
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
             );
             for backend in &compiled {
                 if !found.contains(backend) {
-                    println!("  note: {backend} was compiled in but did not register on this machine");
+                    println!(
+                        "  note: {backend} was compiled in but did not register on this machine"
+                    );
                 }
             }
         }

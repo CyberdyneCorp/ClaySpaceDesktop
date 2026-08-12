@@ -183,14 +183,7 @@ impl Document {
         // borrowed for the mutation.
         check(
             unsafe {
-                sys::clay_layer_consolidate(
-                    self.as_ptr(),
-                    layer.0,
-                    &raw_params,
-                    min,
-                    max,
-                    &mut raw,
-                )
+                sys::clay_layer_consolidate(self.as_ptr(), layer.0, &raw_params, min, max, &mut raw)
             },
             "clay_layer_consolidate",
         )?;
@@ -198,10 +191,7 @@ impl Document {
     }
 
     /// Whether a layer is already consolidated, and what it cost.
-    pub fn consolidation_state(
-        &self,
-        layer: LayerId,
-    ) -> Result<Option<ConsolidationCost>> {
+    pub fn consolidation_state(&self, layer: LayerId) -> Result<Option<ConsolidationCost>> {
         let mut consolidated = 0i32;
         let mut raw = sys::clay_consolidation_cost::sized();
         // SAFETY: valid handle, a flag and a sized descriptor.

@@ -6,6 +6,8 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+# Not published: this is an application, and its crates are its internals.
+publish = false
 
 [dependencies]
 clayspace-model = { path = "../clayspace-model" }

@@ -79,7 +79,12 @@ impl MatCap {
                     // rim value rather than a background colour that would
                     // show as a hard edge on a silhouette.
                     let edge = (base[0] * 0.18, base[1] * 0.18, base[2] * 0.18);
-                    pixels.extend_from_slice(&[to_srgb8(edge.0), to_srgb8(edge.1), to_srgb8(edge.2), 255]);
+                    pixels.extend_from_slice(&[
+                        to_srgb8(edge.0),
+                        to_srgb8(edge.1),
+                        to_srgb8(edge.2),
+                        255,
+                    ]);
                     continue;
                 }
 
@@ -187,7 +192,8 @@ mod tests {
         for (i, a) in images.iter().enumerate() {
             for (j, b) in images.iter().enumerate().skip(i + 1) {
                 assert_ne!(
-                    a, b,
+                    a,
+                    b,
                     "{:?} and {:?} generate identical images",
                     MatCap::ALL[i],
                     MatCap::ALL[j]

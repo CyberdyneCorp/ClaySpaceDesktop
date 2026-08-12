@@ -65,11 +65,14 @@ impl std::fmt::Display for Backend {
 /// The CPU backend is compiled in unconditionally by the engine, so this never
 /// returns an empty list on a working build.
 pub fn backends() -> Result<Vec<Backend>> {
-    let list = size_query_string("clay_list_backends", |buffer: *mut c_char, size: *mut usize| {
-        // SAFETY: the size-query helper passes either a null buffer with a
-        // valid size out-parameter, or a buffer of at least `*size` bytes.
-        unsafe { sys::clay_list_backends(buffer, size) }
-    })?;
+    let list = size_query_string(
+        "clay_list_backends",
+        |buffer: *mut c_char, size: *mut usize| {
+            // SAFETY: the size-query helper passes either a null buffer with a
+            // valid size out-parameter, or a buffer of at least `*size` bytes.
+            unsafe { sys::clay_list_backends(buffer, size) }
+        },
+    )?;
 
     Ok(list
         .split(',')

@@ -167,13 +167,19 @@ impl MaskField {
     /// Inverts every cell.
     pub fn invert(&mut self) -> Result<()> {
         // SAFETY: valid handle.
-        check(unsafe { sys::clay_mask_invert(self.as_ptr()) }, "clay_mask_invert")
+        check(
+            unsafe { sys::clay_mask_invert(self.as_ptr()) },
+            "clay_mask_invert",
+        )
     }
 
     /// Unmasks everything.
     pub fn clear(&mut self) -> Result<()> {
         // SAFETY: valid handle.
-        check(unsafe { sys::clay_mask_clear(self.as_ptr()) }, "clay_mask_clear")
+        check(
+            unsafe { sys::clay_mask_clear(self.as_ptr()) },
+            "clay_mask_clear",
+        )
     }
 
     /// Grows the masked region by whole cells.

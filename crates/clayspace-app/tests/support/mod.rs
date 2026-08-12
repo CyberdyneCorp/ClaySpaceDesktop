@@ -38,11 +38,7 @@ pub fn save(image: &Image, name: &str) -> PathBuf {
 fn write_png(path: &Path, image: &Image) {
     let file = std::fs::File::create(path)
         .unwrap_or_else(|e| panic!("could not create {}: {e}", path.display()));
-    let mut encoder = png::Encoder::new(
-        std::io::BufWriter::new(file),
-        image.width,
-        image.height,
-    );
+    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), image.width, image.height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
     encoder
@@ -123,13 +119,9 @@ impl Harness {
         // colour, so the literal in the renderer is not what lands in the
         // buffer.
         let empty = GpuMesh::new(&self.gpu);
-        let image = self.target.capture(
-            &self.gpu,
-            &self.renderer,
-            &Camera::default(),
-            &empty,
-            false,
-        );
+        let image =
+            self.target
+                .capture(&self.gpu, &self.renderer, &Camera::default(), &empty, false);
         image.pixel(0, 0)
     }
 }
@@ -215,4 +207,15 @@ pub fn mesh_document(doc: &Document, resolution: i32) -> Mesh {
         ..Default::default()
     })
     .expect("mesh the document")
+}
+
+/// Uploads an engine mesh straight to the GPU, with no per-key splitting.
+///
+/// The control for `visual_incremental`: whatever `SurfaceGeometry` does to
+/// the same triangles has to end up looking like this.
+pub fn upload_engine_mesh(gpu: &Gpu, mesh: &Mesh) -> GpuMesh {
+    let mut gpu_mesh = GpuMesh::new(gpu);
+    let (vertices, indices) = to_vertices(mesh);
+    gpu_mesh.upload(gpu, &vertices, &indices);
+    gpu_mesh
 }

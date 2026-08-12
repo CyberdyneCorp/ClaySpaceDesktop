@@ -56,6 +56,7 @@ pub struct Strings {
     pub menu_brushes: &'static str,
     pub menu_dynamics: &'static str,
     pub menu_masks: &'static str,
+    pub action_extrude: &'static str,
     pub menu_window: &'static str,
     pub menu_help: &'static str,
 
@@ -67,6 +68,8 @@ pub struct Strings {
     pub section_geometry: &'static str,
     pub section_resolution: &'static str,
     pub section_brush_controls: &'static str,
+    pub section_armature: &'static str,
+    pub section_diagnostics: &'static str,
 
     // Labels
     pub label_intensity: &'static str,
@@ -88,11 +91,41 @@ pub struct Strings {
     pub label_units: &'static str,
     pub label_backend: &'static str,
     pub label_new_layer: &'static str,
+    pub label_spheres: &'static str,
+    pub label_skin: &'static str,
+    pub label_mirror_new: &'static str,
 
     // Actions and states
     pub action_undo: &'static str,
     pub action_redo: &'static str,
     pub action_frame_all: &'static str,
+    pub action_new: &'static str,
+    pub action_open: &'static str,
+    pub action_open_recent: &'static str,
+    pub action_save: &'static str,
+    pub action_save_as: &'static str,
+    pub action_import: &'static str,
+    pub action_export: &'static str,
+    pub action_choose_file: &'static str,
+    pub label_import_as: &'static str,
+    pub label_scale: &'static str,
+    pub label_mesher: &'static str,
+    pub label_export_resolution: &'static str,
+    pub label_decimate: &'static str,
+    pub label_keep: &'static str,
+    pub section_warnings: &'static str,
+    pub action_quit: &'static str,
+    pub state_no_recent: &'static str,
+    pub action_diagnostics: &'static str,
+    pub action_attribution: &'static str,
+    pub action_copy: &'static str,
+    pub state_copied: &'static str,
+    pub action_armature_new: &'static str,
+    pub action_armature_edit: &'static str,
+    pub action_armature_remove: &'static str,
+    /// What the pointer does while rigging, said once where it is needed.
+    pub hint_armature: &'static str,
+    pub hint_units: &'static str,
     pub state_unsaved: &'static str,
     pub state_nothing_changed: &'static str,
 }
@@ -106,6 +139,7 @@ const PT_BR: Strings = Strings {
     menu_brushes: "Pincéis",
     menu_dynamics: "Dinâmica",
     menu_masks: "Máscaras",
+    action_extrude: "Extrudar",
     menu_window: "Janela",
     menu_help: "Ajuda",
 
@@ -116,6 +150,8 @@ const PT_BR: Strings = Strings {
     section_geometry: "GEOMETRIA",
     section_resolution: "RESOLUÇÃO",
     section_brush_controls: "CONTROLES DE PINCEL",
+    section_armature: "ARMADURA",
+    section_diagnostics: "DIAGNÓSTICO",
 
     label_intensity: "Intensidade",
     label_size: "Tamanho",
@@ -136,10 +172,39 @@ const PT_BR: Strings = Strings {
     label_units: "Unidades",
     label_backend: "Aceleração",
     label_new_layer: "Nova camada",
+    label_spheres: "Esferas",
+    label_skin: "Pele",
+    label_mirror_new: "Espelhar novas",
 
     action_undo: "Desfazer",
     action_redo: "Refazer",
     action_frame_all: "Enquadrar tudo",
+    action_new: "Novo",
+    action_open: "Abrir…",
+    action_open_recent: "Abrir recente",
+    action_save: "Salvar",
+    action_save_as: "Salvar como…",
+    action_import: "Importar malha…",
+    action_export: "Exportar malha…",
+    action_choose_file: "Escolher arquivo…",
+    label_import_as: "Trazer como",
+    label_scale: "Escala",
+    label_mesher: "Malhador",
+    label_export_resolution: "Célula",
+    label_decimate: "Reduzir triângulos",
+    label_keep: "Manter",
+    section_warnings: "AVISOS",
+    action_quit: "Sair",
+    state_no_recent: "nenhum documento recente",
+    action_diagnostics: "Diagnóstico",
+    action_attribution: "Atribuições",
+    action_copy: "Copiar relatório",
+    state_copied: "copiado",
+    action_armature_new: "Nova armadura",
+    action_armature_edit: "Editar armadura",
+    action_armature_remove: "Remover esfera",
+    hint_armature: "Arraste de uma esfera para criar a seguinte · Alt arrasta · ⌘ redimensiona",
+    hint_units: "Toque para trocar a unidade. Só muda a leitura; nada é redimensionado.",
     state_unsaved: "não salvo",
     state_nothing_changed: "nada mudou",
 };
@@ -153,6 +218,7 @@ const EN_US: Strings = Strings {
     menu_brushes: "Brushes",
     menu_dynamics: "Dynamics",
     menu_masks: "Masks",
+    action_extrude: "Extrude",
     menu_window: "Window",
     menu_help: "Help",
 
@@ -163,6 +229,8 @@ const EN_US: Strings = Strings {
     section_geometry: "GEOMETRY",
     section_resolution: "RESOLUTION",
     section_brush_controls: "BRUSH CONTROLS",
+    section_armature: "ARMATURE",
+    section_diagnostics: "DIAGNOSTICS",
 
     label_intensity: "Intensity",
     label_size: "Size",
@@ -183,10 +251,39 @@ const EN_US: Strings = Strings {
     label_units: "Units",
     label_backend: "Acceleration",
     label_new_layer: "New layer",
+    label_spheres: "Spheres",
+    label_skin: "Skin",
+    label_mirror_new: "Mirror new",
 
     action_undo: "Undo",
     action_redo: "Redo",
     action_frame_all: "Frame all",
+    action_new: "New",
+    action_open: "Open…",
+    action_open_recent: "Open recent",
+    action_save: "Save",
+    action_save_as: "Save as…",
+    action_import: "Import mesh…",
+    action_export: "Export mesh…",
+    action_choose_file: "Choose file…",
+    label_import_as: "Bring in as",
+    label_scale: "Scale",
+    label_mesher: "Mesher",
+    label_export_resolution: "Cell",
+    label_decimate: "Reduce triangles",
+    label_keep: "Keep",
+    section_warnings: "WARNINGS",
+    action_quit: "Quit",
+    state_no_recent: "no recent documents",
+    action_diagnostics: "Diagnostics",
+    action_attribution: "Attributions",
+    action_copy: "Copy report",
+    state_copied: "copied",
+    action_armature_new: "New armature",
+    action_armature_edit: "Edit armature",
+    action_armature_remove: "Remove sphere",
+    hint_armature: "Drag out of a sphere to grow the next · Alt moves · ⌘ resizes",
+    hint_units: "Click to change the unit. It changes the reading only; nothing is rescaled.",
     state_unsaved: "unsaved",
     state_nothing_changed: "nothing changed",
 };
@@ -200,7 +297,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 43] {
+    pub fn all(&self) -> [&'static str; 71] {
         [
             self.menu_file,
             self.menu_edit,
@@ -218,6 +315,8 @@ impl Strings {
             self.section_geometry,
             self.section_resolution,
             self.section_brush_controls,
+            self.section_armature,
+            self.section_diagnostics,
             self.label_intensity,
             self.label_size,
             self.label_flow,
@@ -237,16 +336,40 @@ impl Strings {
             self.label_units,
             self.label_backend,
             self.label_new_layer,
+            self.label_spheres,
+            self.label_skin,
+            self.label_mirror_new,
             self.action_undo,
             self.action_redo,
             self.action_frame_all,
+            self.action_new,
+            self.action_open,
+            self.action_open_recent,
+            self.action_save,
+            self.action_save_as,
+            self.action_import,
+            self.action_export,
+            self.action_choose_file,
+            self.label_import_as,
+            self.label_scale,
+            self.label_mesher,
+            self.label_export_resolution,
+            self.label_decimate,
+            self.label_keep,
+            self.section_warnings,
+            self.action_quit,
+            self.state_no_recent,
+            self.action_diagnostics,
+            self.action_attribution,
+            self.action_copy,
+            self.state_copied,
+            self.action_armature_new,
+            self.action_armature_edit,
+            self.action_armature_remove,
+            self.hint_armature,
+            self.hint_units,
             self.state_unsaved,
             self.state_nothing_changed,
-            // Padding to a fixed size so adding a field is a compile error
-            // here rather than a silently untested string.
-            self.menu_file,
-            self.menu_edit,
-            self.menu_view,
         ]
     }
 }
@@ -260,11 +383,7 @@ mod tests {
         for locale in Locale::ALL {
             let strings = Strings::for_locale(locale);
             for value in strings.all() {
-                assert!(
-                    !value.is_empty(),
-                    "{} has an empty string",
-                    locale.label()
-                );
+                assert!(!value.is_empty(), "{} has an empty string", locale.label());
             }
         }
     }
@@ -293,7 +412,11 @@ mod tests {
         assert_eq!(Locale::from_tag(""), Locale::default());
         assert_eq!(Locale::from_tag("pt-BR"), Locale::PtBr);
         assert_eq!(Locale::from_tag("en-GB"), Locale::EnUs);
-        assert_eq!(Locale::from_tag("EN-US"), Locale::EnUs, "tags are not case sensitive");
+        assert_eq!(
+            Locale::from_tag("EN-US"),
+            Locale::EnUs,
+            "tags are not case sensitive"
+        );
     }
 
     #[test]

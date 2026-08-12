@@ -308,7 +308,9 @@ mod tests {
     #[test]
     fn a_failing_job_reports_why() {
         let mut runner = JobRunner::new();
-        runner.start("export", |_| Err::<(), _>("the file could not be written".into()));
+        runner.start("export", |_| {
+            Err::<(), _>("the file could not be written".into())
+        });
         match drain(&mut runner) {
             Completion::Failed(why) => assert!(why.contains("file")),
             other => panic!("expected a failure, got {other:?}"),

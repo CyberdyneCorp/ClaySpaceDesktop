@@ -22,16 +22,15 @@ use support::Harness;
 
 /// A scene with enough in it to fill the panels.
 fn scene() -> Scene {
-    let layer = |id: u64, name: &str, intensity: u8, visible: bool, protection: Protection| {
-        LayerSummary {
+    let layer =
+        |id: u64, name: &str, intensity: u8, visible: bool, protection: Protection| LayerSummary {
             key: LayerKey(id),
             name: name.to_string(),
             representation: Representation::Sdf,
             visible,
             protection,
             intensity,
-        }
-    };
+        };
     Scene {
         nodes: vec![
             SceneNode {
@@ -73,16 +72,79 @@ fn scene() -> Scene {
         layers: vec![
             layer(10, "Base", 100, true, Protection::default()),
             layer(11, "Forma_principal", 100, true, Protection::default()),
-            layer(12, "Poros", 70, true, Protection { ghost: false, locked: true }),
-            layer(13, "Detalhes_secundarios", 100, false, Protection::default()),
+            layer(
+                12,
+                "Poros",
+                70,
+                true,
+                Protection {
+                    ghost: false,
+                    locked: true,
+                },
+            ),
+            layer(
+                13,
+                "Detalhes_secundarios",
+                100,
+                false,
+                Protection::default(),
+            ),
         ],
         active: Some(LayerKey(11)),
         selected: Some(LayerKey(1)),
     }
 }
 
-fn state<'a>(strings: &'a Strings, scene: &'a Scene, materials: &'a [&'a str]) -> ShellState<'a> {
+/// Documents the file menu offers to reopen.
+static RECENT: &[std::path::PathBuf] = &[];
+
+/// What the export panel would warn about.
+static WARNINGS: &[clayspace_model::ExportWarning] = &[];
+
+/// The report the diagnostics window shows, with a fallback in it so the
+/// interesting branch is the one captured.
+fn diagnostics() -> clayspace_model::Diagnostics {
+    clayspace_model::Diagnostics {
+        app_version: "ClaySpaceDesktop 0.1.0".into(),
+        engine_version: "claycore 0.27.3".into(),
+        engine_revision: "v0.27.3-0-g804fc9d".into(),
+        platform: "macos aarch64".into(),
+        backends: vec!["cpu".into(), "metal".into()],
+        active_backend: "metal".into(),
+        selection: "escolha automática".into(),
+        fallbacks: vec![clayspace_model::Fallback {
+            operation: "raycast".into(),
+            declined_by: "metal".into(),
+        }],
+        renderer: Some("Apple M3 Max — Metal".into()),
+        stalls: vec!["consolidar 6400 ms".into(), "re-malha 45 ms (×12)".into()],
+    }
+}
+
+fn state<'a>(
+    strings: &'a Strings,
+    scene: &'a Scene,
+    materials: &'a [&'a str],
+    diagnostics: &'a clayspace_model::Diagnostics,
+) -> ShellState<'a> {
     ShellState {
+        // A mask with something in it, so the menu's enabled state is what the
+        // capture shows rather than a row of grey.
+        mask: clayspace_model::MaskState {
+            present: true,
+            painted_cells: 4096,
+        },
+        extrude: clayspace_model::ExtrudeSettings::default(),
+        // A rig, mid-edit, so the capture shows the armature section and the
+        // menu entries that depend on it rather than a row of grey.
+        armature: clayspace_view::ArmatureState {
+            exists: true,
+            editing: true,
+            selection: true,
+            spheres: 12,
+            mirror: true,
+            skin: 1.0,
+        },
         strings,
         document_name: "Cabeça_Estudo_v03",
         modified: true,
@@ -104,8 +166,19 @@ fn state<'a>(strings: &'a Strings, scene: &'a Scene, materials: &'a [&'a str]) -
         can_redo: false,
         memory: (1_331_439_861, 4 * 1024 * 1024 * 1024),
         backend: "metal",
-        units: "mm",
+        units: clayspace_model::Units::default(),
         last_action: Some(("Padrão", true)),
+        recent: RECENT,
+        show_import: false,
+        show_export: false,
+        import: clayspace_model::ImportSettings::default(),
+        export: clayspace_model::ExportSettings::default(),
+        export_warnings: WARNINGS,
+        diagnostics,
+        show_diagnostics: false,
+        diagnostics_copied: false,
+        attribution: "# Attribution\n\n| ab_glyph | 0.2.32 | Apache-2.0 |\n",
+        show_attribution: false,
     }
 }
 
@@ -124,7 +197,7 @@ fn capture_shell(harness: &Harness, state: &ShellState<'_>, name: &str) -> clays
     shell::apply_theme(&ctx);
 
     let mut queue = CommandQueue::new();
-    let raw_input = egui::RawInput {
+    let raw_input = || egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(
             egui::Pos2::ZERO,
             egui::vec2(SHELL_WIDTH as f32, SHELL_HEIGHT as f32),
@@ -132,7 +205,7 @@ fn capture_shell(harness: &Harness, state: &ShellState<'_>, name: &str) -> clays
         ..Default::default()
     };
 
-    let output = ctx.run(raw_input, |ctx| {
+    let mut build = |ctx: &egui::Context| {
         egui::TopBottomPanel::top("menu")
             .exact_height(region::MENU_BAR)
             .show(ctx, |ui| shell::menu_bar(ui, state, &mut queue));
@@ -141,7 +214,7 @@ fn capture_shell(harness: &Harness, state: &ShellState<'_>, name: &str) -> clays
             .show(ctx, |ui| shell::options_bar(ui, state, &mut queue));
         egui::TopBottomPanel::bottom("status")
             .exact_height(region::STATUS)
-            .show(ctx, |ui| shell::status_bar(ui, state));
+            .show(ctx, |ui| shell::status_bar(ui, state, &mut queue));
         egui::TopBottomPanel::bottom("shelf")
             .exact_height(region::SHELF)
             .show(ctx, |ui| {
@@ -167,7 +240,19 @@ fn capture_shell(harness: &Harness, state: &ShellState<'_>, name: &str) -> clays
                     shell::viewport_bar(ui, state, &mut queue);
                 });
             });
-    });
+        shell::diagnostics_window(ctx, state, &mut queue);
+        shell::attribution_window(ctx, state, &mut queue);
+        shell::import_window(ctx, state, &mut queue);
+        shell::export_window(ctx, state, &mut queue);
+    };
+
+    // Two passes, not one. An auto-sized `egui::Area` — which is what a window
+    // is — spends its first frame measuring and paints nothing, so a
+    // single-pass capture of the diagnostics window came back byte-identical
+    // to one with the window closed. The panels do not need this; the window
+    // does, and one capture path is better than two.
+    let first = ctx.run(raw_input(), &mut build);
+    let output = ctx.run(raw_input(), &mut build);
 
     // The interface must not have mutated anything to draw itself; commands
     // are the only channel out, and nothing was clicked.
@@ -178,7 +263,9 @@ fn capture_shell(harness: &Harness, state: &ShellState<'_>, name: &str) -> clays
     );
 
     let target = OffscreenTarget::new(&harness.gpu, SHELL_WIDTH, SHELL_HEIGHT);
-    let image = render_egui(harness, &ctx, output, &target);
+    // The font atlas arrives in the first pass's deltas, so both are applied
+    // and only the second is tessellated.
+    let image = render_egui(harness, &ctx, [first, output], &target);
     support::save(&image, name);
     image
 }
@@ -187,34 +274,32 @@ fn capture_shell(harness: &Harness, state: &ShellState<'_>, name: &str) -> clays
 fn render_egui(
     harness: &Harness,
     ctx: &egui::Context,
-    output: egui::FullOutput,
+    passes: [egui::FullOutput; 2],
     target: &OffscreenTarget,
 ) -> clayspace_view::Image {
-    let mut renderer = egui_wgpu::Renderer::new(
-        &harness.gpu.device,
-        OffscreenTarget::FORMAT,
-        None,
-        1,
-        false,
-    );
+    let mut renderer =
+        egui_wgpu::Renderer::new(&harness.gpu.device, OffscreenTarget::FORMAT, None, 1, false);
 
     let pixels_per_point = ctx.pixels_per_point();
-    let primitives = ctx.tessellate(output.shapes, pixels_per_point);
-    for (id, delta) in &output.textures_delta.set {
-        renderer.update_texture(&harness.gpu.device, &harness.gpu.queue, *id, delta);
+    let [first, output] = passes;
+    // Every pass's textures, only the last pass's shapes.
+    for pass in [&first, &output] {
+        for (id, delta) in &pass.textures_delta.set {
+            renderer.update_texture(&harness.gpu.device, &harness.gpu.queue, *id, delta);
+        }
     }
+    let primitives = ctx.tessellate(output.shapes, pixels_per_point);
 
     let descriptor = egui_wgpu::ScreenDescriptor {
         size_in_pixels: [target.width(), target.height()],
         pixels_per_point,
     };
-    let mut encoder =
-        harness
-            .gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("egui"),
-            });
+    let mut encoder = harness
+        .gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("egui"),
+        });
     renderer.update_buffers(
         &harness.gpu.device,
         &harness.gpu.queue,
@@ -258,7 +343,8 @@ fn the_shell_draws_every_region() {
     let strings = Strings::for_locale(Locale::PtBr);
     let scene = scene();
     let materials = ["MatCap Cinza 01", "MatCap Cinza 02", "Gesso"];
-    let state = state(strings, &scene, &materials);
+    let report = diagnostics();
+    let state = state(strings, &scene, &materials, &report);
 
     let image = capture_shell(&harness, &state, "60-shell-pt-br");
 
@@ -296,7 +382,8 @@ fn the_interface_is_readable_where_it_is_quiet() {
     let strings = Strings::for_locale(Locale::PtBr);
     let scene = scene();
     let materials = ["MatCap Cinza 01"];
-    let state = state(strings, &scene, &materials);
+    let report = diagnostics();
+    let state = state(strings, &scene, &materials, &report);
     let image = capture_shell(&harness, &state, "61-shell-contrast");
 
     // Panels must be distinguishable from the viewport ground.
@@ -322,7 +409,8 @@ fn the_shell_renders_in_every_locale() {
     let mut captured = Vec::new();
     for locale in Locale::ALL {
         let strings = Strings::for_locale(locale);
-        let state = state(strings, &scene, &materials);
+        let report = diagnostics();
+        let state = state(strings, &scene, &materials, &report);
         let name = format!("62-shell-{:?}", locale).to_lowercase();
         captured.push((locale, capture_shell(&harness, &state, &name)));
     }
@@ -345,11 +433,13 @@ fn the_active_tool_is_the_only_thing_wearing_the_accent() {
     let scene = scene();
     let materials = ["MatCap Cinza 01"];
 
-    let mut first = state(strings, &scene, &materials);
+    let report = diagnostics();
+    let mut first = state(strings, &scene, &materials, &report);
     first.tool = ToolKind::Padrao;
     let a = capture_shell(&harness, &first, "63-accent-padrao");
 
-    let mut second = state(strings, &scene, &materials);
+    let report = diagnostics();
+    let mut second = state(strings, &scene, &materials, &report);
     second.tool = ToolKind::Suavizar;
     let b = capture_shell(&harness, &second, "63-accent-suavizar");
 
@@ -397,4 +487,109 @@ fn the_active_tool_is_the_only_thing_wearing_the_accent() {
         moved > 200,
         "changing the active tool moved only {moved} pixels in the brush shelf"
     );
+}
+
+#[test]
+fn the_diagnostics_window_carries_what_an_issue_needs() {
+    // Captured because this is the one panel whose job is to be *read* by
+    // someone who is already having a bad day. If the revision wraps or the
+    // fallback line runs off the edge, an assertion will not notice.
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let mut open = state(strings, &scene, &materials, &report);
+    open.show_diagnostics = true;
+    let shown = capture_shell(&harness, &open, "64-diagnostics");
+
+    let closed = state(strings, &scene, &materials, &report);
+    let hidden = capture_shell(&harness, &closed, "64-diagnostics-closed");
+
+    let changed = (0..shown.height)
+        .flat_map(|y| (0..shown.width).map(move |x| (x, y)))
+        .filter(|(x, y)| {
+            let (a, b) = (hidden.pixel(*x, *y), shown.pixel(*x, *y));
+            (0..3).map(|c| a[c].abs_diff(b[c])).max().unwrap_or(0) > 8
+        })
+        .count();
+    assert!(
+        changed > 5_000,
+        "the window drew almost nothing: {changed} pixels"
+    );
+
+    // And the report behind it is the thing that gets pasted.
+    let text = report.to_report();
+    assert!(
+        text.contains("g804fc9d"),
+        "the revision is missing:\n{text}"
+    );
+    assert!(
+        text.contains("metal declined raycast"),
+        "the fallback is missing:\n{text}"
+    );
+}
+
+#[test]
+fn the_export_panel_says_what_will_not_survive_the_write() {
+    // Captured because the warnings are the point of the panel: if they run
+    // off the edge or read as decoration, no assertion will notice.
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let settings = clayspace_model::ExportSettings {
+        mesher: clayspace_model::ExportMesher::Fast,
+        decimate_to: Some(0.4),
+        ..Default::default()
+    };
+    let warnings =
+        clayspace_model::ExportWarning::for_export(clayspace_model::Format::Ply, settings, true);
+    assert_eq!(warnings.len(), 3, "{warnings:?}");
+
+    let mut open = state(strings, &scene, &materials, &report);
+    open.show_export = true;
+    open.export = settings;
+    open.export_warnings = &warnings;
+    let shown = capture_shell(&harness, &open, "65-export");
+
+    let closed = state(strings, &scene, &materials, &report);
+    let hidden = capture_shell(&harness, &closed, "65-export-closed");
+    let changed = (0..shown.height)
+        .flat_map(|y| (0..shown.width).map(move |x| (x, y)))
+        .filter(|(x, y)| {
+            let (a, b) = (hidden.pixel(*x, *y), shown.pixel(*x, *y));
+            (0..3).map(|c| a[c].abs_diff(b[c])).max().unwrap_or(0) > 8
+        })
+        .count();
+    assert!(changed > 5_000, "the panel drew almost nothing: {changed}");
+}
+
+#[test]
+fn the_import_panel_names_the_choice_that_cannot_be_undone() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let mut open = state(strings, &scene, &materials, &report);
+    open.show_import = true;
+    capture_shell(&harness, &open, "65-import");
+
+    // Reference or clay is the decision the panel exists for, and both have
+    // to say what they mean.
+    for becomes in clayspace_model::ImportAs::ALL {
+        assert!(!becomes.label().is_empty());
+        assert!(!becomes.detail().is_empty());
+    }
 }

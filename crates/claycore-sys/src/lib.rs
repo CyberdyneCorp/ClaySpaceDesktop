@@ -24,3 +24,11 @@ include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 /// to register on a machine whose driver is unavailable. Ask the engine for
 /// the runtime answer.
 pub const COMPILED_BACKENDS: &str = env!("CLAYCORE_COMPILED_BACKENDS");
+
+/// The vendored engine's git revision, stamped in at build time.
+///
+/// `"unknown (no git checkout)"` where the engine came from a tarball rather
+/// than a checkout. A version string alone does not identify an engine — two
+/// builds can both say 0.27.3 and differ by a commit — so this travels with
+/// the binary and into the diagnostics report.
+pub const CLAYCORE_REVISION: &str = env!("CLAYCORE_REVISION");

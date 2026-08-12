@@ -252,7 +252,9 @@ impl BrickCache {
     pub fn mark_dirty(&mut self, min: [f32; 3], max: [f32; 3]) -> Result<()> {
         // SAFETY: two three-float inputs as the entry point requires.
         check(
-            unsafe { sys::clay_brick_cache_mark_dirty(self.raw.as_ptr(), min.as_ptr(), max.as_ptr()) },
+            unsafe {
+                sys::clay_brick_cache_mark_dirty(self.raw.as_ptr(), min.as_ptr(), max.as_ptr())
+            },
             "clay_brick_cache_mark_dirty",
         )
     }
@@ -337,7 +339,11 @@ impl BrickCache {
         // SAFETY: the size-query form, with a null buffer.
         check(
             unsafe {
-                sys::clay_brick_cache_surface_bricks(self.raw.as_ptr(), std::ptr::null_mut(), &mut count)
+                sys::clay_brick_cache_surface_bricks(
+                    self.raw.as_ptr(),
+                    std::ptr::null_mut(),
+                    &mut count,
+                )
             },
             "clay_brick_cache_surface_bricks",
         )?;
@@ -411,6 +417,39 @@ impl BrickCache {
             states: states.into_iter().map(BrickState::from_raw).collect(),
             padded_dim,
         })
+    }
+
+    /// Builds the coarse brick covering a 2×2×2 block of full-resolution ones.
+    ///
+    /// Subsampled rather than evaluated: same lattice size, twice the spacing.
+    /// Buildable only when all eight children are evaluated *and* clean, so
+    /// `false` is an ordinary "not yet" rather than a failure. Dirtying any
+    /// child drops the mip, which is what stops one being downsampled from
+    /// stale data.
+    pub fn build_mip(&mut self, coarse_key: BrickKey) -> Result<bool> {
+        let mut built = 0;
+        // SAFETY: a three-int key and an out-parameter written by the call.
+        check(
+            unsafe {
+                sys::clay_brick_cache_build_mip(self.raw.as_ptr(), coarse_key.as_ptr(), &mut built)
+            },
+            "clay_brick_cache_build_mip",
+        )?;
+        Ok(built != 0)
+    }
+
+    /// Whether a valid mip exists for a coarse key — the cheap way to ask
+    /// before reading one.
+    pub fn current_lod(&self, coarse_key: BrickKey) -> Result<i32> {
+        let mut lod = 0;
+        // SAFETY: a three-int key and an out-parameter written by the call.
+        check(
+            unsafe {
+                sys::clay_brick_cache_current_lod(self.raw.as_ptr(), coarse_key.as_ptr(), &mut lod)
+            },
+            "clay_brick_cache_current_lod",
+        )?;
+        Ok(lod)
     }
 
     /// Meshes a subset of the cache's surface bricks.
@@ -565,7 +604,11 @@ impl BrickCache {
     }
 
     /// Casts one ray against the cached bricks.
-    pub fn raycast(&self, origin: [f32; 3], direction: [f32; 3]) -> Result<Option<crate::pick::Hit>> {
+    pub fn raycast(
+        &self,
+        origin: [f32; 3],
+        direction: [f32; 3],
+    ) -> Result<Option<crate::pick::Hit>> {
         let mut hit = 0i32;
         let mut t = 0.0f32;
         let (mut position, mut normal) = ([0.0f32; 3], [0.0f32; 3]);
@@ -603,6 +646,8 @@ impl Drop for BrickCache {
 
 impl std::fmt::Debug for BrickCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BrickCache").field("config", &self.config).finish()
+        f.debug_struct("BrickCache")
+            .field("config", &self.config)
+            .finish()
     }
 }

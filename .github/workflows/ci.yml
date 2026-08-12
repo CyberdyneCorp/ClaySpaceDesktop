@@ -1,0 +1,308 @@
+# The gate. Everything that has to hold before a change lands.
+#
+# The engine is a submodule built from source with CMake, so every job pays for
+# a C++20 build before it can compile a line of Rust. That is what the ccache
+# step is for; without it the matrix is dominated by rebuilding ClayCore four
+# times over.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # A backtrace on a CI failure costs nothing and saves a round trip.
+  RUST_BACKTRACE: 1
+
+jobs:
+  # The four configurations the specification names. CPU is always compiled
+  # into the engine, so the CPU-only rows are the ones that must pass
+  # everywhere; the accelerated rows are what the acceleration policy is for.
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      # One row failing should not hide the others: a Metal-only regression is
+      # worth seeing next to a green CPU run.
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS, CPU only
+            os: macos-14
+            features: ""
+            cpu_only: true
+          - name: macOS, Metal
+            os: macos-14
+            features: "--features clayspace-engine/metal"
+          - name: Linux, CPU only
+            os: ubuntu-24.04
+            features: ""
+            cpu_only: true
+          - name: Linux, Vulkan
+            os: ubuntu-24.04
+            features: "--features clayspace-engine/vulkan"
+            vulkan: true
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Without this the probe finds Metal on macOS and the "CPU only" row
+      # tests what the Metal row already tests.
+      - name: Ask for a CPU-only engine
+        if: matrix.cpu_only
+        run: echo "CLAYCORE_CPU_ONLY=1" >> "$GITHUB_ENV"
+
+      - name: Cache cargo and the engine build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+
+      # winit and wgpu need these to build on Linux even where no window is
+      # ever opened; rfd needs GTK for its fallback dialog.
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build \
+            libx11-dev libxkbcommon-dev libwayland-dev \
+            libgtk-3-dev
+
+      - name: Vulkan SDK
+        if: matrix.vulkan
+        run: |
+          # `libvulkan-dev` carries the headers; there is no `vulkan-headers`
+          # package on Ubuntu 24.04, which is what the first attempt tried.
+          sudo apt-get install -y --no-install-recommends \
+            libvulkan-dev glslang-tools spirv-tools
+          # The engine's build script looks for VULKAN_SDK. The distribution
+          # packages install into /usr, which is a valid SDK root for its
+          # purposes.
+          echo "VULKAN_SDK=/usr" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: cargo build --workspace --all-targets ${{ matrix.features }}
+
+      # Visual tests ask for a headless GPU and skip when there is none; the
+      # window smoke asks for a display and skips likewise. Both report the
+      # skip rather than passing quietly, so a runner that *should* have a
+      # device shows up as a skip in the log rather than a false green.
+      - name: Test
+        run: cargo test --workspace ${{ matrix.features }}
+
+      # The budgets are a property of an optimised build. Measuring them in a
+      # debug build measures the profile, so the timing assertions only run
+      # here.
+      - name: Test (release)
+        run: cargo test --workspace --release ${{ matrix.features }}
+
+  # Figures, not assertions. The gate is a *regression* against a recorded
+  # baseline — the specification asks for performance to be measured in CI
+  # rather than asserted there, and absolute budgets that hold on a developer's
+  # machine and not on a shared runner teach people to ignore the gate.
+  # Budget breaches are printed either way.
+  benchmark:
+    name: Performance
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: benchmark
+
+      - name: Measure
+        run: |
+          cargo run --release --bin bench -- \
+            --json "$RUNNER_TEMP/now.json" \
+            --baseline benchmarks/baseline-macos-aarch64.json \
+            | tee "$RUNNER_TEMP/report.txt"
+
+      # The figures outlive the run, so a regression can be looked at rather
+      # than re-measured.
+      - name: Keep the figures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/now.json
+            ${{ runner.temp }}/report.txt
+
+  lint:
+    name: Format, lint and audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: lint
+
+      - name: Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build \
+            libx11-dev libxkbcommon-dev libwayland-dev \
+            libgtk-3-dev
+
+      - name: Formatting
+        run: cargo fmt --all --check
+
+      # Warnings are errors here and nowhere else: a warning that survives a
+      # merge is a warning nobody will ever fix.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@cargo-deny
+
+      # Advisories and licences. Bans and sources are checked too, so a new
+      # dependency that duplicates an existing one, or comes from somewhere
+      # unexpected, is caught at the point it is added.
+      - name: Dependency audit
+        run: cargo deny check
+
+  layering:
+    name: Layering
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # The architecture the specification asks for, checked mechanically:
+      # the ViewModels cannot reach the engine, the view cannot reach the
+      # model, and unsafe stays in the two crates that are allowed it. This
+      # needs no build, so it is the fastest signal on a pull request.
+      - name: Check the layering rules
+        run: python3 tools/check_layering.py
+
+  # Task 8.2: the same document, authored from nothing on each platform, has to
+  # be the same file. A document is an edit list — it records what was asked
+  # for, not what any backend computed — so a difference here would mean the
+  # serializer is picking up something platform-shaped, which is the kind of
+  # defect that only shows up when someone opens a colleague's file.
+  document-bytes:
+    name: Document bytes (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      # CPU only on both, so the comparison is between platforms rather than
+      # between one platform's accelerator and another's.
+      - run: echo "CLAYCORE_CPU_ONLY=1" >> "$GITHUB_ENV"
+      - name: Install the Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libgtk-3-dev
+      - uses: Swatinem/rust-cache@v2
+      - name: Write the canonical document
+        run: cargo run -q -p clayspace-app --release --bin canonical -- canonical.clayspace
+      - name: Take its digest
+        run: |
+          if command -v sha256sum >/dev/null; then
+            sha256sum canonical.clayspace | awk '{print $1}' > digest.txt
+          else
+            shasum -a 256 canonical.clayspace | awk '{print $1}' > digest.txt
+          fi
+          cat digest.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: document-digest-${{ matrix.os }}
+          path: digest.txt
+
+  document-bytes-agree:
+    name: Documents agree across platforms
+    runs-on: ubuntu-24.04
+    needs: document-bytes
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: document-digest-*
+          path: digests
+      - name: Compare the digests
+        run: |
+          set -eu
+          found=$(find digests -name digest.txt | sort)
+          echo "$found" | while read -r file; do
+            echo "$(dirname "$file"): $(cat "$file")"
+          done
+          count=$(echo "$found" | wc -l | tr -d ' ')
+          if [ "$count" -lt 2 ]; then
+            echo "only $count platform reported a digest; nothing to compare" >&2
+            exit 1
+          fi
+          unique=$(cat $found | sort -u | wc -l | tr -d ' ')
+          if [ "$unique" -ne 1 ]; then
+            echo "the canonical document is not byte-identical across platforms" >&2
+            exit 1
+          fi
+          echo "byte-identical across $count platforms"
+
+  packaging:
+    name: Packaging
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      # The submodule, because the attribution manifest reproduces the
+      # engine's licence and reads it from `vendor/ClayCore/LICENSE`. Without
+      # it the generator falls back to naming the path, and the committed
+      # manifest — generated in a tree that has the submodule — no longer
+      # matches. Nothing here builds the engine; this is one file.
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # The attribution manifest is generated from `cargo metadata`, so the
+      # only way it goes wrong is by not being regenerated after a dependency
+      # moves. This is that check, and it needs no engine build — `cargo
+      # metadata` reads the manifests rather than compiling anything.
+      - name: Check the packaging scripts and the attribution manifest
+        run: python3 tools/test_tools.py
+
+  openspec:
+    name: OpenSpec
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install -g @fission-ai/openspec@latest
+      # Strict: the specification and the code are supposed to describe the
+      # same application, and a change that drifts from its spec is a change
+      # whose intent has been lost.
+      - name: Validate the change and the specs
+        run: openspec validate --all --strict

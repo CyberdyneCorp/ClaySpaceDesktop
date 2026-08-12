@@ -10,7 +10,9 @@
 //! along the trailing edge, and a status area.
 
 use clayspace_model::{
-    BrushSettings, Falloff, LayerSummary, Scene, SceneStats, ToolKind, ViewPresetKind,
+    BrushSettings, Diagnostics, ExportMesher, ExportSettings, ExportWarning, ExtrudeSettings,
+    ExtrudeSide, Falloff, ImportAs, ImportSettings, LayerSummary, MaskOp, MaskState,
+    RecentDocuments, Scene, SceneStats, ToolKind, Units, ViewPresetKind,
 };
 use clayspace_vm::{Axis, Command, CommandQueue};
 
@@ -23,7 +25,49 @@ use crate::strings::Strings;
 /// Assembled by the composition root from the ViewModels. Passing one struct
 /// rather than a dozen arguments keeps a View function's signature honest
 /// about being a function of state.
+/// What the interface needs to know about the rig.
+///
+/// A summary rather than the tree itself: the shell draws no spheres — the
+/// viewport does — and handing it the tree would invite it to.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ArmatureState {
+    /// Whether the active layer has a rig at all.
+    pub exists: bool,
+    /// Whether the pointer is currently rigging rather than sculpting.
+    pub editing: bool,
+    /// Whether a sphere is selected, which is what makes removal meaningful.
+    pub selection: bool,
+    /// How many spheres, for the readout.
+    pub spheres: usize,
+    pub mirror: bool,
+    pub skin: f32,
+}
+
 pub struct ShellState<'a> {
+    /// What is frozen, for the mask menu.
+    pub mask: MaskState,
+    /// The rig, as the menu and the armature panel need it.
+    pub armature: ArmatureState,
+    /// Documents opened lately, most recent first.
+    pub recent: &'a [std::path::PathBuf],
+    /// The exchange panels: whether they are open, and what they would do.
+    pub show_import: bool,
+    pub show_export: bool,
+    pub import: ImportSettings,
+    pub export: ExportSettings,
+    /// What the export as configured would give up.
+    pub export_warnings: &'a [ExportWarning],
+    /// This build and this machine.
+    pub diagnostics: &'a Diagnostics,
+    /// Whether the diagnostics window is open.
+    pub show_diagnostics: bool,
+    /// Whether the report was just put on the clipboard, for the confirmation.
+    pub diagnostics_copied: bool,
+    /// The attribution manifest, and whether it is open.
+    pub attribution: &'a str,
+    pub show_attribution: bool,
+    /// What an extrusion would use.
+    pub extrude: ExtrudeSettings,
     pub strings: &'a Strings,
     pub document_name: &'a str,
     pub modified: bool,
@@ -47,7 +91,8 @@ pub struct ShellState<'a> {
     /// Bytes in use and the budget, for the memory meter.
     pub memory: (u64, u64),
     pub backend: &'a str,
-    pub units: &'a str,
+    /// The document's scale and what lengths are shown in.
+    pub units: Units,
     /// What the last action did, for the status area.
     pub last_action: Option<(&'a str, bool)>,
 }
@@ -97,15 +142,15 @@ pub fn apply_theme(ctx: &egui::Context) {
 
     // Quiet at rest, gaining contrast on hover and while being adjusted.
     visuals.widgets.noninteractive.bg_fill = Tokens::panel();
-    visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, Tokens::text_dim());
+    visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0_f32, Tokens::text_dim());
     visuals.widgets.inactive.bg_fill = Tokens::raised();
-    visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, Tokens::text_dim());
+    visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0_f32, Tokens::text_dim());
     visuals.widgets.hovered.bg_fill = Tokens::raised();
-    visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, Tokens::text());
+    visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0_f32, Tokens::text());
     visuals.widgets.active.bg_fill = Tokens::raised();
-    visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, Tokens::text());
+    visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0_f32, Tokens::text());
     visuals.selection.bg_fill = Tokens::raised();
-    visuals.selection.stroke = egui::Stroke::new(1.0, Tokens::text());
+    visuals.selection.stroke = egui::Stroke::new(1.0_f32, Tokens::text());
 
     ctx.set_visuals(visuals);
 
@@ -189,7 +234,58 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
     ui.horizontal(|ui| {
         ui.add_space(space::SNUG);
         egui::menu::bar(ui, |ui| {
-            ui.menu_button(s.menu_file, |_| {});
+            ui.menu_button(s.menu_file, |ui| {
+                if ui.button(s.action_new).clicked() {
+                    queue.push(Command::NewDocument);
+                    ui.close_menu();
+                }
+                if ui.button(s.action_open).clicked() {
+                    queue.push(Command::OpenDocument);
+                    ui.close_menu();
+                }
+                ui.menu_button(s.action_open_recent, |ui| {
+                    if state.recent.is_empty() {
+                        // Disabled rather than absent: an empty submenu that
+                        // vanishes reads as a broken menu, and this says why.
+                        ui.add_enabled(false, egui::Button::new(s.state_no_recent));
+                        return;
+                    }
+                    for path in state.recent {
+                        let label = RecentDocuments::label(path);
+                        if ui
+                            .button(label)
+                            .on_hover_text(path.to_string_lossy())
+                            .clicked()
+                        {
+                            queue.push(Command::OpenRecent(path.clone()));
+                            ui.close_menu();
+                        }
+                    }
+                });
+                ui.separator();
+                if ui.button(s.action_save).clicked() {
+                    queue.push(Command::Save);
+                    ui.close_menu();
+                }
+                if ui.button(s.action_save_as).clicked() {
+                    queue.push(Command::SaveAs);
+                    ui.close_menu();
+                }
+                ui.separator();
+                if ui.button(s.action_import).clicked() {
+                    queue.push(Command::ToggleImport);
+                    ui.close_menu();
+                }
+                if ui.button(s.action_export).clicked() {
+                    queue.push(Command::ToggleExport);
+                    ui.close_menu();
+                }
+                ui.separator();
+                if ui.button(s.action_quit).clicked() {
+                    queue.push(Command::Quit);
+                    ui.close_menu();
+                }
+            });
             ui.menu_button(s.menu_edit, |ui| {
                 if ui
                     .add_enabled(state.can_undo, egui::Button::new(s.action_undo))
@@ -218,7 +314,36 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                     ui.close_menu();
                 }
             });
-            ui.menu_button(s.menu_sculpt, |_| {});
+            ui.menu_button(s.menu_sculpt, |ui| {
+                if ui.button(s.action_armature_new).clicked() {
+                    queue.push(Command::NewArmature);
+                    ui.close_menu();
+                }
+                // A checkbox rather than a button: this is the one mode in the
+                // application, and a mode you cannot see the state of is the
+                // kind that gets left on.
+                let mut editing = state.armature.editing;
+                if ui
+                    .add_enabled(
+                        state.armature.exists,
+                        egui::Checkbox::new(&mut editing, s.action_armature_edit),
+                    )
+                    .clicked()
+                {
+                    queue.push(Command::ToggleArmatureEditing);
+                    ui.close_menu();
+                }
+                if ui
+                    .add_enabled(
+                        state.armature.editing && state.armature.selection,
+                        egui::Button::new(s.action_armature_remove),
+                    )
+                    .clicked()
+                {
+                    queue.push(Command::RemoveZsphere);
+                    ui.close_menu();
+                }
+            });
             ui.menu_button(s.menu_brushes, |ui| {
                 for tool in ToolKind::ALL {
                     if ui.button(tool.label()).clicked() {
@@ -228,9 +353,53 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                 }
             });
             ui.menu_button(s.menu_dynamics, |_| {});
-            ui.menu_button(s.menu_masks, |_| {});
+            ui.menu_button(s.menu_masks, |ui| {
+                // Disabled rather than hidden: a menu whose entries come and
+                // go is harder to learn than one whose entries are sometimes
+                // grey, and the grey says *why* the tool is unavailable.
+                for op in [
+                    MaskOp::Invert,
+                    MaskOp::Expand(1),
+                    MaskOp::Contract(1),
+                    MaskOp::Smooth(1),
+                    MaskOp::InvertWithinBounds,
+                    MaskOp::Clear,
+                ] {
+                    let enabled = !op.needs_a_mask() || state.mask.is_active();
+                    if ui
+                        .add_enabled(enabled, egui::Button::new(op.label()))
+                        .clicked()
+                    {
+                        queue.push(Command::ApplyMaskOp(op));
+                        ui.close_menu();
+                    }
+                }
+                ui.separator();
+                for side in ExtrudeSide::ALL {
+                    let label = format!("{} — {}", s.action_extrude, side.label());
+                    if ui
+                        .add_enabled(state.mask.is_active(), egui::Button::new(label))
+                        .clicked()
+                    {
+                        queue.push(Command::ExtrudeMask(ExtrudeSettings {
+                            side,
+                            ..state.extrude
+                        }));
+                        ui.close_menu();
+                    }
+                }
+            });
             ui.menu_button(s.menu_window, |_| {});
-            ui.menu_button(s.menu_help, |_| {});
+            ui.menu_button(s.menu_help, |ui| {
+                if ui.button(s.action_diagnostics).clicked() {
+                    queue.push(Command::ToggleDiagnostics);
+                    ui.close_menu();
+                }
+                if ui.button(s.action_attribution).clicked() {
+                    queue.push(Command::ToggleAttribution);
+                    ui.close_menu();
+                }
+            });
         });
 
         // The document, on the trailing edge as the design places it.
@@ -258,14 +427,25 @@ pub fn options_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
         ui.add_space(space::PANEL);
         ui.vertical(|ui| {
             ui.set_width(180.0);
-            if let Some(value) = slider(ui, s.label_intensity, state.brush.intensity, 0.0..=1.0, 2) {
+            if let Some(value) = slider(ui, s.label_intensity, state.brush.intensity, 0.0..=1.0, 2)
+            {
                 queue.push(Command::SetBrushIntensity(value));
             }
         });
         ui.add_space(space::SECTION);
         ui.vertical(|ui| {
             ui.set_width(180.0);
-            if let Some(value) = slider(ui, s.label_size, state.brush.size, 0.005..=1.0, 3) {
+            // The label carries the size on the model; the slider keeps
+            // editing engine units. A unit-aware slider whose range shifts
+            // under the pointer when the unit is switched is one nobody
+            // trusts, and the options bar has a fixed height that a second
+            // row would overflow.
+            let label = format!(
+                "{} · {}",
+                s.label_size,
+                state.units.format(state.brush.size)
+            );
+            if let Some(value) = slider(ui, &label, state.brush.size, 0.005..=1.0, 3) {
                 queue.push(Command::SetBrushSize(value));
             }
         });
@@ -300,12 +480,20 @@ pub fn left_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Command
             let selected = state.scene.selected == Some(node.key);
             let text = egui::RichText::new(&node.name)
                 .size(type_scale::BODY)
-                .color(if selected { Tokens::text() } else { Tokens::text_dim() });
+                .color(if selected {
+                    Tokens::text()
+                } else {
+                    Tokens::text_dim()
+                });
             ui.label(text);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 icons::button(
                     ui,
-                    if node.visible { Icon::Visible } else { Icon::Hidden },
+                    if node.visible {
+                        Icon::Visible
+                    } else {
+                        Icon::Hidden
+                    },
                     node.visible,
                 );
             });
@@ -334,9 +522,17 @@ pub fn left_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Command
             let button = egui::Button::new(
                 egui::RichText::new(axis.label())
                     .size(type_scale::LABEL)
-                    .color(if on { Tokens::text() } else { Tokens::text_dim() }),
+                    .color(if on {
+                        Tokens::text()
+                    } else {
+                        Tokens::text_dim()
+                    }),
             )
-            .fill(if on { Tokens::raised() } else { Tokens::panel() });
+            .fill(if on {
+                Tokens::raised()
+            } else {
+                Tokens::panel()
+            });
             if ui.add(button).clicked() {
                 queue.push(Command::ToggleSymmetry(*axis));
             }
@@ -351,14 +547,25 @@ fn layer_row(
     queue: &mut CommandQueue,
 ) {
     let active = state.scene.active == Some(layer.key);
-    let fill = if active { Tokens::raised() } else { Tokens::panel() };
+    let fill = if active {
+        Tokens::raised()
+    } else {
+        Tokens::panel()
+    };
 
     egui::Frame::new()
         .fill(fill)
-        .inner_margin(egui::Margin::symmetric(space::SNUG as i8, space::TIGHT as i8))
+        .inner_margin(egui::Margin::symmetric(
+            space::SNUG as i8,
+            space::TIGHT as i8,
+        ))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                let eye = if layer.visible { Icon::Visible } else { Icon::Hidden };
+                let eye = if layer.visible {
+                    Icon::Visible
+                } else {
+                    Icon::Hidden
+                };
                 if icons::button(ui, eye, layer.visible).clicked() {
                     queue.push(Command::SetLayerVisible(layer.key, !layer.visible));
                 }
@@ -367,8 +574,15 @@ fn layer_row(
                     .size(type_scale::BODY)
                     // Selection is indicated by surface tone and weight, never
                     // by the accent — that marks the active brush alone.
-                    .color(if active { Tokens::text() } else { Tokens::text_dim() });
-                if ui.add(egui::Label::new(name).sense(egui::Sense::click())).clicked() {
+                    .color(if active {
+                        Tokens::text()
+                    } else {
+                        Tokens::text_dim()
+                    });
+                if ui
+                    .add(egui::Label::new(name).sense(egui::Sense::click()))
+                    .clicked()
+                {
                     queue.push(Command::SelectLayer(layer.key));
                 }
 
@@ -389,6 +603,253 @@ fn layer_row(
             });
         });
     ui.add_space(space::HAIR);
+}
+
+/// The diagnostics report, as a window rather than a panel.
+///
+/// A window because it is read rarely and copied whole: docking it would cost
+/// a permanent strip of the interface for something a person opens twice a
+/// year, and then only when something has already gone wrong.
+///
+/// Every value is a readout the reader can compare against an issue, and the
+/// copy button takes the lot. A report that has to be retyped is one that
+/// arrives with a digit wrong.
+pub fn diagnostics_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    if !state.show_diagnostics {
+        return;
+    }
+    let s = state.strings;
+    let mut open = true;
+    egui::Window::new(s.action_diagnostics)
+        .open(&mut open)
+        .resizable(false)
+        .collapsible(false)
+        .show(ctx, |ui| {
+            ui.set_min_width(360.0);
+            let d = state.diagnostics;
+
+            heading(ui, s.section_diagnostics);
+            readout(ui, "Aplicação", d.app_version.clone());
+            readout(ui, "Motor", d.engine_version.clone());
+            readout(ui, "Revisão", d.engine_revision.clone());
+            readout(ui, "Plataforma", d.platform.clone());
+
+            heading(ui, s.label_backend);
+            readout(ui, "Disponíveis", d.backends.join(", "));
+            readout(
+                ui,
+                "Ativo",
+                format!("{} — {}", d.active_backend, d.selection),
+            );
+            if let Some(renderer) = &d.renderer {
+                readout(ui, "Vídeo", renderer.clone());
+            }
+
+            // The stalls, which are what "it stutters" turns into. Listed even
+            // when there are none, for the same reason as the fallbacks below.
+            if d.stalls.is_empty() {
+                readout(ui, "Travamentos", "nenhum acima de um quadro");
+            } else {
+                for stall in &d.stalls {
+                    readout(ui, "Travamento", stall.clone());
+                }
+            }
+
+            // Fallbacks are listed even when there are none. Silence here reads
+            // as "the panel is broken" rather than as "nothing fell back", and
+            // a reader cannot tell the two apart.
+            if d.fallbacks.is_empty() {
+                readout(ui, "Alternativas", "nenhuma nesta sessão");
+            } else {
+                for fallback in &d.fallbacks {
+                    readout(
+                        ui,
+                        "Alternativa",
+                        format!("{} recusou {}", fallback.declined_by, fallback.operation),
+                    );
+                }
+            }
+
+            ui.add_space(space::SNUG);
+            ui.horizontal(|ui| {
+                if ui.button(s.action_copy).clicked() {
+                    queue.push(Command::CopyDiagnostics);
+                }
+                if state.diagnostics_copied {
+                    ui.label(
+                        egui::RichText::new(s.state_copied)
+                            .size(type_scale::LABEL)
+                            .color(Tokens::accent()),
+                    );
+                }
+            });
+        });
+
+    // The window's own close button and the menu entry mean the same thing, so
+    // they emit the same command rather than each owning a copy of the state.
+    if !open {
+        queue.push(Command::ToggleDiagnostics);
+    }
+}
+
+/// What the application is built from, and on what terms.
+///
+/// Shown rather than only shipped beside the binary: the licence policy in
+/// `deny.toml` is written on the understanding that attribution travels with
+/// the distribution, and a file nobody can reach from the application is one
+/// that goes missing the first time it is repackaged.
+pub fn attribution_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    if !state.show_attribution {
+        return;
+    }
+    let mut open = true;
+    egui::Window::new(state.strings.action_attribution)
+        .open(&mut open)
+        .resizable(true)
+        .default_size(egui::vec2(520.0, 420.0))
+        .show(ctx, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(state.attribution)
+                        .size(type_scale::LABEL)
+                        .family(egui::FontFamily::Monospace)
+                        .color(Tokens::text_dim()),
+                );
+            });
+        });
+    if !open {
+        queue.push(Command::ToggleAttribution);
+    }
+}
+
+/// Bringing geometry in.
+///
+/// A panel rather than a bare file dialog, because the one real decision —
+/// whether the model becomes a reference or becomes clay — cannot be made
+/// after the fact, and a native dialog has nowhere to ask it.
+pub fn import_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    if !state.show_import {
+        return;
+    }
+    let s = state.strings;
+    let mut open = true;
+    let mut settings = state.import;
+    egui::Window::new(s.action_import)
+        .open(&mut open)
+        .resizable(false)
+        .collapsible(false)
+        .show(ctx, |ui| {
+            ui.set_min_width(320.0);
+            ui.label(
+                egui::RichText::new(s.label_import_as)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+            for becomes in ImportAs::ALL {
+                if ui
+                    .radio(settings.becomes == becomes, becomes.label())
+                    .on_hover_text(becomes.detail())
+                    .clicked()
+                {
+                    settings.becomes = becomes;
+                }
+            }
+            if let Some(value) = slider(ui, s.label_scale, settings.scale, 0.01..=100.0, 2) {
+                settings.scale = value;
+            }
+            if settings != state.import {
+                queue.push(Command::SetImportSettings(settings));
+            }
+            ui.add_space(space::SNUG);
+            if ui.button(s.action_choose_file).clicked() {
+                queue.push(Command::RunImport);
+            }
+        });
+    if !open {
+        queue.push(Command::ToggleImport);
+    }
+}
+
+/// Writing geometry out, and saying beforehand what will not survive.
+pub fn export_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    if !state.show_export {
+        return;
+    }
+    let s = state.strings;
+    let mut open = true;
+    let mut settings = state.export;
+    egui::Window::new(s.action_export)
+        .open(&mut open)
+        .resizable(false)
+        .collapsible(false)
+        .show(ctx, |ui| {
+            ui.set_min_width(340.0);
+            ui.label(
+                egui::RichText::new(s.label_mesher)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+            for mesher in ExportMesher::ALL {
+                let response = ui.radio(settings.mesher == mesher, mesher.label());
+                let response = match mesher.caveat() {
+                    Some(caveat) => response.on_hover_text(caveat),
+                    None => response,
+                };
+                if response.clicked() {
+                    settings.mesher = mesher;
+                }
+            }
+            if let Some(value) = slider(
+                ui,
+                s.label_export_resolution,
+                settings.resolution,
+                0.005..=0.2,
+                3,
+            ) {
+                settings.resolution = value;
+            }
+
+            // Decimation is off by default and expressed as a ratio, so the
+            // checkbox and the slider are one control: unticking it means
+            // "keep every triangle" rather than "keep 100% of them", which is
+            // the same file by a slower route.
+            let mut decimating = settings.decimate_to.is_some();
+            if ui.checkbox(&mut decimating, s.label_decimate).clicked() {
+                settings.decimate_to = decimating.then_some(0.5);
+            }
+            if let Some(ratio) = settings.decimate_to {
+                // "Manter", not "Reduzir" again: the value is the share of
+                // triangles kept, and labelling both the checkbox and the
+                // slider the same way reads as one control repeated.
+                if let Some(value) = slider(ui, s.label_keep, ratio, 0.05..=0.95, 2) {
+                    settings.decimate_to = Some(value);
+                }
+            }
+            if settings != state.export {
+                queue.push(Command::SetExportSettings(settings));
+            }
+
+            // Before the write, not after. Every one of these is knowable now
+            // and otherwise found out by opening the file somewhere else.
+            if !state.export_warnings.is_empty() {
+                heading(ui, s.section_warnings);
+                for warning in state.export_warnings {
+                    ui.label(
+                        egui::RichText::new(&warning.message)
+                            .size(type_scale::LABEL)
+                            .color(Tokens::accent()),
+                    );
+                }
+            }
+
+            ui.add_space(space::SNUG);
+            if ui.button(s.action_choose_file).clicked() {
+                queue.push(Command::RunExport);
+            }
+        });
+    if !open {
+        queue.push(Command::ToggleExport);
+    }
 }
 
 /// Material, geometry, resolution and brush controls.
@@ -435,6 +896,36 @@ pub fn right_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
     readout(ui, s.label_triangles, thousands(state.stats.triangles));
     readout(ui, s.label_objects, format!("{}", state.stats.objects));
 
+    if state.armature.exists {
+        heading(ui, s.section_armature);
+        readout(ui, s.label_spheres, format!("{}", state.armature.spheres));
+        if let Some(value) = slider(ui, s.label_skin, state.armature.skin, 0.5..=3.0, 2) {
+            queue.push(Command::SetSkinThickness(value));
+        }
+        let mut mirror = state.armature.mirror;
+        if ui.checkbox(&mut mirror, s.label_mirror_new).clicked() {
+            queue.push(Command::SetArmatureMirror(mirror));
+        }
+        if state.armature.editing {
+            // The gestures, where a person is when they need them. ZBrush
+            // teaches these by tutorial; one line costs nothing.
+            ui.label(
+                egui::RichText::new(s.hint_armature)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+            if ui
+                .add_enabled(
+                    state.armature.selection,
+                    egui::Button::new(s.action_armature_remove),
+                )
+                .clicked()
+            {
+                queue.push(Command::RemoveZsphere);
+            }
+        }
+    }
+
     heading(ui, s.section_brush_controls);
     if let Some(value) = slider(ui, s.label_noise, state.brush.shaping.noise, 0.0..=1.0, 2) {
         queue.push(Command::SetBrushNoise(value));
@@ -450,9 +941,17 @@ pub fn right_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
             let button = egui::Button::new(
                 egui::RichText::new(falloff.label())
                     .size(type_scale::LABEL)
-                    .color(if on { Tokens::text() } else { Tokens::text_dim() }),
+                    .color(if on {
+                        Tokens::text()
+                    } else {
+                        Tokens::text_dim()
+                    }),
             )
-            .fill(if on { Tokens::raised() } else { Tokens::panel() });
+            .fill(if on {
+                Tokens::raised()
+            } else {
+                Tokens::panel()
+            });
             if ui.add(button).clicked() {
                 queue.push(Command::SetBrushFalloff(falloff));
             }
@@ -490,7 +989,11 @@ pub fn brush_shelf(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
                     egui::RichText::new(tool.label())
                         .size(type_scale::LABEL)
                         // The accent, on the active brush and nowhere else.
-                        .color(if active { Tokens::accent() } else { Tokens::text_dim() }),
+                        .color(if active {
+                            Tokens::accent()
+                        } else {
+                            Tokens::text_dim()
+                        }),
                 );
                 if response.clicked() {
                     queue.push(Command::SelectTool(tool));
@@ -502,7 +1005,7 @@ pub fn brush_shelf(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
 }
 
 /// The status area: document, memory, backend and units.
-pub fn status_bar(ui: &mut egui::Ui, state: &ShellState<'_>) {
+pub fn status_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
     let s = state.strings;
     ui.horizontal(|ui| {
         ui.add_space(space::PANEL);
@@ -513,10 +1016,7 @@ pub fn status_bar(ui: &mut egui::Ui, state: &ShellState<'_>) {
                 .size(type_scale::HEADING)
                 .color(Tokens::text_faint()),
         );
-        numeric(
-            ui,
-            format!("{} / {}", gigabytes(used), gigabytes(budget)),
-        );
+        numeric(ui, format!("{} / {}", gigabytes(used), gigabytes(budget)));
 
         // Approaching the budget changes state before it is exhausted, rather
         // than only at failure.
@@ -534,12 +1034,30 @@ pub fn status_bar(ui: &mut egui::Ui, state: &ShellState<'_>) {
         ui.painter().rect_filled(
             filled,
             0.0,
-            if fraction > 0.85 { Tokens::accent() } else { Tokens::text_dim() },
+            if fraction > 0.85 {
+                Tokens::accent()
+            } else {
+                Tokens::text_dim()
+            },
         );
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(space::PANEL);
-            numeric(ui, format!("{}: {}", s.label_units, state.units));
+            // A control, not a label: the design shows the unit here, and a
+            // person looking for where to change it looks where it is shown.
+            let shown = format!("{}: {}", s.label_units, state.units.display.label());
+            if ui
+                .add(egui::Button::new(
+                    egui::RichText::new(shown)
+                        .size(type_scale::LABEL)
+                        .family(egui::FontFamily::Monospace)
+                        .color(Tokens::text_dim()),
+                ))
+                .on_hover_text(s.hint_units)
+                .clicked()
+            {
+                queue.push(Command::NextDisplayUnit);
+            }
             ui.add_space(space::SECTION);
             numeric(ui, format!("{}: {}", s.label_backend, state.backend));
             if let Some((label, changed)) = state.last_action {
@@ -568,9 +1086,17 @@ pub fn viewport_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comma
             let button = egui::Button::new(
                 egui::RichText::new(preset.label())
                     .size(type_scale::LABEL)
-                    .color(if on { Tokens::text() } else { Tokens::text_dim() }),
+                    .color(if on {
+                        Tokens::text()
+                    } else {
+                        Tokens::text_dim()
+                    }),
             )
-            .fill(if on { Tokens::raised() } else { Tokens::ground() });
+            .fill(if on {
+                Tokens::raised()
+            } else {
+                Tokens::ground()
+            });
             if ui.add(button).clicked() {
                 queue.push(Command::SetViewPreset(preset));
             }
@@ -600,7 +1126,11 @@ fn paint_sphere(ui: &egui::Ui, rect: egui::Rect, tint: egui::Color32, active: bo
     }
 
     if active {
-        painter.circle_stroke(centre, radius + 3.0, egui::Stroke::new(1.5, Tokens::accent()));
+        painter.circle_stroke(
+            centre,
+            radius + 3.0,
+            egui::Stroke::new(1.5_f32, Tokens::accent()),
+        );
     }
 }
 
@@ -645,7 +1175,8 @@ mod tests {
         // The panels are fixed and the viewport absorbs the rest, so at the
         // smallest window the design targets there must still be a viewport.
         let width = 1280.0 - region::RAIL - region::LEFT - region::RIGHT;
-        let height = 800.0 - region::MENU_BAR - region::OPTIONS_BAR - region::SHELF - region::STATUS;
+        let height =
+            800.0 - region::MENU_BAR - region::OPTIONS_BAR - region::SHELF - region::STATUS;
         assert!(width > 400.0, "the viewport would be {width} wide");
         assert!(height > 300.0, "the viewport would be {height} tall");
     }

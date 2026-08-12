@@ -18,8 +18,8 @@ mod authoring;
 mod backend;
 mod brick;
 mod brush;
-mod consolidate;
 mod buffer;
+mod consolidate;
 mod descriptor;
 mod document;
 mod error;
@@ -36,17 +36,17 @@ pub use brick::{
     BrickCache, BrickConfig, BrickKey, BrickMeshParams, BrickMeshRange, BrickRequest, BrickSamples,
     BrickState, BrickStats,
 };
-pub use brush::{
-    Accumulation, BrushParams, BrushShape, Falloff, StrokePreset, StrokeSample,
-};
+pub use brush::{Accumulation, BrushParams, BrushShape, Falloff, StrokePreset, StrokeSample};
 pub use consolidate::{ConsolidationCost, ConsolidationParams, FieldReport};
-pub use document::{Document, Item, LayerId, NodeId};
-pub use mask::{ExtrudeSide, Mask, MaskExtrudeParams, MaskField, MaskRef};
+pub use document::{ArmatureEdit, Document, Item, LayerId, NodeId};
 pub use error::{ClayError, ErrorKind, Result};
-pub use mesh::{Mesh, MeshParams, MeshValidity, Mesher, VertexLayout};
+pub use mask::{ExtrudeSide, Mask, MaskExtrudeParams, MaskField, MaskRef};
+pub use mesh::{ImportBudget, Mesh, MeshLayerDesc, MeshParams, MeshValidity, Mesher, VertexLayout};
 pub use pick::{Hit, Snapped};
 pub use reader::Reader;
-pub use sculpt::{resolve_stroke, MoveParams, RelaxParams, VolumeParams};
+pub use sculpt::{
+    resolve_stroke, FlattenMode, FlattenParams, MoveParams, RelaxParams, VolumeParams,
+};
 pub use voxel::{Cell, RepairReport, VoxelField, VoxelGrid, VoxelGridRef};
 
 use claycore_sys as sys;
@@ -92,7 +92,16 @@ pub fn version() -> Version {
     // SAFETY: three out-parameters, all valid for writes of i32. The call
     // cannot fail and has no other effect.
     unsafe { sys::clay_version(&mut major, &mut minor, &mut patch) };
-    Version { major, minor, patch }
+    Version {
+        major,
+        minor,
+        patch,
+    }
+}
+
+/// The vendored engine's git revision, as this build was compiled against it.
+pub fn revision() -> &'static str {
+    sys::CLAYCORE_REVISION
 }
 
 /// The engine ABI this crate was written against.
@@ -103,7 +112,7 @@ pub fn version() -> Version {
 /// constant exists so that a mismatch can also be reported in diagnostics.
 pub const EXPECTED_ABI: Version = Version {
     major: 0,
-    minor: 26,
+    minor: 29,
     patch: 0,
 };
 

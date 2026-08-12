@@ -1,0 +1,32 @@
+{
+  "conditions": {
+    "scene": "reference-r1",
+    "platform": "macos",
+    "architecture": "aarch64",
+    "backend": "metal",
+    "engine": "0.29.0",
+    "viewport": [1280, 800]
+  },
+  "figures": {
+    "dab.median": 12.4828,
+    "dab.p95": 14.9751,
+    "frame.median": 1.4724,
+    "frame.p95": 2.7661,
+    "locality.dab_ms": 9.9273,
+    "locality.dab_ms_10x": 36.7318,
+    "locality.key_ratio": 1.0000,
+    "locality.keys_remeshed": 100.0000,
+    "locality.keys_remeshed_10x": 100.0000,
+    "locality.surface_bricks": 1049.0000,
+    "locality.surface_bricks_10x": 9466.0000,
+    "memory.baseline": 1.0244,
+    "memory.budget": 512.0000,
+    "memory.drift": 1.0000,
+    "memory.peak": 1.0215,
+    "startup.backend_discovery": 0.0007,
+    "startup.to_first_document": 12.0045,
+    "tape.dab_after_96_edits": 11.8948,
+    "tape.dab_on_fresh": 11.1534,
+    "tape.growth": 1.0665
+  }
+}

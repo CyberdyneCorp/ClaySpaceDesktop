@@ -72,6 +72,37 @@ pub struct BackendPolicy {
 }
 
 impl BackendPolicy {
+    /// Which backend to evaluate a batch of brick refills on, or `None` for
+    /// the CPU.
+    ///
+    /// Routed by batch size, which is what the engine's own header asks for.
+    /// A device submission has a fixed cost — about 0.25 ms on an M-series Mac
+    /// — that the batch has to earn back, so a handful of residual bricks are
+    /// cheaper on the CPU however fast the GPU is once it starts.
+    ///
+    /// This used to return `None` unconditionally: before ClayCore 0.28.0 the
+    /// Metal path paid a full round trip *per brick* and sat 7–10× behind the
+    /// CPU at every size (#64). Batched into one dispatch it is now roughly
+    /// 2× ahead at a dab and far more on a whole-model fill, so the decision
+    /// is a threshold rather than a refusal.
+    ///
+    /// `active()` still reports what the machine offers, because that is what
+    /// the status bar tells the user about. This is only about which backend
+    /// does this particular job.
+    pub fn refill_backend(&self, bricks: usize) -> Option<&Backend> {
+        (bricks >= Self::GPU_CROSSOVER_BRICKS && self.active != Backend::Cpu)
+            .then_some(&self.active)
+    }
+
+    /// How many bricks a batch needs before an accelerated backend pays.
+    ///
+    /// Measured by the engine at brick dim 8 on an M-series Mac, which is the
+    /// cache configuration this application uses: below about sixteen bricks
+    /// the CPU wins, at a dab's twenty-seven Metal is roughly twice as fast.
+    /// Worth re-measuring on a device that is not an M-series Mac —
+    /// `backend_choice.rs` is what would notice.
+    pub const GPU_CROSSOVER_BRICKS: usize = 16;
+
     /// Discovers what this machine offers and applies `stored_override`.
     ///
     /// The CPU backend is compiled in unconditionally by the engine, so this
@@ -85,10 +116,7 @@ impl BackendPolicy {
     pub fn from_available(available: Vec<Backend>, stored_override: Option<Backend>) -> Self {
         let (active, reason) = match stored_override {
             Some(wanted) if available.contains(&wanted) => (wanted, SelectionReason::Override),
-            Some(_) => (
-                Self::rank(&available),
-                SelectionReason::OverrideUnavailable,
-            ),
+            Some(_) => (Self::rank(&available), SelectionReason::OverrideUnavailable),
             None => (Self::rank(&available), SelectionReason::Automatic),
         };
         Self {
@@ -193,6 +221,47 @@ impl std::fmt::Display for UnavailableBackend {
 
 impl std::error::Error for UnavailableBackend {}
 
+impl SelectionReason {
+    /// Why this backend, in the words the diagnostics panel shows.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Automatic => "escolha automática",
+            Self::Override => "escolhido manualmente",
+            Self::OverrideUnavailable => "escolha manual indisponível; automática",
+        }
+    }
+}
+
+impl BackendPolicy {
+    /// This build and this machine, as a report.
+    ///
+    /// Built here rather than in the composition root because everything in it
+    /// but the graphics adapter is this layer's own knowledge, and a report
+    /// assembled from several places is one that goes stale in one of them.
+    /// The renderer is filled in afterwards by whoever has a device.
+    pub fn diagnostics(&self) -> clayspace_model::Diagnostics {
+        clayspace_model::Diagnostics {
+            app_version: format!("ClaySpaceDesktop {}", env!("CARGO_PKG_VERSION")),
+            engine_version: format!("claycore {}", claycore::version()),
+            engine_revision: claycore::revision().to_string(),
+            platform: format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+            backends: self.available.iter().map(ToString::to_string).collect(),
+            active_backend: self.active.to_string(),
+            selection: self.reason.label().to_string(),
+            fallbacks: self
+                .fallbacks
+                .iter()
+                .map(|(operation, backend)| clayspace_model::Fallback {
+                    operation: operation.label().to_string(),
+                    declined_by: backend.to_string(),
+                })
+                .collect(),
+            renderer: None,
+            stalls: Vec::new(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,8 +314,7 @@ mod tests {
 
     #[test]
     fn an_unavailable_override_falls_back_and_says_so() {
-        let policy =
-            BackendPolicy::from_available(vec![Backend::Cpu], Some(Backend::Cuda));
+        let policy = BackendPolicy::from_available(vec![Backend::Cpu], Some(Backend::Cuda));
         assert_eq!(policy.active(), &Backend::Cpu);
         assert_eq!(
             policy.reason(),
@@ -261,8 +329,15 @@ mod tests {
         let err = policy
             .set_override(Backend::Cuda)
             .expect_err("cuda is not available");
-        assert!(err.to_string().contains("cpu"), "the message should list what is available: {err}");
-        assert_eq!(policy.active(), &Backend::Cpu, "the refusal must not change the active backend");
+        assert!(
+            err.to_string().contains("cpu"),
+            "the message should list what is available: {err}"
+        );
+        assert_eq!(
+            policy.active(),
+            &Backend::Cpu,
+            "the refusal must not change the active backend"
+        );
     }
 
     #[test]

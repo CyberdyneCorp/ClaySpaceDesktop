@@ -10,17 +10,33 @@
 
 #![forbid(unsafe_code)]
 
+pub mod armature;
+pub mod diagnostics;
+pub mod document;
+pub mod exchange;
+pub mod instrument;
+pub mod mask;
 pub mod scene;
 pub mod sculpt;
+pub mod session;
 pub mod tools;
+pub mod units;
 
-pub use scene::{
-    LayerCost, LayerKey, LayerSummary, Protection, Scene, SceneModel, SceneNode,
+pub use armature::{Armature, ArmatureModel, NodeIndex, SkinSettings, Zsphere};
+pub use diagnostics::{Diagnostics, DiagnosticsModel, Fallback};
+pub use document::{DocumentModel, OpenError};
+pub use exchange::{
+    ExchangeModel, ExportMesher, ExportSettings, ExportWarning, Format, ImportAs, ImportSettings,
 };
+pub use instrument::{FrameLog, Stall, FRAME};
+pub use mask::{ExtrudeSettings, ExtrudeSide, MaskModel, MaskOp, MaskState};
+pub use scene::{LayerCost, LayerKey, LayerSummary, Protection, Scene, SceneModel, SceneNode};
 pub use sculpt::{
     Detail, EditOutcome, GestureSample, HistoryEntry, HistoryState, ModelError, SceneStats,
     SculptModel,
 };
+pub use session::{AutosavePolicy, RecentDocuments, Recovery};
 pub use tools::{
     BrushSettings, Falloff, Representation, Shaping, ToolKind, Unavailable, ViewPresetKind,
 };
+pub use units::{Unit, Units, UnitsModel};

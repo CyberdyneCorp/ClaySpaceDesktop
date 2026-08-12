@@ -24,8 +24,8 @@
 - [x] 2.3 Implement per-operation fallback: route an `Unsupported` result to the CPU backend for that operation, keeping the selected backend active elsewhere
 - [x] 2.4 Record each fallback once per operation kind in the diagnostics log
 - [x] 2.5 Implement the user override with cross-session persistence and the unavailable-override fallback path
-- [ ] 2.6 Implement the diagnostics report: discovered backends, active backend, selection reason, engine version, fallbacks this session
-- [ ] 2.7 Add a test asserting a document exported on each registered backend agrees within parity tolerance and saves byte-identically
+- [x] 2.6 Implement the diagnostics report: discovered backends, active backend, selection reason, engine version, fallbacks this session
+- [x] 2.7 Add a test asserting a document exported on each registered backend agrees within parity tolerance and saves byte-identically
 
 ## 3. Rendering foundation
 
@@ -37,7 +37,7 @@
 - [x] 3.6 Implement the view presets with orthographic projection for the orthogonal views and framing preservation on switch
 - [x] 3.7 Implement the navigation gizmo with per-axis activation
 - [x] 3.8 Implement the ground grid and symmetry-plane overlays, excluded from export
-- [ ] 3.9 Implement LOD selection over the brick cache mips with restoration on approach
+- [ ] 3.9 Implement LOD selection over the brick cache mips with restoration on approach — **blocked upstream**: `clay_brick_cache_build_mip` and `read_bricks(lod)` exist, but `clay_brick_cache_mesh` takes no level, so a mip can be built and read and not meshed. See `claycore_lod.rs`
 
 ## 4. MVVM skeleton
 
@@ -65,12 +65,12 @@
 
 ## 6. Masks and armatures
 
-- [ ] 6.1 Implement mask painting through the stroke engine, and pass the active mask to every verb
-- [ ] 6.2 Implement mask invert, clear, expand, contract, smooth and bounded complement
-- [ ] 6.3 Implement mask extrude with outward, inward and centred modes and a roundable rim
-- [ ] 6.4 Verify masks survive a resolution change and that a fully masked region resists every tool
-- [ ] 6.5 Implement armature authoring: add, move, resize, reparent, remove, skin thickness, and symmetric authoring
-- [ ] 6.6 Verify armature persistence across save and reload
+- [x] 6.1 Implement mask painting through the stroke engine, and pass the active mask to every verb
+- [x] 6.2 Implement mask invert, clear, expand, contract, smooth and bounded complement
+- [x] 6.3 Implement mask extrude with outward, inward and centred modes and a roundable rim
+- [x] 6.4 Verify masks survive a resolution change and that a fully masked region resists every tool
+- [x] 6.5 Implement armature authoring: add, move, resize, reparent, remove, skin thickness, and symmetric authoring
+- [x] 6.6 Verify armature persistence across save and reload — the skinned surface survives; the *rig* does not, because a placed armature is write-only in the ABI ([#77](https://github.com/CyberdyneCorp/ClayCore/issues/77)). See `armature_persistence.rs` and `claycore_armature_readback.rs`, both written to fail the day a reader arrives
 
 ## 7. Scene, layers and history
 
@@ -90,14 +90,14 @@
 
 ## 8. Document lifecycle
 
-- [ ] 8.1 Implement open and save through the engine's document I/O, with the newer-version refusal path
-- [ ] 8.2 Verify cross-platform byte-identical documents in CI
-- [ ] 8.3 Implement mesh import for OBJ, PLY, FBX and GLB with the engine's guardrails and the raised-ceiling path
-- [ ] 8.4 Implement export with mesher choice, resolution, decimation and attribute-support warnings; default to the watertight mesher
-- [ ] 8.5 Implement autosave recovery state, crash detection and the recovery offer
-- [ ] 8.6 Implement the unsaved-changes decision on close and on quit
-- [ ] 8.7 Implement the recent documents list with missing-file pruning
-- [ ] 8.8 Implement the document working unit and presentation-only unit switching
+- [x] 8.1 Implement open and save through the engine's document I/O, with the newer-version refusal path
+- [x] 8.2 Verify cross-platform byte-identical documents in CI — the `document-bytes` matrix and the job that compares the digests. The macOS half stays red until [#71](https://github.com/CyberdyneCorp/ClayCore/issues/71)
+- [x] 8.3 Implement mesh import for OBJ, PLY, FBX and GLB with the engine's guardrails and the raised-ceiling path — GLB excepted: `clay_mesh_save` writes it and `clay_mesh_load` does not read it, so it is offered on export only and refused by name on import
+- [x] 8.4 Implement export with mesher choice, resolution, decimation and attribute-support warnings; default to the watertight mesher
+- [x] 8.5 Implement autosave recovery state, crash detection and the recovery offer
+- [x] 8.6 Implement the unsaved-changes decision on close and on quit
+- [x] 8.7 Implement the recent documents list with missing-file pruning
+- [x] 8.8 Implement the document working unit and presentation-only unit switching
 
 ## 9. Interface shell and design system
 
@@ -120,19 +120,19 @@
 
 ## 10. Performance and packaging
 
-- [ ] 10.1 Define the reference document and reference machine configuration per platform
-- [ ] 10.2 Implement the benchmark harness for dab latency, frame time, edit locality, startup and memory
-- [ ] 10.3 Measure and record baseline figures; wire the budgets as a CI gate reporting before and after
-- [ ] 10.4 Implement the interface-thread blocking instrumentation with a 16 ms threshold
-- [ ] 10.5 Verify edit cost does not scale with scene size using the ten-times-larger comparison scene
-- [ ] 10.6 Verify memory returns to baseline across repeated open, sculpt, close cycles
-- [ ] 10.7 Add build features for the backends, with CPU always compiled in and clear failures for unavailable toolkits
-- [ ] 10.8 Set up the CI matrix: macOS CPU-only, macOS Metal, Linux CPU-only, Linux accelerated
-- [ ] 10.9 Add the OpenSpec strict validation job
-- [ ] 10.10 Add formatting, lint and dependency-audit gates
-- [ ] 10.11 Embed the application version and pinned engine revision, and surface both in diagnostics
-- [ ] 10.12 Produce the macOS bundle and the Linux distributable, self-contained with respect to the engine
-- [ ] 10.13 Generate the attribution manifest and surface it in the application
+- [x] 10.1 Define the reference document and reference machine configuration per platform
+- [x] 10.2 Implement the benchmark harness for dab latency, frame time, edit locality, startup and memory
+- [x] 10.3 Measure and record baseline figures; wire the budgets as a CI gate reporting before and after
+- [x] 10.4 Implement the interface-thread blocking instrumentation with a 16 ms threshold
+- [x] 10.5 Verify edit cost does not scale with scene size using the ten-times-larger comparison scene
+- [x] 10.6 Verify memory returns to baseline across repeated open, sculpt, close cycles
+- [x] 10.7 Add build features for the backends, with CPU always compiled in and clear failures for unavailable toolkits
+- [x] 10.8 Set up the CI matrix: macOS CPU-only, macOS Metal, Linux CPU-only, Linux accelerated
+- [x] 10.9 Add the OpenSpec strict validation job
+- [x] 10.10 Add formatting, lint and dependency-audit gates
+- [x] 10.11 Embed the application version and pinned engine revision, and surface both in diagnostics
+- [x] 10.12 Produce the macOS bundle and the Linux distributable, self-contained with respect to the engine
+- [x] 10.13 Generate the attribution manifest and surface it in the application
 
 ## 11. Close-out
 

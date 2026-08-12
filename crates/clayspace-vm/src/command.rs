@@ -8,13 +8,22 @@
 //! panel button that mean the same thing emit the *same* command, so they
 //! cannot drift apart.
 
-use clayspace_model::{Falloff, LayerKey, ToolKind, ViewPresetKind};
+use std::path::PathBuf;
+
+use clayspace_model::{
+    ExportSettings, ExtrudeSettings, Falloff, ImportSettings, LayerKey, MaskOp, ToolKind,
+    ViewPresetKind,
+};
 
 /// A change to the application or the document.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     // -- tools ------------------------------------------------------------
     SelectTool(ToolKind),
+    /// An operation on the mask itself, not through it.
+    ApplyMaskOp(MaskOp),
+    /// Pulls the masked patch off as its own layer.
+    ExtrudeMask(ExtrudeSettings),
     SetBrushSize(f32),
     SetBrushIntensity(f32),
     SetBrushFlow(f32),
@@ -30,11 +39,52 @@ pub enum Command {
     AddLayer,
     RemoveLayer(LayerKey),
 
+    // -- documents --------------------------------------------------------
+    // Handled by the composition root rather than a ViewModel: each one may
+    // need a file dialog, and a ViewModel that could open one would be a
+    // ViewModel that needs a window to test.
+    NewDocument,
+    OpenDocument,
+    /// Opens a document straight from the recent list.
+    OpenRecent(PathBuf),
+    Save,
+    SaveAs,
+    Quit,
+    /// Shows or hides the import and export panels.
+    ToggleImport,
+    ToggleExport,
+    SetImportSettings(ImportSettings),
+    SetExportSettings(ExportSettings),
+    /// Asks for a file and brings it in with the settings as they stand.
+    RunImport,
+    /// Asks for a file and writes it with the settings as they stand.
+    RunExport,
+
+    // -- armatures --------------------------------------------------------
+    /// Starts a rig on the active layer, replacing whatever it had.
+    NewArmature,
+    /// Turns rigging on and off. The pointer means different things in each,
+    /// so this is a mode — the one mode in the application, and the reason it
+    /// is stated in the menu rather than inferred.
+    ToggleArmatureEditing,
+    /// Removes the selected sphere and everything hanging off it.
+    RemoveZsphere,
+    /// Whether a new sphere is mirrored as it is added.
+    SetArmatureMirror(bool),
+    /// The skin thickness, as a multiplier on the authored radii.
+    SetSkinThickness(f32),
+
     // -- the sculpting gesture -------------------------------------------
     /// A stroke began at a point on the surface.
-    BeginStroke { position: [f32; 3], pressure: f32 },
+    BeginStroke {
+        position: [f32; 3],
+        pressure: f32,
+    },
     /// The stroke continued. Samples accumulate until it ends.
-    ContinueStroke { position: [f32; 3], pressure: f32 },
+    ContinueStroke {
+        position: [f32; 3],
+        pressure: f32,
+    },
     /// The stroke ended and should be committed as one undoable edit.
     EndStroke,
     /// The stroke was abandoned before it committed.
@@ -50,6 +100,16 @@ pub enum Command {
     FrameAll,
     NextMaterial,
     ToggleGrid,
+    /// Cycles what lengths are shown in. Presentation only: no geometry
+    /// moves, which is what makes it safe to put on a single click.
+    NextDisplayUnit,
+    /// Shows or hides the attribution manifest.
+    ToggleAttribution,
+    /// Shows or hides the diagnostics report.
+    ToggleDiagnostics,
+    /// Puts the report on the clipboard, which is the whole point of having
+    /// one: a person pastes it into an issue rather than transcribing it.
+    CopyDiagnostics,
 }
 
 impl Command {
@@ -65,6 +125,29 @@ impl Command {
                 | Self::FrameAll
                 | Self::NextMaterial
                 | Self::ToggleGrid
+                | Self::NextDisplayUnit
+                | Self::ToggleAttribution
+                | Self::ToggleDiagnostics
+                | Self::CopyDiagnostics
+                // Document lifecycle is not an edit. Opening replaces the
+                // document wholesale and saving changes nothing in it, so
+                // neither belongs in the undo history or the modified mark.
+                | Self::NewDocument
+                | Self::OpenDocument
+                | Self::OpenRecent(_)
+                | Self::Save
+                | Self::SaveAs
+                | Self::Quit
+                | Self::ToggleImport
+                | Self::ToggleExport
+                | Self::SetImportSettings(_)
+                | Self::SetExportSettings(_)
+                // Import *does* change the document, but it goes through the
+                // composition root's own path — dialog, then model — and
+                // marks the document itself. Routing it through the ordinary
+                // edit path as well would double the entry.
+                | Self::RunImport
+                | Self::RunExport
                 | Self::SelectTool(_)
                 | Self::SetBrushSize(_)
                 | Self::SetBrushIntensity(_)
@@ -75,8 +158,11 @@ impl Command {
                 | Self::SetBrushSmoothing(_)
                 | Self::ToggleSymmetry(_)
                 // Choosing which layer to work on changes nothing in the
-                // document; changing that layer does.
+                // document; changing that layer does. Entering rigging is the
+                // same: it changes what the pointer means, not the surface.
                 | Self::SelectLayer(_)
+                | Self::ToggleArmatureEditing
+                | Self::SetArmatureMirror(_)
         )
     }
 
@@ -84,6 +170,8 @@ impl Command {
     pub fn label(&self) -> &'static str {
         match self {
             Self::SelectTool(_) => "select tool",
+            Self::ApplyMaskOp(op) => op.label(),
+            Self::ExtrudeMask(_) => "extrude mask",
             Self::SetBrushSize(_) => "brush size",
             Self::SetBrushIntensity(_) => "brush intensity",
             Self::SetBrushFlow(_) => "brush flow",
@@ -96,6 +184,11 @@ impl Command {
             Self::AddLayer => "new layer",
             Self::RemoveLayer(_) => "remove layer",
             Self::ToggleSymmetry(_) => "symmetry",
+            Self::NewArmature => "new armature",
+            Self::ToggleArmatureEditing => "edit armature",
+            Self::RemoveZsphere => "remove zsphere",
+            Self::SetArmatureMirror(_) => "armature mirror",
+            Self::SetSkinThickness(_) => "skin thickness",
             Self::BeginStroke { .. } => "begin stroke",
             Self::ContinueStroke { .. } => "continue stroke",
             Self::EndStroke => "stroke",
@@ -106,6 +199,22 @@ impl Command {
             Self::FrameAll => "frame all",
             Self::NextMaterial => "material",
             Self::ToggleGrid => "grid",
+            Self::NewDocument => "new document",
+            Self::OpenDocument => "open document",
+            Self::OpenRecent(_) => "open recent",
+            Self::Save => "save",
+            Self::SaveAs => "save as",
+            Self::Quit => "quit",
+            Self::ToggleImport => "import panel",
+            Self::ToggleExport => "export panel",
+            Self::SetImportSettings(_) => "import settings",
+            Self::SetExportSettings(_) => "export settings",
+            Self::RunImport => "import",
+            Self::RunExport => "export",
+            Self::NextDisplayUnit => "display unit",
+            Self::ToggleAttribution => "attribution",
+            Self::ToggleDiagnostics => "diagnostics",
+            Self::CopyDiagnostics => "copy diagnostics",
         }
     }
 }
@@ -191,7 +300,11 @@ mod tests {
             Command::SetBrushSize(20.0),
             Command::ToggleSymmetry(Axis::X),
         ] {
-            assert!(!command.touches_document(), "{} is not an edit", command.label());
+            assert!(
+                !command.touches_document(),
+                "{} is not an edit",
+                command.label()
+            );
         }
     }
 

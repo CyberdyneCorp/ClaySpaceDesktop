@@ -6,6 +6,13 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+# Not published: this is an application, and its crates are its internals.
+publish = false
+# The crate carries three binaries — the application, the benchmark and the
+# canonical-document writer — so `cargo run -p clayspace-app` has to be told
+# which, or it refuses. Naming the application here means the obvious command
+# does the obvious thing.
+default-run = "clayspace-app"
 
 [lib]
 name = "clayspace_app"
@@ -15,14 +22,28 @@ path = "src/lib.rs"
 name = "clayspace-app"
 path = "src/main.rs"
 
+[features]
+default = []
+# The whole chain, so the binary can be built for a backend by name.
+metal = ["clayspace-engine/metal"]
+cuda = ["clayspace-engine/cuda"]
+vulkan = ["clayspace-engine/vulkan"]
+opencl = ["clayspace-engine/opencl"]
+
 [dependencies]
 clayspace-engine = { path = "../clayspace-engine" }
 clayspace-model = { version = "0.1.0", path = "../clayspace-model" }
-clayspace-vm = { path = "../clayspace-vm" }
+clayspace-vm = { version = "0.1.0", path = "../clayspace-vm" }
 clayspace-view = { path = "../clayspace-view" }
 winit = "0.30.13"
 wgpu = "24.0.5"
 pollster = "1.0.1"
+egui = "0.31.1"
+egui-wgpu = "0.31.1"
+egui-winit = "0.31.1"
+# Native open and save panels. macOS uses AppKit; Linux prefers the XDG
+# portal and falls back to GTK, so a Wayland session gets its own dialog.
+rfd = "0.15.4"
 
 [dev-dependencies]
 egui = "0.31.1"

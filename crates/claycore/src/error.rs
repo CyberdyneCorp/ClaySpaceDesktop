@@ -143,7 +143,9 @@ fn take_last_error() -> Option<String> {
     if ptr.is_null() {
         return None;
     }
-    let text = unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned();
+    let text = unsafe { CStr::from_ptr(ptr) }
+        .to_string_lossy()
+        .into_owned();
     if text.is_empty() {
         None
     } else {

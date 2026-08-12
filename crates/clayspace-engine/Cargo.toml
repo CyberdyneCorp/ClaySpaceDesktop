@@ -6,6 +6,22 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+# Not published: this is an application, and its crates are its internals.
+publish = false
+
+[features]
+default = []
+# Forwarded to the wrapper and from there to the engine's build. The CPU
+# backend is compiled in unconditionally, so there is no feature for it; these
+# name the accelerated ones a build may additionally ask for.
+#
+# The chain has to be complete: with these missing, `--features
+# clayspace-engine/vulkan` is a resolution error rather than a build with
+# Vulkan, which is how the CI matrix's accelerated rows failed.
+metal = ["claycore/metal"]
+cuda = ["claycore/cuda"]
+vulkan = ["claycore/vulkan"]
+opencl = ["claycore/opencl"]
 
 [dependencies]
 claycore.workspace = true

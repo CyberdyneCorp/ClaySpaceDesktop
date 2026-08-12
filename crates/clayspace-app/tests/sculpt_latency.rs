@@ -106,7 +106,7 @@ fn a_frame_with_no_edit_costs_nothing() {
 
 #[test]
 fn dab_latency_stays_inside_the_budget() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(harness) = Harness::new() else {
         return;
     };
     let mut document = document();
@@ -151,18 +151,31 @@ fn dab_latency_stays_inside_the_budget() {
         );
     }
 
-    assert!(
-        median <= MEDIAN_BUDGET,
-        "median dab latency {:.1} ms exceeds the {} ms budget",
-        median.as_secs_f64() * 1000.0,
-        MEDIAN_BUDGET.as_millis()
-    );
-    assert!(
-        p95 <= P95_BUDGET,
-        "95th percentile dab latency {:.1} ms exceeds the {} ms budget",
-        p95.as_secs_f64() * 1000.0,
-        P95_BUDGET.as_millis()
-    );
+    // The budget is a property of the binary that ships. An unoptimised
+    // build runs this work about two and a half times slower, so asserting a
+    // real-time bound against it measures the profile rather than the code —
+    // and the pressure that creates is to loosen the budget or to undo a
+    // correctness fix to fit it. Debug still runs everything above and prints
+    // the numbers; only the verdict is held for a build that means something.
+    if cfg!(debug_assertions) {
+        println!(
+            "  (debug build: timings reported, not asserted — \
+             run with --release for the verdict)"
+        );
+    } else {
+        assert!(
+            median <= MEDIAN_BUDGET,
+            "median dab latency {:.1} ms exceeds the {} ms budget",
+            median.as_secs_f64() * 1000.0,
+            MEDIAN_BUDGET.as_millis()
+        );
+        assert!(
+            p95 <= P95_BUDGET,
+            "95th percentile dab latency {:.1} ms exceeds the {} ms budget",
+            p95.as_secs_f64() * 1000.0,
+            P95_BUDGET.as_millis()
+        );
+    }
 
     // And the result is worth looking at, not only timing.
     let camera = {
@@ -178,7 +191,7 @@ fn dab_latency_stays_inside_the_budget() {
 
 #[test]
 fn compaction_rebuilds_the_surface_without_changing_it() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(harness) = Harness::new() else {
         return;
     };
     let mut document = document();
@@ -208,7 +221,7 @@ fn compaction_rebuilds_the_surface_without_changing_it() {
     let before = harness.capture(geometry.mesh(), &camera, false, "51-before-compaction");
 
     geometry
-        .rebuild(&harness.gpu, &document)
+        .rebuild(&harness.gpu, &mut document)
         .expect("compaction");
     let after = harness.capture(geometry.mesh(), &camera, false, "51-after-compaction");
 

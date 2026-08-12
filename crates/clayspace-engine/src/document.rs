@@ -5,12 +5,16 @@
 //! holds.
 
 use claycore::{
-    Blend, BrickCache, BrickConfig, BrickKey, BrushParams, BrushShape, Document, Falloff, Item,
-    LayerId, Mask, NodeId, Op, StrokePreset, VoxelGrid,
+    Blend, BrickCache, BrickConfig, BrickKey, BrushParams, BrushShape, Document, Falloff,
+    ImportBudget, Item, LayerId, Mask, Mesh, MeshLayerDesc, MeshParams, Mesher, NodeId, Op,
+    StrokePreset, VolumeParams, VoxelGrid,
 };
 use clayspace_model::{
-    BrushSettings, EditOutcome, GestureSample, HistoryState, LayerKey, LayerSummary, ModelError,
-    Protection, Representation, Scene, SceneModel, SceneNode, SceneStats, SculptModel, ToolKind,
+    Armature, ArmatureModel, BrushSettings, DocumentModel, EditOutcome, ExchangeModel,
+    ExportMesher, ExportSettings, ExtrudeSettings, Format, GestureSample, HistoryState, ImportAs,
+    ImportSettings, LayerKey, LayerSummary, MaskModel, MaskOp, MaskState, ModelError, NodeIndex,
+    OpenError, Protection, Representation, Scene, SceneModel, SceneNode, SceneStats, SculptModel,
+    SkinSettings, ToolKind,
 };
 
 use crate::backend::{BackendPolicy, Operation};
@@ -67,16 +71,40 @@ pub struct ClayDocument {
     /// different layer after a removal.
     next_key: u64,
     selected: Option<LayerKey>,
+    /// The armature on the active layer: which node carries it, and the tree.
+    ///
+    /// The tree is held here because the engine's parent array has no getter —
+    /// positions and radii read back, the topology does not. So this is the
+    /// record and the engine is written from it.
+    armature: Option<(LayerId, NodeId, Armature)>,
+    /// The box the placed armature last occupied.
+    ///
+    /// Kept because an edit that *shrinks* a rig leaves surface behind
+    /// otherwise: the new node's own region is refilled when it is placed, and
+    /// the bricks the old one used are never told anything changed. Removing an
+    /// arm left the arm on screen.
+    armature_bounds: Option<([f32; 3], [f32; 3])>,
+    skin: SkinSettings,
 }
 
 impl ClayDocument {
     /// Builds a document with one SDF layer holding a starting form.
     pub fn new(policy: BackendPolicy) -> Result<Self, ModelError> {
         let mut document = Document::new().map_err(ModelError::engine)?;
-        let id = document.add_sdf_layer("Forma").map_err(ModelError::engine)?;
-        // Before undo starts recording: the starting mirror is part of making
-        // the document, not something a user did. Setting it afterwards makes
-        // the first stroke cost two undos where later ones cost one.
+        let id = document
+            .add_sdf_layer("Forma")
+            .map_err(ModelError::engine)?;
+        // X, as the design asks for.
+        //
+        // This was off for the whole of 0.26 and 0.27: `clay_set_layer_mirror`
+        // stored the plane, but per-item participation defaulted to *excluded*,
+        // so the sequence every host writes — set the mirror, add items —
+        // mirrored nothing, and a sculptor would have watched half of every
+        // stroke vanish. ClayCore 0.28.0 makes participation default to
+        // mirrored (#60), and `claycore_repros.rs` is what noticed.
+        //
+        // Set before undo starts recording either way: the starting mirror is
+        // part of making the document, not something a user did.
         let symmetry = [true, false, false];
         document
             .set_layer_mirror(id, symmetry, 0.0)
@@ -89,7 +117,7 @@ impl ClayDocument {
             // dirty set then meshes more cells overall — 64 ms against 39 ms
             // on the same edit.
             dim: 8,
-            voxel_size: 0.02,
+            voxel_size: Self::VOXEL_SIZE,
             band_voxels: 3,
             memory_budget: Some(512 * 1024 * 1024),
             colors: false,
@@ -117,9 +145,28 @@ impl ClayDocument {
             symmetry,
             next_key: 2,
             selected: None,
+            armature: None,
+            armature_bounds: None,
+            skin: SkinSettings::default(),
         };
         model.refresh_stats();
         Ok(model)
+    }
+
+    /// Places a sphere of the given radius in the first layer.
+    ///
+    /// Separate from [`ClayDocument::with_starting_form`] because the
+    /// benchmark's reference scenes differ only in scale, and building them
+    /// through the same path as the application keeps them honest.
+    pub fn add_starting_sphere(&mut self, radius: f32) -> Result<(), ModelError> {
+        let layer = self.layers[0].id;
+        let body = Item::sphere(radius).map_err(ModelError::engine)?;
+        self.document
+            .add_item(layer, &body)
+            .map_err(ModelError::engine)?;
+        self.refill(layer, &[])?;
+        self.refresh_stats();
+        Ok(())
     }
 
     /// Places a starting sphere so there is something to sculpt on.
@@ -140,6 +187,11 @@ impl ClayDocument {
     }
 
     /// The brick cache the viewport re-meshes from.
+    /// The cache, for the few callers that need to build a mip.
+    pub fn cache_mut(&mut self) -> &mut BrickCache {
+        &mut self.cache
+    }
+
     pub fn cache(&self) -> &BrickCache {
         &self.cache
     }
@@ -215,6 +267,19 @@ impl ClayDocument {
     /// the initial fill finds nothing new and so fell back to re-meshing every
     /// surface brick: 1043 keys per dab instead of the influence bound, and a
     /// 267 ms dab against a 50 ms budget.
+    /// Refills the cache for a bounded box of world space.
+    ///
+    /// For edits the engine reports as a count rather than as nodes — the
+    /// surface move is the one — where marking by layer would be correct but
+    /// ruinous. `Mover` did exactly that: every segment of a drag re-meshed
+    /// the whole surface, 5.6 seconds a segment against a 50 ms budget.
+    fn refill_region(&mut self, min: [f32; 3], max: [f32; 3]) -> Result<(), ModelError> {
+        self.cache
+            .mark_dirty(min, max)
+            .map_err(ModelError::engine)?;
+        self.drain_dirty()
+    }
+
     fn refill(&mut self, layer: LayerId, nodes: &[NodeId]) -> Result<(), ModelError> {
         if nodes.is_empty() {
             self.cache
@@ -226,28 +291,41 @@ impl ClayDocument {
                 .map_err(ModelError::engine)?;
         }
 
-        let backend = self.policy.active().clone();
+        self.drain_dirty()
+    }
+
+    /// Meshes and refills whatever is currently marked dirty.
+    fn drain_dirty(&mut self) -> Result<(), ModelError> {
+        // Routed per batch rather than once for the whole drain: a stroke's
+        // last iteration is often a handful of residual bricks, and those are
+        // cheaper on the CPU than the fixed cost of a device submission.
+        // `refill_backend` holds the threshold, and `backend_choice.rs` fails
+        // if the measured ratio ever flips back.
         let mut dirty = Vec::new();
         loop {
-            let (requests, remaining) = self
-                .cache
-                .take_dirty(512)
-                .map_err(ModelError::engine)?;
+            let (requests, remaining) = self.cache.take_dirty(512).map_err(ModelError::engine)?;
             if requests.is_empty() {
                 break;
             }
             dirty.extend(requests.iter().map(|request| request.key()));
+            let backend = self.policy.refill_backend(requests.len()).cloned();
             self.cache
-                .refill(&self.document, Some(&backend), &requests)
+                .refill(&self.document, backend.as_ref(), &requests)
                 .map_err(ModelError::engine)?;
             if remaining == 0 {
                 break;
             }
         }
 
-        dirty.sort();
-        dirty.dedup();
-        self.dirty = dirty;
+        // Accumulated, not assigned. This set is pending work for the
+        // viewport and is only emptied by `take_dirty_keys`. Overwriting it
+        // dropped every edit that landed between two frames: the viewport
+        // re-meshed the last dab's neighbourhood and left the rest of the
+        // stroke as it was, which drew a closed outline of stale geometry
+        // around the edit. `visual_incremental` shows it.
+        self.dirty.extend(dirty);
+        self.dirty.sort();
+        self.dirty.dedup();
         Ok(())
     }
 
@@ -286,6 +364,52 @@ impl ClayDocument {
     }
 
     /// Turns the domain's brush settings into the engine's stroke preset.
+    /// Adds a prepared volume to the active layer. For tests that need to
+    /// drive the bake-and-replace path with parameters the tools do not
+    /// expose, so a sweep can find the ones that work.
+    pub fn add_volume_for_test(&mut self, volume: Item) -> Result<(), ModelError> {
+        let layer = self.active_layer().id;
+        let node = self
+            .document
+            .add_item(layer, &volume)
+            .map_err(ModelError::engine)?;
+        self.refill(layer, &[node])
+    }
+
+    /// The spacing a bake-and-replace tool samples the document at.
+    ///
+    /// Suavizar, Relaxar, Planar and Polir do not stamp: they sample a region
+    /// into a volume, modify it, and add it back with `Op::Replace`. Whatever
+    /// they do in between, the replacement can be no finer than this — so
+    /// sampling coarser than the brick cache draws at replaces a region of the
+    /// surface with a blockier version of itself, which is what made those
+    /// four crumble.
+    pub fn bake_cell_size(brush_size: f32) -> f32 {
+        let _ = brush_size;
+        Self::VOXEL_SIZE
+    }
+
+    /// The brick cache's sampling, which is what the viewport draws.
+    pub const VOXEL_SIZE: f32 = 0.02;
+
+    /// The most positional jitter we pass through to the engine.
+    ///
+    /// Zero, which means the design's Ruído control does not reach the engine.
+    ///
+    /// This was set after measuring a document/brick-cache disagreement on a
+    /// jittered stroke at 0.02 voxels with a 3-voxel band. It does **not**
+    /// reproduce at 0.01 voxels with a 6-voxel band, where the two agree to
+    /// within 0.002 — so the disagreement is about the narrow band being too
+    /// thin to carry the displacement, not about jitter, and the ClayCore bug
+    /// this once claimed does not exist. `claycore_repros.rs` holds the
+    /// measurement.
+    ///
+    /// It stays at zero for now because the cache we run is the thin-band one
+    /// and a stroke that vanishes is the worst failure this tool can have. The
+    /// honest fix is a band wide enough for the brush, not a clamp; that is
+    /// open work, and raising this is what should happen once it is done.
+    pub const MAX_JITTER: f32 = 0.0;
+
     fn preset(&self, brush: BrushSettings, tool: ToolKind) -> StrokePreset {
         let brush = brush.sanitized();
         StrokePreset {
@@ -295,7 +419,18 @@ impl ClayDocument {
             strength: brush.intensity,
             // The design's Ruído, Suavização and Acumular, each landing on the
             // preset field the engine already has for it.
-            jitter_position: brush.shaping.noise,
+            // Clamped to `MAX_JITTER`, because the engine's two evaluators
+            // disagree about a jittered stroke: it shows up in
+            // `Document::raycast` but not in the brick cache — not even in a
+            // cache built from scratch afterwards, so it is the brick
+            // evaluation itself and not the dirty marking. The viewport meshes
+            // from the cache, so such a stroke is invisible: the document
+            // grows, undo fills up, and the screen never changes. That is what
+            // shipped, with Ruído defaulting to 0.15.
+            //
+            // The clamp lives here rather than in the domain because it is a
+            // fact about this engine, not about brushes.
+            jitter_position: brush.shaping.noise.min(Self::MAX_JITTER),
             steady: brush.shaping.smoothing,
             accumulation: if tool == ToolKind::Camada || !brush.shaping.accumulate {
                 // Camada is the clamped-accumulation tool by definition, and
@@ -327,17 +462,39 @@ impl ClayDocument {
             })
             .collect();
 
-        let stamp = Item::sphere(brush.sanitized().size).map_err(ModelError::engine)?;
-        let mut stamp = stamp;
+        // Every tool that reaches here is a relief tool. There is no catch-all
+        // arm any more: the one that was here mapped anything unlisted to
+        // `Op::Add`, which adds a *sphere* — so the planing tools deposited
+        // blobs and nothing said so. A tool with no mapping now refuses.
+        let op = match tool {
+            ToolKind::Padrao | ToolKind::Camada | ToolKind::Inflar => Op::Relief,
+            other => {
+                return Err(ModelError::engine(format!(
+                    "{} has no mapping onto an SDF verb; it should not have \
+                     been offered on this layer",
+                    other.label()
+                )))
+            }
+        };
+
+        let mut stamp = Item::sphere(brush.sanitized().size).map_err(ModelError::engine)?;
+        stamp.set_op(op).map_err(ModelError::engine)?;
+        // For CLAY_OP_RELIEF the item is the *region* and `blend_k` is the
+        // amplitude the surface moves by along its own normal — not a
+        // smoothing distance. It was set to 40% of the radius, which measured
+        // as a displacement of about a sixth of the brush: a stroke that left
+        // the sphere looking untouched. The engine saturates the amplitude at
+        // roughly the radius, so that is what it is asked for, and `strength`
+        // scales it from there.
         stamp
-            .set_op(match tool {
-                ToolKind::Padrao | ToolKind::Camada | ToolKind::Inflar => Op::Relief,
-                ToolKind::Mascara => Op::Relief,
-                _ => Op::Add,
-            })
+            .set_blend(Blend::Quadratic, brush.sanitized().size)
             .map_err(ModelError::engine)?;
+        // The item's rounding is the falloff width, and it was never set at
+        // all. Measured, going from zero to the brush radius tripled the
+        // displacement — leaving it at zero was throwing away most of the
+        // brush as well as its soft edge.
         stamp
-            .set_blend(Blend::Quadratic, brush.sanitized().size * 0.4)
+            .set_rounding(brush.sanitized().size)
             .map_err(ModelError::engine)?;
 
         // The mirror is written only when it changes, so an unchanged setting
@@ -384,11 +541,7 @@ impl ClayDocument {
         ];
         // A drag under the resolution moves nothing; reporting that as an edit
         // would put an entry in the history for a gesture that did not land.
-        let travelled = displacement
-            .iter()
-            .map(|d| d * d)
-            .sum::<f32>()
-            .sqrt();
+        let travelled = displacement.iter().map(|d| d * d).sum::<f32>().sqrt();
         if travelled < 1e-4 {
             return Ok(EditOutcome::NOTHING);
         }
@@ -412,7 +565,20 @@ impl ClayDocument {
         if applied == 0 {
             return Ok(EditOutcome::NOTHING);
         }
-        self.refill(layer, &[])?;
+        // The box the move can have touched: the brush around where it started
+        // and around where it ended, and nothing else. `move_surface` reports a
+        // count rather than nodes, which is why this is computed here rather
+        // than asked for.
+        let reach = brush.size + travelled;
+        let mut min = [0.0f32; 3];
+        let mut max = [0.0f32; 3];
+        for axis in 0..3 {
+            let a = first.position[axis];
+            let b = a + displacement[axis];
+            min[axis] = a.min(b) - reach;
+            max[axis] = a.max(b) + reach;
+        }
+        self.refill_region(min, max)?;
         Ok(EditOutcome {
             changed: true,
             dirty_bricks: self.dirty.len(),
@@ -431,18 +597,46 @@ impl ClayDocument {
         let brush = brush.sanitized();
         let layer = self.active_layer().id;
 
+        // The mask, honoured here rather than by the engine.
+        //
+        // A mask reaches an SDF edit inside the stroke engine, where a stamp
+        // in a frozen region emits nothing. This verb does not go through the
+        // stroke engine — it authors a curve item and adds it — so
+        // `clay_layer_add_item` has nowhere to take a mask and the frozen
+        // region would be pulled like any other. Sampling the mask along the
+        // path and dropping the frozen samples is the same rule applied where
+        // this verb can apply it.
+        let live: Vec<&GestureSample> = match self.mask.as_ref() {
+            Some(mask) => {
+                let positions: Vec<[f32; 3]> = samples.iter().map(|s| s.position).collect();
+                let frozen = mask.sample_many(&positions).map_err(ModelError::engine)?;
+                samples
+                    .iter()
+                    .zip(frozen)
+                    .filter(|(_, value)| *value < 0.5)
+                    .map(|(sample, _)| sample)
+                    .collect()
+            }
+            None => samples.iter().collect(),
+        };
+        if live.len() < 2 {
+            // All of it, or all but a point, was frozen.
+            return Ok(EditOutcome::NOTHING);
+        }
+
         // The path as control points, each carrying the radius at that point.
         // Tapering toward the tip is what makes it read as a pulled tendril
         // rather than a tube.
-        let mut points = Vec::with_capacity(samples.len() * 4);
-        for (index, sample) in samples.iter().enumerate() {
-            let t = index as f32 / (samples.len() - 1) as f32;
+        let mut points = Vec::with_capacity(live.len() * 4);
+        for (index, sample) in live.iter().enumerate() {
+            let t = index as f32 / (live.len() - 1) as f32;
             points.extend_from_slice(&sample.position);
             points.push(brush.size * (1.0 - 0.7 * t));
         }
 
         let mut item = Item::stroke().map_err(ModelError::engine)?;
-        item.set_stroke_points(&points).map_err(ModelError::engine)?;
+        item.set_stroke_points(&points)
+            .map_err(ModelError::engine)?;
         item.set_op(Op::Add).map_err(ModelError::engine)?;
         item.set_stroke_blend_k(brush.size * 0.5)
             .map_err(ModelError::engine)?;
@@ -487,28 +681,196 @@ impl ClayDocument {
             (min[2] + max[2]) * 0.5,
         ];
 
+        // One pass, at the brush's own radius about the gesture's centre.
+        //
+        // Three shapes were measured, on a deliberately bumpy surface, scored
+        // by how much neighbouring pixels disagree — a smoothing tool should
+        // leave that lower than it found it (4.9 before, in these units):
+        //
+        //   one pass at the brush radius   7   <- this
+        //   one pass over the whole gesture  13
+        //   one pass per sample              11
+        //
+        // Widening the region or repeating the pass both make it worse, which
+        // is not what one would guess. It is measured rather than reasoned,
+        // and the reason is not yet understood — see the note in
+        // `visual_bake_tools`.
+        let cell = Self::bake_cell_size(brush.size);
+        // The verb still acts at the brush's radius about the gesture; only
+        // the sampled box grows, so the crossfade has untouched clay to land
+        // in.
+        let (mut min, mut max) = (min, max);
+        Self::grown_for_feather(&mut min, &mut max, cell);
         let mut volume = self
             .document
-            .volume_from_region(
-                claycore::VolumeParams {
-                    cell_size: Some(brush.size * 0.25),
-                    ..Default::default()
+            .relax_region(
+                &claycore::RelaxParams {
+                    strength: brush.intensity,
+                    radius_cells: 1,
+                    iterations: 2,
+                    centre,
+                    region_radius: brush.size,
+                    falloff: brush.size * 0.5,
+                    mask: self.mask.as_deref(),
                 },
+                Self::bake_volume(cell),
                 min,
                 max,
             )
             .map_err(ModelError::engine)?;
 
-        volume
-            .relax(&claycore::RelaxParams {
-                strength: brush.intensity,
-                radius_cells: 1,
-                iterations: 2,
-                centre,
-                region_radius: brush.size,
-                falloff: brush.size * 0.5,
-                mask: self.mask.as_deref(),
+        volume.set_op(Op::Replace).map_err(ModelError::engine)?;
+        let node = self
+            .document
+            .add_item(layer, &volume)
+            .map_err(ModelError::engine)?;
+        self.refill(layer, &[node])?;
+        Ok(EditOutcome {
+            changed: true,
+            dirty_bricks: self.dirty.len(),
+        })
+    }
+
+    /// Paints the mask along the stroke — Máscara.
+    ///
+    /// Freezes a region against every verb, which is what a mask is for. It
+    /// was mapped onto `Op::Relief` and deformed the surface instead: the tool
+    /// that is supposed to protect the clay was denting it, and
+    /// [`ToolKind::engine_verb`] said `clay_mask_apply_stroke` all along.
+    fn mask_stroke(
+        &mut self,
+        brush: BrushSettings,
+        samples: &[GestureSample],
+    ) -> Result<EditOutcome, ModelError> {
+        let brush = brush.sanitized();
+        let preset = self.preset(brush, ToolKind::Mascara);
+        let stroke: Vec<claycore::StrokeSample> = samples
+            .iter()
+            .map(|s| claycore::StrokeSample {
+                position: s.position,
+                pressure: s.pressure,
+                time: s.time,
             })
+            .collect();
+
+        if self.mask.is_none() {
+            // The cache's own spacing, not a fraction of the brush.
+            //
+            // A quarter of the brush was tried: at the default brush that is a
+            // 0.1 cell, coarser than anything the surface can express, and
+            // `clay_document_mask_extrude` refuses a wall thinner than a cell —
+            // so a mask painted with a large brush could not be extruded at any
+            // sensible thickness. Matching the voxel size makes a mask as fine
+            // as the thing it freezes.
+            self.mask = Some(Mask::new(Self::VOXEL_SIZE).map_err(ModelError::engine)?);
+        }
+
+        let painted = {
+            let mask = self.mask.as_mut().expect("just created");
+            mask.apply_stroke(
+                &stroke,
+                &preset,
+                brush.intensity,
+                BrushShape::Sphere,
+                Falloff::Smooth,
+            )
+            .map_err(ModelError::engine)?
+        };
+
+        // Nothing in the surface moved, and nothing needs re-meshing: a mask
+        // is state the *next* stroke reads.
+        Ok(EditOutcome {
+            changed: painted > 0,
+            dirty_bricks: 0,
+        })
+    }
+
+    /// Pulls the region the stroke covered onto a plane — Planar and Polir.
+    ///
+    /// Both were reaching for `clay_item_volume_flatten`, as
+    /// [`ToolKind::engine_verb`] says. It was not bound, and they fell through
+    /// a `_ => Op::Add` arm that added a sphere instead: a planing tool that
+    /// deposited a blob. The catch-all is gone with them.
+    ///
+    /// Cut-only, because a planing tool must remove what stands proud without
+    /// filling the hollows it is meant to reveal — two-sided flatten is a
+    /// different verb with a different name.
+    fn flatten_stroke(
+        &mut self,
+        brush: BrushSettings,
+        samples: &[GestureSample],
+    ) -> Result<EditOutcome, ModelError> {
+        let brush = brush.sanitized();
+        let layer = self.active_layer().id;
+
+        let mut min = [f32::INFINITY; 3];
+        let mut max = [f32::NEG_INFINITY; 3];
+        for sample in samples {
+            for axis in 0..3 {
+                min[axis] = min[axis].min(sample.position[axis] - brush.size);
+                max[axis] = max[axis].max(sample.position[axis] + brush.size);
+            }
+        }
+        let centre = [
+            (min[0] + max[0]) * 0.5,
+            (min[1] + max[1]) * 0.5,
+            (min[2] + max[2]) * 0.5,
+        ];
+
+        // The plane the stroke defines: through the middle of what it covered,
+        // facing the way the surface does there. Without a surface normal to
+        // read, the outward direction from the centre of the region is the
+        // best available answer and is right for a convex form.
+        let normal = {
+            let length =
+                (centre[0] * centre[0] + centre[1] * centre[1] + centre[2] * centre[2]).sqrt();
+            if length < 1e-5 {
+                [0.0, 1.0, 0.0]
+            } else {
+                [centre[0] / length, centre[1] / length, centre[2] / length]
+            }
+        };
+
+        // Sampled and flattened in one step, straight from the document.
+        //
+        // Baking with `volume_from_region` and then flattening the result was
+        // the first version, because `clay_item_volume_flatten_from` did not
+        // exist when this was written — it arrived in 0.27.0. The engine's own
+        // note on the difference: a volume reports a distance only inside the
+        // band it carries and a lower bound outside it, so a facet moving
+        // further than the band is placed against the bound and "a wrong shape
+        // [is] returned with CLAY_OK". A document has no band.
+        //
+        // One pass covering everything the gesture touched, for the same
+        // reason relax does. The plane stays put: a planing tool cuts to one
+        // plane, and that is what makes a facet.
+        let reach = (0..3)
+            .map(|axis| (max[axis] - min[axis]) * 0.5)
+            .fold(0.0f32, f32::max);
+        // As for relax: the box grows so the crossfade lands outside what the
+        // verb touched, and the verb's own region_radius is unchanged.
+        let cell = Self::bake_cell_size(brush.size);
+        let (mut min, mut max) = (min, max);
+        Self::grown_for_feather(&mut min, &mut max, cell);
+        let mut volume = self
+            .document
+            .flatten_region(
+                &claycore::FlattenParams {
+                    plane_point: centre,
+                    plane_normal: normal,
+                    strength: brush.intensity,
+                    centre,
+                    // Required positive: with no region the engine replaces
+                    // the shape with a half-space, and a ball comes back a box.
+                    region_radius: reach + brush.size,
+                    falloff: brush.size * 0.5,
+                    mode: claycore::FlattenMode::CutOnly,
+                    mask: self.mask.as_deref(),
+                },
+                Self::bake_volume(cell),
+                min,
+                max,
+            )
             .map_err(ModelError::engine)?;
 
         volume.set_op(Op::Replace).map_err(ModelError::engine)?;
@@ -578,10 +940,24 @@ impl ClayDocument {
                 ToolKind::Suavizar | ToolKind::Relaxar => grid.sculpt_smooth(cell, &params),
                 ToolKind::Inflar => grid.sculpt_inflate(cell, &params, 1),
                 ToolKind::Pincar => grid.sculpt_pinch(cell, &params),
-                ToolKind::Raspar => {
-                    grid.sculpt_scrape(cell, &params, [0.0, 1.0, 0.0], 0.0)
+                ToolKind::Raspar => grid.sculpt_scrape(cell, &params, [0.0, 1.0, 0.0], 0.0),
+                // At full strength, whatever Intensidade says.
+                //
+                // Every voxel verb dithers its writes against a hash of the
+                // cell coordinate when strength is below 1 — that is how a
+                // soft stamp works on binary occupancy. For a *repair* verb
+                // that is incoherent: Preencher closes a one-cell hole or it
+                // does not, and dithering means it scatters the very repairs
+                // it was asked to make. Measured, with the same perforated
+                // material: 0 cells closed at the default intensity, 6 at
+                // full strength. `voxel_tools.rs` is the regression.
+                ToolKind::Preencher => {
+                    let solid = BrushParams {
+                        strength: 1.0,
+                        ..params
+                    };
+                    grid.sculpt_fill_cavities(cell, &solid, 2)
                 }
-                ToolKind::Preencher => grid.sculpt_fill_cavities(cell, &params, 2),
                 ToolKind::Nudge => grid.sculpt_smudge(cell, &params, [1.0, 0.0, 0.0]),
                 // Anything else deposits material, which is what a default
                 // brush does on a voxel grid.
@@ -640,6 +1016,10 @@ impl SculptModel for ClayDocument {
                 ToolKind::Puxar => self.snakehook_stroke(brush, samples),
                 // Bake-and-relax over the region the stroke covered.
                 ToolKind::Suavizar | ToolKind::Relaxar => self.relax_stroke(brush, samples),
+                // Bake-and-flatten, cut-only.
+                ToolKind::Planar | ToolKind::Polir => self.flatten_stroke(brush, samples),
+                // Paints the freeze, and moves nothing.
+                ToolKind::Mascara => self.mask_stroke(brush, samples),
                 _ => self.stroke_sdf(tool, brush, samples, symmetry),
             },
             Representation::Voxel => self.stroke_voxel(tool, brush, samples),
@@ -708,7 +1088,6 @@ impl SculptModel for ClayDocument {
 
 /// Kept so the routing type is visible to readers of this module's imports.
 const _: fn(Operation) -> &'static str = Operation::label;
-
 
 impl SceneModel for ClayDocument {
     fn scene(&self) -> Scene {
@@ -793,9 +1172,7 @@ impl SceneModel for ClayDocument {
             .map_err(ModelError::engine)?;
         let key = self.take_key();
         let grid = match representation {
-            Representation::Voxel => {
-                Some(VoxelGrid::new(0.02).map_err(ModelError::engine)?)
-            }
+            Representation::Voxel => Some(VoxelGrid::new(0.02).map_err(ModelError::engine)?),
             _ => None,
         };
         self.layers.push(Layer {
@@ -820,9 +1197,7 @@ impl SceneModel for ClayDocument {
             ));
         }
         let id = self.layers[index].id;
-        self.document
-            .remove_layer(id)
-            .map_err(ModelError::engine)?;
+        self.document.remove_layer(id).map_err(ModelError::engine)?;
         self.layers.remove(index);
         self.active = self.active.min(self.layers.len() - 1);
         if self.selected == Some(key) {
@@ -959,6 +1334,53 @@ impl ClayDocument {
         self.index_of(key).map(|index| self.layers[index].id)
     }
 
+    /// How a bake-and-replace verb samples the document.
+    ///
+    /// The feather is the whole of ClayCore #67. A hard `CLAY_OP_REPLACE`
+    /// holds *both* fields live at the boundary: the baked volume ties with
+    /// the field beneath it at every sample plane, and branch-switching
+    /// between two fields that touch ripples the normals at the cell
+    /// wavelength. The zero set was exact and the shading was not, which is
+    /// why Suavizar, Relaxar, Planar and Polir corrugated everything they
+    /// touched. With a feather the inside is the volume, the outside is the
+    /// original field, and the two crossfade.
+    ///
+    /// One band is the engine's stated sweet spot, and the band defaults to
+    /// three cells — so the feather is three cells too. Wider costs the
+    /// document's safe step scale; narrower brings the tie back.
+    fn bake_volume(cell: f32) -> claycore::VolumeParams {
+        claycore::VolumeParams {
+            cell_size: Some(cell),
+            feather: Some(Self::feather_for(cell)),
+            ..Default::default()
+        }
+    }
+
+    /// The crossfade margin, and how far the sampled box must grow to hold it.
+    ///
+    /// One band — the engine's stated sweet spot, and the band defaults to
+    /// three cells.
+    fn feather_for(cell: f32) -> f32 {
+        cell * 3.0
+    }
+
+    /// Grows a bake region so the crossfade lands in clay the verb never
+    /// reached.
+    ///
+    /// The feather is measured *inward* from the box faces, so a box sized to
+    /// the verb's own reach spends its whole margin crossfading away the very
+    /// thing the verb did. Measured: Suavizar and Relaxar went from changing
+    /// 15% of the subject to changing nothing at all. Padding by twice the
+    /// feather puts the whole crossfade outside the verb's reach, which is
+    /// what the engine means by "bake with a band that covers the verb".
+    fn grown_for_feather(min: &mut [f32; 3], max: &mut [f32; 3], cell: f32) {
+        let margin = Self::feather_for(cell) * 2.0;
+        for axis in 0..3 {
+            min[axis] -= margin;
+            max[axis] += margin;
+        }
+    }
+
     /// The spacing a collapse samples at.
     ///
     /// Taken from the brick cache, which is the one place that knows the scale
@@ -966,5 +1388,584 @@ impl ClayDocument {
     /// has no intrinsic scale the way a mesh's bounds give one.
     fn consolidation_params(&self) -> claycore::ConsolidationParams {
         claycore::ConsolidationParams::at(self.cache.config().voxel_size)
+    }
+}
+
+impl DocumentModel for ClayDocument {
+    fn save(&mut self, path: &std::path::Path) -> Result<(), ModelError> {
+        self.document.save(path).map_err(ModelError::engine)
+    }
+
+    fn open(&mut self, path: &std::path::Path) -> Result<(), OpenError> {
+        // Built completely before anything here is touched. A failed open must
+        // leave the sculptor's work exactly as it was — losing it to a
+        // mistyped filename would be the worst bug this application could
+        // have.
+        let opened = Self::from_file(path, self.policy.clone())?;
+        *self = opened;
+        Ok(())
+    }
+
+    fn reset(&mut self) -> Result<(), ModelError> {
+        let fresh = Self::new(self.policy.clone()).and_then(Self::with_starting_form)?;
+        *self = fresh;
+        Ok(())
+    }
+}
+
+impl ClayDocument {
+    /// Reads a document from disk into a complete model.
+    fn from_file(path: &std::path::Path, policy: BackendPolicy) -> Result<Self, OpenError> {
+        let unreadable = |detail: String| OpenError::Unreadable {
+            path: path.to_path_buf(),
+            detail,
+        };
+
+        let document = Document::open(path).map_err(|e| match e.kind() {
+            claycore::ErrorKind::NotFound => OpenError::NotFound(path.to_path_buf()),
+            // The one failure a user can act on without help: the document is
+            // fine and this build is behind.
+            claycore::ErrorKind::ForwardVersion => OpenError::TooNew {
+                path: path.to_path_buf(),
+                detail: e.to_string(),
+            },
+            _ => unreadable(e.to_string()),
+        })?;
+
+        let ids = document
+            .layer_ids()
+            .map_err(|e| unreadable(e.to_string()))?;
+        if ids.is_empty() {
+            return Err(unreadable("it holds no layers".to_string()));
+        }
+
+        // Ids and protection are all that survive: the ABI has no getter for a
+        // layer's name, visibility or representation, so a reopened document
+        // comes back anonymous and every layer is treated as SDF. Reported
+        // upstream; until then this is what a host can know.
+        let layers: Vec<Layer> = ids
+            .iter()
+            .enumerate()
+            .map(|(index, id)| Layer {
+                id: *id,
+                key: LayerKey(index as u64 + 1),
+                name: format!("Camada {}", index + 1),
+                representation: Representation::Sdf,
+                grid: None,
+                visible: true,
+                protection: document
+                    .layer_protection(*id)
+                    .map(|p| Protection {
+                        ghost: p.ghost,
+                        locked: p.locked,
+                    })
+                    .unwrap_or_default(),
+                intensity: 100,
+            })
+            .collect();
+
+        let cache = BrickCache::new(BrickConfig {
+            dim: 8,
+            voxel_size: Self::VOXEL_SIZE,
+            band_voxels: 3,
+            memory_budget: Some(512 * 1024 * 1024),
+            colors: false,
+        })
+        .map_err(|e| unreadable(e.to_string()))?;
+
+        let next_key = layers.len() as u64 + 1;
+        let mut model = Self {
+            document,
+            layers,
+            active: 0,
+            cache,
+            policy,
+            dirty: Vec::new(),
+            stats: SceneStats::default(),
+            mask: None,
+            symmetry: [false; 3],
+            next_key,
+            selected: None,
+            armature: None,
+            armature_bounds: None,
+            skin: SkinSettings::default(),
+        };
+
+        // Undo starts recording from here: opening is not something the user
+        // did to the document, and it must not be undoable back into an empty
+        // one.
+        model
+            .document
+            .enable_undo()
+            .map_err(|e| unreadable(e.to_string()))?;
+
+        let ids: Vec<LayerId> = model.layers.iter().map(|layer| layer.id).collect();
+        for id in ids {
+            model
+                .refill(id, &[])
+                .map_err(|e| unreadable(e.to_string()))?;
+        }
+        model.refresh_stats();
+        Ok(model)
+    }
+}
+
+impl ExchangeModel for ClayDocument {
+    fn import_mesh(
+        &mut self,
+        path: &std::path::Path,
+        settings: ImportSettings,
+    ) -> Result<(), ModelError> {
+        // The format is checked before the engine is asked, so an unreadable
+        // one is refused by name rather than by a decoder error naming a
+        // library the sculptor has never heard of.
+        match Format::of(path) {
+            Some(format) if format.can_import() => {}
+            Some(format) => {
+                return Err(ModelError::engine(format!(
+                    "o motor não lê {}; ele grava esse formato mas não o importa",
+                    format.extension().to_uppercase()
+                )))
+            }
+            None => return Err(ModelError::engine("formato desconhecido")),
+        }
+
+        // The budget is checked against the file's declared counts before
+        // anything is allocated, which is the point: a malformed file can
+        // claim a billion triangles.
+        let mesh = Mesh::load_within(
+            path,
+            ImportBudget {
+                max_vertices: settings.max_vertices,
+                max_triangles: settings.max_triangles,
+            },
+        )
+        .map_err(ModelError::engine)?;
+
+        let name = path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Importado".to_string());
+
+        match settings.becomes {
+            ImportAs::Reference => self.attach_reference(&mesh, &name, settings),
+            ImportAs::Clay => self.sample_into_clay(&mesh, &name, settings),
+        }
+    }
+
+    fn export_mesh(
+        &mut self,
+        path: &std::path::Path,
+        settings: ExportSettings,
+    ) -> Result<(), ModelError> {
+        if Format::of(path).is_none() {
+            return Err(ModelError::engine("formato desconhecido"));
+        }
+        let params = MeshParams {
+            voxel_size: Some(settings.resolution.max(1e-4)),
+            resolution: 128,
+            decimate_ratio: settings.decimate_to,
+            mesher: match settings.mesher {
+                ExportMesher::Watertight => Mesher::MarchingTetrahedra,
+                ExportMesher::Fast => Mesher::SurfaceNets,
+                ExportMesher::Sharp => Mesher::DualContouring,
+            },
+        };
+        // Combined rather than `mesh`: the field alone would silently leave
+        // every imported reference layer out of the file.
+        let mesh = self
+            .document
+            .mesh_combined(params)
+            .map_err(ModelError::engine)?;
+        mesh.save(path).map_err(ModelError::engine)
+    }
+
+    fn has_mesh_layers(&self) -> bool {
+        self.layers
+            .iter()
+            .any(|layer| layer.representation == Representation::Mesh)
+    }
+}
+
+impl ClayDocument {
+    /// Carries a mesh verbatim, on a layer of its own.
+    fn attach_reference(
+        &mut self,
+        mesh: &Mesh,
+        name: &str,
+        settings: ImportSettings,
+    ) -> Result<(), ModelError> {
+        let id = self
+            .document
+            .attach_mesh_layer(
+                mesh,
+                &MeshLayerDesc {
+                    name: name.to_string(),
+                    max_vertices: settings.max_vertices,
+                    max_triangles: settings.max_triangles,
+                    import_scale: settings.scale,
+                },
+            )
+            .map_err(ModelError::engine)?;
+
+        let key = self.take_key();
+        self.layers.push(Layer {
+            id,
+            key,
+            name: name.to_string(),
+            // Recorded as a mesh so the tools refuse it by representation
+            // rather than by a special case. A mesh layer is not evaluated,
+            // and nothing here pretends otherwise.
+            representation: Representation::Mesh,
+            grid: None,
+            visible: true,
+            protection: Protection::default(),
+            intensity: 100,
+        });
+        self.refresh_stats();
+        Ok(())
+    }
+
+    /// Samples a mesh into a field, on a layer of its own, so it can be
+    /// sculpted from then on.
+    fn sample_into_clay(
+        &mut self,
+        mesh: &Mesh,
+        name: &str,
+        settings: ImportSettings,
+    ) -> Result<(), ModelError> {
+        let mut item = Item::volume_from_mesh(
+            mesh,
+            VolumeParams {
+                // The cache's own cell size, scaled the way the geometry is:
+                // sampling finer than the brick cache can hold would cost time
+                // for detail that is discarded on the first refill.
+                cell_size: Some(Self::VOXEL_SIZE / settings.scale.max(1e-3)),
+                band: None,
+                padding: None,
+                // No feather: an imported mesh is placed with `Op::Add`, and
+                // the engine ignores the feather for every op but replace.
+                feather: None,
+            },
+        )
+        .map_err(ModelError::engine)?;
+        item.set_op(Op::Add).map_err(ModelError::engine)?;
+
+        let layer = self.add_layer(name, Representation::Sdf)?;
+        let id = self.layer_id(layer)?;
+        let node = self
+            .document
+            .add_item(id, &item)
+            .map_err(ModelError::engine)?;
+        self.refill(id, &[node])?;
+        self.refresh_stats();
+        Ok(())
+    }
+}
+
+impl MaskModel for ClayDocument {
+    fn mask_state(&self) -> MaskState {
+        match &self.mask {
+            Some(mask) => MaskState {
+                present: true,
+                painted_cells: mask.painted_count().unwrap_or(0),
+            },
+            None => MaskState::default(),
+        }
+    }
+
+    fn apply_mask_op(&mut self, op: MaskOp) -> Result<(), ModelError> {
+        // Clearing a mask that was never painted is a no-op rather than a
+        // refusal: the menu entry is always there, and pressing it on an empty
+        // mask should do the obvious nothing.
+        if matches!(op, MaskOp::Clear) {
+            self.mask = None;
+            return Ok(());
+        }
+
+        let Some(mask) = self.mask.as_mut() else {
+            return Err(ModelError::engine("não há máscara para editar"));
+        };
+
+        match op {
+            MaskOp::Invert => mask.invert().map_err(ModelError::engine),
+            MaskOp::Expand(steps) => mask.expand(steps.max(1)).map_err(ModelError::engine),
+            MaskOp::Contract(steps) => mask.contract(steps.max(1)).map_err(ModelError::engine),
+            MaskOp::Smooth(passes) => mask.smooth(passes.max(1)).map_err(ModelError::engine),
+            MaskOp::InvertWithinBounds => {
+                // Bounded by what the mask already covers, which is the whole
+                // point: inverting a sparse mask over infinite space would
+                // freeze the universe.
+                let Some((min, max)) = mask.bounds().map_err(ModelError::engine)? else {
+                    // Nothing painted, so nothing to be the complement of.
+                    return Ok(());
+                };
+                // `bounds` answers in cells and `invert_within` asks in world
+                // units. The box is grown by a cell on each side so the
+                // boundary cells are inside it rather than on its face.
+                let cell = mask.cell_size().map_err(ModelError::engine)?;
+                let low = min.map(|c| (c - 1) as f32 * cell);
+                let high = max.map(|c| (c + 1) as f32 * cell);
+                mask.invert_within(low, high).map_err(ModelError::engine)
+            }
+            MaskOp::Clear => unreachable!("handled above"),
+        }
+    }
+
+    fn extrude_mask(&mut self, settings: ExtrudeSettings) -> Result<(), ModelError> {
+        let settings = settings.sanitized();
+        let Some(mask) = self.mask.as_ref() else {
+            return Err(ModelError::engine("não há máscara para extrudar"));
+        };
+        if mask.painted_count().unwrap_or(0) == 0 {
+            return Err(ModelError::engine("a máscara está vazia"));
+        }
+
+        let layer = self.active_layer().id;
+        let item = self
+            .document
+            .mask_extrude(
+                layer,
+                mask,
+                claycore::MaskExtrudeParams {
+                    thickness: settings.thickness,
+                    side: match settings.side {
+                        clayspace_model::ExtrudeSide::Outward => claycore::ExtrudeSide::Outward,
+                        clayspace_model::ExtrudeSide::Inward => claycore::ExtrudeSide::Inward,
+                        clayspace_model::ExtrudeSide::Centred => claycore::ExtrudeSide::Centred,
+                    },
+                    threshold: None,
+                    border_round: settings.border_round,
+                    border_smooth: settings.border_smooth,
+                    cell_size: None,
+                },
+            )
+            .map_err(ModelError::engine)?;
+
+        // Into a layer of its own. An extrusion is a new piece of geometry, not
+        // an edit to the one it came from, and putting it in its own layer is
+        // what lets it be moved, hidden or thrown away afterwards.
+        let key = self.add_layer("Extrusão", Representation::Sdf)?;
+        let index = self.index_of(key)?;
+        let id = self.layers[index].id;
+        let node = self
+            .document
+            .add_item(id, &item)
+            .map_err(ModelError::engine)?;
+        self.refill(id, &[node])?;
+        self.refresh_stats();
+        Ok(())
+    }
+}
+
+impl ArmatureModel for ClayDocument {
+    fn armature(&self) -> Option<Armature> {
+        let (layer, _, tree) = self.armature.as_ref()?;
+        // Only while it still belongs to the layer being worked on: an
+        // armature on a hidden layer is not the one a click should edit.
+        (*layer == self.active_layer().id).then(|| tree.clone())
+    }
+
+    fn begin_armature(&mut self, position: [f32; 3], radius: f32) -> Result<(), ModelError> {
+        let layer = self.active_layer().id;
+        let tree = Armature::rooted(position, radius);
+        let node = self.place_armature(layer, &tree)?;
+        self.armature = Some((layer, node, tree));
+        Ok(())
+    }
+
+    fn add_zsphere(
+        &mut self,
+        parent: NodeIndex,
+        position: [f32; 3],
+        radius: f32,
+        mirrored: bool,
+    ) -> Result<NodeIndex, ModelError> {
+        let Some((_, _, tree)) = self.armature.as_mut() else {
+            return Err(ModelError::engine("não há armadura nesta camada"));
+        };
+        if tree.get(parent).is_none() {
+            return Err(ModelError::engine("essa esfera não existe"));
+        }
+        let index = tree.add_child(parent, position, radius);
+
+        // The reflection, in the same edit. The engine does this itself for a
+        // placed armature; the tree is mirrored here to match, since the host
+        // holds the topology.
+        if mirrored {
+            if let Some(reflected) = Armature::mirrored_position(position) {
+                // Under the mirror of the parent where there is one, which is
+                // what keeps two arms hanging off two shoulders rather than
+                // both off the same one.
+                let mirror_parent = self.mirror_of(parent).unwrap_or(parent);
+                if let Some((_, _, tree)) = self.armature.as_mut() {
+                    tree.add_child(mirror_parent, reflected, radius);
+                }
+            }
+        }
+
+        self.rewrite_armature()?;
+        Ok(index)
+    }
+
+    fn move_zsphere(&mut self, index: NodeIndex, delta: [f32; 3]) -> Result<(), ModelError> {
+        let Some((_, _, tree)) = self.armature.as_mut() else {
+            return Err(ModelError::engine("não há armadura nesta camada"));
+        };
+        tree.move_subtree(index, delta);
+        self.rewrite_armature()
+    }
+
+    fn resize_zsphere(&mut self, index: NodeIndex, radius: f32) -> Result<(), ModelError> {
+        let Some((_, _, tree)) = self.armature.as_mut() else {
+            return Err(ModelError::engine("não há armadura nesta camada"));
+        };
+        tree.set_radius(index, radius);
+        self.rewrite_armature()
+    }
+
+    fn reparent_zsphere(
+        &mut self,
+        index: NodeIndex,
+        new_parent: NodeIndex,
+    ) -> Result<(), ModelError> {
+        // Reparenting has no entry point of its own — the tree edits are add,
+        // move, set-radius and delete — so it is done by rewriting the whole
+        // node, which is what the engine does underneath for every one of them
+        // anyway.
+        let Some((_, _, tree)) = self.armature.as_mut() else {
+            return Err(ModelError::engine("não há armadura nesta camada"));
+        };
+        tree.reparent(index, new_parent)?;
+        self.rewrite_armature()
+    }
+
+    fn remove_zsphere(&mut self, index: NodeIndex) -> Result<(), ModelError> {
+        let Some((_, _, tree)) = self.armature.as_mut() else {
+            return Err(ModelError::engine("não há armadura nesta camada"));
+        };
+        if tree.nodes.len() <= 1 {
+            return Err(ModelError::engine(
+                "a armadura ficaria sem raiz; remova a camada",
+            ));
+        }
+        if index == 0 {
+            return Err(ModelError::engine("a raiz não pode ser removida"));
+        }
+        tree.remove(index);
+        self.rewrite_armature()
+    }
+
+    fn set_skin(&mut self, skin: SkinSettings) -> Result<(), ModelError> {
+        self.skin = skin;
+        if self.armature.is_some() {
+            self.rewrite_armature()?;
+        }
+        Ok(())
+    }
+
+    fn skin(&self) -> SkinSettings {
+        self.skin
+    }
+}
+
+impl ClayDocument {
+    /// Builds the item and places it, returning the node that carries it.
+    fn place_armature(&mut self, layer: LayerId, tree: &Armature) -> Result<NodeId, ModelError> {
+        let mut item = Item::armature().map_err(ModelError::engine)?;
+
+        // Radii scaled on the way out. The tree keeps what was authored, so
+        // moving the thickness slider is reversible and does not quietly
+        // rewrite the rig.
+        let points: Vec<f32> = tree
+            .nodes
+            .iter()
+            .flat_map(|n| {
+                [
+                    n.position[0],
+                    n.position[1],
+                    n.position[2],
+                    self.skin.radius_for(n.radius),
+                ]
+            })
+            .collect();
+        item.set_stroke_points(&points)
+            .map_err(ModelError::engine)?;
+
+        let parents: Vec<u32> = tree.nodes.iter().map(|n| n.parent).collect();
+        item.set_armature_parents(&parents)
+            .map_err(ModelError::engine)?;
+
+        // No blend term: `clay_item_set_stroke_blend_k` refuses an armature
+        // ("stroke points need CLAY_PRIM_STROKE"). The skin is the cones
+        // between the spheres, so thickness lives in the radii above.
+        item.set_op(Op::Add).map_err(ModelError::engine)?;
+
+        let node = self
+            .document
+            .add_item(layer, &item)
+            .map_err(ModelError::engine)?;
+        self.armature_bounds = Some(Self::armature_bounds(tree, self.skin));
+        self.refill(layer, &[node])?;
+        self.refresh_stats();
+        Ok(node)
+    }
+
+    /// The box a tree occupies, spheres and all.
+    fn armature_bounds(tree: &Armature, skin: SkinSettings) -> ([f32; 3], [f32; 3]) {
+        let mut min = [f32::INFINITY; 3];
+        let mut max = [f32::NEG_INFINITY; 3];
+        for node in &tree.nodes {
+            let r = skin.radius_for(node.radius);
+            for axis in 0..3 {
+                min[axis] = min[axis].min(node.position[axis] - r);
+                max[axis] = max[axis].max(node.position[axis] + r);
+            }
+        }
+        if !min[0].is_finite() {
+            return ([0.0; 3], [0.0; 3]);
+        }
+        (min, max)
+    }
+
+    /// Replaces the placed armature with what the tree now says.
+    ///
+    /// Every edit goes through here rather than through
+    /// `clay_layer_armature_edit`, for one reason: reparenting has no op there,
+    /// and a rig that could do four of its five edits one way and the fifth
+    /// another would be two code paths to keep in step. The engine's own
+    /// implementation of those ops is a whole-tree replace, so this costs what
+    /// they cost.
+    fn rewrite_armature(&mut self) -> Result<(), ModelError> {
+        let Some((layer, node, tree)) = self.armature.take() else {
+            return Ok(());
+        };
+        // Where it was, before it is replaced by where it now is.
+        let vacated = self.armature_bounds;
+
+        self.document
+            .remove_node(layer, node)
+            .map_err(ModelError::engine)?;
+        let fresh = self.place_armature(layer, &tree)?;
+        self.armature = Some((layer, fresh, tree));
+
+        // An edit that shrinks the rig leaves its old surface behind
+        // otherwise: placing the new node refills the region it occupies, and
+        // nothing tells the bricks the old one used that anything changed.
+        if let Some((min, max)) = vacated {
+            self.refill_region(min, max)?;
+        }
+        Ok(())
+    }
+
+    /// The node reflecting `index` through x = 0, if the tree holds one.
+    fn mirror_of(&self, index: NodeIndex) -> Option<NodeIndex> {
+        let (_, _, tree) = self.armature.as_ref()?;
+        let node = tree.get(index)?;
+        let target = Armature::mirrored_position(node.position)?;
+        tree.nodes
+            .iter()
+            .position(|other| (0..3).all(|axis| (other.position[axis] - target[axis]).abs() < 1e-4))
+            .map(|i| i as NodeIndex)
     }
 }

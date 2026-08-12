@@ -18,6 +18,7 @@ fn main() {
         .unwrap_or_else(|_| manifest.join("../../vendor/ClayCore"));
 
     check_submodule(&engine);
+    record_revision(&engine);
     check_cmake();
 
     let backends = select_backends();
@@ -25,6 +26,33 @@ fn main() {
     emit_link_flags(&build_dir, &backends);
     generate_bindings(&engine);
     emit_rerun_directives(&engine);
+}
+
+/// Stamps the vendored engine's revision into the build.
+///
+/// The version string alone is not enough to identify an engine: two builds
+/// can both say 0.27.3 and differ by a commit. This project has already filed
+/// a round of issues against a stale engine for exactly that reason, so the
+/// revision travels with the binary and into the diagnostics report.
+///
+/// `--long` so the hash is always present: without it a checkout sitting
+/// exactly on a tag reports only the tag, which is the version we already
+/// have and not the commit we wanted.
+///
+/// A source tree with no git — a vendored tarball, a package build — reports
+/// so rather than failing: the revision is a diagnostic, not a requirement.
+fn record_revision(engine: &Path) {
+    let described = Command::new("git")
+        .args(["-C"])
+        .arg(engine)
+        .args(["describe", "--always", "--dirty", "--tags", "--long"])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .filter(|revision| !revision.is_empty())
+        .unwrap_or_else(|| "unknown (no git checkout)".to_string());
+    println!("cargo::rustc-env=CLAYCORE_REVISION={described}");
 }
 
 /// A clone without `--recurse-submodules` is the most likely first failure.
@@ -105,7 +133,18 @@ impl Backends {
 /// backend the caller asked for. With no features named, probe the platform.
 fn select_backends() -> Backends {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    let asked = |name: &str| std::env::var(format!("CARGO_FEATURE_{}", name.to_uppercase())).is_ok();
+    let asked =
+        |name: &str| std::env::var(format!("CARGO_FEATURE_{}", name.to_uppercase())).is_ok();
+
+    // A way to ask for no accelerated backend at all.
+    //
+    // Probing the platform is right for a developer build, and wrong for the
+    // CI row named "CPU only": on macOS the probe finds Metal and the row
+    // silently tests the same configuration as the row next to it. The CPU
+    // backend is compiled into the engine unconditionally, so this asks for
+    // nothing rather than for something absent.
+    println!("cargo:rerun-if-env-changed=CLAYCORE_CPU_ONLY");
+    let cpu_only = std::env::var_os("CLAYCORE_CPU_ONLY").is_some();
 
     let (metal_req, cuda_req, vulkan_req, opencl_req) = (
         asked("metal"),
@@ -117,16 +156,37 @@ fn select_backends() -> Backends {
 
     let mut b = Backends::default();
 
+    if cpu_only && any_requested {
+        // Contradictory. Refusing beats picking one silently: whichever way it
+        // went, the build would not be the one someone asked for.
+        panic!(
+            "\n\nCLAYCORE_CPU_ONLY is set and an accelerated backend feature was \
+             also requested.\n\nDrop one of the two.\n"
+        );
+    }
+
     if metal_req {
-        require(target_os == "macos" && has_metal(), "metal", "the Metal toolchain (Xcode command line tools) on macOS");
+        require(
+            target_os == "macos" && has_metal(),
+            "metal",
+            "the Metal toolchain (Xcode command line tools) on macOS",
+        );
         b.metal = true;
     }
     if cuda_req {
-        require(has_cuda(), "cuda", "the CUDA toolkit (nvcc on PATH, or CUDA_PATH set)");
+        require(
+            has_cuda(),
+            "cuda",
+            "the CUDA toolkit (nvcc on PATH, or CUDA_PATH set)",
+        );
         b.cuda = true;
     }
     if vulkan_req {
-        require(has_vulkan(), "vulkan", "the Vulkan SDK (VULKAN_SDK set, or vulkan discoverable by pkg-config)");
+        require(
+            has_vulkan(),
+            "vulkan",
+            "the Vulkan SDK (VULKAN_SDK set, or vulkan discoverable by pkg-config)",
+        );
         b.vulkan = true;
     }
     if opencl_req {
@@ -134,7 +194,7 @@ fn select_backends() -> Backends {
         b.opencl = true;
     }
 
-    if !any_requested {
+    if !any_requested && !cpu_only {
         // Default: take what this machine can actually build.
         match target_os.as_str() {
             "macos" => b.metal = has_metal(),
@@ -152,7 +212,10 @@ fn select_backends() -> Backends {
     }
     // Consumed by the crate to report what was compiled in, distinct from what
     // the engine registers at runtime.
-    println!("cargo:rustc-env=CLAYCORE_COMPILED_BACKENDS={}", names.join(","));
+    println!(
+        "cargo:rustc-env=CLAYCORE_COMPILED_BACKENDS={}",
+        names.join(",")
+    );
     b
 }
 
@@ -231,7 +294,12 @@ fn emit_link_flags(build_dir: &Path, b: &Backends) {
     let deps = build_dir.join("_deps");
     if deps.is_dir() {
         if let Ok(entries) = std::fs::read_dir(&deps) {
-            roots.extend(entries.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.is_dir()));
+            roots.extend(
+                entries
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.path())
+                    .filter(|p| p.is_dir()),
+            );
         }
     }
 
@@ -240,13 +308,17 @@ fn emit_link_flags(build_dir: &Path, b: &Backends) {
         collect_archives(root, &mut found, 0);
     }
 
-    for dir in dedup(found.iter().filter_map(|p| p.parent().map(Path::to_path_buf))) {
+    for dir in dedup(
+        found
+            .iter()
+            .filter_map(|p| p.parent().map(Path::to_path_buf)),
+    ) {
         println!("cargo:rustc-link-search=native={}", dir.display());
     }
 
     // claycore first: static link order matters for the transitive deps.
     println!("cargo:rustc-link-lib=static=claycore");
-    for name in dedup(found.iter().filter_map(archive_stem)) {
+    for name in dedup(found.iter().map(PathBuf::as_path).filter_map(archive_stem)) {
         if name != "claycore" {
             println!("cargo:rustc-link-lib=static={name}");
         }
@@ -264,6 +336,34 @@ fn emit_link_flags(build_dir: &Path, b: &Backends) {
         "linux" => {
             println!("cargo:rustc-link-lib=stdc++");
             println!("cargo:rustc-link-lib=pthread");
+            // The engine links these itself with `target_link_libraries`, but
+            // `claycore` is a STATIC library: that records a usage requirement
+            // for CMake consumers and puts nothing in the archive. The final
+            // link is rustc's, so the loader has to be named here or the
+            // backend compiles and then fails to link — which is exactly what
+            // the Linux Vulkan row did, with a page of `undefined symbol:
+            // vkDestroyPipeline`.
+            if b.vulkan {
+                println!("cargo:rustc-link-lib=vulkan");
+            }
+            if b.opencl {
+                println!("cargo:rustc-link-lib=OpenCL");
+            }
+            if b.cuda {
+                // The toolkit is rarely on the default search path.
+                for root in ["CUDA_PATH", "CUDA_HOME"]
+                    .iter()
+                    .filter_map(|k| std::env::var(k).ok())
+                {
+                    for dir in ["lib64", "lib"] {
+                        let path = Path::new(&root).join(dir);
+                        if path.is_dir() {
+                            println!("cargo:rustc-link-search=native={}", path.display());
+                        }
+                    }
+                }
+                println!("cargo:rustc-link-lib=cudart");
+            }
         }
         _ => {}
     }
@@ -286,7 +386,7 @@ fn collect_archives(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
     }
 }
 
-fn archive_stem(path: &PathBuf) -> Option<String> {
+fn archive_stem(path: &Path) -> Option<String> {
     let stem = path.file_stem()?.to_str()?;
     Some(stem.strip_prefix("lib").unwrap_or(stem).to_string())
 }
@@ -323,9 +423,18 @@ fn generate_bindings(engine: &Path) {
 
 fn emit_rerun_directives(engine: &Path) {
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed={}", engine.join("bindings/c/clay.h").display());
-    println!("cargo:rerun-if-changed={}", engine.join("bindings/c/clay_c.cpp").display());
-    println!("cargo:rerun-if-changed={}", engine.join("CMakeLists.txt").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        engine.join("bindings/c/clay.h").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        engine.join("bindings/c/clay_c.cpp").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        engine.join("CMakeLists.txt").display()
+    );
     for dir in ["include", "src", "backends", "cmake"] {
         let p = engine.join(dir);
         if p.is_dir() {

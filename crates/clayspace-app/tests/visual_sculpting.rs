@@ -100,7 +100,8 @@ fn padrao_deposits_material_along_a_stroke() {
 
     assert!(
         change > VISIBLE_CHANGE,
-        "the Padrão stroke moved only {:.1}% of the subject", change * 100.0
+        "the Padrão stroke moved only {:.1}% of the subject",
+        change * 100.0
     );
 }
 
@@ -135,7 +136,8 @@ fn mover_drags_the_surface_outward() {
 
     assert!(
         change > VISIBLE_CHANGE,
-        "the Move brush moved only {:.1}% of the subject", change * 100.0
+        "the Move brush moved only {:.1}% of the subject",
+        change * 100.0
     );
 }
 
@@ -155,7 +157,8 @@ fn subtrair_removes_material_where_it_is_applied() {
 
     assert!(
         change > VISIBLE_CHANGE,
-        "subtracting a sphere moved only {:.1}% of the subject", change * 100.0
+        "subtracting a sphere moved only {:.1}% of the subject",
+        change * 100.0
     );
 }
 
@@ -194,7 +197,8 @@ fn a_smooth_blend_softens_the_seam_between_two_forms() {
     let change = hard_image.changed_fraction_over_subject(&soft_image, background, 6);
     assert!(
         change > VISIBLE_CHANGE,
-        "a quadratic blend of support 0.45 moved only {:.1}% of the subject", change * 100.0
+        "a quadratic blend of support 0.45 moved only {:.1}% of the subject",
+        change * 100.0
     );
 }
 
@@ -232,7 +236,8 @@ fn mascara_extrude_pulls_a_patch_off_the_surface() {
 
     assert!(
         change > VISIBLE_CHANGE,
-        "extruding a masked patch moved only {:.1}% of the subject", change * 100.0
+        "extruding a masked patch moved only {:.1}% of the subject",
+        change * 100.0
     );
 }
 
@@ -252,7 +257,8 @@ fn painting_a_mask_does_not_itself_sculpt() {
 
     assert!(
         change < 0.002,
-        "painting a mask moved {:.1}% of the subject; a mask freezes, it does not sculpt", change * 100.0
+        "painting a mask moved {:.1}% of the subject; a mask freezes, it does not sculpt",
+        change * 100.0
     );
 }
 
@@ -335,7 +341,8 @@ macro_rules! voxel_verb_test {
             assert!(
                 change > VISIBLE_CHANGE,
                 "{} changed {cells} cells but moved only {:.1}% of the subject",
-                $file, change * 100.0
+                $file,
+                change * 100.0
             );
         }
     };
@@ -439,7 +446,8 @@ fn preencher_fills_a_cavity_that_smoothing_would_not() {
     assert!(cells > 0, "fill-cavities changed no cells");
     assert!(
         change > VISIBLE_CHANGE,
-        "fill-cavities changed {cells} cells but moved only {:.1}% of the subject", change * 100.0
+        "fill-cavities changed {cells} cells but moved only {:.1}% of the subject",
+        change * 100.0
     );
 }
 
@@ -483,11 +491,11 @@ fn a_mask_visibly_protects_the_region_it_covers() {
     assert!(
         change > VISIBLE_CHANGE,
         "masking half the footprint moved only {:.1}% of the subject, \
-         so the mask is not reaching the verb", change * 100.0
+         so the mask is not reaching the verb",
+        change * 100.0
     );
     assert!(
-        masked.occupied_count().expect("occupied")
-            > unmasked.occupied_count().expect("occupied"),
+        masked.occupied_count().expect("occupied") > unmasked.occupied_count().expect("occupied"),
         "the masked carve removed at least as much material as the unmasked one"
     );
 }
@@ -502,7 +510,8 @@ fn voxel_colour_reaches_the_render() {
     let warm = grid.palette_add([0.85, 0.35, 0.15]).expect("palette");
     let cool = grid.palette_add([0.15, 0.35, 0.85]).expect("palette");
     grid.fill_box([0, 0, 0], [16, 16, 16], warm).expect("fill");
-    grid.fill_box([0, 0, 0], [7, 16, 16], cool).expect("fill half");
+    grid.fill_box([0, 0, 0], [7, 16, 16], cool)
+        .expect("fill half");
 
     let mesh = grid.mesh().expect("mesh");
     let camera = support::framed_camera(&mesh);
