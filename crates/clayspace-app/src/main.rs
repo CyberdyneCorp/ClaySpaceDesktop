@@ -13,7 +13,7 @@ use std::time::Instant;
 use clayspace_app::{ray_at, SessionStore, SharedDocument, SurfaceGeometry, ViewportInput};
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
-    AutosavePolicy, Diagnostics, RecentDocuments, Recovery, SkinSettings, ViewPresetKind,
+    AutosavePolicy, Diagnostics, RecentDocuments, Recovery, SkinSettings, Units, ViewPresetKind,
 };
 use clayspace_view::shell::{self, region, ArmatureState, ShellState};
 use clayspace_view::{
@@ -119,6 +119,8 @@ struct App {
     pending_recovery: Recovery,
     /// Set by the menu's Sair, acted on where the event loop can be exited.
     quit_requested: bool,
+    /// The document's scale, and what lengths are shown in.
+    units: Units,
     /// The plane a rig gesture runs on: a point on it, and its normal.
     ///
     /// Fixed at the press rather than recomputed per sample. A plane that
@@ -181,6 +183,7 @@ impl App {
             saved_at: Instant::now(),
             pending_recovery,
             quit_requested: false,
+            units: Units::default(),
             rig_plane: None,
             strings: Strings::for_locale(Locale::default()),
         }
@@ -892,7 +895,7 @@ impl App {
             can_redo: history.can_redo,
             memory,
             backend: &backend,
-            units: "mm",
+            units: self.units,
             last_action: (!last.label.is_empty()).then_some((last.label.as_str(), last.changed)),
         };
 
@@ -905,7 +908,7 @@ impl App {
                 .show(ctx, |ui| shell::options_bar(ui, &state, &mut queue));
             egui::TopBottomPanel::bottom("status")
                 .exact_height(region::STATUS)
-                .show(ctx, |ui| shell::status_bar(ui, &state));
+                .show(ctx, |ui| shell::status_bar(ui, &state, &mut queue));
             egui::TopBottomPanel::bottom("shelf")
                 .exact_height(region::SHELF)
                 .show(ctx, |ui| {
@@ -1039,6 +1042,12 @@ impl App {
             Command::Save => self.save(false),
             Command::SaveAs => self.save(true),
             Command::Quit => self.quit_requested = true,
+            Command::NextDisplayUnit => {
+                // Presentation only. Nothing in the document is touched, so
+                // this neither marks it modified nor enters the history.
+                self.units.display = self.units.next_display();
+                self.request_redraw();
+            }
             Command::ToggleDiagnostics => {
                 self.show_diagnostics = !self.show_diagnostics;
                 // The confirmation belongs to one visit. Leaving it set means

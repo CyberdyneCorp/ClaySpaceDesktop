@@ -162,7 +162,7 @@ fn state<'a>(
         can_redo: false,
         memory: (1_331_439_861, 4 * 1024 * 1024 * 1024),
         backend: "metal",
-        units: "mm",
+        units: clayspace_model::Units::default(),
         last_action: Some(("Padrão", true)),
         recent: RECENT,
         diagnostics,
@@ -203,7 +203,7 @@ fn capture_shell(harness: &Harness, state: &ShellState<'_>, name: &str) -> clays
             .show(ctx, |ui| shell::options_bar(ui, state, &mut queue));
         egui::TopBottomPanel::bottom("status")
             .exact_height(region::STATUS)
-            .show(ctx, |ui| shell::status_bar(ui, state));
+            .show(ctx, |ui| shell::status_bar(ui, state, &mut queue));
         egui::TopBottomPanel::bottom("shelf")
             .exact_height(region::SHELF)
             .show(ctx, |ui| {

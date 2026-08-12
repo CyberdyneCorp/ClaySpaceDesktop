@@ -88,6 +88,9 @@ pub enum Command {
     FrameAll,
     NextMaterial,
     ToggleGrid,
+    /// Cycles what lengths are shown in. Presentation only: no geometry
+    /// moves, which is what makes it safe to put on a single click.
+    NextDisplayUnit,
     /// Shows or hides the diagnostics report.
     ToggleDiagnostics,
     /// Puts the report on the clipboard, which is the whole point of having
@@ -108,6 +111,7 @@ impl Command {
                 | Self::FrameAll
                 | Self::NextMaterial
                 | Self::ToggleGrid
+                | Self::NextDisplayUnit
                 | Self::ToggleDiagnostics
                 | Self::CopyDiagnostics
                 // Document lifecycle is not an edit. Opening replaces the
@@ -176,6 +180,7 @@ impl Command {
             Self::Save => "save",
             Self::SaveAs => "save as",
             Self::Quit => "quit",
+            Self::NextDisplayUnit => "display unit",
             Self::ToggleDiagnostics => "diagnostics",
             Self::CopyDiagnostics => "copy diagnostics",
         }

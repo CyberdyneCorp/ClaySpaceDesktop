@@ -18,6 +18,7 @@ pub mod scene;
 pub mod sculpt;
 pub mod session;
 pub mod tools;
+pub mod units;
 
 pub use armature::{Armature, ArmatureModel, NodeIndex, SkinSettings, Zsphere};
 pub use diagnostics::{Diagnostics, DiagnosticsModel, Fallback};
@@ -32,3 +33,4 @@ pub use session::{AutosavePolicy, RecentDocuments, Recovery};
 pub use tools::{
     BrushSettings, Falloff, Representation, Shaping, ToolKind, Unavailable, ViewPresetKind,
 };
+pub use units::{Unit, Units, UnitsModel};

@@ -97,7 +97,7 @@
 - [x] 8.5 Implement autosave recovery state, crash detection and the recovery offer
 - [x] 8.6 Implement the unsaved-changes decision on close and on quit
 - [x] 8.7 Implement the recent documents list with missing-file pruning
-- [ ] 8.8 Implement the document working unit and presentation-only unit switching
+- [x] 8.8 Implement the document working unit and presentation-only unit switching
 
 ## 9. Interface shell and design system
 

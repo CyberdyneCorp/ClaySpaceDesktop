@@ -11,7 +11,7 @@
 
 use clayspace_model::{
     BrushSettings, Diagnostics, ExtrudeSettings, ExtrudeSide, Falloff, LayerSummary, MaskOp,
-    MaskState, RecentDocuments, Scene, SceneStats, ToolKind, ViewPresetKind,
+    MaskState, RecentDocuments, Scene, SceneStats, ToolKind, Units, ViewPresetKind,
 };
 use clayspace_vm::{Axis, Command, CommandQueue};
 
@@ -80,7 +80,8 @@ pub struct ShellState<'a> {
     /// Bytes in use and the budget, for the memory meter.
     pub memory: (u64, u64),
     pub backend: &'a str,
-    pub units: &'a str,
+    /// The document's scale and what lengths are shown in.
+    pub units: Units,
     /// What the last action did, for the status area.
     pub last_action: Option<(&'a str, bool)>,
 }
@@ -410,7 +411,17 @@ pub fn options_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
         ui.add_space(space::SECTION);
         ui.vertical(|ui| {
             ui.set_width(180.0);
-            if let Some(value) = slider(ui, s.label_size, state.brush.size, 0.005..=1.0, 3) {
+            // The label carries the size on the model; the slider keeps
+            // editing engine units. A unit-aware slider whose range shifts
+            // under the pointer when the unit is switched is one nobody
+            // trusts, and the options bar has a fixed height that a second
+            // row would overflow.
+            let label = format!(
+                "{} · {}",
+                s.label_size,
+                state.units.format(state.brush.size)
+            );
+            if let Some(value) = slider(ui, &label, state.brush.size, 0.005..=1.0, 3) {
                 queue.push(Command::SetBrushSize(value));
             }
         });
@@ -800,7 +811,7 @@ pub fn brush_shelf(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
 }
 
 /// The status area: document, memory, backend and units.
-pub fn status_bar(ui: &mut egui::Ui, state: &ShellState<'_>) {
+pub fn status_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
     let s = state.strings;
     ui.horizontal(|ui| {
         ui.add_space(space::PANEL);
@@ -838,7 +849,21 @@ pub fn status_bar(ui: &mut egui::Ui, state: &ShellState<'_>) {
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(space::PANEL);
-            numeric(ui, format!("{}: {}", s.label_units, state.units));
+            // A control, not a label: the design shows the unit here, and a
+            // person looking for where to change it looks where it is shown.
+            let shown = format!("{}: {}", s.label_units, state.units.display.label());
+            if ui
+                .add(egui::Button::new(
+                    egui::RichText::new(shown)
+                        .size(type_scale::LABEL)
+                        .family(egui::FontFamily::Monospace)
+                        .color(Tokens::text_dim()),
+                ))
+                .on_hover_text(s.hint_units)
+                .clicked()
+            {
+                queue.push(Command::NextDisplayUnit);
+            }
             ui.add_space(space::SECTION);
             numeric(ui, format!("{}: {}", s.label_backend, state.backend));
             if let Some((label, changed)) = state.last_action {

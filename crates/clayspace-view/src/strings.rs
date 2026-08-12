@@ -114,6 +114,7 @@ pub struct Strings {
     pub action_armature_remove: &'static str,
     /// What the pointer does while rigging, said once where it is needed.
     pub hint_armature: &'static str,
+    pub hint_units: &'static str,
     pub state_unsaved: &'static str,
     pub state_nothing_changed: &'static str,
 }
@@ -181,6 +182,7 @@ const PT_BR: Strings = Strings {
     action_armature_edit: "Editar armadura",
     action_armature_remove: "Remover esfera",
     hint_armature: "Arraste de uma esfera para criar a seguinte · Alt arrasta · ⌘ redimensiona",
+    hint_units: "Toque para trocar a unidade. Só muda a leitura; nada é redimensionado.",
     state_unsaved: "não salvo",
     state_nothing_changed: "nada mudou",
 };
@@ -248,6 +250,7 @@ const EN_US: Strings = Strings {
     action_armature_edit: "Edit armature",
     action_armature_remove: "Remove sphere",
     hint_armature: "Drag out of a sphere to grow the next · Alt moves · ⌘ resizes",
+    hint_units: "Click to change the unit. It changes the reading only; nothing is rescaled.",
     state_unsaved: "unsaved",
     state_nothing_changed: "nothing changed",
 };
@@ -261,7 +264,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 59] {
+    pub fn all(&self) -> [&'static str; 60] {
         [
             self.menu_file,
             self.menu_edit,
@@ -320,6 +323,7 @@ impl Strings {
             self.action_armature_edit,
             self.action_armature_remove,
             self.hint_armature,
+            self.hint_units,
             self.state_unsaved,
             self.state_nothing_changed,
         ]

@@ -297,6 +297,7 @@ impl SculptViewModel {
             // records nothing for them because they change no state it owns.
             Command::FrameAll
             | Command::NextMaterial
+            | Command::NextDisplayUnit
             | Command::ToggleDiagnostics
             | Command::CopyDiagnostics => {}
         }
