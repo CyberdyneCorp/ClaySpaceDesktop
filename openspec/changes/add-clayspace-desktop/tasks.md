@@ -70,7 +70,7 @@
 - [x] 6.3 Implement mask extrude with outward, inward and centred modes and a roundable rim
 - [x] 6.4 Verify masks survive a resolution change and that a fully masked region resists every tool
 - [x] 6.5 Implement armature authoring: add, move, resize, reparent, remove, skin thickness, and symmetric authoring
-- [x] 6.6 Verify armature persistence across save and reload — the skinned surface survives; the *tree* does not, because the ABI has no reader for the parent array. See `clayspace-engine/tests/armature_persistence.rs`, which is written to fail the day one arrives
+- [x] 6.6 Verify armature persistence across save and reload — the skinned surface survives; the *rig* does not, because a placed armature is write-only in the ABI ([#77](https://github.com/CyberdyneCorp/ClayCore/issues/77)). See `armature_persistence.rs` and `claycore_armature_readback.rs`, both written to fail the day a reader arrives
 
 ## 7. Scene, layers and history
 

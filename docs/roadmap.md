@@ -65,7 +65,7 @@ the signal to do it.
 | [#73](https://github.com/CyberdyneCorp/ClayCore/issues/73) gradient normals scale with document size | A dab is 4 ms on a fresh document and 120 ms after 192 edits | Workaround available: host-side normals. Not taken — see below |
 | [#67](https://github.com/CyberdyneCorp/ClayCore/issues/67) bake-and-replace corrugates the surface | Suavizar, Relaxar, Planar and Polir damage what they touch | Applied once per gesture rather than per segment, which halves it. Still visibly wrong |
 | [#69](https://github.com/CyberdyneCorp/ClayCore/issues/69) no layer enumeration | A reopened document loses layer names, visibility and **stack order** | Layer ids recovered by probing. Order loss is a silent correctness difference |
-| a placed armature is write-only | A saved rig comes back as surface only, so it cannot be re-posed or edited | Verified in `claycore_armature_readback.rs`: `clay_layer_stroke_points` refuses the primitive, and nothing reads the parent array. Not yet filed; it belongs beside #69 |
+| [#77](https://github.com/CyberdyneCorp/ClayCore/issues/77) a placed armature is write-only | A saved rig comes back as surface only, so it cannot be re-posed or edited | Verified in `claycore_armature_readback.rs`: `clay_layer_stroke_points` refuses the primitive, and nothing reads the parent array. The armature-shaped instance of #16 |
 | [#64](https://github.com/CyberdyneCorp/ClayCore/issues/64) Metal 7–10× slower than CPU at refill | None — routed around | `BackendPolicy::refill_backend` returns CPU; `backend_choice.rs` fails when that flips |
 | [#63](https://github.com/CyberdyneCorp/ClayCore/issues/63) Metal absent on paravirtual GPUs | None for us | Not ours; kernel half fixed in 0.27.3 |
 
