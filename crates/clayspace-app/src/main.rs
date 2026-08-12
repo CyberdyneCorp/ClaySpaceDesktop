@@ -257,7 +257,12 @@ impl App {
             egui_renderer,
         });
 
-        self.sync_geometry();
+        // Timed under its own name. This meshes the whole starting form, so
+        // it is always the largest re-mesh of a session — and reported as
+        // "re-malha" it became the worst one in the diagnostics list every
+        // time, masking whatever a drag actually cost. A hitch before the
+        // first frame is a different thing from a hitch under the pointer.
+        self.timed("malha inicial", Self::sync_geometry_now);
         self.frame_all();
         true
     }

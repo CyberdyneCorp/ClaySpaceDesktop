@@ -37,17 +37,23 @@ setup: submodule build
 
 # Open the application.
 run:
-    cargo run -p {{app}} --release
+    cargo run -p {{app}} --release --bin {{app}}
+
+# Forces a rebuild of the engine, because it is the C++ configure step that
+# this changes and not a Rust feature. `--no-default-features` would do
+# nothing: every crate here declares `default = []`.
 
 # Open it with the CPU backend only, whatever the machine offers.
 run-cpu:
-    CLAYCORE_CPU_ONLY=1 cargo run -p {{app}} --release --no-default-features
+    CLAYCORE_CPU_ONLY=1 cargo run -p {{app}} --release --bin {{app}}
 
-# Versions, the engine revision, every registered backend and the active one.
+# What the engine reports about itself, without opening a window. The
+# application's own Ajuda → Diagnóstico adds the graphics adapter and this
+# session's fallbacks to the same picture.
 
-# The same report the application's Ajuda → Diagnóstico window shows.
+# Which engine is linked, and which backends it registered.
 diagnostics:
-    cargo run -q -p {{app}} --release --bin {{app}} 2>&1 | head -8
+    cargo run -q -p claycore --example diagnostics
 
 # -- testing -----------------------------------------------------------------
 
@@ -175,7 +181,11 @@ engine-pin tag:
 clean:
     cargo clean
 
-# Remove only the Rust artifacts, keeping the compiled C++ engine.
+# `claycore-sys` is deliberately absent: its build script *is* the C++ engine
+# build, so cleaning it is what costs the several minutes this recipe exists
+# to avoid. Use `just clean` when you want that.
+
+# Rebuild the Rust crates, keeping the compiled C++ engine.
 clean-rust:
-    cargo clean -p claycore -p claycore-sys -p clayspace-model \
-        -p clayspace-engine -p clayspace-vm -p clayspace-view -p {{app}}
+    cargo clean -p claycore -p clayspace-model -p clayspace-engine \
+        -p clayspace-vm -p clayspace-view -p {{app}}

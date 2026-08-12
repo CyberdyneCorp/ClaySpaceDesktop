@@ -213,9 +213,15 @@ Detection is automatic, but can be overridden:
 
 ```sh
 just run-cpu                                      # CPU only, any platform
+CLAYCORE_CPU_ONLY=1 cargo build                   # the same, longhand
 cargo build -p claycore --features metal          # require Metal
 cargo build -p claycore --features cuda,vulkan    # require both
 ```
+
+Note that CPU-only is an **environment variable and not a cargo feature**:
+`CLAYCORE_CPU_ONLY` reaches the C++ configure step, which is where backends
+are actually chosen. Every crate here declares `default = []`, so
+`--no-default-features` would build exactly what a plain build does.
 
 Naming a feature whose toolchain is missing is a **hard error** at configure
 time, with the reason. Silently dropping it would produce a binary that cannot
@@ -226,7 +232,7 @@ to 1e-4 relative against the CPU scalar reference, and
 `every_registered_backend_agrees_with_cpu` asserts it here too.
 
 ```sh
-cargo run -p claycore --example diagnostics
+just diagnostics   # or: cargo run -p claycore --example diagnostics
 ```
 
 ```

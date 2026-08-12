@@ -8,6 +8,11 @@ license.workspace = true
 repository.workspace = true
 # Not published: this is an application, and its crates are its internals.
 publish = false
+# The crate carries three binaries — the application, the benchmark and the
+# canonical-document writer — so `cargo run -p clayspace-app` has to be told
+# which, or it refuses. Naming the application here means the obvious command
+# does the obvious thing.
+default-run = "clayspace-app"
 
 [lib]
 name = "clayspace_app"
