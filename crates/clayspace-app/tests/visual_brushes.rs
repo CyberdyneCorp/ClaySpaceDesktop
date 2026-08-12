@@ -416,14 +416,19 @@ fn no_brush_stalls_the_stroke() {
             continue;
         };
         if outcome.refused.is_none() {
-            measured.push((outcome.tool, outcome.worst_segment, outcome.typical_segment));
+            measured.push((
+                outcome.tool,
+                outcome.worst_segment,
+                outcome.typical_segment,
+                outcome.worst_sync,
+            ));
         }
     }
     if measured.is_empty() {
         return;
     }
 
-    for (tool, worst, _) in &measured {
+    for (tool, worst, _, _) in &measured {
         println!(
             "{:<12} worst segment {:>7.1} ms{}",
             format!("{tool:?}"),
@@ -479,8 +484,8 @@ fn no_brush_stalls_the_stroke() {
     // lives on something that holds.
     let over: Vec<String> = measured
         .iter()
-        .filter(|(tool, worst, _)| *worst > ceiling(tool))
-        .map(|(tool, worst, _)| format!("{tool:?} {:.0} ms", worst.as_secs_f64() * 1000.0))
+        .filter(|(tool, worst, _, _)| *worst > ceiling(tool))
+        .map(|(tool, worst, _, _)| format!("{tool:?} {:.0} ms", worst.as_secs_f64() * 1000.0))
         .collect();
     if !over.is_empty() {
         println!("  worst segment past its fence (contention, not asserted): {over:?}");
@@ -490,33 +495,64 @@ fn no_brush_stalls_the_stroke() {
     // through a stroke as the dirty region accumulates — and it is noisy
     // enough under parallel test execution to be a poor fence on its own. The
     // median depositing segment is what dragging actually feels like.
-    // Widened where the machine has no accelerated backend.
+    // No absolute millisecond bound here, deliberately.
     //
-    // These bounds were calibrated on a Metal machine, and the CPU-only CI row
-    // measured Puxar's typical segment at 378 ms against a 220 ms fence — not
-    // a regression, just a configuration that refills 4608 bricks without a
-    // GPU. A fence that fails on a legitimately slower machine is the same
-    // mistake as one that fails on contention: it trains people to rerun.
-    let unaccelerated = BackendPolicy::discover(None)
-        .map(|policy| *policy.active() == clayspace_engine::claycore::Backend::Cpu)
-        .unwrap_or(true);
-    let slack = if unaccelerated { 3 } else { 1 };
+    // This test asserted one three times and moved it three times. The numbers
+    // that made me move it, all on CI runners rather than by regression:
+    //
+    //   Puxar   378 ms, then 700 ms   — same job, same configuration
+    //   Padrao   36.1 ms against 35   — a bound set from a local 35.5
+    //
+    // Wall-clock on a shared runner varies by nearly 2x, so a fence fitted to
+    // one measurement fails on the next and teaches people to rerun. And the
+    // repository already has the right instrument for this: `bench` runs on
+    // its own job, compares against a recorded baseline, and carries
+    // tolerances and noise floors built for exactly this question.
+    //
+    // What is asserted here is the shape, which no runner's speed changes: a
+    // stamping tool adds a small item and dirties the bricks under it, while a
+    // bake-and-replace tool samples a whole region and puts it back. The
+    // second must cost meaningfully more than the first on the same machine in
+    // the same run. That is what catches a stamping tool accidentally becoming
+    // a region operation, which is the regression this test was written for.
+    let typical = |wanted: ToolKind| {
+        measured
+            .iter()
+            .find(|(tool, _, _, _)| *tool == wanted)
+            .map(|(_, _, typical, _)| *typical)
+            .filter(|t| !t.is_zero())
+    };
 
-    for (tool, _, typical) in &measured {
-        if typical.is_zero() {
+    if let (Some(stamp), Some(region)) = (typical(ToolKind::Padrao), typical(ToolKind::Puxar)) {
+        println!(
+            "  shape: Padrao {:.1} ms against Puxar {:.1} ms",
+            stamp.as_secs_f64() * 1000.0,
+            region.as_secs_f64() * 1000.0
+        );
+        assert!(
+            region > stamp * 2,
+            "Puxar re-meshes a region and Padrao stamps, yet they cost the \
+             same ({:.1} ms against {:.1} ms) — one of them is not doing what \
+             it is supposed to",
+            region.as_secs_f64() * 1000.0,
+            stamp.as_secs_f64() * 1000.0
+        );
+    }
+
+    // And the one absolute that is not a stopwatch: a stamping tool must not
+    // be re-meshing the whole surface. Keys, not milliseconds, so it means the
+    // same thing on every machine.
+    for (tool, _, _, sync) in &measured {
+        if !STAMPING.contains(tool) {
             continue;
         }
-        let bound = if STAMPING.contains(tool) {
-            Duration::from_millis(35 * slack)
-        } else {
-            Duration::from_millis(220 * slack)
-        };
-        assert!(
-            *typical <= bound,
-            "{tool:?}'s typical segment is {:.1} ms, past the {:.0} ms this \
-             path is held to",
-            typical.as_secs_f64() * 1000.0,
-            bound.as_secs_f64() * 1000.0
-        );
+        if let Some(cost) = sync {
+            assert!(
+                cost.keys < 2000,
+                "{tool:?} re-meshed {} keys for one segment, which is a region \
+                 operation wearing a stamp's clothes",
+                cost.keys
+            );
+        }
     }
 }
