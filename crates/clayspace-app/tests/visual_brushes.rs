@@ -40,8 +40,13 @@ struct Outcome {
     segments: usize,
     /// Share of subject pixels that changed.
     changed: f64,
-    /// Longest single segment, which is what a sculptor feels.
+    /// Longest single segment. Inherently the last one: the dirty region
+    /// accumulates through a stroke, so cost rises from about 14 ms to about
+    /// 36 ms across twenty-four samples.
     worst_segment: Duration,
+    /// The median segment that actually deposited, which is the steadier
+    /// signal and the one worth holding tightly.
+    typical_segment: Duration,
     triangles: usize,
     /// Whether the model said the edit did anything.
     reported: bool,
@@ -143,6 +148,7 @@ fn exercise(harness: &mut Harness, tool: ToolKind) -> Option<Outcome> {
             segments: 0,
             changed: 0.0,
             worst_segment: Duration::ZERO,
+            typical_segment: Duration::ZERO,
             triangles: geometry.triangle_count(),
             reported: false,
             worst_sync: None,
@@ -162,6 +168,7 @@ fn exercise(harness: &mut Harness, tool: ToolKind) -> Option<Outcome> {
     let mut refused = None;
     let mut segments = 0usize;
     let mut worst = Duration::ZERO;
+    let mut applied: Vec<Duration> = Vec::new();
     let mut began = false;
     let mut worst_sync: Option<clayspace_app::SyncCost> = None;
 
@@ -205,6 +212,18 @@ fn exercise(harness: &mut Harness, tool: ToolKind) -> Option<Outcome> {
             }
         }
         let elapsed = started.elapsed();
+        if std::env::var_os("CLAYSPACE_SEGMENTS").is_some() {
+            eprintln!(
+                "  {tool:?} segment {segments}: {:.1} ms",
+                elapsed.as_secs_f64() * 1000.0
+            );
+        }
+        // Only every third sample deposits — the rest are inside the stamp
+        // gap and cost nothing — so a median over *all* of them would be zero.
+        // The ones that did work are what a sculptor feels.
+        if elapsed > Duration::from_millis(1) {
+            applied.push(elapsed);
+        }
         if elapsed > worst {
             worst = elapsed;
         }
@@ -231,6 +250,10 @@ fn exercise(harness: &mut Harness, tool: ToolKind) -> Option<Outcome> {
         segments,
         changed: subject_change(&before, &after, background),
         worst_segment: worst,
+        typical_segment: {
+            applied.sort();
+            applied.get(applied.len() / 2).copied().unwrap_or_default()
+        },
         triangles: geometry.triangle_count(),
         reported: vm.last_action().get().changed,
         worst_sync,
@@ -393,14 +416,14 @@ fn no_brush_stalls_the_stroke() {
             continue;
         };
         if outcome.refused.is_none() {
-            measured.push((outcome.tool, outcome.worst_segment));
+            measured.push((outcome.tool, outcome.worst_segment, outcome.typical_segment));
         }
     }
     if measured.is_empty() {
         return;
     }
 
-    for (tool, worst) in &measured {
+    for (tool, worst, _) in &measured {
         println!(
             "{:<12} worst segment {:>7.1} ms{}",
             format!("{tool:?}"),
@@ -417,19 +440,23 @@ fn no_brush_stalls_the_stroke() {
         return;
     }
 
-    // These went up when X symmetry was turned on. ClayCore 0.28.0 made the
-    // layer mirror work (#60), the design asks for X, so it is on — and a
-    // mirrored stroke edits two patches instead of one. Measured on the same
-    // stroke, only the mirror changing:
+    // Two things moved these, in opposite directions.
     //
-    //   Padrao   28.3 ms over 170 keys  ->  97.6 ms over 526 keys
-    //   Puxar   256.6 ms over 2448      -> 580.8 ms over 4608
+    // X symmetry went on when ClayCore 0.28.0 made the layer mirror work
+    // (#60), and a mirrored stroke edits two patches instead of one — better
+    // than three times the keys, because each patch is dilated by a ring of
+    // its own. That took Padrao from 28.3 ms to 97.6.
     //
-    // Better than three times the keys rather than twice, because each patch
-    // is dilated by a ring of its own. Nearly all of it is meshing, and
-    // meshing is dominated by gradient normals scaling with the document
-    // rather than the region (#73) — which is fixed upstream and not in
-    // 0.28.0. These fences move back down when that lands.
+    // Then the drag stopped paying for gradient normals. They cost 11x
+    // everything else in a segment put together (#73, fixed upstream and not
+    // in 0.28.0), and they buy shading quality a sculptor is not looking at
+    // while the form is moving. The fast path shades with face normals and
+    // `SurfaceGeometry::refine` buys the gradient back when the pointer comes
+    // up, over just the keys the gesture touched:
+    //
+    //   Padrao   97.6 ms  ->  36.6 ms      Puxar   580.8 ms  ->  239.4 ms
+    //
+    // Still not a frame, and no longer three of them.
     let ceiling = |tool: &ToolKind| {
         if STAMPING.contains(tool) {
             Duration::from_millis(150)
@@ -437,16 +464,38 @@ fn no_brush_stalls_the_stroke() {
             // Not a target, a fence. It is roughly where these sit today, so
             // it catches a regression without pretending the current cost is
             // acceptable — bringing them down is open work.
-            Duration::from_millis(900)
+            Duration::from_millis(700)
         }
     };
 
-    for (tool, worst) in &measured {
+    for (tool, worst, _) in &measured {
         assert!(
             *worst <= ceiling(tool),
             "{tool:?} took {:.1} ms for one segment of a stroke, which reads \
              as a stall while dragging",
             worst.as_secs_f64() * 1000.0
+        );
+    }
+
+    // And the steadier bound. The worst segment is the last one — cost climbs
+    // through a stroke as the dirty region accumulates — and it is noisy
+    // enough under parallel test execution to be a poor fence on its own. The
+    // median depositing segment is what dragging actually feels like.
+    for (tool, _, typical) in &measured {
+        if typical.is_zero() {
+            continue;
+        }
+        let bound = if STAMPING.contains(tool) {
+            Duration::from_millis(35)
+        } else {
+            Duration::from_millis(220)
+        };
+        assert!(
+            *typical <= bound,
+            "{tool:?}'s typical segment is {:.1} ms, past the {:.0} ms this \
+             path is held to",
+            typical.as_secs_f64() * 1000.0,
+            bound.as_secs_f64() * 1000.0
         );
     }
 }

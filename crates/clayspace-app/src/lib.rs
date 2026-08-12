@@ -11,7 +11,7 @@ pub mod reference;
 pub mod session;
 pub mod shared;
 
-pub use geometry::{SurfaceGeometry, SyncCost};
+pub use geometry::{Shading, SurfaceGeometry, SyncCost};
 pub use input::{ray_at, ViewportInput};
 pub use reference::{conditions, Conditions, Scene};
 pub use session::SessionStore;

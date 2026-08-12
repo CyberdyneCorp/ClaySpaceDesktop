@@ -8,12 +8,12 @@
     "viewport": [1280, 800]
   },
   "figures": {
-    "dab.median": 86.0841,
-    "dab.p95": 114.9248,
-    "frame.median": 1.6961,
-    "frame.p95": 3.2137,
-    "locality.dab_ms": 63.4339,
-    "locality.dab_ms_10x": 74.9189,
+    "dab.median": 11.9861,
+    "dab.p95": 13.2168,
+    "frame.median": 1.4351,
+    "frame.p95": 2.6904,
+    "locality.dab_ms": 10.3394,
+    "locality.dab_ms_10x": 34.3881,
     "locality.key_ratio": 1.0000,
     "locality.keys_remeshed": 100.0000,
     "locality.keys_remeshed_10x": 100.0000,
@@ -23,10 +23,10 @@
     "memory.budget": 512.0000,
     "memory.drift": 1.0000,
     "memory.peak": 1.0215,
-    "startup.backend_discovery": 0.0009,
-    "startup.to_first_document": 11.6028,
-    "tape.dab_after_96_edits": 61.5290,
-    "tape.dab_on_fresh": 14.9939,
-    "tape.growth": 4.1036
+    "startup.backend_discovery": 0.0010,
+    "startup.to_first_document": 9.9363,
+    "tape.dab_after_96_edits": 12.2560,
+    "tape.dab_on_fresh": 11.2794,
+    "tape.growth": 1.0866
   }
 }
