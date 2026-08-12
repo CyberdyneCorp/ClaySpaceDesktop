@@ -91,7 +91,10 @@ fn the_topology_reads_back_too_including_a_branch() {
     let parents = document
         .armature_parents(layer, node)
         .expect("the parent array is readable since 0.29.0");
-    assert_eq!(parents, PARENTS, "the branch did not survive the round trip");
+    assert_eq!(
+        parents, PARENTS,
+        "the branch did not survive the round trip"
+    );
 }
 
 #[test]
