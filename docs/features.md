@@ -190,10 +190,47 @@ mesh layer without normals costs the whole export its normals — the engine's
 concat rule, which drops any attribute that is present on some inputs and
 absent on others.
 
+## Documents and sessions
+
+- Save, open, new, save-as, and a **Arquivo** menu carrying all of it plus
+  *Abrir recente*, which prunes documents that are no longer there — a menu
+  that offers a file and then fails to open it is worse than a shorter menu.
+- **Autosave every two minutes**, and only while there is something to lose.
+  A marker file written when a session opens and removed when it closes is
+  what tells the next run whether the last one crashed; a marker still there
+  means the autosave beside it is offered back.
+- Recovered work is unsaved work. It does not take the recovery file's path,
+  so the next save asks; and it is marked modified, because it is.
+- Session state lives in Application Support on macOS and `$XDG_STATE_HOME` on
+  Linux. State, not cache: losing it costs work.
+
+## Diagnostics
+
+**Ajuda → Diagnóstico** carries the application version, the engine version,
+the vendored engine's git revision, the platform, every registered backend,
+the active one and why, the graphics adapter, anything that fell back this
+session, and anything that held the interface thread longer than one frame.
+One button puts the lot on the clipboard.
+
+The stall list is one line per operation, keeping the worst time and counting
+the occurrences — a list with one line per stall is dominated by whatever runs
+most often, which is the operation least worth looking at.
+
+**Ajuda → Atribuições** shows the attribution manifest, which is generated
+from `cargo metadata` and embedded in the binary rather than shipped beside it.
+
+## Units
+
+One engine unit is a centimetre; lengths read in millimetres. Switching the
+display unit is presentation only and changes no geometry — a test states that
+directly, in every unit. The status bar's unit readout is the control that
+changes it, because that is where a person looks for it.
+
 ## Not built yet
 
 Panels cannot be resized or collapsed, shortcuts are fixed, and there is no
-level-of-detail switching in the viewport. See [roadmap.md](roadmap.md).
+level-of-detail switching in the viewport — the engine can build a mip and
+read it but not mesh it. See [roadmap.md](roadmap.md).
 
 ## Deliberately absent
 

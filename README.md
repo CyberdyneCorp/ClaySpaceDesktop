@@ -40,6 +40,9 @@ Opens a window on a starting form.
 | `⌘S` `⇧⌘S` `⌘O` `⌘N` | Save, save as, open, new |
 | `A` | Rig with ZSpheres — see below |
 
+**Arquivo** carries the document lifecycle and mesh import/export; **Ajuda**
+carries the diagnostics report and the attribution manifest.
+
 Closing over unsaved edits asks first, and a session that ends any other way
 offers its work back on the next run. **Arquivo** carries the whole lifecycle
 including *Abrir recente*, which prunes documents that are no longer there.

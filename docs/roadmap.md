@@ -4,7 +4,7 @@ Where the project stands, what is left, and what is still undecided. Task
 counts come from `openspec/changes/add-clayspace-desktop/tasks.md`, which is
 the authority.
 
-**94 of 109 tasks. Milestones 1 to 4 delivered; milestone 5 in progress.**
+**106 of 109 tasks. Milestones 1 to 4 delivered; milestone 5 all but closed.**
 
 Engine pinned at ClayCore **0.27.3**. A dab is 15.8 ms median and 23.1 ms p95
 on a bare document, against a 50/100 ms budget — but 81 ms on the reference
@@ -26,23 +26,30 @@ why*.
 | Group | Milestone | Done |
 |---|---|---|
 | 1. Workspace and engine bridge | M1 | 16/16 |
-| 2. Acceleration policy | M1 | 5/7 |
-| 3. Rendering foundation | M2 | 8/9 |
+| 2. Acceleration policy | M1 | 7/7 |
+| 3. Rendering foundation | M2 | **8/9** — LOD blocked upstream |
 | 4. MVVM skeleton | M3 | 7/7 |
 | 5. Sculpting loop | M3 | 11/11 |
 | 6. Masks and armatures | M5 | 6/6 |
 | 7. Scene, layers and history | M4 | 13/13 |
-| 8. Document lifecycle | M5 | **2/8** |
+| 8. Document lifecycle | M5 | 8/8 |
 | 9. Interface shell and design system | M4 | 16/16 |
-| 10. Performance and packaging | M5 | **9/13** |
+| 10. Performance and packaging | M5 | 13/13 |
 | 11. Close-out | M5 | 1/3 |
 
 ## What is blocked, and what is not
 
-**Nothing on the remaining task list is blocked by ClayCore.** Every open
-upstream issue degrades something already built rather than stopping something
-next. The one exception is CI, where two of seven jobs cannot pass until the
-engine compiles on the CI compiler.
+**One task is blocked by ClayCore: 3.9, level of detail.** Everything else on
+the list is either done or waiting on a decision. I had 3.9 down as unblocked
+on the last roadmap, on the grounds that `build_mip`, `current_lod` and
+`read_bricks(lod)` all exist. They do — and `clay_brick_cache_mesh` takes no
+level, so a mip can be built and read and not meshed. A coarse viewport would
+mean reimplementing the mesher this application deliberately does not own.
+`claycore_lod.rs` records it and fails when the meshing call grows a level.
+
+Every other open upstream issue degrades something already built rather than
+stopping something next. CI is the exception, where the macOS rows cannot pass
+until the engine compiles on the CI compiler.
 
 ### Upstream: fixed on `main`, awaiting a release
 
@@ -61,7 +68,8 @@ the signal to do it.
 
 | Issue | Effect here | Our position |
 |---|---|---|
-| [#71](https://github.com/CyberdyneCorp/ClayCore/issues/71) 0.27.3 will not build with AppleClang | **Both macOS CI rows fail** | The only true blocker. One character upstream; we are not patching a vendored engine |
+| [#71](https://github.com/CyberdyneCorp/ClayCore/issues/71) 0.27.3 will not build with AppleClang | **The macOS CI rows fail**, including the new document-bytes one | One character upstream; we are not patching a vendored engine |
+| no LOD meshing | **Blocks 3.9.** Mips build and read; nothing meshes them | Not yet filed. `claycore_lod.rs` is the repro |
 | [#73](https://github.com/CyberdyneCorp/ClayCore/issues/73) gradient normals scale with document size | A dab is 4 ms on a fresh document and 120 ms after 192 edits | Workaround available: host-side normals. Not taken — see below |
 | [#67](https://github.com/CyberdyneCorp/ClayCore/issues/67) bake-and-replace corrugates the surface | Suavizar, Relaxar, Planar and Polir damage what they touch | Applied once per gesture rather than per segment, which halves it. Still visibly wrong |
 | [#69](https://github.com/CyberdyneCorp/ClayCore/issues/69) no layer enumeration | A reopened document loses layer names, visibility and **stack order** | Layer ids recovered by probing. Order loss is a silent correctness difference |
@@ -69,34 +77,19 @@ the signal to do it.
 | [#64](https://github.com/CyberdyneCorp/ClayCore/issues/64) Metal 7–10× slower than CPU at refill | None — routed around | `BackendPolicy::refill_backend` returns CPU; `backend_choice.rs` fails when that flips |
 | [#63](https://github.com/CyberdyneCorp/ClayCore/issues/63) Metal absent on paravirtual GPUs | None for us | Not ours; kernel half fixed in 0.27.3 |
 
-## What we can do now
+## What is left
 
-In the order I would take it. None of this waits on anyone.
+**3.9, level of detail.** Blocked upstream; see above.
 
-**1. Autosave and recent files — 8.5, 8.7.** Pure host work, and autosave
-matters more than usual while four tools can damage a surface.
+**11.1, the open decisions.** Four of them, below. They gate archiving the
+change and nobody but the product owner can settle them.
 
-**2. Mesh import and export — 8.3, 8.4.** `clay_mesh_load` / `clay_mesh_save`,
-the mesher choice, and the merged export added in 0.27.0. FBX has a known
-engine quirk ([#38](https://github.com/CyberdyneCorp/ClayCore/issues/38),
-closed) worth re-checking on arrival.
+**11.3, archive.** After 11.1.
 
-**3. Diagnostics — 2.6, 10.11.** Backends discovered, backend active, why it
-was chosen, engine revision, fallbacks this session. Small, and it is what
-turns a bug report from this application into something actionable.
-
-**4. Units and the working unit — 8.8.** Presentation-only switching.
-
-**5. Bundles and attribution — 10.12, 10.13.** The macOS bundle and the Linux
-distributable, and the attribution manifest the licence policy in `deny.toml`
-is written against.
-
-**6. Interface-thread instrumentation — 10.4.** A 16 ms threshold with the
-operation responsible. Consolidation takes 6.4 s, so this has something real
-to catch.
-
-**7. LOD over brick mips — 3.9.** `read_bricks(lod)`, `build_mip` and
-`current_lod` are all present.
+That is the whole list. Everything else in milestone 5 landed: masks and
+armatures, document lifecycle including autosave and recovery, mesh import and
+export, diagnostics, units, instrumentation, bundles and attribution, backend
+parity and the cross-platform document check.
 
 ### Armatures, as delivered
 
@@ -143,10 +136,12 @@ never run unasked; it does not require us to keep quiet about it.
 
 ## Continuous integration
 
-Seven jobs. Five green: Linux CPU-only, format/lint/audit, layering, OpenSpec
-strict, and the performance gate. Two red, both on
-[#71](https://github.com/CyberdyneCorp/ClayCore/issues/71): macOS CPU-only and
-macOS Metal.
+Eleven jobs. Green: Linux CPU-only, Linux Vulkan, format/lint/audit, layering,
+packaging, OpenSpec strict, the performance gate, and the Linux half of the
+document-bytes matrix. Red on
+[#71](https://github.com/CyberdyneCorp/ClayCore/issues/71): macOS CPU-only,
+macOS Metal, and the macOS half of document-bytes — which also holds up the
+job that compares the two platforms' digests.
 
 The performance gate compares against `benchmarks/baseline-macos-aarch64.json`
 and fails on a regression. Budget breaches are printed but not enforced without
