@@ -336,6 +336,34 @@ fn emit_link_flags(build_dir: &Path, b: &Backends) {
         "linux" => {
             println!("cargo:rustc-link-lib=stdc++");
             println!("cargo:rustc-link-lib=pthread");
+            // The engine links these itself with `target_link_libraries`, but
+            // `claycore` is a STATIC library: that records a usage requirement
+            // for CMake consumers and puts nothing in the archive. The final
+            // link is rustc's, so the loader has to be named here or the
+            // backend compiles and then fails to link — which is exactly what
+            // the Linux Vulkan row did, with a page of `undefined symbol:
+            // vkDestroyPipeline`.
+            if b.vulkan {
+                println!("cargo:rustc-link-lib=vulkan");
+            }
+            if b.opencl {
+                println!("cargo:rustc-link-lib=OpenCL");
+            }
+            if b.cuda {
+                // The toolkit is rarely on the default search path.
+                for root in ["CUDA_PATH", "CUDA_HOME"]
+                    .iter()
+                    .filter_map(|k| std::env::var(k).ok())
+                {
+                    for dir in ["lib64", "lib"] {
+                        let path = Path::new(&root).join(dir);
+                        if path.is_dir() {
+                            println!("cargo:rustc-link-search=native={}", path.display());
+                        }
+                    }
+                }
+                println!("cargo:rustc-link-lib=cudart");
+            }
         }
         _ => {}
     }

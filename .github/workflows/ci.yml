@@ -273,7 +273,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
+      # The submodule, because the attribution manifest reproduces the
+      # engine's licence and reads it from `vendor/ClayCore/LICENSE`. Without
+      # it the generator falls back to naming the path, and the committed
+      # manifest — generated in a tree that has the submodule — no longer
+      # matches. Nothing here builds the engine; this is one file.
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
