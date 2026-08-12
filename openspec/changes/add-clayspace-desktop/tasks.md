@@ -70,7 +70,7 @@
 - [x] 6.3 Implement mask extrude with outward, inward and centred modes and a roundable rim
 - [x] 6.4 Verify masks survive a resolution change and that a fully masked region resists every tool
 - [x] 6.5 Implement armature authoring: add, move, resize, reparent, remove, skin thickness, and symmetric authoring
-- [x] 6.6 Verify armature persistence across save and reload — the skinned surface survives; the *rig* does not, because a placed armature is write-only in the ABI ([#77](https://github.com/CyberdyneCorp/ClayCore/issues/77)). See `armature_persistence.rs` and `claycore_armature_readback.rs`, both written to fail the day a reader arrives
+- [x] 6.6 Verify armature persistence across save and reload — both halves survive since ClayCore 0.29.0 closed [#77](https://github.com/CyberdyneCorp/ClayCore/issues/77): the skinned surface, and the tree with its topology, so a reopened rig can be posed. See `armature_persistence.rs` and `claycore_armature_readback.rs`
 
 ## 7. Scene, layers and history
 
