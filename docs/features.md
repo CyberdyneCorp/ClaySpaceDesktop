@@ -266,7 +266,8 @@ dent.
 | What | Effect | Issue |
 |---|---|---|
 | Ruído | Inert. Clamped to zero, because jitter interacts badly with the cache's narrow band | ours, not the engine's |
-| Renaming a layer | Shown, but not saved. The ABI names a layer at creation and has no rename, so a renamed layer comes back under the name it was made with | no upstream call to use |
+| Renaming a layer | Shown, but not saved. The ABI names a layer at creation and has no rename, so a renamed layer comes back under the name it was made with | [#92](https://github.com/CyberdyneCorp/ClayCore/issues/92) |
+| Negative ZSpheres | The indentation is real, but placed as a separate subtractive sphere: the membrane along its links is not cut, the sign is lost on reload, and only a leaf may be negative | [#99](https://github.com/CyberdyneCorp/ClayCore/issues/99) |
 | Suavizar, Relaxar | Subtle. Relax moves the surface by less than a cell per pass and the cell is 0.02, so they take the high-frequency edge off rather than removing a dent | the engine's design |
 | Dab latency with symmetry on | A mirrored stroke edits two patches, so a segment costs ~98 ms against ~28 ms unmirrored. Nearly all of it is meshing | [#73](https://github.com/CyberdyneCorp/ClayCore/issues/73), fixed upstream and not in 0.28.0 |
 | Layer names after reopening | Lost, along with visibility and stack order. Ids are recovered by probing | [#69](https://github.com/CyberdyneCorp/ClayCore/issues/69) |
