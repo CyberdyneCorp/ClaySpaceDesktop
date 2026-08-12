@@ -117,6 +117,7 @@ pub struct Strings {
     pub action_quit: &'static str,
     pub state_no_recent: &'static str,
     pub action_diagnostics: &'static str,
+    pub action_attribution: &'static str,
     pub action_copy: &'static str,
     pub state_copied: &'static str,
     pub action_armature_new: &'static str,
@@ -196,6 +197,7 @@ const PT_BR: Strings = Strings {
     action_quit: "Sair",
     state_no_recent: "nenhum documento recente",
     action_diagnostics: "Diagnóstico",
+    action_attribution: "Atribuições",
     action_copy: "Copiar relatório",
     state_copied: "copiado",
     action_armature_new: "Nova armadura",
@@ -274,6 +276,7 @@ const EN_US: Strings = Strings {
     action_quit: "Quit",
     state_no_recent: "no recent documents",
     action_diagnostics: "Diagnostics",
+    action_attribution: "Attributions",
     action_copy: "Copy report",
     state_copied: "copied",
     action_armature_new: "New armature",
@@ -294,7 +297,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 70] {
+    pub fn all(&self) -> [&'static str; 71] {
         [
             self.menu_file,
             self.menu_edit,
@@ -357,6 +360,7 @@ impl Strings {
             self.action_quit,
             self.state_no_recent,
             self.action_diagnostics,
+            self.action_attribution,
             self.action_copy,
             self.state_copied,
             self.action_armature_new,

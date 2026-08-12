@@ -304,6 +304,7 @@ impl SculptViewModel {
             Command::FrameAll
             | Command::NextMaterial
             | Command::NextDisplayUnit
+            | Command::ToggleAttribution
             | Command::ToggleDiagnostics
             | Command::CopyDiagnostics => {}
         }

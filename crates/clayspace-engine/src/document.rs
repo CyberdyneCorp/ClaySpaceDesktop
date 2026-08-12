@@ -188,6 +188,11 @@ impl ClayDocument {
     }
 
     /// The brick cache the viewport re-meshes from.
+    /// The cache, for the few callers that need to build a mip.
+    pub fn cache_mut(&mut self) -> &mut BrickCache {
+        &mut self.cache
+    }
+
     pub fn cache(&self) -> &BrickCache {
         &self.cache
     }

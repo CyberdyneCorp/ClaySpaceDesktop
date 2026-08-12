@@ -419,6 +419,39 @@ impl BrickCache {
         })
     }
 
+    /// Builds the coarse brick covering a 2×2×2 block of full-resolution ones.
+    ///
+    /// Subsampled rather than evaluated: same lattice size, twice the spacing.
+    /// Buildable only when all eight children are evaluated *and* clean, so
+    /// `false` is an ordinary "not yet" rather than a failure. Dirtying any
+    /// child drops the mip, which is what stops one being downsampled from
+    /// stale data.
+    pub fn build_mip(&mut self, coarse_key: BrickKey) -> Result<bool> {
+        let mut built = 0;
+        // SAFETY: a three-int key and an out-parameter written by the call.
+        check(
+            unsafe {
+                sys::clay_brick_cache_build_mip(self.raw.as_ptr(), coarse_key.as_ptr(), &mut built)
+            },
+            "clay_brick_cache_build_mip",
+        )?;
+        Ok(built != 0)
+    }
+
+    /// Whether a valid mip exists for a coarse key — the cheap way to ask
+    /// before reading one.
+    pub fn current_lod(&self, coarse_key: BrickKey) -> Result<i32> {
+        let mut lod = 0;
+        // SAFETY: a three-int key and an out-parameter written by the call.
+        check(
+            unsafe {
+                sys::clay_brick_cache_current_lod(self.raw.as_ptr(), coarse_key.as_ptr(), &mut lod)
+            },
+            "clay_brick_cache_current_lod",
+        )?;
+        Ok(lod)
+    }
+
     /// Meshes a subset of the cache's surface bricks.
     ///
     /// `keys` empty means every surface brick. The returned ranges say which

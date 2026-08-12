@@ -63,6 +63,9 @@ pub struct ShellState<'a> {
     pub show_diagnostics: bool,
     /// Whether the report was just put on the clipboard, for the confirmation.
     pub diagnostics_copied: bool,
+    /// The attribution manifest, and whether it is open.
+    pub attribution: &'a str,
+    pub show_attribution: bool,
     /// What an extrusion would use.
     pub extrude: ExtrudeSettings,
     pub strings: &'a Strings,
@@ -392,6 +395,10 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                     queue.push(Command::ToggleDiagnostics);
                     ui.close_menu();
                 }
+                if ui.button(s.action_attribution).clicked() {
+                    queue.push(Command::ToggleAttribution);
+                    ui.close_menu();
+                }
             });
         });
 
@@ -682,6 +689,36 @@ pub fn diagnostics_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &m
     // they emit the same command rather than each owning a copy of the state.
     if !open {
         queue.push(Command::ToggleDiagnostics);
+    }
+}
+
+/// What the application is built from, and on what terms.
+///
+/// Shown rather than only shipped beside the binary: the licence policy in
+/// `deny.toml` is written on the understanding that attribution travels with
+/// the distribution, and a file nobody can reach from the application is one
+/// that goes missing the first time it is repackaged.
+pub fn attribution_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    if !state.show_attribution {
+        return;
+    }
+    let mut open = true;
+    egui::Window::new(state.strings.action_attribution)
+        .open(&mut open)
+        .resizable(true)
+        .default_size(egui::vec2(520.0, 420.0))
+        .show(ctx, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(state.attribution)
+                        .size(type_scale::LABEL)
+                        .family(egui::FontFamily::Monospace)
+                        .color(Tokens::text_dim()),
+                );
+            });
+        });
+    if !open {
+        queue.push(Command::ToggleAttribution);
     }
 }
 

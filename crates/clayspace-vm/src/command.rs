@@ -103,6 +103,8 @@ pub enum Command {
     /// Cycles what lengths are shown in. Presentation only: no geometry
     /// moves, which is what makes it safe to put on a single click.
     NextDisplayUnit,
+    /// Shows or hides the attribution manifest.
+    ToggleAttribution,
     /// Shows or hides the diagnostics report.
     ToggleDiagnostics,
     /// Puts the report on the clipboard, which is the whole point of having
@@ -124,6 +126,7 @@ impl Command {
                 | Self::NextMaterial
                 | Self::ToggleGrid
                 | Self::NextDisplayUnit
+                | Self::ToggleAttribution
                 | Self::ToggleDiagnostics
                 | Self::CopyDiagnostics
                 // Document lifecycle is not an edit. Opening replaces the
@@ -209,6 +212,7 @@ impl Command {
             Self::RunImport => "import",
             Self::RunExport => "export",
             Self::NextDisplayUnit => "display unit",
+            Self::ToggleAttribution => "attribution",
             Self::ToggleDiagnostics => "diagnostics",
             Self::CopyDiagnostics => "copy diagnostics",
         }

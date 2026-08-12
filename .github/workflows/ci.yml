@@ -197,6 +197,22 @@ jobs:
       - name: Check the layering rules
         run: python3 tools/check_layering.py
 
+  packaging:
+    name: Packaging
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # The attribution manifest is generated from `cargo metadata`, so the
+      # only way it goes wrong is by not being regenerated after a dependency
+      # moves. This is that check, and it needs no engine build — `cargo
+      # metadata` reads the manifests rather than compiling anything.
+      - name: Check the packaging scripts and the attribution manifest
+        run: python3 tools/test_tools.py
+
   openspec:
     name: OpenSpec
     runs-on: ubuntu-24.04

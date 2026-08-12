@@ -177,6 +177,8 @@ fn state<'a>(
         diagnostics,
         show_diagnostics: false,
         diagnostics_copied: false,
+        attribution: "# Attribution\n\n| ab_glyph | 0.2.32 | Apache-2.0 |\n",
+        show_attribution: false,
     }
 }
 
@@ -239,6 +241,7 @@ fn capture_shell(harness: &Harness, state: &ShellState<'_>, name: &str) -> clays
                 });
             });
         shell::diagnostics_window(ctx, state, &mut queue);
+        shell::attribution_window(ctx, state, &mut queue);
         shell::import_window(ctx, state, &mut queue);
         shell::export_window(ctx, state, &mut queue);
     };

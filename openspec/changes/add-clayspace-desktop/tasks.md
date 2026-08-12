@@ -37,7 +37,7 @@
 - [x] 3.6 Implement the view presets with orthographic projection for the orthogonal views and framing preservation on switch
 - [x] 3.7 Implement the navigation gizmo with per-axis activation
 - [x] 3.8 Implement the ground grid and symmetry-plane overlays, excluded from export
-- [ ] 3.9 Implement LOD selection over the brick cache mips with restoration on approach
+- [ ] 3.9 Implement LOD selection over the brick cache mips with restoration on approach — **blocked upstream**: `clay_brick_cache_build_mip` and `read_bricks(lod)` exist, but `clay_brick_cache_mesh` takes no level, so a mip can be built and read and not meshed. See `claycore_lod.rs`
 
 ## 4. MVVM skeleton
 
@@ -131,8 +131,8 @@
 - [x] 10.9 Add the OpenSpec strict validation job
 - [x] 10.10 Add formatting, lint and dependency-audit gates
 - [x] 10.11 Embed the application version and pinned engine revision, and surface both in diagnostics
-- [ ] 10.12 Produce the macOS bundle and the Linux distributable, self-contained with respect to the engine
-- [ ] 10.13 Generate the attribution manifest and surface it in the application
+- [x] 10.12 Produce the macOS bundle and the Linux distributable, self-contained with respect to the engine
+- [x] 10.13 Generate the attribution manifest and surface it in the application
 
 ## 11. Close-out
 
