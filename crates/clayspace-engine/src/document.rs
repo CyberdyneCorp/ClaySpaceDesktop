@@ -20,6 +20,7 @@ use clayspace_model::{
 use crate::backend::{BackendPolicy, Operation};
 
 /// A layer the document holds, and what it is made of.
+#[derive(Clone)]
 struct Layer {
     id: LayerId,
     /// A stable handle the interface uses. Engine ids are not guaranteed to
@@ -1122,6 +1123,7 @@ impl SculptModel for ClayDocument {
     fn undo(&mut self) -> Result<bool, ModelError> {
         let moved = self.document.undo().map_err(ModelError::engine)?;
         if moved {
+            self.reconcile_layers();
             let layer = self.active_layer().id;
             // Undo can move anything the layer holds, so the bound is the
             // layer rather than a node set.
@@ -1134,6 +1136,7 @@ impl SculptModel for ClayDocument {
     fn redo(&mut self) -> Result<bool, ModelError> {
         let moved = self.document.redo().map_err(ModelError::engine)?;
         if moved {
+            self.reconcile_layers();
             let layer = self.active_layer().id;
             self.refill(layer, &[])?;
             self.resync_armature();
@@ -2129,6 +2132,66 @@ impl ClayDocument {
         self.refill(layer, &placed)?;
         self.refresh_stats();
         Ok(placed)
+    }
+
+    /// Brings the layer list back in line with the document.
+    ///
+    /// Undo moves layers as well as geometry — starting a rig adds one, so
+    /// undoing past that removes it — and this list is the host's own record.
+    /// Left alone it kept a layer the document no longer had, and the next
+    /// refill asked the engine to mark a layer that was not there.
+    ///
+    /// Keys are preserved for ids that survived, because a `LayerKey` is the
+    /// stable handle the interface holds and renumbering it would move the
+    /// selection out from under a panel. A layer that comes *back* — a redo of
+    /// its creation — is rebuilt from what the document says it is, which is
+    /// only answerable at all since ClayCore 0.29.0 (#69).
+    fn reconcile_layers(&mut self) {
+        let Ok(ids) = self.document.layer_ids() else {
+            return;
+        };
+        let active_id = self.layers.get(self.active).map(|layer| layer.id);
+
+        let mut rebuilt = Vec::with_capacity(ids.len());
+        for id in &ids {
+            if let Some(known) = self.layers.iter().find(|layer| layer.id == *id) {
+                rebuilt.push(known.clone());
+                continue;
+            }
+            let info = self.document.layer_info(*id).ok();
+            let name = self
+                .document
+                .layer_name(*id)
+                .ok()
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| format!("Camada {}", rebuilt.len() + 1));
+            rebuilt.push(Layer {
+                id: *id,
+                key: self.take_key(),
+                name: name.clone(),
+                engine_name: name,
+                representation: match info.map(|i| i.representation) {
+                    Some(claycore::LayerRepresentation::Voxel) => Representation::Voxel,
+                    Some(claycore::LayerRepresentation::Mesh) => Representation::Mesh,
+                    _ => Representation::Sdf,
+                },
+                visible: info.map(|i| i.visible).unwrap_or(true),
+                protection: info
+                    .map(|i| Protection {
+                        ghost: i.protection.ghost,
+                        locked: i.protection.locked,
+                    })
+                    .unwrap_or_default(),
+                intensity: 100,
+            });
+        }
+
+        self.layers = rebuilt;
+        // The layer that was active, if it is still there; otherwise the last
+        // one, which is where a removal leaves you in every panel of this kind.
+        self.active = active_id
+            .and_then(|id| self.layers.iter().position(|layer| layer.id == id))
+            .unwrap_or_else(|| self.layers.len().saturating_sub(1));
     }
 
     /// Re-reads the rig from the document after history moved underneath it.

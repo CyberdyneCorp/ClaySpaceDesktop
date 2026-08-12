@@ -144,6 +144,13 @@ struct App {
     show_export: bool,
     import: ImportSettings,
     export: ExportSettings,
+    /// The engine's undo depth when a rig gesture began.
+    ///
+    /// A rig drag edits once per sample, so a gesture is many engine entries
+    /// and has to be banked as one action — the same accounting a stroke gets.
+    /// Measured rather than counted: reading the depth either side says what
+    /// actually happened, however many edits the gesture turned out to make.
+    rig_depth_at_press: usize,
     /// The plane a rig gesture runs on: a point on it, and its normal.
     ///
     /// Fixed at the press rather than recomputed per sample. A plane that
@@ -221,6 +228,7 @@ impl App {
             import: ImportSettings::default(),
             export: ExportSettings::default(),
             rig_plane: None,
+            rig_depth_at_press: 0,
             strings: Strings::for_locale(Locale::default()),
         }
     }
@@ -549,13 +557,22 @@ impl App {
         self.frame_all();
     }
 
+    /// The engine's undo depth, which is what a rig edit moves.
+    fn engine_undo_depth(&self) -> usize {
+        self.document
+            .with(|document| clayspace_model::SculptModel::history(document).depth)
+    }
+
     /// Everything that has to catch up after the rig changed outside a drag.
-    fn after_armature_edit(&mut self) {
-        // One undoable action. Each armature edit groups itself into a single
-        // engine entry, and the sculpting ViewModel owns the history that
-        // Cmd+Z reads — a sculptor has one undo and does not care which part
-        // of the application produced the thing they want back.
-        self.sculpt.record_external_action(1);
+    ///
+    /// `before` is the undo depth from before the edit, so this banks exactly
+    /// what the edit did rather than assuming it was one entry.
+    fn after_armature_edit(&mut self, before: usize) {
+        // The sculpting ViewModel owns the history Cmd+Z reads — a sculptor
+        // has one undo and does not care which part of the application
+        // produced the thing they want back.
+        let entries = self.engine_undo_depth().saturating_sub(before);
+        self.sculpt.record_external_action(entries);
         self.settle_geometry();
         self.scene.refresh();
         self.armature.refresh();
@@ -887,6 +904,13 @@ impl App {
                 Drag::Rig => {
                     self.armature.release();
                     self.rig_plane = None;
+                    // The whole gesture as one action. A drag edits once per
+                    // sample, so this is usually a dozen engine entries and
+                    // always exactly one Cmd+Z.
+                    let entries = self
+                        .engine_undo_depth()
+                        .saturating_sub(self.rig_depth_at_press);
+                    self.sculpt.record_external_action(entries);
                     // Rigging rewrites the armature node outright and refills
                     // the box it vacated, so unlike a stroke it can leave slots
                     // for bricks the surface has moved out of. Compaction, not
@@ -920,6 +944,9 @@ impl App {
                 _ => Drag::Sculpt,
             };
             self.drag = started;
+            if started == Drag::Rig {
+                self.rig_depth_at_press = self.engine_undo_depth();
+            }
             if started == Drag::Sculpt {
                 self.stroke_at(point, true);
             }
@@ -1302,34 +1329,38 @@ impl App {
                         ]
                     })
                     .unwrap_or([0.0; 3]);
+                let before = self.engine_undo_depth();
                 self.armature.begin(at);
                 self.rigging = self.armature.is_rigging();
-                self.after_armature_edit();
+                self.after_armature_edit(before);
             }
             Command::ToggleArmatureEditing => {
                 self.rigging = !self.rigging && self.armature.is_rigging();
                 self.request_redraw();
             }
             Command::RemoveZsphere => {
+                let before = self.engine_undo_depth();
                 self.armature.remove_selected();
-                self.after_armature_edit();
+                self.after_armature_edit(before);
             }
             Command::ToggleSkinPreview => {
                 self.skin_preview = !self.skin_preview;
                 self.request_redraw();
             }
             Command::ToggleZsphereNegative => {
+                let before = self.engine_undo_depth();
                 let negative = !self.armature.selected_is_negative();
                 self.armature.set_selected_negative(negative);
-                self.after_armature_edit();
+                self.after_armature_edit(before);
             }
             Command::SetArmatureMirror(on) => {
                 self.armature.set_symmetric(on);
                 self.request_redraw();
             }
             Command::SetSkinThickness(thickness) => {
+                let before = self.engine_undo_depth();
                 self.armature.set_skin(SkinSettings { thickness });
-                self.after_armature_edit();
+                self.after_armature_edit(before);
             }
             Command::SetViewPreset(preset) => {
                 self.camera.apply_preset(match preset {
