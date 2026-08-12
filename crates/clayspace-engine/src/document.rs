@@ -7,7 +7,7 @@
 use claycore::{
     Blend, BrickCache, BrickConfig, BrickKey, BrushParams, BrushShape, Document, Falloff,
     ImportBudget, Item, LayerId, Mask, Mesh, MeshLayerDesc, MeshParams, Mesher, NodeId, Op,
-    StrokePreset, VolumeParams, VoxelGrid,
+    StrokePreset, VolumeParams,
 };
 use clayspace_model::{
     Armature, ArmatureModel, BrushSettings, DocumentModel, EditOutcome, ExchangeModel,
@@ -25,10 +25,16 @@ struct Layer {
     /// A stable handle the interface uses. Engine ids are not guaranteed to
     /// survive an edit, so the interface is given one that is.
     key: LayerKey,
+    /// What the interface shows, which a rename changes.
     name: String,
+    /// What the *document* calls this layer.
+    ///
+    /// Fixed at creation, because the ABI names a layer when it is made and
+    /// has no rename. It is kept separately from `name` for one reason: it is
+    /// the only handle `clay_document_voxel_layer` takes, so a renamed voxel
+    /// layer would otherwise lose its grid.
+    engine_name: String,
     representation: Representation,
-    /// Voxel layers carry their own grid; SDF layers do not.
-    grid: Option<VoxelGrid>,
     visible: bool,
     protection: Protection,
     intensity: u8,
@@ -130,8 +136,8 @@ impl ClayDocument {
                 id,
                 key: LayerKey(1),
                 name: "Forma".to_string(),
+                engine_name: "Forma".to_string(),
                 representation: Representation::Sdf,
-                grid: None,
                 visible: true,
                 protection: Protection::default(),
                 intensity: 100,
@@ -214,21 +220,27 @@ impl ClayDocument {
 
     /// Adds a voxel layer and makes it active.
     pub fn add_voxel_layer(&mut self, name: &str, voxel_size: f32) -> Result<(), ModelError> {
-        // The document lends its grid, but the borrow would hold the document
-        // for as long as the layer lives. A standalone grid the layer owns is
-        // simpler here and gives the same behaviour to the tools.
-        let id = self
+        // Through the document, so the grid is *in* the document.
+        //
+        // This used to make an SDF layer and keep a standalone `VoxelGrid`
+        // beside it, on the grounds that borrowing the document's grid would
+        // hold the document for as long as the layer lived. It gave the tools
+        // the same behaviour and cost the sculptor their work: the grid was
+        // never part of the document, so nothing voxel survived a save, and
+        // the engine reported the layer as SDF because that is what it was.
+        // The borrow is taken per stroke instead, which is short enough not to
+        // fight anything.
+        let (id, _) = self
             .document
-            .add_sdf_layer(name)
+            .add_voxel_layer(name, voxel_size)
             .map_err(ModelError::engine)?;
-        let grid = VoxelGrid::new(voxel_size).map_err(ModelError::engine)?;
         let key = self.take_key();
         self.layers.push(Layer {
             id,
             key,
             name: name.to_string(),
+            engine_name: name.to_string(),
             representation: Representation::Voxel,
-            grid: Some(grid),
             visible: true,
             protection: Protection::default(),
             intensity: 100,
@@ -893,14 +905,18 @@ impl ClayDocument {
         samples: &[GestureSample],
     ) -> Result<EditOutcome, ModelError> {
         let index = self.active;
+        let engine_name = self.layers[index].engine_name.clone();
         let voxel_size = {
-            let layer = &self.layers[index];
-            let grid = layer.grid.as_ref().expect("a voxel layer carries a grid");
+            let (_, grid) = self
+                .document
+                .voxel_layer(&engine_name)
+                .map_err(ModelError::engine)?;
             grid.voxel_size().map_err(ModelError::engine)?
         };
-        // Split the borrows by field: the mask and the layers are disjoint,
-        // but `&self` for one and `&mut self` for the other is not.
-        let Self { layers, mask, .. } = self;
+        // Split the borrows by field: the mask, the layers and the document
+        // are disjoint, but `&self` for one and `&mut self` for another is
+        // not.
+        let Self { document, mask, .. } = self;
         let brush = brush.sanitized();
         let params = BrushParams {
             size: ((brush.size / voxel_size).round() as i32).clamp(1, 64),
@@ -916,8 +932,11 @@ impl ClayDocument {
             mask: mask.as_deref(),
         };
 
-        let layer = &mut layers[index];
-        let grid = layer.grid.as_mut().expect("a voxel layer carries a grid");
+        // Borrowed for the length of this stroke and no longer, which is what
+        // makes the document able to own it.
+        let (_, mut grid) = document
+            .voxel_layer(&engine_name)
+            .map_err(ModelError::engine)?;
 
         // Index 0 is the engine's empty slot, so a fresh grid has no colour to
         // deposit and every set would write emptiness.
@@ -1166,21 +1185,23 @@ impl SceneModel for ClayDocument {
         name: &str,
         representation: Representation,
     ) -> Result<LayerKey, ModelError> {
-        let id = self
-            .document
-            .add_sdf_layer(name)
-            .map_err(ModelError::engine)?;
+        // A voxel representation is a different call, not a flag: the grid
+        // has to be the document's or it is not saved with it.
+        let id = match representation {
+            Representation::Voxel => self
+                .document
+                .add_voxel_layer(name, Self::VOXEL_SIZE)
+                .map(|(id, _)| id),
+            _ => self.document.add_sdf_layer(name),
+        }
+        .map_err(ModelError::engine)?;
         let key = self.take_key();
-        let grid = match representation {
-            Representation::Voxel => Some(VoxelGrid::new(0.02).map_err(ModelError::engine)?),
-            _ => None,
-        };
         self.layers.push(Layer {
             id,
             key,
             name: name.to_string(),
+            engine_name: name.to_string(),
             representation,
-            grid,
             visible: true,
             protection: Protection::default(),
             intensity: 100,
@@ -1299,8 +1320,8 @@ impl SceneModel for ClayDocument {
             id,
             key,
             name: name.to_string(),
+            engine_name: name.to_string(),
             representation: Representation::Mesh,
-            grid: None,
             visible: true,
             protection: Protection::default(),
             intensity: 100,
@@ -1452,6 +1473,16 @@ impl ClayDocument {
             .enumerate()
             .map(|(index, id)| {
                 let info = document.layer_info(*id).ok();
+                // The document's own name is both what the interface shows and
+                // the key `clay_document_voxel_layer` takes. A layer that was
+                // never named comes back empty rather than absent, and an
+                // unnamed row in the stack is worse to work with than a
+                // numbered one.
+                let engine_name = document
+                    .layer_name(*id)
+                    .ok()
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or_else(|| format!("Camada {}", index + 1));
                 let representation = match info.map(|i| i.representation) {
                     Some(claycore::LayerRepresentation::Voxel) => Representation::Voxel,
                     Some(claycore::LayerRepresentation::Mesh) => Representation::Mesh,
@@ -1463,13 +1494,9 @@ impl ClayDocument {
                     // A layer that was never named comes back empty rather
                     // than absent, and an unnamed row in the stack is worse to
                     // work with than a numbered one.
-                    name: document
-                        .layer_name(*id)
-                        .ok()
-                        .filter(|name| !name.is_empty())
-                        .unwrap_or_else(|| format!("Camada {}", index + 1)),
+                    name: engine_name.clone(),
+                    engine_name,
                     representation,
-                    grid: None,
                     visible: info.map(|i| i.visible).unwrap_or(true),
                     protection: info
                         .map(|i| Protection {
@@ -1643,11 +1670,11 @@ impl ClayDocument {
             id,
             key,
             name: name.to_string(),
+            engine_name: name.to_string(),
             // Recorded as a mesh so the tools refuse it by representation
             // rather than by a special case. A mesh layer is not evaluated,
             // and nothing here pretends otherwise.
             representation: Representation::Mesh,
-            grid: None,
             visible: true,
             protection: Protection::default(),
             intensity: 100,

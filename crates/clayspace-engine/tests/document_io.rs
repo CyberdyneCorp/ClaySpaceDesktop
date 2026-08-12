@@ -274,38 +274,88 @@ fn a_reopened_document_keeps_its_layers_as_they_were() {
         .map(|l| (l.name.clone(), l.representation, l.visible))
         .collect();
 
-    // Names, stack order and visibility, which is what #69 bought.
-    let names = |rows: &[(String, clayspace_model::Representation, bool)]| {
-        rows.iter()
-            .map(|(name, _, visible)| (name.clone(), *visible))
-            .collect::<Vec<_>>()
-    };
     assert_eq!(
-        names(&after),
-        names(&before),
+        after, before,
         "a reopened document does not hold the layers it was saved with"
     );
+    let _ = std::fs::remove_file(&path);
+}
 
-    // Representation is the exception, and it is ours rather than the
-    // engine's. `ClayDocument::add_voxel_layer` creates an *SDF* layer in the
-    // document and keeps a standalone `VoxelGrid` beside it — see the comment
-    // there — so the engine has never been told the layer is a voxel one, and
-    // reports SDF perfectly correctly. Which means the grid is not in the
-    // document at all and voxel work does not survive a save.
-    //
-    // #69 did not cause that; it made it visible, because representation was
-    // unreadable before. Asserted here as the current behaviour so the fix —
-    // going through `clay_document_add_voxel_layer`, which is bound already —
-    // announces itself rather than passing silently.
-    let voxel_row = after
-        .iter()
-        .find(|(name, _, _)| name == "Voxels")
-        .expect("the voxel layer is still there by name");
-    assert_eq!(
-        voxel_row.1,
-        clayspace_model::Representation::Sdf,
-        "a voxel layer now round trips as one — go through \
-         clay_document_add_voxel_layer and delete this note"
+#[test]
+fn voxel_work_survives_a_save() {
+    // It did not, and #69 is what made it visible. `add_voxel_layer` used to
+    // create an *SDF* layer in the document and keep a standalone grid beside
+    // it, so the engine reported SDF perfectly correctly — because that is
+    // what the layer was — and nothing voxel was ever written to the file.
+    // Silent data loss: the sculptor saw their work, saved, reopened, and it
+    // was gone.
+    let Some(mut document) = fresh_document() else {
+        return;
+    };
+    document
+        .add_voxel_layer("Voxels", 0.05)
+        .expect("a voxel layer");
+
+    let brush = BrushSettings {
+        size: 0.25,
+        ..Default::default()
+    };
+    let mut deposited = false;
+    for step in 0..6 {
+        let t = step as f32 / 5.0;
+        let outcome = document
+            .apply_stroke(
+                ToolKind::Padrao,
+                brush,
+                &[GestureSample {
+                    position: [(t - 0.5) * 0.4, 0.0, 0.0],
+                    pressure: 1.0,
+                    time: t,
+                }],
+                [false; 3],
+            )
+            .expect("deposit");
+        deposited |= outcome.changed;
+    }
+    assert!(
+        deposited,
+        "nothing was deposited, so there is nothing to lose"
     );
+
+    let path = scratch("voxel-roundtrip.clayspace");
+    document.save(&path).expect("save");
+    document.open(&path).expect("open");
+
+    let layer = document
+        .scene()
+        .layers
+        .iter()
+        .find(|l| l.name == "Voxels")
+        .cloned()
+        .expect("the voxel layer came back");
+    assert_eq!(
+        layer.representation,
+        clayspace_model::Representation::Voxel,
+        "the layer came back as something other than a voxel layer, which \
+         means its grid is not in the document"
+    );
+
+    // And it is still sculptable: a voxel verb on it must be accepted rather
+    // than refused for the representation.
+    document
+        .set_active_layer(layer.key)
+        .expect("select the voxel layer");
+    document
+        .apply_stroke(
+            ToolKind::Raspar,
+            brush,
+            &[GestureSample {
+                position: [0.0, 0.0, 0.0],
+                pressure: 1.0,
+                time: 0.0,
+            }],
+            [false; 3],
+        )
+        .expect("a voxel verb on a reopened voxel layer");
     let _ = std::fs::remove_file(&path);
 }
