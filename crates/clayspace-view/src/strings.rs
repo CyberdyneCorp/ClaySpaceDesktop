@@ -132,6 +132,8 @@ pub struct Strings {
     pub action_armature_new: &'static str,
     pub action_armature_edit: &'static str,
     pub action_armature_remove: &'static str,
+    pub action_skin_preview: &'static str,
+    pub action_zsphere_negative: &'static str,
     /// What the pointer does while rigging, said once where it is needed.
     pub hint_armature: &'static str,
     pub hint_units: &'static str,
@@ -212,6 +214,8 @@ const PT_BR: Strings = Strings {
     action_armature_new: "Nova armadura",
     action_armature_edit: "Editar armadura",
     action_armature_remove: "Remover esfera",
+    action_skin_preview: "Prévia da pele",
+    action_zsphere_negative: "Esfera negativa",
     hint_armature: "Arraste de uma esfera para criar a seguinte · Alt arrasta · ⌘ redimensiona",
     hint_units: "Toque para trocar a unidade. Só muda a leitura; nada é redimensionado.",
     state_unsaved: "não salvo",
@@ -291,6 +295,8 @@ const EN_US: Strings = Strings {
     action_armature_new: "New armature",
     action_armature_edit: "Edit armature",
     action_armature_remove: "Remove sphere",
+    action_skin_preview: "Skin preview",
+    action_zsphere_negative: "Negative sphere",
     hint_armature: "Drag out of a sphere to grow the next · Alt moves · ⌘ resizes",
     hint_units: "Click to change the unit. It changes the reading only; nothing is rescaled.",
     state_unsaved: "unsaved",
@@ -377,6 +383,8 @@ const ES_419: Strings = Strings {
     action_armature_new: "Nuevo esqueleto",
     action_armature_edit: "Editar esqueleto",
     action_armature_remove: "Eliminar esfera",
+    action_skin_preview: "Vista previa de la piel",
+    action_zsphere_negative: "Esfera negativa",
     hint_armature: "Arrastra desde una esfera para crear la siguiente · Alt mueve · ⌘ redimensiona",
     hint_units: "Haz clic para cambiar la unidad. Solo cambia la lectura; no se reescala nada.",
     state_unsaved: "sin guardar",
@@ -393,7 +401,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 72] {
+    pub fn all(&self) -> [&'static str; 74] {
         [
             self.menu_file,
             self.menu_edit,
@@ -463,6 +471,8 @@ impl Strings {
             self.action_armature_new,
             self.action_armature_edit,
             self.action_armature_remove,
+            self.action_skin_preview,
+            self.action_zsphere_negative,
             self.hint_armature,
             self.hint_units,
             self.state_unsaved,

@@ -302,6 +302,9 @@ pub struct Renderer {
     cursor_mesh: GpuMesh,
     /// The ZSphere rig, drawn over the surface it skins.
     armature_mesh: GpuMesh,
+    /// The translucent skin between the spheres, drawn while rigging.
+    membrane_mesh: GpuMesh,
+    membrane_pipeline: wgpu::RenderPipeline,
     /// The rectangle of the frame the scene is drawn into, in physical pixels.
     scene_viewport: Option<[f32; 4]>,
     gizmo_mesh: GpuMesh,
@@ -432,9 +435,23 @@ impl Renderer {
             false,
         );
 
+        // Triangles, blended, and no depth write — so the spheres and links
+        // behind the membrane still read through it.
+        let membrane_pipeline = make_pipeline(
+            gpu,
+            &layout,
+            &shader,
+            format,
+            "overlay_vs",
+            "membrane_fs",
+            wgpu::PrimitiveTopology::TriangleList,
+            false,
+        );
+
         Self {
             pipeline,
             overlay_pipeline,
+            membrane_pipeline,
             camera_buffer,
             material_buffer,
             bind_group,
@@ -447,6 +464,7 @@ impl Renderer {
             overlay_mesh: GpuMesh::new(gpu),
             cursor_mesh: GpuMesh::new(gpu),
             armature_mesh: GpuMesh::new(gpu),
+            membrane_mesh: GpuMesh::new(gpu),
             scene_viewport: None,
             gizmo_mesh: {
                 let mut mesh = GpuMesh::new(gpu);
@@ -511,6 +529,9 @@ impl Renderer {
     /// same reason: a rig you cannot see inside the skin is a rig you cannot
     /// edit.
     pub fn set_armature(&mut self, gpu: &Gpu, view: ArmatureView<'_>) {
+        let (membrane_vertices, membrane_indices) = membrane_geometry(&view);
+        self.membrane_mesh
+            .upload(gpu, &membrane_vertices, &membrane_indices);
         let (vertices, indices) = armature_geometry(view);
         self.armature_mesh.upload(gpu, &vertices, &indices);
     }
@@ -641,6 +662,18 @@ impl Renderer {
             }
 
             // The rig, over the surface it skins.
+            // The membrane first: it is translucent and writes no depth, so
+            // the spheres and links drawn after it read through rather than
+            // being hidden by it.
+            if !self.membrane_mesh.is_empty() {
+                pass.set_pipeline(&self.membrane_pipeline);
+                pass.set_vertex_buffer(0, self.membrane_mesh.vertices.slice(..));
+                pass.set_index_buffer(
+                    self.membrane_mesh.indices.slice(..),
+                    wgpu::IndexFormat::Uint32,
+                );
+                pass.draw_indexed(0..self.membrane_mesh.index_count, 0, 0..1);
+            }
             if !self.armature_mesh.is_empty() {
                 pass.set_pipeline(&self.overlay_pipeline);
                 pass.set_vertex_buffer(0, self.armature_mesh.vertices.slice(..));
@@ -949,6 +982,69 @@ fn cursor_geometry(cursor: BrushCursor) -> (Vec<Vertex>, Vec<u32>) {
         }
     }
     indices.extend_from_slice(&[base, base + 1, base + 2, base + 3]);
+
+    (vertices, indices)
+}
+
+/// A tapered sleeve along each link, which is the membrane a rig would skin
+/// into.
+///
+/// ZBrush shows this while a rig is being built and shows it translucent, so
+/// the chain reads through its own surface. Eight sides is enough at the size
+/// a link is drawn — this is a hint about where the skin will go, not the skin.
+fn membrane_geometry(view: &ArmatureView<'_>) -> (Vec<Vertex>, Vec<u32>) {
+    const SIDES: usize = 8;
+    let mut vertices: Vec<Vertex> = Vec::new();
+    let mut indices: Vec<u32> = Vec::new();
+
+    for (child, parent) in view.links {
+        let (Some((a, ra)), Some((b, rb))) = (
+            view.spheres.get(*child as usize),
+            view.spheres.get(*parent as usize),
+        ) else {
+            continue;
+        };
+        let (from, to) = (Vec3::from(*a), Vec3::from(*b));
+        let axis = to - from;
+        let length = axis.length();
+        if length < 1e-5 {
+            continue;
+        }
+        let forward = axis / length;
+        // Any vector not along the axis gives a frame to sweep the ring in.
+        let aside = if forward.x.abs() < 0.9 {
+            Vec3::X
+        } else {
+            Vec3::Y
+        };
+        let u = forward.cross(aside).normalize();
+        let v = forward.cross(u);
+
+        let colour = palette::dimmed(palette::ACCENT, 0.5);
+        let base = vertices.len() as u32;
+        for side in 0..SIDES {
+            let angle = side as f32 / SIDES as f32 * std::f32::consts::TAU;
+            let (s, c) = angle.sin_cos();
+            let offset = u * c + v * s;
+            // Slightly inside each sphere, so the sleeve meets them rather
+            // than poking out of their silhouettes.
+            for (centre, radius) in [(from, *ra), (to, *rb)] {
+                vertices.push(Vertex {
+                    position: (centre + offset * radius * 0.72).into(),
+                    normal: offset.into(),
+                    color: colour,
+                });
+            }
+        }
+        for side in 0..SIDES {
+            let next = (side + 1) % SIDES;
+            let (a0, a1) = (base + side as u32 * 2, base + side as u32 * 2 + 1);
+            let (b0, b1) = (base + next as u32 * 2, base + next as u32 * 2 + 1);
+            // Both windings, because the sleeve is seen from inside as often
+            // as outside and this pipeline does not cull.
+            indices.extend_from_slice(&[a0, a1, b1, a0, b1, b0]);
+        }
+    }
 
     (vertices, indices)
 }

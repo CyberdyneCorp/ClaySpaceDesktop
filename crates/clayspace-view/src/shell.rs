@@ -37,6 +37,10 @@ pub struct ArmatureState {
     pub editing: bool,
     /// Whether a sphere is selected, which is what makes removal meaningful.
     pub selection: bool,
+    /// Whether the viewport is drawing the skin or only the ZSpheres.
+    pub skin_preview: bool,
+    /// Whether the selected sphere cuts rather than adds.
+    pub selection_is_negative: bool,
     /// How many spheres, for the readout.
     pub spheres: usize,
     pub mirror: bool,
@@ -341,6 +345,29 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                     .clicked()
                 {
                     queue.push(Command::RemoveZsphere);
+                    ui.close_menu();
+                }
+                let mut negative = state.armature.selection_is_negative;
+                if ui
+                    .add_enabled(
+                        state.armature.editing && state.armature.selection,
+                        egui::Checkbox::new(&mut negative, s.action_zsphere_negative),
+                    )
+                    .clicked()
+                {
+                    queue.push(Command::ToggleZsphereNegative);
+                    ui.close_menu();
+                }
+                ui.separator();
+                let mut preview = state.armature.skin_preview;
+                if ui
+                    .add_enabled(
+                        state.armature.exists,
+                        egui::Checkbox::new(&mut preview, s.action_skin_preview),
+                    )
+                    .clicked()
+                {
+                    queue.push(Command::ToggleSkinPreview);
                     ui.close_menu();
                 }
             });

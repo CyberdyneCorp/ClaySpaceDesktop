@@ -23,6 +23,14 @@ pub struct Zsphere {
     pub radius: f32,
     /// Its parent, or itself when it is the root.
     pub parent: NodeIndex,
+    /// Whether this sphere cuts into the rig rather than adding to it.
+    ///
+    /// ZBrush's negative ZSphere, which is made by pushing one inside its
+    /// parent: it stops contributing skin and starts carving an indentation.
+    /// The engine's armature primitive cannot express this — it is a stroke
+    /// plus a tree, with one op for the whole item — so the negatives are
+    /// placed as a second, subtractive item over the same layer.
+    pub negative: bool,
 }
 
 impl Zsphere {
@@ -45,6 +53,7 @@ impl Armature {
                 position,
                 radius,
                 parent: 0,
+                negative: false,
             }],
         }
     }
@@ -106,8 +115,108 @@ impl Armature {
             position,
             radius,
             parent,
+            negative: false,
         });
         index
+    }
+
+    /// Puts a sphere on the link between a node and its parent.
+    ///
+    /// ZBrush's insert: you click the membrane rather than either end, and the
+    /// new sphere takes the child's place in the chain — the child hangs off
+    /// it, so everything below comes along. Inserting on a root's own link is
+    /// refused, because a root has no link.
+    ///
+    /// Its radius is the mean of the two it sits between, which is what makes
+    /// an inserted joint look like it belongs rather than like a bead.
+    pub fn insert_on_link(&mut self, child: NodeIndex) -> Option<NodeIndex> {
+        let node = *self.get(child)?;
+        if node.is_root(child) {
+            return None;
+        }
+        let parent = *self.get(node.parent)?;
+
+        let midpoint = [
+            (node.position[0] + parent.position[0]) * 0.5,
+            (node.position[1] + parent.position[1]) * 0.5,
+            (node.position[2] + parent.position[2]) * 0.5,
+        ];
+        let inserted = self.add_child(node.parent, midpoint, (node.radius + parent.radius) * 0.5);
+        // The child now hangs off the new sphere rather than off its old
+        // parent, which is what puts it *between* them rather than beside.
+        self.nodes[child as usize].parent = inserted;
+        Some(inserted)
+    }
+
+    /// Whether a sphere cuts rather than adds.
+    ///
+    /// Two refusals, both structural. A root cannot cut — there would be
+    /// nothing left to cut into. And only a leaf can, because a negative
+    /// sphere leaves the positive tree and anything hanging off it would be
+    /// orphaned; in ZBrush a negative is something you push into a limb's end,
+    /// not something you hang a limb from.
+    pub fn set_negative(&mut self, index: NodeIndex, negative: bool) -> Result<(), ModelError> {
+        let node = self
+            .get(index)
+            .copied()
+            .ok_or_else(|| ModelError::engine("essa esfera não existe"))?;
+        if negative {
+            if node.is_root(index) {
+                return Err(ModelError::engine("a raiz não pode ser negativa"));
+            }
+            if self.subtree(index).len() > 1 {
+                return Err(ModelError::engine(
+                    "só uma esfera sem filhos pode ser negativa",
+                ));
+            }
+        }
+        self.nodes[index as usize].negative = negative;
+        Ok(())
+    }
+
+    /// The tree that adds, and the spheres that cut.
+    ///
+    /// Split because they are placed as two things: the engine's armature
+    /// primitive carries one op for the whole item, so a negative sphere
+    /// cannot live in the same item as the ones it cuts into.
+    ///
+    /// The positive half is a *tree* and has to stay one, so the surviving
+    /// parents are remapped onto their new indices — dropping nodes without
+    /// remapping would silently reparent every limb after the first negative.
+    /// The negative half is just spheres: each carves on its own, and
+    /// `set_negative` keeps them leaves so there is no topology to preserve.
+    pub fn split_by_sign(&self) -> (Armature, Vec<Zsphere>) {
+        let keep: Vec<NodeIndex> = (0..self.nodes.len() as NodeIndex)
+            .filter(|i| !self.nodes[*i as usize].negative)
+            .collect();
+        let mut remap = vec![None; self.nodes.len()];
+        for (new, old) in keep.iter().enumerate() {
+            remap[*old as usize] = Some(new as NodeIndex);
+        }
+
+        let nodes = keep
+            .iter()
+            .map(|old| {
+                let node = self.nodes[*old as usize];
+                Zsphere {
+                    // A parent that was itself removed cannot happen while
+                    // negatives are leaves, but if it ever does the node
+                    // becomes a root rather than pointing at a stranger.
+                    parent: remap[node.parent as usize].unwrap_or_else(|| {
+                        remap[*old as usize].expect("a kept node has a new index")
+                    }),
+                    ..node
+                }
+            })
+            .collect();
+
+        let cutters = self
+            .nodes
+            .iter()
+            .filter(|node| node.negative)
+            .copied()
+            .collect();
+        (Armature { nodes }, cutters)
     }
 
     /// Moves a node and everything under it.
@@ -243,6 +352,12 @@ pub trait ArmatureModel {
     ) -> Result<(), ModelError>;
     fn remove_zsphere(&mut self, index: NodeIndex) -> Result<(), ModelError>;
 
+    /// Puts a sphere on the link between `child` and its parent.
+    fn insert_zsphere(&mut self, child: NodeIndex) -> Result<NodeIndex, ModelError>;
+
+    /// Makes a sphere cut into the rig rather than add to it.
+    fn set_zsphere_negative(&mut self, index: NodeIndex, negative: bool) -> Result<(), ModelError>;
+
     fn set_skin(&mut self, skin: SkinSettings) -> Result<(), ModelError>;
     fn skin(&self) -> SkinSettings;
 }
@@ -250,6 +365,93 @@ pub trait ArmatureModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sphere_inserted_on_a_link_takes_the_childs_place() {
+        // ZBrush's insert: click the membrane, and the new sphere goes
+        // *between* rather than beside — so the child, and everything under
+        // it, hangs off the new one.
+        let mut a = Armature::rooted([0.0, 0.0, 0.0], 0.4);
+        let elbow = a.add_child(0, [1.0, 0.0, 0.0], 0.2);
+        let hand = a.add_child(elbow, [1.6, 0.0, 0.0], 0.1);
+
+        let inserted = a.insert_on_link(elbow).expect("a link to insert on");
+        assert_eq!(a.nodes[elbow as usize].parent, inserted);
+        assert_eq!(a.nodes[inserted as usize].parent, 0);
+        assert_eq!(a.nodes[hand as usize].parent, elbow, "the hand was moved");
+
+        // Midway, and sized between the two it sits between.
+        assert_eq!(a.nodes[inserted as usize].position, [0.5, 0.0, 0.0]);
+        assert!((a.nodes[inserted as usize].radius - 0.3).abs() < 1e-6);
+
+        // And the subtree still walks: moving the root carries everything.
+        assert_eq!(a.subtree(0).len(), 4);
+    }
+
+    #[test]
+    fn a_root_has_no_link_to_insert_on() {
+        let mut a = Armature::rooted([0.0, 0.0, 0.0], 0.4);
+        assert!(a.insert_on_link(0).is_none());
+    }
+
+    #[test]
+    fn only_a_childless_sphere_can_be_made_negative() {
+        let mut a = Armature::rooted([0.0, 0.0, 0.0], 0.4);
+        let elbow = a.add_child(0, [1.0, 0.0, 0.0], 0.2);
+        let hand = a.add_child(elbow, [1.6, 0.0, 0.0], 0.1);
+
+        // The root has nothing to cut into.
+        assert!(a.set_negative(0, true).is_err());
+        // The elbow carries the hand; making it negative would orphan it.
+        assert!(a.set_negative(elbow, true).is_err());
+        // The hand is a leaf.
+        a.set_negative(hand, true).expect("a leaf can cut");
+        assert!(a.nodes[hand as usize].negative);
+    }
+
+    #[test]
+    fn splitting_by_sign_keeps_the_positive_tree_a_tree() {
+        // The failure this guards: dropping nodes without remapping silently
+        // reparents every limb after the first negative one.
+        let mut a = Armature::rooted([0.0, 0.0, 0.0], 0.4);
+        let left = a.add_child(0, [-1.0, 0.0, 0.0], 0.2);
+        let cut = a.add_child(0, [0.0, 0.5, 0.0], 0.15);
+        let right = a.add_child(0, [1.0, 0.0, 0.0], 0.2);
+        let right_hand = a.add_child(right, [1.6, 0.0, 0.0], 0.1);
+        a.set_negative(cut, true).expect("a leaf");
+
+        let (positive, cutters) = a.split_by_sign();
+        assert_eq!(cutters.len(), 1);
+        assert_eq!(cutters[0].position, [0.0, 0.5, 0.0]);
+        assert_eq!(positive.nodes.len(), 4);
+
+        // Every surviving node still hangs off what it hung off before.
+        let at = |p: [f32; 3]| {
+            positive
+                .nodes
+                .iter()
+                .position(|n| n.position == p)
+                .expect("a node") as NodeIndex
+        };
+        assert_eq!(
+            positive.nodes[at([-1.0, 0.0, 0.0]) as usize].parent,
+            at([0.0, 0.0, 0.0])
+        );
+        assert_eq!(
+            positive.nodes[at([1.6, 0.0, 0.0]) as usize].parent,
+            at([1.0, 0.0, 0.0])
+        );
+        let _ = (left, right_hand);
+    }
+
+    #[test]
+    fn a_rig_with_no_negatives_splits_into_itself() {
+        let mut a = Armature::rooted([0.0, 0.0, 0.0], 0.4);
+        a.add_child(0, [1.0, 0.0, 0.0], 0.2);
+        let (positive, cutters) = a.split_by_sign();
+        assert!(cutters.is_empty());
+        assert_eq!(positive, a);
+    }
 
     /// A shoulder with an arm hanging off it, and a second branch.
     fn rig() -> Armature {

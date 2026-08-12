@@ -141,6 +141,8 @@ fn state<'a>(
             exists: true,
             editing: true,
             selection: true,
+            skin_preview: true,
+            selection_is_negative: false,
             spheres: 12,
             mirror: true,
             skin: 1.0,

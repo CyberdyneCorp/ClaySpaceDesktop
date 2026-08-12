@@ -95,6 +95,17 @@ impl ArmatureModel for FakeRig {
         Ok(())
     }
 
+    fn insert_zsphere(&mut self, child: NodeIndex) -> Result<NodeIndex, ModelError> {
+        let tree = self.tree.as_mut().ok_or_else(no_rig)?;
+        tree.insert_on_link(child)
+            .ok_or_else(|| ModelError::engine("essa esfera não tem ligação"))
+    }
+
+    fn set_zsphere_negative(&mut self, index: NodeIndex, negative: bool) -> Result<(), ModelError> {
+        let tree = self.tree.as_mut().ok_or_else(no_rig)?;
+        tree.set_negative(index, negative)
+    }
+
     fn set_skin(&mut self, skin: SkinSettings) -> Result<(), ModelError> {
         self.skin = skin;
         Ok(())
@@ -347,4 +358,71 @@ fn the_skin_setting_goes_through_to_the_model() {
     let mut vm = rigged();
     vm.set_skin(SkinSettings { thickness: 1.8 });
     assert_eq!(vm.skin().get().thickness, 1.8);
+}
+
+#[test]
+fn clicking_a_link_inserts_a_sphere_between_its_ends() {
+    // ZBrush's insert: you aim at the membrane rather than either end, and the
+    // new sphere takes the child's place in the chain.
+    let mut vm = rigged();
+    let tree = vm.tree().get().clone().expect("a tree");
+    assert_eq!(tree.nodes.len(), 2);
+
+    // A ray at the midpoint of the only link, which is neither sphere.
+    let (origin, direction) = ray_at(0.5, 0.0);
+    assert_eq!(vm.pick(origin, direction), None, "that ray hits a sphere");
+    assert_eq!(vm.pick_link(origin, direction), Some(1));
+
+    // Only while growing — a bare click on a link should not surprise anyone
+    // into inserting a joint.
+    assert_eq!(vm.grab_at(origin, direction, false, false), Grab::Empty);
+    let grab = vm.grab_at(origin, direction, true, false);
+    assert_eq!(grab, Grab::Insert(1));
+
+    vm.press(grab, [0.5, 0.0, 0.0]);
+    // The first movement inserts — on the link, which is where an insert
+    // belongs — and the rest of the gesture carries it, exactly as growing a
+    // child does. So placing it off the line takes a second sample.
+    vm.drag([0.5, 0.0, 0.0]);
+    vm.drag([0.5, 0.2, 0.0]);
+    vm.release();
+
+    let after = vm.tree().get().clone().expect("a tree");
+    assert_eq!(after.nodes.len(), 3);
+    // The child now hangs off the inserted sphere rather than off the root.
+    assert_eq!(after.nodes[1].parent, 2);
+    assert_eq!(after.nodes[2].parent, 0);
+    // And the rest of the gesture placed it off the line it was inserted on.
+    assert!(
+        (after.nodes[2].position[1] - 0.2).abs() < 1e-5,
+        "the inserted sphere did not follow the pointer: {:?}",
+        after.nodes[2].position
+    );
+}
+
+#[test]
+fn a_negative_sphere_is_refused_where_it_would_orphan_something() {
+    let mut vm = rigged();
+    // Grow a third so the middle one has a child.
+    vm.press(Grab::Grow(1), [1.0, 0.0, 0.0]);
+    vm.drag([1.6, 0.0, 0.0]);
+    vm.release();
+
+    // The tip is a leaf and can cut.
+    vm.set_selected_negative(true);
+    assert!(
+        vm.selected_is_negative(),
+        "a leaf could not be made negative"
+    );
+    assert!(vm.notice().get().is_none());
+
+    // The middle one carries the tip.
+    vm.press(Grab::Move(1), [1.0, 0.0, 0.0]);
+    vm.release();
+    vm.set_selected_negative(true);
+    assert!(!vm.selected_is_negative());
+    assert!(
+        vm.notice().get().is_some(),
+        "making a parent negative was accepted silently"
+    );
 }

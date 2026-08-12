@@ -306,3 +306,70 @@ fn posing_the_character_carries_the_limb() {
         "the left arm moved with the right one"
     );
 }
+
+#[test]
+fn the_skin_preview_off_shows_the_zspheres_and_the_membrane() {
+    // ZBrush's `A`: while building a rig you look at the spheres, and every so
+    // often you look at what they make. Captured both ways, because "the
+    // scaffolding stands alone" is a claim about a picture.
+    let Some((mut harness, document, mut geometry)) = as_the_app_starts() else {
+        return;
+    };
+    let background = harness.background();
+    let mut vm = ArmatureViewModel::new(Box::new(document.clone()));
+    grow_a_character(&mut vm);
+
+    let gpu = harness.gpu.clone();
+    document
+        .with(|d| geometry.rebuild(&gpu, d))
+        .expect("mesh the character");
+    let mut camera = Camera::default();
+    match SculptModel::bounds(&document) {
+        Some((min, max)) => camera.frame_bounds(min.into(), max.into()),
+        None => camera.frame_default(),
+    }
+
+    let tree = vm.tree().get().clone().expect("a tree");
+    let thickness = vm.skin().get().thickness;
+    let spheres: Vec<([f32; 3], f32)> = tree
+        .nodes
+        .iter()
+        .map(|n| (n.position, n.radius * thickness))
+        .collect();
+    let links = tree.links();
+    harness.renderer.set_armature(
+        &gpu,
+        ArmatureView {
+            spheres: &spheres,
+            links: &links,
+            selected: None,
+            root: Some(0),
+        },
+    );
+
+    let with_skin = harness.capture(geometry.mesh(), &camera, false, "e2e-3-skin-preview-on");
+
+    // Preview off: the surface is simply not drawn, which is what the
+    // composition root does with an empty mesh.
+    let nothing = clayspace_view::GpuMesh::new(&gpu);
+    let spheres_only = harness.capture(&nothing, &camera, false, "e2e-4-skin-preview-off");
+
+    let (skinned, bare) = (
+        covered(&with_skin, background),
+        covered(&spheres_only, background),
+    );
+    println!("coverage: skin {skinned:.3}, spheres only {bare:.3}");
+
+    // The scaffolding stands alone rather than vanishing with the surface —
+    // that is the whole point of the mode.
+    assert!(
+        bare > 0.01,
+        "with the skin off there is almost nothing left to see: {bare:.3}"
+    );
+    // And it is meaningfully less than the skinned view, or the toggle did
+    // nothing.
+    assert!(
+        bare < skinned,
+        "turning the skin off did not change what is drawn"
+    );
+}

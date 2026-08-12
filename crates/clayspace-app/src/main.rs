@@ -18,8 +18,8 @@ use clayspace_model::{
 };
 use clayspace_view::shell::{self, region, ArmatureState, ShellState};
 use clayspace_view::{
-    mirrored_cursors, ArmatureView, BrushCursor, Camera, Gpu, Locale, MatCap, Overlays, Renderer,
-    Strings, SurfaceLoss, ViewPreset, WindowSurface,
+    mirrored_cursors, ArmatureView, BrushCursor, Camera, Gpu, GpuMesh, Locale, MatCap, Overlays,
+    Renderer, Strings, SurfaceLoss, ViewPreset, WindowSurface,
 };
 use clayspace_vm::{
     ArmatureViewModel, Axis, Command, CommandQueue, DocumentViewModel, Grab, Guard, MaskViewModel,
@@ -113,6 +113,12 @@ struct App {
     overlay_symmetry: [bool; 3],
     /// Whether the pointer is rigging rather than sculpting.
     rigging: bool,
+    /// Whether the viewport draws the rig's skin or only its ZSpheres.
+    ///
+    /// ZBrush's Adaptive Skin preview. On by default because the skin is what
+    /// the rig is *for*; turned off, the scaffolding stands alone and a joint
+    /// is easier to grab.
+    skin_preview: bool,
     /// Whether the diagnostics window is open, and whether the last thing that
     /// happened in it was a copy.
     show_diagnostics: bool,
@@ -148,6 +154,12 @@ struct App {
 }
 
 struct Graphics {
+    /// Nothing, for the frames that draw no surface.
+    ///
+    /// Held rather than made each time: the skin preview toggles often enough
+    /// that allocating an empty buffer per frame would be a silly cost for a
+    /// thing that never changes.
+    nothing: GpuMesh,
     gpu: Gpu,
     surface: WindowSurface,
     renderer: Renderer,
@@ -192,6 +204,7 @@ impl App {
             viewport: None,
             overlay_symmetry: [false; 3],
             rigging: false,
+            skin_preview: true,
             show_diagnostics: false,
             diagnostics_copied: false,
             store,
@@ -248,7 +261,9 @@ impl App {
         let egui_renderer = egui_wgpu::Renderer::new(&gpu.device, surface.format(), None, 1, false);
 
         let geometry = SurfaceGeometry::new(&gpu);
+        let nothing = GpuMesh::new(&gpu);
         self.graphics = Some(Graphics {
+            nothing,
             gpu,
             surface,
             renderer,
@@ -665,7 +680,7 @@ impl App {
         );
         let index = match grab {
             Grab::Empty => return false,
-            Grab::Move(i) | Grab::Grow(i) | Grab::Resize(i) => i,
+            Grab::Move(i) | Grab::Grow(i) | Grab::Resize(i) | Grab::Insert(i) => i,
         };
         let Some(centre) = self
             .armature
@@ -725,6 +740,8 @@ impl App {
             exists: tree.is_some(),
             editing: self.rigging,
             selection: self.armature.selected().get().is_some(),
+            skin_preview: self.skin_preview,
+            selection_is_negative: self.armature.selected_is_negative(),
             spheres: tree.as_ref().map(|t| t.nodes.len()).unwrap_or(0),
             mirror: *self.armature.symmetric().get(),
             skin: self.armature.skin().get().thickness,
@@ -1171,12 +1188,21 @@ impl App {
 
         graphics.renderer.set_cursors(&graphics.gpu, &cursors);
         graphics.renderer.set_scene_viewport(scene_viewport);
+        // With the skin preview off, the surface is simply not drawn — the
+        // scaffolding stands alone, which is what ZBrush shows while a rig is
+        // being built. Presentation only: nothing in the document changes, so
+        // toggling it back costs no re-mesh.
+        let surface = if self.rigging && !self.skin_preview {
+            &graphics.nothing
+        } else {
+            graphics.geometry.mesh()
+        };
         graphics.renderer.render(
             &graphics.gpu,
             &view,
             graphics.surface.framebuffer(),
             &self.camera,
-            graphics.geometry.mesh(),
+            surface,
             false,
         );
         paint_interface(graphics, &context, output, &view, scale);
@@ -1272,6 +1298,15 @@ impl App {
             }
             Command::RemoveZsphere => {
                 self.armature.remove_selected();
+                self.after_armature_edit();
+            }
+            Command::ToggleSkinPreview => {
+                self.skin_preview = !self.skin_preview;
+                self.request_redraw();
+            }
+            Command::ToggleZsphereNegative => {
+                let negative = !self.armature.selected_is_negative();
+                self.armature.set_selected_negative(negative);
                 self.after_armature_edit();
             }
             Command::SetArmatureMirror(on) => {
@@ -1481,7 +1516,13 @@ impl ApplicationHandler for App {
                     KeyCode::Digit2 => Some(Command::SetViewPreset(ViewPresetKind::Front)),
                     KeyCode::Digit3 => Some(Command::SetViewPreset(ViewPresetKind::Side)),
                     KeyCode::Digit4 => Some(Command::SetViewPreset(ViewPresetKind::Top)),
-                    KeyCode::KeyA => Some(Command::ToggleArmatureEditing),
+                    // `A` is Adaptive Skin preview in ZBrush, and anyone who
+                    // has rigged before will reach for it. Entering the mode
+                    // moves to the modifier rather than the other way round:
+                    // it is done once a session, and previewing is done
+                    // constantly.
+                    KeyCode::KeyA if modifiers.shift => Some(Command::ToggleArmatureEditing),
+                    KeyCode::KeyA => Some(Command::ToggleSkinPreview),
                     KeyCode::Delete | KeyCode::Backspace if self.rigging => {
                         Some(Command::RemoveZsphere)
                     }

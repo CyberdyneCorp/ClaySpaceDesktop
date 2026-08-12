@@ -222,6 +222,14 @@ impl ArmatureModel for SharedDocument {
         self.0.borrow_mut().remove_zsphere(index)
     }
 
+    fn insert_zsphere(&mut self, child: NodeIndex) -> Result<NodeIndex, ModelError> {
+        self.0.borrow_mut().insert_zsphere(child)
+    }
+
+    fn set_zsphere_negative(&mut self, index: NodeIndex, negative: bool) -> Result<(), ModelError> {
+        self.0.borrow_mut().set_zsphere_negative(index, negative)
+    }
+
     fn set_skin(&mut self, skin: SkinSettings) -> Result<(), ModelError> {
         self.0.borrow_mut().set_skin(skin)
     }

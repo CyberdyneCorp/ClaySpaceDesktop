@@ -2007,6 +2007,25 @@ impl ArmatureModel for ClayDocument {
         self.rewrite_armature()
     }
 
+    fn insert_zsphere(&mut self, child: NodeIndex) -> Result<NodeIndex, ModelError> {
+        let Some((_, _, tree)) = self.armature.as_mut() else {
+            return Err(ModelError::engine("não há armadura nesta camada"));
+        };
+        let inserted = tree
+            .insert_on_link(child)
+            .ok_or_else(|| ModelError::engine("essa esfera não tem ligação"))?;
+        self.rewrite_armature()?;
+        Ok(inserted)
+    }
+
+    fn set_zsphere_negative(&mut self, index: NodeIndex, negative: bool) -> Result<(), ModelError> {
+        let Some((_, _, tree)) = self.armature.as_mut() else {
+            return Err(ModelError::engine("não há armadura nesta camada"));
+        };
+        tree.set_negative(index, negative)?;
+        self.rewrite_armature()
+    }
+
     fn set_skin(&mut self, skin: SkinSettings) -> Result<(), ModelError> {
         self.skin = skin;
         if self.armature.is_some() {
@@ -2023,6 +2042,12 @@ impl ArmatureModel for ClayDocument {
 impl ClayDocument {
     /// Builds the item and places it, returning the node that carries it.
     fn place_armature(&mut self, layer: LayerId, tree: &Armature) -> Result<NodeId, ModelError> {
+        // The spheres that add and the ones that cut go in as separate items.
+        // The armature primitive is a stroke plus a tree with one op for the
+        // whole thing, so a negative sphere cannot live in the same item as
+        // what it cuts into — see `Armature::split_by_sign`.
+        let (positive, cutters) = tree.split_by_sign();
+        let tree = &positive;
         let mut item = Item::armature().map_err(ModelError::engine)?;
 
         // Radii scaled on the way out. The tree keeps what was authored, so
@@ -2056,8 +2081,29 @@ impl ClayDocument {
             .document
             .add_item(layer, &item)
             .map_err(ModelError::engine)?;
-        self.armature_bounds = Some(Self::armature_bounds(tree, self.skin));
-        self.refill(layer, &[node])?;
+
+        // The cutters, after the rig so they carve what it just placed. Each
+        // is its own sphere rather than a tree: `set_negative` keeps them
+        // leaves, so there is no topology to preserve and a ball-shaped
+        // indentation is exactly what a negative ZSphere makes.
+        let mut placed = vec![node];
+        for cutter in &cutters {
+            let mut hole =
+                Item::sphere(self.skin.radius_for(cutter.radius)).map_err(ModelError::engine)?;
+            hole.set_op(Op::Subtract).map_err(ModelError::engine)?;
+            hole.set_position(cutter.position)
+                .map_err(ModelError::engine)?;
+            placed.push(
+                self.document
+                    .add_item(layer, &hole)
+                    .map_err(ModelError::engine)?,
+            );
+        }
+
+        // Bounds over the *whole* tree, cutters included: they are what the
+        // vacated box has to cover when a rig is rewritten.
+        self.armature_bounds = Some(Self::armature_bounds(&positive, self.skin));
+        self.refill(layer, &placed)?;
         self.refresh_stats();
         Ok(node)
     }
@@ -2112,6 +2158,12 @@ impl ClayDocument {
             .zip(parents.iter())
             .map(|(point, parent)| clayspace_model::Zsphere {
                 position: [point[0], point[1], point[2]],
+                // A reloaded rig is all positive: the cutters are separate
+                // items and the armature the engine reads back holds only the
+                // spheres that add. Their indentations are still in the
+                // surface; what is lost is the ability to un-negative them,
+                // which is the same shape of loss as a rename.
+                negative: false,
                 radius: if skin.thickness > 0.0 {
                     point[3] / skin.thickness
                 } else {

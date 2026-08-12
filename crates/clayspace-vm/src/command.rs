@@ -71,6 +71,13 @@ pub enum Command {
     RemoveZsphere,
     /// Whether a new sphere is mirrored as it is added.
     SetArmatureMirror(bool),
+    /// Whether the viewport draws the skin or only the ZSpheres.
+    ///
+    /// ZBrush's Adaptive Skin preview, on `A`: while building a rig you want
+    /// to see the spheres, and every so often you want to see what they make.
+    ToggleSkinPreview,
+    /// Makes the selected sphere cut into the rig rather than add to it.
+    ToggleZsphereNegative,
     /// The skin thickness, as a multiplier on the authored radii.
     SetSkinThickness(f32),
 
@@ -163,6 +170,7 @@ impl Command {
                 | Self::SelectLayer(_)
                 | Self::ToggleArmatureEditing
                 | Self::SetArmatureMirror(_)
+                | Self::ToggleSkinPreview
         )
     }
 
@@ -188,6 +196,8 @@ impl Command {
             Self::ToggleArmatureEditing => "edit armature",
             Self::RemoveZsphere => "remove zsphere",
             Self::SetArmatureMirror(_) => "armature mirror",
+            Self::ToggleSkinPreview => "skin preview",
+            Self::ToggleZsphereNegative => "negative zsphere",
             Self::SetSkinThickness(_) => "skin thickness",
             Self::BeginStroke { .. } => "begin stroke",
             Self::ContinueStroke { .. } => "continue stroke",

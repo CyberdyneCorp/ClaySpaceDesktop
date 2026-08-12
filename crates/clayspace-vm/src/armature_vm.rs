@@ -21,6 +21,12 @@ pub enum Grab {
     Grow(NodeIndex),
     /// Change this sphere's radius.
     Resize(NodeIndex),
+    /// Put a sphere on the link between this one and its parent.
+    ///
+    /// ZBrush's insert: you click the membrane rather than either end. Once
+    /// the sphere exists the gesture continues as a move, so it can be placed
+    /// off the line it was inserted on.
+    Insert(NodeIndex),
 }
 
 /// A gesture in progress.
@@ -138,6 +144,36 @@ impl ArmatureViewModel {
         }
     }
 
+    /// The link a ray passes nearest, if it passes near one at all.
+    ///
+    /// Links are thin, so this is a distance test rather than an intersection:
+    /// a click within a fraction of the thinner end's radius counts as
+    /// hitting the membrane. Spheres are tested first by the caller, so this
+    /// only ever answers where neither end was hit.
+    pub fn pick_link(&self, origin: [f32; 3], direction: [f32; 3]) -> Option<NodeIndex> {
+        let tree = self.tree.get().clone()?;
+        let mut best: Option<(f32, NodeIndex)> = None;
+        for (child, parent) in tree.links() {
+            let (Some(a), Some(b)) = (tree.get(child), tree.get(parent)) else {
+                continue;
+            };
+            let midpoint = [
+                (a.position[0] + b.position[0]) * 0.5,
+                (a.position[1] + b.position[1]) * 0.5,
+                (a.position[2] + b.position[2]) * 0.5,
+            ];
+            // The membrane is thinnest in the middle, so the midpoint is both
+            // the easiest place to aim and the place an insert belongs.
+            let reach = a.radius.min(b.radius) * 0.9;
+            if let Some(t) = ray_hits_sphere(origin, direction, midpoint, reach) {
+                if best.is_none_or(|(closest, _)| t < closest) {
+                    best = Some((t, child));
+                }
+            }
+        }
+        best.map(|(_, child)| child)
+    }
+
     /// The sphere a ray meets first, nearest the eye.
     ///
     /// Nearest rather than any: rigs overlap constantly — a shoulder sits
@@ -171,6 +207,13 @@ impl ArmatureViewModel {
             Some(index) if resize => Grab::Resize(index),
             Some(index) if grow => Grab::Grow(index),
             Some(index) => Grab::Move(index),
+            // Neither end was hit, so the membrane between them might be.
+            // Only when growing: a bare click on a link should do nothing
+            // rather than surprise someone into inserting a joint.
+            None if grow => self
+                .pick_link(origin, direction)
+                .map(Grab::Insert)
+                .unwrap_or(Grab::Empty),
             None => Grab::Empty,
         }
     }
@@ -180,7 +223,9 @@ impl ArmatureViewModel {
         if let Grab::Empty = grab {
             return;
         }
-        if let Grab::Move(index) | Grab::Grow(index) | Grab::Resize(index) = grab {
+        if let Grab::Move(index) | Grab::Grow(index) | Grab::Resize(index) | Grab::Insert(index) =
+            grab
+        {
             self.selected.set(Some(index));
         }
         self.drag = Some(Dragging {
@@ -241,6 +286,21 @@ impl ArmatureViewModel {
                     }
                 }
             },
+            Grab::Insert(child) => match state.grown {
+                // Already inserted; the rest of the gesture moves it, so a
+                // joint can be placed off the line it was inserted on.
+                Some(inserted) => self.model.move_zsphere(inserted, delta),
+                None => match self.model.insert_zsphere(child) {
+                    Ok(inserted) => {
+                        if let Some(drag) = self.drag.as_mut() {
+                            drag.grown = Some(inserted);
+                        }
+                        self.selected.set(Some(inserted));
+                        Ok(())
+                    }
+                    Err(e) => Err(e),
+                },
+            },
             Grab::Empty => Ok(()),
         };
 
@@ -272,6 +332,32 @@ impl ArmatureViewModel {
             Err(e) => self.notice.set(Some(e.to_string())),
         }
         self.refresh();
+    }
+
+    /// Makes the selected sphere cut into the rig rather than add to it.
+    ///
+    /// ZBrush makes a negative by pushing a sphere inside its parent; this is
+    /// the same effect said out loud, which is easier to undo and easier to
+    /// see.
+    pub fn set_selected_negative(&mut self, negative: bool) {
+        let Some(index) = *self.selected.get() else {
+            return;
+        };
+        match self.model.set_zsphere_negative(index, negative) {
+            Ok(()) => {
+                self.notice.set_if_changed(None);
+            }
+            Err(e) => self.notice.set(Some(e.to_string())),
+        }
+        self.refresh();
+    }
+
+    /// Whether the selected sphere is currently a cutter.
+    pub fn selected_is_negative(&self) -> bool {
+        self.selected
+            .get()
+            .and_then(|index| self.tree.get().as_ref().and_then(|t| t.get(index).copied()))
+            .is_some_and(|node| node.negative)
     }
 
     /// Hangs the selection off another sphere.

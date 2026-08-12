@@ -40,7 +40,7 @@ repository routinely does; see [Common tasks](#common-tasks).
 | `[` `]` | Brush smaller / larger |
 | `F` / `M` / `Esc` | Frame / cycle materials / quit |
 | `⌘S` `⇧⌘S` `⌘O` `⌘N` | Save, save as, open, new |
-| `A` | Rig with ZSpheres — see below |
+| `A` / `⇧A` | Skin preview / enter rigging — see below |
 
 **Arquivo** carries the document lifecycle and mesh import/export; **Ajuda**
 carries the diagnostics report and the attribution manifest.
@@ -50,9 +50,20 @@ offers its work back on the next run. **Arquivo** carries the whole lifecycle
 including *Abrir recente*, which prunes documents that are no longer there.
 
 While rigging, the pointer means something else. **Escultura → Nova armadura**
-starts one; then drag out of a sphere to grow the next, Option-drag to move a
-sphere and everything under it, ⌘-drag to resize, `Delete` to remove a branch.
-A press on empty space still orbits.
+starts one — on a layer of its own, with the sculpt hidden, because a ZSphere
+armature is its own tool rather than something added to what you were
+sculpting. Then:
+
+- **drag out of a sphere** to grow the next one;
+- **drag the membrane between two** to insert a joint there;
+- **Option-drag** to move a sphere and everything under it;
+- **⌘-drag** to resize;
+- `Delete` removes a branch, and **Esfera negativa** makes a leaf cut into the
+  rig instead of adding to it.
+
+`A` toggles the skin preview, as it does in ZBrush: with it off you see the
+ZSpheres and the translucent membrane between them, which is what you want
+while building. A press on empty space still orbits.
 
 The full list of what works is in [docs/features.md](docs/features.md).
 

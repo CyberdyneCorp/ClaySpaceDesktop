@@ -81,3 +81,15 @@ fn overlay_vs(input: VertexInput) -> OverlayOutput {
 fn overlay_fs(input: OverlayOutput) -> @location(0) vec4<f32> {
     return input.color;
 }
+
+// The ZSphere membrane: the surface a rig would make, shown while it is being
+// built. Translucent on purpose — you have to see the spheres and the links
+// *through* it, or it is just the skin again with worse shading.
+//
+// Its own fragment entry rather than an alpha channel on the vertex, because
+// `Vertex` carries three floats of colour and widening it would cost every
+// mesh in the application a quarter more memory for one overlay's benefit.
+@fragment
+fn membrane_fs(input: OverlayOutput) -> @location(0) vec4<f32> {
+    return vec4<f32>(input.color.rgb, 0.30);
+}
