@@ -70,9 +70,17 @@ pub struct SurfaceGeometry {
 ///
 /// Both produce identical vertex *positions* — normals are an attribute, not
 /// a displacement — so switching between them cannot move the surface. What
-/// changes is 75 ms of gradient sampling per re-mesh, measured after 96 edits
-/// over 80 bricks: 7.7 ms with face normals against 83.2 ms with gradient
-/// ones, and the difference is ClayCore #73.
+/// changes is the gradient sampling, measured after 96 edits over 80 bricks:
+///
+/// | engine | face normals | gradient normals |
+/// |---|---|---|
+/// | 0.28.0 | 7.7 ms | 83.2 ms |
+/// | 0.29.1 | 8.0 ms | 11.5 ms |
+///
+/// Two upstream fixes closed most of that — #73 culling the tape per brick and
+/// #83 batching the attribute taps. The split stays because 3.5 ms a segment
+/// is still about 30% of the mesh, but it is now a modest win rather than the
+/// difference between interactive and not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shading {
     /// Area-weighted face normals. Needs no field sampling, so it is flat

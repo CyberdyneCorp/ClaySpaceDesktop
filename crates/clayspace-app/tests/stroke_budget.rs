@@ -4,6 +4,20 @@
 //! target without knowing which term dominates it. This splits one segment
 //! into the four things it does, so "can this be made interactive" is a
 //! question about a specific call rather than about the application.
+//!
+//! Where it has stood, on this machine, at 80 bricks after 96 edits:
+//!
+//! | engine | edit | face normals | gradient normals |
+//! |---|---|---|---|
+//! | 0.28.0 | 1.09 ms | 7.71 ms | 83.22 ms |
+//! | 0.29.0 | 0.97 ms | 7.86 ms | 19.90 ms |
+//! | 0.29.1 | 0.95 ms | 8.02 ms | 11.48 ms |
+//!
+//! Two upstream fixes, both to the same term: #73 culled the tape per brick,
+//! and #83 batched the attribute taps through the CPU pool. The gradient has
+//! gone from eleven times the cost of face normals to under one and a half,
+//! which is what narrowed the case for shading fast during a drag — narrowed,
+//! not closed: 3.5 ms a segment is still 30% of the mesh.
 
 mod support;
 
@@ -108,7 +122,7 @@ fn one_segment_split_into_what_it_spends() {
     println!("  mesh, gradient normals        : {:7.2} ms", ms(gradient));
     println!("  full sync (mesh + upload)     : {:7.2} ms", ms(sync));
     println!(
-        "  gradient normals cost         : {:7.2} ms  ({:.0}x)",
+        "  gradient normals cost         : {:7.2} ms  ({:.1}x)",
         ms(gradient) - ms(flat),
         ms(gradient) / ms(flat).max(0.001)
     );

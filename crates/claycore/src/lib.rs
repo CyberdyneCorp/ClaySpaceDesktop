@@ -113,7 +113,7 @@ pub fn revision() -> &'static str {
 pub const EXPECTED_ABI: Version = Version {
     major: 0,
     minor: 29,
-    patch: 0,
+    patch: 1,
 };
 
 #[cfg(test)]
