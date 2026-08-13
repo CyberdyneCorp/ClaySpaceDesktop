@@ -124,7 +124,7 @@
 - [x] 10.2 Implement the benchmark harness for dab latency, frame time, edit locality, startup and memory
 - [x] 10.3 Measure and record baseline figures; wire the budgets as a CI gate reporting before and after
 - [x] 10.4 Implement the interface-thread blocking instrumentation with a 16 ms threshold
-- [x] 10.5 Verify edit cost does not scale with scene size using the ten-times-larger comparison scene
+- [x] 10.5 Verify edit cost does not scale with scene size using the ten-times-larger comparison scene — it did, twice over, and the comparison scene did not catch either: the dirty set was dilated by a ring that ClayCore 0.28.0 had made unnecessary (200 keys per dab against 27), and the GPU buffer was rewritten whole on every dab. Each key now owns a span it keeps (`clayspace-app/src/slots.rs`) and only the changed spans are written. Median dab 12.0 → 3.1 ms, of which the GPU write is 0.2 ms. `dab_profile.rs` fails if the upload ever dominates again
 - [x] 10.6 Verify memory returns to baseline across repeated open, sculpt, close cycles
 - [x] 10.7 Add build features for the backends, with CPU always compiled in and clear failures for unavailable toolkits
 - [x] 10.8 Set up the CI matrix: macOS CPU-only, macOS Metal, Linux CPU-only, Linux accelerated
