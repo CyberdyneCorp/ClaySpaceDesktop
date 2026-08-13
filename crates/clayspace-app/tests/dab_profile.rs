@@ -107,7 +107,7 @@ fn where_a_dab_spends_its_time() {
     row("engine: brick cache mesh", engine_mesh);
     row("ours:   copy into vertex layout", read);
     row("ours:   split into per-key geometry", split);
-    row("ours:   concatenate and upload", upload);
+    row("ours:   write the changed spans", upload);
     println!("  {:<34} {total:>7.1} ms", "total");
     println!(
         "\n  engine {:.0}%, ours {:.0}%\n",
@@ -115,9 +115,12 @@ fn where_a_dab_spends_its_time() {
         (read + split + upload) / total * 100.0
     );
 
-    // The one thing worth failing on: the buffer is rebuilt whole every dab,
-    // so if that ever dominates, the incremental path has stopped being
-    // incremental in the only place it still is.
+    // The one thing worth failing on. This used to be a warning about a known
+    // gap — the buffer really was rebuilt whole every dab — and it fired the
+    // moment the dilation ring came out and meshing got cheap enough to stop
+    // hiding it. Now each key owns a span and only the changed spans are
+    // written, so an upload costs what the edit costs; if this ever dominates
+    // again, that has regressed.
     assert!(
         upload < total * 0.5,
         "uploading is {:.0}% of a dab, which is not what this path is for",
