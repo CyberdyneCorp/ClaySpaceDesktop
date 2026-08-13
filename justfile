@@ -79,7 +79,10 @@ fmt:
 
 # Clippy over every target, warnings included.
 lint:
-    cargo clippy --workspace --all-targets --release
+    # `-D warnings` because CI lints that way. Without it `just check` passed
+    # on a tree whose lint job was already red on main, which is the one thing
+    # this recipe exists to prevent.
+    cargo clippy --workspace --all-targets --release -- -D warnings
 
 # The architecture rules: which crate may reach which, and where unsafe lives.
 layering:

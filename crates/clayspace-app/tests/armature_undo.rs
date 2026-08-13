@@ -10,7 +10,7 @@
 
 use clayspace_app::SharedDocument;
 use clayspace_engine::{BackendPolicy, ClayDocument};
-use clayspace_model::{ArmatureModel, SculptModel};
+use clayspace_model::SculptModel;
 use clayspace_vm::{ArmatureViewModel, Command, Grab, SculptViewModel};
 
 struct Rigging {
