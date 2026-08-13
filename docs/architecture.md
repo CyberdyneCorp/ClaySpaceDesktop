@@ -175,13 +175,54 @@ number means at a normal framing.
 16-cell bricks were also tried, and are worse: a third as many keys but eight
 times the cells each, so a dilated set meshes more overall — 64 ms against 39.
 
-### A known cost
+### Two costs that were paid per model rather than per edit
 
-Assembly is concatenation rather than sub-range patching, because the engine
-welds vertices across brick seams and a key's range cannot be relocated
-independently. Meshing is the cost the engine bounds and this does not repeat
-it, but the upload is a full memcpy — 11 ms at the current model size, and it
-grows with the model. If it becomes the bottleneck, that is where to look.
+Both are gone, and both had been sitting behind a correct-looking incremental
+path. A dab dirties about 27 bricks; before these, it re-meshed 200 and
+rewrote the whole GPU buffer.
+
+**The dilation ring.** The dirty bricks used to be dilated by one before
+meshing, because a subset mesh omitted triangles straddling its boundary and
+left seams. ClayCore 0.28.0 fixed that (#66) — a subset now returns every
+triangle with a corner in a requested brick — and the ring stayed on out of
+habit. Removing it changed nothing a rebuild comparison can see and cut the
+keys per dab from 200 to 27.
+
+**Whole-buffer upload.** Assembly used to be concatenation, on the grounds
+that the engine welds vertices across brick seams so a key's range cannot move
+independently. That is true of the engine's output and not of ours: the
+per-key split gives every key its own local vertex table, so a key's geometry
+is self-contained and its span can be placed anywhere. Each key now keeps a
+span in both buffers (`clayspace-app/src/slots.rs`) and a dab writes only the
+spans it touched.
+
+Spans carry a quarter of headroom so a brick re-meshing slightly larger stays
+put; one that outgrows its span is re-homed at the end and the abandoned
+indices are filled with degenerate triangles, since the surface is a single
+draw call over a single range. Holes accumulate, so the whole surface is laid
+out again once a fifth of the drawn range is holes.
+
+Index spans are rounded to a multiple of three. The rasteriser groups indices
+into triangles by position from the start of the draw range and knows nothing
+about spans, so a span ending mid-triangle re-cuts every triangle after it —
+which renders as speckle over the entire model rather than damage anywhere
+nameable.
+
+A median dab, at 286k triangles:
+
+| stage | before | after |
+| --- | --- | --- |
+| keys re-meshed | 200 | 27 |
+| engine: apply stroke + refill | 0.7 ms | 0.6 ms |
+| engine: brick cache mesh | 5.8 ms | 1.8 ms |
+| ours: copy into vertex layout | 0.1 ms | 0.1 ms |
+| ours: split into per-key geometry | 2.2 ms | 0.5 ms |
+| ours: write to the GPU | 3.1 ms | 0.2 ms |
+| **total** | **12.0 ms** | **3.1 ms** |
+
+The upload is now the smallest term and no longer scales with the model, which
+is the property that matters: it is the edit that is paid for, not the sculpt.
+`dab_profile.rs` fails if it ever dominates again.
 
 ## MVVM, mechanically
 

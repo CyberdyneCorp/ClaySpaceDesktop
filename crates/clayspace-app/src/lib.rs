@@ -10,6 +10,7 @@ pub mod input;
 pub mod reference;
 pub mod session;
 pub mod shared;
+pub mod slots;
 
 pub use geometry::{Shading, SurfaceGeometry, SyncCost};
 pub use input::{ray_at, ViewportInput};

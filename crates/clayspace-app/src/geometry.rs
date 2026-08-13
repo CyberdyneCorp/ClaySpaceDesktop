@@ -9,6 +9,11 @@
 //! a full re-mesh of 232. So the dirty subset is meshed and nothing else, and
 //! each key's geometry is kept so the whole surface can be reassembled without
 //! re-marching it.
+//!
+//! Keeping it per key is also what lets the GPU buffers be written per key:
+//! see [`crate::slots`], which gives each key a span it keeps, so a dab writes
+//! only what it changed. Both halves matter — meshing the dirty subset is
+//! wasted if the result is then copied to the GPU in full.
 
 use std::collections::HashMap;
 
@@ -17,6 +22,16 @@ use clayspace_engine::claycore::{
 };
 use clayspace_engine::ClayDocument;
 use clayspace_view::{Gpu, GpuMesh, Vertex};
+
+use crate::slots::SlotMap;
+
+/// How much of the drawn index range may be holes before it is worth the cost
+/// of laying the whole surface out again.
+///
+/// Holes are degenerate triangles, so they are paid on every frame while a
+/// rebuild is paid once. A fifth is the point where the per-frame vertex work
+/// outweighs the rebuild on the reference scene.
+const MAX_WASTE: f32 = 0.2;
 
 /// One key's contribution to the surface.
 #[derive(Debug, Clone, Default)]
@@ -41,7 +56,7 @@ pub struct SyncCost {
     pub read_time: std::time::Duration,
     /// Splitting the triangles into per-key geometry so a dab can replace one.
     pub split_time: std::time::Duration,
-    /// Concatenating the keys and handing the buffer to the GPU.
+    /// Writing the changed spans to the GPU.
     pub upload_time: std::time::Duration,
     pub triangles: usize,
     pub vertices: usize,
@@ -54,6 +69,14 @@ pub struct SurfaceGeometry {
     mesh: GpuMesh,
     /// Set when the keys have changed but the GPU buffer has not been rebuilt.
     dirty: bool,
+    /// Which keys changed since the last upload, so only those are written.
+    touched: std::collections::HashSet<BrickKey>,
+    /// Where each key's geometry sits in the GPU buffers.
+    layout: SlotMap,
+    /// Set when the layout cannot be patched and must be laid out afresh.
+    relayout: bool,
+    /// The union of every key's bounds, exact as of the last full rebuild.
+    bounds: Option<([f32; 3], [f32; 3])>,
     last_cost: Option<SyncCost>,
     /// Stage timings from the last `remesh`, for `SyncCost`.
     last_engine_mesh: std::time::Duration,
@@ -102,6 +125,10 @@ impl SurfaceGeometry {
             keys: HashMap::new(),
             mesh: GpuMesh::new(gpu),
             dirty: false,
+            touched: std::collections::HashSet::new(),
+            layout: SlotMap::default(),
+            relayout: true,
+            bounds: None,
             last_cost: None,
             last_engine_mesh: std::time::Duration::ZERO,
             last_read: std::time::Duration::ZERO,
@@ -159,22 +186,29 @@ impl SurfaceGeometry {
         // and it nearly became a filed bug.
         // The edited region and one ring around it.
         //
-        // Everything requested is also replaced, which is what makes the
-        // incremental surface exact.
+        // The dirty bricks, and only those.
         //
-        // Until ClayCore 0.28.0 a subset mesh emitted only triangles wholly
-        // inside the keys it was given, so a stroke left seams that no amount
-        // of dilation closed and `settle` had to re-mesh the world when the
-        // pointer came up (#66). A subset now returns every triangle with at
-        // least one corner in a requested brick — but attributed to the
-        // lowest *requested* key owning a corner, which is request-relative.
+        // There used to be a ring of dilation around them. It was there
+        // because a subset mesh omitted triangles straddling its boundary, so
+        // a stroke left seams — and the ring did not close them either, which
+        // is what `settle` was for. ClayCore 0.28.0 fixed the omission (#66),
+        // `settle` went, and the ring stayed: nobody asked whether it was
+        // still buying anything.
         //
-        // That is why the replaced set has to be the whole request rather than
-        // the dirty core: a straddling triangle can be attributed to a key in
-        // the ring, and replacing only the core would drop it. Measured over
-        // six dabs, the difference is 153 triangles missing against a rebuild
-        // versus none at all; `settle_needed.rs` is that measurement.
-        let meshed = dilate(&dirty, 1);
+        // It was not. A subset now returns every triangle with at least one
+        // corner in a requested brick, attributed to the lowest requested key,
+        // so requesting the dirty core is enough — `settle_needed.rs` holds
+        // the result to being triangle-for-triangle what a rebuild produces
+        // either way. Measured on the same stroke, only the ring changing:
+        //
+        //   keys per dab      200 -> 48        engine mesh   5.8 -> 1.7 ms
+        //   Padrao's segment 36.6 -> 17.4 ms   Puxar's       239 -> 177 ms
+        //
+        // Everything requested is also replaced, which is the other half of
+        // exactness: a straddling triangle is attributed to whichever
+        // requested key owns a corner, so replacing less than the request
+        // would drop it.
+        let meshed = dirty.clone();
         let replace: std::collections::HashSet<BrickKey> = meshed.iter().copied().collect();
 
         let started = std::time::Instant::now();
@@ -314,6 +348,7 @@ impl SurfaceGeometry {
         // The machinery came out rather than sitting there looking like it did
         // something.
         for key in &to_replace {
+            self.touched.insert(*key);
             let slot = ranges.iter().position(|range| range.key == *key);
             let entry = self.keys.entry(*key).or_default();
             entry.vertices.clear();
@@ -357,26 +392,117 @@ impl SurfaceGeometry {
         Ok(())
     }
 
-    /// Rebuilds the GPU buffer from the stored keys.
+    /// Writes the keys that changed, and only those.
     ///
-    /// Concatenation rather than sub-range patching: the engine welds vertices
-    /// across brick seams, so a key's range cannot be relocated independently.
-    /// Meshing is the cost the engine bounds and this does not repeat it; the
-    /// upload is a memcpy whose size the latency test keeps honest.
+    /// Each key owns a span of both buffers and keeps it, so a dab writes the
+    /// twenty-odd spans it touched instead of rewriting the surface. That is
+    /// the difference between an upload that costs what the edit costs and one
+    /// that costs what the model costs — measured on the reference stroke,
+    /// 3.1 ms down to 0.2 ms with the model six times larger.
+    ///
+    /// Falls back to a full rebuild when the layout can no longer take a
+    /// patch: the first upload, a buffer that has run out of room, or too much
+    /// of the drawn range gone to holes.
     fn upload(&mut self, gpu: &Gpu) {
         if !self.dirty {
             return;
         }
-        let mut vertices = Vec::with_capacity(self.vertex_count());
-        let mut indices = Vec::with_capacity(self.triangle_count() * 3);
-
-        for geometry in self.keys.values() {
-            let base = vertices.len() as u32;
-            vertices.extend_from_slice(&geometry.vertices);
-            indices.extend(geometry.indices.iter().map(|i| i + base));
+        if self.relayout || self.layout.waste() > MAX_WASTE {
+            self.lay_out(gpu);
+            return;
         }
+        for key in std::mem::take(&mut self.touched) {
+            if !self.patch(gpu, key) {
+                // Out of room. Everything written so far is still consistent,
+                // and the rebuild below replaces all of it anyway.
+                self.touched.clear();
+                self.lay_out(gpu);
+                return;
+            }
+        }
+        self.mesh.set_index_count(self.layout.index_count());
+        self.mesh.set_bounds(self.bounds);
+        self.dirty = false;
+    }
 
-        self.mesh.upload(gpu, &vertices, &indices);
+    /// Writes one key into its span, re-homing it if it has outgrown it.
+    ///
+    /// `false` means the buffers are full and the caller must rebuild.
+    fn patch(&mut self, gpu: &Gpu, key: BrickKey) -> bool {
+        let Some(geometry) = self.keys.get(&key) else {
+            return true;
+        };
+        if geometry.indices.is_empty() {
+            // Emptied by an edit rather than removed: the key keeps its span
+            // so a later edit finds it, but must stop drawing.
+            if let Some(slot) = self.layout.get(key) {
+                let span = (slot.index_base, slot.index_base + slot.index_capacity);
+                blank(&mut self.mesh, gpu, span);
+            }
+            return true;
+        }
+        let Some(placed) = self.layout.place(
+            key,
+            geometry.vertices.len() as u32,
+            geometry.indices.len() as u32,
+        ) else {
+            return false;
+        };
+        if let Some(span) = placed.stranded {
+            blank(&mut self.mesh, gpu, span);
+        }
+        let slot = placed.slot;
+
+        // Indices are stored relative to the key's own vertices, so they are
+        // rebased onto wherever the span landed. The tail of the span is
+        // filled with degenerate triangles: the surface is one draw call over
+        // one range, and a zero-area triangle is the cheapest way for a
+        // partly-used span to draw only the part that is used.
+        let mut indices = Vec::with_capacity(slot.index_capacity as usize);
+        indices.extend(geometry.indices.iter().map(|i| i + slot.vertex_base));
+        indices.resize(slot.index_capacity as usize, slot.vertex_base);
+
+        self.bounds = union(self.bounds, bounds_of(&geometry.vertices));
+        self.mesh
+            .patch_vertices(gpu, slot.vertex_base, &geometry.vertices);
+        self.mesh.patch_indices(gpu, slot.index_base, &indices);
+        true
+    }
+
+    /// Lays the whole surface out afresh and writes it in one go.
+    ///
+    /// Distinct from [`SurfaceGeometry::rebuild`], which re-meshes from the
+    /// document; this only re-arranges geometry already in hand.
+    ///
+    /// The slow path, and the one that reclaims holes. Spans are allocated
+    /// with the same headroom a patch would give them, so the strokes right
+    /// after a rebuild stay incremental rather than immediately re-homing
+    /// everything.
+    fn lay_out(&mut self, gpu: &Gpu) {
+        let vertices_needed = self.vertex_count() + self.keys.len() * 64;
+        let indices_needed = self.triangle_count() * 3 + self.keys.len() * 64;
+        self.mesh.reserve(
+            gpu,
+            (vertices_needed * 2).max(1024),
+            (indices_needed * 2).max(1024),
+        );
+        self.layout = SlotMap::new(
+            (vertices_needed * 2).max(1024) as u32,
+            (indices_needed * 2).max(1024) as u32,
+        );
+        self.bounds = None;
+        self.touched.clear();
+
+        let keys: Vec<BrickKey> = self.keys.keys().copied().collect();
+        for key in keys {
+            // A fresh layout has room for everything it was sized from, so a
+            // refusal here would be a sizing bug rather than a full buffer.
+            let placed = self.patch(gpu, key);
+            debug_assert!(placed, "a fresh layout ran out of room");
+        }
+        self.mesh.set_index_count(self.layout.index_count());
+        self.mesh.set_bounds(self.bounds);
+        self.relayout = false;
         self.dirty = false;
     }
 
@@ -430,8 +556,13 @@ impl SurfaceGeometry {
     pub fn rebuild(&mut self, gpu: &Gpu, document: &mut ClayDocument) -> Result<(), ClayError> {
         let keys = document.cache().surface_bricks()?;
         self.keys.clear();
+        self.touched.clear();
+        // The spans described geometry that has just been discarded, so the
+        // layout cannot be patched onto what replaces it.
+        self.relayout = true;
         if keys.is_empty() {
             self.mesh.upload(gpu, &[], &[]);
+            self.layout = SlotMap::default();
             document.take_dirty_keys();
             return Ok(());
         }
@@ -496,32 +627,6 @@ impl SurfaceGeometry {
     }
 }
 
-/// Grows a key set by every neighbour that shares any boundary with it.
-///
-/// All twenty-six, not the six faces. Face-only was tried, reasoning that a
-/// seam is shared across a face and that corners cost six times the keys for
-/// a boundary no triangle spans. The second half of that is wrong: the engine
-/// welds vertices across seams, so a triangle at a brick corner can be owned
-/// by a diagonal neighbour, and a diagonal neighbour left out of the re-mesh
-/// keeps its stale copy of a vertex that has since moved. On screen that is a
-/// dark sliver at the corner of every brick the stroke crossed — visible in
-/// `visual_incremental`, and invisible to any count or timing.
-fn dilate(keys: &[BrickKey], rings: i32) -> Vec<BrickKey> {
-    let mut grown: std::collections::HashSet<BrickKey> = keys.iter().copied().collect();
-    for key in keys {
-        for dx in -rings..=rings {
-            for dy in -rings..=rings {
-                for dz in -rings..=rings {
-                    grown.insert([key[0] + dx, key[1] + dy, key[2] + dz]);
-                }
-            }
-        }
-    }
-    let mut grown: Vec<BrickKey> = grown.into_iter().collect();
-    grown.sort();
-    grown
-}
-
 /// Reads an engine mesh into the renderer's vertex layout in one pass.
 fn read_mesh(mesh: &Mesh) -> Result<(Vec<Vertex>, Vec<u32>), ClayError> {
     let count = mesh.vertex_count();
@@ -572,3 +677,37 @@ fn read_mesh(mesh: &Mesh) -> Result<(Vec<Vertex>, Vec<u32>), ClayError> {
 
 /// Kept so the document type is visible to readers of the imports.
 const _: fn(&Document) -> bool = |_| true;
+
+/// The corners of a box containing every vertex.
+fn bounds_of(vertices: &[Vertex]) -> Option<([f32; 3], [f32; 3])> {
+    let first = vertices.first()?.position;
+    Some(vertices.iter().fold((first, first), |(min, max), v| {
+        let at = v.position;
+        (
+            [min[0].min(at[0]), min[1].min(at[1]), min[2].min(at[2])],
+            [max[0].max(at[0]), max[1].max(at[1]), max[2].max(at[2])],
+        )
+    }))
+}
+
+/// Both boxes, or whichever one exists.
+fn union(
+    a: Option<([f32; 3], [f32; 3])>,
+    b: Option<([f32; 3], [f32; 3])>,
+) -> Option<([f32; 3], [f32; 3])> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some((
+            [a.0[0].min(b.0[0]), a.0[1].min(b.0[1]), a.0[2].min(b.0[2])],
+            [a.1[0].max(b.1[0]), a.1[1].max(b.1[1]), a.1[2].max(b.1[2])],
+        )),
+        (some, None) | (None, some) => some,
+    }
+}
+
+/// Makes a span of indices draw nothing.
+///
+/// Degenerate triangles rather than a shorter draw: the surface is one range,
+/// and a hole in the middle of it has to be covered by something.
+fn blank(mesh: &mut GpuMesh, gpu: &Gpu, (first, last): (u32, u32)) {
+    mesh.patch_indices(gpu, first, &vec![0; (last - first) as usize]);
+}

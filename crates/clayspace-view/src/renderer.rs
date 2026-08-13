@@ -129,12 +129,34 @@ impl GpuMesh {
         self.bounds = bounds_of(vertices);
     }
 
+    /// Allocates buffers of a fixed size without writing anything.
+    ///
+    /// The incremental path needs the addresses to exist before it knows what
+    /// goes in them, which `upload` cannot offer — it sizes the buffers to the
+    /// data it is given.
+    pub fn reserve(&mut self, gpu: &Gpu, vertices: usize, indices: usize) {
+        self.vertices = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("vertices"),
+            size: (vertices * Vertex::STRIDE).max(4) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.indices = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("indices"),
+            size: (indices * 4).max(4) as u64,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.vertex_capacity = vertices;
+        self.index_capacity = indices;
+        self.index_count = 0;
+    }
+
     /// Overwrites one contiguous run of vertices, leaving the rest alone.
     ///
     /// This is the incremental path: a dab re-meshes its dirty keys and each
-    /// key's range is patched in place. Ranges may be overwritten but never
-    /// freed in isolation, because the engine welds vertices across brick
-    /// seams — compaction is a whole-mesh operation, not a per-dab one.
+    /// key's span is patched where it already sits, so the cost of an edit is
+    /// the size of the edit rather than the size of the model.
     pub fn patch_vertices(&mut self, gpu: &Gpu, first: u32, vertices: &[Vertex]) {
         if vertices.is_empty() {
             return;
@@ -148,6 +170,40 @@ impl GpuMesh {
             (first as usize * Vertex::STRIDE) as u64,
             bytemuck::cast_slice(vertices),
         );
+    }
+
+    /// Overwrites one contiguous run of indices, leaving the rest alone.
+    pub fn patch_indices(&mut self, gpu: &Gpu, first: u32, indices: &[u32]) {
+        if indices.is_empty() {
+            return;
+        }
+        debug_assert!(
+            first as usize + indices.len() <= self.index_capacity,
+            "a patch must lie inside the allocated buffer"
+        );
+        gpu.queue.write_buffer(
+            &self.indices,
+            (first as usize * 4) as u64,
+            bytemuck::cast_slice(indices),
+        );
+    }
+
+    /// How many indices the draw call covers.
+    ///
+    /// The incremental path draws one range over spans that are not
+    /// necessarily full, so the count is the layout's business, not the
+    /// buffer's.
+    pub fn set_index_count(&mut self, count: u32) {
+        debug_assert!(count as usize <= self.index_capacity);
+        self.index_count = count;
+    }
+
+    /// Replaces the bounds without touching the geometry.
+    ///
+    /// The incremental path never holds the whole surface in one slice, so it
+    /// tracks bounds itself and states them here.
+    pub fn set_bounds(&mut self, bounds: Option<([f32; 3], [f32; 3])>) {
+        self.bounds = bounds.map(|(min, max)| (Vec3::from(min), Vec3::from(max)));
     }
 
     pub fn index_count(&self) -> u32 {

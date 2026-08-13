@@ -128,7 +128,7 @@ mod tests {
         let mut detail = Detail::Full;
         let mut changes = 0;
 
-        let mut walk = |from: f32, to: f32, detail: &mut Detail, changes: &mut usize| {
+        let walk = |from: f32, to: f32, detail: &mut Detail, changes: &mut usize| {
             let steps = 200;
             for step in 0..=steps {
                 let t = step as f32 / steps as f32;
