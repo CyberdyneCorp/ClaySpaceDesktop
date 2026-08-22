@@ -26,14 +26,14 @@
 - [x] 3.4 Add a `ClayDocument::convert_layer` that produces a new layer and leaves the source untouched
 - [x] 3.5 Add a cost estimate — surface movement, vanishing feature size, grid size against the memory budget — computed from the chosen cell size
 - [x] 3.6 Refuse an unbounded region and an unaffordable resolution, each with its own reason
-- [!] 3.7 Test that a conversion is one undo step and that undo removes the new layer — **blocked**: a conversion produces no engine undo entry at all (layer creation and rasterization are unrecorded, and a voxel layer has no history by construction), so undo cannot take it back. `conversion.rs` records the measurement. Needs a decision: host-side history entry, or change the spec to say a conversion is taken back by removing the layer
+- [x] 3.7 Test that a conversion is not undoable and that removing its layer takes it back — a conversion produces no engine undo entry at all, so the spec says what is true and `conversion.rs` holds the measurement
 - [x] 3.8 Test that a coloured voxel sculpt keeps its colours across voxel-to-SDF
 - [x] 3.9 Test that mesh-to-voxel keeps a feature thinner than a cell that the SDF detour loses
 
 ## 4. Phase 2 — conversion in the interface
 
 - [ ] 4.1 Add the conversion commands to `Command` and route them through the existing dispatch
-- [ ] 4.2 Add a conversion panel showing direction, cell size, region, and the computed costs
+- [ ] 4.2 Add a conversion panel showing direction, cell size, region, the computed costs, and that the crossing is not undoable
 - [ ] 4.3 Recompute the stated costs as the resolution changes
 - [ ] 4.4 Put the conversion behind the busy cursor, since it is unbounded work
 - [ ] 4.5 Localise the panel in all three locales

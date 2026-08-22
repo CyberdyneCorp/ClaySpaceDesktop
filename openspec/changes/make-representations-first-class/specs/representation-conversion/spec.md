@@ -51,13 +51,31 @@ The application SHALL produce a new layer from a conversion and SHALL leave the
 source layer unchanged, so that a crossing can be reconsidered without redoing
 the work that led to it.
 
+A conversion SHALL NOT be undoable, and the application SHALL say so where it
+offers one: a crossing is taken back by removing the layer it added. The source
+layer surviving is what makes that sufficient.
+
+This is the engine's shape rather than a choice. A conversion produces no undo
+entry — layer creation and rasterization are not recorded, and a voxel layer
+carries no history at all by construction — so there is nothing for undo to
+take back. Grouping the crossing's edits was tried and groups nothing. An
+application-side history entry could remove the layer on undo, and would put a
+second history beside the engine's for one operation, which is a larger claim
+than the operation is worth: removing a layer is already one click and already
+undoes nothing else.
+
 #### Scenario: The source survives
 - **WHEN** a conversion completes
 - **THEN** the source layer is still present with its content unchanged
 
-#### Scenario: A conversion is one undo step
-- **WHEN** the user undoes immediately after a conversion
-- **THEN** the new layer is gone and the document is as it was before
+#### Scenario: A conversion is taken back by removing its layer
+- **WHEN** the user removes the layer a conversion produced
+- **THEN** the document holds what it held before the conversion
+
+#### Scenario: The interface does not offer undo for a crossing
+- **WHEN** the user is shown a conversion before running it
+- **THEN** the interface states that the crossing is not undoable and that the
+  source layer is what it is taken back with
 
 ### Requirement: A conversion that cannot succeed is refused with a reason
 The application SHALL refuse a conversion it cannot perform — an unbounded

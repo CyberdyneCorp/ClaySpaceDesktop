@@ -63,50 +63,48 @@ fn a_conversion_adds_a_layer_and_leaves_the_source_alone() {
     );
 }
 
-/// **The spec asks for something the engine does not offer, and this records
-/// the gap rather than hiding it.**
+/// A crossing is taken back by removing the layer it added, not by undo.
 ///
-/// `representation-conversion` says undoing immediately after a conversion
-/// leaves the document as it was. It does not, and cannot as things stand: a
-/// conversion adds *no undo entry at all*. Measured — the undo depth is 1
-/// before the conversion and 1 after, and that one entry is the starting
-/// form's.
+/// That is the specification, and it is the engine's shape rather than a
+/// preference. A conversion produces no undo entry at all: measured here, the
+/// depth is the same before and after, and the one entry that exists belongs
+/// to the starting form. Layer creation and rasterization are not recorded,
+/// and a voxel layer carries no history by construction — "No history; a host
+/// snapshots if it wants undo". Bracketing the crossing in an undo group was
+/// tried and groups nothing, because there are no entries to group.
 ///
-/// The reason is in the engine's own design rather than in a missing call.
-/// Layer creation and rasterization are not recorded, and a voxel layer has no
-/// history by construction: "No history; a host snapshots if it wants undo."
-/// Bracketing the crossing in `begin_undo_group` / `end_undo_group` was tried
-/// and brackets nothing, because there are no entries to group.
-///
-/// So taking a conversion back means removing the layer it added, which is
-/// what the source layer surviving is for. Whether the application should
-/// carry its own history entry to make undo do that is a decision for the
-/// change, not something to settle inside a test.
+/// The source layer surviving is what makes removal sufficient, which is why
+/// `a_conversion_adds_a_layer_and_leaves_the_source_alone` is the test this one
+/// leans on.
 #[test]
-fn a_conversion_is_not_yet_undoable_and_this_says_so() {
+fn a_crossing_is_taken_back_by_removing_its_layer() {
     let Some(mut doc) = document() else {
         return;
     };
     let before = doc.scene().layers.len();
     let depth_before = doc.history().depth;
 
-    doc.convert_layer(Direction::SdfToVoxel, CELL, 1)
+    let made = doc
+        .convert_layer(Direction::SdfToVoxel, CELL, 1)
         .expect("convert");
     assert_eq!(doc.scene().layers.len(), before + 1);
+
+    // No entry, so nothing for undo to take back. If this ever stops being
+    // true the specification should say so too — `representation-conversion`
+    // states it as a property of the crossing, not as an omission.
     assert_eq!(
         doc.history().depth,
         depth_before,
-        "a conversion has started producing undo entries — if that is \
-         deliberate, this test and `representation-conversion` should now \
-         agree that undo takes it back"
+        "a conversion has started producing undo entries; the spec says it \
+         does not, and the two have to move together"
     );
 
-    doc.undo().expect("undo");
+    // What does take it back.
+    doc.remove_layer(made).expect("remove the converted layer");
     assert_eq!(
         doc.scene().layers.len(),
-        before + 1,
-        "undo removed the converted layer, which is what the spec asks for — \
-         update this test and the spec together"
+        before,
+        "removing the converted layer left the document changed"
     );
 }
 

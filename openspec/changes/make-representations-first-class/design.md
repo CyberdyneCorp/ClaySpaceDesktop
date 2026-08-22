@@ -97,6 +97,28 @@ would imply. Rejected: the crossing is lossy in one direction and irreversible
 in the other, and an in-place conversion makes undo the only way back — which
 works until the session ends. A new layer makes the original the way back.
 
+### A conversion is not undoable, and the interface says so
+
+Measured during phase 2 rather than assumed: a conversion produces **no undo
+entry at all**. The depth is 1 before the crossing and 1 after, and that one
+entry belongs to the starting form. Layer creation and rasterization are not
+recorded, and a voxel layer carries no history by construction — the engine's
+own words are "No history; a host snapshots if it wants undo". Bracketing the
+crossing in `begin_undo_group` / `end_undo_group` was tried and brackets
+nothing, because there are no entries to group.
+
+So the specs say what is true: a crossing is taken back by removing the layer it
+added, and the conversion panel says so before it runs.
+
+**Alternative considered:** an application-side history entry, so that undo
+removes the layer. Rejected for the size of what it introduces rather than the
+difficulty — it puts a second history beside the engine's, for one operation,
+and every question that follows ("what happens when the engine's history and
+ours disagree about order?") is a question this application has never had to
+answer. Removing a layer is already one click and already takes back nothing
+else. If conversions later become common enough that undo is expected of them,
+this is the decision to revisit.
+
 ### The cost of a conversion is computed, not written down
 
 The dialog states surface movement as half the chosen cell size, and the feature
