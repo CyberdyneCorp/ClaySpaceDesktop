@@ -283,6 +283,23 @@ fn build_engine(engine: &Path, b: &Backends) -> PathBuf {
         // link out of the build tree.
         .build_target("claycore");
 
+    if b.cuda {
+        // The engine compiles its CUDA with separable compilation on, so each
+        // device object carries a reference to `__cudaRegisterLinkedBinary_*`
+        // that only the device link (`nvcc -dlink`) defines. CMake runs that
+        // link when one of *its own* targets consumes the library — the
+        // engine's shared library, benchmarks and tests all do, which is why
+        // its own build is fine. Here the final link is rustc's, and nothing
+        // ever device-links, so every binary in the workspace failed with
+        // `undefined symbol: __cudaRegisterLinkedBinary_..._clay_kernels_cu_...`.
+        //
+        // This asks CMake to device-link into the archive itself, which is
+        // what the property is for: a static library whose consumer is not
+        // CMake. `cmake_device_link.o` becomes a member of `libclaycore.a` and
+        // defines the symbol.
+        cfg.define("CMAKE_CUDA_RESOLVE_DEVICE_SYMBOLS", "ON");
+    }
+
     let dst = cfg.build();
     dst.join("build")
 }
@@ -363,10 +380,42 @@ fn emit_link_flags(build_dir: &Path, b: &Backends) {
                     }
                 }
                 println!("cargo:rustc-link-lib=cudart");
+                // The device-link object CMAKE_CUDA_RESOLVE_DEVICE_SYMBOLS
+                // produces references the device runtime's fatbin wrapper, so
+                // the archive that defines it has to be on the link line too.
+                // Static only — there is no shared cudadevrt — and it is the
+                // second half of the fix: without it the undefined symbol just
+                // moves from `__cudaRegisterLinkedBinary_*` to
+                // `__fatbinwrap_*_cuda_device_runtime_cu_*`.
+                //
+                // The search paths above only cover a toolkit install. A
+                // distribution package puts nvcc in /usr/bin and the archive
+                // in the compiler's own library directory, where the toolkit
+                // roots never point — so ask the compiler, which is the one
+                // that knows.
+                if let Some(dir) = cudadevrt_dir() {
+                    println!("cargo:rustc-link-search=native={}", dir.display());
+                }
+                println!("cargo:rustc-link-lib=static=cudadevrt");
             }
         }
         _ => {}
     }
+}
+
+/// Where `libcudadevrt.a` lives, asked of the C compiler.
+///
+/// `-print-file-name` answers with the name unchanged when it knows nothing,
+/// so an answer is only useful if it is a path that exists.
+fn cudadevrt_dir() -> Option<PathBuf> {
+    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".into());
+    let out = Command::new(cc)
+        .arg("-print-file-name=libcudadevrt.a")
+        .output()
+        .ok()?;
+    let path = PathBuf::from(String::from_utf8(out.stdout).ok()?.trim());
+    path.is_file()
+        .then(|| path.parent().map(Path::to_path_buf))?
 }
 
 fn collect_archives(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
