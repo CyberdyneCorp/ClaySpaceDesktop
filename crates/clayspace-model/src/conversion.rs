@@ -74,6 +74,52 @@ impl Direction {
     }
 }
 
+/// What the conversion panel is set to.
+///
+/// The direction and the resolution are the whole of the decision, and the
+/// costs follow from them — so this is what a command carries and the costs are
+/// recomputed rather than sent alongside, which would let the two disagree.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ConversionSettings {
+    pub direction: Direction,
+    /// The cell size a crossing into voxels would use, in document units.
+    pub cell_size: f32,
+    /// How much the lattice is filtered on the way out of a grid.
+    ///
+    /// 0 keeps the terracing and loses nothing; 1 is what an organic sculpt
+    /// wants. Meaningless in the directions that do not read a grid.
+    pub blur: i32,
+}
+
+impl Default for ConversionSettings {
+    fn default() -> Self {
+        Self {
+            direction: Direction::SdfToVoxel,
+            // The brick cache's own cell, so a first crossing lands at the
+            // resolution the rest of the application already works at.
+            cell_size: 0.02,
+            blur: 1,
+        }
+    }
+}
+
+impl ConversionSettings {
+    /// The bounds a cell size is clamped to.
+    ///
+    /// Not a matter of taste: below the floor a crossing of any real extent
+    /// exceeds the memory budget, and above the ceiling the result is coarser
+    /// than the form it came from.
+    pub const CELL_RANGE: std::ops::RangeInclusive<f32> = 0.002..=0.2;
+
+    pub fn sanitized(mut self) -> Self {
+        self.cell_size = self
+            .cell_size
+            .clamp(*Self::CELL_RANGE.start(), *Self::CELL_RANGE.end());
+        self.blur = self.blur.clamp(0, 2);
+        self
+    }
+}
+
 /// Why a conversion was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Refusal {

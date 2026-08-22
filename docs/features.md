@@ -82,6 +82,36 @@ producing an error you cannot act on.
 Symmetry about X, Y and Z is applied through the layer's mirror, so both halves
 belong to one operation and undo together.
 
+## Crossing between representations
+
+ClayCore carries SDF, voxel and mesh side by side, and the intended workflow
+uses more than one: **block out and hard-surface on SDF, free-form sculpt on
+voxels, refine on a mesh when the topology is one you want to keep.** Four
+crossings are offered from **Arquivo → Converter**, each from the active layer:
+
+| From | To | What it does |
+|---|---|---|
+| SDF | voxel | Rasterizes the field into cells over the layer's bounds |
+| voxel | SDF | Reads occupancy back, redistanced, as an ordinary operand — one volume item per palette entry, which is what carries the colour |
+| mesh | voxel | Straight from the triangles in one sampling, so a feature thinner than a cell survives where a field detour loses it, and the vertex colours reach the palette |
+| mesh | SDF | Resamples the triangles onto a lattice as a volume item |
+
+**The panel states what the crossing costs before it runs**, computed from the
+cell size rather than written down, so the figures move as you move the slider:
+how far the surface can travel (half a cell), what thickness of feature
+vanishes (one cell), how many cells the region holds, and whether sharp edges,
+colour and the parametric history survive.
+
+**A crossing produces a new layer and leaves the source alone**, and it is
+**not undoable** — the panel says so. A conversion produces no engine undo
+entry at all: layer creation and rasterization are not recorded, and a voxel
+layer carries no history by construction. Taking a crossing back means removing
+the layer it added, which is exactly what the surviving source is for.
+
+Refused rather than approximated: a layer with no bounds and no region, a
+resolution whose grid would exceed the memory budget — with the budget named —
+an empty source, and a crossing that starts from a different representation.
+
 ## Armatures
 
 ZSpheres, with ZBrush's gesture: **drag out of a sphere to grow the next one.**

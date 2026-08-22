@@ -157,6 +157,9 @@ struct App {
     /// The exchange panels and what they would do.
     show_import: bool,
     show_export: bool,
+    /// The conversion panel, and what it is set to.
+    show_convert: bool,
+    conversion: clayspace_model::ConversionSettings,
     import: ImportSettings,
     export: ExportSettings,
     /// The engine's undo depth when a rig gesture began.
@@ -244,6 +247,8 @@ impl App {
             show_attribution: false,
             show_import: false,
             show_export: false,
+            show_convert: false,
+            conversion: clayspace_model::ConversionSettings::default(),
             import: ImportSettings::default(),
             export: ExportSettings::default(),
             rig_plane: None,
@@ -1165,6 +1170,33 @@ impl App {
         }
     }
 
+    /// Crosses the active layer, with the pointer saying it is working.
+    ///
+    /// Unbounded: the work follows the region and the resolution, not the
+    /// edit, so it is one of the few things here that can take long enough to
+    /// need saying. A refusal reaches the tool status the same way an engine
+    /// refusal does.
+    fn run_conversion(&mut self) {
+        let settings = self.conversion;
+        let outcome = self.busy(|app| {
+            app.timed("converter", |app| {
+                app.document.with(|document| {
+                    document.convert_layer(settings.direction, settings.cell_size, settings.blur)
+                })
+            })
+        });
+        match outcome {
+            Ok(_) => {
+                self.show_convert = false;
+                self.scene.refresh();
+                self.sculpt.refresh_after_conversion();
+                self.document_vm.touched();
+                self.settle_geometry();
+            }
+            Err(e) => eprintln!("a conversão foi recusada: {e}"),
+        }
+    }
+
     /// Carries out a shortcut's action.
     ///
     /// The table holds names rather than commands because some of these are
@@ -1237,6 +1269,12 @@ impl App {
         self.mask.dispatch(&command);
         // A rig belongs to a layer, so choosing another layer changes which
         // one — or whether there is one at all.
+        match &command {
+            Command::ToggleConvert => self.show_convert = !self.show_convert,
+            Command::SetConversion(settings) => self.conversion = settings.sanitized(),
+            Command::RunConversion => self.run_conversion(),
+            _ => {}
+        }
         if matches!(command, Command::SelectLayer(_)) {
             self.armature.refresh();
             self.rigging = self.rigging && self.armature.is_rigging();
@@ -1329,6 +1367,13 @@ impl App {
             mask: *self.mask.state().get(),
             armature: self.armature_state(),
             recent: self.recent.paths(),
+            show_convert: self.show_convert,
+            conversion: self.conversion,
+            // Asked of the document, which is the only layer that can see the
+            // bounds a region is measured against.
+            conversion_cost: self
+                .document
+                .with(|d| d.conversion_cost(self.conversion.direction, self.conversion.cell_size)),
             show_import: self.show_import,
             show_export: self.show_export,
             import: self.import,
@@ -1390,6 +1435,7 @@ impl App {
                 });
             shell::diagnostics_window(ctx, &state, &mut queue);
             shell::attribution_window(ctx, &state, &mut queue);
+            shell::convert_window(ctx, &state, &mut queue);
             shell::import_window(ctx, &state, &mut queue);
             shell::export_window(ctx, &state, &mut queue);
             egui::CentralPanel::default()

@@ -254,6 +254,9 @@ impl SculptViewModel {
             | Command::SetSkinThickness(_)
             | Command::ApplyMaskOp(_)
             | Command::ExtrudeMask(_)
+            | Command::ToggleConvert
+            | Command::SetConversion(_)
+            | Command::RunConversion
             | Command::SetLayerVisible(..)
             | Command::AddLayer
             | Command::RemoveLayer(_) => {}
@@ -394,6 +397,15 @@ impl SculptViewModel {
             let (row, index) = self.slot(*self.tool.get());
             self.brushes[row][index] = settings;
         }
+    }
+
+    /// Catches the ViewModel up after a conversion made the new layer active.
+    ///
+    /// A crossing changes the active layer's representation without a
+    /// `SelectLayer` passing through here, so the shelf and the brush would
+    /// otherwise still belong to the layer the sculptor converted *from*.
+    pub fn refresh_after_conversion(&mut self) {
+        self.follow_the_active_layer();
     }
 
     /// What the active layer holds, for the shell to show and the shelf to

@@ -11,8 +11,8 @@
 use std::path::PathBuf;
 
 use clayspace_model::{
-    ExportSettings, ExtrudeSettings, Falloff, ImportSettings, LayerKey, MaskOp, ToolKind,
-    ViewPresetKind,
+    ConversionSettings, ExportSettings, ExtrudeSettings, Falloff, ImportSettings, LayerKey, MaskOp,
+    ToolKind, ViewPresetKind,
 };
 
 /// A change to the application or the document.
@@ -53,6 +53,13 @@ pub enum Command {
     /// Shows or hides the import and export panels.
     ToggleImport,
     ToggleExport,
+    /// Opens or closes the panel that crosses a layer to another
+    /// representation.
+    ToggleConvert,
+    /// What the conversion panel is set to.
+    SetConversion(ConversionSettings),
+    /// Crosses the active layer, adding a new one.
+    RunConversion,
     SetImportSettings(ImportSettings),
     SetExportSettings(ExportSettings),
     /// Asks for a file and brings it in with the settings as they stand.
@@ -147,8 +154,14 @@ impl Command {
                 | Self::Quit
                 | Self::ToggleImport
                 | Self::ToggleExport
+                | Self::ToggleConvert
                 | Self::SetImportSettings(_)
                 | Self::SetExportSettings(_)
+                // Choosing what a crossing would do changes nothing; running
+                // one adds a layer, and takes the composition root's own path
+                // for the same reason import does.
+                | Self::SetConversion(_)
+                | Self::RunConversion
                 // Import *does* change the document, but it goes through the
                 // composition root's own path — dialog, then model — and
                 // marks the document itself. Routing it through the ordinary
@@ -219,6 +232,9 @@ impl Command {
             Self::ToggleExport => "export panel",
             Self::SetImportSettings(_) => "import settings",
             Self::SetExportSettings(_) => "export settings",
+            Self::ToggleConvert => "convert panel",
+            Self::SetConversion(_) => "conversion settings",
+            Self::RunConversion => "convert",
             Self::RunImport => "import",
             Self::RunExport => "export",
             Self::NextDisplayUnit => "display unit",

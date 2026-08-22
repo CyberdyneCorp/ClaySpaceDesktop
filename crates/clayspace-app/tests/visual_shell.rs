@@ -139,6 +139,9 @@ fn state<'a>(
     ShellState {
         shortcuts: shortcuts(),
         representation: clayspace_model::Representation::Sdf,
+        show_convert: false,
+        conversion: clayspace_model::ConversionSettings::default(),
+        conversion_cost: None,
         // A mask with something in it, so the menu's enabled state is what the
         // capture shows rather than a row of grey.
         mask: clayspace_model::MaskState {
@@ -255,6 +258,7 @@ fn capture_shell(harness: &Harness, state: &ShellState<'_>, name: &str) -> clays
             });
         shell::diagnostics_window(ctx, state, &mut queue);
         shell::attribution_window(ctx, state, &mut queue);
+        shell::convert_window(ctx, state, &mut queue);
         shell::import_window(ctx, state, &mut queue);
         shell::export_window(ctx, state, &mut queue);
     };
@@ -657,5 +661,68 @@ fn the_shelf_holds_what_the_representation_has() {
         differing > 500,
         "the shelf looks the same for both representations ({differing} pixels \
          differ), so it is not following the active layer"
+    );
+}
+
+/// The conversion panel, in each direction a layer can cross.
+///
+/// Its whole job is to state the losses before the crossing runs, and the
+/// figures are recomputed from the cell size rather than written into the
+/// strings — so the capture is also the check that they render at all.
+#[test]
+fn the_conversion_panel_states_what_a_crossing_costs() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01", "MatCap Cinza 02", "Gesso"];
+    let report = diagnostics();
+
+    // Two resolutions, so the capture shows the figures following the choice
+    // rather than describing a default.
+    for (cell, name) in [(0.02, "66-convert-fine"), (0.1, "66-convert-coarse")] {
+        let mut open = state(strings, &scene, &materials, &report);
+        open.show_convert = true;
+        open.conversion = clayspace_model::ConversionSettings {
+            direction: clayspace_model::Direction::SdfToVoxel,
+            cell_size: cell,
+            blur: 1,
+        };
+        open.conversion_cost = Some(clayspace_model::Cost::of(
+            clayspace_model::Direction::SdfToVoxel,
+            cell,
+            [2.0, 2.0, 2.0],
+        ));
+        let shown = capture_shell(&harness, &open, name);
+
+        let mut closed = state(strings, &scene, &materials, &report);
+        closed.show_convert = false;
+        let hidden = capture_shell(&harness, &closed, "66-convert-closed");
+        let differing = shown
+            .pixels
+            .chunks_exact(4)
+            .zip(hidden.pixels.chunks_exact(4))
+            .filter(|(a, b)| a != b)
+            .count();
+        // Counted rather than compared whole: a failed `assert_ne!` on two
+        // 1280x800 buffers prints megabytes of pixels and says nothing.
+        assert!(
+            differing > 2000,
+            "the conversion panel drew nothing at cell {cell} ({differing} \
+             pixels differ from the same shell with it closed)"
+        );
+    }
+
+    // A mesh layer crosses two ways and an SDF layer one, so the panel's
+    // contents follow the active representation like the shelf does.
+    assert_eq!(
+        clayspace_model::Direction::from_representation(clayspace_model::Representation::Mesh)
+            .len(),
+        2
+    );
+    assert_eq!(
+        clayspace_model::Direction::from_representation(clayspace_model::Representation::Sdf).len(),
+        1
     );
 }

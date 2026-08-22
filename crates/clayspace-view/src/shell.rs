@@ -10,9 +10,9 @@
 //! along the trailing edge, and a status area.
 
 use clayspace_model::{
-    BrushSettings, Diagnostics, ExportMesher, ExportSettings, ExportWarning, ExtrudeSettings,
-    ExtrudeSide, Falloff, ImportAs, ImportSettings, LayerSummary, MaskOp, MaskState,
-    RecentDocuments, Representation, Scene, SceneStats, ToolKind, Units, ViewPresetKind,
+    BrushSettings, Diagnostics, Direction, ExportMesher, ExportSettings, ExportWarning,
+    ExtrudeSettings, ExtrudeSide, Falloff, ImportAs, ImportSettings, LayerSummary, MaskOp,
+    MaskState, RecentDocuments, Representation, Scene, SceneStats, ToolKind, Units, ViewPresetKind,
 };
 use clayspace_vm::{Axis, Command, CommandQueue};
 
@@ -56,6 +56,14 @@ pub struct ShellState<'a> {
     /// Documents opened lately, most recent first.
     pub recent: &'a [std::path::PathBuf],
     /// The exchange panels: whether they are open, and what they would do.
+    pub show_convert: bool,
+    /// What the conversion panel is set to, and what that would cost.
+    ///
+    /// The cost is computed by the layer that can see the document's bounds
+    /// and handed in, rather than recomputed here: a View that worked out its
+    /// own answer could disagree with the one the conversion actually uses.
+    pub conversion: clayspace_model::ConversionSettings,
+    pub conversion_cost: Option<clayspace_model::Cost>,
     pub show_import: bool,
     pub show_export: bool,
     pub import: ImportSettings,
@@ -319,6 +327,13 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                     ui.close_menu();
                 }
                 ui.separator();
+                // Beside import and export, because a crossing is the same
+                // kind of act: it produces a new layer from something the
+                // document already holds, and states what it costs first.
+                if ui.button(s.action_convert).clicked() {
+                    queue.push(Command::ToggleConvert);
+                    ui.close_menu();
+                }
                 if ui.button(s.action_import).clicked() {
                     queue.push(Command::ToggleImport);
                     ui.close_menu();
@@ -839,6 +854,146 @@ pub fn attribution_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &m
 /// A panel rather than a bare file dialog, because the one real decision —
 /// whether the model becomes a reference or becomes clay — cannot be made
 /// after the fact, and a native dialog has nowhere to ask it.
+/// The conversion panel: where a layer crosses to another representation.
+///
+/// Its whole job is to state the losses *before* the crossing runs. They are
+/// recomputed from the chosen cell size every frame rather than written into
+/// the strings, because a number written down is wrong the first time somebody
+/// changes the default — and the resolution is the whole of the decision being
+/// made here.
+pub fn convert_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    if !state.show_convert {
+        return;
+    }
+    let s = state.strings;
+    let mut open = true;
+    let mut settings = state.conversion;
+    let available = Direction::from_representation(state.representation);
+
+    egui::Window::new(s.action_convert)
+        .open(&mut open)
+        .resizable(false)
+        .collapsible(false)
+        .show(ctx, |ui| {
+            ui.set_min_width(340.0);
+            if available.is_empty() {
+                ui.label(
+                    egui::RichText::new(s.convert_none_here)
+                        .size(type_scale::LABEL)
+                        .color(Tokens::text_dim()),
+                );
+                return;
+            }
+
+            ui.label(
+                egui::RichText::new(s.label_convert_to)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+            for direction in &available {
+                let chosen = settings.direction == *direction;
+                if ui.radio(chosen, direction.to().label()).clicked() && !chosen {
+                    settings.direction = *direction;
+                    queue.push(Command::SetConversion(settings));
+                }
+            }
+
+            if settings.direction.chooses_resolution() {
+                ui.add_space(space::SNUG);
+                ui.label(
+                    egui::RichText::new(s.label_cell_size)
+                        .size(type_scale::LABEL)
+                        .color(Tokens::text_dim()),
+                );
+                let mut cell = settings.cell_size;
+                if ui
+                    .add(
+                        egui::Slider::new(
+                            &mut cell,
+                            clayspace_model::ConversionSettings::CELL_RANGE,
+                        )
+                        .logarithmic(true)
+                        .show_value(true),
+                    )
+                    .changed()
+                {
+                    settings.cell_size = cell;
+                    queue.push(Command::SetConversion(settings));
+                }
+            }
+
+            ui.add_space(space::SECTION);
+            ui.label(
+                egui::RichText::new(s.label_convert_costs)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+            for line in cost_lines(state, settings) {
+                ui.label(
+                    egui::RichText::new(line)
+                        .size(type_scale::LABEL)
+                        .color(Tokens::text_dim()),
+                );
+            }
+            // The one the specification asks for by name: a sculptor must not
+            // discover after the fact that the crossing cannot be undone.
+            ui.label(
+                egui::RichText::new(s.convert_not_undoable)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::accent()),
+            );
+
+            ui.add_space(space::SECTION);
+            if ui.button(s.convert_run).clicked() {
+                queue.push(Command::RunConversion);
+            }
+        });
+    if !open {
+        queue.push(Command::ToggleConvert);
+    }
+}
+
+/// What the crossing costs, in the units the document is measured in.
+///
+/// Built from [`clayspace_model::Cost`] rather than from prose, so the figures
+/// and the settings above them cannot disagree.
+fn cost_lines(
+    state: &ShellState<'_>,
+    settings: clayspace_model::ConversionSettings,
+) -> Vec<String> {
+    let s = state.strings;
+    let Some(cost) = state.conversion_cost else {
+        return Vec::new();
+    };
+    let mut lines = Vec::new();
+    if settings.direction.chooses_resolution() {
+        lines.push(format!(
+            "· {} {}",
+            s.convert_surface_moves,
+            state.units.format(cost.surface_movement)
+        ));
+        lines.push(format!(
+            "· {} ({})",
+            s.convert_features_vanish,
+            state.units.format(cost.vanishing_feature)
+        ));
+        // Grouped, like the geometry readout: "1000000 cells" is a number a
+        // reader has to count the digits of before it means anything.
+        lines.push(format!(
+            "· {} {}",
+            thousands(cost.cells as usize),
+            s.convert_cells
+        ));
+    }
+    if !cost.keeps_sharp_edges {
+        lines.push(format!("· {}", s.convert_sharp_edges_lost));
+    }
+    if !cost.keeps_history {
+        lines.push(format!("· {}", s.convert_history_lost));
+    }
+    lines
+}
+
 pub fn import_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQueue) {
     if !state.show_import {
         return;

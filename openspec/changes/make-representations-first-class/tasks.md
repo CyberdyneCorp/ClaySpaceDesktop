@@ -32,13 +32,13 @@
 
 ## 4. Phase 2 — conversion in the interface
 
-- [ ] 4.1 Add the conversion commands to `Command` and route them through the existing dispatch
-- [ ] 4.2 Add a conversion panel showing direction, cell size, region, the computed costs, and that the crossing is not undoable
-- [ ] 4.3 Recompute the stated costs as the resolution changes
-- [ ] 4.4 Put the conversion behind the busy cursor, since it is unbounded work
-- [ ] 4.5 Localise the panel in all three locales
-- [ ] 4.6 Capture the panel for each direction
-- [ ] 4.7 Document the round trip in `docs/features.md`
+- [x] 4.1 Add the conversion commands to `Command` and route them through the existing dispatch
+- [x] 4.2 Add a conversion panel showing direction, cell size, region, the computed costs, and that the crossing is not undoable
+- [x] 4.3 Recompute the stated costs as the resolution changes
+- [x] 4.4 Put the conversion behind the busy cursor, since it is unbounded work
+- [x] 4.5 Localise the panel in all three locales
+- [x] 4.6 Capture the panel for each direction
+- [x] 4.7 Document the round trip in `docs/features.md`
 
 ## 5. Phase 3 — mesh sculpting
 
