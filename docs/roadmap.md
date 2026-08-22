@@ -190,9 +190,8 @@ bricks:
 went 86 ms → 12 ms.
 
 The table above is the 0.28.0 measurement, kept because it is what the shading
-split was built against. That split — face normals while dragging, the gradient
-bought back on pointer-up — **is gone**, because the thing it was avoiding
-stopped costing anything:
+split was built against. The gradient has since come down a long way over a
+fixed 80-brick sample:
 
 | engine | face normals | gradient normals | premium |
 |---|---|---|---|
@@ -200,16 +199,34 @@ stopped costing anything:
 | 0.29.1 | 8.0 ms | 11.5 ms | 1.4x |
 | 0.30.0 | 12.6 ms | 13.2 ms | 1.04x |
 
-By the end it was the most expensive thing in a gesture: re-shading the 111
-keys a stroke touches cost 15.7 ms at pointer-up, to buy back 0.6 ms of
-gradient. The application said so on every stroke — `a interface travou:
-sombreamento final 17 ms` — and the `stroke` stall printed beside it was the
-same event, since that timer wraps the whole end-of-gesture pass.
+That last row read as "the gradient is free now", and for one release the drag
+shaded fully and there was no second pass. The end of a gesture went 17.5 ms →
+2.0 ms, which was real: re-shading the 111 keys a stroke touches had cost
+15.7 ms at pointer-up, and the application said so on every stroke — `a
+interface travou: sombreamento final 17 ms`, with the `stroke` stall printed
+beside it being the same event.
 
-Sculpting shades fully now. The end of a gesture went 17.5 ms → 2.0 ms, which
-is only the coarse levels; the drag itself did not get slower; and the mid-drag
-picture became *pixel-identical* to a full re-mesh where it used to differ.
-`gesture_end.rs` fails if anything is put back onto pointer-up.
+But 80 bricks is not what a segment meshes. Over the 27 keys a dab dirties, the
+premium is not 1.04x:
+
+| shading | median | p95 | worst |
+|---|---|---|---|
+| face normals | 3.4 ms | 4.0 ms | 6.2 ms |
+| gradient | 4.9 ms | 8.1 ms | **18.9 ms** |
+
+40% at the median, and in the tail the difference between a segment that always
+fits a frame and one that sometimes takes 19 ms. The brush ring is drawn in the
+frame that meshes the edit, so those spikes are the ring visibly trailing the
+pointer — reported as exactly that, and the reason the split is back.
+
+It is not the old split. The drag shades fast, and `SurfaceGeometry::refine_within`
+pays the gradient back **a segment at a time, on frames that are not sculpting**
+— a pause mid-gesture or the frames after the pointer lifts, each bounded by
+what the frame has left. A gesture's debt clears in about five idle frames.
+Neither end pays a hitch: the worst mid-drag segment is 4.9 ms and pointer-up is
+2.0 ms, and `gesture_end.rs` fails if either leaves a frame. A third test there
+holds the drained surface triangle-for-triangle against a full rebuild, which is
+what says the queue can be drained in pieces at all.
 
 The scaling below is the shape of the original problem, also measured on
 0.28.0, at a fixed 80 bricks while the document grows from 1 node to 193:

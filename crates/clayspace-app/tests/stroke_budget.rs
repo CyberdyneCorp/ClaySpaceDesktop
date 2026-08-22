@@ -12,12 +12,23 @@
 //! | 0.28.0 | 1.09 ms | 7.71 ms | 83.22 ms |
 //! | 0.29.0 | 0.97 ms | 7.86 ms | 19.90 ms |
 //! | 0.29.1 | 0.95 ms | 8.02 ms | 11.48 ms |
+//! | 0.30.0 | 1.00 ms | 12.49 ms | 13.66 ms |
 //!
 //! Two upstream fixes, both to the same term: #73 culled the tape per brick,
 //! and #83 batched the attribute taps through the CPU pool. The gradient has
-//! gone from eleven times the cost of face normals to under one and a half,
-//! which is what narrowed the case for shading fast during a drag — narrowed,
-//! not closed: 3.5 ms a segment is still 30% of the mesh.
+//! gone from eleven times the cost of face normals to a few per cent of them.
+//!
+//! Read the last column against the one beside it and not against the rows
+//! above it. The face-normal column is not comparable across those rows — the
+//! 0.30.0 row is the first taken from a build that links CUDA at all, so the
+//! 96 dabs behind it were refilled by a different backend and the 80 bricks
+//! sampled hold different geometry. What the row *does* say is that on the
+//! same sample, on the same day, the gradient costs 1.1x face normals.
+//!
+//! It does not follow that the drag can afford it. This is a fixed 80-brick
+//! sample; a segment meshes the 27 keys a dab dirtied, and over those the
+//! premium is 40% at the median with a tail reaching 19 ms. `gesture_end.rs`
+//! is where that is measured and held.
 
 mod support;
 

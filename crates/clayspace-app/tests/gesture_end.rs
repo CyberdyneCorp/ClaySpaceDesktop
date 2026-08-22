@@ -1,9 +1,12 @@
-//! What the end of a gesture costs, which is what a sculptor feels as a hitch.
+//! What a gesture costs a frame, at both ends of it.
 //!
-//! Lifting the pointer used to run a second shading pass over every key the
-//! stroke had touched — 111 of them on the gesture below — because sculpting
-//! shaded with face normals and bought the gradient back afterwards. The
-//! application reported it, in Portuguese, on every stroke:
+//! Two hitches, and the change from one to the other is why both are held
+//! here rather than only the second.
+//!
+//! Lifting the pointer used to run a shading pass over every key the stroke
+//! had touched — 111 of them on the gesture below — because sculpting shaded
+//! with face normals and bought the gradient back afterwards. The application
+//! reported it, in Portuguese, on every stroke:
 //!
 //! ```text
 //! a interface travou: sombreamento final 17 ms
@@ -11,27 +14,35 @@
 //! ```
 //!
 //! Those two are one event: `stroke` is the outer timer around `EndStroke` and
-//! the shading pass ran inside it. The split existed because the gradient once
-//! cost eleven times face normals; by ClayCore 0.30.0 it cost 1.04x, so the
-//! pass was spending 15.7 ms buying back something worth 0.6 ms. Sculpting
-//! shades fully now and there is no second pass.
+//! the shading pass ran inside it. Shading fully during the drag removed it,
+//! and moved the cost onto every frame of the drag instead — 40% on the median
+//! segment, and a tail that reached 19 ms where face normals never left 6. The
+//! cursor ring is drawn in the frame that meshes the edit, so that tail is
+//! what a sculptor feels as the ring trailing the pointer.
 //!
-//! What this holds is the end of a gesture staying inside a frame. That the
-//! drag itself still draws what a full re-mesh would is `visual_incremental`'s
-//! job, and its mid-drag comparison got *tighter* with this change rather than
-//! looser — mid-drag is now the same shading a rebuild uses.
+//! So the drag shades fast again and `refine_within` pays the gradient off a
+//! segment at a time, on frames that are not sculpting. Which means neither
+//! end of a gesture may exceed a frame, and both assertions below are the
+//! regression: `FRAME` is the application's own stall threshold, the one that
+//! printed "a interface travou", so these fail exactly when a sculptor would
+//! have seen the message.
+//!
+//! That the drag still draws what a full re-mesh would is `visual_incremental`'s
+//! job; that the deferred shading lands on the same surface a rebuild has is
+//! the last test here.
 
 mod support;
 
-use std::time::Instant;
+use std::collections::HashSet;
+use std::time::{Duration, Instant};
 
 use clayspace_app::SurfaceGeometry;
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{BrushSettings, GestureSample, SculptModel, ToolKind, FRAME};
 use support::Harness;
 
-/// Segments in the test gesture. Enough that the old refinement pass had a
-/// gesture's worth of keys to re-mesh rather than a dab's.
+/// Segments in the test gesture. Enough that the refinement has a gesture's
+/// worth of keys to get through rather than a dab's.
 const SEGMENTS: usize = 24;
 
 fn document() -> Option<ClayDocument> {
@@ -43,6 +54,10 @@ fn document() -> Option<ClayDocument> {
 
 /// Drags across the front of the model, syncing after each segment as the
 /// application does while the pointer is down.
+///
+/// No refinement in here, deliberately: the application spends only what a
+/// frame has left on it, and a frame that sculpts has nothing left. What the
+/// drag costs is the sync alone.
 ///
 /// Returns the worst segment and the whole gesture's cost.
 fn drag(
@@ -79,11 +94,21 @@ fn drag(
     (worst, total)
 }
 
+/// The triangles on screen, however they are split between keys.
+///
+/// Per-key equality is the wrong question — the engine attributes a straddling
+/// triangle to the lowest *requested* key, so a subset re-mesh may legally move
+/// one between keys. `settle_needed.rs` makes the same argument at more length.
+fn triangles(geometry: &SurfaceGeometry) -> HashSet<[[i32; 3]; 3]> {
+    geometry
+        .stored_triangles()
+        .into_values()
+        .flatten()
+        .collect()
+}
+
 #[test]
-fn lifting_the_pointer_stays_inside_a_frame() {
-    // The regression. `FRAME` is the application's own stall threshold — the
-    // one that printed "a interface travou" — so this fails exactly when a
-    // sculptor would have seen the message.
+fn neither_end_of_a_gesture_leaves_the_frame() {
     let Some(harness) = Harness::new() else {
         return;
     };
@@ -104,12 +129,35 @@ fn lifting_the_pointer_stays_inside_a_frame() {
     document.build_mips().expect("build the mips");
     let pointer_up = started.elapsed();
 
+    // What one idle frame is willing to spend on the debt, near enough: the
+    // application offers a frame less a reserve for drawing and presenting.
+    let slice = FRAME - Duration::from_millis(4);
+    let started = Instant::now();
+    let owed = geometry
+        .refine_within(&harness.gpu, &mut document, slice)
+        .expect("refine");
+    let refinement = started.elapsed();
+
     println!(
         "gesture: worst segment {worst:.2} ms, whole gesture {total:.2} ms, \
-         pointer-up {:.2} ms",
-        pointer_up.as_secs_f64() * 1000.0
+         pointer-up {:.2} ms, first refinement slice {:.2} ms ({} segments left)",
+        pointer_up.as_secs_f64() * 1000.0,
+        refinement.as_secs_f64() * 1000.0,
+        geometry.awaiting_refinement(),
     );
 
+    // The regression the drag has to hold. Shading fully mid-drag put 15 to
+    // 19 ms segments in this gesture's tail, which is a dropped frame with the
+    // pointer moving — the one moment the ring is being watched.
+    assert!(
+        Duration::from_secs_f64(worst / 1000.0) < FRAME,
+        "the worst mid-drag segment took {worst:.1} ms, over a {:.1} ms frame. \
+         The drag is meshing more, or shading more, than it can afford — the \
+         ring is drawn in this same frame, so this is the pointer lag.",
+        FRAME.as_secs_f64() * 1000.0
+    );
+
+    // The regression the end of a gesture has to hold.
     assert!(
         pointer_up < FRAME,
         "the end of a gesture took {:.1} ms, over a {:.1} ms frame — which is \
@@ -117,5 +165,84 @@ fn lifting_the_pointer_stays_inside_a_frame() {
          back onto pointer-up.",
         pointer_up.as_secs_f64() * 1000.0,
         FRAME.as_secs_f64() * 1000.0
+    );
+
+    // And the refinement itself, which is only allowed to overrun by the one
+    // set it is guaranteed to finish.
+    assert!(
+        refinement < FRAME,
+        "a refinement slice took {:.1} ms against a {:.1} ms budget. It is \
+         meant to stop at the first set that runs the budget out, so a single \
+         set has grown past a frame.",
+        refinement.as_secs_f64() * 1000.0,
+        slice.as_secs_f64() * 1000.0
+    );
+
+    // The debt has to be finite and it has to be paid: a drag that queues
+    // faster than the idle frames can clear would never catch up.
+    let mut slices = 1;
+    let mut owed = owed;
+    while owed {
+        owed = geometry
+            .refine_within(&harness.gpu, &mut document, slice)
+            .expect("refine");
+        slices += 1;
+        assert!(
+            slices < 100,
+            "the refinement queue is not draining: {} segments still owed",
+            geometry.awaiting_refinement()
+        );
+    }
+    println!("gesture: refined in {slices} slices");
+}
+
+#[test]
+fn a_refined_gesture_draws_what_a_rebuild_draws() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let Some(mut document) = document() else {
+        return;
+    };
+    let mut geometry = SurfaceGeometry::new(&harness.gpu);
+    geometry
+        .rebuild(&harness.gpu, &mut document)
+        .expect("the first mesh");
+
+    drag(&harness, &mut geometry, &mut document);
+    // Drained to nothing, which is where the application gets to within a few
+    // idle frames of the pointer lifting.
+    while geometry
+        .refine_within(&harness.gpu, &mut document, FRAME)
+        .expect("refine")
+    {}
+    assert_eq!(geometry.awaiting_refinement(), 0);
+    let refined = triangles(&geometry);
+
+    let mut rebuilt = SurfaceGeometry::new(&harness.gpu);
+    rebuilt
+        .rebuild(&harness.gpu, &mut document)
+        .expect("rebuild");
+    let whole = triangles(&rebuilt);
+
+    let missing = whole.difference(&refined).count();
+    let extra = refined.difference(&whole).count();
+    println!(
+        "after refinement: {} triangles against a rebuild's {} — {missing} missing, {extra} spare",
+        refined.len(),
+        whole.len(),
+    );
+
+    // Re-shading replaces a segment with the same request that produced it, so
+    // it may not lose or invent a triangle. This is what says the queue can be
+    // drained a set at a time rather than all at once.
+    assert_eq!(
+        missing, 0,
+        "the refined surface is missing {missing} triangles a rebuild has — \
+         draining the queue a set at a time dropped geometry"
+    );
+    assert_eq!(
+        extra, 0,
+        "the refined surface holds {extra} triangles a rebuild does not"
     );
 }

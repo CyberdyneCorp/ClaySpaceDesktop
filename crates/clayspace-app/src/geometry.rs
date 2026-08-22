@@ -83,6 +83,27 @@ pub struct SurfaceGeometry {
     last_engine_mesh: std::time::Duration,
     last_read: std::time::Duration,
     last_split: std::time::Duration,
+    /// Key sets meshed with face normals, oldest first.
+    ///
+    /// One entry per [`SurfaceGeometry::sync`] that shaded fast, holding
+    /// exactly the keys that sync requested. The set is the unit because the
+    /// engine attributes a straddling triangle to the lowest *requested* key
+    /// (ClayCore #66): re-meshing the same request re-runs that sync with the
+    /// gradient and replaces exactly what it wrote, where re-meshing some
+    /// other slice of it would move triangles between keys and leave the ones
+    /// it moved away from behind.
+    ///
+    /// Ordered because a later sync overwrote an earlier one, and the shading
+    /// pass has to land in the same order to end up with the same surface.
+    pending_shading: std::collections::VecDeque<Vec<BrickKey>>,
+    /// How many queued sets name each key.
+    ///
+    /// So that "is this set meshed again later?" is a lookup per key rather
+    /// than a scan of the queue. Scanning is fine for the two dozen sets a
+    /// gesture leaves and quadratic in the thousands a drag that never pauses
+    /// can reach — and a drag that never pauses is exactly the one that never
+    /// gets to drain.
+    pending_keys: HashMap<BrickKey, usize>,
     /// The level the stored geometry was meshed at.
     ///
     /// Distinct from `requested` because a coarse surface is not always
@@ -110,14 +131,32 @@ pub struct SurfaceGeometry {
 /// | 0.29.1 | 8.0 ms | 11.5 ms | 1.4x |
 /// | 0.30.0 | 12.6 ms | 13.2 ms | 1.04x |
 ///
-/// Three upstream fixes closed it — #73 culling the tape per brick, #83
-/// batching the attribute taps, and #93's release carrying the rest. The
-/// gradient is now within measurement noise of face normals, so **sculpting
-/// shades fully** and there is no second pass.
+/// Three upstream fixes narrowed it — #73 culling the tape per brick, #83
+/// batching the attribute taps, and #93's release carrying the rest.
 ///
-/// [`Shading::Fast`] is still what the coarse LOD surface uses, because level
-/// 1 *refuses* gradient normals rather than downgrading them — the one place
-/// the choice is not about cost.
+/// The table above is a *fixed 80-brick sample*, which is not what a segment
+/// meshes. Over the 27 keys a dab actually dirties, three runs of 96 segments
+/// each on the same worked model:
+///
+/// | shading | median | p95 | worst |
+/// |---|---|---|---|
+/// | face normals | 3.4 / 3.4 / 4.1 ms | 3.9 / 4.0 / 5.3 ms | 4.1 / 4.2 / 6.2 ms |
+/// | gradient | 5.0 / 4.7 / 4.9 ms | 8.1 / 5.2 / 11.4 ms | 14.9 / 5.6 / 18.9 ms |
+///
+/// So the premium is 40% at the median and, in the tail, the difference
+/// between a segment that always fits a frame and one that sometimes takes
+/// 19 ms. The cursor ring is drawn in the frame that meshes the edit, so that
+/// tail is what a sculptor feels as the ring trailing the pointer.
+///
+/// Sculpting therefore shades fast and owes the gradient, which
+/// [`SurfaceGeometry::refine_within`] pays off on frames that are not
+/// sculpting. Not at pointer-up in one pass — that was 15.7 ms in one frame,
+/// the hitch `gesture_end.rs` exists to hold — and not beside the sample
+/// either, which would cost the frame both shadings at once.
+///
+/// [`Shading::Fast`] is also what the coarse LOD surface uses, and there for
+/// a different reason: level 1 *refuses* gradient normals rather than
+/// downgrading them, which is the one place the choice is not about cost.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shading {
     /// Area-weighted face normals. Needs no field sampling, so it is flat
@@ -147,6 +186,8 @@ impl SurfaceGeometry {
             last_engine_mesh: std::time::Duration::ZERO,
             last_read: std::time::Duration::ZERO,
             last_split: std::time::Duration::ZERO,
+            pending_shading: std::collections::VecDeque::new(),
+            pending_keys: HashMap::new(),
             detail: Detail::Full,
             requested: Detail::Full,
         }
@@ -242,15 +283,18 @@ impl SurfaceGeometry {
         let replace: std::collections::HashSet<BrickKey> = meshed.iter().copied().collect();
 
         let started = std::time::Instant::now();
-        // Gradient normals, while the pointer is down.
+        // Face normals while the pointer is down, and the gradient owed.
         //
-        // This used to shade with face normals and buy the gradient back at
-        // pointer-up, because the gradient cost eleven times everything else
-        // in a segment put together. It does not any more — see [`Shading`] —
-        // and the pass that bought it back had become the most expensive thing
-        // in a gesture: 15.7 ms over the 111 keys a stroke touches, against
-        // 0.6 ms to have shaded them properly in the first place.
-        self.remesh(document, &meshed, Some(&replace), Shading::Full, 0)?;
+        // The gradient is no longer eleven times the rest of a segment — it is
+        // 40% of it, and a tail that reaches 19 ms where face normals never
+        // leave 6 — so it is deferred rather than skipped, and paid off a
+        // segment at a time by `refine_within` on frames that are not
+        // sculpting. See [`Shading`] for the measurements.
+        self.remesh(document, &meshed, Some(&replace), Shading::Fast, 0)?;
+        for key in &meshed {
+            *self.pending_keys.entry(*key).or_insert(0) += 1;
+        }
+        self.pending_shading.push_back(meshed.clone());
         let mesh_time = started.elapsed();
 
         let started = std::time::Instant::now();
@@ -544,6 +588,91 @@ impl SurfaceGeometry {
         self.dirty = false;
     }
 
+    /// Re-shades what sculpting shaded fast, for as long as `budget` allows.
+    ///
+    /// Returns whether anything is still owed, which is the caller's cue to
+    /// ask for another frame.
+    ///
+    /// The positions are already right — `sync` is exact, and normals do not
+    /// move a vertex — so nothing a silhouette test could see changes here.
+    /// What it buys back is the gradient the drag deferred.
+    ///
+    /// The first set of a call runs whatever the budget says, so a caller with
+    /// nothing to spare still makes progress rather than spinning; every set
+    /// after it has to fit in what is left. One set is a dab's worth of keys,
+    /// which is the granularity that keeps that guarantee cheap: 27 keys and
+    /// about 2.2 ms on the reference form, against the 15.7 ms the single
+    /// pointer-up pass cost over all 111 keys a stroke touches.
+    pub fn refine_within(
+        &mut self,
+        gpu: &Gpu,
+        document: &mut ClayDocument,
+        budget: std::time::Duration,
+    ) -> Result<bool, ClayError> {
+        // Level 1 is face-shaded by construction and has no gradient to buy
+        // back, and the queued keys are from the other level's space anyway —
+        // so they are dropped rather than carried across the switch.
+        if self.detail == Detail::Reduced {
+            self.forget_pending();
+            return Ok(false);
+        }
+        let started = std::time::Instant::now();
+        let mut last: Option<std::time::Duration> = None;
+        while !self.pending_shading.is_empty() {
+            // What the previous set cost is the estimate for the next one, so
+            // the budget is a ceiling rather than something to overshoot by
+            // whatever the set after it happens to cost. Stopping only once
+            // the budget was already spent ran 17.7 ms against 12.7 ms.
+            if last.is_some_and(|cost| started.elapsed() + cost > budget) {
+                break;
+            }
+            let keys = self.pending_shading.pop_front().expect("not empty");
+            // Dropped from the tally first, so what is left against a key is
+            // what the sets *behind* this one name.
+            self.untally(&keys);
+            // Every key of it is meshed again further down the queue, so
+            // shading it now would only be overwritten by a set that has to
+            // run regardless. Common in a slow drag, where consecutive
+            // samples dirty the same bricks.
+            if keys.iter().all(|key| self.pending_keys.contains_key(key)) {
+                continue;
+            }
+            let set_started = std::time::Instant::now();
+            let replace: std::collections::HashSet<BrickKey> = keys.iter().copied().collect();
+            self.remesh(document, &keys, Some(&replace), Shading::Full, 0)?;
+            self.upload(gpu);
+            last = Some(set_started.elapsed());
+        }
+        Ok(!self.pending_shading.is_empty())
+    }
+
+    /// Takes one set back out of [`SurfaceGeometry::pending_keys`].
+    ///
+    /// A key whose count reaches zero is removed rather than left at zero, so
+    /// "is this key still queued" stays a `contains_key`.
+    fn untally(&mut self, keys: &[BrickKey]) {
+        for key in keys {
+            let Some(count) = self.pending_keys.get_mut(key) else {
+                continue;
+            };
+            *count -= 1;
+            if *count == 0 {
+                self.pending_keys.remove(key);
+            }
+        }
+    }
+
+    /// Drops the whole shading debt, for when nothing it names is addressable.
+    fn forget_pending(&mut self) {
+        self.pending_shading.clear();
+        self.pending_keys.clear();
+    }
+
+    /// How many segments are waiting for their gradient.
+    pub fn awaiting_refinement(&self) -> usize {
+        self.pending_shading.len()
+    }
+
     /// Re-meshes the whole surface and compacts the per-key slots.
     ///
     /// No longer needed to close seams. Until ClayCore 0.28.0 a subset mesh
@@ -646,6 +775,9 @@ impl SurfaceGeometry {
         let (keys, lod, shading) = self.level_for(document, detail)?;
         self.keys.clear();
         self.touched.clear();
+        // Everything it could name is about to be meshed at the level's own
+        // shading, so the debt is settled rather than carried.
+        self.forget_pending();
         // The spans described geometry that has just been discarded, so the
         // layout cannot be patched onto what replaces it.
         self.relayout = true;

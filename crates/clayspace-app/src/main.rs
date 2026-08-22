@@ -8,14 +8,14 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use clayspace_app::{ray_at, SessionStore, SharedDocument, SurfaceGeometry, ViewportInput};
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
     AutosavePolicy, Detail, DetailPolicy, Diagnostics, ExchangeModel, ExportSettings,
     ExportWarning, Format, FrameLog, ImportSettings, RecentDocuments, Recovery, SkinSettings,
-    Units, ViewPresetKind,
+    Units, ViewPresetKind, FRAME,
 };
 use clayspace_view::shell::{self, region, ArmatureState, ShellState};
 use clayspace_view::{
@@ -97,6 +97,9 @@ struct App {
     camera: Camera,
     /// When to draw the coarse surface, and when to bring the full one back.
     detail_policy: DetailPolicy,
+    /// Whether this frame changed the document, which is what says the frame
+    /// has nothing spare to spend on [`App::refine_geometry`].
+    edited_this_frame: bool,
     /// The camera the level of detail was last decided for.
     ///
     /// The decision needs the model's bounds and its brick count, so it is
@@ -213,6 +216,7 @@ impl App {
             policy,
             camera: Camera::default(),
             detail_policy: DetailPolicy::default(),
+            edited_this_frame: false,
             detail_camera: None,
             window: None,
             graphics: None,
@@ -690,6 +694,51 @@ impl App {
         }
     }
 
+    /// Spends what the frame has left re-shading what the drag shaded fast.
+    ///
+    /// Only on a frame that did not sculpt. Re-shading a key the next sample
+    /// will dirty again is thrown away, and doing it *beside* the sample would
+    /// charge the frame both shadings at once — which is the whole reason the
+    /// drag defers it. A held pointer counts as not sculpting, so a pause
+    /// mid-gesture pays the debt down rather than letting it stack up until
+    /// the pointer lifts.
+    ///
+    /// Asks for another frame while anything is still owed: with
+    /// `ControlFlow::Wait` a debt nobody is waiting on would otherwise sit
+    /// there until the next input event.
+    fn refine_geometry(&mut self, frame_started: Instant) {
+        if self.edited_this_frame || self.graphics.is_none() {
+            return;
+        }
+        // What the frame still owes after this: egui's own paint, the scene,
+        // and the present. A reserve rather than a measurement — overrunning
+        // it costs one frame, on a frame where nothing is being tracked.
+        const PRESENT_RESERVE: Duration = Duration::from_millis(4);
+        let spent = frame_started.elapsed() + PRESENT_RESERVE;
+        let Some(budget) = FRAME.checked_sub(spent) else {
+            self.request_redraw();
+            return;
+        };
+
+        let owed = self.timed("sombreamento", |app| {
+            let graphics = app.graphics.as_mut().expect("graphics");
+            let gpu = graphics.gpu.clone();
+            match app
+                .document
+                .with(|document| graphics.geometry.refine_within(&gpu, document, budget))
+            {
+                Ok(owed) => owed,
+                Err(e) => {
+                    eprintln!("o sombreamento não pôde ser concluído: {e}");
+                    false
+                }
+            }
+        });
+        if owed {
+            self.request_redraw();
+        }
+    }
+
     fn settle_geometry_now(&mut self) {
         let Some(graphics) = self.graphics.as_mut() else {
             return;
@@ -1084,6 +1133,7 @@ impl App {
             self.rigging = self.rigging && self.armature.is_rigging();
         }
         if command.touches_document() {
+            self.edited_this_frame = true;
             self.scene.refresh();
             // Painting a mask arrives as a stroke, which this ViewModel never
             // sees, so it is told to look again rather than left stale.
@@ -1094,10 +1144,10 @@ impl App {
             // sculpting command and would have to guess.
             self.document_vm.touched();
         }
-        // No quality pass any more: `sync` shades fully, because the gradient
-        // stopped costing anything worth deferring. What is left at the end of
-        // a gesture is the coarse levels, which cannot be built mid-stroke —
-        // dirtying any child drops its mip.
+        // The coarse levels, which cannot be built mid-stroke: dirtying any
+        // child drops its mip. Not the gesture's shading — that is owed to
+        // [`App::refine_geometry`], which pays it off across the frames after
+        // the pointer stops rather than all of it in this one.
         if matches!(command, Command::EndStroke | Command::CancelStroke) {
             self.build_mips();
         }
@@ -1105,12 +1155,14 @@ impl App {
     }
 
     fn redraw(&mut self) {
+        let frame_started = Instant::now();
         let Some(window) = self.window.clone() else {
             return;
         };
         if self.graphics.is_none() {
             return;
         }
+        self.edited_this_frame = false;
 
         // The interface is built first, because it decides where the viewport
         // is and therefore what a pointer position means.
@@ -1277,6 +1329,10 @@ impl App {
         // After the frame's commands, so a camera move made in it is the one
         // decided against, and before the surface is drawn.
         self.update_detail();
+        // Last of the work, so it is offered only what the rest of the frame
+        // did not want — and after `update_detail`, whose level switch is what
+        // decides whether the debt is still addressable at all.
+        self.refine_geometry(frame_started);
 
         let graphics = self.graphics.as_mut().expect("graphics");
         let frame = match graphics.surface.acquire(&graphics.gpu) {
