@@ -67,6 +67,14 @@ impl Layer {
 }
 
 /// A ClayCore document driven by the domain's vocabulary.
+/// One mesh gesture, and where it sits against the engine's own history.
+struct MeshGesture {
+    layer: LayerKey,
+    deltas: claycore::MeshDeltas,
+    /// The engine's undo depth when this was recorded. See `mesh_undo`.
+    engine_depth: usize,
+}
+
 pub struct ClayDocument {
     document: Document,
     layers: Vec<Layer>,
@@ -99,6 +107,23 @@ pub struct ClayDocument {
     /// the other option and `forbid(unsafe_code)` refused it, correctly: the
     /// C call takes a non-const sculptor because it really may write.
     mesh_sculptor: std::cell::RefCell<Option<(LayerKey, claycore::MeshSculptor)>>,
+    /// Mesh gestures, newest last, and the redo side of the same.
+    ///
+    /// A second history beside the engine's, which the design deferred and
+    /// this is the revisit of. A vertex displacement is destructive and is not
+    /// an edit item, so the document holds nothing to take back — measured,
+    /// the engine's undo depth is the same before and after a mesh stroke. The
+    /// engine does offer the machinery: `clay_mesh_deltas` reverts a gesture
+    /// bit exactly.
+    ///
+    /// The two histories interleave by *depth*. Each record remembers the
+    /// engine's undo depth when it was made, and an undo reverts the mesh
+    /// gesture only when that depth still matches — any engine edit since has
+    /// raised it, so the engine's entry is the more recent one and goes first.
+    /// Undoing that engine entry lowers the depth back, and the mesh gesture
+    /// becomes the most recent again.
+    mesh_undo: Vec<MeshGesture>,
+    mesh_redo: Vec<MeshGesture>,
     /// The mirror currently set on the active layer, so it is only rewritten
     /// when it actually changes.
     symmetry: [bool; 3],
@@ -186,6 +211,8 @@ impl ClayDocument {
             stats: SceneStats::default(),
             surface_brick_count: 0,
             mesh_sculptor: std::cell::RefCell::new(None),
+            mesh_undo: Vec::new(),
+            mesh_redo: Vec::new(),
             mask: None,
             symmetry,
             next_key: 2,
@@ -1347,19 +1374,41 @@ impl ClayDocument {
             })
             .collect();
 
-        let mut held = self.mesh_sculptor.borrow_mut();
-        let Some((_, sculptor)) = held.as_mut() else {
-            return Ok(EditOutcome::NOTHING);
+        // Recorded per gesture, because that is the unit a sculptor thinks in
+        // and the unit `mesh-sculpting` specifies: one gesture, one undo.
+        let mut deltas = claycore::MeshDeltas::new().map_err(ModelError::engine)?;
+        let moved = {
+            let mut held = self.mesh_sculptor.borrow_mut();
+            let Some((_, sculptor)) = held.as_mut() else {
+                return Ok(EditOutcome::NOTHING);
+            };
+            let moved = sculptor
+                .apply_stroke(
+                    &points,
+                    &preset,
+                    stamp,
+                    self.mask.as_ref(),
+                    Some(&mut deltas),
+                )
+                .map_err(ModelError::engine)?;
+            // Refit rather than refresh: topology is fixed, so the ray-query
+            // tree stays a valid partition and only its bounds went stale,
+            // which is proportional to the brush instead of to the mesh.
+            sculptor.refit().map_err(ModelError::engine)?;
+            moved
         };
-        let mask = self.mask.as_ref();
-        let moved = sculptor
-            .apply_stroke(&points, &preset, stamp, mask)
-            .map_err(ModelError::engine)?;
-        // Refit rather than refresh: topology is fixed, so the ray-query tree
-        // stays a valid partition and only its bounds went stale, which is
-        // proportional to the brush instead of to the mesh.
-        sculptor.refit().map_err(ModelError::engine)?;
 
+        // A gesture that reached nothing is not worth a place on the stack,
+        // and putting one there would make an undo appear to do nothing.
+        if deltas.vertex_count().map_err(ModelError::engine)? > 0 {
+            self.mesh_undo.push(MeshGesture {
+                layer: key,
+                deltas,
+                engine_depth: self.engine_undo_depth(),
+            });
+            // A new edit ends the redo line, exactly as the engine's own does.
+            self.mesh_redo.clear();
+        }
         Ok(EditOutcome {
             changed: moved > 0,
             // A mesh layer is not in the brick cache at all, so nothing was
@@ -1390,6 +1439,101 @@ impl ClayDocument {
             .ok()
             .flatten()
             .map(|hit| hit.position)
+    }
+
+    /// How stretched the active mesh layer's triangles are.
+    ///
+    /// Sculpting a mesh stretches what is there — a large grab does, and
+    /// snakehook does it to the extreme — and nothing here retessellates,
+    /// because that would spend the retopology the import was for. So the
+    /// stretch is *reported* rather than prevented, and a sculptor learns the
+    /// mesh wants retopology at the point it starts wanting it instead of at
+    /// export.
+    ///
+    /// `None` where the active layer is not a sculpted mesh.
+    pub fn mesh_quality(&self) -> Option<f32> {
+        let key = self.active_layer().key;
+        let mut held = self.mesh_sculptor.borrow_mut();
+        let (built_for, sculptor) = held.as_mut()?;
+        (*built_for == key)
+            .then(|| sculptor.quality().ok())
+            .flatten()
+    }
+
+    /// The engine's own undo depth, which is what the two histories order by.
+    fn engine_undo_depth(&self) -> usize {
+        self.document
+            .undo_state()
+            .map(|state| state.undo_depth)
+            .unwrap_or(0)
+    }
+
+    /// Whether the newest mesh gesture is more recent than the newest engine
+    /// entry.
+    ///
+    /// True when no engine edit has landed since it was recorded: any that had
+    /// would have raised the depth past what the record remembers.
+    fn mesh_gesture_is_newest(&self) -> bool {
+        self.mesh_undo
+            .last()
+            .is_some_and(|gesture| gesture.engine_depth == self.engine_undo_depth())
+    }
+
+    /// Takes back one mesh gesture, bit exactly.
+    fn undo_mesh_gesture(&mut self) -> Result<bool, ModelError> {
+        let Some(gesture) = self.mesh_undo.pop() else {
+            return Ok(false);
+        };
+        let engine_name = self
+            .layers
+            .iter()
+            .find(|layer| layer.key == gesture.layer)
+            .map(|layer| layer.engine_name.clone());
+        let Some(engine_name) = engine_name else {
+            // The layer it belongs to is gone, so there is nothing to put
+            // back. Dropping the record is the whole of the answer.
+            return Ok(true);
+        };
+        self.ensure_mesh_sculptor(gesture.layer, &engine_name)?;
+        {
+            let mut held = self.mesh_sculptor.borrow_mut();
+            let Some((_, sculptor)) = held.as_mut() else {
+                return Ok(false);
+            };
+            gesture
+                .deltas
+                .revert(sculptor)
+                .map_err(ModelError::engine)?;
+            sculptor.refit().map_err(ModelError::engine)?;
+        }
+        self.mesh_redo.push(gesture);
+        Ok(true)
+    }
+
+    /// Puts one back.
+    fn redo_mesh_gesture(&mut self) -> Result<bool, ModelError> {
+        let Some(gesture) = self.mesh_redo.pop() else {
+            return Ok(false);
+        };
+        let engine_name = self
+            .layers
+            .iter()
+            .find(|layer| layer.key == gesture.layer)
+            .map(|layer| layer.engine_name.clone());
+        let Some(engine_name) = engine_name else {
+            return Ok(true);
+        };
+        self.ensure_mesh_sculptor(gesture.layer, &engine_name)?;
+        {
+            let mut held = self.mesh_sculptor.borrow_mut();
+            let Some((_, sculptor)) = held.as_mut() else {
+                return Ok(false);
+            };
+            gesture.deltas.apply(sculptor).map_err(ModelError::engine)?;
+            sculptor.refit().map_err(ModelError::engine)?;
+        }
+        self.mesh_undo.push(gesture);
+        Ok(true)
     }
 
     /// Builds the sculptor for a mesh layer, or keeps the one already built.
@@ -1591,6 +1735,11 @@ impl SculptModel for ClayDocument {
     }
 
     fn undo(&mut self) -> Result<bool, ModelError> {
+        // Whichever history holds the more recent edit answers. See
+        // `mesh_undo` for why depth is what orders them.
+        if self.mesh_gesture_is_newest() {
+            return self.undo_mesh_gesture();
+        }
         let moved = self.document.undo().map_err(ModelError::engine)?;
         if moved {
             self.reconcile_layers();
@@ -1604,6 +1753,15 @@ impl SculptModel for ClayDocument {
     }
 
     fn redo(&mut self) -> Result<bool, ModelError> {
+        // The mirror of `undo`: a mesh gesture on the redo stack recorded at
+        // the current engine depth is the one that was taken back last.
+        if self
+            .mesh_redo
+            .last()
+            .is_some_and(|gesture| gesture.engine_depth == self.engine_undo_depth())
+        {
+            return self.redo_mesh_gesture();
+        }
         let moved = self.document.redo().map_err(ModelError::engine)?;
         if moved {
             self.reconcile_layers();
@@ -1615,12 +1773,16 @@ impl SculptModel for ClayDocument {
     }
 
     fn history(&self) -> HistoryState {
+        // Both histories, because the menu and the shortcut ask this one
+        // question and a mesh gesture is as undoable as an engine entry. A
+        // depth that counted only the engine's would grey out Undo in the
+        // middle of a mesh sculpting session.
         match self.document.undo_state() {
             Ok(state) => HistoryState {
-                can_undo: state.undo_depth > 0,
-                can_redo: state.redo_depth > 0,
-                depth: state.undo_depth,
-                redo_depth: state.redo_depth,
+                can_undo: state.undo_depth > 0 || !self.mesh_undo.is_empty(),
+                can_redo: state.redo_depth > 0 || !self.mesh_redo.is_empty(),
+                depth: state.undo_depth + self.mesh_undo.len(),
+                redo_depth: state.redo_depth + self.mesh_redo.len(),
             },
             Err(_) => HistoryState::default(),
         }
@@ -2129,6 +2291,8 @@ impl ClayDocument {
             stats: SceneStats::default(),
             surface_brick_count: 0,
             mesh_sculptor: std::cell::RefCell::new(None),
+            mesh_undo: Vec::new(),
+            mesh_redo: Vec::new(),
             mask: None,
             symmetry: [false; 3],
             next_key,

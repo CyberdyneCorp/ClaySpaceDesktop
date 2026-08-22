@@ -223,3 +223,117 @@ fn a_mesh_is_not_picked_from_under_another_layer() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+/// A mesh gesture is one undo step, and it reverts the mesh exactly.
+///
+/// It has to be an application-side record. A vertex displacement is
+/// destructive and is not an edit item, so the document holds nothing to take
+/// back — measured, the engine's undo depth is the same before and after a
+/// mesh stroke. What the engine does offer is `clay_mesh_deltas`, which
+/// reverts bit exactly rather than approximately.
+mod undo {
+    use super::*;
+
+    #[test]
+    fn one_gesture_is_one_undo() {
+        let Some((mut document, path)) = with_imported_mesh("undo") else {
+            return;
+        };
+        let before = document.history().depth;
+        dab(&mut document, ToolKind::Padrao, [0.0, 0.0, 1.0]).expect("a stroke");
+        assert_eq!(
+            document.history().depth,
+            before + 1,
+            "a mesh gesture has to be visible in the history, or Undo greys \
+             out in the middle of a sculpting session"
+        );
+
+        assert!(document.undo().expect("undo"), "nothing was taken back");
+        assert_eq!(document.history().depth, before);
+        assert!(document.redo().expect("redo"), "nothing was put back");
+        assert_eq!(document.history().depth, before + 1);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A gesture that reached nothing is not worth a place on the stack: an
+    /// undo that appears to do nothing is worse than one that is not offered.
+    #[test]
+    fn a_gesture_that_moved_nothing_is_not_recorded() {
+        let Some((mut document, path)) = with_imported_mesh("undo-empty") else {
+            return;
+        };
+        // Build the sculptor first, so this measures the recording rule rather
+        // than the first stroke's setup.
+        dab(&mut document, ToolKind::Padrao, [0.0, 0.0, 1.0]).expect("a stroke");
+        let before = document.history().depth;
+
+        // Far outside the form: the brush reaches nothing.
+        let _ = dab(&mut document, ToolKind::Padrao, [0.0, 0.0, 40.0]);
+        assert_eq!(
+            document.history().depth,
+            before,
+            "a stroke that moved no vertex was put on the undo stack"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The two histories interleave by depth, which is what makes one Cmd+Z
+    /// mean "the last thing I did" whichever kind of edit that was.
+    #[test]
+    fn an_engine_edit_after_a_mesh_gesture_is_undone_first() {
+        let Some((mut document, path)) = with_imported_mesh("undo-interleave") else {
+            return;
+        };
+        dab(&mut document, ToolKind::Padrao, [0.0, 0.0, 1.0]).expect("a mesh stroke");
+        let mesh_depth = document.history().depth;
+
+        // An engine edit on top: a new layer is one.
+        document
+            .add_layer("Depois", Representation::Sdf)
+            .expect("a layer");
+        let layers_after_add = document.scene().layers.len();
+        assert!(document.history().depth > mesh_depth);
+
+        // The engine's entry is the more recent one, so it goes first.
+        assert!(document.undo().expect("undo"));
+        assert_eq!(
+            document.scene().layers.len(),
+            layers_after_add - 1,
+            "the mesh gesture was taken back before the engine edit that \
+             happened after it"
+        );
+
+        // And now the mesh gesture is the most recent again.
+        assert!(document.undo().expect("undo"));
+        assert_eq!(document.history().depth, mesh_depth - 1);
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+/// The mesh's quality is reportable, which is how stretching is *shown*.
+///
+/// Nothing here retessellates: that would spend the retopology the import was
+/// for, and the engine stops at the same boundary. So a heavy pull is reported
+/// rather than prevented, and the figure is what a sculptor reads to know the
+/// mesh wants retopology — at the point it starts wanting it, rather than at
+/// export.
+#[test]
+fn the_mesh_reports_what_its_queries_cost() {
+    let Some((mut document, path)) = with_imported_mesh("quality") else {
+        return;
+    };
+    assert!(
+        document.mesh_quality().is_none(),
+        "there is no sculptor before the first stroke, so there is no figure"
+    );
+
+    dab(&mut document, ToolKind::Padrao, [0.0, 0.0, 1.0]).expect("a stroke");
+    let quality = document
+        .mesh_quality()
+        .expect("a sculpted mesh has a figure to report");
+    assert!(
+        quality.is_finite() && quality >= 0.0,
+        "the quality figure is not a number a reader could act on: {quality}"
+    );
+    let _ = std::fs::remove_file(&path);
+}

@@ -43,7 +43,7 @@ pub use document::{prim, ArmatureEdit, Document, Item, LayerId, NodeId};
 pub use error::{ClayError, ErrorKind, Result};
 pub use mask::{ExtrudeSide, Mask, MaskExtrudeParams, MaskField, MaskRef};
 pub use mesh::{ImportBudget, Mesh, MeshLayerDesc, MeshParams, MeshValidity, Mesher, VertexLayout};
-pub use mesh_sculpt::{MeshBrush, MeshFalloff, MeshHit, MeshSculptor, MeshStamp};
+pub use mesh_sculpt::{MeshBrush, MeshDeltas, MeshFalloff, MeshHit, MeshSculptor, MeshStamp};
 pub use pick::{Hit, Snapped};
 pub use reader::Reader;
 pub use sculpt::{

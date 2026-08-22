@@ -208,6 +208,78 @@ impl MeshStamp {
     }
 }
 
+/// A sparse, coalesced record of what a gesture moved.
+///
+/// The undo a mesh stroke cannot get from the edit list: a vertex displacement
+/// is destructive and is not an edit item, so there is nothing in the document
+/// to take back. This is what the engine offers instead, and it reverts *bit
+/// exactly* rather than approximately — which is the difference between an
+/// undo and something that mostly looks like one.
+///
+/// Coalesced across a gesture: a stroke that passes over the same vertex forty
+/// times records where it started, once.
+pub struct MeshDeltas {
+    raw: NonNull<sys::clay_mesh_deltas>,
+}
+
+impl MeshDeltas {
+    pub fn new() -> Result<Self> {
+        // SAFETY: takes nothing and returns an owned handle or null.
+        let raw = unsafe { sys::clay_mesh_deltas_create() };
+        NonNull::new(raw)
+            .map(|raw| Self { raw })
+            .ok_or_else(|| raw_failure("clay_mesh_deltas_create", ErrorKind::Backend))
+    }
+
+    /// How many vertices the gesture moved.
+    ///
+    /// Zero for a gesture that reached nothing, which is what says a record is
+    /// not worth keeping on the undo stack.
+    pub fn vertex_count(&self) -> Result<usize> {
+        let mut count = 0;
+        // SAFETY: valid handle, out-parameter written on success.
+        check(
+            unsafe { sys::clay_mesh_deltas_vertex_count(self.raw.as_ptr(), &mut count) },
+            "clay_mesh_deltas_vertex_count",
+        )?;
+        Ok(count)
+    }
+
+    /// Puts every recorded vertex back where it was.
+    pub fn revert(&self, sculptor: &mut MeshSculptor) -> Result<()> {
+        // SAFETY: both handles are valid and belong to the same mesh; the
+        // record is read and the sculptor written, which is what it takes.
+        check(
+            unsafe { sys::clay_mesh_deltas_revert(self.raw.as_ptr(), sculptor.raw.as_ptr()) },
+            "clay_mesh_deltas_revert",
+        )
+    }
+
+    /// Puts the gesture back — the redo half.
+    pub fn apply(&self, sculptor: &mut MeshSculptor) -> Result<()> {
+        // SAFETY: as above.
+        check(
+            unsafe { sys::clay_mesh_deltas_apply(self.raw.as_ptr(), sculptor.raw.as_ptr()) },
+            "clay_mesh_deltas_apply",
+        )
+    }
+}
+
+impl Drop for MeshDeltas {
+    fn drop(&mut self) {
+        // SAFETY: owned handle, released exactly once.
+        unsafe { sys::clay_mesh_deltas_destroy(self.raw.as_ptr()) };
+    }
+}
+
+impl std::fmt::Debug for MeshDeltas {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MeshDeltas")
+            .field("vertices", &self.vertex_count().ok())
+            .finish()
+    }
+}
+
 /// Where a ray met a mesh.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MeshHit {
@@ -340,6 +412,7 @@ impl MeshSculptor {
         preset: &crate::StrokePreset,
         stamp: MeshStamp,
         mask: Option<&Mask>,
+        deltas: Option<&mut MeshDeltas>,
     ) -> Result<usize> {
         if samples.is_empty() {
             return Ok(0);
@@ -362,7 +435,7 @@ impl MeshSculptor {
                     mask.map_or(std::ptr::null(), |m| m.as_ptr() as *const _),
                     std::ptr::null(),
                     0,
-                    std::ptr::null_mut(),
+                    deltas.map_or(std::ptr::null_mut(), |d| d.raw.as_ptr()),
                     &mut applied,
                 )
             },
