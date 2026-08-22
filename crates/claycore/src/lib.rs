@@ -112,7 +112,7 @@ pub fn revision() -> &'static str {
 /// constant exists so that a mismatch can also be reported in diagnostics.
 pub const EXPECTED_ABI: Version = Version {
     major: 0,
-    minor: 30,
+    minor: 39,
     patch: 0,
 };
 

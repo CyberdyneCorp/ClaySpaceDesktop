@@ -6,11 +6,11 @@ the authority.
 
 **107 of 109 tasks. Milestones 1 to 4 delivered; milestone 5 all but closed.**
 
-Engine pinned at ClayCore **0.30.0**, at the tag rather than at `main` — the
+Engine pinned at ClayCore **0.39.0**, at the tag rather than at `main` — the
 tag is a release, `main` is where they are still working. On the reference
 scene a dab is 12.2 ms median against a 50 ms budget and startup to first
-document is 15.1 ms, both recorded against 0.29.1 on macOS aarch64; the 0.30.0
-pin has not been re-measured on that machine. See *What is slow and why*.
+document is 15.1 ms, both recorded against 0.29.1 on macOS aarch64; neither
+0.30.0 nor 0.39.0 has been re-measured on that machine. See *What is slow and why*.
 
 ## Milestones
 
@@ -205,6 +205,7 @@ fixed 80-brick sample:
 | 0.28.0 | 7.7 ms | 83.2 ms | 11x |
 | 0.29.1 | 8.0 ms | 11.5 ms | 1.4x |
 | 0.30.0 | 12.6 ms | 13.2 ms | 1.04x |
+| 0.39.0 | 6.3 ms | 9.5 ms | 1.5x |
 
 That last row read as "the gradient is free now", and for one release the drag
 shaded fully and there was no second pass. The end of a gesture went 17.5 ms →
@@ -283,6 +284,11 @@ dab that cost 5 ms. On 1043 surface bricks after 96 edits:
 |---|---|---|---|
 | a dab | 27 → **18** | 0.9 ms | 4.3 → **3.6 ms** |
 | undoing that dab | 2940 → **1045** | 83 → **66 ms** | 284 → **141 ms** |
+
+Taking up ClayCore 0.39.0 halved both columns again without a line changing
+here — an undo is 13.7 ms in the engine and 68.2 ms in the re-mesh, and the dab
+it reverses is 0.3 ms and 1.9 ms. The ratio is what the issue below is about
+and it has not moved: an undo still costs about forty times the edit.
 
 Two things, one ours and one not.
 

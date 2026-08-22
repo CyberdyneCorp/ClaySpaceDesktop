@@ -294,8 +294,14 @@ voxel size and resolution levels — which is what "Dinâmica: Ligada" means
 operationally, closer to ZBrush's Sculptris Pro than to a simulation. The
 physics controls are not shipped disabled; they are not shipped.
 
-**Mesh-surface brushes.** ClayCore sculpts fields and voxels. Mesh layers are
-carried, saved and exported, never sculpted.
+**Mesh-surface brushes.** Mesh layers here are carried, saved and exported,
+never sculpted. That used to be a statement about the engine and is now a
+statement about this application: ClayCore 0.39.0 added a mesh sculptor —
+sixteen fixed-topology brushes, taper and twist, a lattice cage, masks, the
+stroke engine and a bit-exact undo record, all reaching a mesh layer's own
+vertices. Nothing here calls any of it. A mesh layer still cannot be a boolean
+operand or blend with a field without being converted first, which is the part
+that has not changed.
 
 **Windows.** Out of scope for this change.
 
