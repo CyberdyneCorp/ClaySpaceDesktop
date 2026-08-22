@@ -403,6 +403,16 @@ impl ClayDocument {
     }
 
     /// Meshes and refills whatever is currently marked dirty.
+    ///
+    /// Refreshes the statistics on the way out, because this is the one place
+    /// every edit passes through. They used to be refreshed by a handful of
+    /// whole-document operations only — opening, the starting form, a bake, a
+    /// rig placement — and by nothing a sculptor does continuously, so
+    /// `surface_brick_count` stayed at whatever the starting form produced for
+    /// the rest of the session. It is what the level-of-detail policy is asked
+    /// to decide on, including its "never coarsen under 2048 surface bricks"
+    /// floor, so a model sculpted past that floor was still being measured as
+    /// if it were the sphere it started as.
     fn drain_dirty(&mut self) -> Result<(), ModelError> {
         // Routed per batch rather than once for the whole drain: a stroke's
         // last iteration is often a handful of residual bricks, and those are
@@ -466,6 +476,7 @@ impl ClayDocument {
         self.dirty.extend(dirty);
         self.dirty.sort();
         self.dirty.dedup();
+        self.refresh_stats();
         Ok(())
     }
 
@@ -513,9 +524,15 @@ impl ClayDocument {
 
     /// Whether a layer contributes to the surface an edit would touch.
     fn refresh_stats(&mut self) {
-        // Counted from the cache rather than by meshing the document, which
-        // would cost a full march on every edit.
-        self.surface_brick_count = self.cache.surface_bricks().map(|k| k.len()).unwrap_or(0);
+        // Read from the cache's own counter rather than by enumerating its
+        // keys. `surface_bricks` is a size query plus a copy of every stored
+        // key — a megabyte of allocation on a worked model to learn one
+        // number — and `stats` keeps that number as it classifies.
+        self.surface_brick_count = self
+            .cache
+            .stats()
+            .map(|stats| stats.surface_bricks as usize)
+            .unwrap_or(self.surface_brick_count);
         self.stats = SceneStats {
             // Reported once the viewport meshes; until then nothing has been
             // built and the interface says so rather than showing a zero that
