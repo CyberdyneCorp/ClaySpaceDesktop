@@ -90,7 +90,15 @@ pub struct ClayDocument {
     /// holding every mesh layer's would pay for meshes nobody is touching.
     /// Built on the first stroke against a layer and dropped when the active
     /// mesh layer changes.
-    mesh_sculptor: Option<(LayerKey, claycore::MeshSculptor)>,
+    /// In a cell because a *pick* needs it and a pick is a question.
+    ///
+    /// The sculptor answers a raycast from its own tree and may refit it while
+    /// doing so, which is a mutation — but `SculptModel::pick` takes `&self`,
+    /// and widening that so every caller of a question must hold a mutable
+    /// borrow would be the tail wagging the dog. Casting the borrow away was
+    /// the other option and `forbid(unsafe_code)` refused it, correctly: the
+    /// C call takes a non-const sculptor because it really may write.
+    mesh_sculptor: std::cell::RefCell<Option<(LayerKey, claycore::MeshSculptor)>>,
     /// The mirror currently set on the active layer, so it is only rewritten
     /// when it actually changes.
     symmetry: [bool; 3],
@@ -177,7 +185,7 @@ impl ClayDocument {
             dirty: Vec::new(),
             stats: SceneStats::default(),
             surface_brick_count: 0,
-            mesh_sculptor: None,
+            mesh_sculptor: std::cell::RefCell::new(None),
             mask: None,
             symmetry,
             next_key: 2,
@@ -1339,16 +1347,13 @@ impl ClayDocument {
             })
             .collect();
 
-        let Self {
-            mesh_sculptor,
-            mask,
-            ..
-        } = self;
-        let Some((_, sculptor)) = mesh_sculptor.as_mut() else {
+        let mut held = self.mesh_sculptor.borrow_mut();
+        let Some((_, sculptor)) = held.as_mut() else {
             return Ok(EditOutcome::NOTHING);
         };
+        let mask = self.mask.as_ref();
         let moved = sculptor
-            .apply_stroke(&points, &preset, stamp, mask.as_ref())
+            .apply_stroke(&points, &preset, stamp, mask)
             .map_err(ModelError::engine)?;
         // Refit rather than refresh: topology is fixed, so the ray-query tree
         // stays a valid partition and only its bounds went stale, which is
@@ -1364,13 +1369,36 @@ impl ClayDocument {
         })
     }
 
+    /// Where a ray meets the active mesh layer's triangles.
+    ///
+    /// Answered by the sculptor's own tree, through the cell that field is
+    /// held in — see there for why.
+    fn pick_active_mesh(&self, origin: [f32; 3], direction: [f32; 3]) -> Option<[f32; 3]> {
+        let key = self.active_layer().key;
+        let mut held = self.mesh_sculptor.borrow_mut();
+        let (built_for, sculptor) = held.as_mut()?;
+        if *built_for != key {
+            // Not built yet, and a pick cannot build it — that costs an
+            // adjacency pass and a pick happens every frame the pointer moves.
+            // The first stroke builds it; until then the pointer finds nothing
+            // on this layer, which reads as the cursor not settling rather
+            // than as a wrong answer.
+            return None;
+        }
+        sculptor
+            .raycast(origin, direction)
+            .ok()
+            .flatten()
+            .map(|hit| hit.position)
+    }
+
     /// Builds the sculptor for a mesh layer, or keeps the one already built.
     ///
     /// Rebuilt when the layer changes: a sculptor holds adjacency for the mesh
     /// it was given, so carrying one across layers would move the wrong
     /// vertices.
     fn ensure_mesh_sculptor(&mut self, key: LayerKey, engine_name: &str) -> Result<(), ModelError> {
-        if matches!(self.mesh_sculptor.as_ref(), Some((held, _)) if *held == key) {
+        if matches!(self.mesh_sculptor.borrow().as_ref(), Some((held, _)) if *held == key) {
             return Ok(());
         }
         // Relative to the bounding-box diagonal: vertices closer than this are
@@ -1379,7 +1407,7 @@ impl ClayDocument {
         const WELD: f32 = 1e-4;
         let sculptor = claycore::MeshSculptor::for_layer(&mut self.document, engine_name, WELD)
             .map_err(ModelError::engine)?;
-        self.mesh_sculptor = Some((key, sculptor));
+        *self.mesh_sculptor.borrow_mut() = Some((key, sculptor));
         Ok(())
     }
 
@@ -1537,6 +1565,15 @@ impl SculptModel for ClayDocument {
     }
 
     fn pick(&self, origin: [f32; 3], direction: [f32; 3]) -> Option<[f32; 3]> {
+        // A mesh layer is in neither the tape nor the brick cache, so a field
+        // raycast could never see one — which is why a press on a mesh layer
+        // used to orbit. It is answered by the layer's own triangles instead,
+        // and only while that layer is the active one: the pointer means
+        // "sculpt this" there, and picking a mesh from under an SDF layer
+        // would put the cursor on something the brush cannot reach.
+        if self.active_representation() == Representation::Mesh {
+            return self.pick_active_mesh(origin, direction);
+        }
         // Against the cache rather than the document: the cost is the ray's
         // path through the band rather than a march against the whole tape.
         self.cache
@@ -2091,7 +2128,7 @@ impl ClayDocument {
             dirty: Vec::new(),
             stats: SceneStats::default(),
             surface_brick_count: 0,
-            mesh_sculptor: None,
+            mesh_sculptor: std::cell::RefCell::new(None),
             mask: None,
             symmetry: [false; 3],
             next_key,

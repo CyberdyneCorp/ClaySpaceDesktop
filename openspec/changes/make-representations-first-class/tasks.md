@@ -47,11 +47,11 @@
 - [x] 5.3 Hold a mesh sculptor per mesh layer in `ClayDocument`, created on first sculpt and invalidated when the geometry is replaced
 - [x] 5.4 Route a stroke on an active mesh layer to the mesh sculptor
 - [x] 5.5 Add the sixteen mesh brushes to the capability table and the shelf
-- [ ] 5.6 Make mesh layers pickable, so a press sculpts rather than orbits
+- [x] 5.6 Make mesh layers pickable, so a press sculpts rather than orbits
 - [ ] 5.7 Record a mesh gesture as one undoable action that reverts bit-exactly
 - [ ] 5.8 Report the mesh quality figure and name retopology as the remedy when a stroke passes it
-- [ ] 5.9 Test that indices and quads are byte-identical across a stroke
-- [ ] 5.10 Wrap and expose paint and smear, refusing a mesh with no colour attribute with a stated reason
+- [x] 5.9 Test that indices and quads are byte-identical across a stroke
+- [x] 5.10 Wrap and expose paint and smear, refusing a mesh with no colour attribute with a stated reason
 - [ ] 5.11 Wrap and expose `clay_mesh_sculptor_deform` for taper and twist as layer operations
 - [ ] 5.12 Wrap and expose the mesh lattice cage
 - [ ] 5.13 Visual captures for the mesh brushes, before and after

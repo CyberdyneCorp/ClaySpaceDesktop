@@ -208,6 +208,16 @@ impl MeshStamp {
     }
 }
 
+/// Where a ray met a mesh.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MeshHit {
+    pub position: [f32; 3],
+    /// World space, unit length.
+    pub normal: [f32; 3],
+    /// The weld class the ray landed on, ready to seed a stamp's surface walk.
+    pub seed_class: u32,
+}
+
 /// A mesh layer's vertices, with the adjacency a brush needs.
 ///
 /// Borrows nothing: the sculptor owns its own state and is handed the mesh at
@@ -359,6 +369,36 @@ impl MeshSculptor {
             "clay_mesh_sculptor_apply_stroke",
         )?;
         Ok(applied)
+    }
+
+    /// Where a ray meets this mesh, if it does.
+    ///
+    /// A field raycast could never see a mesh layer — it is not in the tape and
+    /// not in the brick cache — so this is the only way a pointer finds one.
+    /// The hit carries the weld class it landed on, which a caller should hand
+    /// straight back as a stamp's seed so the surface walk starts where the
+    /// finger did rather than searching the whole mesh for it.
+    pub fn raycast(&mut self, origin: [f32; 3], direction: [f32; 3]) -> Result<Option<MeshHit>> {
+        let mut hit = sys::clay_mesh_hit::sized();
+        // SAFETY: valid handle, two arrays of three floats, a null transform
+        // (the mesh's own space), and a descriptor carrying its own size.
+        check(
+            unsafe {
+                sys::clay_mesh_sculptor_raycast(
+                    self.raw.as_ptr(),
+                    origin.as_ptr(),
+                    direction.as_ptr(),
+                    std::ptr::null(),
+                    &mut hit,
+                )
+            },
+            "clay_mesh_sculptor_raycast",
+        )?;
+        Ok((hit.hit != 0).then_some(MeshHit {
+            position: hit.position,
+            normal: hit.normal,
+            seed_class: hit.seed_class,
+        }))
     }
 
     /// Updates the ray-query tree for the vertices the last stamp moved.
