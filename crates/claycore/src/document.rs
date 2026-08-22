@@ -465,3 +465,220 @@ impl Document {
         Ok(LayerId(layer))
     }
 }
+
+impl Document {
+    /// Rasterizes this document's field into one of its own voxel layers.
+    ///
+    /// SDF to voxel, in one call, because the two halves cannot be held apart
+    /// in Rust: `voxel_layer` hands back a grid carrying an exclusive borrow of
+    /// the document, and rasterizing needs the document as well. At the C
+    /// boundary there is no conflict — a grid and a document are distinct
+    /// objects and `clay_voxel_rasterize` takes the document as `const` — so
+    /// the two pointers meet here, in the crate where `unsafe` is allowed to
+    /// live, rather than forcing a copy of the document on the caller.
+    ///
+    /// The layer must already exist and be a voxel layer.
+    pub fn rasterize_into_voxel_layer(
+        &mut self,
+        layer_name: &str,
+        region: ([f32; 3], [f32; 3]),
+    ) -> Result<()> {
+        let c_name = crate::cstring(layer_name, "clay_voxel_rasterize")?;
+        let mut layer: sys::clay_layer_id = Default::default();
+        let mut grid = std::ptr::null_mut();
+        // SAFETY: a valid document handle and a NUL-terminated name; both
+        // out-parameters are written only on success.
+        check(
+            unsafe {
+                sys::clay_document_voxel_layer(
+                    self.as_ptr(),
+                    c_name.as_ptr(),
+                    &mut layer,
+                    &mut grid,
+                )
+            },
+            "clay_document_voxel_layer",
+        )?;
+        let (min, max) = region;
+        // SAFETY: `grid` was just written by a successful call and belongs to
+        // this document; the document is passed as the `const` operand the
+        // entry point declares, and the region is two arrays of three floats.
+        check(
+            unsafe {
+                sys::clay_voxel_rasterize(
+                    grid,
+                    self.as_ptr() as *const _,
+                    min.as_ptr(),
+                    max.as_ptr(),
+                )
+            },
+            "clay_voxel_rasterize",
+        )
+    }
+
+    /// Rasterizes one of this document's mesh layers into one of its voxel
+    /// layers — triangles straight into cells, in one sampling.
+    ///
+    /// Combined for the reason [`Document::rasterize_into_voxel_layer`] is:
+    /// the mesh and the grid are both borrowed from this document, and Rust
+    /// will not hold two such borrows at once even though the C boundary takes
+    /// the mesh as `const`.
+    pub fn rasterize_mesh_into_voxel_layer(
+        &mut self,
+        mesh_layer: &str,
+        voxel_layer: &str,
+        region: ([f32; 3], [f32; 3]),
+    ) -> Result<()> {
+        let c_mesh = crate::cstring(mesh_layer, "clay_document_mesh_layer")?;
+        let c_voxel = crate::cstring(voxel_layer, "clay_document_voxel_layer")?;
+        let mut layer: sys::clay_layer_id = Default::default();
+        let mut mesh = std::ptr::null_mut();
+        // SAFETY: a valid document and a NUL-terminated name; the outputs are
+        // written only on success.
+        check(
+            unsafe {
+                sys::clay_document_mesh_layer(self.as_ptr(), c_mesh.as_ptr(), &mut layer, &mut mesh)
+            },
+            "clay_document_mesh_layer",
+        )?;
+        let mut grid = std::ptr::null_mut();
+        // SAFETY: as above, for the voxel side.
+        check(
+            unsafe {
+                sys::clay_document_voxel_layer(
+                    self.as_ptr(),
+                    c_voxel.as_ptr(),
+                    &mut layer,
+                    &mut grid,
+                )
+            },
+            "clay_document_voxel_layer",
+        )?;
+        let (min, max) = region;
+        // SAFETY: both handles were written by successful calls and belong to
+        // this document; the region is two arrays of three floats.
+        check(
+            unsafe { sys::clay_voxel_rasterize_mesh(grid, mesh, min.as_ptr(), max.as_ptr()) },
+            "clay_voxel_rasterize_mesh",
+        )
+    }
+
+    /// Converts one of this document's voxel layers into a new SDF layer.
+    ///
+    /// Combined for the same reason as the two above.
+    pub fn voxel_layer_to_sdf_layer(
+        &mut self,
+        voxel_layer: &str,
+        name: &str,
+        blur: i32,
+    ) -> Result<LayerId> {
+        let c_voxel = crate::cstring(voxel_layer, "clay_document_voxel_layer")?;
+        let c_name = crate::cstring(name, "clay_voxel_to_layer")?;
+        let mut layer: sys::clay_layer_id = Default::default();
+        let mut grid = std::ptr::null_mut();
+        // SAFETY: a valid document and a NUL-terminated name.
+        check(
+            unsafe {
+                sys::clay_document_voxel_layer(
+                    self.as_ptr(),
+                    c_voxel.as_ptr(),
+                    &mut layer,
+                    &mut grid,
+                )
+            },
+            "clay_document_voxel_layer",
+        )?;
+        let mut made: sys::clay_layer_id = Default::default();
+        // SAFETY: the grid belongs to this document and was just written; the
+        // name is NUL-terminated and the output is written only on success.
+        check(
+            unsafe {
+                sys::clay_voxel_to_layer(self.as_ptr(), grid, c_name.as_ptr(), blur, &mut made)
+            },
+            "clay_voxel_to_layer",
+        )?;
+        Ok(LayerId(made))
+    }
+
+    /// Converts one of this document's mesh layers into a new SDF layer.
+    ///
+    /// Mesh to SDF: the triangles are resampled onto a lattice as a volume
+    /// item. What comes back is an operand — boolean it, blend it, deform it —
+    /// and what does not come back is the edge loops and the UVs, which is
+    /// precisely what made the mesh worth importing. That is the whole reason
+    /// this is a conversion offered rather than something done automatically.
+    ///
+    /// The mesh handle stays inside this call. A borrowed layer mesh must not
+    /// be wrapped in [`Mesh`], which destroys what it holds on drop.
+    pub fn mesh_layer_to_sdf_layer(
+        &mut self,
+        mesh_layer: &str,
+        name: &str,
+        params: crate::VolumeParams,
+    ) -> Result<LayerId> {
+        let c_mesh = crate::cstring(mesh_layer, "clay_document_mesh_layer")?;
+        let mut layer: sys::clay_layer_id = Default::default();
+        let mut mesh = std::ptr::null_mut();
+        // SAFETY: a valid document and a NUL-terminated name; both outputs are
+        // written only on success. The handle is borrowed and is never wrapped
+        // in an owning `Mesh`, so nothing here will destroy the layer's mesh.
+        check(
+            unsafe {
+                sys::clay_document_mesh_layer(self.as_ptr(), c_mesh.as_ptr(), &mut layer, &mut mesh)
+            },
+            "clay_document_mesh_layer",
+        )?;
+        // Built through the ordinary constructor rather than by calling the
+        // entry point again here: `Item::volume_from_mesh` is where that call
+        // and its safety argument live, and a second copy of both is a second
+        // place to get it wrong. It needs an owning `Mesh`, which this handle
+        // is not, so the raw call is made once through the shared descriptor.
+        let raw = params.into_raw();
+        let mut item = std::ptr::null_mut();
+        // SAFETY: the mesh belongs to this document and was just written; the
+        // descriptor carries its own size.
+        check(
+            unsafe { sys::clay_item_volume_from_mesh(mesh, &raw, &mut item) },
+            "clay_item_volume_from_mesh",
+        )?;
+        let item = crate::Item::from_raw(item, "clay_item_volume_from_mesh")?;
+        let made = self.add_sdf_layer(name)?;
+        self.add_item(made, &item)?;
+        Ok(made)
+    }
+
+    /// Converts a whole voxel grid into a new SDF layer, colour and all.
+    ///
+    /// One volume item per palette entry, which is what carries the colour: a
+    /// distance field has none in it, so a single item could only come back
+    /// grey. `blur` is as [`Item::volume_from_voxels`] describes it.
+    ///
+    /// A new layer rather than a replacement. The crossing discards the
+    /// procedural history in one direction and is lossy in the other, so the
+    /// source staying where it is *is* the way back — undo works until the
+    /// session ends, and the layer works after it.
+    pub fn voxel_to_layer(
+        &mut self,
+        grid: &crate::VoxelGrid,
+        name: &str,
+        blur: i32,
+    ) -> Result<LayerId> {
+        let c_name = crate::cstring(name, "clay_voxel_to_layer")?;
+        let mut layer: sys::clay_layer_id = Default::default();
+        // SAFETY: valid handles, a NUL-terminated name, and an out-parameter
+        // written only on success.
+        check(
+            unsafe {
+                sys::clay_voxel_to_layer(
+                    self.as_ptr(),
+                    grid.as_ptr(),
+                    c_name.as_ptr(),
+                    blur,
+                    &mut layer,
+                )
+            },
+            "clay_voxel_to_layer",
+        )?;
+        Ok(LayerId(layer))
+    }
+}

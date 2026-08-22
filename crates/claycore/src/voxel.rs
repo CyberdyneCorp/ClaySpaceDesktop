@@ -307,6 +307,70 @@ impl VoxelField {
     // -- sculpting verbs ----------------------------------------------------
 
     /// Majority filter over the 26-neighbourhood: spurs dissolve, notches fill.
+    /// Fills this grid from a document's field, over a region.
+    ///
+    /// SDF to voxel: cells whose centre evaluates inside are set, and colour
+    /// comes from the tape's colour field by nearest palette entry.
+    ///
+    /// Lossy in the ways lattice sampling is, and the engine states them
+    /// rather than hiding them: the surface moves by up to half a cell, a
+    /// feature thinner than a cell can vanish, a sharp edge becomes a
+    /// staircase at the cell size, and only the region passed is rasterized.
+    /// A caller that wants those numbers rather than the prose can compute
+    /// them from [`VoxelGrid::voxel_size`].
+    pub fn rasterize(
+        &mut self,
+        document: &crate::Document,
+        region: ([f32; 3], [f32; 3]),
+    ) -> Result<()> {
+        let (min, max) = region;
+        // SAFETY: valid handles, and two arrays of three floats each, which is
+        // what the entry point reads.
+        check(
+            unsafe {
+                sys::clay_voxel_rasterize(
+                    self.as_ptr(),
+                    document.as_ptr() as *const _,
+                    min.as_ptr(),
+                    max.as_ptr(),
+                )
+            },
+            "clay_voxel_rasterize",
+        )
+    }
+
+    /// Fills this grid from a mesh's triangles, in one sampling.
+    ///
+    /// Not the same as meshing to a volume and rasterizing that. The detour
+    /// pays two samplings — triangles into a narrow band, then the band into
+    /// cells — and each places the surface within about half a cell of its own
+    /// lattice, so the second quantises what the first already quantised. This
+    /// asks the triangles directly, which is why a feature thinner than a cell
+    /// survives here where the detour loses it, and why the model's vertex
+    /// colours reach the palette at all: a distance field carries no colour.
+    ///
+    /// The region is not optional as it is for a document. A document may be
+    /// unbounded; a mesh cannot be.
+    pub fn rasterize_mesh(
+        &mut self,
+        mesh: &crate::Mesh,
+        region: ([f32; 3], [f32; 3]),
+    ) -> Result<()> {
+        let (min, max) = region;
+        // SAFETY: valid handles and two arrays of three floats.
+        check(
+            unsafe {
+                sys::clay_voxel_rasterize_mesh(
+                    self.as_ptr(),
+                    mesh.as_ptr(),
+                    min.as_ptr(),
+                    max.as_ptr(),
+                )
+            },
+            "clay_voxel_rasterize_mesh",
+        )
+    }
+
     pub fn sculpt_smooth(&mut self, cell: Cell, brush: &BrushParams<'_>) -> Result<()> {
         let raw = brush.to_raw();
         // SAFETY: three-int input and a sized descriptor.

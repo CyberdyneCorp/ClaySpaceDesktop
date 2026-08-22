@@ -216,7 +216,7 @@ pub struct VolumeParams {
 }
 
 impl VolumeParams {
-    fn to_raw(self) -> sys::clay_volume_params {
+    pub(crate) fn into_raw(self) -> sys::clay_volume_params {
         let mut raw = sys::clay_volume_params::sized();
         raw.cell_size = self.cell_size.unwrap_or(0.0);
         raw.band = self.band.unwrap_or(0.0);
@@ -368,7 +368,7 @@ impl Document {
         max: [f32; 3],
     ) -> Result<Item> {
         let raw_flatten = flatten.to_raw();
-        let raw_volume = volume.to_raw();
+        let raw_volume = volume.into_raw();
         let mut item = std::ptr::null_mut();
         // SAFETY: two sized descriptors, two three-float bounds, and an
         // out-parameter written only on success.
@@ -408,7 +408,7 @@ impl Document {
         max: [f32; 3],
     ) -> Result<Item> {
         let raw_relax = relax.to_raw();
-        let raw_volume = volume.to_raw();
+        let raw_volume = volume.into_raw();
         let mut item = std::ptr::null_mut();
         // SAFETY: two sized descriptors, two three-float bounds, and an
         // out-parameter written only on success.
@@ -438,7 +438,7 @@ impl Document {
         min: [f32; 3],
         max: [f32; 3],
     ) -> Result<Item> {
-        let raw = params.to_raw();
+        let raw = params.into_raw();
         let mut item = std::ptr::null_mut();
         // SAFETY: sized descriptor, two three-float bounds, out-parameter
         // written only on success.
@@ -465,7 +465,7 @@ impl Item {
     /// verbatim and cannot be sculpted; this resamples them into a field and
     /// gives up the original geometry in exchange for being clay.
     pub fn volume_from_mesh(mesh: &crate::Mesh, params: VolumeParams) -> Result<Item> {
-        let raw = params.to_raw();
+        let raw = params.into_raw();
         let mut item = std::ptr::null_mut();
         // SAFETY: a valid mesh handle, a sized descriptor, and an
         // out-parameter written only on success.
@@ -474,6 +474,30 @@ impl Item {
             "clay_item_volume_from_mesh",
         )?;
         Item::from_raw(item, "clay_item_volume_from_mesh")
+    }
+
+    /// A volume item read from a voxel grid — voxel back to SDF.
+    ///
+    /// Direct, with no mesh detour: occupancy is read by trilinear
+    /// interpolation between cell centres and *redistanced*, so the result
+    /// carries a Lipschitz bound a raymarcher and a blend can trust. That is
+    /// what makes it an ordinary operand rather than a picture of one.
+    ///
+    /// Non-destructive — the grid is untouched.
+    ///
+    /// `blur` filters the lattice on the way out. At 0 nothing is filtered and
+    /// nothing can be lost, and the surface keeps the lattice's terracing; 1 is
+    /// what an organic sculpt wants. `index` selects a palette entry, which is
+    /// how colour survives: one volume item per entry.
+    pub fn volume_from_voxels(grid: &crate::VoxelGrid, blur: i32, index: i32) -> Result<Item> {
+        let mut item = std::ptr::null_mut();
+        // SAFETY: a valid grid handle and an out-parameter written only on
+        // success.
+        check(
+            unsafe { sys::clay_item_volume_from_voxels(grid.as_ptr(), blur, index, &mut item) },
+            "clay_item_volume_from_voxels",
+        )?;
+        Item::from_raw(item, "clay_item_volume_from_voxels")
     }
 
     /// Relaxes a sampled volume in place — the Smooth verb on the SDF side.

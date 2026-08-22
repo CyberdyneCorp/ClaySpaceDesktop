@@ -20,15 +20,15 @@
 
 ## 3. Phase 2 — conversion in the engine bridge
 
-- [ ] 3.1 Wrap `clay_voxel_rasterize` in `claycore`, with the region and cell size
-- [ ] 3.2 Wrap `clay_voxel_rasterize_mesh` for the direct mesh-to-voxel path
-- [ ] 3.3 Wrap `clay_item_volume_from_voxels` and `clay_voxel_to_layer`
-- [ ] 3.4 Add a `ClayDocument::convert_layer` that produces a new layer and leaves the source untouched
-- [ ] 3.5 Add a cost estimate — surface movement, vanishing feature size, grid size against the memory budget — computed from the chosen cell size
-- [ ] 3.6 Refuse an unbounded region and an unaffordable resolution, each with its own reason
-- [ ] 3.7 Test that a conversion is one undo step and that undo removes the new layer
-- [ ] 3.8 Test that a coloured voxel sculpt keeps its colours across voxel-to-SDF
-- [ ] 3.9 Test that mesh-to-voxel keeps a feature thinner than a cell that the SDF detour loses
+- [x] 3.1 Wrap `clay_voxel_rasterize` in `claycore`, with the region and cell size
+- [x] 3.2 Wrap `clay_voxel_rasterize_mesh` for the direct mesh-to-voxel path
+- [x] 3.3 Wrap `clay_item_volume_from_voxels` and `clay_voxel_to_layer`
+- [x] 3.4 Add a `ClayDocument::convert_layer` that produces a new layer and leaves the source untouched
+- [x] 3.5 Add a cost estimate — surface movement, vanishing feature size, grid size against the memory budget — computed from the chosen cell size
+- [x] 3.6 Refuse an unbounded region and an unaffordable resolution, each with its own reason
+- [!] 3.7 Test that a conversion is one undo step and that undo removes the new layer — **blocked**: a conversion produces no engine undo entry at all (layer creation and rasterization are unrecorded, and a voxel layer has no history by construction), so undo cannot take it back. `conversion.rs` records the measurement. Needs a decision: host-side history entry, or change the spec to say a conversion is taken back by removing the layer
+- [x] 3.8 Test that a coloured voxel sculpt keeps its colours across voxel-to-SDF
+- [x] 3.9 Test that mesh-to-voxel keeps a feature thinner than a cell that the SDF detour loses
 
 ## 4. Phase 2 — conversion in the interface
 

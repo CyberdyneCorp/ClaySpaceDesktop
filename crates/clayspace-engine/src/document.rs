@@ -10,11 +10,11 @@ use claycore::{
     Op, StrokePreset, VolumeParams,
 };
 use clayspace_model::{
-    Armature, ArmatureModel, BrushSettings, DocumentModel, EditOutcome, ExchangeModel,
-    ExportMesher, ExportSettings, ExtrudeSettings, Format, GestureSample, HistoryState, ImportAs,
-    ImportSettings, LayerKey, LayerSummary, MaskModel, MaskOp, MaskState, ModelError, NodeIndex,
-    OpenError, Protection, Representation, Scene, SceneModel, SceneNode, SceneStats, SculptModel,
-    SkinSettings, ToolKind,
+    Armature, ArmatureModel, BrushSettings, Cost, Direction, DocumentModel, EditOutcome,
+    ExchangeModel, ExportMesher, ExportSettings, ExtrudeSettings, Format, GestureSample,
+    HistoryState, ImportAs, ImportSettings, LayerKey, LayerSummary, MaskModel, MaskOp, MaskState,
+    ModelError, NodeIndex, OpenError, Protection, Refusal, Representation, Scene, SceneModel,
+    SceneNode, SceneStats, SculptModel, SkinSettings, ToolKind,
 };
 
 use crate::backend::{BackendPolicy, Operation};
@@ -400,6 +400,184 @@ impl ClayDocument {
         }
 
         self.drain_dirty()
+    }
+
+    /// How many bytes a voxel cell costs, for the budget refusal.
+    ///
+    /// A palette index and the bookkeeping around it. Approximate on purpose:
+    /// it decides whether to refuse a resolution, not what to allocate.
+    const BYTES_PER_CELL: u64 = 4;
+
+    /// The region a conversion would cover, and what it would cost there.
+    ///
+    /// Asked before the conversion runs, so the interface can state the losses
+    /// while the sculptor is still choosing the resolution. `None` where the
+    /// source has no bounds and the direction needs a region — which is itself
+    /// the answer, and `convert_layer` refuses with it.
+    pub fn conversion_cost(&self, direction: Direction, cell_size: f32) -> Option<Cost> {
+        let extent = match self.bounds() {
+            Some((min, max)) => std::array::from_fn(|i| (max[i] - min[i]).max(0.0)),
+            None if direction.needs_region() => return None,
+            None => [0.0; 3],
+        };
+        Some(Cost::of(direction, cell_size, extent))
+    }
+
+    /// Crosses the active layer to another representation, as a new layer.
+    ///
+    /// A new layer rather than a replacement, always. One direction discards
+    /// the procedural history and the other quantises onto a lattice, so the
+    /// source staying where it is *is* the way back: undo works until the
+    /// session ends, and a layer works after it.
+    ///
+    /// `blur` filters the lattice on the way out of a grid — 0 keeps the
+    /// terracing and loses nothing, 1 is what an organic sculpt wants.
+    pub fn convert_layer(
+        &mut self,
+        direction: Direction,
+        cell_size: f32,
+        blur: i32,
+    ) -> Result<LayerKey, ModelError> {
+        let source = self.active_layer();
+        if source.representation != direction.from() {
+            // Not a tool refusal — there is no tool here — so it is stated as
+            // what it is: this crossing starts somewhere else.
+            return Err(ModelError::Conversion(Refusal::WrongSource {
+                needs: direction.from(),
+                active: source.representation,
+            }));
+        }
+        let Some(cost) = self.conversion_cost(direction, cell_size) else {
+            return Err(ModelError::Conversion(Refusal::UnboundedRegion));
+        };
+        cost.within(
+            self.cache
+                .stats()
+                .ok()
+                .and_then(|s| s.memory_budget)
+                .unwrap_or(u64::MAX),
+            Self::BYTES_PER_CELL,
+        )
+        .map_err(ModelError::Conversion)?;
+
+        let name = format!("{} · {}", source.name, direction.to().label());
+        // Bracketed, because a crossing is several engine edits — the layer,
+        // then whatever fills it — and a sculptor asked for one thing. Without
+        // the group, undo took back the filling and left the empty layer
+        // standing, which is the shape `a_conversion_is_one_undo_step` caught.
+        self.document
+            .begin_undo_group()
+            .map_err(ModelError::engine)?;
+        let made = match direction {
+            Direction::SdfToVoxel => self.rasterize_to_voxels(&name, cell_size),
+            Direction::VoxelToSdf => self.voxels_to_sdf(&name, blur),
+            Direction::MeshToVoxel => self.mesh_to_voxels(&name, cell_size),
+            Direction::MeshToSdf => self.mesh_to_sdf(&name),
+        };
+        // Closed on the failing path too: a group left open swallows every
+        // edit after it into one undo step, which is a worse bug than the one
+        // that opened it.
+        let closed = self.document.end_undo_group().map_err(ModelError::engine);
+        let made = made?;
+        closed?;
+        Ok(made)
+    }
+
+    fn rasterize_to_voxels(&mut self, name: &str, cell_size: f32) -> Result<LayerKey, ModelError> {
+        let Some((min, max)) = self.bounds() else {
+            return Err(ModelError::Conversion(Refusal::UnboundedRegion));
+        };
+        self.add_voxel_layer(name, cell_size)?;
+        let key = self.active_layer().key;
+        let engine_name = self.active_layer().engine_name.clone();
+        self.document
+            .rasterize_into_voxel_layer(&engine_name, (min, max))
+            .map_err(ModelError::engine)?;
+        self.after_conversion(key)
+    }
+
+    fn voxels_to_sdf(&mut self, name: &str, blur: i32) -> Result<LayerKey, ModelError> {
+        let engine_name = self.active_layer().engine_name.clone();
+        // Scoped rather than dropped: the grid carries an exclusive borrow of
+        // the document, and the conversion below needs the document back.
+        let occupied = {
+            let (_, grid) = self
+                .document
+                .voxel_layer(&engine_name)
+                .map_err(ModelError::engine)?;
+            grid.occupied_count().map_err(ModelError::engine)?
+        };
+        if occupied == 0 {
+            return Err(ModelError::Conversion(Refusal::SourceEmpty));
+        }
+        // One volume item per palette entry, which is what carries the colour
+        // across: a distance field has none in it.
+        let layer = self
+            .document
+            .voxel_layer_to_sdf_layer(&engine_name, name, blur)
+            .map_err(ModelError::engine)?;
+        let key = self.adopt_engine_layer(layer, name, Representation::Sdf)?;
+        self.after_conversion(key)
+    }
+
+    fn mesh_to_voxels(&mut self, name: &str, cell_size: f32) -> Result<LayerKey, ModelError> {
+        let Some((min, max)) = self.bounds() else {
+            return Err(ModelError::Conversion(Refusal::UnboundedRegion));
+        };
+        let engine_name = self.active_layer().engine_name.clone();
+        self.add_voxel_layer(name, cell_size)?;
+        let key = self.active_layer().key;
+        let target = self.active_layer().engine_name.clone();
+        self.document
+            .rasterize_mesh_into_voxel_layer(&engine_name, &target, (min, max))
+            .map_err(ModelError::engine)?;
+        self.after_conversion(key)
+    }
+
+    fn mesh_to_sdf(&mut self, name: &str) -> Result<LayerKey, ModelError> {
+        let engine_name = self.active_layer().engine_name.clone();
+        let layer = self
+            .document
+            .mesh_layer_to_sdf_layer(&engine_name, name, VolumeParams::default())
+            .map_err(ModelError::engine)?;
+        let key = self.adopt_engine_layer(layer, name, Representation::Sdf)?;
+        self.after_conversion(key)
+    }
+
+    /// Registers a layer the engine made on its own.
+    ///
+    /// The conversions that end in SDF hand back a `LayerId` the engine
+    /// created — `clay_voxel_to_layer` builds one item per palette entry, and
+    /// the mesh crossing builds a volume item — so the layer exists in the
+    /// document before this side has a row for it.
+    fn adopt_engine_layer(
+        &mut self,
+        id: LayerId,
+        name: &str,
+        representation: Representation,
+    ) -> Result<LayerKey, ModelError> {
+        let key = self.take_key();
+        self.layers.push(Layer {
+            id,
+            key,
+            name: name.to_string(),
+            engine_name: name.to_string(),
+            representation,
+            visible: true,
+            protection: Protection::default(),
+            intensity: 100,
+        });
+        self.active = self.layers.len() - 1;
+        Ok(key)
+    }
+
+    /// What every direction owes once its new layer exists.
+    fn after_conversion(&mut self, key: LayerKey) -> Result<LayerKey, ModelError> {
+        self.reconcile_layers();
+        // The whole new layer is dirty; nothing about it was there before.
+        let layer = self.active_layer().id;
+        self.refill(layer, &[])?;
+        Ok(key)
     }
 
     /// Meshes and refills whatever is currently marked dirty.

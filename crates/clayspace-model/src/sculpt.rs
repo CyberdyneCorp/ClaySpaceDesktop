@@ -170,6 +170,9 @@ pub enum ModelError {
     Unavailable(crate::tools::Unavailable),
     /// The engine refused, with its own description.
     Engine(String),
+    /// A crossing between representations was refused, with which of the
+    /// reasons it was.
+    Conversion(crate::conversion::Refusal),
 }
 
 impl std::fmt::Display for ModelError {
@@ -177,6 +180,7 @@ impl std::fmt::Display for ModelError {
         match self {
             Self::Unavailable(why) => write!(f, "{why}"),
             Self::Engine(why) => f.write_str(why),
+            Self::Conversion(why) => write!(f, "{why}"),
         }
     }
 }

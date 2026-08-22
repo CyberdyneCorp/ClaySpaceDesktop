@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 pub mod armature;
+pub mod conversion;
 pub mod detail;
 pub mod diagnostics;
 pub mod document;
@@ -24,6 +25,7 @@ pub mod tools;
 pub mod units;
 
 pub use armature::{Armature, ArmatureModel, NodeIndex, SkinSettings, Zsphere};
+pub use conversion::{Cost, Direction, Refusal};
 pub use detail::DetailPolicy;
 pub use diagnostics::{Diagnostics, DiagnosticsModel, Fallback};
 pub use document::{DocumentModel, OpenError};

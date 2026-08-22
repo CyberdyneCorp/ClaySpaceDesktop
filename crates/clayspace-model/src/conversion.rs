@@ -1,0 +1,285 @@
+//! Crossing between representations, and what each crossing costs.
+//!
+//! ClayCore carries SDF, voxel and mesh side by side and the intended workflow
+//! uses more than one: block out and hard-surface on SDF, free-form sculpt on
+//! voxels, refine on a mesh when the topology is one worth keeping. Crossing is
+//! how a sculptor gets from one to the next.
+//!
+//! Every crossing is lossy, and the losses are *stated before the conversion
+//! runs* rather than discovered in the result. They are computed from the
+//! chosen resolution rather than written into a sentence, because a number
+//! written down is wrong the first time somebody changes the default.
+
+use crate::Representation;
+
+/// A crossing from one representation to another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Direction {
+    /// Rasterize a field into cells.
+    SdfToVoxel,
+    /// Read occupancy back as a distance field, redistanced.
+    VoxelToSdf,
+    /// Triangles straight into cells, in one sampling.
+    MeshToVoxel,
+    /// Triangles onto a lattice as a volume item.
+    MeshToSdf,
+}
+
+impl Direction {
+    pub const ALL: [Direction; 4] = [
+        Self::SdfToVoxel,
+        Self::VoxelToSdf,
+        Self::MeshToVoxel,
+        Self::MeshToSdf,
+    ];
+
+    pub fn from(self) -> Representation {
+        match self {
+            Self::SdfToVoxel => Representation::Sdf,
+            Self::VoxelToSdf => Representation::Voxel,
+            Self::MeshToVoxel | Self::MeshToSdf => Representation::Mesh,
+        }
+    }
+
+    pub fn to(self) -> Representation {
+        match self {
+            Self::SdfToVoxel | Self::MeshToVoxel => Representation::Voxel,
+            Self::VoxelToSdf | Self::MeshToSdf => Representation::Sdf,
+        }
+    }
+
+    /// The crossings available from a representation.
+    pub fn from_representation(representation: Representation) -> Vec<Direction> {
+        Self::ALL
+            .into_iter()
+            .filter(|direction| direction.from() == representation)
+            .collect()
+    }
+
+    /// Whether the crossing needs a region to be rasterized into.
+    ///
+    /// A document may be unbounded, so rasterizing one needs to be told where
+    /// to stop. A mesh cannot be unbounded and a grid already has bounds, so
+    /// neither does.
+    pub fn needs_region(self) -> bool {
+        self == Self::SdfToVoxel
+    }
+
+    /// Whether the crossing is measured in cells at all.
+    ///
+    /// Reading a grid back does not choose a resolution — it already has one —
+    /// so there is no cell size to state a cost against.
+    pub fn chooses_resolution(self) -> bool {
+        matches!(self, Self::SdfToVoxel | Self::MeshToVoxel)
+    }
+}
+
+/// Why a conversion was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// The source has no bounds and no region was given, so there is nothing
+    /// to say where the rasterization stops.
+    UnboundedRegion,
+    /// The grid the chosen resolution would build does not fit the budget.
+    OverBudget { cells: u64, budget_bytes: u64 },
+    /// The source carries nothing to convert.
+    SourceEmpty,
+    /// This crossing starts from a different representation.
+    WrongSource {
+        needs: Representation,
+        active: Representation,
+    },
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnboundedRegion => f.write_str(
+                "this layer has no bounds, so a region is needed to say where \
+                 the rasterization stops",
+            ),
+            Self::OverBudget {
+                cells,
+                budget_bytes,
+            } => write!(
+                f,
+                "that resolution needs {cells} cells, past the {} MB budget",
+                budget_bytes / (1024 * 1024)
+            ),
+            Self::SourceEmpty => f.write_str("this layer carries nothing to convert"),
+            Self::WrongSource { needs, active } => write!(
+                f,
+                "that crossing starts from a {} layer; this one is {}",
+                needs.label(),
+                active.label()
+            ),
+        }
+    }
+}
+
+/// What a crossing will cost, at the resolution it is being asked for.
+///
+/// Computed rather than written down. A sculptor changing the cell size should
+/// watch these move, because that is the whole of the decision they are making.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Cost {
+    /// How far the surface can move, in document units. Half a cell: a cell is
+    /// either in or out, so the surface lands on the nearer cell boundary.
+    pub surface_movement: f32,
+    /// A feature thinner than this can vanish, because no cell centre falls
+    /// inside it. Nothing downstream can invent what was never stored.
+    pub vanishing_feature: f32,
+    /// How many cells the region holds at this resolution.
+    pub cells: u64,
+    /// Whether the procedural edit list survives the crossing.
+    ///
+    /// It does not, in any direction that ends in cells or vertices: once
+    /// rasterized, the parametric items behind the sculpt are not reachable
+    /// from the other side. That is why a crossing produces a new layer rather
+    /// than replacing one.
+    pub keeps_history: bool,
+    /// Whether a sharp edge survives, or becomes a staircase at the cell size.
+    pub keeps_sharp_edges: bool,
+    /// Whether surface colour survives the crossing.
+    pub keeps_colour: bool,
+}
+
+impl Cost {
+    /// What the crossing costs at `cell_size`, over a region of `extent`.
+    ///
+    /// `extent` is the region's size in document units along each axis.
+    pub fn of(direction: Direction, cell_size: f32, extent: [f32; 3]) -> Self {
+        let cell_size = cell_size.max(f32::EPSILON);
+        let cells = if direction.chooses_resolution() {
+            extent
+                .iter()
+                .map(|span| ((span / cell_size).ceil().max(1.0)) as u64)
+                .product()
+        } else {
+            0
+        };
+        Self {
+            surface_movement: if direction.chooses_resolution() {
+                cell_size * 0.5
+            } else {
+                0.0
+            },
+            vanishing_feature: if direction.chooses_resolution() {
+                cell_size
+            } else {
+                0.0
+            },
+            cells,
+            // Nothing carries the edit list across. The SDF side *is* its
+            // history, and neither cells nor vertices hold one.
+            keeps_history: false,
+            // Only the directions that do not quantise onto a lattice.
+            keeps_sharp_edges: !direction.chooses_resolution(),
+            // Every direction here carries colour: the tape's colour field
+            // reaches the palette, the palette reaches one volume item per
+            // entry, and a mesh's vertex colours reach the palette directly.
+            // The one that would not is a mesh through a *field*, which is why
+            // mesh-to-voxel is direct rather than a detour.
+            keeps_colour: true,
+        }
+    }
+
+    /// Whether this many cells fits a byte budget, at `bytes_per_cell`.
+    pub fn within(&self, budget_bytes: u64, bytes_per_cell: u64) -> Result<(), Refusal> {
+        if self.cells.saturating_mul(bytes_per_cell) > budget_bytes {
+            return Err(Refusal::OverBudget {
+                cells: self.cells,
+                budget_bytes,
+            });
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_direction_goes_somewhere_else() {
+        for direction in Direction::ALL {
+            assert_ne!(
+                direction.from(),
+                direction.to(),
+                "{direction:?} does not cross anything"
+            );
+        }
+    }
+
+    #[test]
+    fn a_mesh_can_reach_both_of_the_others() {
+        let from_mesh = Direction::from_representation(Representation::Mesh);
+        assert_eq!(from_mesh.len(), 2, "a mesh converts two ways");
+    }
+
+    /// The reason the numbers are computed: they have to follow the slider.
+    #[test]
+    fn a_finer_cell_moves_the_surface_less_and_costs_more_cells() {
+        let extent = [1.0, 1.0, 1.0];
+        let coarse = Cost::of(Direction::SdfToVoxel, 0.1, extent);
+        let fine = Cost::of(Direction::SdfToVoxel, 0.01, extent);
+
+        assert!(
+            fine.surface_movement < coarse.surface_movement,
+            "a finer cell has to place the surface more precisely"
+        );
+        assert!(
+            fine.vanishing_feature < coarse.vanishing_feature,
+            "a finer cell has to keep smaller features"
+        );
+        assert!(
+            fine.cells > coarse.cells,
+            "a finer cell has to cost more storage"
+        );
+    }
+
+    #[test]
+    fn the_surface_moves_by_half_a_cell() {
+        let cost = Cost::of(Direction::SdfToVoxel, 0.02, [1.0; 3]);
+        assert_eq!(cost.surface_movement, 0.01);
+        assert_eq!(cost.vanishing_feature, 0.02);
+    }
+
+    /// Reading a grid back chooses no resolution, so it has no cell-sized
+    /// losses to state — and stating one anyway would be an invention.
+    #[test]
+    fn a_direction_that_chooses_no_resolution_states_no_cell_cost() {
+        let cost = Cost::of(Direction::VoxelToSdf, 0.02, [1.0; 3]);
+        assert_eq!(cost.surface_movement, 0.0);
+        assert_eq!(cost.vanishing_feature, 0.0);
+        assert!(cost.keeps_sharp_edges);
+    }
+
+    #[test]
+    fn no_direction_carries_the_edit_list() {
+        for direction in Direction::ALL {
+            assert!(
+                !Cost::of(direction, 0.02, [1.0; 3]).keeps_history,
+                "{direction:?} claims to keep the procedural history"
+            );
+        }
+    }
+
+    #[test]
+    fn a_resolution_past_the_budget_is_refused_with_the_budget() {
+        let cost = Cost::of(Direction::SdfToVoxel, 0.001, [1.0; 3]);
+        let error = cost
+            .within(512 * 1024 * 1024, 4)
+            .expect_err("a billion cells does not fit 512 MB");
+        assert!(
+            error.to_string().contains("512 MB"),
+            "the refusal must name the budget it would exceed: {error}"
+        );
+    }
+
+    #[test]
+    fn a_resolution_inside_the_budget_is_allowed() {
+        let cost = Cost::of(Direction::SdfToVoxel, 0.02, [1.0; 3]);
+        assert!(cost.within(512 * 1024 * 1024, 4).is_ok());
+    }
+}
