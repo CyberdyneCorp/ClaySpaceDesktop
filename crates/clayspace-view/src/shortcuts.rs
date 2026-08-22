@@ -47,6 +47,16 @@ impl Chord {
         }
     }
 
+    /// With Shift alone, for a bare-letter binding that has a variant.
+    pub fn shift(key: Key) -> Self {
+        Self {
+            key,
+            command: false,
+            shift: true,
+            alt: false,
+        }
+    }
+
     /// How the menu displays it.
     pub fn label(self) -> String {
         let mut text = String::new();
@@ -83,14 +93,19 @@ pub enum Key {
     Digit2,
     Digit3,
     Digit4,
+    A,
     F,
     M,
+    N,
+    O,
     Z,
     X,
     Y,
     S,
     BracketLeft,
     BracketRight,
+    Delete,
+    Backspace,
     Escape,
 }
 
@@ -101,14 +116,19 @@ impl Key {
             Self::Digit2 => "2",
             Self::Digit3 => "3",
             Self::Digit4 => "4",
+            Self::A => "A",
             Self::F => "F",
             Self::M => "M",
+            Self::N => "N",
+            Self::O => "O",
             Self::Z => "Z",
             Self::X => "X",
             Self::Y => "Y",
             Self::S => "S",
             Self::BracketLeft => "[",
             Self::BracketRight => "]",
+            Self::Delete => "Del",
+            Self::Backspace => "⌫",
             Self::Escape => "Esc",
         }
     }
@@ -121,6 +141,10 @@ impl Key {
 /// need to know that.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Action {
+    NewDocument,
+    OpenDocument,
+    Save,
+    SaveAs,
     Undo,
     Redo,
     FrameAll,
@@ -134,11 +158,18 @@ pub enum Action {
     SymmetryZ,
     BrushSmaller,
     BrushLarger,
+    ToggleSkinPreview,
+    ToggleArmatureEditing,
+    RemoveZsphere,
     Quit,
 }
 
 impl Action {
-    pub const ALL: [Action; 14] = [
+    pub const ALL: [Action; 21] = [
+        Self::NewDocument,
+        Self::OpenDocument,
+        Self::Save,
+        Self::SaveAs,
         Self::Undo,
         Self::Redo,
         Self::FrameAll,
@@ -152,6 +183,9 @@ impl Action {
         Self::SymmetryZ,
         Self::BrushSmaller,
         Self::BrushLarger,
+        Self::ToggleSkinPreview,
+        Self::ToggleArmatureEditing,
+        Self::RemoveZsphere,
         Self::Quit,
     ];
 }
@@ -188,8 +222,19 @@ impl Default for Shortcuts {
             bindings.insert(chord, action);
         };
 
+        // The platform's primary modifier for the file and history actions,
+        // which is what every application on every desktop uses for these —
+        // `Chord::primary` is Command on macOS and Control elsewhere, so this
+        // table is the same table on all three.
+        bind(Chord::primary(Key::N), Action::NewDocument);
+        bind(Chord::primary(Key::O), Action::OpenDocument);
+        bind(Chord::primary(Key::S), Action::Save);
+        bind(Chord::primary_shift(Key::S), Action::SaveAs);
         bind(Chord::primary(Key::Z), Action::Undo);
         bind(Chord::primary_shift(Key::Z), Action::Redo);
+
+        // Bare letters for what a hand on the keyboard reaches for while the
+        // other hand is sculpting.
         bind(Chord::plain(Key::F), Action::FrameAll);
         bind(Chord::plain(Key::M), Action::NextMaterial);
         bind(Chord::plain(Key::Digit1), Action::ViewPerspective);
@@ -201,6 +246,18 @@ impl Default for Shortcuts {
         bind(Chord::plain(Key::S), Action::SymmetryZ);
         bind(Chord::plain(Key::BracketLeft), Action::BrushSmaller);
         bind(Chord::plain(Key::BracketRight), Action::BrushLarger);
+
+        // `A` is Adaptive Skin preview in ZBrush, and anyone who has rigged
+        // before will reach for it. Entering the mode takes the modifier
+        // rather than the other way round: it is done once a session, and
+        // previewing is done constantly.
+        bind(Chord::plain(Key::A), Action::ToggleSkinPreview);
+        bind(Chord::shift(Key::A), Action::ToggleArmatureEditing);
+        // Two keys, one action: whichever the keyboard has where the thumb
+        // expects it. `chord` reports the first for the menu.
+        bind(Chord::plain(Key::Delete), Action::RemoveZsphere);
+        bind(Chord::plain(Key::Backspace), Action::RemoveZsphere);
+
         bind(Chord::plain(Key::Escape), Action::Quit);
 
         Self { bindings }

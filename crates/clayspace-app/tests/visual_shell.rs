@@ -121,6 +121,15 @@ fn diagnostics() -> clayspace_model::Diagnostics {
     }
 }
 
+/// The default bindings, so the menus render the chords they advertise.
+///
+/// A single shared table rather than one per call: `ShellState` borrows it,
+/// and a temporary would not outlive the state that holds it.
+fn shortcuts() -> &'static clayspace_view::Shortcuts {
+    static SHORTCUTS: std::sync::OnceLock<clayspace_view::Shortcuts> = std::sync::OnceLock::new();
+    SHORTCUTS.get_or_init(clayspace_view::Shortcuts::default)
+}
+
 fn state<'a>(
     strings: &'a Strings,
     scene: &'a Scene,
@@ -128,6 +137,7 @@ fn state<'a>(
     diagnostics: &'a clayspace_model::Diagnostics,
 ) -> ShellState<'a> {
     ShellState {
+        shortcuts: shortcuts(),
         // A mask with something in it, so the menu's enabled state is what the
         // capture shows rather than a row of grey.
         mask: clayspace_model::MaskState {

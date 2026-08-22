@@ -18,6 +18,7 @@ use clayspace_vm::{Axis, Command, CommandQueue};
 
 use crate::design::{size, space, type_scale, Tokens};
 use crate::icons::{self, Icon};
+use crate::shortcuts::{Action, Shortcuts};
 use crate::strings::Strings;
 
 /// Everything a frame of interface needs to read.
@@ -73,6 +74,11 @@ pub struct ShellState<'a> {
     /// What an extrusion would use.
     pub extrude: ExtrudeSettings,
     pub strings: &'a Strings,
+    /// The bindings in force, so a menu item can show the chord that does the
+    /// same thing. Borrowed rather than copied because remapping replaces the
+    /// table and a menu built from a stale copy would advertise the binding
+    /// the user just changed.
+    pub shortcuts: &'a Shortcuts,
     pub document_name: &'a str,
     pub modified: bool,
 
@@ -232,6 +238,38 @@ fn slider(
 
 // -- the regions -------------------------------------------------------------
 
+/// How a menu item spells the shortcut that does the same thing.
+///
+/// Empty where nothing is bound, which is what `Button::shortcut_text` wants
+/// for "this item has no shortcut" — so an unbound action simply reads as a
+/// plain item rather than as a gap.
+fn chord_text(state: &ShellState<'_>, action: Action) -> String {
+    state
+        .shortcuts
+        .chord(action)
+        .map(|chord| chord.label())
+        .unwrap_or_default()
+}
+
+/// A menu item, labelled with the chord bound to the same action.
+fn item(ui: &mut egui::Ui, state: &ShellState<'_>, label: &str, action: Action) -> egui::Response {
+    ui.add(egui::Button::new(label).shortcut_text(chord_text(state, action)))
+}
+
+/// The same, greyed out when the action cannot be taken.
+fn item_enabled(
+    ui: &mut egui::Ui,
+    state: &ShellState<'_>,
+    enabled: bool,
+    label: &str,
+    action: Action,
+) -> egui::Response {
+    ui.add_enabled(
+        enabled,
+        egui::Button::new(label).shortcut_text(chord_text(state, action)),
+    )
+}
+
 /// The menu bar. Every item dispatches the same command its shortcut does.
 pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
     let s = state.strings;
@@ -239,11 +277,11 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
         ui.add_space(space::SNUG);
         egui::menu::bar(ui, |ui| {
             ui.menu_button(s.menu_file, |ui| {
-                if ui.button(s.action_new).clicked() {
+                if item(ui, state, s.action_new, Action::NewDocument).clicked() {
                     queue.push(Command::NewDocument);
                     ui.close_menu();
                 }
-                if ui.button(s.action_open).clicked() {
+                if item(ui, state, s.action_open, Action::OpenDocument).clicked() {
                     queue.push(Command::OpenDocument);
                     ui.close_menu();
                 }
@@ -267,11 +305,11 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                     }
                 });
                 ui.separator();
-                if ui.button(s.action_save).clicked() {
+                if item(ui, state, s.action_save, Action::Save).clicked() {
                     queue.push(Command::Save);
                     ui.close_menu();
                 }
-                if ui.button(s.action_save_as).clicked() {
+                if item(ui, state, s.action_save_as, Action::SaveAs).clicked() {
                     queue.push(Command::SaveAs);
                     ui.close_menu();
                 }
@@ -285,35 +323,35 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button(s.action_quit).clicked() {
+                if item(ui, state, s.action_quit, Action::Quit).clicked() {
                     queue.push(Command::Quit);
                     ui.close_menu();
                 }
             });
             ui.menu_button(s.menu_edit, |ui| {
-                if ui
-                    .add_enabled(state.can_undo, egui::Button::new(s.action_undo))
-                    .clicked()
-                {
+                if item_enabled(ui, state, state.can_undo, s.action_undo, Action::Undo).clicked() {
                     queue.push(Command::Undo);
                     ui.close_menu();
                 }
-                if ui
-                    .add_enabled(state.can_redo, egui::Button::new(s.action_redo))
-                    .clicked()
-                {
+                if item_enabled(ui, state, state.can_redo, s.action_redo, Action::Redo).clicked() {
                     queue.push(Command::Redo);
                     ui.close_menu();
                 }
             });
             ui.menu_button(s.menu_view, |ui| {
                 for preset in ViewPresetKind::ALL {
-                    if ui.button(preset.label()).clicked() {
+                    let action = match preset {
+                        ViewPresetKind::Perspective => Action::ViewPerspective,
+                        ViewPresetKind::Front => Action::ViewFront,
+                        ViewPresetKind::Side => Action::ViewSide,
+                        ViewPresetKind::Top => Action::ViewTop,
+                    };
+                    if item(ui, state, preset.label(), action).clicked() {
                         queue.push(Command::SetViewPreset(preset));
                         ui.close_menu();
                     }
                 }
-                if ui.button(s.action_frame_all).clicked() {
+                if item(ui, state, s.action_frame_all, Action::FrameAll).clicked() {
                     queue.push(Command::FrameAll);
                     ui.close_menu();
                 }

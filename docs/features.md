@@ -98,12 +98,14 @@ what ZBrush does by making a ZSphere its own tool: you are not looking at the
 model you were sculpting while you build one. The sculpt is hidden rather than
 removed — still in the stack, one click from coming back.
 
-**Escultura** opens a rig; `A` toggles editing; `Delete` removes the selected
-  sphere and everything under it. The root refuses to be removed.
+**Escultura** opens a rig; `⇧A` toggles editing and `A` the skin preview;
+  `Delete` removes the selected sphere and everything under it. The root
+  refuses to be removed.
 
 Every rig edit is one undoable action — growing a sphere, inserting a joint,
 moving a subtree, resizing, removing, making one negative, changing the skin.
-`Z` takes it back and `R` brings it forward, on the same history as sculpting,
+`⌘Z` takes it back and `⇧⌘Z` brings it forward — Ctrl on Windows and Linux, the
+platform's primary modifier either way — on the same history as sculpting,
 because a sculptor has one undo and does not care which part of the
 application produced the thing they want back.
 

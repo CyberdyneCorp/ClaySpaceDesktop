@@ -10,7 +10,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use clayspace_app::{ray_at, SessionStore, SharedDocument, SurfaceGeometry, ViewportInput};
+use clayspace_app::{
+    chord_for, ray_at, SessionStore, SharedDocument, SurfaceGeometry, ViewportInput,
+};
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
     AutosavePolicy, Detail, DetailPolicy, Diagnostics, ExchangeModel, ExportSettings,
@@ -19,8 +21,8 @@ use clayspace_model::{
 };
 use clayspace_view::shell::{self, region, ArmatureState, ShellState};
 use clayspace_view::{
-    mirrored_cursors, ArmatureView, BrushCursor, Camera, Gpu, GpuMesh, Locale, MatCap, Overlays,
-    Renderer, Strings, SurfaceLoss, ViewPreset, WindowSurface,
+    mirrored_cursors, Action, ArmatureView, BrushCursor, Camera, Gpu, GpuMesh, Locale, MatCap,
+    Overlays, Renderer, Shortcuts, Strings, SurfaceLoss, ViewPreset, WindowSurface,
 };
 use clayspace_vm::{
     ArmatureViewModel, Axis, Command, CommandQueue, DocumentViewModel, Grab, Guard, MaskViewModel,
@@ -29,7 +31,7 @@ use clayspace_vm::{
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowId};
 
 fn main() {
@@ -97,6 +99,8 @@ struct App {
     camera: Camera,
     /// When to draw the coarse surface, and when to bring the full one back.
     detail_policy: DetailPolicy,
+    /// The bindings in force, which the key handler is the only reader of.
+    shortcuts: Shortcuts,
     /// Whether this frame changed the document, which is what says the frame
     /// has nothing spare to spend on [`App::refine_geometry`].
     edited_this_frame: bool,
@@ -216,6 +220,7 @@ impl App {
             policy,
             camera: Camera::default(),
             detail_policy: DetailPolicy::default(),
+            shortcuts: Shortcuts::default(),
             edited_this_frame: false,
             detail_camera: None,
             window: None,
@@ -1098,6 +1103,53 @@ impl App {
         }
     }
 
+    /// Carries out a shortcut's action.
+    ///
+    /// The table holds names rather than commands because some of these are
+    /// not commands: `BrushSmaller` has to read the current size to make one,
+    /// and the file actions and `Quit` reach for the platform rather than for
+    /// a ViewModel. Everything that *is* a command goes through `handle`, so a
+    /// shortcut and its menu item are the same dispatch.
+    fn perform(&mut self, action: Action, event_loop: &ActiveEventLoop) {
+        let command = match action {
+            Action::NewDocument => return self.new_document(),
+            Action::OpenDocument => return self.open(),
+            Action::Save => return self.save(false),
+            Action::SaveAs => return self.save(true),
+            Action::Quit => {
+                // The same question the close button asks, for the same
+                // reason.
+                if self.document_vm.guard() == Guard::Clear || self.confirm_discarding_work() {
+                    self.end_session();
+                    event_loop.exit();
+                }
+                return;
+            }
+            // Only while there is a rig to take one out of. Bound rather than
+            // guarded inside the table, because Delete means nothing else here
+            // and a binding that changes meaning with the mode is the kind
+            // that cannot be remapped sensibly.
+            Action::RemoveZsphere if !self.rigging => return,
+            Action::RemoveZsphere => Command::RemoveZsphere,
+            Action::Undo => Command::Undo,
+            Action::Redo => Command::Redo,
+            Action::FrameAll => Command::FrameAll,
+            Action::NextMaterial => Command::NextMaterial,
+            Action::ViewPerspective => Command::SetViewPreset(ViewPresetKind::Perspective),
+            Action::ViewFront => Command::SetViewPreset(ViewPresetKind::Front),
+            Action::ViewSide => Command::SetViewPreset(ViewPresetKind::Side),
+            Action::ViewTop => Command::SetViewPreset(ViewPresetKind::Top),
+            Action::SymmetryX => Command::ToggleSymmetry(Axis::X),
+            Action::SymmetryY => Command::ToggleSymmetry(Axis::Y),
+            Action::SymmetryZ => Command::ToggleSymmetry(Axis::Z),
+            Action::BrushSmaller => Command::SetBrushSize(self.sculpt.brush().get().size * 0.8),
+            Action::BrushLarger => Command::SetBrushSize(self.sculpt.brush().get().size * 1.25),
+            Action::ToggleSkinPreview => Command::ToggleSkinPreview,
+            Action::ToggleArmatureEditing => Command::ToggleArmatureEditing,
+        };
+        self.handle(command);
+    }
+
     /// Dispatches a command to whichever ViewModel owns it.
     fn apply(&mut self, command: Command) {
         // Timed by the command's own name, so a stall is reported as the thing
@@ -1208,6 +1260,7 @@ impl App {
         let mut input = ViewportInput::default();
         let state = ShellState {
             strings: self.strings,
+            shortcuts: &self.shortcuts,
             mask: *self.mask.state().get(),
             armature: self.armature_state(),
             recent: self.recent.paths(),
@@ -1663,67 +1716,22 @@ impl ApplicationHandler for App {
                     return;
                 };
 
-                // The file shortcuts, which take the platform's command
-                // modifier and so are handled before the bare-letter ones.
+                // The bindings are the table's, not this handler's. The
+                // platform difference lives inside `modifiers.command` — ⌘ on
+                // macOS, Ctrl elsewhere — so there is one table for all three
+                // and no `cfg!` on this path. See [`clayspace_app::keys`] for
+                // what a handler of its own cost last time.
                 let modifiers = self
                     .graphics
                     .as_ref()
                     .map(|g| g.egui_state.egui_ctx().input(|i| i.modifiers))
                     .unwrap_or_default();
-                if modifiers.command {
-                    match code {
-                        KeyCode::KeyS if modifiers.shift => self.save(true),
-                        KeyCode::KeyS => self.save(false),
-                        KeyCode::KeyO => self.open(),
-                        KeyCode::KeyN => self.new_document(),
-                        _ => {}
-                    }
+                let Some(action) =
+                    chord_for(code, modifiers).and_then(|chord| self.shortcuts.action(chord))
+                else {
                     return;
-                }
-
-                let command = match code {
-                    KeyCode::Digit1 => Some(Command::SetViewPreset(ViewPresetKind::Perspective)),
-                    KeyCode::Digit2 => Some(Command::SetViewPreset(ViewPresetKind::Front)),
-                    KeyCode::Digit3 => Some(Command::SetViewPreset(ViewPresetKind::Side)),
-                    KeyCode::Digit4 => Some(Command::SetViewPreset(ViewPresetKind::Top)),
-                    // `A` is Adaptive Skin preview in ZBrush, and anyone who
-                    // has rigged before will reach for it. Entering the mode
-                    // moves to the modifier rather than the other way round:
-                    // it is done once a session, and previewing is done
-                    // constantly.
-                    KeyCode::KeyA if modifiers.shift => Some(Command::ToggleArmatureEditing),
-                    KeyCode::KeyA => Some(Command::ToggleSkinPreview),
-                    KeyCode::Delete | KeyCode::Backspace if self.rigging => {
-                        Some(Command::RemoveZsphere)
-                    }
-                    KeyCode::KeyF => Some(Command::FrameAll),
-                    KeyCode::KeyM => Some(Command::NextMaterial),
-                    KeyCode::KeyX => Some(Command::ToggleSymmetry(Axis::X)),
-                    KeyCode::KeyY => Some(Command::ToggleSymmetry(Axis::Y)),
-                    KeyCode::KeyZ => Some(Command::Undo),
-                    KeyCode::KeyR => Some(Command::Redo),
-                    KeyCode::BracketLeft => {
-                        Some(Command::SetBrushSize(self.sculpt.brush().get().size * 0.8))
-                    }
-                    KeyCode::BracketRight => {
-                        Some(Command::SetBrushSize(self.sculpt.brush().get().size * 1.25))
-                    }
-                    KeyCode::Escape => {
-                        // The same question the close button asks, for the
-                        // same reason.
-                        if self.document_vm.guard() == Guard::Clear
-                            || self.confirm_discarding_work()
-                        {
-                            self.end_session();
-                            event_loop.exit();
-                        }
-                        None
-                    }
-                    _ => None,
                 };
-                if let Some(command) = command {
-                    self.handle(command);
-                }
+                self.perform(action, event_loop);
             }
 
             _ => {}
