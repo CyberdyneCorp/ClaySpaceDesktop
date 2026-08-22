@@ -32,7 +32,7 @@ use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::PhysicalKey;
-use winit::window::{Window, WindowId};
+use winit::window::{CursorIcon, Window, WindowId};
 
 fn main() {
     let policy = match BackendPolicy::discover(None) {
@@ -671,18 +671,30 @@ impl App {
             .detail_policy
             .decide(current, distance / extent, bricks);
 
-        self.timed("nível de detalhe", |app| {
-            let Some(graphics) = app.graphics.as_mut() else {
-                return;
-            };
-            let gpu = graphics.gpu.clone();
-            if let Err(e) = app
-                .document
-                .with(|document| graphics.geometry.set_detail(&gpu, document, wanted))
-            {
-                eprintln!("o nível de detalhe não pôde ser trocado: {e}");
-            }
-        });
+        // Switching level is a full re-mesh, so it says so — but only when it
+        // is actually switching. `set_detail` answers most calls by returning
+        // false, and a cursor that flickered on every frame of an orbit would
+        // be worse than no cursor at all.
+        let switching = wanted != current;
+        let swap = |app: &mut Self| {
+            app.timed("nível de detalhe", |app| {
+                let Some(graphics) = app.graphics.as_mut() else {
+                    return;
+                };
+                let gpu = graphics.gpu.clone();
+                if let Err(e) = app
+                    .document
+                    .with(|document| graphics.geometry.set_detail(&gpu, document, wanted))
+                {
+                    eprintln!("o nível de detalhe não pôde ser trocado: {e}");
+                }
+            });
+        };
+        if switching {
+            self.busy(swap);
+        } else {
+            swap(self);
+        }
     }
 
     /// Asks for the requested level again, once mips exist for it.
@@ -857,6 +869,56 @@ impl App {
             .map(|graphics| graphics.gpu.adapter_description());
         report.stalls = self.stalls.lines();
         report
+    }
+
+    /// Whether a command blocks the interface long enough to say so.
+    ///
+    /// Measured rather than guessed: undo is 66 ms in the engine and 141 ms in
+    /// the re-mesh on a 1043-brick model, and it grows with the model because
+    /// `clay_document_undo` cannot say what it changed (ClayCore #210).
+    /// Opening, saving and the exchange formats are unbounded — they are a file
+    /// of somebody else's size.
+    ///
+    /// A stroke is deliberately absent. It is the one operation where a frame
+    /// *is* the feedback, and swapping the cursor under a moving pointer would
+    /// be worse than the wait.
+    fn blocks_visibly(command: &Command) -> bool {
+        matches!(
+            command,
+            Command::Undo
+                | Command::Redo
+                | Command::NewDocument
+                | Command::OpenDocument
+                | Command::OpenRecent(_)
+                | Command::Save
+                | Command::SaveAs
+                | Command::RunImport
+                | Command::RunExport
+        )
+    }
+
+    /// Runs something slow with the pointer saying so.
+    ///
+    /// The interface thread is blocked for the whole of it, so there is no
+    /// frame to put a spinner in and nothing else the application can do. A
+    /// cursor is what a blocked thread can still change: the request reaches
+    /// the window system inside this call, and the window system draws it
+    /// whether or not this thread ever produces another frame.
+    ///
+    /// Restored rather than left: egui sets its own cursor from the frame's
+    /// output, so leaving this one in place would be corrected on the next
+    /// frame and not on this one — which is exactly the frame that took a
+    /// quarter of a second to arrive.
+    fn busy<T>(&mut self, work: impl FnOnce(&mut Self) -> T) -> T {
+        let window = self.window.clone();
+        if let Some(window) = window.as_ref() {
+            window.set_cursor(winit::window::Cursor::Icon(CursorIcon::Progress));
+        }
+        let outcome = work(self);
+        if let Some(window) = window.as_ref() {
+            window.set_cursor(winit::window::Cursor::Icon(CursorIcon::Default));
+        }
+        outcome
     }
 
     /// Runs something on the interface thread and records it if it stalls.
@@ -1157,6 +1219,9 @@ impl App {
         // re-mesh inside it is timed separately and shows up beside it, which
         // is what says *which half* was slow.
         let label = command.label();
+        if Self::blocks_visibly(&command) {
+            return self.busy(|app| app.timed(label, |app| app.apply_now(command)));
+        }
         self.timed(label, |app| app.apply_now(command));
     }
 
