@@ -89,6 +89,27 @@ impl Gpu {
     }
 
     /// The adapter this device came from, for surface configuration.
+    /// How many samples per pixel to draw the scene with.
+    ///
+    /// Four where the device will take them for this format, one where it will
+    /// not — asked rather than assumed, because a sample count the format does
+    /// not support is a validation error at pipeline creation and there is no
+    /// reason to take the window down over an edge a fallback covers.
+    ///
+    /// The scene is what this is for. The interface is drawn by egui straight
+    /// into the resolved target afterwards: text and panel edges are already
+    /// laid out on the pixel grid, so multisampling them would cost fill rate
+    /// to change nothing.
+    pub fn sample_count(&self, format: wgpu::TextureFormat) -> u32 {
+        const WANTED: u32 = 4;
+        let flags = self.adapter.get_texture_format_features(format).flags;
+        if flags.sample_count_supported(WANTED) {
+            WANTED
+        } else {
+            1
+        }
+    }
+
     pub fn adapter(&self) -> &wgpu::Adapter {
         &self.adapter
     }
@@ -138,23 +159,35 @@ pub struct Framebuffer {
     pub width: u32,
     pub height: u32,
     depth: wgpu::TextureView,
+    /// The multisampled colour target, resolved into the caller's view.
+    ///
+    /// `None` where the device will not multisample this format, in which case
+    /// drawing goes straight to the caller's view as it always did.
+    color: Option<wgpu::TextureView>,
+    samples: u32,
 }
 
 impl Framebuffer {
     pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
-    pub fn new(gpu: &Gpu, width: u32, height: u32) -> Self {
+    pub fn new(gpu: &Gpu, width: u32, height: u32, format: wgpu::TextureFormat) -> Self {
+        let (width, height) = (width.max(1), height.max(1));
+        let samples = gpu.sample_count(format);
+        let size = wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        };
         let depth = gpu
             .device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("depth"),
-                size: wgpu::Extent3d {
-                    width: width.max(1),
-                    height: height.max(1),
-                    depth_or_array_layers: 1,
-                },
+                size,
                 mip_level_count: 1,
-                sample_count: 1,
+                // The depth buffer is written by the same pass as the colour
+                // one, so it carries the same sample count or the pipeline is
+                // invalid.
+                sample_count: samples,
                 dimension: wgpu::TextureDimension::D2,
                 format: Self::DEPTH_FORMAT,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -162,15 +195,51 @@ impl Framebuffer {
             })
             .create_view(&wgpu::TextureViewDescriptor::default());
 
+        let color = (samples > 1).then(|| {
+            gpu.device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("msaa colour"),
+                    size,
+                    mip_level_count: 1,
+                    sample_count: samples,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    view_formats: &[],
+                })
+                .create_view(&wgpu::TextureViewDescriptor::default())
+        });
+
         Self {
-            width: width.max(1),
-            height: height.max(1),
+            width,
+            height,
             depth,
+            color,
+            samples,
         }
     }
 
     pub fn depth_view(&self) -> &wgpu::TextureView {
         &self.depth
+    }
+
+    /// What a pass should draw into, and what it should resolve into.
+    ///
+    /// Multisampling draws into the framebuffer's own colour target and
+    /// resolves into `target`; without it, `target` is drawn into directly and
+    /// there is nothing to resolve.
+    pub fn attachment<'a>(
+        &'a self,
+        target: &'a wgpu::TextureView,
+    ) -> (&'a wgpu::TextureView, Option<&'a wgpu::TextureView>) {
+        match &self.color {
+            Some(color) => (color, Some(target)),
+            None => (target, None),
+        }
+    }
+
+    pub fn samples(&self) -> u32 {
+        self.samples
     }
 
     pub fn aspect(&self) -> f32 {

@@ -58,7 +58,7 @@ impl OffscreenTarget {
         Self {
             texture,
             view,
-            framebuffer: Framebuffer::new(gpu, width, height),
+            framebuffer: Framebuffer::new(gpu, width, height, Self::FORMAT),
             padded_bytes_per_row,
             readback,
         }

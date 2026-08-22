@@ -116,6 +116,11 @@ sits inside a torso — and picking the far one makes a chest impossible to grab
 
 - MatCap shading with five built-in materials, generated rather than shipped as
   assets. Vertex colours modulate the material where a mesh carries them.
+- 4x multisampling on the scene, where the device will take it for the surface
+  format and falling back to one sample where it will not. The interface is
+  drawn into the resolved target afterwards rather than multisampled with it:
+  text and panel edges are already laid out on the pixel grid. Measured at
+  0.45 ms a frame before and 0.48 ms after, against a 16.7 ms budget.
 - Orbit, pan, zoom, frame-all. Pitch is clamped short of the pole, where the
   view matrix degenerates.
 - Four view presets — Perspectiva, Frontal, Lateral, Superior. The orthogonal

@@ -97,8 +97,11 @@ Taken up here, each one flipping a test rather than being read about.
 | [#63](https://github.com/CyberdyneCorp/ClayCore/issues/63) partial backend registration | 0.30.0 | A backend that loses one pipeline now registers and says what it lost, and `clay_backend_supports` / `clay_backend_diagnostic` answer why one is missing. Worth surfacing in the diagnostics report; nothing is broken without it |
 | [#86](https://github.com/CyberdyneCorp/ClayCore/issues/86) whole-grid voxel meshing | 0.30.0 | An incremental voxel display path, mirroring the brick cache's. The voxel tools here do not re-mesh per frame, so nothing pays the cost it removes |
 
-**There are no open upstream issues affecting this project.** Every one filed
-from this work has been released.
+**One upstream issue is open:**
+[#210](https://github.com/CyberdyneCorp/ClayCore/issues/210), an undo that
+cannot say what it changed. It costs latency and blocks nothing — see *What is
+blocked, and what is not*. Every other issue filed from this work has been
+released.
 
 ## What is left
 
@@ -231,6 +234,45 @@ Neither end pays a hitch: the worst mid-drag segment is 4.9 ms and pointer-up is
 2.0 ms, and `gesture_end.rs` fails if either leaves a frame. A third test there
 holds the drained surface triangle-for-triangle against a full rebuild, which is
 what says the queue can be drained in pieces at all.
+
+### Where the frame time is not
+
+The scene costs 0.48 ms a frame at 1280x800 on 296,607 triangles, against a
+16.7 ms budget — 3% of it, with 4x multisampling on. Nothing on screen is
+worth optimising and everything the application does slowly is on the CPU,
+meshing. That is the number to check before any rendering work is proposed.
+
+It also means the visual budget is wide open, and one thing it will not buy is
+worth recording so it is not tried twice.
+
+**Cavity shading from screen-space normal derivatives does not work here.** A
+MatCap is indexed by the view-space normal alone, so two points sharing a
+normal shade identically whether one sits on an open flank or at the bottom of
+a fold — which is why an unlit sculpt reads as a blob. The cheap fix for that
+is to take the divergence of the normal across a pixel quad, `dpdx(n).x -
+dpdy(n).y`, and darken where the surface turns into itself. It needs no second
+pass and no extra target.
+
+It produces tessellation moiré, not cavity. The reference form is 296,607
+triangles over roughly 40,000 covered pixels — about seven triangles a pixel —
+so the interpolated normal field is piecewise-linear at a scale *below* the
+derivative's. What the derivative measures is where the triangle edges are.
+Turned up far enough to see, it draws the mesh:
+
+  target/visual/50-sculpted-surface.png, at 27x the intended strength, is a
+  sphere covered in concentric rings with no cavity anywhere.
+
+It also broke `compaction_rebuilds_the_surface_without_changing_it`, which
+compares a compacted surface against the same surface before compaction: 77% of
+pixels changed, because amplifying a per-triangle quantity makes the render
+sensitive to which key owns which triangle.
+
+The technique needs triangles much larger than a pixel. What would work is a
+real screen-space occlusion pass sampling the depth buffer over a radius, which
+measures a neighbourhood rather than a tessellation and is indifferent to
+triangle size. That needs the scene rendered to an offscreen target and a
+fullscreen pass — egui composites straight onto the resolved target today — and
+the frame budget above says it is affordable.
 
 ### Undo, which costs far more than the edit it takes back
 

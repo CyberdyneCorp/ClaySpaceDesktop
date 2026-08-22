@@ -63,7 +63,7 @@ impl WindowSurface {
         };
         surface.configure(&gpu.device, &config);
 
-        let framebuffer = Framebuffer::new(&gpu, config.width, config.height);
+        let framebuffer = Framebuffer::new(&gpu, config.width, config.height, format);
         Ok((
             gpu.clone(),
             Self {
@@ -96,7 +96,7 @@ impl WindowSurface {
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&gpu.device, &self.config);
-        self.framebuffer = Framebuffer::new(gpu, width, height);
+        self.framebuffer = Framebuffer::new(gpu, width, height, self.config.format);
     }
 
     /// Acquires the next image to draw into.

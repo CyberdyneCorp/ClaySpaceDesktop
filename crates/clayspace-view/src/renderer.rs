@@ -658,6 +658,11 @@ impl Renderer {
             bytemuck::bytes_of(&gizmo_uniform),
         );
 
+        // Multisampled where the device allows it: the scene is drawn into the
+        // framebuffer's own target and resolved into `target`, which is what
+        // egui then paints the interface onto.
+        let (attachment, resolve_target) = framebuffer.attachment(target);
+
         let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -667,8 +672,8 @@ impl Renderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("viewport"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
-                    resolve_target: None,
+                    view: attachment,
+                    resolve_target,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(self.background),
                         store: wgpu::StoreOp::Store,
@@ -824,6 +829,10 @@ fn make_pipeline(
     topology: wgpu::PrimitiveTopology,
     cull: bool,
 ) -> wgpu::RenderPipeline {
+    // Read from the same place the framebuffer reads it, so the two cannot
+    // disagree — a pipeline whose sample count differs from its attachment's
+    // is a validation error at draw time rather than at creation.
+    let samples = gpu.sample_count(format);
     gpu.device
         .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(vs),
@@ -856,7 +865,10 @@ fn make_pipeline(
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: Default::default(),
+            multisample: wgpu::MultisampleState {
+                count: samples,
+                ..Default::default()
+            },
             multiview: None,
             cache: None,
         })
