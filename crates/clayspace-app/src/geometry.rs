@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 
 use clayspace_engine::claycore::{
-    BrickKey, BrickMeshParams, ClayError, Document, Mesh, VertexLayout,
+    BrickKey, BrickMeshParams, BrickState, ClayError, Document, Mesh, VertexLayout,
 };
 use clayspace_engine::ClayDocument;
 use clayspace_model::Detail;
@@ -237,26 +237,6 @@ impl SurfaceGeometry {
         if dirty.is_empty() {
             return Ok(None);
         }
-        // The edited region and one ring around it.
-        //
-        // Meshing a subset leaves faint seams along the edge of the edit, and
-        // `settle` clears them when the stroke ends. The cause is ours, not
-        // the engine's: `clay_brick_cache_mesh` given a key list was measured
-        // against the same call with none, and inside those bricks it returns
-        // identical vertex positions *and* identical triangles. What a subset
-        // cannot emit is a triangle reaching outside itself — and this drops
-        // exactly those, because it clears a key's stored geometry and rebuilds
-        // it from a mesh that could not contain them.
-        //
-        // The fix is to keep, rather than clear, the stored triangles whose
-        // vertices lie outside the meshed set; that needs per-vertex ownership
-        // recorded alongside the geometry. Until then the ring is a cheap
-        // reduction in how often it shows and `settle` is the guarantee.
-        //
-        // An earlier version of this comment blamed the engine. It was wrong,
-        // and it nearly became a filed bug.
-        // The edited region and one ring around it.
-        //
         // The dirty bricks, and only those.
         //
         // There used to be a ring of dilation around them. It was there
@@ -279,8 +259,24 @@ impl SurfaceGeometry {
         // exactness: a straddling triangle is attributed to whichever
         // requested key owns a corner, so replacing less than the request
         // would drop it.
-        let meshed = dirty.clone();
-        let replace: std::collections::HashSet<BrickKey> = meshed.iter().copied().collect();
+        //
+        // Meshed is a subset of that again: only the keys that actually hold a
+        // surface. A dirty set is an edit's *influence bound*, which is a box,
+        // and a box around a surface is mostly not surface — a third of a
+        // dab's keys and two thirds of an undo's are uniformly inside or
+        // outside, where marching `dim³` cells is guaranteed to produce
+        // nothing. Measured on the reference form, 1043 surface bricks:
+        //
+        //   a dab    27 dirty keys,   18 hold a surface
+        //   an undo  2940 dirty keys, 1045 hold a surface
+        //
+        // They are still *replaced*: a brick the surface has left has to lose
+        // its stored triangles, and `remesh` clears a replaced key it was not
+        // asked to mesh. Replacing more than was requested is safe where
+        // replacing less is not, because a straddling triangle is attributed
+        // to a *requested* key and an unrequested one can hold none.
+        let replace: std::collections::HashSet<BrickKey> = dirty.iter().copied().collect();
+        let meshed = Self::holding_a_surface(document, &dirty)?;
 
         let started = std::time::Instant::now();
         // Face normals while the pointer is down, and the gradient owed.
@@ -320,6 +316,24 @@ impl SurfaceGeometry {
     }
 
     /// Meshes a set of keys and replaces their stored geometry.
+    /// The keys of `dirty` that hold an fp16 lattice, in the same order.
+    ///
+    /// Asked per key rather than by intersecting with `surface_bricks`, which
+    /// is a size query plus a copy of every stored key in the cache: a dab
+    /// filtering 27 keys would pay for the whole surface to learn about nine.
+    fn holding_a_surface(
+        document: &ClayDocument,
+        dirty: &[BrickKey],
+    ) -> Result<Vec<BrickKey>, ClayError> {
+        let states = document.cache().states(dirty)?;
+        Ok(dirty
+            .iter()
+            .zip(states)
+            .filter(|(_, state)| *state == BrickState::Surface)
+            .map(|(key, _)| *key)
+            .collect())
+    }
+
     /// Meshes `keys` and replaces the stored geometry of `replace`.
     ///
     /// `replace` of `None` means every meshed key, which is what a full
@@ -429,9 +443,17 @@ impl SurfaceGeometry {
         // stored geometry to be kept either; since 0.28.0 they are returned.
         // The machinery came out rather than sitting there looking like it did
         // something.
+        // Keyed rather than scanned. `position` per replaced key is
+        // `replace * ranges`, which is three million comparisons where an undo
+        // replaces 2940 keys against a 1045-key request — most of the split.
+        let slot_of: HashMap<BrickKey, usize> = ranges
+            .iter()
+            .enumerate()
+            .map(|(slot, range)| (range.key, slot))
+            .collect();
         for key in &to_replace {
             self.touched.insert(*key);
-            let slot = ranges.iter().position(|range| range.key == *key);
+            let slot = slot_of.get(key).copied();
             let entry = self.keys.entry(*key).or_default();
             entry.vertices.clear();
             entry.indices.clear();

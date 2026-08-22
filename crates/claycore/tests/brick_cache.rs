@@ -354,3 +354,46 @@ fn a_layout_naming_an_absent_attribute_is_refused() {
          not filled with whatever was in the buffer"
     );
 }
+
+#[test]
+fn states_answers_without_reading_a_sample() {
+    let (_doc, cache) = filled_cache();
+    let surface = cache.surface_bricks().expect("surface bricks");
+    assert!(!surface.is_empty(), "the fixture built no surface bricks");
+
+    // A key the cache has never seen, so the answer covers more than the
+    // states a surface brick can be in.
+    let unseen = [10_000, 10_000, 10_000];
+    let mut keys = surface[..surface.len().min(4)].to_vec();
+    keys.push(unseen);
+
+    let states = cache.states(&keys).expect("states");
+    assert_eq!(states.len(), keys.len());
+    // Zipped against the surface keys this call actually asked about, not
+    // against every surface brick: the last entry is the unseen one.
+    for (key, state) in keys[..keys.len() - 1].iter().zip(&states) {
+        assert_eq!(
+            *state,
+            BrickState::Surface,
+            "{key:?} came back from surface_bricks and does not hold a lattice"
+        );
+    }
+    assert_eq!(
+        states.last().copied(),
+        Some(BrickState::Missing),
+        "a key the cache has never seen should read as missing"
+    );
+
+    // The same answer the full read gives, which is what says the states-only
+    // form is the same call and not a second implementation.
+    let full = cache.read_bricks(&keys, 0, 0, false).expect("read bricks");
+    assert_eq!(states, full.states);
+}
+
+#[test]
+fn states_of_nothing_is_nothing() {
+    let (_doc, cache) = filled_cache();
+    // Not an error and not a whole-cache query: the C boundary refuses a call
+    // that would write nothing, so this one never reaches it.
+    assert!(cache.states(&[]).expect("states").is_empty());
+}

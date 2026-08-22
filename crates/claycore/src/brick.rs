@@ -366,6 +366,47 @@ impl BrickCache {
         Ok(keys)
     }
 
+    /// What each named key holds, without reading a sample.
+    ///
+    /// `read_bricks` with only `out_states`, which the C boundary allows —
+    /// what it refuses is a call that would write nothing at all. That matters
+    /// because the payload is `dim³` fp16 per key: asking 2940 keys for their
+    /// state through the full read would allocate a couple of hundred
+    /// megabytes to answer a question about 2940 enum values.
+    ///
+    /// Cheaper than `surface_bricks` where the question is about a known set
+    /// rather than about the whole cache — that one is a size query plus a
+    /// copy of *every* stored key, and a caller filtering a dab's worth of
+    /// dirty keys would pay for the entire surface to learn about a dozen.
+    pub fn states(&self, keys: &[BrickKey]) -> Result<Vec<BrickState>> {
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut states = vec![0i32; keys.len()];
+        // SAFETY: `keys` is `keys.len() * 3` int32 and `states` is one int32
+        // per key. The value and colour buffers are null with zero capacity,
+        // which this entry point permits as long as `out_states` is not also
+        // null. `apron` is 0: no payload is being read for it to pad.
+        check(
+            unsafe {
+                sys::clay_brick_cache_read_bricks(
+                    self.raw.as_ptr(),
+                    0,
+                    keys.as_ptr() as *const i32,
+                    keys.len(),
+                    0,
+                    states.as_mut_ptr(),
+                    std::ptr::null_mut(),
+                    0,
+                    std::ptr::null_mut(),
+                    0,
+                )
+            },
+            "clay_brick_cache_read_bricks",
+        )?;
+        Ok(states.into_iter().map(BrickState::from_raw).collect())
+    }
+
     /// Reads whole bricks in their stored fp16 form, ready for texture upload.
     ///
     /// `apron` pads each brick with samples from its neighbours so that

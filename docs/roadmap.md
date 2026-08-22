@@ -47,10 +47,14 @@ meshed. ClayCore 0.30.0 added `clay_brick_cache_mesh_lod` (#93) and 3.9 closed
 on it — see *Level of detail, as delivered*. What is left on the list is
 waiting on a decision rather than on an engine.
 
-There are no open upstream issues left either, and nothing released is waiting
-on host code. Every issue filed from this work has been released and taken up —
-including [#71](https://github.com/CyberdyneCorp/ClayCore/issues/71), which was
-the macOS CI blocker.
+One upstream issue is open, and it blocks nothing:
+[#210](https://github.com/CyberdyneCorp/ClayCore/issues/210) — `clay_document_undo`
+does not report what it changed, so an undo has to dirty the whole layer. Undo
+works and is correct; it costs far more than the edit it reverses. See *Undo,
+which costs far more than the edit it takes back*. Every other issue filed from
+this work has been released and taken up — including
+[#71](https://github.com/CyberdyneCorp/ClayCore/issues/71), which was the macOS
+CI blocker.
 
 ### Released in 0.28.0
 
@@ -227,6 +231,47 @@ Neither end pays a hitch: the worst mid-drag segment is 4.9 ms and pointer-up is
 2.0 ms, and `gesture_end.rs` fails if either leaves a frame. A third test there
 holds the drained surface triangle-for-triangle against a full rebuild, which is
 what says the queue can be drained in pieces at all.
+
+### Undo, which costs far more than the edit it takes back
+
+Nothing measured undo until it was asked about, and it was 367 ms to reverse a
+dab that cost 5 ms. On 1043 surface bricks after 96 edits:
+
+| | keys meshed | the edit | the sync |
+|---|---|---|---|
+| a dab | 27 → **18** | 0.9 ms | 4.3 → **3.6 ms** |
+| undoing that dab | 2940 → **1045** | 83 → **66 ms** | 284 → **141 ms** |
+
+Two things, one ours and one not.
+
+Ours: a dirty set is an edit's *influence bound*, which is a box, and a box
+around a surface is mostly not surface. A third of a dab's keys and two thirds
+of an undo's were uniformly inside or outside — no lattice, no triangle
+possible — and were being marched anyway. `sync` now asks
+`clay_brick_cache_read_bricks` for the state of the keys it was handed and
+meshes only the ones holding a lattice, while still *replacing* all of them, so
+a brick the surface has left still loses its triangles. Asked per key rather
+than by intersecting with `surface_bricks`, which would make a dab pay for a
+copy of the whole cache to learn about nine keys.
+
+That also removed a real inversion: the incremental path had been costing
+nearly twice a full rebuild of the same surface (284 ms against 152 ms), so the
+fast path was the slow one. It is now within noise of a rebuild, which is the
+right place for it — a dirty set can never exceed the surface, so past this
+point there is nothing a rebuild-instead-of-patch crossover would buy. It was
+measured and left out rather than added on principle.
+
+Not ours: `ClayDocument::undo` bounds its refill by the whole layer, because
+`clay_document_undo` reports only *whether* it undid something.
+`mark_dirty_layer` is what the header calls "what a first, full fill marks", so
+every undo pays a full fill. The host cannot narrow it — diffing the layer's
+nodes catches adds and removes but silently misses an undone move or resize,
+which keeps its id, and under-dirtying leaves stale bricks on screen. Filed as
+[#210](https://github.com/CyberdyneCorp/ClayCore/issues/210): an undo that
+reports its influence bound would take this to about the cost of the edit.
+
+`undo_cost.rs` holds the half that is ours, in keys rather than milliseconds —
+a sync may never mesh more keys than the surface has.
 
 The scaling below is the shape of the original problem, also measured on
 0.28.0, at a fixed 80 bricks while the document grows from 1 node to 193:
