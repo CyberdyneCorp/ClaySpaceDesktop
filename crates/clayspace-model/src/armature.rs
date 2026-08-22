@@ -7,9 +7,12 @@
 //! comes along. That is what makes a ZSphere rig feel like a puppet rather than
 //! a scatter of balls.
 //!
-//! The host holds the tree because the engine's parent array cannot be read
-//! back — positions and radii can, the topology cannot. So this is the record,
-//! and the engine is written to from it.
+//! The host holds the tree as the authoring record and writes the engine from
+//! it. It no longer *has* to: ClayCore 0.29.0 made the parent array readable
+//! (#77) and 0.30.0 the signs (#99), which is what makes a reopened rig
+//! posable. Keeping the host copy is about authoring — radii are stored as
+//! authored and scaled on the way out, so the thickness slider stays
+//! reversible.
 
 use crate::sculpt::ModelError;
 
@@ -27,9 +30,12 @@ pub struct Zsphere {
     ///
     /// ZBrush's negative ZSphere, which is made by pushing one inside its
     /// parent: it stops contributing skin and starts carving an indentation.
-    /// The engine's armature primitive cannot express this — it is a stroke
-    /// plus a tree, with one op for the whole item — so the negatives are
-    /// placed as a second, subtractive item over the same layer.
+    ///
+    /// Expressed to the engine as the node's own sign since ClayCore 0.30.0
+    /// (#99). Before that the primitive carried one op for the whole item, so
+    /// a negative had to be placed as a separate subtractive sphere — which
+    /// left the membrane along its links uncut and lost the sign on reload,
+    /// and is why only a leaf was allowed to be one.
     pub negative: bool,
 }
 
@@ -150,73 +156,30 @@ impl Armature {
 
     /// Whether a sphere cuts rather than adds.
     ///
-    /// Two refusals, both structural. A root cannot cut — there would be
-    /// nothing left to cut into. And only a leaf can, because a negative
-    /// sphere leaves the positive tree and anything hanging off it would be
-    /// orphaned; in ZBrush a negative is something you push into a limb's end,
-    /// not something you hang a limb from.
+    /// One refusal, and it is structural: a root cannot cut, because there
+    /// would be nothing left to cut into — the field would be the whole rig
+    /// subtracted from nothing.
+    ///
+    /// A negative sphere used to have to be a leaf as well. That was never
+    /// ZBrush's rule, only the old ABI's: a negative was placed as a separate
+    /// subtractive item, so anything hanging off it would have been orphaned.
+    /// Since ClayCore 0.30.0 the sign belongs to the node (#99) and a negative
+    /// may carry children, which keep their own signs.
     pub fn set_negative(&mut self, index: NodeIndex, negative: bool) -> Result<(), ModelError> {
         let node = self
             .get(index)
             .copied()
             .ok_or_else(|| ModelError::engine("essa esfera não existe"))?;
-        if negative {
-            if node.is_root(index) {
-                return Err(ModelError::engine("a raiz não pode ser negativa"));
-            }
-            if self.subtree(index).len() > 1 {
-                return Err(ModelError::engine(
-                    "só uma esfera sem filhos pode ser negativa",
-                ));
-            }
+        if negative && node.is_root(index) {
+            return Err(ModelError::engine("a raiz não pode ser negativa"));
         }
         self.nodes[index as usize].negative = negative;
         Ok(())
     }
 
-    /// The tree that adds, and the spheres that cut.
-    ///
-    /// Split because they are placed as two things: the engine's armature
-    /// primitive carries one op for the whole item, so a negative sphere
-    /// cannot live in the same item as the ones it cuts into.
-    ///
-    /// The positive half is a *tree* and has to stay one, so the surviving
-    /// parents are remapped onto their new indices — dropping nodes without
-    /// remapping would silently reparent every limb after the first negative.
-    /// The negative half is just spheres: each carves on its own, and
-    /// `set_negative` keeps them leaves so there is no topology to preserve.
-    pub fn split_by_sign(&self) -> (Armature, Vec<Zsphere>) {
-        let keep: Vec<NodeIndex> = (0..self.nodes.len() as NodeIndex)
-            .filter(|i| !self.nodes[*i as usize].negative)
-            .collect();
-        let mut remap = vec![None; self.nodes.len()];
-        for (new, old) in keep.iter().enumerate() {
-            remap[*old as usize] = Some(new as NodeIndex);
-        }
-
-        let nodes = keep
-            .iter()
-            .map(|old| {
-                let node = self.nodes[*old as usize];
-                Zsphere {
-                    // A parent that was itself removed cannot happen while
-                    // negatives are leaves, but if it ever does the node
-                    // becomes a root rather than pointing at a stranger.
-                    parent: remap[node.parent as usize].unwrap_or_else(|| {
-                        remap[*old as usize].expect("a kept node has a new index")
-                    }),
-                    ..node
-                }
-            })
-            .collect();
-
-        let cutters = self
-            .nodes
-            .iter()
-            .filter(|node| node.negative)
-            .copied()
-            .collect();
-        (Armature { nodes }, cutters)
+    /// One sign per node, in node order, for the engine's sign array.
+    pub fn signs(&self) -> Vec<bool> {
+        self.nodes.iter().map(|node| node.negative).collect()
     }
 
     /// Moves a node and everything under it.
@@ -395,62 +358,61 @@ mod tests {
     }
 
     #[test]
-    fn only_a_childless_sphere_can_be_made_negative() {
+    fn a_negative_sphere_may_carry_children() {
+        // The rule that went with #99. It was the old ABI's, not ZBrush's: a
+        // negative used to be a separate subtractive item, so anything hanging
+        // off it would have been orphaned.
         let mut a = Armature::rooted([0.0, 0.0, 0.0], 0.4);
-        let elbow = a.add_child(0, [1.0, 0.0, 0.0], 0.2);
-        let hand = a.add_child(elbow, [1.6, 0.0, 0.0], 0.1);
+        let socket = a.add_child(0, [0.0, 0.5, 0.0], 0.15);
+        a.set_negative(socket, true).expect("a negative sphere");
+        let under = a.add_child(socket, [0.0, 0.8, 0.0], 0.1);
 
-        // The root has nothing to cut into.
-        assert!(a.set_negative(0, true).is_err());
-        // The elbow carries the hand; making it negative would orphan it.
-        assert!(a.set_negative(elbow, true).is_err());
-        // The hand is a leaf.
-        a.set_negative(hand, true).expect("a leaf can cut");
-        assert!(a.nodes[hand as usize].negative);
+        assert!(a.get(socket).expect("the socket").negative);
+        assert!(
+            !a.get(under).expect("its child").negative,
+            "a new child is positive whatever its parent is"
+        );
+        assert_eq!(
+            a.subtree(socket),
+            vec![socket, under],
+            "the child still hangs off the negative sphere"
+        );
     }
 
     #[test]
-    fn splitting_by_sign_keeps_the_positive_tree_a_tree() {
-        // The failure this guards: dropping nodes without remapping silently
-        // reparents every limb after the first negative one.
+    fn a_negative_sphere_can_be_given_children_after_the_fact() {
+        let mut a = Armature::rooted([0.0, 0.0, 0.0], 0.4);
+        let tip = a.add_child(0, [1.0, 0.0, 0.0], 0.2);
+        let below = a.add_child(tip, [1.4, 0.0, 0.0], 0.1);
+        // Making a node with children negative is now allowed, where it used
+        // to be refused outright.
+        a.set_negative(tip, true)
+            .expect("a sphere with children can be negative");
+        assert!(a.get(tip).expect("the tip").negative);
+        assert!(!a.get(below).expect("its child").negative);
+    }
+
+    #[test]
+    fn the_root_still_cannot_cut() {
+        // The one refusal that is structural rather than an ABI limit: there
+        // would be nothing left for the root to cut into.
+        let mut a = Armature::rooted([0.0, 0.0, 0.0], 0.4);
+        assert!(a.set_negative(0, true).is_err());
+        assert!(!a.get(0).expect("the root").negative);
+    }
+
+    #[test]
+    fn signs_are_one_per_node_in_node_order() {
+        // What the engine's sign array is built from, so an off-by-one here
+        // would carve the wrong sphere.
         let mut a = Armature::rooted([0.0, 0.0, 0.0], 0.4);
         let left = a.add_child(0, [-1.0, 0.0, 0.0], 0.2);
         let cut = a.add_child(0, [0.0, 0.5, 0.0], 0.15);
-        let right = a.add_child(0, [1.0, 0.0, 0.0], 0.2);
-        let right_hand = a.add_child(right, [1.6, 0.0, 0.0], 0.1);
-        a.set_negative(cut, true).expect("a leaf");
-
-        let (positive, cutters) = a.split_by_sign();
-        assert_eq!(cutters.len(), 1);
-        assert_eq!(cutters[0].position, [0.0, 0.5, 0.0]);
-        assert_eq!(positive.nodes.len(), 4);
-
-        // Every surviving node still hangs off what it hung off before.
-        let at = |p: [f32; 3]| {
-            positive
-                .nodes
-                .iter()
-                .position(|n| n.position == p)
-                .expect("a node") as NodeIndex
-        };
-        assert_eq!(
-            positive.nodes[at([-1.0, 0.0, 0.0]) as usize].parent,
-            at([0.0, 0.0, 0.0])
-        );
-        assert_eq!(
-            positive.nodes[at([1.6, 0.0, 0.0]) as usize].parent,
-            at([1.0, 0.0, 0.0])
-        );
-        let _ = (left, right_hand);
-    }
-
-    #[test]
-    fn a_rig_with_no_negatives_splits_into_itself() {
-        let mut a = Armature::rooted([0.0, 0.0, 0.0], 0.4);
         a.add_child(0, [1.0, 0.0, 0.0], 0.2);
-        let (positive, cutters) = a.split_by_sign();
-        assert!(cutters.is_empty());
-        assert_eq!(positive, a);
+        a.set_negative(cut, true).expect("a negative sphere");
+
+        assert_eq!(a.signs(), vec![false, false, true, false]);
+        let _ = left;
     }
 
     /// A shoulder with an arm hanging off it, and a second branch.

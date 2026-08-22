@@ -37,6 +37,13 @@ pub enum ArmatureEdit {
     },
     /// Removes `target` and everything under it.
     Delete,
+    /// Makes `target` cut into the rig, or add to it again.
+    ///
+    /// A new child is always positive; this is what flips it. The node keeps
+    /// its children either way — they keep their own signs.
+    SetSign {
+        negative: bool,
+    },
 }
 
 /// A node placed in a layer.
@@ -54,16 +61,14 @@ impl NodeId {
     pub fn get(self) -> u32 {
         self.0
     }
-
-    /// A node id a host is probing for rather than holding.
-    ///
-    /// Nothing in the ABI enumerates a layer's nodes, so a host that reopened
-    /// a document and wants to find one has to ask about ids it has not been
-    /// handed. `Document::node_prim` makes that a checkable question.
-    pub fn from_raw(id: u32) -> Self {
-        Self(id)
-    }
 }
+
+// `NodeId::from_raw` used to live here — a node id a host was *probing for*
+// rather than holding, because nothing in the ABI enumerated a layer's nodes.
+// `Document::layer_nodes` does since ClayCore 0.30.0 (#91), and probing was
+// never sound: ids are not dense, so a scan lost everything past the longest
+// gap it tolerated. It came out with its only caller rather than staying
+// available to write the same bug again.
 
 /// The primitive values `Document::node_prim` reports, for the few a host has
 /// to recognise by name.
@@ -115,6 +120,33 @@ impl Item {
                 sys::clay_item_set_armature_parents(self.as_ptr(), parents.as_ptr(), parents.len())
             },
             "clay_item_set_armature_parents",
+        )
+    }
+
+    /// One sign per node: `false` adds to the rig, `true` cuts into it.
+    ///
+    /// ZBrush's negative ZSphere. The field is the armature of the positive
+    /// nodes *minus* the armature of the negative ones, each half built as the
+    /// unsigned armature is. A link exists only between two nodes of the same
+    /// sign, so the skin along a negative node's links is never drawn — the
+    /// membrane cut — and a carve never sweeps a positive parent's radius, so
+    /// an eye socket does not swallow the head.
+    ///
+    /// An array shorter than the nodes reads as positive-padded, exactly as a
+    /// short parent array reads as roots. A negative node may carry children.
+    ///
+    /// Added in ClayCore 0.30.0, closing #99.
+    pub fn set_armature_signs(&mut self, negative: &[bool]) -> Result<()> {
+        // The ABI takes +1 or -1 and refuses any other magnitude: a magnitude
+        // here would be the negative-radius convention the feature explicitly
+        // did not take.
+        let signs: Vec<i8> = negative.iter().map(|n| if *n { -1 } else { 1 }).collect();
+        // SAFETY: valid handle; `signs` holds exactly `len` values.
+        check(
+            unsafe {
+                sys::clay_item_set_armature_signs(self.as_ptr(), signs.as_ptr(), signs.len())
+            },
+            "clay_item_set_armature_signs",
         )
     }
 

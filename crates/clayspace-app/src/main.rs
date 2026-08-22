@@ -13,8 +13,9 @@ use std::time::Instant;
 use clayspace_app::{ray_at, SessionStore, SharedDocument, SurfaceGeometry, ViewportInput};
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
-    AutosavePolicy, Diagnostics, ExchangeModel, ExportSettings, ExportWarning, Format, FrameLog,
-    ImportSettings, RecentDocuments, Recovery, SkinSettings, Units, ViewPresetKind,
+    AutosavePolicy, Detail, DetailPolicy, Diagnostics, ExchangeModel, ExportSettings,
+    ExportWarning, Format, FrameLog, ImportSettings, RecentDocuments, Recovery, SkinSettings,
+    Units, ViewPresetKind,
 };
 use clayspace_view::shell::{self, region, ArmatureState, ShellState};
 use clayspace_view::{
@@ -94,6 +95,13 @@ struct App {
     policy: BackendPolicy,
 
     camera: Camera,
+    /// When to draw the coarse surface, and when to bring the full one back.
+    detail_policy: DetailPolicy,
+    /// The camera the level of detail was last decided for.
+    ///
+    /// The decision needs the model's bounds and its brick count, so it is
+    /// made when the camera has actually moved rather than every frame.
+    detail_camera: Option<([f32; 3], f32)>,
     window: Option<Arc<Window>>,
     graphics: Option<Graphics>,
 
@@ -204,6 +212,8 @@ impl App {
             armature,
             policy,
             camera: Camera::default(),
+            detail_policy: DetailPolicy::default(),
+            detail_camera: None,
             window: None,
             graphics: None,
             drag: Drag::None,
@@ -596,14 +606,88 @@ impl App {
     /// child drops its mip, so building them mid-stroke is work thrown away on
     /// the next sample.
     ///
-    /// Nothing draws them yet — `clay_brick_cache_mesh` takes no level, see
-    /// ClayCore #93 — so this is maintenance against the day it does.
+    /// What draws them is [`App::update_detail`], since ClayCore 0.30.0 gave
+    /// the meshing call a level (#93).
     fn build_mips(&mut self) {
         self.timed("níveis de detalhe", |app| {
             if let Err(e) = app.document.with(|document| document.build_mips()) {
                 eprintln!("os níveis de detalhe não puderam ser construídos: {e}");
             }
         });
+        // A request for the coarse surface made while the mips were still
+        // down drew full resolution instead. They are up now, so the request
+        // gets its second chance here rather than waiting for the camera to
+        // move again.
+        self.reapply_detail();
+    }
+
+    /// Draws the level the camera asks for, when the camera has moved.
+    ///
+    /// Guarded on movement because deciding needs the model's bounds and its
+    /// brick count, and a resting camera would pay for both every frame to be
+    /// told nothing changed. The policy's own hysteresis handles the rest:
+    /// between the two bounds the answer is whatever it already was, so
+    /// creeping across the band cannot swap the surface twice.
+    fn update_detail(&mut self) {
+        let here = (self.camera.target.into(), self.camera.distance);
+        if self.detail_camera == Some(here) {
+            return;
+        }
+        self.detail_camera = Some(here);
+
+        // Extents rather than world units, so the policy reads the same on a
+        // model of any size. Without bounds there is no surface to coarsen.
+        let Some((min, max)) = self.sculpt.bounds() else {
+            return;
+        };
+        let extent = (0..3).fold(0.0f32, |widest, axis| widest.max(max[axis] - min[axis]));
+        if extent <= 0.0 {
+            return;
+        }
+        let centre: [f32; 3] = std::array::from_fn(|axis| (min[axis] + max[axis]) * 0.5);
+        let eye: [f32; 3] = self.camera.eye().into();
+        let distance = (0..3)
+            .map(|axis| (eye[axis] - centre[axis]).powi(2))
+            .sum::<f32>()
+            .sqrt();
+
+        let bricks = self
+            .document
+            .with(|document| document.surface_brick_count());
+        let current = self
+            .graphics
+            .as_ref()
+            .map_or(Detail::Full, |graphics| graphics.geometry.detail());
+        let wanted = self
+            .detail_policy
+            .decide(current, distance / extent, bricks);
+
+        self.timed("nível de detalhe", |app| {
+            let Some(graphics) = app.graphics.as_mut() else {
+                return;
+            };
+            let gpu = graphics.gpu.clone();
+            if let Err(e) = app
+                .document
+                .with(|document| graphics.geometry.set_detail(&gpu, document, wanted))
+            {
+                eprintln!("o nível de detalhe não pôde ser trocado: {e}");
+            }
+        });
+    }
+
+    /// Asks for the requested level again, once mips exist for it.
+    fn reapply_detail(&mut self) {
+        let Some(graphics) = self.graphics.as_mut() else {
+            return;
+        };
+        let gpu = graphics.gpu.clone();
+        if let Err(e) = self
+            .document
+            .with(|document| graphics.geometry.reapply_detail(&gpu, document))
+        {
+            eprintln!("o nível de detalhe não pôde ser trocado: {e}");
+        }
     }
 
     /// Re-shades what the gesture touched, at full quality.
@@ -1208,6 +1292,9 @@ impl App {
         });
         self.sync_symmetry_overlay();
         self.sync_armature_view();
+        // After the frame's commands, so a camera move made in it is the one
+        // decided against, and before the surface is drawn.
+        self.update_detail();
 
         let graphics = self.graphics.as_mut().expect("graphics");
         let frame = match graphics.surface.acquire(&graphics.gpu) {

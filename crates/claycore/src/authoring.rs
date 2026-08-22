@@ -361,6 +361,31 @@ impl Document {
         )
     }
 
+    /// Renames a layer — the setter for the name [`Document::layer_name`]
+    /// reads back.
+    ///
+    /// A command like every other layer edit, so one rename is one undo step
+    /// and a ghosted or locked layer refuses it. `NULL` and the empty string
+    /// are refused: an empty name is what a cleared text field submits, and
+    /// the document's name would be the only one left to lose.
+    ///
+    /// Names are **not** unique, here or at creation, and nothing enforces
+    /// one. [`Document::voxel_layer`] and its mesh counterpart answer with the
+    /// *first* layer in stack order carrying the name, so renaming a voxel
+    /// layer onto a name already in use shadows the other layer's grid. There
+    /// is no id-addressed accessor for a grid, so a host that renames voxel
+    /// layers has to keep those names distinct itself.
+    ///
+    /// Added in ClayCore 0.30.0, closing #92.
+    pub fn set_layer_name(&mut self, layer: LayerId, name: &str) -> Result<()> {
+        let c_name = crate::cstring(name, "clay_document_set_layer_name")?;
+        // SAFETY: valid handle and a NUL-terminated name that outlives the call.
+        check(
+            unsafe { sys::clay_document_set_layer_name(self.as_ptr(), layer.0, c_name.as_ptr()) },
+            "clay_document_set_layer_name",
+        )
+    }
+
     /// Sets whether a layer is ghosted or locked.
     pub fn set_layer_protection(&mut self, layer: LayerId, protection: Protection) -> Result<()> {
         // SAFETY: valid handle.
@@ -404,6 +429,9 @@ impl Document {
             ArmatureEdit::SetRadius { radius } => (2, [0.0; 3], radius),
             // The target and everything under it.
             ArmatureEdit::Delete => (3, [0.0; 3], 0.0),
+            // `radius` carries the sign here rather than a radius; anything
+            // other than +1 or -1 is refused.
+            ArmatureEdit::SetSign { negative } => (4, [0.0; 3], if negative { -1.0 } else { 1.0 }),
         };
         // SAFETY: valid handles and a three-float value the entry point reads
         // according to `op`.
@@ -468,6 +496,123 @@ impl Document {
         )?;
         parents.truncate(count);
         Ok(parents)
+    }
+
+    /// A placed armature's signs, one per node, parallel to the parents.
+    ///
+    /// `true` means the node cuts rather than adds. Signs stored shorter than
+    /// the nodes read back positive-padded — the reading compilation makes —
+    /// so a rig saved before signs existed comes back all-positive rather than
+    /// failing.
+    ///
+    /// Added in ClayCore 0.30.0, closing #99.
+    pub fn armature_signs(&self, layer: LayerId, node: NodeId) -> Result<Vec<bool>> {
+        let mut count: usize = 0;
+        // A first call with a null buffer asks how many there are.
+        // SAFETY: the count is the only out-parameter written on this call.
+        check(
+            unsafe {
+                sys::clay_layer_armature_signs(
+                    self.as_ptr(),
+                    layer.0,
+                    node.0,
+                    std::ptr::null_mut(),
+                    &mut count,
+                )
+            },
+            "clay_layer_armature_signs",
+        )?;
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut signs = vec![0i8; count];
+        // SAFETY: `signs` is sized to the count the call above reported.
+        check(
+            unsafe {
+                sys::clay_layer_armature_signs(
+                    self.as_ptr(),
+                    layer.0,
+                    node.0,
+                    signs.as_mut_ptr(),
+                    &mut count,
+                )
+            },
+            "clay_layer_armature_signs",
+        )?;
+        signs.truncate(count);
+        Ok(signs.into_iter().map(|s| s < 0).collect())
+    }
+
+    /// How many top-level nodes a layer holds.
+    ///
+    /// A layer with no SDF content — a voxel or a mesh layer — counts zero
+    /// rather than failing, which is the same reading the evaluation entry
+    /// points make of it.
+    ///
+    /// Added in ClayCore 0.30.0, closing #91.
+    pub fn layer_node_count(&self, layer: LayerId) -> Result<usize> {
+        let mut count: usize = 0;
+        // SAFETY: valid handle; the count is the only out-parameter.
+        check(
+            unsafe { sys::clay_layer_node_count(self.as_ptr(), layer.0, &mut count) },
+            "clay_layer_node_count",
+        )?;
+        Ok(count)
+    }
+
+    /// The top-level node at `index`, in the layer's evaluation order.
+    ///
+    /// Index 0 is evaluated first. An index at or beyond the count is
+    /// `NotFound`, so a host walks to the end without a sentinel.
+    ///
+    /// Top level only, on purpose: this is the sibling of
+    /// [`Document::children`], which descends. [`Document::layer_nodes`] pairs
+    /// the two.
+    ///
+    /// Added in ClayCore 0.30.0, closing #91.
+    pub fn layer_node_at(&self, layer: LayerId, index: usize) -> Result<NodeId> {
+        let mut node: sys::clay_node_id = Default::default();
+        // SAFETY: valid handle; the node id is the only out-parameter.
+        check(
+            unsafe { sys::clay_layer_node_at(self.as_ptr(), layer.0, index, &mut node) },
+            "clay_layer_node_at",
+        )?;
+        Ok(NodeId(node))
+    }
+
+    /// Every node in a layer, groups descended into, in evaluation order.
+    ///
+    /// The pair the ABI documents: enumerate the roots, ask what each one is,
+    /// and recurse through the ones that answer as groups. A layer's own root
+    /// is not a group and carries no node id, which is why the two calls have
+    /// to exist separately.
+    ///
+    /// This replaces probing ids upward and tolerating a run of misses. Ids
+    /// are not dense — a removal leaves a gap and nothing bounds how long one
+    /// can be — so a probe loses every node past the longest gap it happened
+    /// to tolerate, and no value of "long enough" is defensible.
+    pub fn layer_nodes(&self, layer: LayerId) -> Result<Vec<NodeId>> {
+        let mut found = Vec::new();
+        for index in 0..self.layer_node_count(layer)? {
+            let node = self.layer_node_at(layer, index)?;
+            self.collect_nodes(layer, node, &mut found);
+        }
+        Ok(found)
+    }
+
+    /// `node` and everything under it, depth-first in evaluation order.
+    ///
+    /// A node that is not a group has no children to ask for, and the refusal
+    /// is how that is known — so it is a leaf here rather than an error.
+    fn collect_nodes(&self, layer: LayerId, node: NodeId, found: &mut Vec<NodeId>) {
+        found.push(node);
+        let Ok(children) = self.children(layer, node) else {
+            return;
+        };
+        for child in children {
+            self.collect_nodes(layer, child, found);
+        }
     }
 
     /// A group's children, in order.

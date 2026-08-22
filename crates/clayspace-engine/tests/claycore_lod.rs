@@ -1,16 +1,19 @@
-//! Task 3.9: what a host can actually do with the brick cache's mips.
+//! Task 3.9: drawing the brick cache's mips.
 //!
-//! The roadmap listed LOD as unblocked because `read_bricks(lod)`,
-//! `build_mip` and `current_lod` are all present. They are — and they are not
-//! enough: nothing meshes a mip. Filed as ClayCore #93.
+//! For three releases the LOD half a host could reach was the half it could
+//! not use — `build_mip` built a level, `read_bricks` read one and
+//! `current_lod` reported one, and nothing meshed one. That was ClayCore #93,
+//! and these tests held the two host halves either side of the gap.
 //!
-//! So the host halves are built and tested — the policy that decides when a
-//! coarser level is worth drawing, and the maintenance that keeps the mips
-//! ready — and the one call that would join them is the thing being waited
-//! for. These tests hold both halves and the gap between them.
+//! ClayCore 0.30.0 closed it with `clay_brick_cache_mesh_lod`, so they now
+//! assert the joined path: the policy decides, the maintenance keeps the mips
+//! built, and the coarse surface meshes. What is left of the old shape is the
+//! set of engine contracts the host path depends on — the refusals at level 1
+//! are load-bearing, not incidental, so they are pinned here.
 
+use clayspace_engine::claycore::BrickMeshParams;
 use clayspace_engine::{BackendPolicy, ClayDocument};
-use clayspace_model::{BrushSettings, GestureSample, SculptModel, ToolKind};
+use clayspace_model::{BrushSettings, Detail, DetailPolicy, GestureSample, SculptModel, ToolKind};
 
 fn document() -> Option<ClayDocument> {
     let policy = BackendPolicy::discover(None).ok()?;
@@ -19,78 +22,59 @@ fn document() -> Option<ClayDocument> {
         .ok()
 }
 
-#[test]
-fn the_cache_has_surface_bricks_to_build_mips_from() {
-    let Some(mut document) = document() else {
-        return;
-    };
+/// A dab at the given offset, so a test can settle a surface worth mipping.
+fn dab(document: &mut ClayDocument, at: [f32; 3], time: f32) {
     document
         .apply_stroke(
             ToolKind::Padrao,
             BrushSettings::default(),
             &[GestureSample {
-                position: [0.0, 0.0, 0.55],
+                position: at,
                 pressure: 1.0,
-                time: 0.0,
+                time,
             }],
             [false; 3],
         )
         .expect("a dab");
+}
+
+/// A settled document with mips built over it.
+fn settled() -> Option<ClayDocument> {
+    let mut document = document()?;
+    for step in 0..6 {
+        let t = step as f32 / 5.0;
+        dab(&mut document, [(t - 0.5) * 0.5, 0.0, 1.0], t);
+    }
+    document.build_mips().expect("build the mips");
+    Some(document)
+}
+
+/// Face normals and no colours — the only shading level 1 accepts.
+fn coarse_params() -> BrickMeshParams {
+    BrickMeshParams {
+        gradient_normals: false,
+        colors: false,
+        gradient_eps: None,
+    }
+}
+
+#[test]
+fn the_cache_has_surface_bricks_to_build_mips_from() {
+    let Some(mut document) = document() else {
+        return;
+    };
+    dab(&mut document, [0.0, 0.0, 0.55], 0.0);
 
     let bricks = document.cache().surface_bricks().expect("surface bricks");
     assert!(!bricks.is_empty(), "the starting form produced no bricks");
 }
 
 #[test]
-fn nothing_meshes_a_mip() {
-    // The stopping point. `clay_brick_cache_mesh` takes a document, meshing
-    // parameters and a key list — and no level. Its own header says the
-    // lattice is the cache's and already decided, which is true at lod 0 and
-    // is exactly what a coarse level would have to change.
-    //
-    // So mips are *readable* — `clay_brick_cache_read_bricks` takes a lod —
-    // and not *meshable*. A host that wants a coarse viewport has to march
-    // the samples itself, which means reimplementing the mesher this
-    // application deliberately does not own.
-    //
-    // Written as a grep over the header so it fails when a level appears in
-    // the meshing call, which is the signal to build LOD selection on top.
-    let header = include_str!("../../../vendor/ClayCore/bindings/c/clay.h");
-    let signature: String = header
-        .split("clay_result clay_brick_cache_mesh(")
-        .nth(1)
-        .expect("the meshing entry point")
-        .split(");")
-        .next()
-        .expect("its argument list")
-        .to_string();
-
-    assert!(
-        !signature.contains("lod"),
-        "the meshing call grew a level: {signature}\n\
-         build the LOD path on it instead of leaving this note"
-    );
-}
-
-#[test]
-fn a_mip_can_be_built_and_read_even_though_it_cannot_be_meshed() {
-    // The half that does work, recorded so the gap is precisely one call wide
-    // rather than a vague "LOD is not supported".
+fn a_mip_can_be_built_and_read() {
     let Some(mut document) = document() else {
         return;
     };
-    document
-        .apply_stroke(
-            ToolKind::Padrao,
-            BrushSettings::default(),
-            &[GestureSample {
-                position: [0.0, 0.0, 0.55],
-                pressure: 1.0,
-                time: 0.0,
-            }],
-            [false; 3],
-        )
-        .expect("a dab");
+    dab(&mut document, [0.0, 0.0, 0.55], 0.0);
 
     let bricks = document.cache().surface_bricks().expect("surface bricks");
     let Some(first) = bricks.first().copied() else {
@@ -104,8 +88,7 @@ fn a_mip_can_be_built_and_read_even_though_it_cannot_be_meshed() {
     ];
 
     // Buildable only when all eight children are evaluated and clean, so a
-    // "not yet" is an ordinary answer rather than a failure — and either
-    // answer proves the call is reachable, which is what this records.
+    // "not yet" is an ordinary answer rather than a failure.
     let built = document.cache_mut().build_mip(coarse);
     assert!(
         built.is_ok(),
@@ -115,36 +98,15 @@ fn a_mip_can_be_built_and_read_even_though_it_cannot_be_meshed() {
 
 #[test]
 fn the_surfaces_mips_can_be_built_and_are_ready_to_draw() {
-    // The maintenance half. A coarse brick is buildable only when all eight
-    // children are evaluated and clean, so this runs against a settled
-    // document rather than mid-stroke.
-    let Some(mut document) = document() else {
+    let Some(mut document) = settled() else {
         return;
     };
-    for step in 0..6 {
-        let t = step as f32 / 5.0;
-        document
-            .apply_stroke(
-                ToolKind::Padrao,
-                BrushSettings::default(),
-                &[GestureSample {
-                    position: [(t - 0.5) * 0.5, 0.0, 1.0],
-                    pressure: 1.0,
-                    time: t,
-                }],
-                [false; 3],
-            )
-            .expect("a dab");
-    }
-
     let built = document.build_mips().expect("build the mips");
     assert!(
         built > 0,
         "no coarse brick was buildable over a settled surface"
     );
 
-    // And they report as available, which is what a meshing call would ask
-    // before requesting one.
     let bricks = document.cache().surface_bricks().expect("surface bricks");
     let first = bricks.first().copied().expect("a surface brick");
     let coarse = [
@@ -160,26 +122,182 @@ fn the_surfaces_mips_can_be_built_and_are_ready_to_draw() {
 }
 
 #[test]
-fn the_policy_and_the_maintenance_meet_nothing() {
-    // The gap, stated where both halves are in scope. The policy can ask for
-    // `Detail::Reduced`, the mips exist for it, and there is no call that
-    // takes the two together — which is the whole of #93.
-    let policy = clayspace_model::DetailPolicy::default();
-    let far = policy.decide(clayspace_model::Detail::Full, 10.0, 10_000);
-    assert_eq!(far, clayspace_model::Detail::Reduced);
+fn the_coarse_surface_meshes() {
+    // What #93 blocked, now the whole point: triangles out of a mip.
+    let Some(document) = settled() else {
+        return;
+    };
+    let coarse = document
+        .drawable_coarse_keys()
+        .expect("the coarse keys with mips");
+    if coarse.is_empty() {
+        return;
+    }
 
-    let header = include_str!("../../../vendor/ClayCore/bindings/c/clay.h");
-    let signature: String = header
-        .split("clay_result clay_brick_cache_mesh(")
-        .nth(1)
-        .expect("the meshing entry point")
-        .split(");")
-        .next()
-        .expect("its argument list")
-        .to_string();
+    let (mesh, ranges) = document
+        .cache()
+        .mesh_lod(None, coarse_params(), 1, &coarse)
+        .expect("mesh the coarse level");
+
     assert!(
-        !signature.contains("lod"),
-        "the meshing call grew a level: {signature}\n\
-         join the policy to it and delete this test"
+        mesh.index_count() > 0,
+        "the coarse level meshed to nothing at all"
     );
+    assert_eq!(
+        ranges.len(),
+        coarse.len(),
+        "a range per requested key, in the order they were given"
+    );
+    assert!(
+        ranges.iter().any(|range| range.index_count > 0),
+        "every coarse key contributed nothing"
+    );
+}
+
+#[test]
+fn the_coarse_surface_is_coarser_than_the_full_one() {
+    // The whole reason to draw it. Twice the spacing over the same surface, so
+    // the triangle count should fall substantially rather than marginally.
+    let Some(document) = settled() else {
+        return;
+    };
+    let coarse = document
+        .drawable_coarse_keys()
+        .expect("the coarse keys with mips");
+    if coarse.is_empty() {
+        return;
+    }
+
+    let (fine_mesh, _) = document
+        .cache()
+        .mesh_lod(None, coarse_params(), 0, &[])
+        .expect("mesh the full level");
+    let (coarse_mesh, _) = document
+        .cache()
+        .mesh_lod(None, coarse_params(), 1, &coarse)
+        .expect("mesh the coarse level");
+
+    assert!(
+        coarse_mesh.index_count() < fine_mesh.index_count(),
+        "the coarse level was not coarser: {} indices against {}",
+        coarse_mesh.index_count(),
+        fine_mesh.index_count()
+    );
+}
+
+#[test]
+fn level_one_refuses_gradient_normals() {
+    // Load-bearing rather than incidental: the host draws the coarse surface
+    // face-shaded *because* of this, so a release that started downgrading
+    // instead of refusing should show up here rather than as a shading
+    // difference nobody traced back.
+    let Some(document) = settled() else {
+        return;
+    };
+    let coarse = document
+        .drawable_coarse_keys()
+        .expect("the coarse keys with mips");
+    if coarse.is_empty() {
+        return;
+    }
+
+    let gradient = BrickMeshParams {
+        gradient_normals: true,
+        colors: false,
+        gradient_eps: None,
+    };
+    let refused = document
+        .cache()
+        .mesh_lod(Some(document.document()), gradient, 1, &coarse);
+    assert!(
+        refused.is_err(),
+        "level 1 accepted gradient normals; the coarse path can stop \
+         forcing face normals"
+    );
+}
+
+#[test]
+fn a_coarse_key_with_no_mip_is_refused() {
+    // Why `drawable_coarse_keys` filters rather than handing the whole coarse
+    // set over: one unbuilt mip fails the entire call, so an unfiltered list
+    // would lose the coarse surface whenever a stroke left a child dirty.
+    let Some(mut document) = document() else {
+        return;
+    };
+    dab(&mut document, [0.0, 0.0, 0.55], 0.0);
+
+    let bricks = document.cache().surface_bricks().expect("surface bricks");
+    let Some(first) = bricks.first().copied() else {
+        return;
+    };
+    // Deliberately far from anything the surface occupies, so no mip exists
+    // for it however settled the document is.
+    let absent = [first[0] + 4096, first[1] + 4096, first[2] + 4096];
+
+    let refused = document
+        .cache()
+        .mesh_lod(None, coarse_params(), 1, &[absent]);
+    assert!(
+        refused.is_err(),
+        "a coarse key with no mip meshed anyway; the filter in \
+         drawable_coarse_keys is no longer what makes the coarse path safe"
+    );
+}
+
+#[test]
+fn every_drawable_coarse_key_actually_meshes() {
+    // The filter's contract, stated as the property the host relies on: what
+    // it returns can be meshed in one call without a single refusal.
+    let Some(document) = settled() else {
+        return;
+    };
+    let coarse = document
+        .drawable_coarse_keys()
+        .expect("the coarse keys with mips");
+    if coarse.is_empty() {
+        return;
+    }
+
+    for key in &coarse {
+        assert_eq!(
+            document.coarse_lod(*key).expect("current lod"),
+            1,
+            "a key that reported no mip came back as drawable: {key:?}"
+        );
+        assert!(
+            document
+                .cache()
+                .mesh_lod(None, coarse_params(), 1, &[*key])
+                .is_ok(),
+            "a drawable coarse key was refused on its own: {key:?}"
+        );
+    }
+}
+
+#[test]
+fn the_policy_and_the_maintenance_now_meet() {
+    // The gap, closed. The policy asks for `Reduced`, the mips exist for it,
+    // and the call that takes the two together is `mesh_lod` — which is the
+    // whole of #93.
+    let Some(document) = settled() else {
+        return;
+    };
+    let policy = DetailPolicy::default();
+    assert_eq!(
+        policy.decide(Detail::Full, 10.0, 10_000),
+        Detail::Reduced,
+        "the policy no longer asks for a coarse surface"
+    );
+
+    let coarse = document
+        .drawable_coarse_keys()
+        .expect("the coarse keys with mips");
+    if coarse.is_empty() {
+        return;
+    }
+    let (mesh, _) = document
+        .cache()
+        .mesh_lod(None, coarse_params(), 1, &coarse)
+        .expect("what the policy asked for is drawable");
+    assert!(mesh.index_count() > 0, "the coarse surface drew nothing");
 }

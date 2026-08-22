@@ -73,9 +73,18 @@ fn dab_refill(backend: Option<&clayspace_engine::claycore::Backend>) -> Option<D
     Some(times[times.len() / 2])
 }
 
+/// A dab is about this many bricks, which is over the threshold — so this is
+/// the batch size the routing decision is really about.
+const DAB: usize = 27;
+
 #[test]
 fn refill_runs_on_whichever_backend_is_actually_faster() {
-    let Ok(policy) = BackendPolicy::discover(None) else {
+    // The routing used to be a constant measured on one machine, and this test
+    // is what caught it being wrong on another: on a 24-thread Linux box with
+    // an RTX 5060 the CPU wins at every batch size, and the constant sent a
+    // dab to the GPU anyway. It is now measured, so what this asserts is that
+    // the policy agrees with the measurement it was given.
+    let Ok(mut policy) = BackendPolicy::discover(None) else {
         return;
     };
     let accelerated = policy.active().clone();
@@ -93,10 +102,12 @@ fn refill_runs_on_whichever_backend_is_actually_faster() {
         gpu.as_secs_f64() * 1000.0
     );
 
-    // A dab is about 27 bricks, which is over the threshold, so this is the
-    // batch size the routing decision is really about.
-    let dab = 27;
-    let chosen_is_cpu = policy.refill_backend(dab).is_none();
+    // The same batch size for both, so comparing per-brick costs is comparing
+    // these two durations.
+    policy.record_refill(None, DAB, cpu);
+    policy.record_refill(Some(&accelerated), DAB, gpu);
+
+    let chosen_is_cpu = policy.refill_backend(DAB).is_none();
     if cpu <= gpu {
         assert!(
             chosen_is_cpu,
@@ -110,6 +121,77 @@ fn refill_runs_on_whichever_backend_is_actually_faster() {
              {cpu:?}, and yet refill is still routed to the CPU"
         );
     }
+}
+
+#[test]
+fn routing_follows_the_measurement_rather_than_the_constant() {
+    // The property that makes the constant survivable: whatever it says, one
+    // measurement each way settles it. Driven with synthetic timings so it
+    // asserts the policy's own logic on every machine, including CPU-only
+    // ones where there is nothing to race.
+    let Ok(mut policy) = BackendPolicy::discover(None) else {
+        return;
+    };
+    let accelerated = policy.active().clone();
+    if accelerated == clayspace_engine::claycore::Backend::Cpu {
+        return;
+    }
+
+    // Before anything is measured the constant decides, which is what produces
+    // the first sample.
+    assert!(
+        policy.refill_backend(DAB).is_some(),
+        "an unmeasured policy should try the accelerated backend"
+    );
+    assert!(policy.needs_refill_calibration());
+
+    // A slow accelerated backend sends the work to the CPU.
+    policy.record_refill(None, DAB, Duration::from_micros(500));
+    policy.record_refill(Some(&accelerated), DAB, Duration::from_micros(2000));
+    assert!(!policy.needs_refill_calibration());
+    assert!(
+        policy.refill_backend(DAB).is_none(),
+        "a backend measured four times slower than the CPU still got the work"
+    );
+
+    // And the other way, which is the machine the constant was written for.
+    let Ok(mut policy) = BackendPolicy::discover(None) else {
+        return;
+    };
+    policy.record_refill(None, DAB, Duration::from_micros(2000));
+    policy.record_refill(Some(&accelerated), DAB, Duration::from_micros(500));
+    assert!(
+        policy.refill_backend(DAB).is_some(),
+        "a backend measured four times faster than the CPU did not get the work"
+    );
+}
+
+#[test]
+fn a_measured_policy_still_keeps_small_batches_on_the_cpu() {
+    // The guard that is not about throughput: what a handful of residual
+    // bricks avoids is the fixed cost of a device submission, which no
+    // per-brick measurement of a large batch can see.
+    let Ok(mut policy) = BackendPolicy::discover(None) else {
+        return;
+    };
+    let accelerated = policy.active().clone();
+    if accelerated == clayspace_engine::claycore::Backend::Cpu {
+        return;
+    }
+    // Measured as overwhelmingly favouring the accelerated backend.
+    policy.record_refill(None, DAB, Duration::from_micros(10_000));
+    policy.record_refill(Some(&accelerated), DAB, Duration::from_micros(100));
+
+    assert!(
+        policy.refill_backend(1).is_none(),
+        "one brick was sent to a device"
+    );
+    assert!(
+        policy
+            .refill_backend(BackendPolicy::GPU_CROSSOVER_BRICKS - 1)
+            .is_none(),
+        "a sub-threshold batch was sent to a device"
+    );
 }
 
 #[test]
@@ -149,5 +231,44 @@ fn the_active_backend_is_still_reported_honestly() {
     assert!(
         policy.available().contains(policy.active()),
         "the active backend is not one this machine offers"
+    );
+}
+
+#[test]
+fn a_real_document_calibrates_itself_on_its_first_big_refill() {
+    // The end-to-end half. The split happens inside `drain_dirty`, so building
+    // a starting form — which refills the whole thing — is enough to leave the
+    // policy measured rather than guessing.
+    //
+    // This is what took startup on a 24-thread Linux box with an RTX 5060 from
+    // 179 ms to 63 ms: the constant sent the whole fill to a backend four times
+    // slower than the CPU, and two 32-brick slices are enough to find that out.
+    let Ok(policy) = BackendPolicy::discover(None) else {
+        return;
+    };
+    if policy.active() == &clayspace_engine::claycore::Backend::Cpu {
+        return;
+    }
+    let Ok(document) = clayspace_engine::ClayDocument::new(policy)
+        .and_then(clayspace_engine::ClayDocument::with_starting_form)
+    else {
+        return;
+    };
+
+    let (cpu, accelerated) = document.policy().refill_cost_per_brick();
+    assert!(
+        cpu.is_some() && accelerated.is_some(),
+        "the first full refill left the routing unmeasured: cpu {cpu:?}, \
+         accelerated {accelerated:?}"
+    );
+    assert!(
+        !document.policy().needs_refill_calibration(),
+        "the policy still wants calibrating after a whole-model refill"
+    );
+    println!(
+        "per brick: cpu {:.0} ns, {} {:.0} ns",
+        cpu.unwrap_or(0.0),
+        document.policy().active(),
+        accelerated.unwrap_or(0.0)
     );
 }

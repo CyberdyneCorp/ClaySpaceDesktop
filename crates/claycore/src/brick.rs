@@ -463,6 +463,34 @@ impl BrickCache {
         params: BrickMeshParams,
         keys: &[BrickKey],
     ) -> Result<(Mesh, Vec<BrickMeshRange>)> {
+        self.mesh_lod(doc, params, 0, keys)
+    }
+
+    /// The same, at a level of the cache's lattice.
+    ///
+    /// `lod` is 0 for the full-resolution bricks — where this is exactly
+    /// [`BrickCache::mesh`] — or 1 for their mips. At level 1 `keys` names
+    /// *coarse* keys, the 2×2×2 block keys [`BrickCache::build_mip`] and
+    /// [`BrickCache::current_lod`] take, and empty still means "every brick
+    /// this level stores".
+    ///
+    /// Level 1 **refuses** colours and gradient normals rather than
+    /// downgrading them, so `params` must have both off: a coarse vertex sits
+    /// on the mip's surface rather than the field's, far enough off it that a
+    /// per-brick culled tape and the whole document's no longer agree. Face
+    /// normals come from the triangles and work at every level.
+    ///
+    /// A level that was never built is an error rather than an empty mesh,
+    /// because an empty mesh already means "no surface bricks" — an ordinary
+    /// state of a session, where a missing mip is a "not yet". Ask
+    /// [`BrickCache::current_lod`] before naming a coarse key.
+    pub fn mesh_lod(
+        &self,
+        doc: Option<&Document>,
+        params: BrickMeshParams,
+        lod: i32,
+        keys: &[BrickKey],
+    ) -> Result<(Mesh, Vec<BrickMeshRange>)> {
         let raw_params = params.to_raw();
         let doc_ptr = doc.map_or(std::ptr::null(), |d| d.as_ptr() as *const _);
         let mut ranges = vec![sys::clay_brick_mesh_range::default(); keys.len()];
@@ -478,20 +506,21 @@ impl BrickCache {
         // or both null with a zero count, which selects "every surface brick".
         check(
             unsafe {
-                sys::clay_brick_cache_mesh(
+                sys::clay_brick_cache_mesh_lod(
                     self.raw.as_ptr(),
                     doc_ptr,
                     &raw_params,
+                    lod,
                     keys_ptr,
                     key_count,
                     ranges_ptr,
                     &mut mesh,
                 )
             },
-            "clay_brick_cache_mesh",
+            "clay_brick_cache_mesh_lod",
         )?;
 
-        let mesh = Mesh::from_raw(mesh, "clay_brick_cache_mesh")?;
+        let mesh = Mesh::from_raw(mesh, "clay_brick_cache_mesh_lod")?;
         let ranges = ranges
             .into_iter()
             .map(|r| BrickMeshRange {

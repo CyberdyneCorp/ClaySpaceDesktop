@@ -1,11 +1,10 @@
 //! Which level of detail the viewport should be drawing.
 //!
-//! Two halves, and only one of them is ours to finish. Deciding *when* a
-//! coarser level is worth it is host policy and lives here, testable without a
-//! GPU or an engine. Actually drawing one needs `clay_brick_cache_mesh` to
-//! accept a level, which it does not — see ClayCore #93. So this decides, the
-//! engine adapter keeps the mips built and ready, and the day the meshing call
-//! grows a level the two are already joined.
+//! Deciding *when* a coarser level is worth it is host policy and lives here,
+//! testable without a GPU or an engine. Drawing one is the engine adapter's:
+//! it keeps the mips built and hands over the coarse keys that have one, and
+//! the composition root meshes them at level 1. The join was blocked until
+//! ClayCore 0.30.0 gave the meshing call a level (#93).
 //!
 //! The rule that matters is hysteresis. A single threshold flickers: a camera
 //! resting exactly on it swaps the whole surface between levels every frame

@@ -21,6 +21,7 @@ use clayspace_engine::claycore::{
     BrickKey, BrickMeshParams, ClayError, Document, Mesh, VertexLayout,
 };
 use clayspace_engine::ClayDocument;
+use clayspace_model::Detail;
 use clayspace_view::{Gpu, GpuMesh, Vertex};
 
 use crate::slots::SlotMap;
@@ -87,6 +88,19 @@ pub struct SurfaceGeometry {
     /// A gesture's worth of them, so the quality pass at the end re-meshes
     /// what the stroke touched rather than the whole surface.
     coarsely_shaded: std::collections::HashSet<BrickKey>,
+    /// The level the stored geometry was meshed at.
+    ///
+    /// Distinct from `requested` because a coarse surface is not always
+    /// available: with no mip built yet, asking for `Reduced` draws `Full`
+    /// rather than nothing, and this records what is actually on screen.
+    detail: Detail,
+    /// The level last asked for.
+    ///
+    /// Kept so a fallback settles instead of retrying: a request that could
+    /// not be met is not re-attempted on the next frame, only when the
+    /// request changes or [`SurfaceGeometry::reapply_detail`] says the mips
+    /// have since been built.
+    requested: Detail,
 }
 
 /// How a mesh is shaded, which is the one knob worth changing mid-gesture.
@@ -134,6 +148,8 @@ impl SurfaceGeometry {
             last_read: std::time::Duration::ZERO,
             last_split: std::time::Duration::ZERO,
             coarsely_shaded: std::collections::HashSet::new(),
+            detail: Detail::Full,
+            requested: Detail::Full,
         }
     }
 
@@ -162,6 +178,21 @@ impl SurfaceGeometry {
         gpu: &Gpu,
         document: &mut ClayDocument,
     ) -> Result<Option<SyncCost>, ClayError> {
+        // An edit while the coarse surface is drawn returns to full resolution
+        // first. The two levels do not share a key space — a coarse key names
+        // a 2x2x2 block of fine ones — so the dirty keys the engine hands back
+        // do not address the store a coarse rebuild left behind. Without this,
+        // the sync fails outright rather than drawing something wrong, which
+        // `lod_switching.rs` records. It is also what the sculptor wants:
+        // dirtying any child drops its mip, so there is nothing coarse left to
+        // draw where the edit landed anyway.
+        //
+        // The rebuild meshes the edit and drains the dirty set with it, so the
+        // `take` below finds nothing and this reports no incremental cost. The
+        // surface is correct; only the latency line skips a frame.
+        if self.detail == Detail::Reduced {
+            self.rebuild_at(gpu, document, Detail::Full)?;
+        }
         let dirty = document.take_dirty_keys();
         if dirty.is_empty() {
             return Ok(None);
@@ -217,7 +248,7 @@ impl SurfaceGeometry {
         // shading quality that is not what a sculptor is looking at mid-drag:
         // they are watching the form move. `refine` pays for it when the
         // pointer comes up, over just these keys.
-        self.remesh(document, &meshed, Some(&replace), Shading::Fast)?;
+        self.remesh(document, &meshed, Some(&replace), Shading::Fast, 0)?;
         self.coarsely_shaded.extend(meshed.iter().copied());
         let mesh_time = started.elapsed();
 
@@ -227,11 +258,7 @@ impl SurfaceGeometry {
 
         // The interface reports what is on screen, so the counts come from
         // what was actually built rather than from an estimate.
-        document.record_geometry(
-            self.triangle_count(),
-            self.vertex_count(),
-            clayspace_model::Detail::Full,
-        );
+        document.record_geometry(self.triangle_count(), self.vertex_count(), self.detail);
 
         let cost = SyncCost {
             keys: meshed.len(),
@@ -253,21 +280,31 @@ impl SurfaceGeometry {
     /// `replace` of `None` means every meshed key, which is what a full
     /// rebuild wants. A subset re-mesh passes a smaller set than it meshed —
     /// see [`SurfaceGeometry::sync`] for why.
+    ///
+    /// `lod` is 0 for the full-resolution bricks or 1 for their mips, where
+    /// `keys` names coarse keys instead. A caller may not mix the two: the
+    /// stored geometry is keyed by whatever level built it.
     fn remesh(
         &mut self,
         document: &ClayDocument,
         keys: &[BrickKey],
         replace: Option<&std::collections::HashSet<BrickKey>>,
         shading: Shading,
+        lod: i32,
     ) -> Result<(), ClayError> {
         let engine_started = std::time::Instant::now();
-        let (mesh, ranges) = document.cache().mesh(
-            Some(document.document()),
+        // No document at level 1, which skips compiling a tape the coarse
+        // mesh cannot use anyway: the level refuses gradient normals and
+        // colours, and face normals come from the triangles.
+        let doc = (lod == 0).then(|| document.document());
+        let (mesh, ranges) = document.cache().mesh_lod(
+            doc,
             BrickMeshParams {
                 gradient_normals: shading.gradient(),
                 colors: false,
                 gradient_eps: None,
             },
+            lod,
             keys,
         )?;
 
@@ -517,12 +554,15 @@ impl SurfaceGeometry {
     /// gesture, and affordable there because nobody is waiting on the next
     /// sample.
     pub fn refine(&mut self, gpu: &Gpu, document: &mut ClayDocument) -> Result<(), ClayError> {
-        if self.coarsely_shaded.is_empty() {
+        // Nothing coarsely shaded at reduced detail — level 1 is face-shaded
+        // by construction and has no gradient pass to buy back — and the keys
+        // would be from the other level's space anyway.
+        if self.coarsely_shaded.is_empty() || self.detail == Detail::Reduced {
             return Ok(());
         }
         let keys: Vec<BrickKey> = self.coarsely_shaded.iter().copied().collect();
         let replace: std::collections::HashSet<BrickKey> = self.coarsely_shaded.drain().collect();
-        self.remesh(document, &keys, Some(&replace), Shading::Full)?;
+        self.remesh(document, &keys, Some(&replace), Shading::Full, 0)?;
         self.upload(gpu);
         Ok(())
     }
@@ -548,27 +588,112 @@ impl SurfaceGeometry {
         self.rebuild(gpu, document)
     }
 
-    /// Rebuilds every key from scratch.
+    /// Rebuilds every key from scratch, at the level last asked for.
     ///
     /// The compaction the specification calls for: per-key slots accumulate
     /// empty entries as the surface moves, and this is where they go. Off the
     /// interaction path — it costs a full re-mesh.
     pub fn rebuild(&mut self, gpu: &Gpu, document: &mut ClayDocument) -> Result<(), ClayError> {
-        let keys = document.cache().surface_bricks()?;
+        self.rebuild_at(gpu, document, self.requested)
+    }
+
+    /// The level currently on screen, which is not always the one asked for.
+    pub fn detail(&self) -> Detail {
+        self.detail
+    }
+
+    /// Draws the surface at `detail`, rebuilding when that is not the request.
+    ///
+    /// Returns whether anything was rebuilt. Switching level is a full
+    /// re-mesh, which is affordable only because it is rare: the policy's
+    /// hysteresis band is what stops a resting camera paying it every frame.
+    /// Incremental syncing happens at full resolution only.
+    pub fn set_detail(
+        &mut self,
+        gpu: &Gpu,
+        document: &mut ClayDocument,
+        detail: Detail,
+    ) -> Result<bool, ClayError> {
+        if detail == self.requested {
+            return Ok(false);
+        }
+        self.requested = detail;
+        self.rebuild_at(gpu, document, detail)?;
+        Ok(true)
+    }
+
+    /// Tries the requested level again, for when the mips it wanted have since
+    /// been built.
+    ///
+    /// A request for the coarse surface made before any mip existed draws full
+    /// resolution instead. That is the right answer at the time and the wrong
+    /// one once a gesture ends and the mips go up, so the end of a gesture
+    /// asks again rather than leaving the fallback in place until the camera
+    /// happens to move.
+    pub fn reapply_detail(
+        &mut self,
+        gpu: &Gpu,
+        document: &mut ClayDocument,
+    ) -> Result<bool, ClayError> {
+        if self.detail == self.requested {
+            return Ok(false);
+        }
+        self.rebuild_at(gpu, document, self.requested)?;
+        Ok(self.detail == self.requested)
+    }
+
+    /// Which keys, level and shading draw `detail`.
+    ///
+    /// Falls back to full resolution when the coarse surface is not there to
+    /// draw: no mip has been built yet, or every coarse brick still has a
+    /// child the last stroke left dirty. Drawing the model at the wrong size
+    /// or not at all would both be worse than drawing it slowly.
+    fn level_for(
+        &self,
+        document: &ClayDocument,
+        detail: Detail,
+    ) -> Result<(Vec<BrickKey>, i32, Shading), ClayError> {
+        if detail == Detail::Reduced {
+            let coarse = document.drawable_coarse_keys()?;
+            if !coarse.is_empty() {
+                // Level 1 refuses gradient normals rather than downgrading
+                // them, so the coarse surface is face-shaded by construction.
+                return Ok((coarse, 1, Shading::Fast));
+            }
+        }
+        Ok((document.cache().surface_bricks()?, 0, Shading::Full))
+    }
+
+    /// Rebuilds every key from scratch at `detail`.
+    fn rebuild_at(
+        &mut self,
+        gpu: &Gpu,
+        document: &mut ClayDocument,
+        detail: Detail,
+    ) -> Result<(), ClayError> {
+        let (keys, lod, shading) = self.level_for(document, detail)?;
         self.keys.clear();
         self.touched.clear();
         // The spans described geometry that has just been discarded, so the
         // layout cannot be patched onto what replaces it.
         self.relayout = true;
+        // What is on screen, which is the fallback rather than the request
+        // when there was no coarse surface to draw.
+        self.detail = if lod == 1 {
+            Detail::Reduced
+        } else {
+            Detail::Full
+        };
+        self.coarsely_shaded.clear();
         if keys.is_empty() {
             self.mesh.upload(gpu, &[], &[]);
             self.layout = SlotMap::default();
             document.take_dirty_keys();
             return Ok(());
         }
-        self.remesh(document, &keys, None, Shading::Full)?;
-        self.coarsely_shaded.clear();
+        self.remesh(document, &keys, None, shading, lod)?;
         self.upload(gpu);
+        document.record_geometry(self.triangle_count(), self.vertex_count(), self.detail);
         // Drained, because everything it could name has just been meshed.
         //
         // Left undrained, the pending set from building the starting form —

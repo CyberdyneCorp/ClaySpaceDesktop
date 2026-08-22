@@ -401,28 +401,57 @@ fn clicking_a_link_inserts_a_sphere_between_its_ends() {
 }
 
 #[test]
-fn a_negative_sphere_is_refused_where_it_would_orphan_something() {
+fn a_sphere_that_carries_a_limb_can_still_cut() {
+    // This used to be refused. The rule was the old ABI's, not ZBrush's: a
+    // negative was placed as a separate subtractive item, so anything hanging
+    // off it would have been orphaned. ClayCore 0.30.0 made the sign a
+    // property of the node (#99), so a negative may carry children.
     let mut vm = rigged();
-    // Grow a third so the middle one has a child.
+    // Grow a third, so the middle sphere carries a limb.
     vm.press(Grab::Grow(1), [1.0, 0.0, 0.0]);
     vm.drag([1.6, 0.0, 0.0]);
     vm.release();
 
-    // The tip is a leaf and can cut.
+    // The middle one carries the tip, and can cut anyway.
+    vm.press(Grab::Move(1), [1.0, 0.0, 0.0]);
+    vm.release();
+    vm.set_selected_negative(true);
+    assert!(
+        vm.selected_is_negative(),
+        "a sphere with a child was refused: {:?}",
+        vm.notice().get()
+    );
+    assert!(vm.notice().get().is_none());
+
+    // And the limb hanging off it kept its own sign, rather than being
+    // dragged negative with its parent.
+    let tree = vm.tree().get().clone().expect("a tree");
+    assert!(
+        !tree.get(2).expect("the tip").negative,
+        "flipping a parent's sign dragged its child's with it"
+    );
+
+    // The leaf can cut too, independently.
+    vm.press(Grab::Move(2), [1.6, 0.0, 0.0]);
+    vm.release();
     vm.set_selected_negative(true);
     assert!(
         vm.selected_is_negative(),
         "a leaf could not be made negative"
     );
-    assert!(vm.notice().get().is_none());
+}
 
-    // The middle one carries the tip.
-    vm.press(Grab::Move(1), [1.0, 0.0, 0.0]);
+#[test]
+fn the_root_cannot_cut() {
+    // The one refusal that survives, and it is structural: there would be
+    // nothing left for the root to cut into.
+    let mut vm = rigged();
+    vm.press(Grab::Move(0), [0.0, 0.0, 0.0]);
     vm.release();
     vm.set_selected_negative(true);
     assert!(!vm.selected_is_negative());
     assert!(
         vm.notice().get().is_some(),
-        "making a parent negative was accepted silently"
+        "making the root negative was accepted silently"
     );
 }

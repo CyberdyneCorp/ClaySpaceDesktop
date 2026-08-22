@@ -5,9 +5,9 @@
 //! holds.
 
 use claycore::{
-    Blend, BrickCache, BrickConfig, BrickKey, BrushParams, BrushShape, Document, Falloff,
-    ImportBudget, Item, LayerId, Mask, Mesh, MeshLayerDesc, MeshParams, Mesher, NodeId, Op,
-    StrokePreset, VolumeParams,
+    Blend, BrickCache, BrickConfig, BrickKey, BrushParams, BrushShape, ClayError, Document,
+    Falloff, ImportBudget, Item, LayerId, Mask, Mesh, MeshLayerDesc, MeshParams, Mesher, NodeId,
+    Op, StrokePreset, VolumeParams,
 };
 use clayspace_model::{
     Armature, ArmatureModel, BrushSettings, DocumentModel, EditOutcome, ExchangeModel,
@@ -30,10 +30,11 @@ struct Layer {
     name: String,
     /// What the *document* calls this layer.
     ///
-    /// Fixed at creation, because the ABI names a layer when it is made and
-    /// has no rename. It is kept separately from `name` for one reason: it is
-    /// the only handle `clay_document_voxel_layer` takes, so a renamed voxel
-    /// layer would otherwise lose its grid.
+    /// Equal to `name` since ClayCore 0.30.0 gave the ABI a rename (#92), and
+    /// kept as its own field because it is a different thing: it is the only
+    /// handle `clay_document_voxel_layer` takes, and a name is not a key
+    /// anything upstream enforces. Renaming writes both, so a renamed voxel
+    /// layer keeps its grid.
     engine_name: String,
     representation: Representation,
     visible: bool,
@@ -69,6 +70,11 @@ pub struct ClayDocument {
     /// Bricks dirtied since the viewport last caught up.
     dirty: Vec<BrickKey>,
     stats: SceneStats,
+    /// Bricks the surface occupies, refreshed with the stats.
+    ///
+    /// Kept because the detail policy needs a size and asking the cache for
+    /// the whole key list every frame would cost more than the policy saves.
+    surface_brick_count: usize,
     /// A mask the tools consult, when one has been painted.
     mask: Option<Mask>,
     /// The mirror currently set on the active layer, so it is only rewritten
@@ -83,12 +89,13 @@ pub struct ClayDocument {
     /// The tree is held here because the engine's parent array has no getter —
     /// positions and radii read back, the topology does not. So this is the
     /// record and the engine is written from it.
-    /// The rig: its layer, every node it placed, and the tree behind them.
+    /// The rig: its layer, the nodes it placed, and the tree behind them.
     ///
-    /// *Every* node, because a rig with negative spheres is more than one
-    /// item — the armature plus a subtractive sphere per cutter. Tracking only
-    /// the armature's own node left the cutters behind on each rewrite, so an
-    /// edited rig accumulated a subtraction per edit.
+    /// One node since ClayCore 0.30.0 (#99), because the signs made the rig a
+    /// single item again. It stays a list because rewriting is defined over
+    /// whatever was placed: when a negative sphere was a second subtractive
+    /// item, tracking only the armature's own node left the cutters behind on
+    /// each rewrite, and an edited rig accumulated a subtraction per edit.
     armature: Option<(LayerId, Vec<NodeId>, Armature)>,
     /// The box the placed armature last occupied.
     ///
@@ -154,6 +161,7 @@ impl ClayDocument {
             policy,
             dirty: Vec::new(),
             stats: SceneStats::default(),
+            surface_brick_count: 0,
             mask: None,
             symmetry,
             next_key: 2,
@@ -208,28 +216,12 @@ impl ClayDocument {
     /// dirtying any child drops its mip, and rebuilding them mid-stroke would
     /// be work thrown away on the next sample.
     ///
-    /// Nothing consumes these yet: `clay_brick_cache_mesh` takes no level, so
-    /// a mip can be built and read and not drawn (ClayCore #93). Keeping them
-    /// current means the day that call grows a level, the coarse surface is
-    /// already there to mesh.
+    /// What consumes them is [`ClayDocument::drawable_coarse_keys`], since
+    /// ClayCore 0.30.0 gave the meshing call a level (#93). Building them here
+    /// is still what makes a coarse surface available the moment the camera
+    /// asks for one.
     pub fn build_mips(&mut self) -> Result<usize, ModelError> {
-        let keys = self.cache.surface_bricks().map_err(ModelError::engine)?;
-
-        // Each coarse brick covers a 2x2x2 block, so the surface's coarse keys
-        // are its fine keys halved — deduplicated, because eight fine bricks
-        // map to one coarse.
-        let mut coarse: Vec<BrickKey> = keys
-            .iter()
-            .map(|key| {
-                [
-                    key[0].div_euclid(2),
-                    key[1].div_euclid(2),
-                    key[2].div_euclid(2),
-                ]
-            })
-            .collect();
-        coarse.sort_unstable();
-        coarse.dedup();
+        let coarse = self.coarse_keys().map_err(ModelError::engine)?;
 
         let mut built = 0;
         for key in coarse {
@@ -248,6 +240,53 @@ impl ClayDocument {
         self.cache
             .current_lod(coarse_key)
             .map_err(ModelError::engine)
+    }
+
+    /// The coarse keys covering the surface, deduplicated.
+    ///
+    /// Each coarse brick covers a 2×2×2 block, so these are the surface's fine
+    /// keys halved — eight of them map to one, hence the dedup.
+    fn coarse_keys(&self) -> Result<Vec<BrickKey>, ClayError> {
+        let mut coarse: Vec<BrickKey> = self
+            .cache
+            .surface_bricks()?
+            .iter()
+            .map(|key| {
+                [
+                    key[0].div_euclid(2),
+                    key[1].div_euclid(2),
+                    key[2].div_euclid(2),
+                ]
+            })
+            .collect();
+        coarse.sort_unstable();
+        coarse.dedup();
+        Ok(coarse)
+    }
+
+    /// The coarse keys that actually have a mip, ready to be meshed at level 1.
+    ///
+    /// Filtered rather than handed over whole, because meshing a level refuses
+    /// a coarse key with no valid mip rather than skipping it: one child left
+    /// dirty by the last stroke would otherwise fail the whole coarse surface.
+    /// A short list is an ordinary answer — it means the rest of the surface
+    /// is only available at full resolution.
+    pub fn drawable_coarse_keys(&self) -> Result<Vec<BrickKey>, ClayError> {
+        let mut drawable = Vec::new();
+        for key in self.coarse_keys()? {
+            if self.cache.current_lod(key)? == 1 {
+                drawable.push(key);
+            }
+        }
+        Ok(drawable)
+    }
+
+    /// How many bricks the surface currently occupies.
+    ///
+    /// The size input to the detail policy, which never coarsens a model small
+    /// enough to mesh inside a frame anyway.
+    pub fn surface_brick_count(&self) -> usize {
+        self.surface_brick_count
     }
 
     /// The cache, for the few callers that need to build a mip.
@@ -377,10 +416,42 @@ impl ClayDocument {
                 break;
             }
             dirty.extend(requests.iter().map(|request| request.key()));
-            let backend = self.policy.refill_backend(requests.len()).cloned();
-            self.cache
-                .refill(&self.document, backend.as_ref(), &requests)
-                .map_err(ModelError::engine)?;
+            // The first eligible batch of a session is split: a slice on the
+            // CPU, the rest on the accelerated backend. That is what turns the
+            // routing from a constant into a measurement, and it costs a
+            // fraction of one batch rather than a startup probe — which would
+            // be paid by every machine, including the ones the constant is
+            // already right for.
+            if self.policy.needs_refill_calibration()
+                && requests.len() >= 3 * Self::CALIBRATION_SLICE
+            {
+                // Two equal slices, one per backend, and then the remainder is
+                // routed on what they cost. Equal because the comparison is
+                // per brick; small because whichever backend loses only ever
+                // runs the slice, so the calibration cannot cost more than a
+                // few milliseconds even where one backend is several times
+                // slower than the other.
+                let slice = Self::CALIBRATION_SLICE;
+                // The accelerated backend runs once before it is timed. The
+                // first call into a device in a process pays for the context
+                // and for compiling its pipelines — on a machine whose toolkit
+                // is older than its GPU, that is a PTX JIT — and charging a
+                // one-time cost to the per-brick rate made CUDA measure 21x
+                // slower than the CPU where a warm sweep says 4x. Wrong in the
+                // direction that happened to be right here, which is the worst
+                // kind of wrong to leave in.
+                self.timed_refill(Some(self.active_backend()), &requests[..slice])?;
+                self.policy.forget_refill_costs();
+
+                self.timed_refill(None, &requests[slice..2 * slice])?;
+                self.timed_refill(Some(self.active_backend()), &requests[2 * slice..3 * slice])?;
+                let rest = &requests[3 * slice..];
+                let backend = self.policy.refill_backend(rest.len()).cloned();
+                self.timed_refill(backend, rest)?;
+            } else {
+                let backend = self.policy.refill_backend(requests.len()).cloned();
+                self.timed_refill(backend, &requests)?;
+            }
             if remaining == 0 {
                 break;
             }
@@ -398,11 +469,53 @@ impl ClayDocument {
         Ok(())
     }
 
+    /// Bricks per slice when calibrating the two backends against each other.
+    ///
+    /// Three slices are used — a warm-up, then one timed on each backend — so
+    /// a batch has to hold three of these before it is worth splitting. That
+    /// means a session that never refills a hundred bricks at once keeps the
+    /// constant, which is the right trade: it is exactly the case where the
+    /// routing decision is cheap to get wrong.
+    ///
+    /// Big enough that a device submission's fixed cost is amortised roughly
+    /// as it would be in a real batch — measured at 8 and 64 bricks on two
+    /// machines, the ratio between the backends was stable, so a slice this
+    /// size predicts a large batch well. Small enough that the losing backend
+    /// costs a couple of milliseconds to find out.
+    const CALIBRATION_SLICE: usize = 32;
+
+    /// The accelerated backend, for the calibration split.
+    fn active_backend(&self) -> claycore::Backend {
+        self.policy.active().clone()
+    }
+
+    /// Refills a batch on `backend` and tells the policy what it cost.
+    ///
+    /// Every refill is timed, so the routing keeps following the machine
+    /// rather than being decided once. The clock is around the engine call and
+    /// nothing else.
+    fn timed_refill(
+        &mut self,
+        backend: Option<claycore::Backend>,
+        requests: &[claycore::BrickRequest],
+    ) -> Result<(), ModelError> {
+        if requests.is_empty() {
+            return Ok(());
+        }
+        let started = std::time::Instant::now();
+        self.cache
+            .refill(&self.document, backend.as_ref(), requests)
+            .map_err(ModelError::engine)?;
+        self.policy
+            .record_refill(backend.as_ref(), requests.len(), started.elapsed());
+        Ok(())
+    }
+
     /// Whether a layer contributes to the surface an edit would touch.
     fn refresh_stats(&mut self) {
         // Counted from the cache rather than by meshing the document, which
         // would cost a full march on every edit.
-        let bricks = self.cache.surface_bricks().map(|k| k.len()).unwrap_or(0);
+        self.surface_brick_count = self.cache.surface_bricks().map(|k| k.len()).unwrap_or(0);
         self.stats = SceneStats {
             // Reported once the viewport meshes; until then nothing has been
             // built and the interface says so rather than showing a zero that
@@ -416,7 +529,6 @@ impl ClayDocument {
                 self.stats.detail
             },
         };
-        let _ = bricks;
     }
 
     /// Records the geometry the viewport actually built, so the interface
@@ -1235,9 +1347,41 @@ impl SceneModel for ClayDocument {
 
     fn rename_layer(&mut self, key: LayerKey, name: &str) -> Result<(), ModelError> {
         let index = self.index_of(key)?;
-        // The engine names a layer at creation and does not rename; the name
-        // the interface shows is the document's own record of it.
+        // Refused here as well as by the engine, so the message is the one the
+        // interface can show. An empty name is what a cleared text field
+        // submits.
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(ModelError::engine("uma camada precisa de um nome"));
+        }
+
+        // A voxel layer's grid is reachable only by name — the ABI has no
+        // id-addressed accessor — and the lookup answers with the first layer
+        // in stack order carrying it. So two voxel layers sharing a name would
+        // shadow one another's grid, and a stroke would land on the wrong one.
+        // Nothing upstream enforces this, which is why it is enforced here and
+        // only where it can actually go wrong.
+        if self.layers[index].representation == Representation::Voxel
+            && self.layers.iter().enumerate().any(|(other, layer)| {
+                other != index
+                    && layer.representation == Representation::Voxel
+                    && layer.engine_name == name
+            })
+        {
+            return Err(ModelError::engine(
+                "já existe uma camada de voxels com esse nome",
+            ));
+        }
+
+        // Since ClayCore 0.30.0 the rename reaches the document, so it is
+        // saved rather than kept beside it and lost (#92). One command, so one
+        // undo step, on the same history as everything else.
+        self.document
+            .set_layer_name(self.layers[index].id, name)
+            .map_err(ModelError::engine)?;
         self.layers[index].name = name.to_string();
+        // Kept in step, because it is the handle a voxel grid is fetched with.
+        self.layers[index].engine_name = name.to_string();
         Ok(())
     }
 
@@ -1588,6 +1732,7 @@ impl ClayDocument {
             policy,
             dirty: Vec::new(),
             stats: SceneStats::default(),
+            surface_brick_count: 0,
             mask: None,
             symmetry: [false; 3],
             next_key,
@@ -1618,9 +1763,9 @@ impl ClayDocument {
         for (index, id) in ids.into_iter().enumerate() {
             if let Some((node, tree)) = Self::recover_armature(&model.document, id) {
                 model.armature_bounds = Some(Self::armature_bounds(&tree, model.skin));
-                // Only the armature node: the cutters are separate items the
-                // reader cannot see, so a reopened rig's negatives are not
-                // ours to remove either. See ClayCore #99.
+                // One node, which is the whole rig: since ClayCore 0.30.0 the
+                // signs travel with it, so there are no separate cutter items
+                // left behind for a reader to miss (#99).
                 model.armature = Some((id, vec![node], tree));
                 // And that layer becomes the active one.
                 //
@@ -2068,12 +2213,13 @@ impl ClayDocument {
         layer: LayerId,
         tree: &Armature,
     ) -> Result<Vec<NodeId>, ModelError> {
-        // The spheres that add and the ones that cut go in as separate items.
-        // The armature primitive is a stroke plus a tree with one op for the
-        // whole thing, so a negative sphere cannot live in the same item as
-        // what it cuts into — see `Armature::split_by_sign`.
-        let (positive, cutters) = tree.split_by_sign();
-        let tree = &positive;
+        // One item for the whole rig, signs included. Until ClayCore 0.30.0 the
+        // armature primitive carried one op for the whole item, so a negative
+        // sphere had to be placed as a second subtractive item over the same
+        // layer — which cut a ball-shaped hole but left the membrane along its
+        // links drawn, lost the sign on reload, and forced negatives to be
+        // leaves. #99 made the sign a property of the node, so all of that
+        // goes away and the rig is one item again.
         let mut item = Item::armature().map_err(ModelError::engine)?;
 
         // Radii scaled on the way out. The tree keeps what was authored, so
@@ -2098,6 +2244,13 @@ impl ClayDocument {
         item.set_armature_parents(&parents)
             .map_err(ModelError::engine)?;
 
+        // The sign half. The engine builds the positive armature minus the
+        // negative one, so a link between two nodes of different signs does
+        // not exist — which is the membrane cut — and a carve never sweeps a
+        // positive parent's radius.
+        item.set_armature_signs(&tree.signs())
+            .map_err(ModelError::engine)?;
+
         // No blend term: `clay_item_set_stroke_blend_k` refuses an armature
         // ("stroke points need CLAY_PRIM_STROKE"). The skin is the cones
         // between the spheres, so thickness lives in the radii above.
@@ -2107,28 +2260,11 @@ impl ClayDocument {
             .document
             .add_item(layer, &item)
             .map_err(ModelError::engine)?;
+        let placed = vec![node];
 
-        // The cutters, after the rig so they carve what it just placed. Each
-        // is its own sphere rather than a tree: `set_negative` keeps them
-        // leaves, so there is no topology to preserve and a ball-shaped
-        // indentation is exactly what a negative ZSphere makes.
-        let mut placed = vec![node];
-        for cutter in &cutters {
-            let mut hole =
-                Item::sphere(self.skin.radius_for(cutter.radius)).map_err(ModelError::engine)?;
-            hole.set_op(Op::Subtract).map_err(ModelError::engine)?;
-            hole.set_position(cutter.position)
-                .map_err(ModelError::engine)?;
-            placed.push(
-                self.document
-                    .add_item(layer, &hole)
-                    .map_err(ModelError::engine)?,
-            );
-        }
-
-        // Bounds over the *whole* tree, cutters included: they are what the
+        // Bounds over the whole tree, negatives included: they are what the
         // vacated box has to cover when a rig is rewritten.
-        self.armature_bounds = Some(Self::armature_bounds(&positive, self.skin));
+        self.armature_bounds = Some(Self::armature_bounds(tree, self.skin));
         self.refill(layer, &placed)?;
         self.refresh_stats();
         Ok(placed)
@@ -2245,25 +2381,22 @@ impl ClayDocument {
     /// it can miss is a rig placed beyond a long run of removed nodes, which
     /// costs the tree and not the surface.
     fn recover_armature(document: &Document, layer: LayerId) -> Option<(NodeId, Armature)> {
-        const GAP: u32 = 16;
-
-        let mut misses = 0;
-        let mut candidate = 1u32;
-        while misses < GAP {
-            let node = NodeId::from_raw(candidate);
-            match document.node_prim(layer, node) {
-                Ok(prim) if prim == claycore::prim::ARMATURE => {
-                    if let Some(tree) = Self::read_armature(document, layer, node) {
-                        return Some((node, tree));
-                    }
-                    misses = 0;
-                }
-                Ok(_) => misses = 0,
-                Err(_) => misses += 1,
-            }
-            candidate += 1;
-        }
-        None
+        // Enumerated since ClayCore 0.30.0 (#91). This used to probe ids
+        // upward and give up after sixteen consecutive misses, which is a
+        // guess about how long a gap can be: ids are not dense, a removal
+        // leaves a gap, and nothing bounds one — so the probe lost every node
+        // past the longest run it happened to tolerate, and no value of
+        // "long enough" was defensible.
+        document
+            .layer_nodes(layer)
+            .ok()?
+            .into_iter()
+            .filter(|node| {
+                document
+                    .node_prim(layer, *node)
+                    .is_ok_and(|prim| prim == claycore::prim::ARMATURE)
+            })
+            .find_map(|node| Some((node, Self::read_armature(document, layer, node)?)))
     }
 
     /// The tree behind a placed armature node.
@@ -2279,18 +2412,20 @@ impl ClayDocument {
         if points.is_empty() || parents.len() != points.len() {
             return None;
         }
+        // The signs, which ClayCore 0.30.0 made readable (#99). A rig saved
+        // before signs existed reads back positive-padded rather than failing,
+        // and so does one whose signs are all positive — the engine stores the
+        // reading compilation makes, so a short array is padded here the same
+        // way it is there.
+        let signs = document.armature_signs(layer, node).unwrap_or_default();
         let skin = SkinSettings::default();
         let nodes = points
             .iter()
             .zip(parents.iter())
-            .map(|(point, parent)| clayspace_model::Zsphere {
+            .enumerate()
+            .map(|(index, (point, parent))| clayspace_model::Zsphere {
                 position: [point[0], point[1], point[2]],
-                // A reloaded rig is all positive: the cutters are separate
-                // items and the armature the engine reads back holds only the
-                // spheres that add. Their indentations are still in the
-                // surface; what is lost is the ability to un-negative them,
-                // which is the same shape of loss as a rename.
-                negative: false,
+                negative: signs.get(index).copied().unwrap_or(false),
                 radius: if skin.thickness > 0.0 {
                     point[3] / skin.thickness
                 } else {

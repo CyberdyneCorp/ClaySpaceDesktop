@@ -4,7 +4,54 @@
 //! CPU scalar reference, so this layer never has to reason about correctness —
 //! only about preference. Choosing badly costs speed; it cannot cost accuracy.
 
+use std::time::Duration;
+
 use claycore::{Backend, ClayError};
+
+/// What a refill has actually cost, per backend.
+///
+/// The reason this exists rather than a constant: the crossover is a property
+/// of the *machine*, not of the library. Measured on an M-series Mac, Metal
+/// wins a dab's twenty-seven bricks by about 2x. Measured on a 24-thread Linux
+/// box with an RTX 5060, both CUDA and Vulkan lose to the CPU at every batch
+/// size from 8 bricks to 7600 — so there is no threshold there to move a
+/// constant to, and the honest answer is "never".
+///
+/// One constant cannot be right for both, and neither can a per-backend one:
+/// the same backend is fast on one machine and slow on another, depending on
+/// the toolkit, the driver and how much CPU there is to lose to. So this
+/// records what the refills actually took and routes on that.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct RefillCost {
+    /// Nanoseconds per brick, smoothed. `None` until the first measurement.
+    per_brick: Option<f64>,
+}
+
+impl RefillCost {
+    /// How much a batch of `bricks` is predicted to cost, or `None` when
+    /// nothing has been measured yet.
+    fn predict(&self, bricks: usize) -> Option<f64> {
+        Some(self.per_brick? * bricks as f64)
+    }
+
+    /// Folds in one measurement.
+    ///
+    /// An exponential average rather than the last value: refills contend with
+    /// whatever else the machine is doing, and one descheduled batch should not
+    /// flip the routing for the rest of the session. It is weighted towards
+    /// recent samples anyway, so a machine that changes — a laptop leaving a
+    /// power-saving state — is followed rather than remembered wrongly.
+    fn record(&mut self, bricks: usize, took: Duration) {
+        if bricks == 0 {
+            return;
+        }
+        let sample = took.as_nanos() as f64 / bricks as f64;
+        self.per_brick = Some(match self.per_brick {
+            Some(held) => held * 0.7 + sample * 0.3,
+            None => sample,
+        });
+    }
+}
 
 /// Why a backend is the active one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +116,9 @@ pub struct BackendPolicy {
     reason: SelectionReason,
     /// Operations that have fallen back this session, each recorded once.
     fallbacks: Vec<(Operation, Backend)>,
+    /// What a refill has cost on the CPU, and on the accelerated backend.
+    cpu_refill: RefillCost,
+    accelerated_refill: RefillCost,
 }
 
 impl BackendPolicy {
@@ -90,8 +140,74 @@ impl BackendPolicy {
     /// the status bar tells the user about. This is only about which backend
     /// does this particular job.
     pub fn refill_backend(&self, bricks: usize) -> Option<&Backend> {
-        (bricks >= Self::GPU_CROSSOVER_BRICKS && self.active != Backend::Cpu)
-            .then_some(&self.active)
+        if self.active == Backend::Cpu {
+            return None;
+        }
+        // Below the threshold the CPU wins on every machine measured, because
+        // what is being avoided is the fixed cost of a device submission
+        // rather than the throughput of the batch. Kept as a guard so a
+        // handful of residual bricks never pays for a dispatch.
+        if bricks < Self::GPU_CROSSOVER_BRICKS {
+            return None;
+        }
+        match (
+            self.cpu_refill.predict(bricks),
+            self.accelerated_refill.predict(bricks),
+        ) {
+            // Both measured: route on what they actually cost, but only move
+            // *away* from the accelerated backend when the CPU is clearly
+            // ahead. A sample is one timing on a machine doing other things,
+            // and the failure modes are not symmetric — sending a batch to a
+            // slightly slower device costs a little, while abandoning a device
+            // that is genuinely faster costs on every edit for the rest of the
+            // session. The margin is what keeps a near-tie on the default.
+            (Some(cpu), Some(accelerated)) => {
+                (accelerated <= cpu * Self::CPU_MARGIN).then_some(&self.active)
+            }
+            // Not measured yet. The accelerated backend is tried, which is
+            // both the old behaviour and what produces the sample that
+            // replaces it — see `needs_refill_calibration`.
+            _ => Some(&self.active),
+        }
+    }
+
+    /// Whether the routing is still running on the constant rather than on
+    /// measurement.
+    ///
+    /// True until both backends have been timed once. The caller answers it by
+    /// splitting one eligible batch — a slice on the CPU, the rest on the
+    /// accelerated backend — which costs a fraction of a batch and settles the
+    /// question for the session.
+    pub fn needs_refill_calibration(&self) -> bool {
+        self.active != Backend::Cpu
+            && (self.cpu_refill.per_brick.is_none() || self.accelerated_refill.per_brick.is_none())
+    }
+
+    /// Records what a refill cost, so the next one routes on evidence.
+    ///
+    /// `backend` is what [`BackendPolicy::refill_backend`] returned, so `None`
+    /// is the CPU.
+    pub fn record_refill(&mut self, backend: Option<&Backend>, bricks: usize, took: Duration) {
+        match backend {
+            Some(_) => self.accelerated_refill.record(bricks, took),
+            None => self.cpu_refill.record(bricks, took),
+        }
+    }
+
+    /// Discards what has been measured, so the next refills are what decide.
+    ///
+    /// For the warm-up: the first call into a device pays costs no later call
+    /// does, and a rate built from it describes the start-up rather than the
+    /// work.
+    pub fn forget_refill_costs(&mut self) {
+        self.cpu_refill = RefillCost::default();
+        self.accelerated_refill = RefillCost::default();
+    }
+
+    /// What a refill is predicted to cost per brick on each backend, in
+    /// nanoseconds — the CPU first. For diagnostics.
+    pub fn refill_cost_per_brick(&self) -> (Option<f64>, Option<f64>) {
+        (self.cpu_refill.per_brick, self.accelerated_refill.per_brick)
     }
 
     /// How many bricks a batch needs before an accelerated backend pays.
@@ -99,9 +215,29 @@ impl BackendPolicy {
     /// Measured by the engine at brick dim 8 on an M-series Mac, which is the
     /// cache configuration this application uses: below about sixteen bricks
     /// the CPU wins, at a dab's twenty-seven Metal is roughly twice as fast.
-    /// Worth re-measuring on a device that is not an M-series Mac —
-    /// `backend_choice.rs` is what would notice.
+    ///
+    /// This is now only the **floor and the starting guess**. What it protects
+    /// is the fixed cost of a device submission, which is a property of the
+    /// call rather than of the machine, so it holds everywhere: a handful of
+    /// residual bricks is never worth a dispatch.
+    ///
+    /// Above it the decision is measured, because the crossover turned out not
+    /// to be a property of the library at all. On a 24-thread Linux box with
+    /// an RTX 5060, both CUDA and Vulkan lose to the CPU at every batch size
+    /// from 8 bricks to 7600 — 3.5x and 2.5x — so there was no threshold to
+    /// move this number to, and routing a dab to the GPU cost 3x on startup.
+    /// One constant cannot be right for both machines, and a per-backend one
+    /// cannot either: the same backend is fast on one and slow on another
+    /// depending on the toolkit, the driver and how much CPU there is to lose
+    /// to. See `RefillCost` and `backend_choice.rs`.
     pub const GPU_CROSSOVER_BRICKS: usize = 16;
+
+    /// How much cheaper the CPU has to measure before it takes the work.
+    ///
+    /// The accelerated backend keeps a batch unless the CPU beats it by more
+    /// than a quarter. Deliberately not symmetric: see
+    /// [`BackendPolicy::refill_backend`].
+    const CPU_MARGIN: f64 = 1.25;
 
     /// Discovers what this machine offers and applies `stored_override`.
     ///
@@ -124,6 +260,8 @@ impl BackendPolicy {
             active,
             reason,
             fallbacks: Vec::new(),
+            cpu_refill: RefillCost::default(),
+            accelerated_refill: RefillCost::default(),
         }
     }
 

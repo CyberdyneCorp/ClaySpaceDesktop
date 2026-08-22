@@ -37,7 +37,7 @@
 - [x] 3.6 Implement the view presets with orthographic projection for the orthogonal views and framing preservation on switch
 - [x] 3.7 Implement the navigation gizmo with per-axis activation
 - [x] 3.8 Implement the ground grid and symmetry-plane overlays, excluded from export
-- [ ] 3.9 Implement LOD selection over the brick cache mips with restoration on approach — the host halves are done: `DetailPolicy` decides with hysteresis, `ClayDocument::build_mips` keeps the coarse levels ready at each gesture end. **Drawing one is blocked upstream** ([#93](https://github.com/CyberdyneCorp/ClayCore/issues/93)): `clay_brick_cache_mesh` takes no level. `claycore_lod.rs` holds both halves and the gap
+- [x] 3.9 Implement LOD selection over the brick cache mips with restoration on approach — `DetailPolicy` decides with hysteresis, `ClayDocument::build_mips` keeps the coarse levels ready at each gesture end, and `SurfaceGeometry::set_detail` meshes them at level 1 through `clay_brick_cache_mesh_lod`, which ClayCore 0.30.0 added ([#93](https://github.com/CyberdyneCorp/ClayCore/issues/93)). The coarse surface is face-shaded because level 1 refuses gradient normals, falls back to full resolution when no mip has been built, and returns to it on an edit. See `claycore_lod.rs` and `lod_switching.rs`
 
 ## 4. MVVM skeleton
 
@@ -91,7 +91,7 @@
 ## 8. Document lifecycle
 
 - [x] 8.1 Implement open and save through the engine's document I/O, with the newer-version refusal path
-- [x] 8.2 Verify cross-platform byte-identical documents in CI — the `document-bytes` matrix and the job that compares the digests. The macOS half stays red until [#71](https://github.com/CyberdyneCorp/ClayCore/issues/71)
+- [x] 8.2 Verify cross-platform byte-identical documents in CI — the `document-bytes` matrix and the job that compares the digests. The macOS half was red on [#71](https://github.com/CyberdyneCorp/ClayCore/issues/71), which shipped in ClayCore 0.29.0; no run has confirmed it green since, so treat those rows as unverified rather than blocked
 - [x] 8.3 Implement mesh import for OBJ, PLY, FBX and GLB with the engine's guardrails and the raised-ceiling path — GLB excepted: `clay_mesh_save` writes it and `clay_mesh_load` does not read it, so it is offered on export only and refused by name on import
 - [x] 8.4 Implement export with mesher choice, resolution, decimation and attribute-support warnings; default to the watertight mesher
 - [x] 8.5 Implement autosave recovery state, crash detection and the recovery offer
