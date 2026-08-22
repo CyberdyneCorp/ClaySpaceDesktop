@@ -281,14 +281,19 @@ fn measure_edit_locality(policy: &BackendPolicy, figures: &mut BTreeMap<String, 
             .unwrap_or(0);
 
         // The same edit on both, not a proportional one — see
-        // `Scene::probe_brush`.
+        // `Scene::probe_brush`. Placed where the cache keeps a surface rather
+        // than at the scene's own coordinates, which land under the surface on
+        // the larger scene — see `Scene::probe_point`.
         let sample = scene.stroke(3)[1];
+        let Some(position) = Scene::probe_point(&document, sample.position) else {
+            return;
+        };
         let started = Instant::now();
         if document
             .apply_stroke(
                 ToolKind::Padrao,
                 Scene::probe_brush(),
-                &[sample],
+                &[clayspace_model::GestureSample { position, ..sample }],
                 [false; 3],
             )
             .is_err()

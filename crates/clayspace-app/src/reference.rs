@@ -155,6 +155,47 @@ impl Scene {
         }
     }
 
+    /// Where to put a probe dab so that it lands on the surface.
+    ///
+    /// The centre of the surface brick most aligned with `toward`, asked of the
+    /// cache rather than derived from the scene's own coordinates. Those place
+    /// the build strokes at `radius * 1.01` and displace outward by a brush
+    /// proportional to the radius, so on the larger scene that coordinate is
+    /// *under* the surface by the time the scene is built. A dab there dirties
+    /// bricks and not one of them holds a lattice, which is a miss reported as
+    /// an edit: `locality.key_ratio` read 0.00 against a budget of 2 for as
+    /// long as the probe was placed that way, so the figure could not fail.
+    ///
+    /// A pick is no better. On the larger scene it answers a radius the cache
+    /// keeps no surface brick at — the bricks along that ray go `Outside`
+    /// straight to `Inside` — which is its own question and not this one.
+    ///
+    /// Deterministic: `surface_bricks` is documented as returning the cache's
+    /// own order and not a stable one, so the choice is made by direction.
+    pub fn probe_point(document: &ClayDocument, toward: [f32; 3]) -> Option<[f32; 3]> {
+        let config = document.cache().config();
+        let extent = config.voxel_size * config.dim as f32;
+        let length = (0..3).map(|i| toward[i] * toward[i]).sum::<f32>().sqrt();
+        if length <= f32::EPSILON {
+            return None;
+        }
+        let direction: [f32; 3] = std::array::from_fn(|i| toward[i] / length);
+
+        document
+            .cache()
+            .surface_bricks()
+            .ok()?
+            .iter()
+            .map(|key| {
+                let at: [f32; 3] = std::array::from_fn(|i| (key[i] as f32 + 0.5) * extent);
+                let len = (0..3).map(|i| at[i] * at[i]).sum::<f32>().sqrt().max(1e-6);
+                let alignment: f32 = (0..3).map(|i| at[i] / len * direction[i]).sum();
+                (at, alignment)
+            })
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(at, _)| at)
+    }
+
     /// A stroke across the front of the form, as a drag delivers it.
     pub fn stroke(self, samples: usize) -> Vec<GestureSample> {
         let radius = self.radius();

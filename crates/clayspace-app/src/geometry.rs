@@ -356,21 +356,40 @@ impl SurfaceGeometry {
         // mesh cannot use anyway: the level refuses gradient normals and
         // colours, and face normals come from the triangles.
         let doc = (lod == 0).then(|| document.document());
-        let (mesh, ranges) = document.cache().mesh_lod(
-            doc,
-            BrickMeshParams {
-                gradient_normals: shading.gradient(),
-                colors: false,
-                gradient_eps: None,
-            },
-            lod,
-            keys,
-        )?;
+        // Nothing requested means nothing meshed — *not* what the same words
+        // mean one layer down. An empty key list is how the C ABI spells "every
+        // surface brick", which is right for an export and catastrophic here:
+        // an edit whose dirty keys all turned out to be uniformly inside or
+        // outside asks for nothing and would be handed the whole model. It cost
+        // 1.31 s and 2.9 M triangles on a 9466-brick scene to establish that a
+        // dab under the surface changed nothing.
+        //
+        // Reachable only since the dirty set started being filtered to the keys
+        // that can hold a triangle, which is what made "nothing to mesh" a
+        // state rather than an impossibility. `scaling_probe.rs` holds it.
+        let (mesh, ranges) = if keys.is_empty() {
+            (None, Vec::new())
+        } else {
+            let (mesh, ranges) = document.cache().mesh_lod(
+                doc,
+                BrickMeshParams {
+                    gradient_normals: shading.gradient(),
+                    colors: false,
+                    gradient_eps: None,
+                },
+                lod,
+                keys,
+            )?;
+            (Some(mesh), ranges)
+        };
 
         self.last_engine_mesh = engine_started.elapsed();
 
         let read_started = std::time::Instant::now();
-        let (vertices, indices) = read_mesh(&mesh)?;
+        let (vertices, indices) = match &mesh {
+            Some(mesh) => read_mesh(mesh)?,
+            None => (Vec::new(), Vec::new()),
+        };
         self.last_read = read_started.elapsed();
         let split_started = std::time::Instant::now();
 
