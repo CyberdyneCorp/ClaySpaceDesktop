@@ -42,8 +42,8 @@
 
 ## 5. Phase 3 — mesh sculpting
 
-- [ ] 5.1 Wrap `clay_mesh_sculptor_create` / `destroy` / `refresh` / `refit` / `quality` in `claycore`
-- [ ] 5.2 Wrap `clay_mesh_sculptor_stamp` and `clay_mesh_sculptor_apply_stroke`
+- [x] 5.1 Wrap `clay_mesh_sculptor_create` / `destroy` / `refresh` / `refit` / `quality` in `claycore`
+- [x] 5.2 Wrap `clay_mesh_sculptor_stamp` and `clay_mesh_sculptor_apply_stroke`
 - [ ] 5.3 Hold a mesh sculptor per mesh layer in `ClayDocument`, created on first sculpt and invalidated when the geometry is replaced
 - [ ] 5.4 Route a stroke on an active mesh layer to the mesh sculptor
 - [ ] 5.5 Add the sixteen mesh brushes to the capability table and the shelf

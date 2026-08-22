@@ -51,6 +51,7 @@ descriptors! {
     sys::clay_relax_params,
     sys::clay_flatten_params,
     sys::clay_volume_params,
+    sys::clay_mesh_brush_desc,
     sys::clay_field_report,
     sys::clay_consolidation_params,
     sys::clay_consolidation_cost,

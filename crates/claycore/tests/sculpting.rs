@@ -617,3 +617,97 @@ fn a_reader_reports_the_safe_step_scale() {
         "the Lipschitz safety factor should be in (0, 1], got {scale}"
     );
 }
+
+/// Sculpting a mesh moves its vertices and never its topology.
+///
+/// The line every one of the sixteen verbs holds above everything else, and the
+/// reason a mesh layer is worth sculpting at all: a model that has just been
+/// retopologized can be refined without spending the retopology.
+mod mesh_sculpting {
+    use claycore::{MeshBrush, MeshSculptor, MeshStamp};
+
+    /// A mesh with enough vertices for a brush to reach several of them.
+    fn sphere_mesh() -> claycore::Mesh {
+        let (doc, _) = super::sphere_doc();
+        doc.mesh(claycore::MeshParams::default()).expect("mesh it")
+    }
+
+    #[test]
+    fn a_stamp_moves_vertices_and_leaves_the_indices_alone() {
+        let mut mesh = sphere_mesh();
+        let before_indices = mesh.indices().to_vec();
+        let before_positions = mesh.positions().to_vec();
+        assert!(!before_indices.is_empty(), "the fixture meshed nothing");
+
+        let mut sculptor = MeshSculptor::new(&mut mesh, 1e-5).expect("a sculptor");
+        let moved = sculptor
+            .stamp(
+                MeshStamp {
+                    verb: MeshBrush::Draw,
+                    center: [0.0, 0.0, 1.0],
+                    radius: 0.5,
+                    strength: 0.4,
+                    ..MeshStamp::default()
+                },
+                None,
+            )
+            .expect("stamp");
+        assert!(moved > 0, "the stamp reached nothing to move");
+
+        assert_eq!(
+            mesh.indices(),
+            before_indices.as_slice(),
+            "sculpting changed the topology, which is the one thing these \
+             verbs may never do"
+        );
+        assert_ne!(
+            mesh.positions(),
+            before_positions.as_slice(),
+            "the stamp reported vertices moved and none did"
+        );
+    }
+
+    /// The adjacency is the whole reason a sculptor is a stateful object, and
+    /// a welded count below the vertex count is how a host learns its import
+    /// was split at a seam.
+    #[test]
+    fn welded_classes_are_reported_beside_the_vertex_count() {
+        let mut mesh = sphere_mesh();
+        let sculptor = MeshSculptor::new(&mut mesh, 1e-5).expect("a sculptor");
+        let vertices = sculptor.vertex_count().expect("vertices");
+        let classes = sculptor.class_count().expect("classes");
+        assert!(vertices > 0);
+        assert!(
+            classes <= vertices,
+            "there cannot be more welded classes than vertices"
+        );
+    }
+
+    /// Every verb has to be expressible; a name in the enum that the engine
+    /// refuses is a tool the interface would offer and could not run.
+    #[test]
+    fn every_verb_is_accepted_by_the_engine() {
+        let mut mesh = sphere_mesh();
+        let mut sculptor = MeshSculptor::new(&mut mesh, 1e-5).expect("a sculptor");
+        for verb in MeshBrush::ALL {
+            if verb.writes_colour() {
+                // Refused on a mesh with no colour attribute, deliberately —
+                // twelve bytes a vertex is not a cost to hide behind a stroke.
+                continue;
+            }
+            sculptor
+                .stamp(
+                    MeshStamp {
+                        verb,
+                        center: [0.0, 0.0, 1.0],
+                        radius: 0.4,
+                        strength: 0.2,
+                        direction: [0.0, 0.02, 0.0],
+                        ..MeshStamp::default()
+                    },
+                    None,
+                )
+                .unwrap_or_else(|e| panic!("{verb:?} was refused: {e}"));
+        }
+    }
+}
