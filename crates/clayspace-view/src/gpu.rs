@@ -164,6 +164,9 @@ pub struct Framebuffer {
     /// `None` where the device will not multisample this format, in which case
     /// drawing goes straight to the caller's view as it always did.
     color: Option<wgpu::TextureView>,
+    /// Single-channel occlusion, written from the depth buffer and multiplied
+    /// onto the resolved colour. `None` when the scene is not multisampled.
+    occlusion: Option<wgpu::TextureView>,
     samples: u32,
 }
 
@@ -190,7 +193,11 @@ impl Framebuffer {
                 sample_count: samples,
                 dimension: wgpu::TextureDimension::D2,
                 format: Self::DEPTH_FORMAT,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                // Sampled as well as written: the occlusion pass reads the
+                // depth this pass produced rather than being given geometry of
+                // its own to re-derive it from.
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             })
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -210,11 +217,32 @@ impl Framebuffer {
                 .create_view(&wgpu::TextureViewDescriptor::default())
         });
 
+        // Single-sampled, and one channel. It is a shadowing term rather than
+        // a picture: it is averaged over a neighbourhood by the composite pass
+        // anyway, so a sample per pixel is already more resolution than
+        // survives that.
+        let occlusion = (samples > 1).then(|| {
+            gpu.device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("occlusion"),
+                    size,
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: Self::OCCLUSION_FORMAT,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&wgpu::TextureViewDescriptor::default())
+        });
+
         Self {
             width,
             height,
             depth,
             color,
+            occlusion,
             samples,
         }
     }
@@ -241,6 +269,20 @@ impl Framebuffer {
     pub fn samples(&self) -> u32 {
         self.samples
     }
+
+    /// Where the occlusion pass writes, and the composite reads.
+    ///
+    /// `None` where the scene is not multisampled: the pass loads the depth
+    /// buffer through `texture_depth_multisampled_2d`, which a single-sampled
+    /// texture cannot be bound to, and a second shader for a case no real
+    /// device reaches is a permutation to keep working for nothing. A device
+    /// that will not multisample draws without occlusion.
+    pub fn occlusion_view(&self) -> Option<&wgpu::TextureView> {
+        self.occlusion.as_ref()
+    }
+
+    /// The format the occlusion target is written in.
+    pub const OCCLUSION_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
 
     pub fn aspect(&self) -> f32 {
         self.width as f32 / self.height as f32

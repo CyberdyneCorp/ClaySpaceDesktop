@@ -238,8 +238,9 @@ what says the queue can be drained in pieces at all.
 
 ### Where the frame time is not
 
-The scene costs 0.48 ms a frame at 1280x800 on 296,607 triangles, against a
-16.7 ms budget — 3% of it, with 4x multisampling on. Nothing on screen is
+The scene costs 0.56 ms a frame at 1280x800 on 296,607 triangles, against a
+16.7 ms budget — 3% of it, with 4x multisampling and the occlusion passes on.
+Nothing on screen is
 worth optimising and everything the application does slowly is on the CPU,
 meshing. That is the number to check before any rendering work is proposed.
 
@@ -268,12 +269,32 @@ compares a compacted surface against the same surface before compaction: 77% of
 pixels changed, because amplifying a per-triangle quantity makes the render
 sensitive to which key owns which triangle.
 
-The technique needs triangles much larger than a pixel. What would work is a
-real screen-space occlusion pass sampling the depth buffer over a radius, which
-measures a neighbourhood rather than a tessellation and is indifferent to
-triangle size. That needs the scene rendered to an offscreen target and a
-fullscreen pass — egui composites straight onto the resolved target today — and
-the frame budget above says it is affordable.
+The technique needs triangles much larger than a pixel. **What was built
+instead reads depth**, which is indifferent to triangle size: positions are
+shared across a triangle edge, so the depth buffer is a continuous function of
+screen position however finely the surface is tessellated, and the normal the
+pass needs is derived from it rather than taken from the vertex.
+
+Two passes after the scene, and neither needs an offscreen colour target. The
+first writes occlusion into a single-channel target the framebuffer owns,
+sampling a hemisphere around each pixel's reconstructed view position. The
+second blurs that over 4x4 and multiplies it onto the resolved colour through
+the blend state — `src * dst` — so it reads no colour and no copy of the frame
+exists. egui still paints onto the same target afterwards, unchanged.
+
+  frame.median  0.48 -> 0.56 ms      (16.7 ms budget)
+
+Measured on the reference form: 31% of pixels darker, none lighter, at most 16%
+of a pixel's light. On a bare sphere the surface mean is unchanged to the digit
+— nothing on a convex form occludes anything else on it, and a pass that
+darkened it would be reporting its own sampling error as shape, which is
+exactly what the normal-derivative version did. `visual_occlusion.rs` holds
+both, against the same frame with `Renderer::set_occlusion(false)`.
+
+It needs the multisampled depth buffer, which it binds as
+`texture_depth_multisampled_2d`. A device that will not multisample the surface
+format draws without occlusion rather than growing a second shader for a case
+no real device reaches.
 
 ### Undo, which costs far more than the edit it takes back
 

@@ -341,6 +341,23 @@ pub enum SymmetryAxis {
 pub struct Renderer {
     pipeline: wgpu::RenderPipeline,
     overlay_pipeline: wgpu::RenderPipeline,
+    /// Depth in, occlusion out.
+    ao_pipeline: wgpu::RenderPipeline,
+    /// Occlusion in, multiplied onto the resolved colour.
+    composite_pipeline: wgpu::RenderPipeline,
+    /// Both bind textures the framebuffer owns and the framebuffer is rebuilt
+    /// on every resize, so their groups are made per frame from these rather
+    /// than held. A bind group is a descriptor write; the alternative is a
+    /// cache keyed by a texture identity wgpu does not expose.
+    ao_layout: wgpu::BindGroupLayout,
+    composite_layout: wgpu::BindGroupLayout,
+    ao_buffer: wgpu::Buffer,
+    /// Whether the occlusion passes run.
+    ///
+    /// A switch rather than a constant because it is the only way to see what
+    /// it is doing: the passes read the frame's own depth, so there is nothing
+    /// to compare a capture against except the same capture without them.
+    occlusion: bool,
     camera_buffer: wgpu::Buffer,
     material_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
@@ -491,6 +508,90 @@ impl Renderer {
             false,
         );
 
+        // The occlusion pass and the composite that multiplies it on. Their
+        // own module: they bind a depth texture and a uniform of their own, so
+        // they share no layout with the scene.
+        let ao_shader = gpu
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("ao"),
+                source: wgpu::ShaderSource::Wgsl(include_str!("shaders/ao.wgsl").into()),
+            });
+        let ao_layout = gpu
+            .device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("ao"),
+                entries: &[
+                    uniform_entry(0),
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Depth,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: true,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+        let composite_layout =
+            gpu.device
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("ao composite"),
+                    entries: &[wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    }],
+                });
+        let ao_pipeline = make_fullscreen_pipeline(
+            gpu,
+            &gpu.device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("ao"),
+                    bind_group_layouts: &[&ao_layout],
+                    push_constant_ranges: &[],
+                }),
+            &ao_shader,
+            "ao_fs",
+            Framebuffer::OCCLUSION_FORMAT,
+            None,
+        );
+        // `src * dst`, which is what "multiply this onto what is there"
+        // is — and it is why the pass needs no copy of the colour it darkens.
+        let composite_pipeline = make_fullscreen_pipeline(
+            gpu,
+            &gpu.device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("ao composite"),
+                    bind_group_layouts: &[&composite_layout],
+                    push_constant_ranges: &[],
+                }),
+            &ao_shader,
+            "composite_fs",
+            format,
+            Some(wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::Dst,
+                    dst_factor: wgpu::BlendFactor::Zero,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent::REPLACE,
+            }),
+        );
+        let ao_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ao"),
+            size: std::mem::size_of::<AoUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         // Triangles, blended, and no depth write — so the spheres and links
         // behind the membrane still read through it.
         let membrane_pipeline = make_pipeline(
@@ -508,6 +609,12 @@ impl Renderer {
             pipeline,
             overlay_pipeline,
             membrane_pipeline,
+            ao_pipeline,
+            composite_pipeline,
+            ao_layout,
+            composite_layout,
+            ao_buffer,
+            occlusion: true,
             camera_buffer,
             material_buffer,
             bind_group,
@@ -600,6 +707,15 @@ impl Renderer {
     /// capture wants.
     pub fn set_scene_viewport(&mut self, viewport: Option<[f32; 4]>) {
         self.scene_viewport = viewport;
+    }
+
+    /// Whether the surface is darkened where it closes in on itself.
+    pub fn set_occlusion(&mut self, on: bool) {
+        self.occlusion = on;
+    }
+
+    pub fn occlusion(&self) -> bool {
+        self.occlusion
     }
 
     /// Rebuilds the overlay geometry for the current settings.
@@ -769,7 +885,127 @@ impl Renderer {
                 pass.draw_indexed(0..self.gizmo_mesh.index_count, 0, 0..1);
             }
         }
+
+        self.occlude(
+            gpu,
+            &mut encoder,
+            target,
+            framebuffer,
+            camera,
+            aspect,
+            scene,
+        );
         gpu.queue.submit(Some(encoder.finish()));
+    }
+
+    /// Darkens what the surface closes in on, from the depth it just wrote.
+    ///
+    /// Two passes after the scene: occlusion into the framebuffer's own
+    /// single-channel target, then a blurred multiply onto the resolved
+    /// colour. Nothing here reads that colour — the multiply is the blend
+    /// state — so there is no copy of the frame and no third target.
+    ///
+    /// Skipped where the device would not multisample. The occlusion pass
+    /// binds the depth buffer as `texture_depth_multisampled_2d`, and a
+    /// single-sampled texture cannot be bound to that; see
+    /// [`Framebuffer::occlusion_view`].
+    #[allow(clippy::too_many_arguments)]
+    fn occlude(
+        &self,
+        gpu: &Gpu,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        framebuffer: &Framebuffer,
+        camera: &Camera,
+        aspect: f32,
+        scene: [f32; 4],
+    ) {
+        if !self.occlusion {
+            return;
+        }
+        let Some(occlusion) = framebuffer.occlusion_view() else {
+            return;
+        };
+        let projection = camera.projection(aspect);
+        gpu.queue.write_buffer(
+            &self.ao_buffer,
+            0,
+            bytemuck::bytes_of(&AoUniform {
+                projection: projection.to_cols_array_2d(),
+                inverse_projection: projection.inverse().to_cols_array_2d(),
+                viewport: scene,
+                params: [AO_RADIUS, AO_INTENSITY, AO_BIAS, AO_SAMPLES],
+            }),
+        );
+
+        let ao_bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("ao"),
+            layout: &self.ao_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.ao_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(framebuffer.depth_view()),
+                },
+            ],
+        });
+        let composite_bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("ao composite"),
+            layout: &self.composite_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(occlusion),
+            }],
+        });
+
+        {
+            // Cleared to white rather than loaded: outside the scene's
+            // rectangle nothing is occluded, and white is what the composite
+            // reads as "leave this alone" when its blur reaches over the edge.
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("occlusion"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: occlusion,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_viewport(scene[0], scene[1], scene[2], scene[3], 0.0, 1.0);
+            pass.set_pipeline(&self.ao_pipeline);
+            pass.set_bind_group(0, &ao_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("occlusion composite"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        // Loaded, because this darkens the frame that is
+                        // already there rather than drawing one.
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_viewport(scene[0], scene[1], scene[2], scene[3], 0.0, 1.0);
+            pass.set_pipeline(&self.composite_pipeline);
+            pass.set_bind_group(0, &composite_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
     }
 }
 
@@ -816,6 +1052,73 @@ fn make_bind_group(
             },
         ],
     })
+}
+
+/// What the occlusion pass needs to turn a depth buffer into a shadowing term.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct AoUniform {
+    projection: [[f32; 4]; 4],
+    inverse_projection: [[f32; 4]; 4],
+    viewport: [f32; 4],
+    params: [f32; 4],
+}
+
+/// How far an occluder can be and still count, in view units.
+///
+/// A world-space radius rather than a screen-space one, so a fold darkens by
+/// how deep it is rather than by how much of the window it happens to cover.
+/// Tuned against the reference form, whose starting sphere has radius 1.
+const AO_RADIUS: f32 = 0.08;
+/// How much of the surface's own colour full occlusion takes away.
+const AO_INTENSITY: f32 = 0.85;
+/// The depth difference below which an occluder is the surface itself.
+///
+/// Without it a flat surface occludes itself everywhere, from the difference
+/// between a sample's own depth and the depth of the pixel it projects to.
+const AO_BIAS: f32 = 0.004;
+/// Samples per pixel. Sixteen is where the noise stops changing what the
+/// composite's blur produces.
+const AO_SAMPLES: f32 = 16.0;
+
+/// A pipeline for a pass with no geometry and no depth.
+///
+/// Single-sampled whatever the scene is: both of these run over the *resolved*
+/// target, after the scene has been resolved into it.
+fn make_fullscreen_pipeline(
+    gpu: &Gpu,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    fs: &str,
+    format: wgpu::TextureFormat,
+    blend: Option<wgpu::BlendState>,
+) -> wgpu::RenderPipeline {
+    gpu.device
+        .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(fs),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some("fullscreen_vs"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some(fs),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview: None,
+            cache: None,
+        })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1385,7 +1688,15 @@ mod tests {
         // The whole point of meshing on the engine side is that the shader
         // does not re-implement the field. If one of these appears here, the
         // drift this project is built to avoid has started.
-        let shader = include_str!("shaders/matcap.wgsl").to_lowercase();
+        // Both of them. The occlusion pass reads the depth the mesh wrote and
+        // is exactly the kind of pass that would be tempting to write a field
+        // march into instead.
+        let shader = format!(
+            "{}{}",
+            include_str!("shaders/matcap.wgsl"),
+            include_str!("shaders/ao.wgsl")
+        )
+        .to_lowercase();
         for forbidden in [
             "sd_sphere",
             "sdsphere",
@@ -1400,7 +1711,7 @@ mod tests {
         ] {
             assert!(
                 !shader.contains(forbidden),
-                "the viewport shader contains `{forbidden}`, which means it is \
+                "a viewport shader contains `{forbidden}`, which means it is \
                  evaluating the field instead of drawing the mesh the engine produced"
             );
         }

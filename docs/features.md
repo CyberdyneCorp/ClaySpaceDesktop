@@ -116,11 +116,22 @@ sits inside a torso — and picking the far one makes a chest impossible to grab
 
 - MatCap shading with five built-in materials, generated rather than shipped as
   assets. Vertex colours modulate the material where a mesh carries them.
+- Ambient occlusion, so the surface darkens where it closes in on itself. A
+  MatCap is indexed by the view-space normal alone and cannot tell an open
+  flank from the bottom of a fold; two passes after the scene read the depth it
+  wrote, derive a normal from that, sample a hemisphere around each pixel and
+  multiply the result onto the resolved colour. Depth rather than the vertex
+  normal because the reference form is about seven triangles per covered pixel,
+  where a screen derivative of the normal reports the tessellation instead of
+  the shape. Costs 0.08 ms a frame. Requires multisampling, since the pass
+  binds the depth buffer as a multisampled texture; a device that falls back to
+  one sample draws without it.
 - 4x multisampling on the scene, where the device will take it for the surface
   format and falling back to one sample where it will not. The interface is
   drawn into the resolved target afterwards rather than multisampled with it:
   text and panel edges are already laid out on the pixel grid. Measured at
-  0.45 ms a frame before and 0.48 ms after, against a 16.7 ms budget.
+  0.45 ms a frame before and 0.48 ms after, against a 16.7 ms budget — 0.56 ms
+  with the occlusion passes above.
 - Orbit, pan, zoom, frame-all. Pitch is clamped short of the pole, where the
   view matrix degenerates.
 - Four view presets — Perspectiva, Frontal, Lateral, Superior. The orthogonal
