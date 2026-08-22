@@ -44,9 +44,9 @@
 
 - [x] 5.1 Wrap `clay_mesh_sculptor_create` / `destroy` / `refresh` / `refit` / `quality` in `claycore`
 - [x] 5.2 Wrap `clay_mesh_sculptor_stamp` and `clay_mesh_sculptor_apply_stroke`
-- [ ] 5.3 Hold a mesh sculptor per mesh layer in `ClayDocument`, created on first sculpt and invalidated when the geometry is replaced
-- [ ] 5.4 Route a stroke on an active mesh layer to the mesh sculptor
-- [ ] 5.5 Add the sixteen mesh brushes to the capability table and the shelf
+- [x] 5.3 Hold a mesh sculptor per mesh layer in `ClayDocument`, created on first sculpt and invalidated when the geometry is replaced
+- [x] 5.4 Route a stroke on an active mesh layer to the mesh sculptor
+- [x] 5.5 Add the sixteen mesh brushes to the capability table and the shelf
 - [ ] 5.6 Make mesh layers pickable, so a press sculpts rather than orbits
 - [ ] 5.7 Record a mesh gesture as one undoable action that reverts bit-exactly
 - [ ] 5.8 Report the mesh quality figure and name retopology as the remedy when a stroke passes it

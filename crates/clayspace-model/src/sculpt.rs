@@ -109,6 +109,14 @@ pub trait SculptModel {
     /// Whether the active layer accepts edits at all.
     fn active_layer_editable(&self) -> bool;
 
+    /// Whether the active layer carries geometry a verb can reach.
+    ///
+    /// Provided, like visibility, so a double that does not model it says yes
+    /// and behaves as it always did.
+    fn active_layer_carries_geometry(&self) -> bool {
+        true
+    }
+
     /// Whether the active layer is drawn.
     ///
     /// An edit to a hidden layer lands where nothing shows it, which a
@@ -128,6 +136,7 @@ pub trait SculptModel {
             representation: self.active_representation(),
             editable: self.active_layer_editable(),
             visible: self.active_layer_visible(),
+            carries_geometry: self.active_layer_carries_geometry(),
         }
     }
 

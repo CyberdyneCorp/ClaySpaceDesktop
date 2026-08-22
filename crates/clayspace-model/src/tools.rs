@@ -88,6 +88,14 @@ pub struct LayerState {
     /// Whether the layer is drawn. An edit to a hidden layer lands where
     /// nothing shows it, which is indistinguishable from the tool not working.
     pub visible: bool,
+    /// Whether the layer carries geometry a verb can reach.
+    ///
+    /// A mesh layer is recorded before its triangles arrive — the row exists
+    /// so the rest of the application can talk about it — and until they do,
+    /// there is nothing for a brush to move. Offering the sixteen mesh verbs
+    /// on an empty row and letting each fail with "no mesh layer named X" is
+    /// the shape this exists to prevent.
+    pub carries_geometry: bool,
 }
 
 impl LayerState {
@@ -97,6 +105,7 @@ impl LayerState {
             representation,
             editable: true,
             visible: true,
+            carries_geometry: true,
         }
     }
 }
@@ -137,6 +146,15 @@ pub enum ToolKind {
     Relaxar,
     /// The cut tool. The practitioners' ninety-percent tool.
     Trim,
+    /// Draw's deposit clamped to a plane. Mesh-side, where the field's
+    /// equivalent is a relief stroke against a flattened region.
+    Argila,
+    /// A tight negative draw and a pinch in one stamp. ZBrush's Crease.
+    Vinco,
+    /// Blends vertex colour toward the brush's own. Moves no vertex.
+    Pintar,
+    /// Drags existing vertex colour along the stroke. Moves no vertex.
+    Borrar,
 }
 
 impl ToolKind {
@@ -235,7 +253,7 @@ impl std::fmt::Display for Unavailable {
 
 impl ToolKind {
     /// Every tool, in the order the brush shelf presents them.
-    pub const ALL: [ToolKind; 15] = [
+    pub const ALL: [ToolKind; 19] = [
         Self::Padrao,
         Self::Inflar,
         Self::Suavizar,
@@ -251,6 +269,10 @@ impl ToolKind {
         Self::Relaxar,
         Self::Nudge,
         Self::Trim,
+        Self::Argila,
+        Self::Vinco,
+        Self::Pintar,
+        Self::Borrar,
     ];
 
     /// The label the interface shows.
@@ -271,6 +293,10 @@ impl ToolKind {
             Self::Polir => "Polir",
             Self::Relaxar => "Relaxar",
             Self::Trim => "Trim",
+            Self::Argila => "Argila",
+            Self::Vinco => "Vinco",
+            Self::Pintar => "Pintar",
+            Self::Borrar => "Borrar",
         }
     }
     /// Every engine verb this tool names, for the diagnostics report.
@@ -302,17 +328,17 @@ impl ToolKind {
             Self::Padrao => Verbs {
                 sdf: Some("clay_layer_apply_stroke (CLAY_OP_RELIEF)"),
                 voxel: Some("clay_voxel_sculpt_inflate"),
-                mesh: None,
+                mesh: Some("clay_mesh_sculptor_stamp (DRAW)"),
             },
             Self::Inflar => Verbs {
                 sdf: Some("clay_layer_apply_stroke (CLAY_OP_RELIEF)"),
                 voxel: Some("clay_voxel_sculpt_inflate"),
-                mesh: None,
+                mesh: Some("clay_mesh_sculptor_stamp (INFLATE)"),
             },
             Self::Suavizar => Verbs {
                 sdf: Some("clay_item_volume_relax"),
                 voxel: Some("clay_voxel_sculpt_smooth"),
-                mesh: None,
+                mesh: Some("clay_mesh_sculptor_stamp (SMOOTH)"),
             },
             Self::Mascara => Verbs {
                 sdf: Some("clay_mask_apply_stroke"),
@@ -322,32 +348,32 @@ impl ToolKind {
             Self::Camada => Verbs {
                 sdf: Some("clay_layer_apply_stroke (clamped accumulation)"),
                 voxel: Some("clay_voxel_sculpt_inflate (clamped)"),
-                mesh: None,
+                mesh: Some("clay_mesh_sculptor_stamp (LAYER)"),
             },
             Self::Mover => Verbs {
                 sdf: Some("clay_layer_move_surface"),
                 voxel: None,
-                mesh: None,
+                mesh: Some("clay_mesh_sculptor_stamp (GRAB)"),
             },
             Self::Puxar => Verbs {
                 sdf: Some("clay_item_set_curve_points (snakehook)"),
                 voxel: None,
-                mesh: None,
+                mesh: Some("clay_mesh_sculptor_stamp (SNAKEHOOK)"),
             },
             Self::Planar => Verbs {
                 sdf: Some("clay_item_volume_flatten (cut-only)"),
                 voxel: None,
-                mesh: None,
+                mesh: Some("clay_mesh_sculptor_stamp (FLATTEN)"),
             },
             Self::Polir => Verbs {
                 sdf: Some("clay_item_volume_flatten (cut-only, hPolish)"),
                 voxel: None,
-                mesh: None,
+                mesh: Some("clay_mesh_sculptor_stamp (POLISH)"),
             },
             Self::Relaxar => Verbs {
                 sdf: Some("clay_item_volume_relax"),
                 voxel: None,
-                mesh: None,
+                mesh: Some("clay_mesh_sculptor_stamp (RELAX)"),
             },
             Self::Trim => Verbs {
                 sdf: Some("clay_cut_create"),
@@ -357,7 +383,7 @@ impl ToolKind {
             Self::Raspar => Verbs {
                 sdf: None,
                 voxel: Some("clay_voxel_sculpt_scrape"),
-                mesh: None,
+                mesh: Some("clay_mesh_sculptor_stamp (SCRAPE)"),
             },
             Self::Preencher => Verbs {
                 sdf: None,
@@ -367,12 +393,32 @@ impl ToolKind {
             Self::Pincar => Verbs {
                 sdf: None,
                 voxel: Some("clay_voxel_sculpt_pinch"),
-                mesh: None,
+                mesh: Some("clay_mesh_sculptor_stamp (PINCH)"),
+            },
+            Self::Argila => Verbs {
+                sdf: None,
+                voxel: None,
+                mesh: Some("clay_mesh_sculptor_stamp (CLAY)"),
+            },
+            Self::Vinco => Verbs {
+                sdf: None,
+                voxel: None,
+                mesh: Some("clay_mesh_sculptor_stamp (CREASE)"),
+            },
+            Self::Pintar => Verbs {
+                sdf: None,
+                voxel: None,
+                mesh: Some("clay_mesh_sculptor_stamp (PAINT)"),
+            },
+            Self::Borrar => Verbs {
+                sdf: None,
+                voxel: None,
+                mesh: Some("clay_mesh_sculptor_stamp (SMEAR)"),
             },
             Self::Nudge => Verbs {
                 sdf: None,
                 voxel: Some("clay_voxel_sculpt_smudge"),
-                mesh: None,
+                mesh: Some("clay_mesh_sculptor_stamp (NUDGE)"),
             },
         }
     }
@@ -416,7 +462,20 @@ impl ToolKind {
         if !layer.visible {
             return Err(Unavailable::LayerHidden);
         }
+        // A mesh row with no triangles yet. Only the mesh side can be empty in
+        // this sense: a field and a grid are both editable from nothing.
+        if layer.representation == Representation::Mesh && !layer.carries_geometry {
+            return Err(Unavailable::MissingAttribute { needs: "mesh" });
+        }
         Ok(())
+    }
+
+    /// Whether the tool writes vertex colour rather than moving the surface.
+    ///
+    /// Both refuse a mesh with no colour attribute rather than creating one:
+    /// twelve bytes a vertex is a real cost to hide behind a stroke.
+    pub fn writes_colour(self) -> bool {
+        matches!(self, Self::Pintar | Self::Borrar)
     }
 
     /// Whether the tool paints a mask rather than moving the surface.
@@ -646,31 +705,43 @@ mod tests {
         );
     }
 
-    /// Not because mesh layers cannot be sculpted — ClayCore 0.39.0 sculpts
-    /// them with sixteen fixed-topology brushes — but because *these* fifteen
-    /// tools have no mesh verb yet. When the mesh brushes are added this test
-    /// stops being true, and it fails rather than passing quietly, which is
-    /// the whole point of the table.
+    /// Sixteen tools reach a mesh layer, which is the whole of the engine's
+    /// fixed-topology vocabulary.
+    ///
+    /// This test used to assert the opposite — that none of the fifteen had a
+    /// mesh binding — and was written to fail the day that stopped being true
+    /// rather than to pass quietly. It did.
+    ///
+    /// Twelve of them are tools that already existed: a smooth is a smooth
+    /// whichever representation it lands on, and the capability table is what
+    /// lets one tool carry three bindings instead of the shelf carrying three
+    /// tools. Four had no counterpart among the fifteen and are new.
     #[test]
-    fn no_current_tool_has_a_mesh_verb_yet() {
-        for tool in ToolKind::ALL {
-            let error = tool
-                .availability(LayerState::editable(Representation::Mesh))
-                .expect_err("none of these fifteen has a mesh binding");
-            assert_eq!(
-                error,
-                Unavailable::NoVerbHere {
-                    active: Representation::Mesh,
-                    verbs: tool.verbs(),
-                },
-                "{}",
+    fn the_mesh_vocabulary_is_bound() {
+        let mesh = ToolKind::for_representation(Representation::Mesh);
+        assert_eq!(
+            mesh.len(),
+            16,
+            "the engine has sixteen fixed-topology brushes and {} are bound",
+            mesh.len()
+        );
+        for tool in &mesh {
+            assert!(
+                tool.verb_on(Representation::Mesh)
+                    .is_some_and(|verb| verb.starts_with("clay_mesh_sculptor")),
+                "{} claims a mesh verb that is not a mesh sculptor call",
                 tool.label()
             );
         }
-        assert!(
-            ToolKind::for_representation(Representation::Mesh).is_empty(),
-            "the shelf would show a mesh tool that has no verb"
-        );
+        // The three that deliberately have none: a mask stroke, a cavity fill
+        // and a shape drawn on the frame are not vertex verbs.
+        for tool in [ToolKind::Mascara, ToolKind::Preencher, ToolKind::Trim] {
+            assert!(
+                !tool.exists_on(Representation::Mesh),
+                "{} was given a mesh binding it should not have",
+                tool.label()
+            );
+        }
     }
 
     #[test]
@@ -685,6 +756,7 @@ mod tests {
                         representation,
                         editable: false,
                         visible: true,
+                        carries_geometry: true,
                     }),
                     Err(Unavailable::LayerProtected),
                     "{} on a protected {} layer",
@@ -789,7 +861,7 @@ mod tests {
         let voxel = ToolKind::for_representation(Representation::Voxel).len();
 
         assert_eq!(
-            mesh, 0,
+            mesh, ENGINE_MESH_BRUSHES,
             "the mesh vocabulary has moved: {mesh} of the engine's \
              {ENGINE_MESH_BRUSHES} fixed-topology brushes are bound. Update \
              this count and `docs/features.md` together."

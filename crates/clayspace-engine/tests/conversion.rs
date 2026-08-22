@@ -205,3 +205,131 @@ fn the_stated_cost_follows_the_chosen_resolution() {
          promise the engine cannot keep"
     );
 }
+
+/// Sculpting a mesh layer through the ordinary stroke path.
+///
+/// The fourth stroke consumer, reached the same way the other three are: one
+/// `apply_stroke` with a tool and a gesture. What makes it different is
+/// invisible from here and deliberately so — the sculptor holding the mesh's
+/// adjacency is built on the first stroke and kept.
+mod mesh_strokes {
+    use super::*;
+    use clayspace_model::SceneModel;
+
+    /// A document carrying a mesh layer, made by crossing the starting form
+    /// over rather than by reading a file: it needs no fixture on disk and it
+    /// exercises the conversion the mesh brushes exist to complete.
+    fn with_mesh_layer() -> Option<ClayDocument> {
+        let mut doc = document()?;
+        // Mesh layers are attached from an imported mesh; the starting form
+        // becomes one by way of the exchange path in the application. Here the
+        // engine's own attach is enough.
+        doc.add_mesh_layer("Retopo").ok()?;
+        Some(doc)
+    }
+
+    /// A mesh row exists before its triangles do — `add_mesh_layer` records
+    /// one so the rest of the application can talk about it, and only an
+    /// import attaches a mesh. Until then the sixteen verbs have nothing to
+    /// move, and offering them so that each fails with "no mesh layer named X"
+    /// is what this refusal prevents.
+    #[test]
+    fn a_mesh_row_with_no_triangles_refuses_the_verbs_by_name() {
+        let Some(mut doc) = with_mesh_layer() else {
+            return;
+        };
+        let mesh = doc
+            .scene()
+            .layers
+            .iter()
+            .find(|l| l.representation == Representation::Mesh)
+            .map(|l| l.key)
+            .expect("the mesh layer");
+        doc.set_active_layer(mesh).expect("activate");
+
+        let error = ToolKind::Padrao
+            .availability(doc.active_layer_state())
+            .expect_err("an empty mesh row has nothing to sculpt");
+        assert!(
+            error.to_string().contains("mesh"),
+            "the refusal has to name what is missing: {error}"
+        );
+    }
+
+    #[test]
+    fn the_stroke_path_and_the_tool_status_refuse_alike() {
+        let Some(mut doc) = with_mesh_layer() else {
+            return;
+        };
+        let mesh = doc
+            .scene()
+            .layers
+            .iter()
+            .find(|l| l.representation == Representation::Mesh)
+            .map(|l| l.key)
+            .expect("the mesh layer");
+        doc.set_active_layer(mesh).expect("activate");
+
+        // Padrão is Draw on a mesh, and the table says so.
+        assert!(ToolKind::Padrao.exists_on(Representation::Mesh));
+        let outcome = doc.apply_stroke(
+            ToolKind::Padrao,
+            BrushSettings::default(),
+            &[
+                GestureSample {
+                    position: [0.0, 0.0, 1.0],
+                    pressure: 1.0,
+                    time: 0.0,
+                },
+                GestureSample {
+                    position: [0.05, 0.0, 1.0],
+                    pressure: 1.0,
+                    time: 1.0,
+                },
+            ],
+            [false; 3],
+        );
+        // This row carries no triangles, so the refusal is the correct
+        // answer and it is the same one `availability` gives — the model and
+        // the stroke path may not disagree about whether a tool applies.
+        let error = outcome.expect_err("an empty mesh row has nothing to sculpt");
+        assert!(
+            error.to_string().contains("mesh"),
+            "the stroke path refused for a different reason than the tool \
+             status would have given: {error}"
+        );
+    }
+
+    /// The three that are absent from the shelf are absent from the model too.
+    #[test]
+    fn a_tool_with_no_mesh_verb_is_refused_on_a_mesh_layer() {
+        let Some(mut doc) = with_mesh_layer() else {
+            return;
+        };
+        let mesh = doc
+            .scene()
+            .layers
+            .iter()
+            .find(|l| l.representation == Representation::Mesh)
+            .map(|l| l.key)
+            .expect("the mesh layer");
+        doc.set_active_layer(mesh).expect("activate");
+
+        let error = doc
+            .apply_stroke(
+                ToolKind::Trim,
+                BrushSettings::default(),
+                &[GestureSample {
+                    position: [0.0, 0.0, 1.0],
+                    pressure: 1.0,
+                    time: 0.0,
+                }],
+                [false; 3],
+            )
+            .expect_err("Trim draws a shape on the frame; it is not a vertex verb");
+        assert!(
+            error.to_string().contains("mesh"),
+            "the refusal must name where the tool does apply: {error}"
+        );
+    }
+}

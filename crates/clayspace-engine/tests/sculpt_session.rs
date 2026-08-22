@@ -609,7 +609,7 @@ mod scene {
     }
 
     #[test]
-    fn a_mesh_layer_offers_no_tool_that_has_no_mesh_verb() {
+    fn a_mesh_layer_offers_the_mesh_vocabulary() {
         let mut doc = document();
         let key = doc.add_mesh_layer("Referência").expect("carry a mesh");
 
@@ -618,32 +618,41 @@ mod scene {
         assert_eq!(layer.representation, Representation::Mesh);
 
         doc.set_active_layer(key).expect("activate");
-        // Not "mesh layers are carried, not sculpted" — that was a statement
-        // about the engine and stopped being true at ClayCore 0.39.0, which
-        // sculpts a mesh layer's own vertices. What is true is narrower and
-        // is about this application: none of these fifteen tools has a mesh
-        // binding yet, so none is offered. The mesh brushes are phase 3 of
-        // `make-representations-first-class`.
-        for tool in ToolKind::ALL {
+        let offered = ToolKind::for_representation(Representation::Mesh);
+        assert_eq!(
+            offered.len(),
+            16,
+            "the shelf offers {} tools on a mesh layer against the engine's \
+             sixteen fixed-topology brushes",
+            offered.len()
+        );
+        // Offered for the representation, and disabled on *this* row: it was
+        // recorded by `add_mesh_layer` and its triangles have not arrived, so
+        // there is nothing for a verb to move. Shown-and-disabled rather than
+        // absent, because the tool does apply here — the layer is what is not
+        // ready — which is the distinction the two refusals draw.
+        for tool in &offered {
             let error = tool
                 .availability(doc.active_layer_state())
-                .expect_err("none of these fifteen has a mesh binding");
+                .expect_err("an empty mesh row has nothing to sculpt");
             assert!(
                 matches!(
                     error,
-                    clayspace_model::Unavailable::NoVerbHere {
-                        active: Representation::Mesh,
-                        ..
-                    }
+                    clayspace_model::Unavailable::MissingAttribute { needs: "mesh" }
                 ),
                 "{} refused for the wrong reason: {error}",
                 tool.label()
             );
         }
-        assert!(
-            ToolKind::for_representation(Representation::Mesh).is_empty(),
-            "the shelf would offer a mesh tool that has no verb"
-        );
+        // A mask stroke, a cavity fill and a shape drawn on the frame are not
+        // vertex verbs, so they are absent rather than disabled.
+        for tool in [ToolKind::Mascara, ToolKind::Preencher, ToolKind::Trim] {
+            assert!(
+                !offered.contains(&tool),
+                "{} was offered on a mesh layer",
+                tool.label()
+            );
+        }
     }
 
     #[test]

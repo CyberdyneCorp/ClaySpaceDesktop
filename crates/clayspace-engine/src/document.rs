@@ -37,6 +37,12 @@ struct Layer {
     /// layer keeps its grid.
     engine_name: String,
     representation: Representation,
+    /// Whether a mesh row's triangles have arrived.
+    ///
+    /// A mesh layer is recorded before its mesh is attached, so the rest of
+    /// the application can talk about it; only `attach_reference` makes it
+    /// real. Always true for the other two, which are editable from nothing.
+    carries_geometry: bool,
     visible: bool,
     protection: Protection,
     intensity: u8,
@@ -77,6 +83,14 @@ pub struct ClayDocument {
     surface_brick_count: usize,
     /// A mask the tools consult, when one has been painted.
     mask: Option<Mask>,
+    /// The sculptor for the mesh layer being sculpted, and which layer it is.
+    ///
+    /// One at a time rather than one per layer: the adjacency is the expensive
+    /// part and a sculptor is only useful for the layer under the pointer, so
+    /// holding every mesh layer's would pay for meshes nobody is touching.
+    /// Built on the first stroke against a layer and dropped when the active
+    /// mesh layer changes.
+    mesh_sculptor: Option<(LayerKey, claycore::MeshSculptor)>,
     /// The mirror currently set on the active layer, so it is only rewritten
     /// when it actually changes.
     symmetry: [bool; 3],
@@ -152,6 +166,7 @@ impl ClayDocument {
                 name: "Forma".to_string(),
                 engine_name: "Forma".to_string(),
                 representation: Representation::Sdf,
+                carries_geometry: true,
                 visible: true,
                 protection: Protection::default(),
                 intensity: 100,
@@ -162,6 +177,7 @@ impl ClayDocument {
             dirty: Vec::new(),
             stats: SceneStats::default(),
             surface_brick_count: 0,
+            mesh_sculptor: None,
             mask: None,
             symmetry,
             next_key: 2,
@@ -337,6 +353,7 @@ impl ClayDocument {
             name: name.to_string(),
             engine_name: name.to_string(),
             representation: Representation::Voxel,
+            carries_geometry: true,
             visible: true,
             protection: Protection::default(),
             intensity: 100,
@@ -563,6 +580,7 @@ impl ClayDocument {
             name: name.to_string(),
             engine_name: name.to_string(),
             representation,
+            carries_geometry: representation != Representation::Mesh,
             visible: true,
             protection: Protection::default(),
             intensity: 100,
@@ -1261,6 +1279,110 @@ impl ClayDocument {
         })
     }
 
+    /// A stroke against a mesh layer's own vertices.
+    ///
+    /// The engine's fourth stroke consumer. What makes it unlike the other
+    /// three is that it needs a *sculptor* — the adjacency a brush walks —
+    /// which is expensive to build and cheap to keep, so it is built on the
+    /// first stroke against a layer and held until the layer changes.
+    fn stroke_mesh(
+        &mut self,
+        tool: ToolKind,
+        brush: BrushSettings,
+        samples: &[GestureSample],
+    ) -> Result<EditOutcome, ModelError> {
+        let Some(verb) = mesh_verb(tool) else {
+            // The capability table says this tool has no mesh binding and the
+            // shelf does not offer it; reaching here means something asked
+            // anyway.
+            return Ok(EditOutcome::NOTHING);
+        };
+        let key = self.active_layer().key;
+        let engine_name = self.active_layer().engine_name.clone();
+        self.ensure_mesh_sculptor(key, &engine_name)?;
+
+        let brush = brush.sanitized();
+        let preset = StrokePreset {
+            spacing: brush.flow,
+            ..StrokePreset::default()
+        };
+        let stamp = claycore::MeshStamp {
+            verb,
+            center: samples[0].position,
+            radius: brush.size,
+            strength: brush.intensity,
+            falloff: match brush.shaping.falloff {
+                clayspace_model::Falloff::Constant => claycore::MeshFalloff::Constant,
+                clayspace_model::Falloff::Linear => claycore::MeshFalloff::Linear,
+                clayspace_model::Falloff::Smooth => claycore::MeshFalloff::Smooth,
+                clayspace_model::Falloff::Gaussian => claycore::MeshFalloff::Gaussian,
+            },
+            // Flatten and Scrape mean "everything under this disc", and a
+            // surface walk refuses to flatten across a groove — which is not
+            // what either verb says.
+            geodesic: !matches!(
+                verb,
+                claycore::MeshBrush::Flatten | claycore::MeshBrush::Scrape
+            ),
+            ..claycore::MeshStamp::default()
+        };
+        let points: Vec<[f32; 5]> = samples
+            .iter()
+            .map(|s| {
+                [
+                    s.position[0],
+                    s.position[1],
+                    s.position[2],
+                    s.pressure,
+                    s.time,
+                ]
+            })
+            .collect();
+
+        let Self {
+            mesh_sculptor,
+            mask,
+            ..
+        } = self;
+        let Some((_, sculptor)) = mesh_sculptor.as_mut() else {
+            return Ok(EditOutcome::NOTHING);
+        };
+        let moved = sculptor
+            .apply_stroke(&points, &preset, stamp, mask.as_ref())
+            .map_err(ModelError::engine)?;
+        // Refit rather than refresh: topology is fixed, so the ray-query tree
+        // stays a valid partition and only its bounds went stale, which is
+        // proportional to the brush instead of to the mesh.
+        sculptor.refit().map_err(ModelError::engine)?;
+
+        Ok(EditOutcome {
+            changed: moved > 0,
+            // A mesh layer is not in the brick cache at all, so nothing was
+            // dirtied and nothing needs re-meshing — the viewport reads the
+            // layer's own triangles.
+            dirty_bricks: 0,
+        })
+    }
+
+    /// Builds the sculptor for a mesh layer, or keeps the one already built.
+    ///
+    /// Rebuilt when the layer changes: a sculptor holds adjacency for the mesh
+    /// it was given, so carrying one across layers would move the wrong
+    /// vertices.
+    fn ensure_mesh_sculptor(&mut self, key: LayerKey, engine_name: &str) -> Result<(), ModelError> {
+        if matches!(self.mesh_sculptor.as_ref(), Some((held, _)) if *held == key) {
+            return Ok(());
+        }
+        // Relative to the bounding-box diagonal: vertices closer than this are
+        // one point of the surface, which is what lets a brush move a split
+        // seam as a seam rather than tearing it open.
+        const WELD: f32 = 1e-4;
+        let sculptor = claycore::MeshSculptor::for_layer(&mut self.document, engine_name, WELD)
+            .map_err(ModelError::engine)?;
+        self.mesh_sculptor = Some((key, sculptor));
+        Ok(())
+    }
+
     /// Applies a stroke to a voxel layer, using the tool's own verb.
     fn stroke_voxel(
         &mut self,
@@ -1371,6 +1493,10 @@ impl SculptModel for ClayDocument {
         self.active_layer().representation
     }
 
+    fn active_layer_carries_geometry(&self) -> bool {
+        self.active_layer().carries_geometry
+    }
+
     fn active_layer_editable(&self) -> bool {
         self.active_layer().editable()
     }
@@ -1406,7 +1532,7 @@ impl SculptModel for ClayDocument {
                 _ => self.stroke_sdf(tool, brush, samples, symmetry),
             },
             Representation::Voxel => self.stroke_voxel(tool, brush, samples),
-            Representation::Mesh => Ok(EditOutcome::NOTHING),
+            Representation::Mesh => self.stroke_mesh(tool, brush, samples),
         }
     }
 
@@ -1471,6 +1597,37 @@ impl SculptModel for ClayDocument {
         let layer = self.active_layer().id;
         self.document.layer_bounds(layer).ok().flatten()
     }
+}
+
+/// Which engine verb a tool invokes on a mesh layer.
+///
+/// Here rather than on `ToolKind`, because `clayspace-model` is the domain and
+/// may not depend on the engine — `tools/check_layering.py` is what keeps that
+/// true. The domain's table names the verb as text and this is where the text
+/// becomes a call, which is the same split every other representation uses.
+fn mesh_verb(tool: ToolKind) -> Option<claycore::MeshBrush> {
+    use claycore::MeshBrush;
+    Some(match tool {
+        ToolKind::Padrao => MeshBrush::Draw,
+        ToolKind::Inflar => MeshBrush::Inflate,
+        ToolKind::Suavizar => MeshBrush::Smooth,
+        ToolKind::Camada => MeshBrush::Layer,
+        ToolKind::Mover => MeshBrush::Grab,
+        ToolKind::Puxar => MeshBrush::Snakehook,
+        ToolKind::Planar => MeshBrush::Flatten,
+        ToolKind::Polir => MeshBrush::Polish,
+        ToolKind::Relaxar => MeshBrush::Relax,
+        ToolKind::Raspar => MeshBrush::Scrape,
+        ToolKind::Pincar => MeshBrush::Pinch,
+        ToolKind::Nudge => MeshBrush::Nudge,
+        ToolKind::Argila => MeshBrush::Clay,
+        ToolKind::Vinco => MeshBrush::Crease,
+        ToolKind::Pintar => MeshBrush::Paint,
+        ToolKind::Borrar => MeshBrush::Smear,
+        // No mesh binding: a mask stroke, a cavity fill and a frame-drawn cut
+        // are not fixed-topology vertex verbs.
+        ToolKind::Mascara | ToolKind::Preencher | ToolKind::Trim => return None,
+    })
 }
 
 /// Kept so the routing type is visible to readers of this module's imports.
@@ -1602,6 +1759,7 @@ impl SceneModel for ClayDocument {
             name: name.to_string(),
             engine_name: name.to_string(),
             representation,
+            carries_geometry: representation != Representation::Mesh,
             visible: true,
             protection: Protection::default(),
             intensity: 100,
@@ -1722,6 +1880,7 @@ impl SceneModel for ClayDocument {
             name: name.to_string(),
             engine_name: name.to_string(),
             representation: Representation::Mesh,
+            carries_geometry: false,
             visible: true,
             protection: Protection::default(),
             intensity: 100,
@@ -1897,6 +2056,10 @@ impl ClayDocument {
                     name: engine_name.clone(),
                     engine_name,
                     representation,
+                    // Read back from the engine, which reports Mesh only for a
+                    // layer that carries one — an unattached row exists on
+                    // this side alone and never survives a reload.
+                    carries_geometry: true,
                     visible: info.map(|i| i.visible).unwrap_or(true),
                     protection: info
                         .map(|i| Protection {
@@ -1928,6 +2091,7 @@ impl ClayDocument {
             dirty: Vec::new(),
             stats: SceneStats::default(),
             surface_brick_count: 0,
+            mesh_sculptor: None,
             mask: None,
             symmetry: [false; 3],
             next_key,
@@ -2083,10 +2247,15 @@ impl ClayDocument {
             key,
             name: name.to_string(),
             engine_name: name.to_string(),
-            // Recorded as a mesh so the tools refuse it by representation
+            // Recorded as a mesh so the tools reach it by representation
             // rather than by a special case. A mesh layer is not evaluated,
             // and nothing here pretends otherwise.
             representation: Representation::Mesh,
+            // This is the call that gives a mesh row its triangles, so it is
+            // where the row becomes sculptable. `add_mesh_layer` records a row
+            // with none, and the mesh verbs are unavailable on it until this
+            // has run.
+            carries_geometry: true,
             visible: true,
             protection: Protection::default(),
             intensity: 100,
@@ -2506,6 +2675,9 @@ impl ClayDocument {
                     Some(claycore::LayerRepresentation::Mesh) => Representation::Mesh,
                     _ => Representation::Sdf,
                 },
+                // As above: the engine's own answer, so a Mesh row here has
+                // triangles behind it.
+                carries_geometry: true,
                 visible: info.map(|i| i.visible).unwrap_or(true),
                 protection: info
                     .map(|i| Protection {

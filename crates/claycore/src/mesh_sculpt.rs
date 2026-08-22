@@ -237,6 +237,40 @@ impl MeshSculptor {
             .ok_or_else(|| raw_failure("clay_mesh_sculptor_create", ErrorKind::Backend))
     }
 
+    /// A sculptor for a mesh layer of a document, by name.
+    ///
+    /// The layer's mesh is *borrowed*, and [`Mesh`] destroys what it holds on
+    /// drop, so the handle never leaves this call — the same reason the
+    /// conversions keep theirs internal.
+    pub fn for_layer(document: &mut crate::Document, layer_name: &str, weld: f32) -> Result<Self> {
+        let c_name = crate::cstring(layer_name, "clay_document_mesh_layer")?;
+        let mut layer: sys::clay_layer_id = Default::default();
+        let mut mesh = std::ptr::null_mut();
+        // SAFETY: a valid document and a NUL-terminated name; both outputs are
+        // written only on success.
+        check(
+            unsafe {
+                sys::clay_document_mesh_layer(
+                    document.as_ptr(),
+                    c_name.as_ptr(),
+                    &mut layer,
+                    &mut mesh,
+                )
+            },
+            "clay_document_mesh_layer",
+        )?;
+        let mut sculptor = std::ptr::null_mut();
+        // SAFETY: the mesh belongs to this document and was just written; it
+        // is not wrapped in an owning `Mesh`, so nothing here destroys it.
+        check(
+            unsafe { sys::clay_mesh_sculptor_create(mesh, weld, &mut sculptor) },
+            "clay_mesh_sculptor_create",
+        )?;
+        NonNull::new(sculptor)
+            .map(|raw| Self { raw })
+            .ok_or_else(|| raw_failure("clay_mesh_sculptor_create", ErrorKind::Backend))
+    }
+
     pub fn vertex_count(&self) -> Result<usize> {
         let mut count = 0;
         // SAFETY: valid handle, out-parameter written on success.
