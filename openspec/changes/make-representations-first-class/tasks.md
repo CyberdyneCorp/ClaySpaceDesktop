@@ -1,22 +1,22 @@
 ## 1. Phase 1 — the capability table
 
-- [ ] 1.1 Add a declared per-representation verb table to `clayspace-model`, keyed by `ToolKind` and `Representation`, carrying what each tool maps to on each side
-- [ ] 1.2 Rewrite `ToolKind::availability` to consult the table, removing the blanket `Unavailable::MeshLayer` at `tools.rs:240`
-- [ ] 1.3 Add `Unavailable` variants for the reasons that survive: layer protected, layer hidden, prerequisite attribute missing
-- [ ] 1.4 Add a test asserting the table covers every `ToolKind` on every `Representation` — no tool may be silently absent from the table
-- [ ] 1.5 Add a test asserting the table's verb count against ClayCore's own enums, so a verb the engine adds and this application has not taken up fails rather than passing quietly
+- [x] 1.1 Add a declared per-representation verb table to `clayspace-model`, keyed by `ToolKind` and `Representation`, carrying what each tool maps to on each side
+- [x] 1.2 Rewrite `ToolKind::availability` to consult the table, removing the blanket `Unavailable::MeshLayer` at `tools.rs:240`
+- [x] 1.3 Add `Unavailable` variants for the reasons that survive: layer protected, layer hidden, prerequisite attribute missing
+- [x] 1.4 Add a test asserting the table covers every `ToolKind` on every `Representation` — no tool may be silently absent from the table
+- [x] 1.5 Add a test asserting the table's verb count against ClayCore's own enums, so a verb the engine adds and this application has not taken up fails rather than passing quietly
 
 ## 2. Phase 1 — the shell follows the layer
 
-- [ ] 2.1 Carry the active layer's representation in `ShellState`
-- [ ] 2.2 Show the representation in the viewport bar, distinguishable by more than colour
-- [ ] 2.3 Show the representation beside each layer in the layer stack
-- [ ] 2.4 Make the brush shelf list only the tools the active representation has
-- [ ] 2.5 Keep the active tool across a layer change where the new representation has it; substitute and state the substitution where it does not
-- [ ] 2.6 Hold brush settings per tool *and* per representation
-- [ ] 2.7 Localise the new strings in all three locales
-- [ ] 2.8 Regenerate the shell captures and check the shelf reads correctly for each representation
-- [ ] 2.9 Update `docs/features.md` and `README.md` for what the shelf now does
+- [x] 2.1 Carry the active layer's representation in `ShellState`
+- [x] 2.2 Show the representation in the viewport bar, distinguishable by more than colour
+- [x] 2.3 Show the representation beside each layer in the layer stack
+- [x] 2.4 Make the brush shelf list only the tools the active representation has
+- [x] 2.5 Keep the active tool across a layer change where the new representation has it; substitute and state the substitution where it does not
+- [x] 2.6 Hold brush settings per tool *and* per representation
+- [x] 2.7 Localise the new strings in all three locales
+- [x] 2.8 Regenerate the shell captures and check the shelf reads correctly for each representation
+- [x] 2.9 Update `docs/features.md` and `README.md` for what the shelf now does
 
 ## 3. Phase 2 — conversion in the engine bridge
 

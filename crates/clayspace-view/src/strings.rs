@@ -105,6 +105,13 @@ pub struct Strings {
     pub label_mirror_new: &'static str,
 
     // Actions and states
+    /// Shown where the shelf would be, on a layer whose representation this
+    /// application has no verb bound for yet.
+    pub shelf_no_tools: &'static str,
+    /// Prefix for the active layer's representation in the viewport bar.
+    pub representation_label: &'static str,
+    /// Said when a layer change forced a different tool.
+    pub tool_substituted: &'static str,
     pub action_undo: &'static str,
     pub action_redo: &'static str,
     pub action_frame_all: &'static str,
@@ -187,6 +194,9 @@ const PT_BR: Strings = Strings {
     label_skin: "Pele",
     label_mirror_new: "Espelhar novas",
 
+    shelf_no_tools: "Nenhuma ferramenta para esta representação ainda",
+    representation_label: "Representação",
+    tool_substituted: "ferramenta trocada: esta camada não tem essa",
     action_undo: "Desfazer",
     action_redo: "Refazer",
     action_frame_all: "Enquadrar tudo",
@@ -268,6 +278,9 @@ const EN_US: Strings = Strings {
     label_skin: "Skin",
     label_mirror_new: "Mirror new",
 
+    shelf_no_tools: "No tools for this representation yet",
+    representation_label: "Representation",
+    tool_substituted: "tool changed: this layer has no verb for that one",
     action_undo: "Undo",
     action_redo: "Redo",
     action_frame_all: "Frame all",
@@ -354,6 +367,9 @@ const ES_419: Strings = Strings {
     label_skin: "Piel",
     label_mirror_new: "Reflejar nuevas",
 
+    shelf_no_tools: "Todavía no hay herramientas para esta representación",
+    representation_label: "Representación",
+    tool_substituted: "herramienta cambiada: esta capa no tiene ese verbo",
     action_undo: "Deshacer",
     action_redo: "Rehacer",
     action_frame_all: "Encuadrar todo",

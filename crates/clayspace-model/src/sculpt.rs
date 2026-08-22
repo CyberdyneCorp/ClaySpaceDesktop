@@ -109,6 +109,28 @@ pub trait SculptModel {
     /// Whether the active layer accepts edits at all.
     fn active_layer_editable(&self) -> bool;
 
+    /// Whether the active layer is drawn.
+    ///
+    /// An edit to a hidden layer lands where nothing shows it, which a
+    /// sculptor cannot tell apart from the tool not working. Provided rather
+    /// than required so a double that does not model visibility says "visible"
+    /// and behaves as it always did.
+    fn active_layer_visible(&self) -> bool {
+        true
+    }
+
+    /// What the active layer can accept right now, as one value.
+    ///
+    /// Assembled here so that a call site cannot forget one of the conditions
+    /// and offer a tool that would refuse.
+    fn active_layer_state(&self) -> crate::tools::LayerState {
+        crate::tools::LayerState {
+            representation: self.active_representation(),
+            editable: self.active_layer_editable(),
+            visible: self.active_layer_visible(),
+        }
+    }
+
     /// Applies part or all of a gesture with the given tool.
     ///
     /// A whole gesture at once lets the engine's stroke engine decide stamp

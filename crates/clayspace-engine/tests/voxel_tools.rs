@@ -101,8 +101,10 @@ fn every_voxel_only_tool_changes_a_voxel_layer() {
             return;
         };
         assert!(
-            tool.availability(document.active_representation(), true)
-                .is_ok(),
+            tool.availability(clayspace_model::LayerState::editable(
+                document.active_representation()
+            ))
+            .is_ok(),
             "{tool:?} is refused on the layer it is meant for"
         );
         if !exercise(&mut document, tool) {
@@ -134,7 +136,9 @@ fn a_voxel_only_tool_still_refuses_an_sdf_layer_by_name() {
         ToolKind::Nudge,
     ] {
         let refusal = tool
-            .availability(document.active_representation(), true)
+            .availability(clayspace_model::LayerState::editable(
+                document.active_representation(),
+            ))
             .expect_err(&format!("{tool:?} was offered on an SDF layer"));
         assert!(
             format!("{refusal}").contains("voxel"),

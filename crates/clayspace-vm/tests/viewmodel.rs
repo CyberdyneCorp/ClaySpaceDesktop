@@ -5,7 +5,7 @@
 //! collects a gesture, a no-op adds no history, reading never schedules a
 //! redraw — are checked here in microseconds rather than through a viewport.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use clayspace_model::{
@@ -25,7 +25,10 @@ struct Recorded {
 /// A Model that records its calls and answers however a test needs.
 struct FakeModel {
     recorded: Rc<RefCell<Recorded>>,
-    representation: Representation,
+    /// Shared, because the layer the ViewModel is looking at can change under
+    /// it and a test has to be able to say so after construction — the model
+    /// is boxed into the ViewModel and unreachable from outside otherwise.
+    representation: Rc<Cell<Representation>>,
     editable: bool,
     /// What the next stroke reports.
     outcome: EditOutcome,
@@ -37,7 +40,7 @@ impl FakeModel {
     fn new(recorded: Rc<RefCell<Recorded>>) -> Self {
         Self {
             recorded,
-            representation: Representation::Sdf,
+            representation: Rc::new(Cell::new(Representation::Sdf)),
             editable: true,
             outcome: EditOutcome {
                 changed: true,
@@ -61,7 +64,7 @@ impl FakeModel {
 
 impl SculptModel for FakeModel {
     fn active_representation(&self) -> Representation {
-        self.representation
+        self.representation.get()
     }
 
     fn active_layer_editable(&self) -> bool {
@@ -150,6 +153,15 @@ fn fixture_with(
     let mut model = FakeModel::new(recorded.clone());
     configure(&mut model);
     (SculptViewModel::new(Box::new(model)), recorded)
+}
+
+/// A fixture whose active representation a test can change afterwards, which
+/// is what a layer change looks like from the ViewModel's side.
+fn fixture_with_layer_changes() -> (SculptViewModel, Rc<Cell<Representation>>) {
+    let recorded = Rc::new(RefCell::new(Recorded::default()));
+    let model = FakeModel::new(recorded);
+    let representation = model.representation.clone();
+    (SculptViewModel::new(Box::new(model)), representation)
 }
 
 fn draw(vm: &mut SculptViewModel, points: &[[f32; 3]]) -> Result<(), ModelError> {
@@ -359,7 +371,7 @@ fn a_protected_layer_refuses_every_tool() {
 
 #[test]
 fn a_voxel_layer_accepts_voxel_tools() {
-    let (mut vm, recorded) = fixture_with(|model| model.representation = Representation::Voxel);
+    let (mut vm, recorded) = fixture_with(|model| model.representation.set(Representation::Voxel));
     vm.dispatch(Command::SelectTool(ToolKind::Raspar))
         .expect("select");
     assert!(
@@ -598,4 +610,86 @@ fn an_idle_viewmodel_reports_no_changes() {
         !watchers.3.take_change(vm.stats()),
         "reading state marked it dirty, which would redraw an idle application forever"
     );
+}
+
+/// The shelf's contents follow the active layer, so the tool and the brush
+/// settings have to as well.
+///
+/// Both of these are about a layer change, which is the moment the vocabulary
+/// underfoot can change. Before the capability table there was one vocabulary
+/// and neither question arose.
+mod following_the_active_layer {
+    use super::*;
+
+    /// A voxel-only tool cannot survive a move to an SDF layer, and the
+    /// alternative to substituting is a tool that silently refuses every
+    /// stroke.
+    #[test]
+    fn a_tool_with_no_verb_on_the_new_layer_is_replaced() {
+        let (mut vm, representation) = fixture_with_layer_changes();
+        vm.dispatch(Command::SelectTool(ToolKind::Raspar))
+            .expect("scrape is a voxel tool");
+        assert_eq!(*vm.tool().get(), ToolKind::Raspar);
+
+        representation.set(Representation::Sdf);
+        vm.dispatch(Command::SelectLayer(clayspace_model::LayerKey(1)))
+            .expect("select");
+
+        assert_ne!(
+            *vm.tool().get(),
+            ToolKind::Raspar,
+            "scrape has no SDF verb, so it cannot still be the active tool"
+        );
+        assert!(
+            vm.tool().get().exists_on(Representation::Sdf),
+            "the replacement must be a tool this layer actually has"
+        );
+        assert_eq!(
+            vm.tool_status().get().as_deref(),
+            Some(clayspace_vm::TOOL_SUBSTITUTED),
+            "a tool that changed under the user has to say so"
+        );
+    }
+
+    /// The other half: a tool both representations carry is not disturbed.
+    #[test]
+    fn a_tool_the_new_layer_has_is_left_alone() {
+        let (mut vm, representation) = fixture_with_layer_changes();
+        vm.dispatch(Command::SelectTool(ToolKind::Suavizar))
+            .expect("smooth is on both");
+
+        representation.set(Representation::Voxel);
+        vm.dispatch(Command::SelectLayer(clayspace_model::LayerKey(1)))
+            .expect("select");
+
+        assert_eq!(
+            *vm.tool().get(),
+            ToolKind::Suavizar,
+            "smooth has a voxel verb, so it must survive the move"
+        );
+    }
+
+    /// A size that suits a field is not a size that suits a grid's cells.
+    #[test]
+    fn brush_settings_are_remembered_per_representation() {
+        let (mut vm, representation) = fixture_with_layer_changes();
+        vm.dispatch(Command::SelectTool(ToolKind::Suavizar))
+            .expect("smooth");
+        vm.dispatch(Command::SetBrushSize(0.4)).expect("size");
+
+        representation.set(Representation::Voxel);
+        vm.dispatch(Command::SelectLayer(clayspace_model::LayerKey(1)))
+            .expect("select");
+        vm.dispatch(Command::SetBrushSize(0.05)).expect("size");
+        assert_eq!(vm.brush().get().size, 0.05);
+
+        representation.set(Representation::Sdf);
+        vm.dispatch(Command::SelectLayer(clayspace_model::LayerKey(1)))
+            .expect("select");
+        assert_eq!(
+            vm.brush().get().size,
+            0.4,
+            "the SDF layer's size came back as the voxel layer's"
+        );
+    }
 }

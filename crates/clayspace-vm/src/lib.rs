@@ -23,7 +23,7 @@ pub use jobs::{Completion, Generation, JobRunner, Outcome, Progress, Reporter};
 pub use notice::{MemoryState, Notice, NoticeBoard, Severity, Where};
 pub use observable::{Observable, Watcher};
 pub use scene_vm::SceneViewModel;
-pub use sculpt_vm::{LastAction, SculptViewModel};
+pub use sculpt_vm::{LastAction, SculptViewModel, TOOL_SUBSTITUTED};
 
 pub use armature_vm::{ArmatureViewModel, Grab};
 pub use document_vm::{DocumentViewModel, Guard};

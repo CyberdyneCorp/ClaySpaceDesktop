@@ -12,7 +12,7 @@
 use clayspace_model::{
     BrushSettings, Diagnostics, ExportMesher, ExportSettings, ExportWarning, ExtrudeSettings,
     ExtrudeSide, Falloff, ImportAs, ImportSettings, LayerSummary, MaskOp, MaskState,
-    RecentDocuments, Scene, SceneStats, ToolKind, Units, ViewPresetKind,
+    RecentDocuments, Representation, Scene, SceneStats, ToolKind, Units, ViewPresetKind,
 };
 use clayspace_vm::{Axis, Command, CommandQueue};
 
@@ -83,6 +83,11 @@ pub struct ShellState<'a> {
     pub modified: bool,
 
     pub tool: ToolKind,
+    /// What the active layer holds.
+    ///
+    /// The shelf offers this representation's verbs and nothing else, so this
+    /// is what decides the shelf's contents rather than a fixed list.
+    pub representation: Representation,
     pub brush: BrushSettings,
     /// Why the active tool cannot be used, when it cannot.
     pub tool_status: Option<&'a str>,
@@ -524,6 +529,14 @@ pub fn options_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
 
         // Why the tool cannot be used, where the user is looking when they try.
         if let Some(reason) = state.tool_status {
+            // The ViewModel carries no locale, so a status it raises itself
+            // arrives as a marker and is localised here. An engine refusal is
+            // already a sentence and passes through as one.
+            let reason = if reason == clayspace_vm::TOOL_SUBSTITUTED {
+                state.strings.tool_substituted
+            } else {
+                reason
+            };
             ui.add_space(space::SECTION);
             ui.label(
                 egui::RichText::new(reason)
@@ -644,8 +657,29 @@ fn layer_row(
                     } else {
                         Tokens::text_dim()
                     });
+                // The name gets what is left after the row's right-hand side
+                // is reserved, and truncates into it. A label sized to its own
+                // text takes the whole row and the tag lands on top of it:
+                // "Detalhes_secundario$DF" is what that looks like.
+                //
+                // Reserved rather than laid out by egui because a
+                // right-to-left group inside a horizontal claims the remaining
+                // width, which is the whole of it when the name has not been
+                // bounded first.
+                let width = (ui.available_width() - size::LAYER_ROW_TAIL).max(size::SWATCH);
                 if ui
-                    .add(egui::Label::new(name).sense(egui::Sense::click()))
+                    .allocate_ui_with_layout(
+                        egui::vec2(width, ui.available_height()),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.add(
+                                egui::Label::new(name)
+                                    .truncate()
+                                    .sense(egui::Sense::click()),
+                            )
+                        },
+                    )
+                    .inner
                     .clicked()
                 {
                     queue.push(Command::SelectLayer(layer.key));
@@ -653,6 +687,19 @@ fn layer_row(
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     numeric(ui, format!("{:>3}", layer.intensity));
+                    // What the layer holds. Told apart by the word rather than
+                    // by a colour, so it survives the contrast theme and a
+                    // reader who cannot separate the hues.
+                    ui.label(
+                        egui::RichText::new(representation_tag(layer.representation))
+                            .size(type_scale::LABEL)
+                            .color(Tokens::text_dim()),
+                    )
+                    .on_hover_text(layer.representation.label());
+                    // The name grows into whatever is left, so without this
+                    // the tag sits flush against it and the two read as one
+                    // word: "Detalhes_secundariosSDF".
+                    ui.add_space(space::SNUG);
                     if layer.protection.locked || layer.protection.ghost {
                         let icon = if layer.protection.ghost {
                             Icon::Ghost
@@ -1039,10 +1086,30 @@ pub fn right_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
 }
 
 /// The brush shelf: every tool, with the active one accented.
+/// The brush shelf, holding the verbs the active representation has.
+///
+/// Not every tool with the ones that do not apply greyed out. Three
+/// representations carry substantially different vocabularies, so a single
+/// list would be mostly disabled entries whatever the active layer, every one
+/// of them saying the same thing — absence carries that better than a greyed
+/// row does. A tool that *has* a verb here and cannot be used right now is
+/// still shown; that is a different sentence and worth the space.
 pub fn brush_shelf(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let tools = ToolKind::for_representation(state.representation);
+    if tools.is_empty() {
+        ui.horizontal(|ui| {
+            ui.add_space(space::PANEL);
+            ui.label(
+                egui::RichText::new(state.strings.shelf_no_tools)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+        });
+        return;
+    }
     ui.horizontal(|ui| {
         ui.add_space(space::PANEL);
-        for tool in ToolKind::ALL {
+        for tool in tools {
             let active = state.tool == tool;
             ui.vertical(|ui| {
                 let (rect, response) = ui.allocate_exact_size(
@@ -1166,7 +1233,35 @@ pub fn viewport_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comma
                 queue.push(Command::SetViewPreset(preset));
             }
         }
+        // The active layer's representation, at the far end of the bar. The
+        // shelf's contents follow it, so it has to be visible without opening
+        // a panel or a shelf that changed under you is unexplained.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_space(space::PANEL);
+            ui.label(
+                egui::RichText::new(format!(
+                    "{}: {}",
+                    state.strings.representation_label,
+                    state.representation.label()
+                ))
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+            );
+        });
     });
+}
+
+/// A short tag for a representation, for where a row has no room for a word.
+///
+/// Distinguished by the letters rather than by colour: the design system's
+/// contrast theme changes the hues, and a tag that only a hue told apart would
+/// stop saying anything under it.
+fn representation_tag(representation: Representation) -> &'static str {
+    match representation {
+        Representation::Sdf => "SDF",
+        Representation::Voxel => "VOX",
+        Representation::Mesh => "MSH",
+    }
 }
 
 /// Paints a shaded sphere: the one place the design spends skeuomorphism.

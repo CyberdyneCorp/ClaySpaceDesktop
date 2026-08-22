@@ -1343,6 +1343,7 @@ impl App {
             document_name: document_name.as_str(),
             modified: *self.document_vm.modified().get(),
             tool: *self.sculpt.tool().get(),
+            representation: self.sculpt.active_representation(),
             brush: *self.sculpt.brush().get(),
             tool_status: self.sculpt.tool_status().get().as_deref(),
             symmetry: *self.sculpt.symmetry().get(),

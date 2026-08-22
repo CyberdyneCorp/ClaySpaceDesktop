@@ -5,11 +5,18 @@
 //! exercised in a test with no window and no GPU.
 
 use clayspace_model::{
-    BrushSettings, EditOutcome, GestureSample, HistoryState, ModelError, SceneStats, SculptModel,
-    ToolKind, ViewPresetKind,
+    BrushSettings, EditOutcome, GestureSample, HistoryState, ModelError, Representation,
+    SceneStats, SculptModel, ToolKind, ViewPresetKind,
 };
 
 use crate::command::{Axis, Command};
+
+/// What the status line says when a layer change forced a different tool.
+///
+/// A marker rather than the sentence: the ViewModel layer carries no locale,
+/// and the View swaps it for the localised string. Every other status here is
+/// an engine refusal, which is already English and already flows through.
+pub const TOOL_SUBSTITUTED: &str = "tool-substituted";
 use crate::observable::Observable;
 
 /// A stroke being drawn.
@@ -45,7 +52,15 @@ pub struct SculptViewModel {
     tool: Observable<ToolKind>,
     /// Settings are held per tool: switching away and back returns what the
     /// user left, not a default.
-    brushes: [BrushSettings; ToolKind::ALL.len()],
+    /// Brush settings, per tool *and* per representation.
+    ///
+    /// A size that suits a voxel grid's cells is not the size that suits a
+    /// field, so returning to a tool on a layer returns the settings it had
+    /// *there* rather than the ones it last had anywhere.
+    brushes: [[BrushSettings; ToolKind::ALL.len()]; Representation::ALL.len()],
+    /// Set when the last layer change had to change the tool too, so the
+    /// status line can say so rather than leaving it unexplained.
+    substituted: bool,
     brush: Observable<BrushSettings>,
     symmetry: Observable<[bool; 3]>,
     view_preset: Observable<ViewPresetKind>,
@@ -90,7 +105,8 @@ impl SculptViewModel {
         let mut vm = Self {
             model,
             tool: Observable::new(ToolKind::Padrao),
-            brushes: [BrushSettings::default(); ToolKind::ALL.len()],
+            brushes: [[BrushSettings::default(); ToolKind::ALL.len()]; Representation::ALL.len()],
+            substituted: false,
             brush: Observable::new(BrushSettings::default()),
             // X on, matching the document the engine adapter builds. These two
             // are separate pieces of state and they must not start out
@@ -201,8 +217,8 @@ impl SculptViewModel {
             Command::SelectTool(tool) => {
                 self.store_brush();
                 if self.tool.set_if_changed(tool) {
-                    let stored = self.brushes[Self::index(tool)];
-                    self.brush.set(stored);
+                    let (row, index) = self.slot(tool);
+                    self.brush.set(self.brushes[row][index]);
                     self.refresh_tool_status();
                 }
             }
@@ -238,10 +254,12 @@ impl SculptViewModel {
             | Command::SetSkinThickness(_)
             | Command::ApplyMaskOp(_)
             | Command::ExtrudeMask(_)
-            | Command::SelectLayer(_)
             | Command::SetLayerVisible(..)
             | Command::AddLayer
             | Command::RemoveLayer(_) => {}
+            // The layer changed, so what the shelf offers and what the brush
+            // is set to may both belong to a different representation now.
+            Command::SelectLayer(_) => self.follow_the_active_layer(),
             Command::ToggleSymmetry(axis) => {
                 let index = match axis {
                     Axis::X => 0,
@@ -322,9 +340,50 @@ impl SculptViewModel {
             .unwrap_or(0)
     }
 
+    fn row(representation: Representation) -> usize {
+        Representation::ALL
+            .iter()
+            .position(|candidate| *candidate == representation)
+            .unwrap_or(0)
+    }
+
+    /// Where this tool's settings live for the layer that is active now.
+    fn slot(&self, tool: ToolKind) -> (usize, usize) {
+        (
+            Self::row(self.model.active_representation()),
+            Self::index(tool),
+        )
+    }
+
+    /// Keeps the active tool where the new layer has it, replaces it where it
+    /// does not.
+    ///
+    /// Called after the layer changed, so `active_representation` already
+    /// answers for the new one. Two things move: the tool, if the new
+    /// representation has no verb for it, and the brush settings, which are
+    /// held per representation and so belong to the new layer now even when
+    /// the tool did not change.
+    ///
+    /// Silently resetting to the first tool was the other option, and it is
+    /// the one that leaves a sculptor wondering what they pressed. The status
+    /// line says what happened instead.
+    fn follow_the_active_layer(&mut self) {
+        let representation = self.model.active_representation();
+        let tool = *self.tool.get();
+        if !tool.exists_on(representation) {
+            if let Some(replacement) = ToolKind::for_representation(representation).first() {
+                self.tool.set(*replacement);
+                self.substituted = true;
+            }
+        }
+        let (row, index) = self.slot(*self.tool.get());
+        self.brush.set(self.brushes[row][index]);
+        self.refresh_tool_status();
+    }
+
     fn store_brush(&mut self) {
-        let index = Self::index(*self.tool.get());
-        self.brushes[index] = *self.brush.get();
+        let (row, index) = self.slot(*self.tool.get());
+        self.brushes[row][index] = *self.brush.get();
     }
 
     fn edit_brush(&mut self, change: impl FnOnce(&mut BrushSettings)) {
@@ -332,18 +391,31 @@ impl SculptViewModel {
         change(&mut settings);
         let settings = settings.sanitized();
         if self.brush.set_if_changed(settings) {
-            self.brushes[Self::index(*self.tool.get())] = settings;
+            let (row, index) = self.slot(*self.tool.get());
+            self.brushes[row][index] = settings;
         }
     }
 
+    /// What the active layer holds, for the shell to show and the shelf to
+    /// filter on.
+    pub fn active_representation(&self) -> Representation {
+        self.model.active_representation()
+    }
+
     fn refresh_tool_status(&mut self) {
+        // A substitution outranks an availability reason: the tool that was
+        // swapped in is available by construction, so there would be nothing
+        // else to report, and the swap is the part that needs explaining.
+        if self.substituted {
+            self.substituted = false;
+            self.tool_status
+                .set_if_changed(Some(TOOL_SUBSTITUTED.to_string()));
+            return;
+        }
         let status = self
             .tool
             .get()
-            .availability(
-                self.model.active_representation(),
-                self.model.active_layer_editable(),
-            )
+            .availability(self.model.active_layer_state())
             .err()
             .map(|why| why.to_string());
         self.tool_status.set_if_changed(status);
@@ -352,11 +424,8 @@ impl SculptViewModel {
     fn ensure_tool_available(&mut self) -> Result<(), ModelError> {
         self.refresh_tool_status();
         let tool = *self.tool.get();
-        tool.availability(
-            self.model.active_representation(),
-            self.model.active_layer_editable(),
-        )
-        .map_err(ModelError::Unavailable)?;
+        tool.availability(self.model.active_layer_state())
+            .map_err(ModelError::Unavailable)?;
 
         if !tool.is_stroke_tool() {
             return Err(ModelError::Unavailable(

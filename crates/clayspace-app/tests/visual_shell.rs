@@ -138,6 +138,7 @@ fn state<'a>(
 ) -> ShellState<'a> {
     ShellState {
         shortcuts: shortcuts(),
+        representation: clayspace_model::Representation::Sdf,
         // A mask with something in it, so the menu's enabled state is what the
         // capture shows rather than a row of grey.
         mask: clayspace_model::MaskState {
@@ -609,4 +610,52 @@ fn the_import_panel_names_the_choice_that_cannot_be_undone() {
         assert!(!becomes.label().is_empty());
         assert!(!becomes.detail().is_empty());
     }
+}
+
+/// The shelf holds the active representation's verbs and nothing else.
+///
+/// Before the capability table there was one shelf of fifteen whatever the
+/// layer, four of which refused on an SDF layer and eleven on a voxel one, each
+/// saying so only once clicked. The two captures below are the same shell with
+/// only the active layer's representation changed.
+#[test]
+fn the_shelf_holds_what_the_representation_has() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01", "MatCap Cinza 02", "Gesso"];
+    let report = diagnostics();
+
+    let mut sdf = state(strings, &scene, &materials, &report);
+    sdf.representation = clayspace_model::Representation::Sdf;
+    let sdf_image = capture_shell(&harness, &sdf, "65-shelf-sdf");
+
+    let mut voxel = state(strings, &scene, &materials, &report);
+    voxel.representation = clayspace_model::Representation::Voxel;
+    // A voxel tool, so the active brush is one this shelf actually holds.
+    voxel.tool = clayspace_model::ToolKind::Raspar;
+    let voxel_image = capture_shell(&harness, &voxel, "65-shelf-voxel");
+
+    let sdf_tools =
+        clayspace_model::ToolKind::for_representation(clayspace_model::Representation::Sdf);
+    let voxel_tools =
+        clayspace_model::ToolKind::for_representation(clayspace_model::Representation::Voxel);
+    assert_ne!(
+        sdf_tools, voxel_tools,
+        "the two representations offer the same tools, so this proves nothing"
+    );
+
+    // The shelf occupies the bottom band, so a difference there is the shelf's.
+    let band = sdf_image.height.saturating_sub(140)..sdf_image.height;
+    let differing = band
+        .flat_map(|y| (0..sdf_image.width).map(move |x| (x, y)))
+        .filter(|(x, y)| sdf_image.pixel(*x, *y) != voxel_image.pixel(*x, *y))
+        .count();
+    assert!(
+        differing > 500,
+        "the shelf looks the same for both representations ({differing} pixels \
+         differ), so it is not following the active layer"
+    );
 }

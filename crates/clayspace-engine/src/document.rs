@@ -1209,7 +1209,7 @@ impl SculptModel for ClayDocument {
         }
         // The refusal belongs to the domain; repeating it here would let the
         // two disagree.
-        tool.availability(self.active_representation(), self.active_layer_editable())
+        tool.availability(self.active_layer_state())
             .map_err(ModelError::Unavailable)?;
 
         match self.active_representation() {

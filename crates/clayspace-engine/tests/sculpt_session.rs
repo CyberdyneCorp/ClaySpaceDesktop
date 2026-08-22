@@ -304,7 +304,9 @@ fn every_sdf_stroke_tool_changes_the_surface() {
             continue;
         }
         if tool
-            .availability(clayspace_model::Representation::Sdf, true)
+            .availability(clayspace_model::LayerState::editable(
+                clayspace_model::Representation::Sdf,
+            ))
             .is_err()
         {
             continue;
@@ -607,7 +609,7 @@ mod scene {
     }
 
     #[test]
-    fn a_mesh_layer_is_carried_and_refuses_every_tool() {
+    fn a_mesh_layer_offers_no_tool_that_has_no_mesh_verb() {
         let mut doc = document();
         let key = doc.add_mesh_layer("Referência").expect("carry a mesh");
 
@@ -616,16 +618,32 @@ mod scene {
         assert_eq!(layer.representation, Representation::Mesh);
 
         doc.set_active_layer(key).expect("activate");
+        // Not "mesh layers are carried, not sculpted" — that was a statement
+        // about the engine and stopped being true at ClayCore 0.39.0, which
+        // sculpts a mesh layer's own vertices. What is true is narrower and
+        // is about this application: none of these fifteen tools has a mesh
+        // binding yet, so none is offered. The mesh brushes are phase 3 of
+        // `make-representations-first-class`.
         for tool in ToolKind::ALL {
             let error = tool
-                .availability(Representation::Mesh, true)
-                .expect_err("mesh layers are carried, not sculpted");
+                .availability(doc.active_layer_state())
+                .expect_err("none of these fifteen has a mesh binding");
             assert!(
-                error.to_string().contains("carried"),
+                matches!(
+                    error,
+                    clayspace_model::Unavailable::NoVerbHere {
+                        active: Representation::Mesh,
+                        ..
+                    }
+                ),
                 "{} refused for the wrong reason: {error}",
                 tool.label()
             );
         }
+        assert!(
+            ToolKind::for_representation(Representation::Mesh).is_empty(),
+            "the shelf would offer a mesh tool that has no verb"
+        );
     }
 
     #[test]

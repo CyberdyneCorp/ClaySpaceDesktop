@@ -39,6 +39,7 @@ pub use sculpt::{
 };
 pub use session::{AutosavePolicy, RecentDocuments, Recovery};
 pub use tools::{
-    BrushSettings, Falloff, Representation, Shaping, ToolKind, Unavailable, ViewPresetKind,
+    BrushSettings, Falloff, LayerState, Representation, Shaping, ToolKind, Unavailable, Verbs,
+    ViewPresetKind,
 };
 pub use units::{Unit, Units, UnitsModel};

@@ -40,9 +40,28 @@ All fifteen are bound and each is covered by a before-and-after capture in
 not a drag across the surface, and the interface refuses a stroke for it rather
 than doing something adjacent to what the label says.
 
-A tool whose verb exists on one representation only reports itself
-**unavailable with a reason** on layers that cannot accept it — it is never
-offered and then silently inert.
+**The shelf holds what the active layer's representation has.** Which tool
+reaches which representation is a declared table rather than a rule written per
+tool, and the shelf, the availability check and the tests all read it — so the
+list you see and the list that works cannot drift apart. Eleven of the fifteen
+have an SDF verb and nine a voxel one; a tool with no verb on the active
+representation is *absent* rather than shown and greyed, because with three
+vocabularies a single list would be mostly disabled rows all saying the same
+sentence.
+
+A tool that *does* have a verb here and still cannot be used — the layer is
+locked, hidden, or missing an attribute the tool needs — is shown disabled and
+says which of those it is. That is a different sentence and worth the space.
+
+Changing the active layer keeps the active tool where the new representation
+has it and substitutes one where it does not, saying so in the status line
+rather than resetting silently. Brush settings are held per tool *and* per
+representation: a size that suits a grid's cells is not the size that suits a
+field, so returning to a tool on a layer returns the settings it had there.
+
+Mesh layers currently offer no tools. That is a statement about this
+application and not about the engine — see *Deliberately absent* — and the
+table's own test fails the day it stops being true.
 
 ## Brush controls
 

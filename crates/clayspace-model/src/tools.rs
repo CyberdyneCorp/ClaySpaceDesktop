@@ -5,10 +5,21 @@
 //! something adjacent to what it says: the mapping follows the engine's own
 //! ZBrush-equivalence table rather than an invention of ours.
 //!
-//! Where a verb exists on one representation only — carve-with-alpha is
-//! voxel-side, flatten needs a region on the SDF side — the tool reports
-//! itself unavailable *with a reason* rather than being offered and then
-//! quietly doing nothing.
+//! Which tool reaches which representation is a *table* rather than a rule
+//! written per tool. That is not a style preference. The rule it replaced said
+//! every tool on a mesh layer is unavailable because "mesh layers are carried,
+//! not sculpted", which was true of the engine when it was written and stopped
+//! being true without anything here noticing — a `match` arm can only be read,
+//! and a table can be checked against the engine's own vocabulary. `tools.rs`'s
+//! own tests do exactly that, so a verb ClayCore has and this application does
+//! not is a failing count rather than a silence.
+//!
+//! A tool with no verb on the active representation is **absent** rather than
+//! offered and disabled. With three representations carrying substantially
+//! different vocabularies, one list would be mostly disabled entries whatever
+//! the active layer, all carrying the same sentence. A tool that *has* a verb
+//! here and cannot be used right now — a locked layer, a hidden one, a missing
+//! attribute — is still shown, disabled, with which of those it is.
 
 /// Which representation a layer holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,16 +28,75 @@ pub enum Representation {
     Sdf,
     /// A palette-indexed voxel grid.
     Voxel,
-    /// An imported mesh the document carries but never sculpts.
+    /// Imported triangles, held verbatim.
     Mesh,
 }
 
 impl Representation {
+    pub const ALL: [Representation; 3] = [Self::Sdf, Self::Voxel, Self::Mesh];
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Sdf => "SDF",
             Self::Voxel => "voxel",
             Self::Mesh => "mesh",
+        }
+    }
+}
+
+/// What one tool invokes on each of the three representations.
+///
+/// A field is `None` where that representation has no verb for the tool. The
+/// engine's name is carried rather than a boolean so that "does this apply
+/// here" and "what does it call" cannot disagree — they are one row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Verbs {
+    pub sdf: Option<&'static str>,
+    pub voxel: Option<&'static str>,
+    pub mesh: Option<&'static str>,
+}
+
+impl Verbs {
+    pub fn on(self, representation: Representation) -> Option<&'static str> {
+        match representation {
+            Representation::Sdf => self.sdf,
+            Representation::Voxel => self.voxel,
+            Representation::Mesh => self.mesh,
+        }
+    }
+
+    /// How many representations this tool reaches.
+    pub fn count(self) -> usize {
+        [self.sdf, self.voxel, self.mesh]
+            .into_iter()
+            .filter(Option::is_some)
+            .count()
+    }
+}
+
+/// What the active layer can accept right now.
+///
+/// Grouped rather than passed as loose flags because the list grows: a tool
+/// can be unavailable for the representation, the protection, the visibility
+/// or a missing attribute, and a call site that forgot one of those silently
+/// offered a tool that would refuse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LayerState {
+    pub representation: Representation,
+    /// Whether the layer accepts edits at all — not locked, not ghosted.
+    pub editable: bool,
+    /// Whether the layer is drawn. An edit to a hidden layer lands where
+    /// nothing shows it, which is indistinguishable from the tool not working.
+    pub visible: bool,
+}
+
+impl LayerState {
+    /// The common case: an ordinary editable, visible layer.
+    pub fn editable(representation: Representation) -> Self {
+        Self {
+            representation,
+            editable: true,
+            visible: true,
         }
     }
 }
@@ -111,42 +181,56 @@ impl ToolKind {
 pub enum Unavailable {
     /// The tool is driven by a different gesture than the one attempted.
     WrongGesture { needs: &'static str },
-    /// The verb exists on the other representation only.
-    WrongRepresentation {
-        needs: Representation,
+    /// The tool has no verb on this representation.
+    ///
+    /// The shelf answers this by not showing the tool, so a user should not
+    /// meet it. It is what a caller gets for asking anyway.
+    ///
+    /// Carries the whole row rather than just the active representation, so
+    /// the message can say where the tool *does* apply — which is the useful
+    /// half, and what a bare "not here" loses.
+    NoVerbHere {
         active: Representation,
+        verbs: Verbs,
     },
     /// The layer is ghosted or locked.
     LayerProtected,
-    /// Mesh layers are carried, not sculpted.
-    MeshLayer,
+    /// The layer is hidden, so an edit would land where nothing is drawn.
+    LayerHidden,
+    /// The layer carries no attribute this tool needs — a mesh with no colour
+    /// for a colour brush, say. Produced by the tools that require one.
+    MissingAttribute { needs: &'static str },
 }
 
 impl std::fmt::Display for Unavailable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::WrongRepresentation { needs, active } => write!(
-                f,
-                "applies to {} layers; this one is {}",
-                needs.label(),
-                active.label()
-            ),
+            Self::NoVerbHere { active, verbs } => {
+                let on: Vec<&str> = Representation::ALL
+                    .into_iter()
+                    .filter(|r| verbs.on(*r).is_some())
+                    .map(Representation::label)
+                    .collect();
+                match on.len() {
+                    0 => write!(f, "has no verb on any representation"),
+                    _ => write!(
+                        f,
+                        "applies to {} layers; this one is {}",
+                        on.join(" and "),
+                        active.label()
+                    ),
+                }
+            }
             Self::WrongGesture { needs } => {
                 write!(f, "draw {needs} rather than a stroke across the surface")
             }
             Self::LayerProtected => f.write_str("this layer is locked"),
-            Self::MeshLayer => f.write_str("mesh layers are carried, not sculpted"),
+            Self::LayerHidden => f.write_str("this layer is hidden"),
+            Self::MissingAttribute { needs } => {
+                write!(f, "this layer carries no {needs}")
+            }
         }
     }
-}
-
-/// What a tool needs from the layer it is applied to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Requires {
-    /// Works on either representation.
-    Either,
-    Sdf,
-    Voxel,
 }
 
 impl ToolKind {
@@ -189,73 +273,150 @@ impl ToolKind {
             Self::Trim => "Trim",
         }
     }
-
-    /// The engine entry point this tool invokes.
+    /// Every engine verb this tool names, for the diagnostics report.
     ///
-    /// Stated so that no tool can exist here without one, and so a reader can
-    /// check a binding against the engine's documentation without reading the
-    /// implementation.
-    pub fn engine_verb(self) -> &'static str {
+    /// Derived from [`ToolKind::verbs`] rather than restated. It used to be a
+    /// second `match`, which is two places to change when a binding moves and
+    /// one place to forget.
+    pub fn engine_verbs(self) -> String {
+        let verbs = self.verbs();
+        let mut named: Vec<&'static str> = Vec::new();
+        for verb in [verbs.sdf, verbs.voxel, verbs.mesh].into_iter().flatten() {
+            if !named.contains(&verb) {
+                named.push(verb);
+            }
+        }
+        named.join(" / ")
+    }
+
+    /// The engine verb this tool invokes on each representation.
+    ///
+    /// `None` where the representation has no verb for it. This is the table
+    /// the shelf, the availability rules and the tests all read; nothing else
+    /// may decide where a tool applies, or they can drift apart again.
+    pub fn verbs(self) -> Verbs {
+        // Written out per tool rather than grouped, so that adding a verb on a
+        // representation is an edit to one line and reading what a tool does
+        // is one row.
         match self {
-            Self::Padrao => "clay_layer_apply_stroke (CLAY_OP_RELIEF)",
-            Self::Mover => "clay_layer_move_surface",
-            Self::Inflar => "clay_voxel_sculpt_inflate / CLAY_OP_RELIEF",
-            Self::Suavizar => "clay_item_volume_relax / clay_voxel_sculpt_smooth",
-            Self::Mascara => "clay_mask_apply_stroke",
-            Self::Puxar => "clay_item_set_curve_points (snakehook)",
-            Self::Raspar => "clay_voxel_sculpt_scrape",
-            Self::Planar => "clay_item_volume_flatten (cut-only)",
-            Self::Preencher => "clay_voxel_sculpt_fill_cavities",
-            Self::Pincar => "clay_voxel_sculpt_pinch / magnify (negative)",
-            Self::Camada => "clay_layer_apply_stroke (clamped accumulation)",
-            Self::Nudge => "clay_voxel_sculpt_smudge",
-            Self::Polir => "clay_item_volume_flatten (cut-only)",
-            Self::Relaxar => "clay_item_volume_relax",
-            Self::Trim => "clay_cut_create",
+            Self::Padrao => Verbs {
+                sdf: Some("clay_layer_apply_stroke (CLAY_OP_RELIEF)"),
+                voxel: Some("clay_voxel_sculpt_inflate"),
+                mesh: None,
+            },
+            Self::Inflar => Verbs {
+                sdf: Some("clay_layer_apply_stroke (CLAY_OP_RELIEF)"),
+                voxel: Some("clay_voxel_sculpt_inflate"),
+                mesh: None,
+            },
+            Self::Suavizar => Verbs {
+                sdf: Some("clay_item_volume_relax"),
+                voxel: Some("clay_voxel_sculpt_smooth"),
+                mesh: None,
+            },
+            Self::Mascara => Verbs {
+                sdf: Some("clay_mask_apply_stroke"),
+                voxel: Some("clay_mask_apply_stroke"),
+                mesh: None,
+            },
+            Self::Camada => Verbs {
+                sdf: Some("clay_layer_apply_stroke (clamped accumulation)"),
+                voxel: Some("clay_voxel_sculpt_inflate (clamped)"),
+                mesh: None,
+            },
+            Self::Mover => Verbs {
+                sdf: Some("clay_layer_move_surface"),
+                voxel: None,
+                mesh: None,
+            },
+            Self::Puxar => Verbs {
+                sdf: Some("clay_item_set_curve_points (snakehook)"),
+                voxel: None,
+                mesh: None,
+            },
+            Self::Planar => Verbs {
+                sdf: Some("clay_item_volume_flatten (cut-only)"),
+                voxel: None,
+                mesh: None,
+            },
+            Self::Polir => Verbs {
+                sdf: Some("clay_item_volume_flatten (cut-only, hPolish)"),
+                voxel: None,
+                mesh: None,
+            },
+            Self::Relaxar => Verbs {
+                sdf: Some("clay_item_volume_relax"),
+                voxel: None,
+                mesh: None,
+            },
+            Self::Trim => Verbs {
+                sdf: Some("clay_cut_create"),
+                voxel: None,
+                mesh: None,
+            },
+            Self::Raspar => Verbs {
+                sdf: None,
+                voxel: Some("clay_voxel_sculpt_scrape"),
+                mesh: None,
+            },
+            Self::Preencher => Verbs {
+                sdf: None,
+                voxel: Some("clay_voxel_sculpt_fill_cavities"),
+                mesh: None,
+            },
+            Self::Pincar => Verbs {
+                sdf: None,
+                voxel: Some("clay_voxel_sculpt_pinch"),
+                mesh: None,
+            },
+            Self::Nudge => Verbs {
+                sdf: None,
+                voxel: Some("clay_voxel_sculpt_smudge"),
+                mesh: None,
+            },
         }
     }
 
-    fn requires(self) -> Requires {
-        match self {
-            // Both representations carry these.
-            Self::Padrao | Self::Inflar | Self::Suavizar | Self::Mascara | Self::Camada => {
-                Requires::Either
-            }
-            // Field-side only: these act on the assembled surface or on a
-            // sampled volume.
-            Self::Mover | Self::Puxar | Self::Planar | Self::Polir | Self::Relaxar | Self::Trim => {
-                Requires::Sdf
-            }
-            // Voxel-side only: cell walks with no field equivalent yet.
-            Self::Raspar | Self::Preencher | Self::Pincar | Self::Nudge => Requires::Voxel,
-        }
+    /// The verb this tool invokes on `representation`, if it has one there.
+    pub fn verb_on(self, representation: Representation) -> Option<&'static str> {
+        self.verbs().on(representation)
+    }
+
+    /// Whether this tool exists at all on `representation`.
+    ///
+    /// What the shelf filters on. A tool that answers `false` is not shown for
+    /// that layer, rather than shown disabled.
+    pub fn exists_on(self, representation: Representation) -> bool {
+        self.verb_on(representation).is_some()
+    }
+
+    /// The tools a representation can offer, in the shelf's own order.
+    pub fn for_representation(representation: Representation) -> Vec<ToolKind> {
+        Self::ALL
+            .into_iter()
+            .filter(|tool| tool.exists_on(representation))
+            .collect()
     }
 
     /// Whether this tool can be applied to a layer, and why not if it cannot.
-    pub fn availability(
-        self,
-        representation: Representation,
-        editable: bool,
-    ) -> Result<(), Unavailable> {
-        if representation == Representation::Mesh {
-            return Err(Unavailable::MeshLayer);
+    ///
+    /// The absent case is still an error here, because a caller that asks
+    /// about a tool the shelf never showed deserves an answer rather than a
+    /// silent no-op. What the *shelf* does with it is not show the tool.
+    pub fn availability(self, layer: LayerState) -> Result<(), Unavailable> {
+        if !self.exists_on(layer.representation) {
+            return Err(Unavailable::NoVerbHere {
+                active: layer.representation,
+                verbs: self.verbs(),
+            });
         }
-        if !editable {
+        if !layer.editable {
             return Err(Unavailable::LayerProtected);
         }
-        match (self.requires(), representation) {
-            (Requires::Either, _) => Ok(()),
-            (Requires::Sdf, Representation::Sdf) => Ok(()),
-            (Requires::Voxel, Representation::Voxel) => Ok(()),
-            (Requires::Sdf, active) => Err(Unavailable::WrongRepresentation {
-                needs: Representation::Sdf,
-                active,
-            }),
-            (Requires::Voxel, active) => Err(Unavailable::WrongRepresentation {
-                needs: Representation::Voxel,
-                active,
-            }),
+        if !layer.visible {
+            return Err(Unavailable::LayerHidden);
         }
+        Ok(())
     }
 
     /// Whether the tool paints a mask rather than moving the surface.
@@ -435,7 +596,7 @@ mod tests {
     #[test]
     fn every_tool_names_an_engine_verb() {
         for tool in ToolKind::ALL {
-            let verb = tool.engine_verb();
+            let verb = tool.engine_verbs();
             assert!(
                 verb.starts_with("clay_"),
                 "{} does not name an engine entry point: {verb}",
@@ -456,7 +617,7 @@ mod tests {
     #[test]
     fn a_voxel_only_tool_is_refused_on_an_sdf_layer_with_a_reason() {
         let error = ToolKind::Raspar
-            .availability(Representation::Sdf, true)
+            .availability(LayerState::editable(Representation::Sdf))
             .expect_err("scrape is voxel-side");
         assert!(
             error.to_string().contains("voxel"),
@@ -467,7 +628,7 @@ mod tests {
     #[test]
     fn an_sdf_only_tool_is_refused_on_a_voxel_layer_with_a_reason() {
         let error = ToolKind::Mover
-            .availability(Representation::Voxel, true)
+            .availability(LayerState::editable(Representation::Voxel))
             .expect_err("the move brush is field-side");
         assert!(error.to_string().contains("SDF"), "{error}");
     }
@@ -475,32 +636,56 @@ mod tests {
     #[test]
     fn switching_to_a_supporting_layer_re_enables_a_tool() {
         assert!(ToolKind::Raspar
-            .availability(Representation::Sdf, true)
+            .availability(LayerState::editable(Representation::Sdf))
             .is_err());
         assert!(
             ToolKind::Raspar
-                .availability(Representation::Voxel, true)
+                .availability(LayerState::editable(Representation::Voxel))
                 .is_ok(),
             "the tool must become available without being reselected"
         );
     }
 
+    /// Not because mesh layers cannot be sculpted — ClayCore 0.39.0 sculpts
+    /// them with sixteen fixed-topology brushes — but because *these* fifteen
+    /// tools have no mesh verb yet. When the mesh brushes are added this test
+    /// stops being true, and it fails rather than passing quietly, which is
+    /// the whole point of the table.
     #[test]
-    fn no_tool_is_offered_on_a_mesh_layer() {
+    fn no_current_tool_has_a_mesh_verb_yet() {
         for tool in ToolKind::ALL {
             let error = tool
-                .availability(Representation::Mesh, true)
-                .expect_err("mesh layers are carried, not sculpted");
-            assert_eq!(error, Unavailable::MeshLayer, "{}", tool.label());
+                .availability(LayerState::editable(Representation::Mesh))
+                .expect_err("none of these fifteen has a mesh binding");
+            assert_eq!(
+                error,
+                Unavailable::NoVerbHere {
+                    active: Representation::Mesh,
+                    verbs: tool.verbs(),
+                },
+                "{}",
+                tool.label()
+            );
         }
+        assert!(
+            ToolKind::for_representation(Representation::Mesh).is_empty(),
+            "the shelf would show a mesh tool that has no verb"
+        );
     }
 
     #[test]
     fn no_tool_is_offered_on_a_protected_layer() {
         for tool in ToolKind::ALL {
             for representation in [Representation::Sdf, Representation::Voxel] {
+                if !tool.exists_on(representation) {
+                    continue;
+                }
                 assert_eq!(
-                    tool.availability(representation, false),
+                    tool.availability(LayerState {
+                        representation,
+                        editable: false,
+                        visible: true,
+                    }),
                     Err(Unavailable::LayerProtected),
                     "{} on a protected {} layer",
                     tool.label(),
@@ -526,11 +711,95 @@ mod tests {
     #[test]
     fn every_tool_works_on_at_least_one_representation() {
         for tool in ToolKind::ALL {
-            let usable = [Representation::Sdf, Representation::Voxel]
+            let usable = Representation::ALL
                 .iter()
-                .any(|r| tool.availability(*r, true).is_ok());
+                .any(|r| tool.availability(LayerState::editable(*r)).is_ok());
             assert!(usable, "{} can never be used", tool.label());
         }
+    }
+
+    /// 1.4. Every tool answers for every representation, so a tool cannot be
+    /// left out of the table and quietly become unavailable everywhere.
+    #[test]
+    fn the_table_answers_for_every_tool_on_every_representation() {
+        for tool in ToolKind::ALL {
+            let verbs = tool.verbs();
+            assert!(
+                verbs.count() > 0,
+                "{} names no verb on any representation, so it can never be \
+                 offered — either bind it or take it out of ALL",
+                tool.label()
+            );
+            for representation in Representation::ALL {
+                // The point is that this does not panic and does not disagree
+                // with itself: `exists_on` and `verb_on` are one lookup.
+                assert_eq!(
+                    tool.exists_on(representation),
+                    tool.verb_on(representation).is_some(),
+                    "{} disagrees with itself on {}",
+                    tool.label(),
+                    representation.label()
+                );
+            }
+        }
+    }
+
+    /// 1.4. The shelf's list and the availability rule are the same lookup, so
+    /// they cannot drift into showing a tool that refuses or hiding one that
+    /// would work.
+    #[test]
+    fn the_shelf_and_the_availability_rule_agree() {
+        for representation in Representation::ALL {
+            let offered = ToolKind::for_representation(representation);
+            for tool in ToolKind::ALL {
+                let shown = offered.contains(&tool);
+                let usable = tool
+                    .availability(LayerState::editable(representation))
+                    .is_ok();
+                assert_eq!(
+                    shown,
+                    usable,
+                    "{} is {} on {} but {} by availability",
+                    tool.label(),
+                    if shown { "shown" } else { "hidden" },
+                    representation.label(),
+                    if usable { "allowed" } else { "refused" }
+                );
+            }
+        }
+    }
+
+    /// 1.5. What the application reaches, against what the engine has.
+    ///
+    /// Not an assertion that the numbers are equal — they are not, and closing
+    /// that is what the rest of this change is for. It is an assertion that
+    /// they are what we last looked at, so taking up an engine release that
+    /// adds a verb fails here instead of passing in silence. That silence is
+    /// exactly how "mesh layers are carried, not sculpted" outlived the fact
+    /// it described.
+    ///
+    /// Update the figures **and** the coverage note when a phase lands.
+    #[test]
+    fn the_coverage_against_the_engine_is_what_we_last_measured() {
+        // ClayCore 0.39.0, counted from `bindings/c/clay.h`.
+        const ENGINE_MESH_BRUSHES: usize = 16;
+        const ENGINE_VOXEL_SCULPT_VERBS: usize = 10;
+
+        let mesh = ToolKind::for_representation(Representation::Mesh).len();
+        let voxel = ToolKind::for_representation(Representation::Voxel).len();
+
+        assert_eq!(
+            mesh, 0,
+            "the mesh vocabulary has moved: {mesh} of the engine's \
+             {ENGINE_MESH_BRUSHES} fixed-topology brushes are bound. Update \
+             this count and `docs/features.md` together."
+        );
+        assert_eq!(
+            voxel, 9,
+            "the voxel vocabulary has moved: {voxel} tools reach a voxel \
+             layer against the engine's {ENGINE_VOXEL_SCULPT_VERBS} sculpting \
+             verbs. Update this count and `docs/features.md` together."
+        );
     }
 
     #[test]

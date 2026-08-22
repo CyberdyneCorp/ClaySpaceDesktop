@@ -29,6 +29,14 @@ pub mod space {
 
 /// Control sizing, in logical pixels.
 pub mod size {
+    /// What a layer row keeps for its right-hand side: the representation tag,
+    /// the intensity, and a protection icon where there is one.
+    ///
+    /// A name is bounded by it rather than by egui's own layout, which hands a
+    /// right-to-left group whatever is left — and that is everything when the
+    /// name in front of it was never bounded.
+    pub const LAYER_ROW_TAIL: f32 = 84.0;
+
     /// A row in a list — scene entries, layer entries.
     pub const ROW: f32 = 26.0;
     /// A slider or field.

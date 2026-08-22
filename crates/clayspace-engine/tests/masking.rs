@@ -55,7 +55,9 @@ fn sdf_tools() -> Vec<ToolKind> {
         .filter(|tool| {
             *tool != ToolKind::Mascara
                 && tool
-                    .availability(clayspace_model::Representation::Sdf, true)
+                    .availability(clayspace_model::LayerState::editable(
+                        clayspace_model::Representation::Sdf,
+                    ))
                     .is_ok()
         })
         .collect()
