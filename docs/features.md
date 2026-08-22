@@ -84,6 +84,12 @@ which is what makes rigging feel like modelling rather than filling in a form.
   the pointer drifts, and the sphere slides away from the cursor.
 - Skin thickness is a multiplier over the authored radii, so the slider is
   reversible and never rewrites the rig.
+- **Esfera negativa** makes a sphere cut into the rig rather than add to it —
+  ZBrush's negative ZSphere, said out loud rather than made by pushing one
+  inside its parent. The sign belongs to the node, so the membrane along its
+  links is not drawn, the carve never sweeps its parent's radius (an eye
+  socket does not swallow the head), a negative may carry a limb, and the sign
+  survives a save. Only the root refuses, having nothing to cut into.
 - The scaffolding — three hoops per sphere, a line per link — draws only while
   rigging, and sits slightly proud of the skin. Flush hoops are invisible,
   because at a joint the skin *is* the sphere.
@@ -122,6 +128,16 @@ sits inside a torso — and picking the far one makes a chest impossible to grab
   the surface rather than hanging at an arbitrary depth.
 - Device loss is recovered rather than fatal: the surface, renderer and buffers
   are rebuilt against the same window and nothing authored is lost.
+- Level of detail. A model past three extents from the camera drops to the
+  brick cache's mips and comes back inside two and a half; the gap between the
+  two distances is what stops a resting camera swapping the surface on a
+  twitch. A model under 2048 surface bricks is never coarsened — it meshes
+  inside a frame anyway. Measured on the reference form: 283,612 triangles down
+  to 86,130, with 2.1% of the frame able to tell the difference filling the
+  screen and 1.3% at the distance it actually drops at. The interface says
+  *detalhe reduzido* while it is drawn. Where no mip has been built yet the
+  full surface is drawn instead, and an edit returns to it. See
+  [Known-degraded](#known-degraded) for what the coarse surface looks like.
 
 ## Interface
 
@@ -159,6 +175,21 @@ recorded once rather than once per call.
 
 Backend choice affects speed, never results.
 
+**Refill is routed per batch, and the routing is measured.** A brick refill
+goes to the CPU below sixteen bricks whatever the machine — what that avoids is
+the fixed cost of a device submission, which is a property of the call rather
+than of the hardware. Above it, the first large refill of a session is split
+into three slices: a warm-up on the accelerated backend, then one timed slice
+each, and every refill after that is timed too, so the routing keeps following
+the machine.
+
+This replaced a constant measured on an M-series Mac. It was right there and
+wrong elsewhere: on a 24-thread Linux box with an RTX 5060, CUDA is 3.5x
+*slower* than the CPU at every batch size from 8 bricks to 7600, and sending
+the startup fill to it cost 179 ms against 63 ms. The accelerated backend keeps
+a batch unless the CPU beats it by more than a quarter, so a near-tie stays on
+the default and only a decisive loss moves the work.
+
 ## History
 
 - Undo and redo over the engine's own vocabulary.
@@ -170,6 +201,12 @@ Backend choice affects speed, never results.
 - Changing symmetry costs its own entry, because a layer's mirror is document
   state. It is written only when it actually differs, so a run of strokes at
   one setting costs nothing extra.
+- Renaming a layer is one entry too, and the new name is **saved**: it goes
+  into the document rather than being kept beside it, so a reopened file shows
+  what the layer was called and not what it was created as. A blank name is
+  refused — it is what a cleared text field submits — and two voxel layers are
+  not allowed to share one, because a grid is reachable only by name and the
+  lookup answers with the first match in stack order.
 
 ## Geometry in and out
 
@@ -239,9 +276,8 @@ changes it, because that is where a person looks for it.
 
 ## Not built yet
 
-Panels cannot be resized or collapsed, shortcuts are fixed, and there is no
-level-of-detail switching in the viewport — the engine can build a mip and
-read it but not mesh it. See [roadmap.md](roadmap.md).
+Panels cannot be resized or collapsed and shortcuts are fixed. See
+[roadmap.md](roadmap.md).
 
 ## Deliberately absent
 
@@ -264,18 +300,22 @@ fixed, so this list shrinks by being noticed rather than by being remembered.
 
 ClayCore 0.28.0 emptied most of it: the layer mirror works, `CLAY_OP_ADD`
 honours stroke strength, a subset mesh emits its straddlers, and the
-bake-and-replace tools no longer corrugate. Suavizar and Relaxar are now
-*subtle* rather than damaging — what is left is what relax actually does,
-which is sub-cell smoothing that takes the edge off rather than removing a
-dent.
+bake-and-replace tools no longer corrugate. 0.29.0 took three more — a reopened
+document keeps its layer names, visibility and stack order; a saved rig comes
+back posable; and the gradient-normal term stopped scaling with the document,
+which is what made symmetry affordable.
+
+0.30.0 took three more: the negative ZSphere is now the node's own sign rather
+than a separate subtractive sphere; a layer rename is saved rather than kept
+beside the document and lost; and a reloaded rig is found by enumerating a
+layer's nodes rather than by probing ids and hoping the gaps are short.
+
+What is left is the engine's design or ours. Nothing on this list is waiting on
+an engine.
 
 | What | Effect | Issue |
 |---|---|---|
 | Ruído | Inert. Clamped to zero, because jitter interacts badly with the cache's narrow band | ours, not the engine's |
-| Renaming a layer | Shown, but not saved. The ABI names a layer at creation and has no rename, so a renamed layer comes back under the name it was made with | [#92](https://github.com/CyberdyneCorp/ClayCore/issues/92) |
-| Negative ZSpheres | The indentation is real, but placed as a separate subtractive sphere: the membrane along its links is not cut, the sign is lost on reload, and only a leaf may be negative | [#99](https://github.com/CyberdyneCorp/ClayCore/issues/99) |
+| The coarse surface, while distant | Faintly speckled, and missing the mips it cannot have. The specks are degenerate triangles shading to a garbage normal — 316 of 86,130 on the reference form — which only shows because level 1 refuses gradient normals and forces face ones. The same specks are on screen during every drag; there `refine` clears them on pointer-up, and here nothing can. Separately, a mip needs all eight children evaluated and the cache only evaluates surface bricks, so coarse blocks on the edge of the surface band never get one (70 of 242 here). Splicing full-resolution geometry into those gaps was measured at 0.69% of the frame and not taken — mixing spacings in one surface risks cracks where they meet | the engine's design, and ours |
 | Suavizar, Relaxar | Subtle. Relax moves the surface by less than a cell per pass and the cell is 0.02, so they take the high-frequency edge off rather than removing a dent | the engine's design |
-| Dab latency with symmetry on | A mirrored stroke edits two patches, so a segment costs ~98 ms against ~28 ms unmirrored. Nearly all of it is meshing | [#73](https://github.com/CyberdyneCorp/ClayCore/issues/73), fixed upstream and not in 0.28.0 |
-| Layer names after reopening | Lost, along with visibility and stack order. Ids are recovered by probing | [#69](https://github.com/CyberdyneCorp/ClayCore/issues/69) |
-| Armature trees after reopening | The skinned surface survives; the rig does not. A placed armature is write-only in both halves — `clay_layer_stroke_points` refuses the primitive ("curve points need CLAY_PRIM_STROKE or CLAY_PRIM_SWEPT"), and there is no reader for the parent array at all. A reopened document reports no armature rather than inventing a plausible one | [#77](https://github.com/CyberdyneCorp/ClayCore/issues/77) |
 
