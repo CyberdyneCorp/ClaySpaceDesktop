@@ -83,11 +83,6 @@ pub struct SurfaceGeometry {
     last_engine_mesh: std::time::Duration,
     last_read: std::time::Duration,
     last_split: std::time::Duration,
-    /// Keys meshed with face normals since the last refinement.
-    ///
-    /// A gesture's worth of them, so the quality pass at the end re-meshes
-    /// what the stroke touched rather than the whole surface.
-    coarsely_shaded: std::collections::HashSet<BrickKey>,
     /// The level the stored geometry was meshed at.
     ///
     /// Distinct from `requested` because a coarse surface is not always
@@ -109,15 +104,20 @@ pub struct SurfaceGeometry {
 /// a displacement — so switching between them cannot move the surface. What
 /// changes is the gradient sampling, measured after 96 edits over 80 bricks:
 ///
-/// | engine | face normals | gradient normals |
-/// |---|---|---|
-/// | 0.28.0 | 7.7 ms | 83.2 ms |
-/// | 0.29.1 | 8.0 ms | 11.5 ms |
+/// | engine | face normals | gradient normals | premium |
+/// |---|---|---|---|
+/// | 0.28.0 | 7.7 ms | 83.2 ms | 11x |
+/// | 0.29.1 | 8.0 ms | 11.5 ms | 1.4x |
+/// | 0.30.0 | 12.6 ms | 13.2 ms | 1.04x |
 ///
-/// Two upstream fixes closed most of that — #73 culling the tape per brick and
-/// #83 batching the attribute taps. The split stays because 3.5 ms a segment
-/// is still about 30% of the mesh, but it is now a modest win rather than the
-/// difference between interactive and not.
+/// Three upstream fixes closed it — #73 culling the tape per brick, #83
+/// batching the attribute taps, and #93's release carrying the rest. The
+/// gradient is now within measurement noise of face normals, so **sculpting
+/// shades fully** and there is no second pass.
+///
+/// [`Shading::Fast`] is still what the coarse LOD surface uses, because level
+/// 1 *refuses* gradient normals rather than downgrading them — the one place
+/// the choice is not about cost.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shading {
     /// Area-weighted face normals. Needs no field sampling, so it is flat
@@ -147,7 +147,6 @@ impl SurfaceGeometry {
             last_engine_mesh: std::time::Duration::ZERO,
             last_read: std::time::Duration::ZERO,
             last_split: std::time::Duration::ZERO,
-            coarsely_shaded: std::collections::HashSet::new(),
             detail: Detail::Full,
             requested: Detail::Full,
         }
@@ -243,13 +242,15 @@ impl SurfaceGeometry {
         let replace: std::collections::HashSet<BrickKey> = meshed.iter().copied().collect();
 
         let started = std::time::Instant::now();
-        // Face normals while the pointer is down. The gradient is 11x the
-        // cost of everything else in a segment put together, and it buys
-        // shading quality that is not what a sculptor is looking at mid-drag:
-        // they are watching the form move. `refine` pays for it when the
-        // pointer comes up, over just these keys.
-        self.remesh(document, &meshed, Some(&replace), Shading::Fast, 0)?;
-        self.coarsely_shaded.extend(meshed.iter().copied());
+        // Gradient normals, while the pointer is down.
+        //
+        // This used to shade with face normals and buy the gradient back at
+        // pointer-up, because the gradient cost eleven times everything else
+        // in a segment put together. It does not any more — see [`Shading`] —
+        // and the pass that bought it back had become the most expensive thing
+        // in a gesture: 15.7 ms over the 111 keys a stroke touches, against
+        // 0.6 ms to have shaded them properly in the first place.
+        self.remesh(document, &meshed, Some(&replace), Shading::Full, 0)?;
         let mesh_time = started.elapsed();
 
         let started = std::time::Instant::now();
@@ -543,35 +544,6 @@ impl SurfaceGeometry {
         self.dirty = false;
     }
 
-    /// Re-shades what a gesture touched, at full quality.
-    ///
-    /// The positions are already right — `sync` is exact, and normals do not
-    /// move a vertex — so this changes nothing a silhouette test could see. It
-    /// buys back the gradient normals that the fast path skipped, over the
-    /// keys the gesture actually touched rather than the whole surface.
-    ///
-    /// Cheap enough to run on every pointer-up because it is bounded by the
-    /// gesture, and affordable there because nobody is waiting on the next
-    /// sample.
-    pub fn refine(&mut self, gpu: &Gpu, document: &mut ClayDocument) -> Result<(), ClayError> {
-        // Nothing coarsely shaded at reduced detail — level 1 is face-shaded
-        // by construction and has no gradient pass to buy back — and the keys
-        // would be from the other level's space anyway.
-        if self.coarsely_shaded.is_empty() || self.detail == Detail::Reduced {
-            return Ok(());
-        }
-        let keys: Vec<BrickKey> = self.coarsely_shaded.iter().copied().collect();
-        let replace: std::collections::HashSet<BrickKey> = self.coarsely_shaded.drain().collect();
-        self.remesh(document, &keys, Some(&replace), Shading::Full, 0)?;
-        self.upload(gpu);
-        Ok(())
-    }
-
-    /// How many keys are waiting for their quality pass.
-    pub fn awaiting_refinement(&self) -> usize {
-        self.coarsely_shaded.len()
-    }
-
     /// Re-meshes the whole surface and compacts the per-key slots.
     ///
     /// No longer needed to close seams. Until ClayCore 0.28.0 a subset mesh
@@ -684,7 +656,6 @@ impl SurfaceGeometry {
         } else {
             Detail::Full
         };
-        self.coarsely_shaded.clear();
         if keys.is_empty() {
             self.mesh.upload(gpu, &[], &[]);
             self.layout = SlotMap::default();

@@ -186,15 +186,30 @@ bricks:
 91% of a segment was one call's gradient-normal term —
 [#73](https://github.com/CyberdyneCorp/ClayCore/issues/73), since fixed in
 0.29.0 and narrowed again by
-[#83](https://github.com/CyberdyneCorp/ClayCore/issues/83) in 0.29.1. The drag
-does not pay it either way: `sync` shades with face normals and
-`SurfaceGeometry::refine` buys the gradient back over the gesture's own keys
-when the pointer comes up. A dab went 86 ms → 12 ms.
+[#83](https://github.com/CyberdyneCorp/ClayCore/issues/83) in 0.29.1. A dab
+went 86 ms → 12 ms.
 
 The table above is the 0.28.0 measurement, kept because it is what the shading
-split was built against. On 0.29.1 the same segment meshes in 11.5 ms with
-gradient normals against 8.0 ms with face ones — the split now buys a modest
-win rather than the difference between interactive and not.
+split was built against. That split — face normals while dragging, the gradient
+bought back on pointer-up — **is gone**, because the thing it was avoiding
+stopped costing anything:
+
+| engine | face normals | gradient normals | premium |
+|---|---|---|---|
+| 0.28.0 | 7.7 ms | 83.2 ms | 11x |
+| 0.29.1 | 8.0 ms | 11.5 ms | 1.4x |
+| 0.30.0 | 12.6 ms | 13.2 ms | 1.04x |
+
+By the end it was the most expensive thing in a gesture: re-shading the 111
+keys a stroke touches cost 15.7 ms at pointer-up, to buy back 0.6 ms of
+gradient. The application said so on every stroke — `a interface travou:
+sombreamento final 17 ms` — and the `stroke` stall printed beside it was the
+same event, since that timer wraps the whole end-of-gesture pass.
+
+Sculpting shades fully now. The end of a gesture went 17.5 ms → 2.0 ms, which
+is only the coarse levels; the drag itself did not get slower; and the mid-drag
+picture became *pixel-identical* to a full re-mesh where it used to differ.
+`gesture_end.rs` fails if anything is put back onto pointer-up.
 
 The scaling below is the shape of the original problem, also measured on
 0.28.0, at a fixed 80 bricks while the document grows from 1 node to 193:

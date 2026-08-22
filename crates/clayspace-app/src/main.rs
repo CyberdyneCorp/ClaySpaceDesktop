@@ -690,22 +690,6 @@ impl App {
         }
     }
 
-    /// Re-shades what the gesture touched, at full quality.
-    fn refine_geometry(&mut self) {
-        self.timed("sombreamento final", |app| {
-            let Some(graphics) = app.graphics.as_mut() else {
-                return;
-            };
-            let gpu = graphics.gpu.clone();
-            if let Err(e) = app
-                .document
-                .with(|document| graphics.geometry.refine(&gpu, document))
-            {
-                eprintln!("o sombreamento final falhou: {e}");
-            }
-        });
-    }
-
     fn settle_geometry_now(&mut self) {
         let Some(graphics) = self.graphics.as_mut() else {
             return;
@@ -1110,13 +1094,11 @@ impl App {
             // sculpting command and would have to guess.
             self.document_vm.touched();
         }
-        // The gesture's quality pass. Not a settle — `sync` is exact since
-        // ClayCore 0.28.0 emitted the straddlers (#66), so there are no seams
-        // left to close and no reason to re-mesh the world. What this buys
-        // back is the gradient normals the fast path skipped, over the keys
-        // this gesture touched.
+        // No quality pass any more: `sync` shades fully, because the gradient
+        // stopped costing anything worth deferring. What is left at the end of
+        // a gesture is the coarse levels, which cannot be built mid-stroke —
+        // dirtying any child drops its mip.
         if matches!(command, Command::EndStroke | Command::CancelStroke) {
-            self.refine_geometry();
             self.build_mips();
         }
         self.request_redraw();

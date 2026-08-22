@@ -21,9 +21,9 @@
 //!   normals has them too, and with gradient normals it has none. They are
 //!   degenerate triangles — 316 of 86130 here — shading to a garbage normal
 //!   when the normal comes from the triangle rather than from the field. The
-//!   coarse surface cannot escape them because level 1 refuses gradients, and
-//!   the same specks are already on screen during every drag, where `refine`
-//!   clears them on pointer-up.
+//!   coarse surface cannot escape them because level 1 refuses gradients. The
+//!   full-resolution surface does escape them: sculpting shades with the
+//!   gradient, so they are only ever seen on the coarse one.
 //! - **Missing coarse blocks.** A mip needs all eight children evaluated, and
 //!   the cache only evaluates surface bricks, so a coarse block on the edge of
 //!   the surface band never gets one however long it settles — 70 of 242 here,

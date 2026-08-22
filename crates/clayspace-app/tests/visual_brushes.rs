@@ -453,13 +453,15 @@ fn no_brush_stalls_the_stroke() {
     // its own. That took Padrao from 28.3 ms to 97.6.
     //
     // Then the drag stopped paying for gradient normals. They cost 11x
-    // everything else in a segment put together (#73, fixed upstream and not
-    // in 0.28.0), and they buy shading quality a sculptor is not looking at
-    // while the form is moving. The fast path shades with face normals and
-    // `SurfaceGeometry::refine` buys the gradient back when the pointer comes
-    // up, over just the keys the gesture touched:
+    // everything else in a segment put together (#73), and the drag shaded
+    // with face normals instead, buying the gradient back on pointer-up:
     //
     //   Padrao   97.6 ms  ->  36.6 ms      Puxar   580.8 ms  ->  239.4 ms
+    //
+    // That split is gone. #73 and #83 took the gradient premium to 1.04x by
+    // ClayCore 0.30.0, so sculpting shades fully and there is no pointer-up
+    // pass — which is what stopped the interface reporting a stall on every
+    // stroke. See `gesture_end.rs`.
     //
     // Still not a frame, and no longer three of them.
     let ceiling = |tool: &ToolKind| {
