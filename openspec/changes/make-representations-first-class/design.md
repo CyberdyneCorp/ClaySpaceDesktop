@@ -112,6 +112,41 @@ vocabulary needs a shelf that can hold a representation's own verbs. Conversions
 come before the vocabulary because mesh sculpting is worth much less without the
 round trip that produces a mesh to sculpt.
 
+### An alpha is a PNG, decoded in the engine bridge
+
+The engine decodes no images — `clay_item_add_alpha` and
+`clay_voxel_sculpt_carve_alpha` take samples — so the host decodes. **PNG only.**
+
+The decoder lives in `clayspace-engine`, beside `import_mesh`, which already has
+exactly this shape: a path in, an engine call out, the format checked before the
+engine is asked. That keeps image decoding out of the View, out of the
+ViewModels, and out of the pure domain crate, none of which should grow a file
+format. `png` is currently a dev-dependency of `clayspace-app` used by the visual
+harness to write captures; it becomes a real dependency of `clayspace-engine` to
+read them.
+
+**Alternative considered:** the image formats the exchange path already links.
+Rejected — it links none. Mesh import hands a path to `clay_mesh_load` and the
+engine reads the file, so there is no existing image decoder to reuse and every
+additional format is a dependency bought for a brush. PNG carries 8- and
+16-bit greyscale, which is what an alpha is; a sculptor with a JPEG can convert
+it, and a second format can be added later without changing anything here.
+
+### The sculpt layer stack lives in the existing layer panel
+
+A voxel layer's sculpt layers are shown inside the layer panel, under the layer
+they belong to, rather than in a panel of their own.
+
+They are not a second kind of document object competing for space — they belong
+to one voxel layer and are meaningless without it, so nesting them under it says
+that and a separate panel would not. It also means the panel is already open
+whenever they are relevant, which a panel of its own would not be.
+
+**Alternative considered:** a panel of its own, as ZBrush gives them. Rejected
+for this shell: `region::LEFT` and `region::RIGHT` are fixed widths and the panels
+cannot yet be resized or collapsed, so a fifth panel would take space from the
+four that are always needed to serve one that matters only on voxel layers.
+
 ## Risks / Trade-offs
 
 **The shelf's contents change under the pointer when the active layer changes** →
@@ -157,13 +192,3 @@ Rollback for any phase is the commit. No document written by a later phase is
 unreadable by an earlier one except a voxel layer carrying sculpt layers, which
 is why the document format's handling of those is a task in phase 3 rather than
 an assumption.
-
-## Open Questions
-
-- Which alpha sources to accept. The engine decodes no images and takes samples,
-  so the application must decode. Whether that is PNG only, or the image formats
-  the exchange path already links, does not change the specs or the task
-  breakdown — the brush takes samples either way.
-- Whether the sculpt-layer stack lives in the existing layer panel or a panel of
-  its own. Both satisfy `voxel-sculpt-layers`; it is a design-system question
-  best answered against the rendered shell.

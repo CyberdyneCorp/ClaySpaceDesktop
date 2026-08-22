@@ -69,7 +69,7 @@
 
 - [ ] 7.1 Wrap the `clay_voxel_sculpt_layer_*` family in `claycore`
 - [ ] 7.2 Add begin/end recording, with the recording state visible in the shell
-- [ ] 7.3 Present the sculpt layer stack: show, hide, reorder, merge down, remove
+- [ ] 7.3 Present the sculpt layer stack inside the existing layer panel, nested under the voxel layer it belongs to: show, hide, reorder, merge down, remove
 - [ ] 7.4 Make strength adjustable after recording, and separately undoable from the strokes
 - [ ] 7.5 Report per-layer and total memory cost
 - [ ] 7.6 Carry sculpt layers through save and reload, or refuse the save with a stated reason if the format cannot hold them
@@ -79,12 +79,13 @@
 
 - [ ] 8.1 Expose the combine operations in the options bar where an edit's op is chosen
 - [ ] 8.2 Expose the five blend profiles beside them
-- [ ] 8.3 Wrap `clay_item_add_alpha` and add an alpha source to the brush, decoding the image on this side
-- [ ] 8.4 State where an alpha is not accepted rather than offering a dead control
-- [ ] 8.5 Expose the deformers as layer operations with their parameters, each one undo step
-- [ ] 8.6 Wrap `clay_item_set_gate` so a mask gates a combine operation, not only a brush
-- [ ] 8.7 Test that a masked region survives a subtracting edit that crosses it
-- [ ] 8.8 Visual captures for the combine operations and the blend profiles
+- [ ] 8.3 Add a PNG alpha decoder to `clayspace-engine` beside `import_mesh`, promoting `png` from a dev-dependency, and refuse a file that is not a PNG with a stated reason
+- [ ] 8.4 Wrap `clay_item_add_alpha` and `clay_voxel_sculpt_carve_alpha`, and add an alpha source to the brush
+- [ ] 8.5 State where an alpha is not accepted rather than offering a dead control
+- [ ] 8.6 Expose the deformers as layer operations with their parameters, each one undo step
+- [ ] 8.7 Wrap `clay_item_set_gate` so a mask gates a combine operation, not only a brush
+- [ ] 8.8 Test that a masked region survives a subtracting edit that crosses it
+- [ ] 8.9 Visual captures for the combine operations and the blend profiles
 
 ## 9. Close-out
 
