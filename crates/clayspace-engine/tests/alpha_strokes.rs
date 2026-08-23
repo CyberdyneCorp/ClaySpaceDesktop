@@ -143,13 +143,14 @@ fn a_brush_not_set_to_use_a_stamp_ignores_the_loaded_one() {
 /// The grid: the stamp routes to the alpha carve, which is its own entry point
 /// because the ordinary voxel verbs carry no alpha.
 ///
-/// Measured by crossing the grid back into a field and marching *that*. Two
-/// simpler measurements were tried and both are blind here: `pick` marches the
-/// document's field, which a voxel layer is not in, so both grids answered with
-/// the untouched starting form's sphere; and `stats` counts what the brick
-/// cache holds, which for a grid is nothing, so both answered zero. Removing
-/// the source layer first is what makes the return trip unambiguous — with it
-/// still there, the ray meets whichever surface is nearer.
+/// Removing the source layer is what makes this measurable, and it is the
+/// whole trick. A voxel layer *is* evaluated into the document's field and
+/// `pick` finds it — but the grid is quantised inward from the field it was
+/// rasterized from, so with the source still present every ray meets the
+/// original sphere and both grids answer identically no matter what the stroke
+/// did. `stats` is no help either: it reports what the viewport last meshed,
+/// and nothing has meshed here. Crossing back into a field afterwards gives a
+/// surface that is the grid's alone.
 #[test]
 fn a_stamp_changes_what_a_grid_stroke_leaves() {
     let mut surfaces = Vec::new();
