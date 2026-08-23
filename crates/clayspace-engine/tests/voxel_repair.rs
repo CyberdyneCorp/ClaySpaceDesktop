@@ -133,3 +133,75 @@ fn a_region_can_be_refined_without_refining_everything() {
         })
         .expect("regional refinement is a voxel operation");
 }
+
+/// The paint and erase brushes, which are a different family from the ten
+/// sculpting verbs: they write colour and remove cells rather than moving a
+/// surface.
+mod brushes {
+    use super::*;
+    use clayspace_model::{BrushSettings, GestureSample, ToolKind};
+
+    fn dab(document: &mut ClayDocument, tool: ToolKind) -> Result<bool, String> {
+        document
+            .apply_stroke(
+                tool,
+                BrushSettings::default(),
+                &[
+                    GestureSample {
+                        position: [0.0, 0.0, 1.0],
+                        pressure: 1.0,
+                        time: 0.0,
+                    },
+                    GestureSample {
+                        position: [0.05, 0.0, 1.0],
+                        pressure: 1.0,
+                        time: 1.0,
+                    },
+                ],
+                [false; 3],
+            )
+            .map(|outcome| outcome.changed)
+            .map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn erasing_removes_cells_from_a_grid() {
+        let Some(mut document) = with_voxel_layer() else {
+            return;
+        };
+        assert!(
+            ToolKind::Apagar.exists_on(Representation::Voxel),
+            "erase is a voxel verb"
+        );
+        assert!(
+            dab(&mut document, ToolKind::Apagar).expect("erase is bound on a grid"),
+            "erasing on the surface removed nothing"
+        );
+    }
+
+    /// A grid's palette always exists, so painting a cell creates nothing that
+    /// was not already stored — which is why the colour-attribute rule that
+    /// governs a mesh does not apply here.
+    #[test]
+    fn painting_a_grid_needs_no_colour_attribute() {
+        let Some(mut document) = with_voxel_layer() else {
+            return;
+        };
+        assert!(
+            !ToolKind::Pintar.needs_colour_attribute(Representation::Voxel),
+            "a grid's palette is not an attribute a layer might lack"
+        );
+        assert!(
+            ToolKind::Pintar.needs_colour_attribute(Representation::Mesh),
+            "a mesh's colour attribute is twelve bytes a vertex and may be absent"
+        );
+        dab(&mut document, ToolKind::Pintar).expect("paint is bound on a grid");
+    }
+
+    /// Erase has no counterpart on the other two, and for different reasons.
+    #[test]
+    fn erase_is_voxel_only() {
+        assert!(!ToolKind::Apagar.exists_on(Representation::Mesh));
+        assert!(!ToolKind::Apagar.exists_on(Representation::Sdf));
+    }
+}

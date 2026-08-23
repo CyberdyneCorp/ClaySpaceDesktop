@@ -115,6 +115,24 @@ the retopology the import was for; the stretch is reported instead, so a
 sculptor learns the mesh wants retopology when it starts wanting it rather than
 at export.
 
+## Voxel layers
+
+Nine of the engine's ten sculpting verbs reach a voxel layer through the ordinary
+shelf, and two more tools are a different family: **Pintar** colours cells that
+are already there and **Apagar** removes them. Painting a grid needs no colour
+attribute — a palette always exists, so it creates nothing that was not already
+stored, unlike a mesh where the attribute is twelve bytes a vertex and is
+refused rather than created.
+
+**Pre-bake repair** is in **Arquivo → Reparar**. A sealed void is invisible
+until something needs the model to be solid — a print, a boolean, a
+fabrication — so the panel reports what is wrong *before* offering to change
+anything, and offers *Preencher vazios* only when there is something to fill.
+
+**Regional refinement** adds a level over a region rather than everywhere,
+which is the point of the level stack: block out coarse, then pay for detail
+only where the detail goes.
+
 ## Crossing between representations
 
 ClayCore carries SDF, voxel and mesh side by side, and the intended workflow

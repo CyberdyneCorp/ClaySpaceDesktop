@@ -59,8 +59,11 @@
 
 ## 6. Phase 3 — voxel vocabulary
 
-- [ ] 6.1 Wrap and expose the voxel verbs not yet reached: carve-with-alpha, flood select, box fill, line fill
-- [ ] 6.2 Wrap and expose the cube and sphere paint/erase brushes with their falloff curves
+- [!] 6.1 Wrap and expose the voxel verbs not yet reached — **partly blocked, and split**:
+  - carve-with-alpha needs the PNG decoder, which is task 8.3 in group 8. Do it there, with the SDF alphas, rather than half here
+  - flood select needs a *selection* — a set of cells the interface can hold, show and act on — and this application has no such concept. That is its own design, not a wrapper
+  - box fill and line fill write cells directly from two points. `fill_box` and `fill_line` are wrapped in `claycore` already; what they lack is a gesture, and a stroke's endpoints are a poor stand-in for a box a user expects to see while dragging it
+- [x] 6.2 Wrap and expose the cube and sphere paint/erase brushes with their falloff curves
 - [x] 6.3 Wrap and expose pre-bake repair: report, close holes, fill voids
 - [x] 6.4 Add a repair panel that reports before it changes anything
 - [x] 6.5 Expose regional refinement through `clay_voxel_add_level_region`

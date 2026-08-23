@@ -272,6 +272,12 @@ pub enum ToolKind {
     Pintar,
     /// Drags existing vertex colour along the stroke. Moves no vertex.
     Borrar,
+    /// Removes cells under the brush.
+    ///
+    /// Voxel-only, and for two different reasons: a mesh's topology may not
+    /// change, and on the SDF side removing material is a subtracting edit
+    /// rather than a brush.
+    Apagar,
 }
 
 impl ToolKind {
@@ -370,7 +376,7 @@ impl std::fmt::Display for Unavailable {
 
 impl ToolKind {
     /// Every tool, in the order the brush shelf presents them.
-    pub const ALL: [ToolKind; 19] = [
+    pub const ALL: [ToolKind; 20] = [
         Self::Padrao,
         Self::Inflar,
         Self::Suavizar,
@@ -390,6 +396,7 @@ impl ToolKind {
         Self::Vinco,
         Self::Pintar,
         Self::Borrar,
+        Self::Apagar,
     ];
 
     /// The label the interface shows.
@@ -414,6 +421,7 @@ impl ToolKind {
             Self::Vinco => "Vinco",
             Self::Pintar => "Pintar",
             Self::Borrar => "Borrar",
+            Self::Apagar => "Apagar",
         }
     }
     /// Every engine verb this tool names, for the diagnostics report.
@@ -522,10 +530,17 @@ impl ToolKind {
                 voxel: None,
                 mesh: Some("clay_mesh_sculptor_stamp (CREASE)"),
             },
+            // One tool, two bindings: "put colour here" is the same intent
+            // whether the colour lands on a vertex or in a cell.
             Self::Pintar => Verbs {
                 sdf: None,
-                voxel: None,
+                voxel: Some("clay_voxel_paint_brush"),
                 mesh: Some("clay_mesh_sculptor_stamp (PAINT)"),
+            },
+            Self::Apagar => Verbs {
+                sdf: None,
+                voxel: Some("clay_voxel_erase_brush"),
+                mesh: None,
             },
             Self::Borrar => Verbs {
                 sdf: None,
@@ -593,6 +608,15 @@ impl ToolKind {
     /// twelve bytes a vertex is a real cost to hide behind a stroke.
     pub fn writes_colour(self) -> bool {
         matches!(self, Self::Pintar | Self::Borrar)
+    }
+
+    /// Whether the tool needs a colour attribute that a layer may not carry.
+    ///
+    /// Only on a mesh. A grid's palette always exists, so painting a cell
+    /// creates nothing that was not already there — the cost the mesh rule
+    /// guards against is twelve bytes a *vertex*, which a grid does not pay.
+    pub fn needs_colour_attribute(self, representation: Representation) -> bool {
+        self.writes_colour() && representation == Representation::Mesh
     }
 
     /// Whether the tool paints a mask rather than moving the surface.
@@ -972,6 +996,9 @@ mod tests {
     fn the_coverage_against_the_engine_is_what_we_last_measured() {
         // ClayCore 0.39.0, counted from `bindings/c/clay.h`.
         const ENGINE_MESH_BRUSHES: usize = 16;
+        /// The ten `clay_voxel_sculpt_*` verbs. The paint and erase brushes
+        /// are a separate family and are *not* in this count, so the number of
+        /// tools reaching a voxel layer is legitimately larger than it.
         const ENGINE_VOXEL_SCULPT_VERBS: usize = 10;
 
         let mesh = ToolKind::for_representation(Representation::Mesh).len();
@@ -984,10 +1011,12 @@ mod tests {
              this count and `docs/features.md` together."
         );
         assert_eq!(
-            voxel, 9,
+            voxel, 11,
             "the voxel vocabulary has moved: {voxel} tools reach a voxel \
-             layer against the engine's {ENGINE_VOXEL_SCULPT_VERBS} sculpting \
-             verbs. Update this count and `docs/features.md` together."
+             layer. Nine of them are sculpt verbs, of the engine's \
+             {ENGINE_VOXEL_SCULPT_VERBS}; the other two are the paint and \
+             erase brushes, which are a different family. Update this count \
+             and `docs/features.md` together."
         );
     }
 

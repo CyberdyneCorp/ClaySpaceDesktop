@@ -1743,6 +1743,13 @@ impl ClayDocument {
                     grid.sculpt_fill_cavities(cell, &solid, 2)
                 }
                 ToolKind::Nudge => grid.sculpt_smudge(cell, &params, [1.0, 0.0, 0.0]),
+                // Colours cells that are already there rather than depositing
+                // any: a grid's palette always exists, so this creates nothing
+                // that was not already stored — unlike on a mesh, where the
+                // colour attribute is twelve bytes a vertex and is refused
+                // rather than created.
+                ToolKind::Pintar => grid.paint_brush(cell, &params, material),
+                ToolKind::Apagar => grid.erase_brush(cell, &params),
                 // Anything else deposits material, which is what a default
                 // brush does on a voxel grid.
                 _ => grid.set_brush(cell, &params, material),
@@ -2058,7 +2065,10 @@ fn mesh_verb(tool: ToolKind) -> Option<claycore::MeshBrush> {
         ToolKind::Borrar => MeshBrush::Smear,
         // No mesh binding: a mask stroke, a cavity fill and a frame-drawn cut
         // are not fixed-topology vertex verbs.
-        ToolKind::Mascara | ToolKind::Preencher | ToolKind::Trim => return None,
+        // No mesh binding: a mask stroke, a cavity fill and a frame-drawn cut
+        // are not fixed-topology vertex verbs, and erasing a cell would change
+        // a mesh's topology, which none of these sixteen may do.
+        ToolKind::Mascara | ToolKind::Preencher | ToolKind::Trim | ToolKind::Apagar => return None,
     })
 }
 
