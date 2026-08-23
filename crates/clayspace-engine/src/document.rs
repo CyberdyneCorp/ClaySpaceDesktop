@@ -1706,7 +1706,25 @@ impl ClayDocument {
         // these verbs and not about brushes — the same reason `MAX_JITTER`
         // lives beside the preset. The field and the grid are unaffected, and
         // Acumular still means what it means there.
-        preset.accumulation = claycore::Accumulation::Clamped;
+        // A mesh stroke does not build on itself — except when it is
+        // *converging*.
+        //
+        // The clamp is here because the verbs that displace along a
+        // per-vertex normal read the normals the previous stamp just moved, so
+        // building up feeds a stamp's output into its own next input and the
+        // surface shreds. A smoothing verb has the opposite character: it
+        // averages toward the neighbourhood, so running it again moves less
+        // each time and converges. Clamping one of those means a sculptor can
+        // never smooth more than a single stamp's worth however long they rub,
+        // which is what "Suavizar does nothing" turned out to be — measured on
+        // a ridge 0.0676 proud of a unit sphere, four passes took it to 1.0670
+        // clamped and 1.0187 accumulating.
+        if !matches!(
+            verb,
+            claycore::MeshBrush::Smooth | claycore::MeshBrush::Relax | claycore::MeshBrush::Polish
+        ) {
+            preset.accumulation = claycore::Accumulation::Clamped;
+        }
         // Where the gesture travelled, which is what a verb that pushes along
         // the surface has to be told.
         //
@@ -1790,6 +1808,7 @@ impl ClayDocument {
                 // Zero: the brush's own diameter.
                 extent: 0.0,
             }),
+            smooth_iterations: Some(Self::SMOOTH_PASSES),
             // Flatten and Scrape mean "everything under this disc", and a
             // surface walk refuses to flatten across a groove — which is not
             // what either verb says.
@@ -2030,6 +2049,31 @@ impl ClayDocument {
     /// Turning the surface walk off does not help: measured at 7.18x either
     /// way.
     const NUDGE_PUSH: f32 = 0.15;
+
+    /// How many Laplacian passes a smoothing verb runs per stamp.
+    ///
+    /// The engine's SMOOTH averages a vertex with its *one-ring*, which is a
+    /// high-frequency filter: it takes out tessellation noise and barely
+    /// touches a bump that spans many edges. To smooth at the scale of the
+    /// brush it has to be run many times, and the engine's own default is far
+    /// below what that needs.
+    ///
+    /// Measured on a ridge standing 0.0676 proud of a unit sphere, four
+    /// smoothing passes over it, with the sculptor's accumulation on:
+    ///
+    ///   passes per stamp   ridge left   cost at a 0.18 brush
+    ///    1                   1.0654            —
+    ///    8                   1.0552          4.0 ms
+    ///   16                   1.0466            —
+    ///   32                   1.0343          4.7 ms
+    ///   64                   1.0187          5.4 ms
+    ///
+    /// The engine's ceiling, and cheap at it: the passes are a fraction of the
+    /// cost of finding the region in the first place. At 64 a single stroke
+    /// takes about a quarter of the ridge, so rubbing melts it — which is what
+    /// smoothing does in Blender and in ZBrush, and what it conspicuously did
+    /// not do here.
+    const SMOOTH_PASSES: i32 = 64;
 
     /// Cells of margin around a removed layer's bounds.
     ///

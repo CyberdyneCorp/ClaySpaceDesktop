@@ -383,6 +383,28 @@ before and after, which reads as how much a verb shredded the surface.
     measurement also corrects an earlier note that the walk makes no difference
     to Grab — true of the resolved-stroke path, not of this one.
 
+- [x] 13.11 Make Suavizar smooth, and be seen doing it
+  - Reported as no effect at all. Three causes, none of them the same.
+  - The mesh clamp from 13.1 applies to every verb, including the ones that
+    *converge*. A smoothing verb averages toward the neighbourhood, so running
+    it again moves less each time and it cannot shred — clamping one means
+    never smoothing more than a single stamp's worth however long a sculptor
+    rubs. Suavizar, Relaxar and Polir are exempt now.
+  - The engine's SMOOTH is a one-ring Laplacian, a high-frequency filter that
+    barely touches a bump spanning many edges, and `smooth_iterations` was
+    never set so it ran at the engine's default. Measured on a ridge 0.0676
+    proud of a unit sphere, four passes: 1.0670 at the default and clamped,
+    1.0187 at sixty-four passes and accumulating. Cheap — 5.4 ms against 4.0 ms
+    for a 0.18 brush on 140,774 vertices.
+  - And it is *region-based*, so it was held until the pointer came up. That is
+    right on a field, where it bakes a region and puts it back, and wrong on a
+    mesh where it is an ordinary stamp. Mesh segments also fire every one stamp
+    rather than every three, since nothing is re-meshed: measured, a forty-move
+    drag now sends eleven updates where it sent none.
+  - An intermediate reading said accumulation made no difference to Suavizar.
+    It was measured against a build that forced the clamp regardless of the
+    brush, so the flag never reached the engine.
+
 **Still open**: Move reaches 8.3% of the sphere against Blender's 0.9% for the
 same nominal radius, which is a units question and not a defect found. Camada
 is better but weak (0.0086 against Blender's 0.341).

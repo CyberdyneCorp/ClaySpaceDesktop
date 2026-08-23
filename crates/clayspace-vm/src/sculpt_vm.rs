@@ -343,7 +343,7 @@ impl SculptViewModel {
                 // Asked before the stroke is borrowed: it reads the model, and
                 // the borrow below is exclusive.
                 let whole = self.holds_the_whole_gesture(tool);
-                let replay = self.replays_from_the_anchor(tool);
+                let stamps = self.stamps_between_segments(tool);
                 let Some(stroke) = self.stroke.as_mut() else {
                     return Ok(());
                 };
@@ -352,7 +352,7 @@ impl SculptViewModel {
                 // A region tool is applied once, when the gesture is complete.
                 // Segmenting it stacks a replacement per segment and the
                 // result crumbles.
-                if !whole && stroke.segment_is_worth_applying(&brush, replay) {
+                if !whole && stroke.segment_is_worth_applying(&brush, stamps) {
                     return self.apply_segment();
                 }
             }
@@ -517,7 +517,43 @@ impl SculptViewModel {
     /// segmenting one stacks a replacement per segment until the result
     /// crumbles.
     fn holds_the_whole_gesture(&self, tool: ToolKind) -> bool {
-        tool.is_region_based()
+        // Not on a mesh. A region tool is one that *bakes*: on a field
+        // Suavizar, Relaxar, Planar and Polir sample a region into a volume,
+        // modify it and put it back with a replace, and segmenting that stacks
+        // a replacement per segment until the result crumbles.
+        //
+        // On a mesh they are none of those things — they are ordinary stamps
+        // over the vertices in reach, exactly like Padrão. Held whole, they
+        // arrived only when the pointer came up, which is half of why Suavizar
+        // read as doing nothing: the other half was that it was clamped and
+        // barely smoothed at all.
+        tool.is_region_based() && self.model.active_representation() != Representation::Mesh
+    }
+
+    /// How far a stroke travels before a segment is sent, in stamps.
+    ///
+    /// A segment on a *field* or a *grid* costs a re-mesh of every brick it
+    /// touched, so it waits for three stamps' worth: sending one per pointer
+    /// move would re-mesh the same neighbourhood over and over.
+    ///
+    /// On a mesh nothing is re-meshed — the layer's own triangles are what the
+    /// viewport reads — so a segment costs the stamp and the buffer it fills,
+    /// measured at about 7 ms for a 0.18 brush on 140,774 vertices. One stamp
+    /// is the natural grain there: the engine resolves a stroke into stamps a
+    /// spacing apart, so waiting longer only delays what it was going to do
+    /// anyway, and delay is exactly what a sculptor sees.
+    ///
+    /// Zero for a dragging verb on a mesh, which replays the whole gesture
+    /// from its anchor and is sent on every pointer move.
+    fn stamps_between_segments(&self, tool: ToolKind) -> f32 {
+        if self.model.active_representation() != Representation::Mesh {
+            return STAMPS_PER_SEGMENT;
+        }
+        if self.replays_from_the_anchor(tool) {
+            0.0
+        } else {
+            1.0
+        }
     }
 
     /// Whether a segment carries the gesture from its anchor rather than only
@@ -788,11 +824,11 @@ impl ActiveStroke {
     /// world units — most of the way across a unit sphere — so a drag reached
     /// its end before a single segment fired and the surface only moved when
     /// the pointer came up.
-    fn segment_is_worth_applying(&self, brush: &BrushSettings, replay: bool) -> bool {
+    fn segment_is_worth_applying(&self, brush: &BrushSettings, stamps: f32) -> bool {
         if self.applied >= self.samples.len() {
             return false;
         }
-        replay || self.travelled >= stamp_gap(brush) * STAMPS_PER_SEGMENT
+        stamps <= 0.0 || self.travelled >= stamp_gap(brush) * stamps
     }
 
     /// The samples not yet sent.

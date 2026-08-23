@@ -135,12 +135,19 @@ Two anchors sharing one drag reach nearly twice as far and move less.
 
 So the segments stay — they are what makes the drag visible while it happens —
 and each replays the whole gesture instead. A replayed segment fires on **every
-pointer move**, where a stamping one waits for three stamps' worth of travel: a
-stamping segment costs a re-mesh of everything it touched, a replayed one costs
-a revert and a single stamp and does not grow with the gesture. At the default
-flow and a brush of 0.858 the stamping threshold is 1.03 world units — most of
-the way across a unit sphere — so waiting for it meant the surface only moved
-when the pointer came up.
+pointer move**, and a stamping one on a mesh every **one** stamp, where on a
+field it waits for three: a
+field segment costs a re-mesh of every brick it touched; a mesh one re-meshes
+nothing, because the layer's own triangles are what the viewport reads. At the
+default flow and a brush of 0.858 the field threshold is 1.03 world units —
+most of the way across a unit sphere.
+
+The bake-and-replace verbs are held whole on a field and **not** on a mesh:
+Suavizar, Relaxar, Planar and Polir sample a region into a volume there and
+segmenting that stacks a replacement per segment until the result crumbles,
+while on a mesh they are ordinary stamps over the vertices in reach. Held whole
+on a mesh, Suavizar arrived only when the pointer came up — which was half of
+why it read as doing nothing.
 
 It costs about 17 ms a move on a 140,774-vertex mesh, nearly all of it the
 stamp itself rather than the buffer it fills (1.2 ms). Dropping the surface
@@ -179,11 +186,23 @@ leaves the other where it was.
 it takes an item carrying a volume and is refused on anything else, so it
 belongs to the SDF side.)
 
-**A mesh stroke never builds on itself**, whatever Acumular says — the field
-and the grid are unaffected and it means what it means there. Not a preference:
-the verbs that displace along a *per-vertex* normal read the normals the
-previous stamp just moved, so building up feeds a stamp's output back into its
-own next input. Measured against Blender's brushes over MCP — matched sphere,
+**A mesh stroke never builds on itself — unless it is *converging*.** The field
+and the grid are unaffected and Acumular means what it means there. Not a
+preference: the verbs that displace along a *per-vertex* normal read the
+normals the previous stamp just moved, so building up feeds a stamp's output
+back into its own next input. A smoothing verb has the opposite character — it
+averages toward the neighbourhood, so running it again moves less each time and
+converges — and clamping one means a sculptor can never smooth more than a
+single stamp's worth however long they rub. Suavizar, Relaxar and Polir are
+exempt for that reason.
+
+**Smoothing runs sixty-four Laplacian passes a stamp.** The engine's SMOOTH
+averages a vertex with its *one-ring*, a high-frequency filter that takes out
+tessellation noise and barely touches a bump spanning many edges. Measured on a
+ridge standing 0.0676 proud of a unit sphere, four passes over it: at the
+engine's own default the ridge came down by under one percent of its height; at
+sixty-four it comes down by nearly three quarters. The passes are cheap next to
+finding the region — 5.4 ms against 4.0 for a 0.18 brush on 140,774 vertices. Measured against Blender's brushes over MCP — matched sphere,
 same brush radius in world units, same strength, same stroke — as the mean
 angle between adjacent vertex normals before and after:
 

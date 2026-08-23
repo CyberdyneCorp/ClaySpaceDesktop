@@ -789,3 +789,72 @@ fn every_segment_of_a_mesh_drag_replays_it_from_the_anchor() {
         );
     }
 }
+
+/// A mesh stroke is seen while it is made, whichever verb it is.
+///
+/// Two things kept Suavizar from being seen at all. It is *region-based* —
+/// on a field it samples a region into a volume, modifies it and puts it back
+/// with a replace, which cannot be segmented — so it was held until the
+/// pointer came up. And a mesh segment waited for three stamps' worth of
+/// travel, a threshold that exists because a field segment costs a re-mesh of
+/// every brick it touched.
+///
+/// On a mesh neither applies: these verbs are ordinary stamps over the
+/// vertices in reach, and nothing is re-meshed. The field keeps both
+/// behaviours, and this holds the difference.
+#[test]
+fn a_mesh_stroke_is_applied_while_it_is_made() {
+    let drag = |vm: &mut SculptViewModel| {
+        vm.dispatch(Command::SetBrushSize(0.18)).expect("size");
+        vm.dispatch(Command::BeginStroke {
+            position: [0.0, 0.0, 1.0],
+            pressure: 1.0,
+        })
+        .expect("begin");
+        for step in 1..=40 {
+            let t = step as f32 / 40.0;
+            vm.dispatch(Command::ContinueStroke {
+                position: [t * 0.8, 0.0, 1.0],
+                pressure: 1.0,
+            })
+            .expect("continue");
+        }
+    };
+
+    for tool in [ToolKind::Suavizar, ToolKind::Padrao] {
+        let (mut mesh, calls) = fixture_with(|model| {
+            model.representation.set(Representation::Mesh);
+        });
+        mesh.dispatch(Command::SelectTool(tool)).expect("tool");
+        drag(&mut mesh);
+        let during = calls.borrow().strokes.len();
+        assert!(
+            during > 4,
+            "{:?} on a mesh reached the model {during} time(s) over forty \
+             pointer moves, so the sculptor rubs at a surface that does not \
+             answer until they let go",
+            tool
+        );
+    }
+
+    // The field is unchanged: a bake is still applied once, at the end.
+    let (mut field, calls) = fixture_with(|model| {
+        model.representation.set(Representation::Sdf);
+    });
+    field
+        .dispatch(Command::SelectTool(ToolKind::Suavizar))
+        .expect("tool");
+    drag(&mut field);
+    assert_eq!(
+        calls.borrow().strokes.len(),
+        0,
+        "a field bake was segmented; it stacks a replacement per segment and \
+         the result crumbles"
+    );
+    field.dispatch(Command::EndStroke).expect("end");
+    assert_eq!(
+        calls.borrow().strokes.len(),
+        1,
+        "the field bake did not arrive when the gesture closed"
+    );
+}

@@ -520,3 +520,112 @@ fn the_brush_size_reaches_a_mesh_stroke() {
     let _ = std::fs::remove_file(&small_path);
     let _ = std::fs::remove_file(&large_path);
 }
+
+/// Smoothing takes a ridge down, rather than politely declining to.
+///
+/// Reported as "Suavizar does nothing", and it did almost nothing: a ridge
+/// standing 0.0676 proud of a unit sphere came down 0.0006 — under one percent
+/// of it — after four passes over it.
+///
+/// Two causes. A mesh stroke is clamped so it cannot build on itself, which is
+/// what stops the verbs that displace along a per-vertex normal from shredding
+/// the surface; a smoothing verb *converges* instead, so clamping one means a
+/// sculptor can never smooth more than a single stamp's worth however long
+/// they rub. And the engine's SMOOTH averages a vertex with its one-ring, a
+/// high-frequency filter that takes out tessellation noise and barely touches
+/// a bump spanning many edges — so it has to be run many times per stamp, and
+/// the engine's own default is far below that.
+///
+/// Measured on the same ridge, four passes over it:
+///
+///   passes per stamp   clamped   accumulating
+///    1                  1.0670      1.0654
+///    8                  1.0646      1.0552
+///   64                  1.0520      1.0187
+#[test]
+fn smoothing_a_mesh_takes_a_ridge_down() {
+    let Some(policy) = BackendPolicy::discover(None).ok() else {
+        return;
+    };
+    let Ok(mut document) = ClayDocument::new(policy).and_then(ClayDocument::with_starting_form)
+    else {
+        return;
+    };
+    document
+        .convert_layer(clayspace_model::Direction::SdfToMesh, 0.02, 0)
+        .expect("into a mesh");
+
+    let sweep = |document: &ClayDocument| -> Vec<GestureSample> {
+        (0..=20)
+            .filter_map(|step| {
+                let t = step as f32 / 20.0;
+                SculptModel::pick(document, [-0.4 + t * 0.8, 0.0, 4.0], [0.0, 0.0, -1.0]).map(
+                    |hit| GestureSample {
+                        position: hit,
+                        pressure: 1.0,
+                        time: t,
+                    },
+                )
+            })
+            .collect()
+    };
+    // How proud the tallest point stands. The sphere started at 1.0, so this
+    // is the ridge's own height — roughness would measure the tessellation
+    // rather than the form, which is why the first attempt at this saw
+    // nothing.
+    let prominence = |document: &mut ClayDocument| -> f32 {
+        document
+            .visible_mesh_geometry()
+            .0
+            .iter()
+            .map(|v| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt())
+            .fold(0.0f32, f32::max)
+    };
+
+    for sample in sweep(&document) {
+        document
+            .apply_stroke(
+                ToolKind::Padrao,
+                BrushSettings {
+                    size: 0.18,
+                    intensity: 0.65,
+                    ..BrushSettings::default()
+                },
+                &[sample],
+                [false; 3],
+            )
+            .expect("the ridge was refused");
+    }
+    let ridge = prominence(&mut document);
+    assert!(
+        ridge > 1.02,
+        "the ridge only stands {ridge} proud of the sphere, so there is \
+         nothing here to smooth"
+    );
+
+    for _ in 0..4 {
+        let samples = sweep(&document);
+        document
+            .apply_stroke(
+                ToolKind::Suavizar,
+                BrushSettings {
+                    size: 0.25,
+                    intensity: 0.65,
+                    ..BrushSettings::default()
+                },
+                &samples,
+                [false; 3],
+            )
+            .expect("Suavizar was refused");
+    }
+    let smoothed = prominence(&mut document);
+
+    // Most of the way back to the sphere it was cut into.
+    let taken = (ridge - smoothed) / (ridge - 1.0);
+    assert!(
+        taken > 0.5,
+        "four passes took {:.0}% of the ridge ({ridge} to {smoothed}); \
+         rubbing at a surface has to melt it",
+        taken * 100.0
+    );
+}

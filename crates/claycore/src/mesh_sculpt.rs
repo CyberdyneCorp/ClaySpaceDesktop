@@ -171,6 +171,13 @@ pub struct MeshStamp<'a> {
     pub geodesic: bool,
     /// The colour Paint blends toward.
     pub colour: [f32; 3],
+    /// How many Laplacian passes a smoothing verb runs, 1..=64.
+    ///
+    /// `None` leaves the engine's own default. One pass averages a vertex with
+    /// its one-ring, which smooths at the scale of a single edge rather than
+    /// at the scale of the brush — on a dense mesh that is a change a sculptor
+    /// cannot see.
+    pub smooth_iterations: Option<i32>,
     /// A scalar stamp scaling this brush's per-vertex weight.
     ///
     /// Borrowed for the duration of the call — the engine copies nothing — so
@@ -229,6 +236,7 @@ impl Default for MeshStamp<'_> {
             direction: [0.0; 3],
             geodesic: true,
             colour: [1.0; 3],
+            smooth_iterations: None,
             alpha: None,
         }
     }
@@ -275,6 +283,9 @@ impl MeshStamp<'_> {
         // seed is worse than a slow one.
         raw.seed_class = sys::CLAY_MESH_NO_CLASS;
         raw.color = self.colour;
+        if let Some(iterations) = self.smooth_iterations {
+            raw.smooth_iterations = iterations.clamp(1, 64);
+        }
         // A malformed stamp is dropped rather than refused: the alpha is a
         // modulation, and losing it leaves the verb doing what it would have
         // done without one. Refusing the whole stroke because a texture was
