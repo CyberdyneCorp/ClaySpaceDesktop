@@ -600,6 +600,52 @@ impl Document {
         Ok(LayerId(made))
     }
 
+    /// Copies a mesh layer's triangles out, for a viewport to draw.
+    ///
+    /// A mesh layer is in neither the tape nor the brick cache, so the surface
+    /// the viewport builds from bricks cannot contain it — a sculpted mesh
+    /// would move and show nothing. This is where its geometry comes from
+    /// instead.
+    ///
+    /// Copied rather than borrowed, because the caller is going to upload it
+    /// and because a layer's mesh must not be wrapped in an owning [`Mesh`]:
+    /// that destroys what it holds on drop. The handle stays inside this call.
+    #[allow(clippy::type_complexity)]
+    pub fn read_mesh_layer(
+        &mut self,
+        layer_name: &str,
+    ) -> Result<(Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<u32>)> {
+        let c_name = crate::cstring(layer_name, "clay_document_mesh_layer")?;
+        let mut layer: sys::clay_layer_id = Default::default();
+        let mut mesh = std::ptr::null_mut();
+        // SAFETY: a valid document and a NUL-terminated name; both outputs are
+        // written only on success.
+        check(
+            unsafe {
+                sys::clay_document_mesh_layer(self.as_ptr(), c_name.as_ptr(), &mut layer, &mut mesh)
+            },
+            "clay_document_mesh_layer",
+        )?;
+        // SAFETY: the handle was just written by a successful call and is
+        // borrowed for the length of this function. `ManuallyDrop` is what
+        // keeps the borrow from being destroyed when the wrapper goes out of
+        // scope — the layer owns it, not this.
+        let borrowed =
+            std::mem::ManuallyDrop::new(Mesh::from_raw(mesh, "clay_document_mesh_layer")?);
+        let positions = borrowed.positions().to_vec();
+        let count = positions.len();
+        let normals = borrowed
+            .normals()
+            .map(<[[f32; 3]]>::to_vec)
+            .unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; count]);
+        let colors = borrowed
+            .colors()
+            .map(<[[f32; 3]]>::to_vec)
+            .unwrap_or_else(|| vec![[1.0; 3]; count]);
+        let indices = borrowed.indices().to_vec();
+        Ok((positions, normals, colors, indices))
+    }
+
     /// Converts one of this document's mesh layers into a new SDF layer.
     ///
     /// Mesh to SDF: the triangles are resampled onto a lattice as a volume

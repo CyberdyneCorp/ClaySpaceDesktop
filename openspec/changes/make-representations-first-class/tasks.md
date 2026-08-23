@@ -54,8 +54,8 @@
 - [x] 5.10 Wrap and expose paint and smear, refusing a mesh with no colour attribute with a stated reason
 - [x] 5.11 Wrap and expose `clay_mesh_sculptor_deform` for taper and twist as layer operations
 - [x] 5.12 Wrap and expose the mesh lattice cage
-- [!] 5.13 Visual captures for the mesh brushes, before and after — **blocked**: the viewport draws only the brick-cache surface, and a mesh layer is not in it, so a sculpted mesh renders as nothing. Pre-existing (an imported mesh has never been drawn, only carried and exported) and made critical by mesh sculpting
-- [ ] 5.14 Draw mesh layers in the viewport: a second geometry source beside `SurfaceGeometry`, since a mesh layer has no bricks. This is the other half of 5.4's "the viewport shows the result"
+- [x] 5.13 Visual captures for the mesh brushes, before and after
+- [x] 5.14 Draw mesh layers in the viewport: a second geometry source beside `SurfaceGeometry`, since a mesh layer has no bricks. This is the other half of 5.4's "the viewport shows the result"
 
 ## 6. Phase 3 — voxel vocabulary
 

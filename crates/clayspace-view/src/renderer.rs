@@ -372,6 +372,12 @@ pub struct Renderer {
     /// geometry, since it would register as a difference of its own.
     pub show_gizmo: bool,
     overlay_mesh: GpuMesh,
+    /// The mesh layers, drawn beside the surface.
+    ///
+    /// A second buffer rather than part of the surface: a mesh layer has no
+    /// bricks, so it never enters the per-key storage the surface is
+    /// reassembled from, and the two are rebuilt by different things.
+    mesh_layers: GpuMesh,
     cursor_mesh: GpuMesh,
     /// The ZSphere rig, drawn over the surface it skins.
     armature_mesh: GpuMesh,
@@ -625,6 +631,7 @@ impl Renderer {
             background: Self::BACKGROUND,
             show_gizmo: false,
             overlay_mesh: GpuMesh::new(gpu),
+            mesh_layers: GpuMesh::new(gpu),
             cursor_mesh: GpuMesh::new(gpu),
             armature_mesh: GpuMesh::new(gpu),
             membrane_mesh: GpuMesh::new(gpu),
@@ -716,6 +723,15 @@ impl Renderer {
 
     pub fn occlusion(&self) -> bool {
         self.occlusion
+    }
+
+    /// The triangles of the document's mesh layers.
+    ///
+    /// Drawn with the surface pipeline and the same material, because a mesh
+    /// layer *is* surface as far as a sculptor is concerned — it is only the
+    /// route it took to get here that differs.
+    pub fn set_mesh_layers(&mut self, gpu: &Gpu, vertices: &[Vertex], indices: &[u32]) {
+        self.mesh_layers.upload(gpu, vertices, indices);
     }
 
     /// Rebuilds the overlay geometry for the current settings.
@@ -825,6 +841,20 @@ impl Renderer {
                 pass.set_vertex_buffer(0, mesh.vertices.slice(..));
                 pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+            }
+
+            // The mesh layers, in the same pass and with the same pipeline, so
+            // they take the same material, the same depth and the same
+            // occlusion as everything else. Drawn after the surface only
+            // because the depth test settles which is in front.
+            if !self.mesh_layers.is_empty() {
+                pass.set_pipeline(&self.pipeline);
+                pass.set_vertex_buffer(0, self.mesh_layers.vertices.slice(..));
+                pass.set_index_buffer(
+                    self.mesh_layers.indices.slice(..),
+                    wgpu::IndexFormat::Uint32,
+                );
+                pass.draw_indexed(0..self.mesh_layers.index_count, 0, 0..1);
             }
 
             // The brush cursor, over the surface it will act on.

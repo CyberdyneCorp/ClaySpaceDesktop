@@ -22,7 +22,7 @@ use clayspace_model::{
 use clayspace_view::shell::{self, region, ArmatureState, ShellState};
 use clayspace_view::{
     mirrored_cursors, Action, ArmatureView, BrushCursor, Camera, Gpu, GpuMesh, Locale, MatCap,
-    Overlays, Renderer, Shortcuts, Strings, SurfaceLoss, ViewPreset, WindowSurface,
+    Overlays, Renderer, Shortcuts, Strings, SurfaceLoss, Vertex, ViewPreset, WindowSurface,
 };
 use clayspace_vm::{
     ArmatureViewModel, Axis, Command, CommandQueue, DocumentViewModel, Grab, Guard, MaskViewModel,
@@ -101,6 +101,13 @@ struct App {
     detail_policy: DetailPolicy,
     /// The bindings in force, which the key handler is the only reader of.
     shortcuts: Shortcuts,
+    /// The mesh revision the viewport's copy of the mesh layers was built at.
+    ///
+    /// A mesh layer is not in the brick cache, so `SurfaceGeometry` cannot
+    /// hold it and the incremental machinery there does not apply: the
+    /// triangles are copied whole or not at all. Comparing a revision is what
+    /// keeps "not at all" the usual answer.
+    mesh_revision: Option<u64>,
     /// Whether this frame changed the document, which is what says the frame
     /// has nothing spare to spend on [`App::refine_geometry`].
     edited_this_frame: bool,
@@ -224,6 +231,7 @@ impl App {
             camera: Camera::default(),
             detail_policy: DetailPolicy::default(),
             shortcuts: Shortcuts::default(),
+            mesh_revision: None,
             edited_this_frame: false,
             detail_camera: None,
             window: None,
@@ -759,6 +767,40 @@ impl App {
         if owed {
             self.request_redraw();
         }
+    }
+
+    /// Brings the viewport's copy of the mesh layers up to date.
+    ///
+    /// Only when it is stale. A mesh layer's triangles are copied out whole
+    /// rather than patched per key, so doing it every frame would upload the
+    /// whole of every mesh layer at sixty hertz to show a surface that has not
+    /// moved.
+    fn sync_mesh_layers(&mut self) {
+        let revision = self.document.with(|document| document.mesh_revision());
+        if self.mesh_revision == Some(revision) {
+            return;
+        }
+        self.mesh_revision = Some(revision);
+        self.timed("camadas de malha", |app| {
+            let (positions, normals, colors, indices) = app
+                .document
+                .with(|document| document.visible_mesh_geometry());
+            let vertices: Vec<Vertex> = positions
+                .into_iter()
+                .zip(normals)
+                .zip(colors)
+                .map(|((position, normal), color)| Vertex {
+                    position,
+                    normal,
+                    color,
+                })
+                .collect();
+            let Some(graphics) = app.graphics.as_mut() else {
+                return;
+            };
+            let gpu = graphics.gpu.clone();
+            graphics.renderer.set_mesh_layers(&gpu, &vertices, &indices);
+        });
     }
 
     fn settle_geometry_now(&mut self) {
@@ -1489,6 +1531,7 @@ impl App {
                 rect.height() * scale,
             ]
         });
+        self.sync_mesh_layers();
         self.sync_symmetry_overlay();
         self.sync_armature_view();
         // After the frame's commands, so a camera move made in it is the one

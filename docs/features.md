@@ -82,6 +82,39 @@ producing an error you cannot act on.
 Symmetry about X, Y and Z is applied through the layer's mirror, so both halves
 belong to one operation and undo together.
 
+## Sculpting a mesh layer
+
+Sixteen fixed-topology verbs reach an imported mesh layer's own vertices, and
+all sixteen hold one line above everything else: **topology never changes.** No
+polygon is created, split or deleted, so `indices` and quads come out byte for
+byte and a model that has just been retopologized can be refined without
+spending the retopology.
+
+Twelve of them are tools that already existed — a smooth is a smooth whichever
+representation it lands on — and four are new: Argila, Vinco, Pintar and
+Borrar. The two colour verbs refuse a mesh carrying no colour attribute rather
+than creating one, because twelve bytes a vertex is a real cost to hide behind
+a stroke.
+
+**Taper, twist and a lattice cage** reach a mesh layer too, as operations on
+the form rather than brushes: no centre, no radius, no falloff. There is
+deliberately no bend — its map folds distinct points onto the same place past a
+gentle angle, so no forward map exists. The cage is the one ZBrush gizmo
+deformer that is mesh-only here, because ZBrush and Blender both apply FFD
+forward to vertices and an implicit field cannot.
+
+A mesh gesture is **one undo step and reverts exactly**. It has to be recorded
+on this side: a vertex displacement is destructive and is not an edit item, so
+the document holds nothing to take back — the engine's undo depth is the same
+before and after a mesh stroke. The two histories interleave by depth, so one
+undo means "the last thing I did" whichever kind of edit that was.
+
+Sculpting **stretches** the triangles it has, and a large grab or a snakehook
+stretches them to the extreme. Nothing here retessellates, because that spends
+the retopology the import was for; the stretch is reported instead, so a
+sculptor learns the mesh wants retopology when it starts wanting it rather than
+at export.
+
 ## Crossing between representations
 
 ClayCore carries SDF, voxel and mesh side by side, and the intended workflow
@@ -354,14 +387,12 @@ voxel size and resolution levels — which is what "Dinâmica: Ligada" means
 operationally, closer to ZBrush's Sculptris Pro than to a simulation. The
 physics controls are not shipped disabled; they are not shipped.
 
-**Mesh-surface brushes.** Mesh layers here are carried, saved and exported,
-never sculpted. That used to be a statement about the engine and is now a
-statement about this application: ClayCore 0.39.0 added a mesh sculptor —
-sixteen fixed-topology brushes, taper and twist, a lattice cage, masks, the
-stroke engine and a bit-exact undo record, all reaching a mesh layer's own
-vertices. Nothing here calls any of it. A mesh layer still cannot be a boolean
-operand or blend with a field without being converted first, which is the part
-that has not changed.
+**Mesh-surface booleans.** A mesh layer can be sculpted — see *Sculpting a
+mesh layer* — but it cannot *compose*: it is not an operand of a boolean, a
+blend or a deformer belonging to another layer until it is converted, and
+paying that conversion quantises the exact vertices and drops the edge loops,
+which is precisely what made it worth keeping as a mesh. Convert it if you mean
+to subtract from it; the panel says what that costs.
 
 **Windows.** Out of scope for this change.
 

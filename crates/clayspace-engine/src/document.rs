@@ -1441,6 +1441,57 @@ impl ClayDocument {
             .map(|hit| hit.position)
     }
 
+    /// The triangles of every visible mesh layer, combined for the viewport.
+    ///
+    /// A mesh layer has no bricks, so the surface built from the cache cannot
+    /// contain it. This is the second geometry source that draws one, and it
+    /// is combined across layers because the viewport draws one buffer: the
+    /// indices of each layer are shifted past the vertices already collected.
+    ///
+    /// Hidden layers are left out rather than uploaded and skipped — the point
+    /// of hiding one is not to pay for it.
+    #[allow(clippy::type_complexity)]
+    pub fn visible_mesh_geometry(
+        &mut self,
+    ) -> (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<u32>) {
+        let names: Vec<String> = self
+            .layers
+            .iter()
+            .filter(|layer| {
+                layer.representation == Representation::Mesh
+                    && layer.carries_geometry
+                    && layer.visible
+            })
+            .map(|layer| layer.engine_name.clone())
+            .collect();
+
+        let mut positions = Vec::new();
+        let mut normals = Vec::new();
+        let mut colors = Vec::new();
+        let mut indices = Vec::new();
+        for name in names {
+            let Ok((p, n, c, i)) = self.document.read_mesh_layer(&name) else {
+                continue;
+            };
+            let base = positions.len() as u32;
+            indices.extend(i.into_iter().map(|index| index + base));
+            positions.extend(p);
+            normals.extend(n);
+            colors.extend(c);
+        }
+        (positions, normals, colors, indices)
+    }
+
+    /// A number that changes when a mesh layer's geometry does.
+    ///
+    /// So the viewport can tell whether its copy is stale without comparing
+    /// the triangles. A mesh gesture is the only thing that moves them, and
+    /// every one of those lands on the undo stack — so the two stack depths
+    /// say it, and an undo changes the answer as surely as a stroke does.
+    pub fn mesh_revision(&self) -> u64 {
+        (self.mesh_undo.len() as u64) << 32 | self.mesh_redo.len() as u64
+    }
+
     /// How stretched the active mesh layer's triangles are.
     ///
     /// Sculpting a mesh stretches what is there — a large grab does, and
