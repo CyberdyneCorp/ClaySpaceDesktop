@@ -29,7 +29,9 @@ pub mod units;
 pub use alpha::{Alpha, AlphaRefusal, AlphaSupport};
 pub use armature::{Armature, ArmatureModel, NodeIndex, SkinSettings, Zsphere};
 pub use combine::{BlendProfile, Combine, CombineSettings};
-pub use conversion::{ConversionSettings, Cost, Direction, Refusal, RepairReport};
+pub use conversion::{
+    ConversionSettings, Cost, DeformSettings, DeformVerb, Direction, Refusal, RepairReport,
+};
 pub use detail::DetailPolicy;
 pub use diagnostics::{Diagnostics, DiagnosticsModel, Fallback};
 pub use document::{DocumentModel, OpenError};
@@ -38,7 +40,10 @@ pub use exchange::{
 };
 pub use instrument::{FrameLog, Stall, FRAME};
 pub use mask::{ExtrudeSettings, ExtrudeSide, MaskModel, MaskOp, MaskState};
-pub use scene::{LayerCost, LayerKey, LayerSummary, Protection, Scene, SceneModel, SceneNode};
+pub use scene::{
+    LayerCost, LayerKey, LayerSummary, Protection, Scene, SceneModel, SceneNode, SculptLayer,
+    SculptLayerCost, SculptLayerOp,
+};
 pub use sculpt::{
     Detail, EditOutcome, GestureSample, HistoryEntry, HistoryState, ModelError, SceneStats,
     SculptModel,

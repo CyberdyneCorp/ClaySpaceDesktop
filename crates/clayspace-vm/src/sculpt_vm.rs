@@ -280,6 +280,10 @@ impl SculptViewModel {
             // file dialog; the ViewModel only reads its name back.
             | Command::LoadAlpha
             | Command::ClearAlpha
+            | Command::ToggleDeform
+            | Command::SetDeform(_)
+            | Command::RunDeform
+            | Command::SculptLayer(_)
             | Command::SetLayerVisible(..)
             | Command::AddLayer
             | Command::RemoveLayer(_) => {}

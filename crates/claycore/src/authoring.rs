@@ -10,6 +10,7 @@ use claycore_sys as sys;
 use crate::descriptor::Descriptor;
 use crate::document::ArmatureEdit;
 use crate::error::{check, Result};
+use crate::mask::MaskField;
 use crate::{Document, Item, LayerId, NodeId};
 
 /// How an item combines with what is already there.
@@ -273,6 +274,40 @@ impl Item {
                 )
             },
             "clay_item_add_alpha",
+        )
+    }
+
+    /// Gates this item by a painted mask, so it does not act where the mask
+    /// protects.
+    ///
+    /// What makes masking protect a surface from *any* operation rather than
+    /// only from a brush. Masks gate authoring elsewhere — a voxel edit
+    /// consumes one per cell as it writes, an SDF stroke consumes one when it
+    /// becomes items — but neither touches an item already in the edit list, so
+    /// a mask over an ear had never done anything about the next boolean.
+    ///
+    /// The mask is *measured* rather than stored: what the item carries is the
+    /// signed distance to the region at or above `threshold`. That is what
+    /// gives the gate a Lipschitz bound worth having, and it means painted
+    /// softness is re-derived from `width` rather than preserved.
+    ///
+    /// `width` is how far the protection fades across, in world units; zero is
+    /// clamped rather than honoured, because a step in the field has no finite
+    /// bound and nothing could march it. `threshold` at or below zero means
+    /// 0.5.
+    ///
+    /// The gate is copied, so the mask may change or be dropped afterwards.
+    /// Refused, leaving the item ungated, when the mask is empty or nothing
+    /// reaches the threshold — a gate that protects nothing and reports success
+    /// is harder to notice than a failure.
+    pub fn set_gate(&mut self, mask: &MaskField, threshold: f32, width: f32) -> Result<()> {
+        // SAFETY: valid item handle; `mask` is a live mask this call only
+        // reads, and the engine copies what it needs before returning.
+        check(
+            unsafe {
+                sys::clay_item_set_gate(self.as_ptr(), mask.as_ptr() as *const _, threshold, width)
+            },
+            "clay_item_set_gate",
         )
     }
 

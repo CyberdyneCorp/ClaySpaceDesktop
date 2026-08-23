@@ -10,10 +10,11 @@
 //! along the trailing edge, and a status area.
 
 use clayspace_model::{
-    AlphaSupport, BlendProfile, BrushSettings, Combine, CombineSettings, Diagnostics, Direction,
-    ExportMesher, ExportSettings, ExportWarning, ExtrudeSettings, ExtrudeSide, Falloff, ImportAs,
-    ImportSettings, LayerSummary, MaskOp, MaskState, RecentDocuments, Representation, Scene,
-    SceneStats, ToolKind, Units, ViewPresetKind,
+    AlphaSupport, BlendProfile, BrushSettings, Combine, CombineSettings, DeformSettings,
+    DeformVerb, Diagnostics, Direction, ExportMesher, ExportSettings, ExportWarning,
+    ExtrudeSettings, ExtrudeSide, Falloff, ImportAs, ImportSettings, LayerSummary, MaskOp,
+    MaskState, RecentDocuments, Representation, Scene, SceneStats, SculptLayer, SculptLayerCost,
+    SculptLayerOp, ToolKind, Units, ViewPresetKind,
 };
 use clayspace_vm::{Axis, Command, CommandQueue};
 
@@ -108,6 +109,12 @@ pub struct ShellState<'a> {
     /// The name and not the samples: the interface says which stamp is in use
     /// and has no business holding megabytes to do it.
     pub alpha: Option<&'a str>,
+    /// The deform panel: whether it is open and what it would do.
+    pub show_deform: bool,
+    pub deform: DeformSettings,
+    /// What the active layer's recorded passes cost, and whether one is
+    /// being recorded right now.
+    pub sculpt_cost: SculptLayerCost,
     /// Why the active tool cannot be used, when it cannot.
     pub tool_status: Option<&'a str>,
     pub symmetry: [bool; 3],
@@ -347,6 +354,10 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                 }
                 if ui.button(s.action_repair).clicked() {
                     queue.push(Command::ToggleRepair);
+                    ui.close_menu();
+                }
+                if ui.button(s.action_deform).clicked() {
+                    queue.push(Command::ToggleDeform);
                     ui.close_menu();
                 }
                 if ui.button(s.action_import).clicked() {
@@ -721,6 +732,137 @@ fn alpha_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQ
     });
 }
 
+/// The whole-form deformers, and what each one is set to.
+///
+/// A panel rather than a gesture: a deformer states something about the *form*
+/// — no centre, no radius, no falloff — so there is nothing for a drag to be
+/// resolved from. The lattice is the third deformer and is absent here for the
+/// opposite reason: it *is* a drag, of a cage's control points, and four
+/// numbers cannot say what it does.
+pub fn deform_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    if !state.show_deform {
+        return;
+    }
+    let s = state.strings;
+    let mut open = true;
+    let mut settings = state.deform;
+
+    egui::Window::new(s.action_deform)
+        .open(&mut open)
+        .resizable(false)
+        .collapsible(false)
+        .show(ctx, |ui| {
+            ui.set_min_width(300.0);
+            if state.representation != Representation::Mesh {
+                ui.label(
+                    egui::RichText::new(s.deform_mesh_only)
+                        .size(type_scale::LABEL)
+                        .color(Tokens::text_dim()),
+                );
+                return;
+            }
+
+            for verb in DeformVerb::ALL {
+                let chosen = settings.verb == verb;
+                if ui.radio(chosen, verb.label()).clicked() && !chosen {
+                    settings.verb = verb;
+                    queue.push(Command::SetDeform(settings));
+                }
+            }
+
+            ui.add_space(space::SNUG);
+            if let Some(axis) = axis_control(ui, s.label_axis, settings.axis) {
+                queue.push(Command::SetDeform(DeformSettings { axis, ..settings }));
+            }
+
+            if let Some(span) = slider(
+                ui,
+                s.label_span,
+                settings.span,
+                DeformSettings::SPAN_RANGE,
+                2,
+            ) {
+                queue.push(Command::SetDeform(DeformSettings { span, ..settings }));
+            }
+
+            // Only the controls the chosen verb reads. A scale beside a twist
+            // is a number that does nothing, and there is no way for the panel
+            // to say so that is better than not drawing it.
+            if settings.verb.takes_a_scale() {
+                if let Some(scale_start) = slider(
+                    ui,
+                    s.label_scale_start,
+                    settings.scale_start,
+                    DeformSettings::SCALE_RANGE,
+                    2,
+                ) {
+                    queue.push(Command::SetDeform(DeformSettings {
+                        scale_start,
+                        ..settings
+                    }));
+                }
+                if let Some(scale_end) = slider(
+                    ui,
+                    s.label_scale_end,
+                    settings.scale_end,
+                    DeformSettings::SCALE_RANGE,
+                    2,
+                ) {
+                    queue.push(Command::SetDeform(DeformSettings {
+                        scale_end,
+                        ..settings
+                    }));
+                }
+            }
+            if settings.verb.takes_an_angle() {
+                if let Some(degrees) = slider(
+                    ui,
+                    s.label_angle,
+                    settings.degrees,
+                    DeformSettings::DEGREES_RANGE,
+                    0,
+                ) {
+                    queue.push(Command::SetDeform(DeformSettings {
+                        degrees,
+                        ..settings
+                    }));
+                }
+            }
+
+            ui.add_space(space::SECTION);
+            if ui.button(settings.verb.label()).clicked() {
+                queue.push(Command::RunDeform);
+            }
+        });
+    if !open {
+        queue.push(Command::ToggleDeform);
+    }
+}
+
+/// Three sliders for a direction, returning the axis when one moves.
+fn axis_control(ui: &mut egui::Ui, label: &str, axis: [f32; 3]) -> Option<[f32; 3]> {
+    ui.label(
+        egui::RichText::new(label)
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    );
+    let mut changed = axis;
+    let mut moved = false;
+    ui.horizontal(|ui| {
+        for (index, name) in ["X", "Y", "Z"].into_iter().enumerate() {
+            let mut value = axis[index];
+            if ui
+                .add(egui::DragValue::new(&mut value).speed(0.02).prefix(name))
+                .changed()
+            {
+                changed[index] = value;
+                moved = true;
+            }
+        }
+    });
+    moved.then_some(changed)
+}
+
 /// The scene tree and the layer stack.
 pub fn left_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
     let s = state.strings;
@@ -756,6 +898,15 @@ pub fn left_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Command
     for layer in state.scene.layers.iter().rev() {
         layer_row(ui, state, layer, queue);
     }
+    // Recording a pass, and what the stack costs. Under the layer list because
+    // that is where the passes themselves are, and only for a grid — a field
+    // and a mesh have no stack to record into, and a button that can only
+    // refuse is worse than one that is not there.
+    if state.representation == Representation::Voxel {
+        ui.add_space(space::SNUG);
+        sculpt_recording_control(ui, state, queue);
+    }
+
     ui.add_space(space::SNUG);
     if ui.button(format!("+  {}", s.label_new_layer)).clicked() {
         // Layer creation is a document change like any other.
@@ -888,7 +1039,192 @@ fn layer_row(
                 });
             });
         });
+
+    // The passes recorded on this layer, nested under it.
+    //
+    // Under the layer rather than in a panel of its own: a pass has no meaning
+    // apart from the grid it was recorded on, and a second stack elsewhere
+    // would have to repeat which layer each entry belongs to. Shown only for
+    // the active layer — a document with several grids would otherwise unroll
+    // every stack at once, and only one of them can be recorded into.
+    if active {
+        let count = layer.sculpt_layers.len();
+        // Top of the stack first, as the layer list itself is ordered: the
+        // last pass recorded wins where two overlap, and the thing that wins
+        // belongs at the top.
+        for pass in layer.sculpt_layers.iter().rev() {
+            sculpt_layer_row(ui, state, pass, count, queue);
+        }
+    }
     ui.add_space(space::HAIR);
+}
+
+/// One recorded pass, indented under the layer it belongs to.
+fn sculpt_layer_row(
+    ui: &mut egui::Ui,
+    state: &ShellState<'_>,
+    pass: &SculptLayer,
+    // How many passes the stack holds, so the top one offers no move up.
+    count: usize,
+    queue: &mut CommandQueue,
+) {
+    let s = state.strings;
+    ui.horizontal(|ui| {
+        ui.add_space(space::ROOMY);
+
+        let eye = if pass.visible {
+            Icon::Visible
+        } else {
+            Icon::Hidden
+        };
+        if icons::button(ui, eye, pass.visible).clicked() {
+            queue.push(Command::SculptLayer(SculptLayerOp::SetVisible {
+                index: pass.index,
+                visible: !pass.visible,
+            }));
+        }
+
+        ui.label(
+            egui::RichText::new(pass.display_name())
+                .size(type_scale::LABEL)
+                // A pass that recorded nothing is shown rather than hidden — a
+                // sculptor may have started recording and thought better of it,
+                // and a row that vanishes is harder to explain than a dim one —
+                // but dialling it does nothing, and it reads that way.
+                .color(if pass.is_empty() {
+                    Tokens::text_dim()
+                } else {
+                    Tokens::text()
+                }),
+        )
+        .on_hover_text(format!(
+            "{} · {}",
+            format_args!("{} {}", thousands(pass.cells), s.sculpt_cells),
+            bytes_label(pass.bytes)
+        ));
+
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .small_button("×")
+                .on_hover_text(s.sculpt_remove)
+                .clicked()
+            {
+                queue.push(Command::SculptLayer(SculptLayerOp::Remove {
+                    index: pass.index,
+                }));
+            }
+            // Merging needs something below to merge into, so the button is
+            // absent on the bottom pass rather than present and refusing.
+            if pass.index > 0
+                && ui
+                    .small_button("⤓")
+                    .on_hover_text(s.sculpt_merge_down)
+                    .clicked()
+            {
+                queue.push(Command::SculptLayer(SculptLayerOp::MergeDown {
+                    index: pass.index,
+                }));
+            }
+            // Order decides which pass wins where two touched the same cell,
+            // so it is worth moving. Each arrow is absent at the end it cannot
+            // move toward.
+            if pass.index + 1 < count
+                && ui
+                    .small_button("▲")
+                    .on_hover_text(s.sculpt_move_up)
+                    .clicked()
+            {
+                queue.push(Command::SculptLayer(SculptLayerOp::Move {
+                    from: pass.index,
+                    to: pass.index + 1,
+                }));
+            }
+            if pass.index > 0
+                && ui
+                    .small_button("▼")
+                    .on_hover_text(s.sculpt_move_down)
+                    .clicked()
+            {
+                queue.push(Command::SculptLayer(SculptLayerOp::Move {
+                    from: pass.index,
+                    to: pass.index - 1,
+                }));
+            }
+            let mut strength = pass.strength;
+            if ui
+                .add(
+                    egui::DragValue::new(&mut strength)
+                        .speed(0.01)
+                        .range(0.0..=1.0)
+                        .fixed_decimals(2),
+                )
+                .changed()
+            {
+                queue.push(Command::SculptLayer(SculptLayerOp::SetStrength {
+                    index: pass.index,
+                    strength,
+                }));
+            }
+        });
+    });
+}
+
+/// A byte count in the largest unit that keeps it readable.
+fn bytes_label(bytes: usize) -> String {
+    const MB: usize = 1024 * 1024;
+    const KB: usize = 1024;
+    if bytes >= MB {
+        format!("{:.1} MB", bytes as f32 / MB as f32)
+    } else if bytes >= KB {
+        format!("{:.1} kB", bytes as f32 / KB as f32)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+/// Starting and stopping a recording, and what the stack occupies.
+fn sculpt_recording_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    let cost = state.sculpt_cost;
+
+    ui.horizontal(|ui| {
+        if cost.recording {
+            if ui.button(s.sculpt_end).clicked() {
+                queue.push(Command::SculptLayer(SculptLayerOp::EndRecording));
+            }
+            ui.label(
+                egui::RichText::new(s.sculpt_recording)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::accent()),
+            );
+        } else if ui.button(s.sculpt_begin).clicked() {
+            // Unnamed: the engine takes a name and the panel numbers what has
+            // none, so a sculptor is not stopped by a dialog for something
+            // they will rename or never look at.
+            queue.push(Command::SculptLayer(SculptLayerOp::BeginRecording {
+                name: String::new(),
+            }));
+        }
+    });
+
+    if cost.layers > 0 {
+        ui.label(
+            egui::RichText::new(bytes_label(cost.bytes))
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+        );
+        // Said rather than enforced. A cap that silently stopped recording
+        // would leave a pass on the grid and un-dialable, which is a
+        // correctness bug wearing a memory limit's clothes — so the number is
+        // shown and the sculptor decides.
+        if cost.worth_merging() {
+            ui.label(
+                egui::RichText::new(s.sculpt_worth_merging)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::accent()),
+            );
+        }
+    }
 }
 
 /// The diagnostics report, as a window rather than a panel.

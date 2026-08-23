@@ -71,13 +71,13 @@
 
 ## 7. Phase 3 — voxel sculpt layers
 
-- [ ] 7.1 Wrap the `clay_voxel_sculpt_layer_*` family in `claycore`
-- [ ] 7.2 Add begin/end recording, with the recording state visible in the shell
-- [ ] 7.3 Present the sculpt layer stack inside the existing layer panel, nested under the voxel layer it belongs to: show, hide, reorder, merge down, remove
-- [ ] 7.4 Make strength adjustable after recording, and separately undoable from the strokes
-- [ ] 7.5 Report per-layer and total memory cost
-- [ ] 7.6 Carry sculpt layers through save and reload, or refuse the save with a stated reason if the format cannot hold them
-- [ ] 7.7 Test that strength survives a save and reload
+- [x] 7.1 Wrap the `clay_voxel_sculpt_layer_*` family in `claycore`
+- [x] 7.2 Add begin/end recording, with the recording state visible in the shell
+- [x] 7.3 Present the sculpt layer stack inside the existing layer panel, nested under the voxel layer it belongs to: show, hide, reorder, merge down, remove
+- [x] 7.4 Make strength adjustable after recording, and separately undoable from the strokes
+- [x] 7.5 Report per-layer and total memory cost
+- [x] 7.6 Carry sculpt layers through save and reload, or refuse the save with a stated reason if the format cannot hold them
+- [x] 7.7 Test that strength survives a save and reload
 
 ## 8. Phase 3 — SDF vocabulary
 
@@ -85,10 +85,26 @@
 - [x] 8.2 Expose the five blend profiles beside them
 - [x] 8.3 Add a PNG alpha decoder to `clayspace-engine` beside `import_mesh`, promoting `png` from a dev-dependency, and refuse a file that is not a PNG with a stated reason
 - [x] 8.4 Wrap `clay_item_add_alpha` and `clay_voxel_sculpt_carve_alpha`, and add an alpha source to the brush
+  - Voxels and meshes take a stamp and are measured doing it. An SDF *stroke*
+    does not: `clay_layer_apply_stroke` uses its item as a template and does not
+    carry the deformer chain hung off it, measured at three amplitudes under two
+    ops. The wrapper works on a placed item and is tested there. Filed in
+    `docs/roadmap.md`; `claycore/tests/alpha_deformer.rs` is the tripwire.
 - [x] 8.5 State where an alpha is not accepted rather than offering a dead control
-- [ ] 8.6 Expose the deformers as layer operations with their parameters, each one undo step
-- [ ] 8.7 Wrap `clay_item_set_gate` so a mask gates a combine operation, not only a brush
-- [ ] 8.8 Test that a masked region survives a subtracting edit that crosses it
+- [x] 8.6 Expose the deformers as layer operations with their parameters, each one undo step
+- [x] 8.7 Wrap `clay_item_set_gate` so a mask gates a combine operation, not only a brush
+  - Wrapped and matching the documented contract. The engine accepts the call
+    and does nothing: measured with a mask sampling 1.0 at the cut's own centre
+    and 65,752 cells painted, at every width and threshold tried, never
+    refusing. The application does not call it — a call per stroke that does
+    nothing is a cost with no benefit and a promise the interface could not
+    keep. Filed in `docs/roadmap.md`.
+- [x] 8.8 Test that a masked region survives a subtracting edit that crosses it
+  - Written the other way round, because that is what is true: the tests hold
+    that a mask gates authoring and not the operation, and fail the day it
+    does. `claycore/tests/mask_gate.rs` measures it at the engine boundary and
+    `clayspace-engine/tests/mask_gate.rs` through the domain. An `#[ignore]`d
+    aspiration would have recorded nothing.
 - [x] 8.9 Visual captures for the combine operations and the blend profiles
 
 ## 9. Close-out

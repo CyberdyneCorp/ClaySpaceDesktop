@@ -53,12 +53,129 @@ pub struct LayerSummary {
     pub protection: Protection,
     /// 0..=100, as the design's stack displays it.
     pub intensity: u8,
+    /// The recorded passes on this layer, bottom-up.
+    ///
+    /// Empty for every representation but a grid, and for a grid nobody has
+    /// recorded a pass on. Nested here rather than kept in a panel of its own
+    /// because a sculpt layer is *part of* the layer it was recorded on — it
+    /// has no meaning apart from that grid, and a second stack elsewhere would
+    /// have to repeat which layer each entry belongs to.
+    pub sculpt_layers: Vec<SculptLayer>,
+}
+
+/// A recorded pass on a voxel layer.
+///
+/// A pass a sculptor can dial back after making it. Not undo: undo is a stack
+/// you pop, this is a slider you keep — and what it stores is what the pass
+/// *changed*, not the brushes that changed it, so dialling one replays cells
+/// rather than re-running strokes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SculptLayer {
+    /// Its position in the stack, which is what every operation addresses it
+    /// by. Layers composite bottom-up, so a higher index wins where two
+    /// overlap.
+    pub index: usize,
+    /// What the sculptor called it. May be empty.
+    pub name: String,
+    /// How far the pass is dialled in, 0..=1.
+    pub strength: f32,
+    pub visible: bool,
+    /// How many cells the pass changed — its cost, and whether it did
+    /// anything at all.
+    pub cells: usize,
+    /// What it occupies: recorded cells plus the recording index.
+    pub bytes: usize,
+}
+
+impl SculptLayer {
+    /// What the interface shows when the pass has no name.
+    ///
+    /// Numbered from one rather than zero: the index is an implementation
+    /// detail of the stack and a sculptor counting passes starts at one.
+    pub fn display_name(&self) -> String {
+        if self.name.is_empty() {
+            format!("Passe {}", self.index + 1)
+        } else {
+            self.name.clone()
+        }
+    }
+
+    /// Whether the pass recorded anything.
+    ///
+    /// A pass that changed no cell is not a mistake — a sculptor may have
+    /// started recording and thought better of it — but it is worth showing
+    /// differently from one that did, since dialling it does nothing.
+    pub fn is_empty(&self) -> bool {
+        self.cells == 0
+    }
 }
 
 impl LayerSummary {
     /// Whether an edit may touch this layer.
     pub fn is_editable(&self) -> bool {
         self.visible && self.protection.is_editable()
+    }
+}
+
+/// Something done to a recorded pass.
+///
+/// One enum rather than a method per verb on the model, for the reason
+/// [`crate::LayerOperation`] is one: they all address a pass by its index in a
+/// grid's stack, and a trait growing eight near-identical methods makes every
+/// double implement eight refusals.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SculptLayerOp {
+    /// Starts recording. Edits until [`Self::EndRecording`] belong to the new
+    /// pass.
+    BeginRecording {
+        name: String,
+    },
+    /// Stops recording. Edits after it belong to no pass.
+    EndRecording,
+    /// Dials a pass up or down, 0..=1.
+    SetStrength {
+        index: usize,
+        strength: f32,
+    },
+    SetVisible {
+        index: usize,
+        visible: bool,
+    },
+    Remove {
+        index: usize,
+    },
+    /// Folds a pass into the one below at full strength.
+    MergeDown {
+        index: usize,
+    },
+    /// Moves a pass within the stack. Order decides which pass wins where two
+    /// touched the same cell.
+    Move {
+        from: usize,
+        to: usize,
+    },
+}
+
+impl SculptLayerOp {
+    /// What the history calls it.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::BeginRecording { .. } => "begin pass",
+            Self::EndRecording => "end pass",
+            Self::SetStrength { .. } => "pass strength",
+            Self::SetVisible { .. } => "pass visibility",
+            Self::Remove { .. } => "remove pass",
+            Self::MergeDown { .. } => "merge pass down",
+            Self::Move { .. } => "reorder pass",
+        }
+    }
+
+    /// Whether this changes the surface rather than only the stack.
+    ///
+    /// Beginning and ending a recording change nothing that is drawn — they
+    /// decide where the *next* edits are filed. Everything else replays cells.
+    pub fn changes_the_surface(&self) -> bool {
+        !matches!(self, Self::BeginRecording { .. } | Self::EndRecording)
     }
 }
 
@@ -72,6 +189,40 @@ pub struct SceneNode {
     pub visible: bool,
     /// Whether it has children that could be shown.
     pub expandable: bool,
+}
+
+/// What a grid's recorded passes cost together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SculptLayerCost {
+    pub layers: usize,
+    /// Recorded cells plus the recording index, across the stack.
+    ///
+    /// Nothing is enforced against it, deliberately: a cap that silently
+    /// stopped recording would leave a pass on the grid and un-dialable, which
+    /// is a correctness bug wearing a memory limit's clothes. The number is
+    /// shown so a sculptor can merge down — one entry per cell instead of two —
+    /// or stop recording.
+    pub bytes: usize,
+    /// Whether a pass is being recorded right now.
+    pub recording: bool,
+}
+
+impl SculptLayerCost {
+    /// The cost in whole megabytes, for a readout.
+    pub fn megabytes(&self) -> f32 {
+        self.bytes as f32 / (1024.0 * 1024.0)
+    }
+
+    /// Above which the interface says the stack is worth merging.
+    ///
+    /// Not a limit and not enforced — see [`Self::bytes`]. A quarter of a
+    /// gigabyte is where a stack is large enough that a sculptor should know
+    /// about it, and small enough that saying so is not nagging.
+    pub const WORTH_MENTIONING: usize = 256 * 1024 * 1024;
+
+    pub fn worth_merging(&self) -> bool {
+        self.bytes > Self::WORTH_MENTIONING
+    }
 }
 
 /// What the interface knows about the document's structure.
@@ -136,6 +287,22 @@ pub trait SceneModel {
         representation: Representation,
     ) -> Result<LayerKey, crate::ModelError>;
     fn remove_layer(&mut self, key: LayerKey) -> Result<(), crate::ModelError>;
+
+    /// Acts on the active layer's recorded passes.
+    ///
+    /// Provided, so a double that models no grids refuses rather than spelling
+    /// out seven refusals it never reaches.
+    fn apply_sculpt_layer_op(&mut self, op: SculptLayerOp) -> Result<(), crate::ModelError> {
+        let _ = op;
+        Err(crate::ModelError::engine(
+            "passes são gravados em uma camada de voxels",
+        ))
+    }
+
+    /// What the active layer's passes cost, and whether one is recording.
+    fn sculpt_layer_cost(&self) -> SculptLayerCost {
+        SculptLayerCost::default()
+    }
     /// Moves a layer to a position in the stack, which is its evaluation order.
     fn move_layer(&mut self, key: LayerKey, index: usize) -> Result<(), crate::ModelError>;
 
@@ -196,6 +363,7 @@ mod tests {
             visible: false,
             protection: Protection::default(),
             intensity: 100,
+            sculpt_layers: Vec::new(),
         };
         assert!(
             !layer.is_editable(),
@@ -215,6 +383,7 @@ mod tests {
                     visible: true,
                     protection: Protection::default(),
                     intensity: 100,
+                    sculpt_layers: Vec::new(),
                 },
                 LayerSummary {
                     key: LayerKey(2),
@@ -223,6 +392,7 @@ mod tests {
                     visible: true,
                     protection: Protection::default(),
                     intensity: 70,
+                    sculpt_layers: Vec::new(),
                 },
             ],
             active: Some(LayerKey(2)),

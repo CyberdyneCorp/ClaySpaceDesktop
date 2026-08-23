@@ -17,7 +17,7 @@ use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
     AutosavePolicy, Detail, DetailPolicy, Diagnostics, ExchangeModel, ExportSettings,
     ExportWarning, Format, FrameLog, ImportSettings, LayerOperation, RecentDocuments, Recovery,
-    SculptModel, SkinSettings, Units, ViewPresetKind, FRAME,
+    SceneModel, SculptModel, SkinSettings, Units, ViewPresetKind, FRAME,
 };
 use clayspace_view::shell::{self, region, ArmatureState, ShellState};
 use clayspace_view::{
@@ -166,6 +166,8 @@ struct App {
     show_export: bool,
     /// The conversion panel, and what it is set to.
     show_repair: bool,
+    show_deform: bool,
+    deform: clayspace_model::DeformSettings,
     show_convert: bool,
     conversion: clayspace_model::ConversionSettings,
     import: ImportSettings,
@@ -257,6 +259,8 @@ impl App {
             show_import: false,
             show_export: false,
             show_repair: false,
+            show_deform: false,
+            deform: clayspace_model::DeformSettings::default(),
             show_convert: false,
             conversion: clayspace_model::ConversionSettings::default(),
             import: ImportSettings::default(),
@@ -526,6 +530,31 @@ impl App {
                 self.after_document_replaced();
             }
             Err(e) => eprintln!("não foi possível importar: {e}"),
+        }
+        self.request_redraw();
+    }
+
+    /// Acts on a recorded pass of the active voxel layer.
+    ///
+    /// Not routed through the edit path, and not because it is cheap: a pass is
+    /// not undo. Dialling one is a property of the stack that stays adjustable
+    /// long after the strokes are finished, and filing it as an undo entry
+    /// would mean a sculptor's next undo took back a slider rather than the
+    /// work.
+    fn run_sculpt_layer_op(&mut self, op: clayspace_model::SculptLayerOp) {
+        let changes_the_surface = op.changes_the_surface();
+        match self
+            .document
+            .with(|document| document.apply_sculpt_layer_op(op))
+        {
+            Ok(()) => {
+                self.scene.refresh();
+                if changes_the_surface {
+                    self.document_vm.touched();
+                    self.sync_geometry();
+                }
+            }
+            Err(e) => eprintln!("o passe foi recusado: {e}"),
         }
         self.request_redraw();
     }
@@ -1365,6 +1394,13 @@ impl App {
             Command::SetConversion(settings) => self.conversion = settings.sanitized(),
             Command::RunConversion => self.run_conversion(),
             Command::ToggleRepair => self.show_repair = !self.show_repair,
+            Command::SculptLayer(op) => self.run_sculpt_layer_op(op.clone()),
+            Command::ToggleDeform => self.show_deform = !self.show_deform,
+            Command::SetDeform(settings) => self.deform = settings.sanitized(),
+            // One undo step, which the engine's own path already makes: the
+            // deformer records its vertex deltas exactly as a mesh stroke
+            // does, so undo takes the whole deformation back.
+            Command::RunDeform => self.run_operation(self.deform.operation()),
             Command::CloseHoles => self.run_operation(LayerOperation::CloseHoles { passes: 1 }),
             Command::FillVoids => self.run_operation(LayerOperation::FillVoids),
             _ => {}
@@ -1465,6 +1501,9 @@ impl App {
             armature: self.armature_state(),
             recent: self.recent.paths(),
             show_repair: self.show_repair,
+            show_deform: self.show_deform,
+            deform: self.deform,
+            sculpt_cost: self.document.with(|document| document.sculpt_layer_cost()),
             // Asked of the document each frame the panel is open, so a repair
             // shows its own result rather than the state before it.
             repair: self
@@ -1543,6 +1582,7 @@ impl App {
             shell::attribution_window(ctx, &state, &mut queue);
             shell::convert_window(ctx, &state, &mut queue);
             shell::repair_window(ctx, &state, &mut queue);
+            shell::deform_window(ctx, &state, &mut queue);
             shell::import_window(ctx, &state, &mut queue);
             shell::export_window(ctx, &state, &mut queue);
             egui::CentralPanel::default()

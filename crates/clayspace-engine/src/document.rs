@@ -94,6 +94,14 @@ struct Layer {
     visible: bool,
     protection: Protection,
     intensity: u8,
+    /// The recorded passes on this layer, bottom-up.
+    ///
+    /// Cached rather than read on demand, for the same reason the armature
+    /// tree is: reading a grid's stack needs a mutable borrow of the document
+    /// and `scene` takes a shared one. Refreshed by
+    /// [`ClayDocument::refresh_sculpt_layers`] after anything that could change
+    /// it, so a stale stack is a missed call rather than a silent drift.
+    sculpt_layers: Vec<clayspace_model::SculptLayer>,
 }
 
 impl Layer {
@@ -105,6 +113,7 @@ impl Layer {
             visible: self.visible,
             protection: self.protection,
             intensity: self.intensity,
+            sculpt_layers: self.sculpt_layers.clone(),
         }
     }
 
@@ -179,6 +188,12 @@ pub struct ClayDocument {
     combine: CombineSettings,
     /// The one alpha stamp loaded, which every brush with `alpha` set uses.
     alpha: Option<Alpha>,
+    /// Whether a pass is being recorded on the active grid.
+    ///
+    /// Mirrored here rather than read back per frame: the engine answers per
+    /// *grid* and the shell asks about the document, so switching to a layer
+    /// with no grid at all would otherwise need a borrow to say "no".
+    recording_pass: bool,
     /// Hands out layer keys. Monotone, so a key is never reused for a
     /// different layer after a removal.
     next_key: u64,
@@ -255,12 +270,14 @@ impl ClayDocument {
                 visible: true,
                 protection: Protection::default(),
                 intensity: 100,
+                sculpt_layers: Vec::new(),
             }],
             active: 0,
             cache,
             policy,
             combine: CombineSettings::for_strokes(),
             alpha: None,
+            recording_pass: false,
             dirty: Vec::new(),
             stats: SceneStats::default(),
             surface_brick_count: 0,
@@ -446,6 +463,7 @@ impl ClayDocument {
             visible: true,
             protection: Protection::default(),
             intensity: 100,
+            sculpt_layers: Vec::new(),
         });
         self.active = self.layers.len() - 1;
         Ok(())
@@ -673,6 +691,7 @@ impl ClayDocument {
             visible: true,
             protection: Protection::default(),
             intensity: 100,
+            sculpt_layers: Vec::new(),
         });
         self.active = self.layers.len() - 1;
         Ok(key)
@@ -1030,6 +1049,19 @@ impl ClayDocument {
         }
 
         let mask = self.mask.as_deref();
+
+        // No gate on the stamp, and that is a measurement rather than an
+        // omission. `clay_item_set_gate` is what would make a mask protect a
+        // surface from an *operation* rather than only from a brush — a mask
+        // over an ear keeps a stroke from depositing there and, without it,
+        // does nothing about the boolean the next stroke performs across the
+        // region. The wrapper exists and matches the documented contract, and
+        // the engine accepts the call and does nothing: measured with a mask
+        // sampling 1.0 at the cut's own centre and 65,752 cells painted, a
+        // subtraction eats the protected region at every width and threshold
+        // tried, and never refuses. `claycore/tests/mask_gate.rs` holds that,
+        // and this comes back the day it fails.
+
         let nodes = self
             .document
             .apply_stroke(layer, &stroke, &preset, &stamp, mask)
@@ -1912,6 +1944,19 @@ impl ClayDocument {
         if after == before {
             return Ok(EditOutcome::NOTHING);
         }
+        // The grid's borrow of the document ends here, so the refresh below
+        // can take its own.
+        let _ = grid;
+
+        // A stroke made while a pass is recording grows that pass, so what the
+        // panel shows about it — its cell count, its cost — is out of date the
+        // moment the stroke lands. Refreshed only while recording: reading the
+        // stack costs a call per pass, and off a recording there is nothing
+        // new to read.
+        if self.recording_pass {
+            let key = self.active_layer().key;
+            self.refresh_sculpt_layers(key)?;
+        }
 
         Ok(EditOutcome {
             changed: true,
@@ -2369,9 +2414,97 @@ impl SceneModel for ClayDocument {
             visible: true,
             protection: Protection::default(),
             intensity: 100,
+            sculpt_layers: Vec::new(),
         });
         self.active = self.layers.len() - 1;
         Ok(key)
+    }
+
+    fn apply_sculpt_layer_op(
+        &mut self,
+        op: clayspace_model::SculptLayerOp,
+    ) -> Result<(), ModelError> {
+        use clayspace_model::SculptLayerOp as Op;
+
+        let layer = self.active_layer();
+        if layer.representation != Representation::Voxel {
+            // Named rather than generic: a sculptor on a field or a mesh needs
+            // to know a pass is a grid's, not that "this failed".
+            return Err(ModelError::Unavailable(
+                clayspace_model::Unavailable::NoVerbHere {
+                    active: layer.representation,
+                    verbs: clayspace_model::Verbs {
+                        sdf: None,
+                        voxel: Some("clay_voxel_begin_sculpt_layer"),
+                        mesh: None,
+                    },
+                },
+            ));
+        }
+        let key = layer.key;
+        let engine_name = layer.engine_name.clone();
+        let mut recording = self.recording_pass;
+        {
+            let (_, mut grid) = self
+                .document
+                .voxel_layer(&engine_name)
+                .map_err(ModelError::engine)?;
+            match &op {
+                Op::BeginRecording { name } => {
+                    let name = (!name.is_empty()).then_some(name.as_str());
+                    grid.begin_sculpt_layer(name).map_err(ModelError::engine)?;
+                    recording = true;
+                }
+                Op::EndRecording => {
+                    grid.end_sculpt_layer().map_err(ModelError::engine)?;
+                    recording = false;
+                }
+                Op::SetStrength { index, strength } => grid
+                    .set_sculpt_layer_strength(*index, *strength)
+                    .map_err(ModelError::engine)?,
+                Op::SetVisible { index, visible } => grid
+                    .set_sculpt_layer_visible(*index, *visible)
+                    .map_err(ModelError::engine)?,
+                Op::Remove { index } => grid
+                    .remove_sculpt_layer(*index)
+                    .map_err(ModelError::engine)?,
+                Op::MergeDown { index } => grid
+                    .merge_sculpt_layer_down(*index)
+                    .map_err(ModelError::engine)?,
+                Op::Move { from, to } => grid
+                    .move_sculpt_layer(*from, *to)
+                    .map_err(ModelError::engine)?,
+            }
+        }
+
+        self.recording_pass = recording;
+        self.refresh_sculpt_layers(key)?;
+        // Everything but starting and stopping a recording replays cells, so
+        // the surface has changed and the viewport has to re-mesh it. Starting
+        // one decides where the *next* edits are filed and draws nothing new.
+        if op.changes_the_surface() {
+            let layer_id = self
+                .layers
+                .iter()
+                .find(|layer| layer.key == key)
+                .map(|layer| layer.id);
+            if let Some(id) = layer_id {
+                self.refill(id, &[])?;
+            }
+        }
+        Ok(())
+    }
+
+    fn sculpt_layer_cost(&self) -> clayspace_model::SculptLayerCost {
+        let layer = self.active_layer();
+        if layer.representation != Representation::Voxel {
+            return clayspace_model::SculptLayerCost::default();
+        }
+        clayspace_model::SculptLayerCost {
+            layers: layer.sculpt_layers.len(),
+            bytes: layer.sculpt_layers.iter().map(|pass| pass.bytes).sum(),
+            recording: self.recording_pass,
+        }
     }
 
     fn remove_layer(&mut self, key: LayerKey) -> Result<(), ModelError> {
@@ -2490,6 +2623,7 @@ impl SceneModel for ClayDocument {
             visible: true,
             protection: Protection::default(),
             intensity: 100,
+            sculpt_layers: Vec::new(),
         });
         Ok(key)
     }
@@ -2674,6 +2808,7 @@ impl ClayDocument {
                         })
                         .unwrap_or_default(),
                     intensity: 100,
+                    sculpt_layers: Vec::new(),
                 }
             })
             .collect();
@@ -2704,6 +2839,7 @@ impl ClayDocument {
             symmetry: [false; 3],
             combine: CombineSettings::for_strokes(),
             alpha: None,
+            recording_pass: false,
             next_key,
             selected: None,
             armature: None,
@@ -2723,6 +2859,26 @@ impl ClayDocument {
         for id in ids.clone() {
             model
                 .refill(id, &[])
+                .map_err(|e| unreadable(e.to_string()))?;
+        }
+
+        // The recorded passes on every grid the document carries.
+        //
+        // Refreshed here for the same reason the rig is recovered here: the
+        // stack is cached on the layer, and a layer rebuilt from a file starts
+        // with an empty one. Without this a reopened document showed no passes
+        // and the sculpt read as flattened — the format carries them since
+        // `.clayspace` minor 10, and the whole promise of a pass is that its
+        // strength stays adjustable past the end of a session.
+        let keys: Vec<LayerKey> = model
+            .layers
+            .iter()
+            .filter(|layer| layer.representation == Representation::Voxel)
+            .map(|layer| layer.key)
+            .collect();
+        for key in keys {
+            model
+                .refresh_sculpt_layers(key)
                 .map_err(|e| unreadable(e.to_string()))?;
         }
 
@@ -2869,6 +3025,7 @@ impl ClayDocument {
             visible: true,
             protection: Protection::default(),
             intensity: 100,
+            sculpt_layers: Vec::new(),
         });
         self.refresh_stats();
         Ok(())
@@ -2907,6 +3064,60 @@ impl ClayDocument {
             .map_err(ModelError::engine)?;
         self.refill(id, &[node])?;
         self.refresh_stats();
+        Ok(())
+    }
+}
+
+impl ClayDocument {
+    /// How many cells the active grid holds, when the active layer is one.
+    ///
+    /// The only direct read of a grid's contents the interface has. A raycast
+    /// marches the document's *field*, which a voxel layer is not in, so
+    /// without this the only way to see what a grid holds is to cross it back
+    /// into a field — which adds a layer and changes the thing being measured.
+    /// Used by the sculpt-layer panel to say whether a pass is doing anything,
+    /// and by the tests that hold that dialling one replays cells.
+    pub fn occupied_cells(&mut self) -> Option<usize> {
+        let layer = self.active_layer();
+        if layer.representation != Representation::Voxel {
+            return None;
+        }
+        let engine_name = layer.engine_name.clone();
+        let (_, grid) = self.document.voxel_layer(&engine_name).ok()?;
+        grid.occupied_count().ok()
+    }
+
+    /// Re-reads the active grid's recorded passes into the layer's cache.
+    ///
+    /// Called after anything that could change the stack. Cached because
+    /// reading it needs a mutable borrow of the document and `scene` takes a
+    /// shared one — the same reason the armature tree is kept here.
+    fn refresh_sculpt_layers(&mut self, key: LayerKey) -> Result<(), ModelError> {
+        let Some(index) = self.layers.iter().position(|layer| layer.key == key) else {
+            return Ok(());
+        };
+        if self.layers[index].representation != Representation::Voxel {
+            return Ok(());
+        }
+        let engine_name = self.layers[index].engine_name.clone();
+        let (_, grid) = self
+            .document
+            .voxel_layer(&engine_name)
+            .map_err(ModelError::engine)?;
+
+        let count = grid.sculpt_layer_count().map_err(ModelError::engine)?;
+        let mut stack = Vec::with_capacity(count);
+        for layer in 0..count {
+            stack.push(clayspace_model::SculptLayer {
+                index: layer,
+                name: grid.sculpt_layer_name(layer).unwrap_or_default(),
+                strength: grid.sculpt_layer_strength(layer).unwrap_or(1.0),
+                visible: grid.sculpt_layer_visible(layer).unwrap_or(true),
+                cells: grid.sculpt_layer_cell_count(layer).unwrap_or(0),
+                bytes: grid.sculpt_layer_bytes(layer).unwrap_or(0),
+            });
+        }
+        self.layers[index].sculpt_layers = stack;
         Ok(())
     }
 }
@@ -3296,6 +3507,7 @@ impl ClayDocument {
                     })
                     .unwrap_or_default(),
                 intensity: 100,
+                sculpt_layers: Vec::new(),
             });
         }
 

@@ -30,6 +30,7 @@ fn scene() -> Scene {
             visible,
             protection,
             intensity,
+            sculpt_layers: Vec::new(),
         };
     Scene {
         nodes: vec![
@@ -170,6 +171,9 @@ fn state<'a>(
         brush: BrushSettings::default(),
         combine: clayspace_model::CombineSettings::for_strokes(),
         alpha: None,
+        sculpt_cost: clayspace_model::SculptLayerCost::default(),
+        show_deform: false,
+        deform: clayspace_model::DeformSettings::default(),
         tool_status: None,
         symmetry: [true, false, false],
         scene,

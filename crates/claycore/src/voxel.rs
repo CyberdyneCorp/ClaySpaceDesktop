@@ -562,6 +562,203 @@ impl VoxelField {
         )
     }
 
+    // -- sculpt layers ------------------------------------------------------
+
+    /// Starts recording a sculpt layer.
+    ///
+    /// A pass that can be dialled back after it is made — ZBrush's layers, on a
+    /// grid. Bracket any run of edits with begin and end, and the grid
+    /// remembers what those edits *changed*, so their strength stays adjustable
+    /// long after the strokes are finished. Not undo: undo is a stack you pop,
+    /// a sculpt layer is a slider you keep.
+    ///
+    /// A layer stores what its pass did, not the brushes that did it, so
+    /// dialling one replays recorded cells rather than re-running strokes — a
+    /// pass whose result depended on the layer under it keeps what it recorded
+    /// when that layer is dialled away.
+    ///
+    /// Rejected while a layer is already recording: a cell can only belong to
+    /// one pass, so nesting has no meaning.
+    pub fn begin_sculpt_layer(&mut self, name: Option<&str>) -> Result<usize> {
+        let c_name = name
+            .map(|name| crate::cstring(name, "clay_voxel_begin_sculpt_layer"))
+            .transpose()?;
+        let mut layer = 0usize;
+        // SAFETY: valid handle; the name is NUL-terminated for as long as the
+        // call runs, or null; `layer` is written only on success.
+        check(
+            unsafe {
+                sys::clay_voxel_begin_sculpt_layer(
+                    self.as_ptr(),
+                    c_name.as_ref().map_or(std::ptr::null(), |n| n.as_ptr()),
+                    &mut layer,
+                )
+            },
+            "clay_voxel_begin_sculpt_layer",
+        )?;
+        Ok(layer)
+    }
+
+    /// Stops recording. Edits after this belong to no layer, and a no-op when
+    /// nothing is recording.
+    pub fn end_sculpt_layer(&mut self) -> Result<()> {
+        // SAFETY: valid handle.
+        check(
+            unsafe { sys::clay_voxel_end_sculpt_layer(self.as_ptr()) },
+            "clay_voxel_end_sculpt_layer",
+        )
+    }
+
+    /// Whether a layer is being recorded right now.
+    pub fn recording_sculpt_layer(&self) -> Result<bool> {
+        let mut recording = 0i32;
+        // SAFETY: valid handle and out-parameter.
+        check(
+            unsafe { sys::clay_voxel_recording_sculpt_layer(self.as_ptr(), &mut recording) },
+            "clay_voxel_recording_sculpt_layer",
+        )?;
+        Ok(recording != 0)
+    }
+
+    pub fn sculpt_layer_count(&self) -> Result<usize> {
+        let mut count = 0usize;
+        // SAFETY: valid handle and out-parameter.
+        check(
+            unsafe { sys::clay_voxel_sculpt_layer_count(self.as_ptr(), &mut count) },
+            "clay_voxel_sculpt_layer_count",
+        )?;
+        Ok(count)
+    }
+
+    /// A layer's name, which may be empty.
+    pub fn sculpt_layer_name(&self, layer: usize) -> Result<String> {
+        let grid = self.as_ptr();
+        crate::buffer::size_query_string("clay_voxel_sculpt_layer_name", |buffer, size| {
+            // SAFETY: the two-call protocol, driven by the shared helper: a
+            // null buffer asks the size and a sized one is filled.
+            unsafe { sys::clay_voxel_sculpt_layer_name(grid, layer, buffer, size) }
+        })
+    }
+
+    /// How many cells the pass changed — its cost, and whether it did anything.
+    pub fn sculpt_layer_cell_count(&self, layer: usize) -> Result<usize> {
+        let mut count = 0usize;
+        // SAFETY: valid handle and out-parameter.
+        check(
+            unsafe { sys::clay_voxel_sculpt_layer_cell_count(self.as_ptr(), layer, &mut count) },
+            "clay_voxel_sculpt_layer_cell_count",
+        )?;
+        Ok(count)
+    }
+
+    pub fn sculpt_layer_strength(&self, layer: usize) -> Result<f32> {
+        let mut strength = 0.0f32;
+        // SAFETY: valid handle and out-parameter.
+        check(
+            unsafe { sys::clay_voxel_sculpt_layer_strength(self.as_ptr(), layer, &mut strength) },
+            "clay_voxel_sculpt_layer_strength",
+        )?;
+        Ok(strength)
+    }
+
+    /// Dials a layer up or down.
+    ///
+    /// On binary occupancy a fractional strength is a fraction of the *cells*,
+    /// chosen by the same cell-coordinate hash the falloff brushes dither with:
+    /// the same strength picks the same cells on every platform and every run,
+    /// and raising it adds cells to the ones already showing rather than
+    /// reshuffling. 0 and 1 are exact — the grid without the pass, and the pass
+    /// applied directly.
+    ///
+    /// Clamped by the engine rather than rejected: a slider that overshoots is
+    /// a caller being a caller.
+    pub fn set_sculpt_layer_strength(&mut self, layer: usize, strength: f32) -> Result<()> {
+        // SAFETY: valid handle.
+        check(
+            unsafe { sys::clay_voxel_set_sculpt_layer_strength(self.as_ptr(), layer, strength) },
+            "clay_voxel_set_sculpt_layer_strength",
+        )
+    }
+
+    pub fn sculpt_layer_visible(&self, layer: usize) -> Result<bool> {
+        let mut visible = 0i32;
+        // SAFETY: valid handle and out-parameter.
+        check(
+            unsafe { sys::clay_voxel_sculpt_layer_visible(self.as_ptr(), layer, &mut visible) },
+            "clay_voxel_sculpt_layer_visible",
+        )?;
+        Ok(visible != 0)
+    }
+
+    pub fn set_sculpt_layer_visible(&mut self, layer: usize, visible: bool) -> Result<()> {
+        // SAFETY: valid handle.
+        check(
+            unsafe {
+                sys::clay_voxel_set_sculpt_layer_visible(self.as_ptr(), layer, i32::from(visible))
+            },
+            "clay_voxel_set_sculpt_layer_visible",
+        )
+    }
+
+    /// Drops a layer and replays the ones above it.
+    pub fn remove_sculpt_layer(&mut self, layer: usize) -> Result<()> {
+        // SAFETY: valid handle.
+        check(
+            unsafe { sys::clay_voxel_remove_sculpt_layer(self.as_ptr(), layer) },
+            "clay_voxel_remove_sculpt_layer",
+        )
+    }
+
+    /// Folds a layer into the one below at full strength, keeping the lower
+    /// layer's name. Rejected for layer 0, which has nothing below it.
+    pub fn merge_sculpt_layer_down(&mut self, layer: usize) -> Result<()> {
+        // SAFETY: valid handle.
+        check(
+            unsafe { sys::clay_voxel_merge_sculpt_layer_down(self.as_ptr(), layer) },
+            "clay_voxel_merge_sculpt_layer_down",
+        )
+    }
+
+    /// Moves a layer within the stack, sliding the rest along.
+    ///
+    /// Order is meaningful: where two passes touched the same cell, moving one
+    /// past the other changes which value survives. The recorded diffs are
+    /// replayed in the new order rather than the strokes re-run.
+    pub fn move_sculpt_layer(&mut self, from: usize, to: usize) -> Result<()> {
+        // SAFETY: valid handle.
+        check(
+            unsafe { sys::clay_voxel_move_sculpt_layer(self.as_ptr(), from, to) },
+            "clay_voxel_move_sculpt_layer",
+        )
+    }
+
+    /// What one layer costs in memory: recorded cells plus the recording index.
+    pub fn sculpt_layer_bytes(&self, layer: usize) -> Result<usize> {
+        let mut bytes = 0usize;
+        // SAFETY: valid handle and out-parameter.
+        check(
+            unsafe { sys::clay_voxel_sculpt_layer_bytes(self.as_ptr(), layer, &mut bytes) },
+            "clay_voxel_sculpt_layer_bytes",
+        )?;
+        Ok(bytes)
+    }
+
+    /// What the whole stack costs.
+    ///
+    /// Nothing is enforced, deliberately: a cap that silently stopped recording
+    /// would leave a pass on the grid and un-dialable, which is a correctness
+    /// bug wearing a memory limit's clothes. A host with a budget merges layers
+    /// down — one entry per cell instead of two — or stops recording.
+    pub fn sculpt_layers_bytes(&self) -> Result<usize> {
+        let mut bytes = 0usize;
+        // SAFETY: valid handle and out-parameter.
+        check(
+            unsafe { sys::clay_voxel_sculpt_layers_bytes(self.as_ptr(), &mut bytes) },
+            "clay_voxel_sculpt_layers_bytes",
+        )?;
+        Ok(bytes)
+    }
+
     /// A caller-supplied scalar stamp modulating per-cell strength.
     ///
     /// The engine decodes no images: a caller with an alpha has already loaded

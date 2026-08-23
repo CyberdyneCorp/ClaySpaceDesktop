@@ -47,14 +47,42 @@ meshed. ClayCore 0.30.0 added `clay_brick_cache_mesh_lod` (#93) and 3.9 closed
 on it — see *Level of detail, as delivered*. What is left on the list is
 waiting on a decision rather than on an engine.
 
-One upstream issue is open, and it blocks nothing:
+Three upstream findings are open, and none of them blocks anything.
+
 [#210](https://github.com/CyberdyneCorp/ClayCore/issues/210) — `clay_document_undo`
 does not report what it changed, so an undo has to dirty the whole layer. Undo
 works and is correct; it costs far more than the edit it reverses. See *Undo,
-which costs far more than the edit it takes back*. Every other issue filed from
-this work has been released and taken up — including
-[#71](https://github.com/CyberdyneCorp/ClayCore/issues/71), which was the macOS
-CI blocker.
+which costs far more than the edit it takes back*.
+
+**`clay_item_set_gate` is accepted and inert.** The entry point that would make
+a mask protect a surface from an *operation* rather than only from a brush — the
+engine's own note says "a mask over an ear has never done anything about the
+next boolean. This does." Measured against 0.39.0, it does not: with a mask
+sampling 1.0 at the cut's own centre and 65,752 cells painted, a subtracting
+edit takes the protected region at every width and threshold tried, and the call
+never refuses. The contract promises one or the other — "a gate that protects
+nothing and reports success is harder to notice than a failure". The wrapper is
+written and matches the contract; the application does not call it, because a
+call per stroke that does nothing is a cost with no benefit and a promise in the
+interface that would not be kept. `claycore/tests/mask_gate.rs` is a tripwire
+written to fail when the engine honours it, and names `stroke_sdf` as where the
+call goes back.
+
+**A stroke does not carry its template item's deformer chain.**
+`clay_layer_apply_stroke` documents its item as "the stamp template scaled to
+each stamp's radius", and the chain hung off that template — an alpha, in this
+case — does not travel with it. Measured: the same stroke with an alpha at
+amplitude 0, 0.05 and 0.25 leaves one surface under both `CLAY_OP_ADD` and
+`CLAY_OP_RELIEF`, while the same alpha on an item placed with `clay_layer_add_item`
+changes the surface and grades with the amplitude. So alpha stamps work on
+voxels and on meshes, which take one by their own routes, and an SDF *stroke*
+states the refusal rather than passing an alpha that would be discarded.
+`claycore/tests/alpha_deformer.rs` holds both halves and fails when the stroke
+starts carrying the chain.
+
+Every other issue filed from this work has been released and taken up —
+including [#71](https://github.com/CyberdyneCorp/ClayCore/issues/71), which was
+the macOS CI blocker.
 
 ### Released in 0.28.0
 

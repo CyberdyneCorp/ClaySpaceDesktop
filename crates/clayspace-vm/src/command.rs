@@ -70,6 +70,14 @@ pub enum Command {
     FillVoids,
     /// How the next SDF edit combines with what is under it.
     SetCombine(clayspace_model::CombineSettings),
+    /// Acts on a recorded pass of the active voxel layer.
+    SculptLayer(clayspace_model::SculptLayerOp),
+    /// Whether the deform panel is open.
+    ToggleDeform,
+    /// What that panel is set to.
+    SetDeform(clayspace_model::DeformSettings),
+    /// Applies it to the active layer, as one undo step.
+    RunDeform,
     /// What the conversion panel is set to.
     SetConversion(ConversionSettings),
     /// Crosses the active layer, adding a new one.
@@ -177,6 +185,16 @@ impl Command {
                 // for the same reason import does.
                 | Self::SetConversion(_)
                 | Self::RunConversion
+                // Opening the panel and setting it change nothing; running it
+                // takes the composition root's own path, as the other layer
+                // operations do.
+                | Self::ToggleDeform
+                | Self::SetDeform(_)
+                | Self::RunDeform
+                // A pass is not undo — dialling one is a property of the stack
+                // rather than an entry in a history — so it takes the
+                // composition root's own path like the other layer work.
+                | Self::SculptLayer(_)
                 // Choosing how the *next* edit combines changes nothing yet;
                 // the stroke that follows is the entry.
                 | Self::SetCombine(_)
@@ -264,6 +282,10 @@ impl Command {
             Self::CloseHoles => "close holes",
             Self::FillVoids => "fill voids",
             Self::SetCombine(_) => "combine operation",
+            Self::SculptLayer(op) => op.label(),
+            Self::ToggleDeform => "deform panel",
+            Self::SetDeform(_) => "deform settings",
+            Self::RunDeform => "deform",
             Self::SetConversion(_) => "conversion settings",
             Self::RunConversion => "convert",
             Self::RunImport => "import",

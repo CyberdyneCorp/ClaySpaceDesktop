@@ -345,3 +345,222 @@ mod tests {
         assert!(cost.within(512 * 1024 * 1024, 4).is_ok());
     }
 }
+
+/// What the deform panel is set to.
+///
+/// The two whole-form deformers a panel can express. A lattice is the third and
+/// is not here: it is dragged by its control points, so what it needs is a cage
+/// in the viewport rather than four numbers, and a panel offering it would be
+/// offering a control that cannot say what it does.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DeformSettings {
+    pub verb: DeformVerb,
+    /// Which axis the effect ramps along. Normalised before use.
+    pub axis: [f32; 3],
+    /// How far along that axis the ramp reaches, in document units.
+    pub span: f32,
+    /// Taper's cross-section scale at each end of the span.
+    pub scale_start: f32,
+    pub scale_end: f32,
+    /// Twist's rotation across the span, in degrees.
+    ///
+    /// Degrees here and radians at the engine: a panel that asks for radians
+    /// asks a sculptor to do arithmetic to make a quarter turn.
+    pub degrees: f32,
+}
+
+/// Which whole-form deformer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DeformVerb {
+    /// The cross-section scale ramps along an axis.
+    #[default]
+    Taper,
+    /// Rotation about an axis ramps along it.
+    Twist,
+}
+
+impl DeformVerb {
+    pub const ALL: [DeformVerb; 2] = [Self::Taper, Self::Twist];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Taper => "Afunilar",
+            Self::Twist => "Torcer",
+        }
+    }
+
+    /// Whether the scale controls do anything for this verb.
+    pub fn takes_a_scale(self) -> bool {
+        self == Self::Taper
+    }
+
+    /// Whether the angle control does.
+    pub fn takes_an_angle(self) -> bool {
+        self == Self::Twist
+    }
+}
+
+impl Default for DeformSettings {
+    fn default() -> Self {
+        Self {
+            verb: DeformVerb::Taper,
+            // Up: the axis a form is most often tapered or twisted along.
+            axis: [0.0, 1.0, 0.0],
+            span: 2.0,
+            scale_start: 1.0,
+            scale_end: 0.5,
+            degrees: 45.0,
+        }
+    }
+}
+
+impl DeformSettings {
+    /// What a span may be, in document units.
+    pub const SPAN_RANGE: std::ops::RangeInclusive<f32> = 0.1..=10.0;
+    /// What a cross-section scale may be.
+    ///
+    /// Zero would collapse the section to a point, which is a degenerate
+    /// surface rather than a taper; the floor keeps it a form.
+    pub const SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.05..=4.0;
+    /// A full turn each way, and no more: past it the twist wraps and the
+    /// number stops describing what is seen.
+    pub const DEGREES_RANGE: std::ops::RangeInclusive<f32> = -360.0..=360.0;
+
+    pub fn sanitized(mut self) -> Self {
+        self.span = self
+            .span
+            .clamp(*Self::SPAN_RANGE.start(), *Self::SPAN_RANGE.end());
+        self.scale_start = self
+            .scale_start
+            .clamp(*Self::SCALE_RANGE.start(), *Self::SCALE_RANGE.end());
+        self.scale_end = self
+            .scale_end
+            .clamp(*Self::SCALE_RANGE.start(), *Self::SCALE_RANGE.end());
+        self.degrees = self
+            .degrees
+            .clamp(*Self::DEGREES_RANGE.start(), *Self::DEGREES_RANGE.end());
+        // A zero axis names no direction, and the engine would be asked to
+        // ramp along nothing. Up is the fallback rather than an error: the
+        // control that produces this is three sliders, and one of them
+        // reaching zero mid-drag is not a mistake worth a dialog.
+        let length = (self.axis[0].powi(2) + self.axis[1].powi(2) + self.axis[2].powi(2)).sqrt();
+        self.axis = if length < 1e-6 {
+            [0.0, 1.0, 0.0]
+        } else {
+            [
+                self.axis[0] / length,
+                self.axis[1] / length,
+                self.axis[2] / length,
+            ]
+        };
+        self
+    }
+
+    /// The operation these settings describe.
+    ///
+    /// Built here rather than in the interface so the degrees-to-radians
+    /// conversion and the normalisation happen once, where they can be tested.
+    pub fn operation(self) -> crate::LayerOperation {
+        let settings = self.sanitized();
+        match settings.verb {
+            DeformVerb::Taper => crate::LayerOperation::Taper {
+                axis: settings.axis,
+                span: settings.span,
+                scale_start: settings.scale_start,
+                scale_end: settings.scale_end,
+            },
+            DeformVerb::Twist => crate::LayerOperation::Twist {
+                axis: settings.axis,
+                span: settings.span,
+                angle: settings.degrees.to_radians(),
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod deform_tests {
+    use super::*;
+
+    #[test]
+    fn a_zero_axis_becomes_a_direction_rather_than_an_error() {
+        let settings = DeformSettings {
+            axis: [0.0; 3],
+            ..Default::default()
+        }
+        .sanitized();
+        let length =
+            (settings.axis[0].powi(2) + settings.axis[1].powi(2) + settings.axis[2].powi(2)).sqrt();
+        assert!((length - 1.0).abs() < 1e-5, "the axis is not a direction");
+    }
+
+    #[test]
+    fn an_axis_is_normalised() {
+        let settings = DeformSettings {
+            axis: [0.0, 5.0, 0.0],
+            ..Default::default()
+        }
+        .sanitized();
+        assert_eq!(settings.axis, [0.0, 1.0, 0.0]);
+    }
+
+    /// The panel asks for degrees and the engine takes radians. Doing the
+    /// conversion here is what keeps it out of three call sites.
+    #[test]
+    fn a_twist_reaches_the_engine_in_radians() {
+        let settings = DeformSettings {
+            verb: DeformVerb::Twist,
+            degrees: 180.0,
+            ..Default::default()
+        };
+        match settings.operation() {
+            crate::LayerOperation::Twist { angle, .. } => {
+                assert!(
+                    (angle - std::f32::consts::PI).abs() < 1e-5,
+                    "half a turn reached the engine as {angle} radians"
+                );
+            }
+            other => panic!("a twist became {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_taper_carries_both_of_its_scales() {
+        let settings = DeformSettings {
+            verb: DeformVerb::Taper,
+            scale_start: 1.5,
+            scale_end: 0.25,
+            ..Default::default()
+        };
+        match settings.operation() {
+            crate::LayerOperation::Taper {
+                scale_start,
+                scale_end,
+                ..
+            } => {
+                assert_eq!((scale_start, scale_end), (1.5, 0.25));
+            }
+            other => panic!("a taper became {other:?}"),
+        }
+    }
+
+    /// A section scaled to nothing is a degenerate surface rather than a
+    /// taper, so the control cannot reach it.
+    #[test]
+    fn a_scale_cannot_collapse_the_section() {
+        let settings = DeformSettings {
+            scale_end: 0.0,
+            ..Default::default()
+        }
+        .sanitized();
+        assert!(settings.scale_end >= *DeformSettings::SCALE_RANGE.start());
+    }
+
+    #[test]
+    fn only_the_verb_that_uses_a_control_offers_it() {
+        assert!(DeformVerb::Taper.takes_a_scale());
+        assert!(!DeformVerb::Taper.takes_an_angle());
+        assert!(DeformVerb::Twist.takes_an_angle());
+        assert!(!DeformVerb::Twist.takes_a_scale());
+    }
+}
