@@ -786,17 +786,17 @@ fn the_conversion_panel_states_what_a_crossing_costs() {
         );
     }
 
-    // A mesh layer crosses two ways and an SDF layer one, so the panel's
-    // contents follow the active representation like the shelf does.
-    assert_eq!(
-        clayspace_model::Direction::from_representation(clayspace_model::Representation::Mesh)
-            .len(),
-        2
-    );
-    assert_eq!(
-        clayspace_model::Direction::from_representation(clayspace_model::Representation::Sdf).len(),
-        1
-    );
+    // Every representation reaches the other two, so the panel offers two
+    // crossings whatever the active layer is — its contents follow the active
+    // representation like the shelf does. An SDF layer used to offer one,
+    // because nothing crossed into a mesh.
+    for representation in clayspace_model::Representation::ALL {
+        assert_eq!(
+            clayspace_model::Direction::from_representation(representation).len(),
+            2,
+            "a {representation:?} layer does not reach both of the others"
+        );
+    }
 }
 
 /// The repair panel reports before it offers to change anything.
@@ -1134,4 +1134,60 @@ fn differing_pixels(a: &clayspace_view::Image, b: &clayspace_view::Image) -> usi
         }
     }
     n
+}
+
+/// The panel offers the crossings into a mesh, and says what one costs.
+///
+/// `Direction` had four entries and none of them ended in a mesh, so the
+/// panel could not offer what does not exist. This is the picture of the two
+/// that now do, and of the loss that is theirs alone: what comes out sculpts
+/// by moving the vertices it was given, and the topology is the sampling
+/// lattice's rather than one built for deformation.
+#[test]
+fn the_conversion_panel_offers_a_crossing_into_a_mesh() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let mut open = state(strings, &scene, &materials, &report);
+    open.show_convert = true;
+    open.conversion = clayspace_model::ConversionSettings {
+        direction: clayspace_model::Direction::SdfToMesh,
+        cell_size: 0.05,
+        blur: 0,
+    };
+    open.conversion_cost = Some(clayspace_model::Cost::of(
+        clayspace_model::Direction::SdfToMesh,
+        0.05,
+        [2.0, 2.0, 2.0],
+    ));
+    let to_mesh = capture_shell(&harness, &open, "70-convert-to-mesh");
+
+    // Against the same panel set to the crossing that does not end in a mesh:
+    // the two differ, and they differ by the line about topology.
+    let mut voxels = state(strings, &scene, &materials, &report);
+    voxels.show_convert = true;
+    voxels.conversion = clayspace_model::ConversionSettings {
+        direction: clayspace_model::Direction::SdfToVoxel,
+        cell_size: 0.05,
+        blur: 0,
+    };
+    voxels.conversion_cost = Some(clayspace_model::Cost::of(
+        clayspace_model::Direction::SdfToVoxel,
+        0.05,
+        [2.0, 2.0, 2.0],
+    ));
+    let to_voxels = capture_shell(&harness, &voxels, "70-convert-to-voxels");
+
+    let differing = differing_pixels(&to_mesh, &to_voxels);
+    assert!(
+        differing > 200,
+        "the panel draws the same thing for a crossing into a mesh and one \
+         into a grid, {differing} pixels apart — see \
+         target/visual/70-convert-to-mesh.png"
+    );
 }

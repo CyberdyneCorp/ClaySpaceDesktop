@@ -171,3 +171,45 @@ the existing tests asked.
     no form to read, captured and compared before deciding — and it has no
     chunked variant. A grid is drawn as the boxes it is; the rounded surface is
     the voxel-to-SDF conversion, which is what that direction is for.
+
+## 11. Crossing into a mesh
+
+The gap the change's own premise left open: `Direction` had four entries and
+none of them ended in `Mesh`, so "the three representations are first-class"
+was true of two of them and of the third only if you had a file to import.
+
+- [x] 11.1 Add `SdfToMesh` and `VoxelToMesh`
+  - Everything needed was already wrapped — `Document::mesh`,
+    `Document::attach_mesh_layer`, `VoxelField::mesh`. Nothing was missing from
+    ClayCore; the gap was ours.
+  - The engine meshes a *document*, not a layer: `clay_document_mesh` takes no
+    layer id and there is no layer-scoped mesher. The SDF crossing hides the
+    other SDF layers across the call and puts them back, which is exact by the
+    engine's own contract and measured — the starting sphere alone meshes to
+    57,650 vertices bounded at ±1, the same document with a blob on a second
+    layer to 44,462 bounded past 1.3, and the restore gives the first answer
+    back. Voxel and mesh layers are left alone: neither carries SDF content.
+  - Marching tetrahedra for the field, because what comes out is going to be
+    sculpted and exported and that is the watertight, 2-manifold one. The
+    greedy mesh for a grid, because the rounded voxel mesher carries no vertex
+    normals and what came out would render as a flat silhouette.
+- [x] 11.2 State the loss that belongs to these two
+  - `Cost::fixed_topology`, and a line in the panel: the topology is the
+    sampling lattice's and nothing here re-flows it. Dense, uniform, no edge
+    loop following anything — the input a retopology pass replaces rather than
+    the output one produces. Said before the crossing, not discovered after it.
+- [x] 11.3 Make a mesh layer reachable by the pointer
+  - Found while testing 11.1 and the reason "convert to mesh and sculpt" would
+    still not have worked. A pick against a mesh layer is answered by the mesh
+    sculptor's raycast, which refused until the sculptor was built — which only
+    a stroke did. The interface sends no stroke where the pick found nothing,
+    so the first stroke could never arrive: **a mesh layer was unsculptable
+    through the pointer, imported or converted.** The sculptor is armed when
+    the layer becomes active. `to_mesh.rs` holds it in the order the interface
+    goes in — select, point, then stroke.
+  - Two tests in `mesh_sculpting.rs` had written the deadlock down as
+    deliberate — "a pick before any stroke finds nothing, deliberately" and
+    "there is no sculptor before the first stroke, so there is no figure". Both
+    now assert the opposite and say why the old reading was wrong. The quality
+    readout gains from it too: a sculptor deciding whether a mesh needs
+    retopology wants the figure before they start, not after.

@@ -171,23 +171,38 @@ fn the_pointer_finds_an_imported_mesh() {
     let Some((mut document, path)) = with_imported_mesh("pick") else {
         return;
     };
-    // The sculptor is built by the first stroke, and the pick is answered from
-    // its tree — so a pick before any stroke finds nothing, deliberately: a
+    // Before any stroke, which is the order that matters. This used to assert
+    // the opposite — the sculptor was built by the first stroke, so a pick
+    // before one found nothing, and that was written down as deliberate: a
     // pick happens every frame the pointer moves and may not pay for an
     // adjacency pass.
-    assert!(
-        document.pick([0.0, 0.0, 4.0], [0.0, 0.0, -1.0]).is_none(),
-        "a pick built the sculptor, which costs an adjacency pass per frame"
+    //
+    // It was a deadlock. The interface places a stroke where the pick reported
+    // and sends nothing where it reported nothing, so the first stroke could
+    // never arrive and a mesh layer was unsculptable through the pointer. The
+    // adjacency pass is paid once, when the layer becomes active — a discrete
+    // thing the sculptor did, not something a moving pointer repeats.
+    let hit = document.pick([0.0, 0.0, 4.0], [0.0, 0.0, -1.0]).expect(
+        "selecting a mesh layer does not make it pointable, so the first \
+             stroke can never be placed on it",
     );
-
-    dab(&mut document, ToolKind::Padrao, [0.0, 0.0, 1.0]).expect("a stroke");
-
-    let hit = document
-        .pick([0.0, 0.0, 4.0], [0.0, 0.0, -1.0])
-        .expect("a ray down the axis has to meet a sphere at the origin");
     assert!(
         hit[2] > 0.0,
         "the ray came from +z and hit at {hit:?}, which is behind the surface"
+    );
+
+    // A ray that meets nothing still meets nothing: a pick that answered
+    // everywhere would put the brush on empty space.
+    assert!(
+        document.pick([4.0, 4.0, 4.0], [0.0, 0.0, -1.0]).is_none(),
+        "a ray nowhere near the mesh reported a hit"
+    );
+
+    // And it still answers after a stroke, which is what it always did.
+    dab(&mut document, ToolKind::Padrao, [0.0, 0.0, 1.0]).expect("a stroke");
+    assert!(
+        document.pick([0.0, 0.0, 4.0], [0.0, 0.0, -1.0]).is_some(),
+        "the pick stopped answering once the mesh had been sculpted"
     );
     let _ = std::fs::remove_file(&path);
 }
@@ -322,9 +337,15 @@ fn the_mesh_reports_what_its_queries_cost() {
     let Some((mut document, path)) = with_imported_mesh("quality") else {
         return;
     };
+    // Reported from the moment the layer is the one being worked on. This used
+    // to assert there was no figure until the first stroke, because the
+    // sculptor the figure comes from was built by that stroke — the same
+    // deadlock `the_pointer_finds_an_imported_mesh` records, seen from the
+    // readout's side. A sculptor deciding whether a mesh needs retopology
+    // wants the number before they start, not after.
     assert!(
-        document.mesh_quality().is_none(),
-        "there is no sculptor before the first stroke, so there is no figure"
+        document.mesh_quality().is_some(),
+        "a selected mesh layer reports no quality figure at all"
     );
 
     dab(&mut document, ToolKind::Padrao, [0.0, 0.0, 1.0]).expect("a stroke");

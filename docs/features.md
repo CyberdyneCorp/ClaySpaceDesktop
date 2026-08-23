@@ -84,7 +84,21 @@ belong to one operation and undo together.
 
 ## Sculpting a mesh layer
 
-Sixteen fixed-topology verbs reach an imported mesh layer's own vertices, and
+A mesh layer comes from an import or from a **crossing** — see *Crossing
+between representations*, where SDF and voxel layers both reach one. Either way
+it is the same kind of thing from here on: the verbs reach both, the quality
+readout measures both, and a save writes both.
+
+**The pointer finds it from the moment it becomes active.** A pick against a
+mesh layer is answered by the mesh sculptor's own raycast, and the sculptor was
+built by the first stroke — but the interface places a stroke where the pick
+reported and sends nothing where it reported nothing, so the first stroke could
+never arrive. A mesh layer was unsculptable through the pointer, imported or
+converted, and a press orbited the camera instead. The sculptor is built when
+the layer is selected: a discrete action, where the adjacency pass it costs is
+worth paying, rather than something a moving pointer repeats.
+
+Sixteen fixed-topology verbs reach a mesh layer's own vertices, and
 all sixteen hold one line above everything else: **topology never changes.** No
 polygon is created, split or deleted, so `indices` and quads come out byte for
 byte and a model that has just been retopologized can be refined without
@@ -170,21 +184,39 @@ can the pointer find it.
 
 ClayCore carries SDF, voxel and mesh side by side, and the intended workflow
 uses more than one: **block out and hard-surface on SDF, free-form sculpt on
-voxels, refine on a mesh when the topology is one you want to keep.** Four
-crossings are offered from **Arquivo → Converter**, each from the active layer:
+voxels, refine on a mesh when the topology is one you want to keep.** Every
+representation reaches both of the others, so **six** crossings are offered from
+**Arquivo → Converter**, each from the active layer:
 
 | From | To | What it does |
 |---|---|---|
 | SDF | voxel | Rasterizes the field into cells over the layer's bounds |
+| SDF | mesh | Marches the field into triangles — watertight and 2-manifold by construction |
 | voxel | SDF | Reads occupancy back, redistanced, as an ordinary operand — one volume item per palette entry, which is what carries the colour |
+| voxel | mesh | The grid's exposed faces as merged quads, with the palette colour on the face |
 | mesh | voxel | Straight from the triangles in one sampling, so a feature thinner than a cell survives where a field detour loses it, and the vertex colours reach the palette |
 | mesh | SDF | Resamples the triangles onto a lattice as a volume item |
+
+The two that end in a mesh are what makes **block out, then sculpt it as a
+mesh** a route through the application rather than a description of one. Until
+they existed the sixteen mesh brushes could only be reached by importing a file.
+
+The engine meshes a *document*, not a layer — `clay_document_mesh` takes no
+layer id and there is no layer-scoped mesher — so the SDF crossing hides the
+other SDF layers across the call and puts them back. That is exact rather than
+approximate: a hidden layer contributes nothing to the field and showing it
+again restores the field exactly, and it is measured. Voxel and mesh layers are
+left alone, because neither carries SDF content and neither reaches that mesher.
 
 **The panel states what the crossing costs before it runs**, computed from the
 cell size rather than written down, so the figures move as you move the slider:
 how far the surface can travel (half a cell), what thickness of feature
 vanishes (one cell), how many cells the region holds, and whether sharp edges,
-colour and the parametric history survive.
+colour and the parametric history survive. A crossing into a mesh states one
+more: **the topology is the sampling lattice's and nothing here re-flows it.**
+What comes out is dense and uniform, with no edge loop following anything — it
+sculpts, and it is the input a retopology pass replaces rather than the output
+one produces.
 
 **A crossing produces a new layer and leaves the source alone**, and it is
 **not undoable** — the panel says so. A conversion produces no engine undo

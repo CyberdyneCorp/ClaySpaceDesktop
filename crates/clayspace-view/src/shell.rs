@@ -1662,6 +1662,12 @@ fn cost_lines(
     if !cost.keeps_history {
         lines.push(format!("· {}", s.convert_history_lost));
     }
+    // Said before the crossing rather than discovered after it. What comes out
+    // sculpts, and it sculpts by moving the vertices it was given — there is
+    // no retopology in it to spend, and nothing here adds one.
+    if cost.fixed_topology {
+        lines.push(format!("· {}", s.convert_fixed_topology));
+    }
     lines
 }
 

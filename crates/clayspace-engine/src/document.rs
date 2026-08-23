@@ -647,6 +647,8 @@ impl ClayDocument {
             Direction::VoxelToSdf => self.voxels_to_sdf(&name, blur),
             Direction::MeshToVoxel => self.mesh_to_voxels(&name, cell_size),
             Direction::MeshToSdf => self.mesh_to_sdf(&name),
+            Direction::SdfToMesh => self.sdf_to_mesh(&name, cell_size),
+            Direction::VoxelToMesh => self.voxels_to_mesh(&name),
         };
         // Closed on the failing path too: a group left open swallows every
         // edit after it into one undo step, which is a worse bug than the one
@@ -718,6 +720,130 @@ impl ClayDocument {
         self.after_conversion(key)
     }
 
+    /// Marches the active layer's field into triangles, on a layer of its own.
+    ///
+    /// The engine meshes a *document*, not a layer — `clay_document_mesh` takes
+    /// no layer id and there is no layer-scoped mesher. So the other SDF layers
+    /// are hidden across the call and put back afterwards. That is exact rather
+    /// than approximate: the engine states that a hidden layer contributes
+    /// nothing to the field and that showing it again restores the field
+    /// exactly, and it is measured — the starting sphere alone meshes to 57,650
+    /// vertices bounded at ±1, the same document with a blob on a second layer
+    /// to 44,462 bounded past 1.3, and restoring gives the first answer back.
+    ///
+    /// Only SDF layers are hidden. A voxel or mesh layer carries no SDF content,
+    /// so neither reaches this mesher and hiding one would change what the
+    /// viewport draws for no reason.
+    ///
+    /// Marching tetrahedra rather than surface nets: what comes out is going to
+    /// be sculpted and eventually exported, and this is the one the engine
+    /// makes watertight and 2-manifold by construction. Nets is the preview
+    /// mesher and is half the vertices, which is a saving on something a
+    /// sculptor is about to spend an afternoon on.
+    fn sdf_to_mesh(&mut self, name: &str, cell_size: f32) -> Result<LayerKey, ModelError> {
+        if self.bounds().is_none() {
+            return Err(ModelError::Conversion(Refusal::UnboundedRegion));
+        }
+        let source = self.active_layer().id;
+        let hidden: Vec<LayerId> = self
+            .layers
+            .iter()
+            .filter(|layer| layer.id != source)
+            .filter(|layer| layer.representation == Representation::Sdf && layer.visible)
+            .map(|layer| layer.id)
+            .collect();
+
+        let meshed = self.meshed_alone(&hidden, cell_size);
+        // Put back before the result is unwrapped. A failed mesh that left the
+        // document's other layers hidden would be a conversion that quietly
+        // erased the rest of the sculpt.
+        for id in &hidden {
+            self.document
+                .set_layer_visible(*id, true)
+                .map_err(ModelError::engine)?;
+        }
+        let mesh = meshed?;
+        if mesh.index_count() == 0 {
+            return Err(ModelError::Conversion(Refusal::SourceEmpty));
+        }
+        self.attach_meshed_layer(mesh, name)
+    }
+
+    /// Hides `hidden`, meshes what is left, and hands the mesh back.
+    ///
+    /// Separated so the restore above runs whether this succeeds or not.
+    fn meshed_alone(&mut self, hidden: &[LayerId], cell_size: f32) -> Result<Mesh, ModelError> {
+        for id in hidden {
+            self.document
+                .set_layer_visible(*id, false)
+                .map_err(ModelError::engine)?;
+        }
+        self.document
+            .mesh(MeshParams {
+                voxel_size: Some(cell_size),
+                mesher: Mesher::MarchingTetrahedra,
+                ..MeshParams::default()
+            })
+            .map_err(ModelError::engine)
+    }
+
+    /// The active grid's exposed faces as triangles, on a layer of its own.
+    ///
+    /// The greedy mesh, which is what the grid *is* — merged quads per axis
+    /// slice, with the palette colour on the face and a normal per vertex. The
+    /// rounded mesher is not used here for the reason the viewport does not use
+    /// it either: it carries no vertex normals, so what came out would render
+    /// as a flat silhouette and every mesh verb would work on a surface the
+    /// sculptor cannot see.
+    fn voxels_to_mesh(&mut self, name: &str) -> Result<LayerKey, ModelError> {
+        let engine_name = self.active_layer().engine_name.clone();
+        let mesh = {
+            let (_, grid) = self
+                .document
+                .voxel_reader(&engine_name)
+                .map_err(ModelError::engine)?;
+            if grid.occupied_count().map_err(ModelError::engine)? == 0 {
+                return Err(ModelError::Conversion(Refusal::SourceEmpty));
+            }
+            grid.mesh().map_err(ModelError::engine)?
+        };
+        self.attach_meshed_layer(mesh, name)
+    }
+
+    /// Attaches a mesh this application produced as a new layer.
+    ///
+    /// The same call an import uses, so a converted mesh and an imported one
+    /// are the same kind of thing from here on — the mesh verbs reach both, the
+    /// quality readout measures both, and a save writes both. No import scale
+    /// and no ceiling: the geometry came from this document rather than from a
+    /// file, so there is no unit to resolve and nothing untrusted to bound.
+    fn attach_meshed_layer(&mut self, mesh: Mesh, name: &str) -> Result<LayerKey, ModelError> {
+        let id = self
+            .document
+            .attach_mesh_layer(
+                &mesh,
+                &MeshLayerDesc {
+                    name: name.to_string(),
+                    max_vertices: 0,
+                    max_triangles: 0,
+                    import_scale: 1.0,
+                },
+            )
+            .map_err(ModelError::engine)?;
+        let key = self.adopt_engine_layer(id, name, Representation::Mesh)?;
+        // Adopted with triangles already in it, unlike `add_mesh_layer`, which
+        // records a row an import fills later. The mesh verbs are available on
+        // this the moment the crossing returns, which is the whole point of it.
+        if let Some(layer) = self.layers.iter_mut().find(|layer| layer.key == key) {
+            layer.carries_geometry = true;
+        }
+        let made = self.after_conversion(key)?;
+        // Ready for the pointer on the frame the crossing returns, rather than
+        // after a stroke that could not be placed.
+        self.arm_mesh_sculptor();
+        Ok(made)
+    }
+
     /// Registers a layer the engine made on its own.
     ///
     /// The conversions that end in SDF hand back a `LayerId` the engine
@@ -752,6 +878,14 @@ impl ClayDocument {
     /// What every direction owes once its new layer exists.
     fn after_conversion(&mut self, key: LayerKey) -> Result<LayerKey, ModelError> {
         self.reconcile_layers();
+        // A mesh layer has no bricks and is not evaluated, so there is nothing
+        // to refill for one — the viewport draws it through the carried-layer
+        // path instead. Marking it dirty would ask the cache to mark a layer
+        // whose field is empty.
+        if self.active_layer().representation == Representation::Mesh {
+            self.refresh_stats();
+            return Ok(key);
+        }
         // The whole new layer is dirty; nothing about it was there before.
         let layer = self.active_layer().id;
         self.refill(layer, &[])?;
@@ -2039,6 +2173,35 @@ impl ClayDocument {
         Ok(())
     }
 
+    /// Builds the mesh sculptor for the active layer, if it needs one.
+    ///
+    /// Called when a layer becomes the one being worked on, which is the
+    /// moment the adjacency pass is worth paying for: it is a discrete thing
+    /// the sculptor did, not something a moving pointer repeats.
+    ///
+    /// It has to happen *before* the first stroke, and that is the whole
+    /// reason this exists. A pick against a mesh layer is answered by the
+    /// sculptor's own raycast, and it used to refuse until the sculptor was
+    /// built — which the first stroke did. But the interface places a stroke
+    /// at what the pick reported and sends nothing when it reports nothing, so
+    /// the first stroke could never arrive: a mesh layer was unsculptable
+    /// through the pointer, imported or converted, and the press orbited the
+    /// camera instead. `to_mesh.rs` is the regression.
+    ///
+    /// A failure is swallowed rather than raised. Selecting a layer is not an
+    /// edit and must not fail because of one, and the stroke path builds the
+    /// sculptor itself and reports properly if it cannot.
+    fn arm_mesh_sculptor(&mut self) {
+        let layer = self.active_layer();
+        if layer.representation != Representation::Mesh || !layer.carries_geometry {
+            return;
+        }
+        let (key, engine_name) = (layer.key, layer.engine_name.clone());
+        if let Err(e) = self.ensure_mesh_sculptor(key, &engine_name) {
+            eprintln!("a malha não pôde ser preparada para escultura: {e}");
+        }
+    }
+
     /// Applies a stroke to a voxel layer, using the tool's own verb.
     fn stroke_voxel(
         &mut self,
@@ -2583,6 +2746,7 @@ impl SceneModel for ClayDocument {
     fn set_active_layer(&mut self, key: LayerKey) -> Result<(), ModelError> {
         self.active = self.index_of(key)?;
         self.selected = Some(key);
+        self.arm_mesh_sculptor();
         Ok(())
     }
 

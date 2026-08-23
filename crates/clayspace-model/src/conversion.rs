@@ -23,20 +23,27 @@ pub enum Direction {
     MeshToVoxel,
     /// Triangles onto a lattice as a volume item.
     MeshToSdf,
+    /// Marches the field into triangles, on a layer that can be sculpted with
+    /// the mesh brushes.
+    SdfToMesh,
+    /// The grid's exposed faces as triangles, likewise.
+    VoxelToMesh,
 }
 
 impl Direction {
-    pub const ALL: [Direction; 4] = [
+    pub const ALL: [Direction; 6] = [
         Self::SdfToVoxel,
         Self::VoxelToSdf,
         Self::MeshToVoxel,
         Self::MeshToSdf,
+        Self::SdfToMesh,
+        Self::VoxelToMesh,
     ];
 
     pub fn from(self) -> Representation {
         match self {
-            Self::SdfToVoxel => Representation::Sdf,
-            Self::VoxelToSdf => Representation::Voxel,
+            Self::SdfToVoxel | Self::SdfToMesh => Representation::Sdf,
+            Self::VoxelToSdf | Self::VoxelToMesh => Representation::Voxel,
             Self::MeshToVoxel | Self::MeshToSdf => Representation::Mesh,
         }
     }
@@ -45,6 +52,7 @@ impl Direction {
         match self {
             Self::SdfToVoxel | Self::MeshToVoxel => Representation::Voxel,
             Self::VoxelToSdf | Self::MeshToSdf => Representation::Sdf,
+            Self::SdfToMesh | Self::VoxelToMesh => Representation::Mesh,
         }
     }
 
@@ -62,7 +70,10 @@ impl Direction {
     /// to stop. A mesh cannot be unbounded and a grid already has bounds, so
     /// neither does.
     pub fn needs_region(self) -> bool {
-        self == Self::SdfToVoxel
+        // Marching a field needs to be told where to stop for the same reason
+        // rasterizing one does — the lattice is bounded even though what comes
+        // off it is triangles.
+        matches!(self, Self::SdfToVoxel | Self::SdfToMesh)
     }
 
     /// Whether the crossing is measured in cells at all.
@@ -70,7 +81,24 @@ impl Direction {
     /// Reading a grid back does not choose a resolution — it already has one —
     /// so there is no cell size to state a cost against.
     pub fn chooses_resolution(self) -> bool {
-        matches!(self, Self::SdfToVoxel | Self::MeshToVoxel)
+        // Marching chooses one as surely as rasterizing does: the cell is what
+        // the surface is found on, so it sets how far the surface can move and
+        // what is too thin to be found at all. Reading a grid does not — the
+        // grid already has a cell, and its faces are where they are.
+        matches!(self, Self::SdfToVoxel | Self::MeshToVoxel | Self::SdfToMesh)
+    }
+
+    /// Whether what comes out has a topology nothing here will change again.
+    ///
+    /// A mesh layer is sculpted by moving the vertices it has: no verb adds,
+    /// removes or re-flows them, because that would spend the retopology an
+    /// import was for. What a crossing *produces* has no retopology to spend —
+    /// it is the sampling lattice's own grid, dense and uniform, with no edge
+    /// loop following anything. It sculpts, and it is the input a retopology
+    /// pass replaces rather than the output one produces. Worth saying before
+    /// the crossing, not after.
+    pub fn ends_in_fixed_topology(self) -> bool {
+        self.to() == Representation::Mesh
     }
 }
 
@@ -204,6 +232,8 @@ pub struct Cost {
     pub keeps_sharp_edges: bool,
     /// Whether surface colour survives the crossing.
     pub keeps_colour: bool,
+    /// Whether what comes out has a topology nothing here will change again.
+    pub fixed_topology: bool,
 }
 
 impl Cost {
@@ -243,6 +273,7 @@ impl Cost {
             // The one that would not is a mesh through a *field*, which is why
             // mesh-to-voxel is direct rather than a detour.
             keeps_colour: true,
+            fixed_topology: direction.ends_in_fixed_topology(),
         }
     }
 
