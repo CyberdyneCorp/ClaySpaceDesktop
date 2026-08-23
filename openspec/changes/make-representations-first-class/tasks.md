@@ -83,9 +83,9 @@
 
 - [x] 8.1 Expose the combine operations in the options bar where an edit's op is chosen
 - [x] 8.2 Expose the five blend profiles beside them
-- [ ] 8.3 Add a PNG alpha decoder to `clayspace-engine` beside `import_mesh`, promoting `png` from a dev-dependency, and refuse a file that is not a PNG with a stated reason
-- [ ] 8.4 Wrap `clay_item_add_alpha` and `clay_voxel_sculpt_carve_alpha`, and add an alpha source to the brush
-- [ ] 8.5 State where an alpha is not accepted rather than offering a dead control
+- [x] 8.3 Add a PNG alpha decoder to `clayspace-engine` beside `import_mesh`, promoting `png` from a dev-dependency, and refuse a file that is not a PNG with a stated reason
+- [x] 8.4 Wrap `clay_item_add_alpha` and `clay_voxel_sculpt_carve_alpha`, and add an alpha source to the brush
+- [x] 8.5 State where an alpha is not accepted rather than offering a dead control
 - [ ] 8.6 Expose the deformers as layer operations with their parameters, each one undo step
 - [ ] 8.7 Wrap `clay_item_set_gate` so a mask gates a combine operation, not only a brush
 - [ ] 8.8 Test that a masked region survives a subtracting edit that crosses it

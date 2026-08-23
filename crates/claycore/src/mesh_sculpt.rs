@@ -151,7 +151,7 @@ impl MeshFalloff {
 
 /// One mesh stamp.
 #[derive(Debug, Clone, Copy)]
-pub struct MeshStamp {
+pub struct MeshStamp<'a> {
     pub verb: MeshBrush,
     /// In the mesh's own space.
     pub center: [f32; 3],
@@ -171,9 +171,54 @@ pub struct MeshStamp {
     pub geodesic: bool,
     /// The colour Paint blends toward.
     pub colour: [f32; 3],
+    /// A scalar stamp scaling this brush's per-vertex weight.
+    ///
+    /// Borrowed for the duration of the call — the engine copies nothing — so
+    /// the lifetime is on the stamp rather than the samples being owned here.
+    /// `None` leaves every verb exactly as it was, which is why it is the
+    /// default and why an existing call site needs no change.
+    ///
+    /// It multiplies the *weight*, so it composes with every verb and every
+    /// falloff at once, and it is sampled by the same kernel the SDF alpha
+    /// uses — one stamp reads identically on a mesh and on a field.
+    pub alpha: Option<AlphaStamp<'a>>,
 }
 
-impl Default for MeshStamp {
+/// A scalar stamp, borrowed for one call.
+///
+/// The engine decodes no images and copies no samples: this is a view of a
+/// buffer the caller holds, and it must outlive the call it is passed to. Its
+/// samples are `width * height` values in 0..=1, row-major with u fastest.
+#[derive(Debug, Clone, Copy)]
+pub struct AlphaStamp<'a> {
+    pub samples: &'a [f32],
+    pub width: i32,
+    pub height: i32,
+    /// The normal of the plane the stamp is projected in. All zeroes means the
+    /// surface normal under the brush centre.
+    pub direction: [f32; 3],
+    /// Orients the stamp in that plane; any rough "up" works.
+    pub tangent: [f32; 3],
+    /// The square the stamp covers, in world units. Zero means the brush's own
+    /// diameter.
+    pub extent: f32,
+}
+
+impl AlphaStamp<'_> {
+    /// Whether the samples fill the dimensions claimed.
+    ///
+    /// Checked before the pointer is handed over: the engine reads
+    /// `width * height` floats out of it, so a shorter slice is a read past
+    /// the end whatever the engine's own validation says about the
+    /// dimensions.
+    fn is_well_formed(&self) -> bool {
+        self.width >= 2
+            && self.height >= 2
+            && (self.width as i64) * (self.height as i64) <= self.samples.len() as i64
+    }
+}
+
+impl Default for MeshStamp<'_> {
     fn default() -> Self {
         Self {
             verb: MeshBrush::Draw,
@@ -184,12 +229,18 @@ impl Default for MeshStamp {
             direction: [0.0; 3],
             geodesic: true,
             colour: [1.0; 3],
+            alpha: None,
         }
     }
 }
 
-impl MeshStamp {
-    fn to_raw(self) -> sys::clay_mesh_brush_desc {
+impl MeshStamp<'_> {
+    /// The engine's descriptor.
+    ///
+    /// The alpha pointer it carries borrows from `self`, so the result must
+    /// not outlive the stamp it came from — every caller here passes it
+    /// straight into one C call and drops it.
+    fn as_raw(&self) -> sys::clay_mesh_brush_desc {
         let mut raw = sys::clay_mesh_brush_desc::sized();
         raw.verb = self.verb.to_raw();
         raw.center = self.center;
@@ -204,6 +255,18 @@ impl MeshStamp {
         // seed is worse than a slow one.
         raw.seed_class = sys::CLAY_MESH_NO_CLASS;
         raw.color = self.colour;
+        // A malformed stamp is dropped rather than refused: the alpha is a
+        // modulation, and losing it leaves the verb doing what it would have
+        // done without one. Refusing the whole stroke because a texture was
+        // the wrong shape would be a worse trade in the middle of a gesture.
+        if let Some(alpha) = self.alpha.filter(AlphaStamp::is_well_formed) {
+            raw.alpha = alpha.samples.as_ptr();
+            raw.alpha_width = alpha.width;
+            raw.alpha_height = alpha.height;
+            raw.alpha_direction = alpha.direction;
+            raw.alpha_tangent = alpha.tangent;
+            raw.alpha_extent = alpha.extent;
+        }
         raw
     }
 }
@@ -560,8 +623,8 @@ impl MeshSculptor {
     /// Zero for a stamp that reached nothing, that was fully masked, or whose
     /// settings amount to no displacement — all three are ordinary outcomes
     /// rather than failures.
-    pub fn stamp(&mut self, stamp: MeshStamp, mask: Option<&Mask>) -> Result<usize> {
-        let desc = stamp.to_raw();
+    pub fn stamp(&mut self, stamp: MeshStamp<'_>, mask: Option<&Mask>) -> Result<usize> {
+        let desc = stamp.as_raw();
         let mut moved = 0;
         // SAFETY: valid handle and a descriptor carrying its own size; the
         // mask is either a valid handle or null, which the entry point allows,
@@ -590,14 +653,14 @@ impl MeshSculptor {
         &mut self,
         samples: &[[f32; 5]],
         preset: &crate::StrokePreset,
-        stamp: MeshStamp,
+        stamp: MeshStamp<'_>,
         mask: Option<&Mask>,
         deltas: Option<&mut MeshDeltas>,
     ) -> Result<usize> {
         if samples.is_empty() {
             return Ok(0);
         }
-        let desc = stamp.to_raw();
+        let desc = stamp.as_raw();
         let raw_preset = preset.to_raw();
         let mut applied = 0;
         // SAFETY: `samples` is `samples.len() * 5` floats, which is the layout

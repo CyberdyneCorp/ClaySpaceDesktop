@@ -530,6 +530,31 @@ impl App {
         self.request_redraw();
     }
 
+    /// Asks for a PNG and loads it as the alpha stamp.
+    ///
+    /// PNG alone in the filter, because PNG alone is read — a dialog offering
+    /// what leads to a refusal is the same mistake the mesh import's filter
+    /// avoids.
+    fn load_alpha(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Carregar alfa")
+            .add_filter("Alfas", &["png"])
+            .pick_file()
+        else {
+            return;
+        };
+        match clayspace_engine::read_alpha(&path) {
+            Ok(alpha) => {
+                self.document
+                    .with(|document| document.set_alpha(Some(alpha)));
+            }
+            // The refusal is a sentence naming what is wrong with *this* file,
+            // built in the domain so that the same reason reaches a test.
+            Err(refusal) => eprintln!("não foi possível carregar o alfa: {refusal}"),
+        }
+        self.request_redraw();
+    }
+
     /// Asks for a file and writes the document into it.
     fn export_mesh(&mut self) {
         let writable: Vec<&str> = Format::ALL
@@ -1427,6 +1452,9 @@ impl App {
         // actual extension when the write happens.
         let export_warnings =
             ExportWarning::for_export(Format::Obj, self.export, self.document.has_mesh_layers());
+        // Read once and borrowed into the state: the shell wants the loaded
+        // stamp's name and the document is what holds it.
+        let alpha_name = self.document.with(|document| document.alpha_name());
         let mut queue = CommandQueue::new();
         let mut viewport = None;
         let mut input = ViewportInput::default();
@@ -1467,6 +1495,7 @@ impl App {
             representation: self.sculpt.active_representation(),
             brush: *self.sculpt.brush().get(),
             combine: *self.sculpt.combine().get(),
+            alpha: alpha_name.as_deref(),
             tool_status: self.sculpt.tool_status().get().as_deref(),
             symmetry: *self.sculpt.symmetry().get(),
             scene: &scene,
@@ -1664,6 +1693,11 @@ impl App {
                 self.request_redraw();
             }
             Command::RunImport => self.import_mesh(),
+            Command::LoadAlpha => self.load_alpha(),
+            Command::ClearAlpha => {
+                self.document.with(|document| document.set_alpha(None));
+                self.request_redraw();
+            }
             Command::RunExport => self.export_mesh(),
             Command::NextDisplayUnit => {
                 // Presentation only. Nothing in the document is touched, so

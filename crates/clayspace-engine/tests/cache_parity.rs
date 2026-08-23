@@ -132,6 +132,7 @@ fn every_brush_the_interface_can_produce_moves_the_cache() {
                         smoothing: 0.25,
                         mirror: false,
                     },
+                    alpha: false,
                 };
                 let mut document = document().expect("a document");
                 let (_, before) = both(&document);

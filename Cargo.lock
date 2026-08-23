@@ -574,6 +574,7 @@ dependencies = [
  "claycore",
  "clayspace-model",
  "clayspace-vm",
+ "png",
 ]
 
 [[package]]

@@ -26,7 +26,16 @@ opencl = ["claycore/opencl"]
 [dependencies]
 claycore.workspace = true
 clayspace-model = { path = "../clayspace-model" }
+# The engine decodes no images by design — an image decoder in a library that
+# compiles to five backends is a liability it declines to carry — so a host
+# that wants alpha stamps loads them itself. This is the adapter, which is
+# where a file becomes something the domain can hold.
+png = "0.18.1"
+
 
 [dev-dependencies]
 claycore = { workspace = true, features = ["test-support"] }
+# The tests write the PNGs they read, so a fixture on disk cannot drift from
+# what the decoder is asked to handle.
+png = "0.18.1"
 clayspace-vm = { path = "../clayspace-vm" }

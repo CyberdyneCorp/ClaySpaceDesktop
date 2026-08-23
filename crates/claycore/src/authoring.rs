@@ -203,6 +203,79 @@ impl Item {
         )
     }
 
+    /// Appends an alpha stamp to the item's deformer chain.
+    ///
+    /// A caller-supplied scalar image read as a distance offset, under the
+    /// same radial falloff the noise and blob deformers use — pores, fabric,
+    /// scales, stitching.
+    ///
+    /// A *deformer* rather than a primitive, which is the engine's design and
+    /// not an accident of the API: an item shaped like the stamp would add
+    /// material in the stamp's shape, where an alpha modulates a surface
+    /// already there. So it offsets the distance and the surface moves along
+    /// its own normal.
+    ///
+    /// The engine decodes no images. `samples` is `width * height` scalars in
+    /// row-major order, and loading a PNG into that shape is the host's.
+    ///
+    /// `centre`, `direction` and `tangent` place and orient the stamp;
+    /// `extent` is how far across it reaches in world units, `radius` the
+    /// falloff's own reach, `amplitude` how far the surface moves, and `ease`
+    /// an easing index.
+    ///
+    /// Refused, leaving the item unchanged: a width or height below 2 (there
+    /// is nothing to interpolate between), a non-positive extent, or a
+    /// `samples` shorter than the dimensions claim.
+    // Mirrors the C entry point's parameter list, as `sculpt_carve_alpha`
+    // does. Grouping them into a struct would be a second shape to keep in
+    // step with the ABI for no gain.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_alpha(
+        &mut self,
+        samples: &[f32],
+        width: i32,
+        height: i32,
+        centre: [f32; 3],
+        direction: [f32; 3],
+        tangent: [f32; 3],
+        extent: f32,
+        radius: f32,
+        amplitude: f32,
+        ease: i32,
+    ) -> Result<()> {
+        // Checked here rather than left to the engine: the C call reads
+        // `width * height` floats out of the pointer, so a slice shorter than
+        // that is a read past the end whatever the engine's own validation
+        // says about the dimensions.
+        let claimed = (width as i64) * (height as i64);
+        if width < 2 || height < 2 || claimed > samples.len() as i64 {
+            return Err(crate::raw_failure(
+                "clay_item_add_alpha",
+                crate::ErrorKind::InvalidArgument,
+            ));
+        }
+        // SAFETY: valid handle; `samples` holds at least `width * height`
+        // floats, checked above; the three arrays are three floats each.
+        check(
+            unsafe {
+                sys::clay_item_add_alpha(
+                    self.as_ptr(),
+                    samples.as_ptr(),
+                    width,
+                    height,
+                    centre.as_ptr(),
+                    direction.as_ptr(),
+                    tangent.as_ptr(),
+                    extent,
+                    radius,
+                    amplitude,
+                    ease,
+                )
+            },
+            "clay_item_add_alpha",
+        )
+    }
+
     /// Repeats radially about the origin.
     pub fn set_repeat_radial(&mut self, count: i32, offset: f32) -> Result<()> {
         // SAFETY: valid handle.

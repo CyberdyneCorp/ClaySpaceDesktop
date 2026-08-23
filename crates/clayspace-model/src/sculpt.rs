@@ -195,6 +195,24 @@ pub trait SculptModel {
         crate::CombineSettings::for_strokes()
     }
 
+    /// Loads or clears the alpha stamp every brush with `alpha` set uses.
+    ///
+    /// One stamp for the document rather than one per tool: a stamp is
+    /// megabytes and a sculptor works with one at a time. Which tools use it
+    /// is [`BrushSettings::alpha`]. Defaulted so a double that models no
+    /// stamps ignores it rather than spelling out a refusal.
+    fn set_alpha(&mut self, alpha: Option<crate::Alpha>) {
+        let _ = alpha;
+    }
+
+    /// What the loaded stamp is called, if one is loaded.
+    ///
+    /// The name rather than the samples: the interface needs to say which
+    /// stamp is in use and has no business holding megabytes to do it.
+    fn alpha_name(&self) -> Option<String> {
+        None
+    }
+
     /// Where a ray meets the surface, if anywhere.
     fn pick(&self, origin: [f32; 3], direction: [f32; 3]) -> Option<[f32; 3]>;
 

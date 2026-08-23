@@ -169,6 +169,7 @@ fn state<'a>(
         tool: ToolKind::Padrao,
         brush: BrushSettings::default(),
         combine: clayspace_model::CombineSettings::for_strokes(),
+        alpha: None,
         tool_status: None,
         symmetry: [true, false, false],
         scene,

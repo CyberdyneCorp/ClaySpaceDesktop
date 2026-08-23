@@ -44,7 +44,7 @@ pub use error::{ClayError, ErrorKind, Result};
 pub use mask::{ExtrudeSide, Mask, MaskExtrudeParams, MaskField, MaskRef};
 pub use mesh::{ImportBudget, Mesh, MeshLayerDesc, MeshParams, MeshValidity, Mesher, VertexLayout};
 pub use mesh_sculpt::{
-    MeshBrush, MeshDeform, MeshDeformer, MeshDeltas, MeshFalloff, MeshHit, MeshLattice,
+    AlphaStamp, MeshBrush, MeshDeform, MeshDeformer, MeshDeltas, MeshFalloff, MeshHit, MeshLattice,
     MeshSculptor, MeshStamp,
 };
 pub use pick::{Hit, Snapped};

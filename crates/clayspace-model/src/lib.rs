@@ -10,6 +10,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod alpha;
 pub mod armature;
 pub mod combine;
 pub mod conversion;
@@ -25,6 +26,7 @@ pub mod session;
 pub mod tools;
 pub mod units;
 
+pub use alpha::{Alpha, AlphaRefusal, AlphaSupport};
 pub use armature::{Armature, ArmatureModel, NodeIndex, SkinSettings, Zsphere};
 pub use combine::{BlendProfile, Combine, CombineSettings};
 pub use conversion::{ConversionSettings, Cost, Direction, Refusal, RepairReport};

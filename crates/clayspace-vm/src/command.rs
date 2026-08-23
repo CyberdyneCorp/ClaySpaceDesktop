@@ -30,6 +30,12 @@ pub enum Command {
     SetBrushNoise(f32),
     SetBrushFalloff(Falloff),
     SetBrushAccumulate(bool),
+    /// Whether the active tool's brush is modulated by the loaded stamp.
+    SetBrushAlpha(bool),
+    /// Asks for a PNG and loads it as the alpha stamp.
+    LoadAlpha,
+    /// Drops the loaded stamp, so no brush is modulated.
+    ClearAlpha,
     SetBrushSmoothing(f32),
     ToggleSymmetry(Axis),
 
@@ -187,6 +193,12 @@ impl Command {
                 | Self::SetBrushNoise(_)
                 | Self::SetBrushFalloff(_)
                 | Self::SetBrushAccumulate(_)
+                | Self::SetBrushAlpha(_)
+                // Loading a stamp changes no surface; the stroke that uses it
+                // does. Loading takes the composition root's own path for the
+                // reason import does — it opens a dialog.
+                | Self::LoadAlpha
+                | Self::ClearAlpha
                 | Self::SetBrushSmoothing(_)
                 | Self::ToggleSymmetry(_)
                 // Choosing which layer to work on changes nothing in the
@@ -211,6 +223,9 @@ impl Command {
             Self::SetBrushNoise(_) => "brush noise",
             Self::SetBrushFalloff(_) => "brush edge",
             Self::SetBrushAccumulate(_) => "brush accumulation",
+            Self::SetBrushAlpha(_) => "brush stamp",
+            Self::LoadAlpha => "load stamp",
+            Self::ClearAlpha => "clear stamp",
             Self::SetBrushSmoothing(_) => "brush smoothing",
             Self::SelectLayer(_) => "select layer",
             Self::SetLayerVisible(..) => "layer visibility",

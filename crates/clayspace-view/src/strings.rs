@@ -88,6 +88,14 @@ pub struct Strings {
     pub label_combine: &'static str,
     /// How sharply the join is made.
     pub label_blend: &'static str,
+    /// The scalar stamp modulating a brush.
+    pub label_alpha: &'static str,
+    /// Loading one.
+    pub action_load_alpha: &'static str,
+    /// Dropping it.
+    pub action_clear_alpha: &'static str,
+    /// Shown where none is loaded.
+    pub alpha_none: &'static str,
     pub label_symmetry: &'static str,
     pub label_resolution: &'static str,
     pub label_smoothing: &'static str,
@@ -201,6 +209,10 @@ const PT_BR: Strings = Strings {
     label_flow: "Fluxo",
     label_combine: "Operação",
     label_blend: "Junção",
+    label_alpha: "Alfa",
+    action_load_alpha: "Carregar alfa…",
+    action_clear_alpha: "Remover alfa",
+    alpha_none: "nenhum alfa carregado",
     label_symmetry: "Simetria",
     label_resolution: "Resolução",
     label_smoothing: "Suavização",
@@ -306,6 +318,10 @@ const EN_US: Strings = Strings {
     label_flow: "Flow",
     label_combine: "Operation",
     label_blend: "Join",
+    label_alpha: "Alpha",
+    action_load_alpha: "Load alpha…",
+    action_clear_alpha: "Clear alpha",
+    alpha_none: "no alpha loaded",
     label_symmetry: "Symmetry",
     label_resolution: "Resolution",
     label_smoothing: "Smoothing",
@@ -414,6 +430,10 @@ const ES_419: Strings = Strings {
     label_flow: "Flujo",
     label_combine: "Operación",
     label_blend: "Unión",
+    label_alpha: "Alfa",
+    action_load_alpha: "Cargar alfa…",
+    action_clear_alpha: "Quitar alfa",
+    alpha_none: "ningún alfa cargado",
     label_symmetry: "Simetría",
     label_resolution: "Resolución",
     label_smoothing: "Suavizado",
@@ -505,7 +525,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 76] {
+    pub fn all(&self) -> [&'static str; 80] {
         [
             self.menu_file,
             self.menu_edit,
@@ -531,6 +551,10 @@ impl Strings {
             self.label_flow,
             self.label_combine,
             self.label_blend,
+            self.label_alpha,
+            self.action_load_alpha,
+            self.action_clear_alpha,
+            self.alpha_none,
             self.label_symmetry,
             self.label_resolution,
             self.label_smoothing,

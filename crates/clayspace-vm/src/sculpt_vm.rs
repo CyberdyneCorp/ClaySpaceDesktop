@@ -245,6 +245,7 @@ impl SculptViewModel {
             Command::SetBrushNoise(value) => self.edit_brush(|b| b.shaping.noise = value),
             Command::SetBrushFalloff(falloff) => self.edit_brush(|b| b.shaping.falloff = falloff),
             Command::SetBrushAccumulate(on) => self.edit_brush(|b| b.shaping.accumulate = on),
+            Command::SetBrushAlpha(on) => self.edit_brush(|b| b.alpha = on),
             Command::SetBrushSmoothing(value) => self.edit_brush(|b| b.shaping.smoothing = value),
 
             // Scene, layer, mask and armature commands belong to other
@@ -275,6 +276,10 @@ impl SculptViewModel {
             | Command::ToggleRepair
             | Command::SetConversion(_)
             | Command::RunConversion
+            // The stamp is loaded through the composition root, which owns the
+            // file dialog; the ViewModel only reads its name back.
+            | Command::LoadAlpha
+            | Command::ClearAlpha
             | Command::SetLayerVisible(..)
             | Command::AddLayer
             | Command::RemoveLayer(_) => {}

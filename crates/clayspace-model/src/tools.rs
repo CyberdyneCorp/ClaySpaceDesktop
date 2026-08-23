@@ -678,6 +678,14 @@ pub struct BrushSettings {
     pub flow: f32,
     /// Shaping controls, which the design's brush panel exposes.
     pub shaping: Shaping,
+    /// Whether this brush is modulated by the loaded alpha stamp.
+    ///
+    /// A flag rather than the samples: settings are held per tool and per
+    /// representation and are copied on every read, and a stamp is megabytes.
+    /// The document holds the one loaded stamp; this says whether *this* tool
+    /// uses it — which is the right grain, because a sculptor wants the detail
+    /// brush stamped and the blockout brush plain.
+    pub alpha: bool,
 }
 
 /// How a stamp is shaped, beyond its size and strength.
@@ -756,6 +764,7 @@ impl Default for BrushSettings {
             size: 0.18,
             intensity: 0.65,
             flow: 0.80,
+            alpha: false,
             shaping: Shaping::default(),
         }
     }
@@ -776,6 +785,7 @@ impl BrushSettings {
                 smoothing: self.shaping.smoothing.clamp(0.0, 0.95),
                 ..self.shaping
             },
+            alpha: self.alpha,
         }
     }
 }
@@ -1031,6 +1041,7 @@ mod tests {
                 smoothing: 1.0,
                 ..Default::default()
             },
+            alpha: false,
         }
         .sanitized();
         assert!(settings.shaping.noise <= 1.0);

@@ -10,10 +10,10 @@
 //! along the trailing edge, and a status area.
 
 use clayspace_model::{
-    BlendProfile, BrushSettings, Combine, CombineSettings, Diagnostics, Direction, ExportMesher,
-    ExportSettings, ExportWarning, ExtrudeSettings, ExtrudeSide, Falloff, ImportAs, ImportSettings,
-    LayerSummary, MaskOp, MaskState, RecentDocuments, Representation, Scene, SceneStats, ToolKind,
-    Units, ViewPresetKind,
+    AlphaSupport, BlendProfile, BrushSettings, Combine, CombineSettings, Diagnostics, Direction,
+    ExportMesher, ExportSettings, ExportWarning, ExtrudeSettings, ExtrudeSide, Falloff, ImportAs,
+    ImportSettings, LayerSummary, MaskOp, MaskState, RecentDocuments, Representation, Scene,
+    SceneStats, ToolKind, Units, ViewPresetKind,
 };
 use clayspace_vm::{Axis, Command, CommandQueue};
 
@@ -103,6 +103,11 @@ pub struct ShellState<'a> {
     pub brush: BrushSettings,
     /// How the next SDF edit combines with what is under it.
     pub combine: CombineSettings,
+    /// The loaded alpha stamp's name, if one is loaded.
+    ///
+    /// The name and not the samples: the interface says which stamp is in use
+    /// and has no business holding megabytes to do it.
+    pub alpha: Option<&'a str>,
     /// Why the active tool cannot be used, when it cannot.
     pub tool_status: Option<&'a str>,
     pub symmetry: [bool; 3],
@@ -561,6 +566,9 @@ pub fn options_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
             combine_controls(ui, state, queue);
         }
 
+        ui.add_space(space::SECTION);
+        alpha_control(ui, state, queue);
+
         // Why the tool cannot be used, where the user is looking when they try.
         if let Some(reason) = state.tool_status {
             // The ViewModel carries no locale, so a status it raises itself
@@ -658,6 +666,58 @@ fn combine_controls(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comma
         ) {
             queue.push(Command::SetCombine(CombineSettings { radius, ..settings }));
         }
+    });
+}
+
+/// The alpha stamp: which one is loaded, and whether this brush uses it.
+///
+/// Where a stamp cannot be used the reason is shown in place of the toggle,
+/// rather than the toggle being drawn and doing nothing. That distinction
+/// matters more here than for most controls: two of the three representations
+/// take a stamp and the third does not, so a sculptor meets the unavailable
+/// case by moving between layers and needs to be told which of the two they
+/// are in.
+fn alpha_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    let support = AlphaSupport::of(state.representation, state.combine.op);
+
+    ui.vertical(|ui| {
+        ui.set_width(210.0);
+        ui.label(
+            egui::RichText::new(s.label_alpha)
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+        );
+
+        if !support.accepted() {
+            ui.label(
+                egui::RichText::new(support.to_string())
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+            return;
+        }
+
+        ui.horizontal(|ui| match state.alpha {
+            Some(name) => {
+                let mut on = state.brush.alpha;
+                if ui.checkbox(&mut on, name).changed() {
+                    queue.push(Command::SetBrushAlpha(on));
+                }
+                if ui
+                    .small_button("×")
+                    .on_hover_text(s.action_clear_alpha)
+                    .clicked()
+                {
+                    queue.push(Command::ClearAlpha);
+                }
+            }
+            None => {
+                if ui.button(s.action_load_alpha).clicked() {
+                    queue.push(Command::LoadAlpha);
+                }
+            }
+        });
     });
 }
 

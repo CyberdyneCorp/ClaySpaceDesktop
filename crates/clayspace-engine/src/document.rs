@@ -10,7 +10,7 @@ use claycore::{
     Op, StrokePreset, VolumeParams,
 };
 use clayspace_model::{
-    Armature, ArmatureModel, BlendProfile, BrushSettings, Combine, CombineSettings, Cost,
+    Alpha, Armature, ArmatureModel, BlendProfile, BrushSettings, Combine, CombineSettings, Cost,
     Direction, DocumentModel, EditOutcome, ExchangeModel, ExportMesher, ExportSettings,
     ExtrudeSettings, Format, GestureSample, HistoryState, ImportAs, ImportSettings, LayerKey,
     LayerSummary, MaskModel, MaskOp, MaskState, ModelError, NodeIndex, OpenError, Protection,
@@ -42,6 +42,19 @@ fn engine_op(op: Combine) -> Op {
         Combine::Relief => Op::Relief,
         Combine::Incise => Op::Incise,
     }
+}
+
+/// A unit vector pointing away from the origin through `point`.
+///
+/// Stands in for the surface normal where none is to hand: on a form built out
+/// from the origin it is close enough to orient a stamp's plane, and it is
+/// never zero-length, which is what the voxel carve refuses.
+fn outward(point: [f32; 3]) -> [f32; 3] {
+    let length = (point[0] * point[0] + point[1] * point[1] + point[2] * point[2]).sqrt();
+    if length < 1e-6 {
+        return [0.0, 0.0, 1.0];
+    }
+    [point[0] / length, point[1] / length, point[2] / length]
 }
 
 fn engine_blend(profile: BlendProfile) -> Blend {
@@ -164,6 +177,8 @@ pub struct ClayDocument {
     symmetry: [bool; 3],
     /// How the next SDF edit combines with what is under it.
     combine: CombineSettings,
+    /// The one alpha stamp loaded, which every brush with `alpha` set uses.
+    alpha: Option<Alpha>,
     /// Hands out layer keys. Monotone, so a key is never reused for a
     /// different layer after a removal.
     next_key: u64,
@@ -245,6 +260,7 @@ impl ClayDocument {
             cache,
             policy,
             combine: CombineSettings::for_strokes(),
+            alpha: None,
             dirty: Vec::new(),
             stats: SceneStats::default(),
             surface_brick_count: 0,
@@ -910,6 +926,21 @@ impl ClayDocument {
         }
     }
 
+    /// The loaded stamp, if this brush is set to use one and it is accepted
+    /// here.
+    ///
+    /// One place asks the domain whether an alpha applies, so the three stroke
+    /// paths cannot come to different answers about it.
+    fn alpha_for(&self, brush: BrushSettings, op: Combine) -> Option<&Alpha> {
+        if !brush.alpha {
+            return None;
+        }
+        clayspace_model::AlphaSupport::of(self.active_representation(), op)
+            .accepted()
+            .then_some(self.alpha.as_ref())
+            .flatten()
+    }
+
     /// Applies a stroke to an SDF layer.
     fn stroke_sdf(
         &mut self,
@@ -980,6 +1011,13 @@ impl ClayDocument {
         stamp
             .set_rounding(brush.sanitized().size)
             .map_err(ModelError::engine)?;
+
+        // No alpha here, and `alpha_for` is what says so rather than a
+        // condition repeated at this call site. A field takes one as a
+        // deformer on an item, and `clay_layer_apply_stroke` uses its item as
+        // a template scaled per stamp — the deformer chain does not travel
+        // with it. Measured, and recorded in
+        // `claycore/tests/alpha_deformer.rs`.
 
         // The mirror is written only when it changes, so an unchanged setting
         // costs no history entry. The engine makes a whole stroke one step by
@@ -1392,6 +1430,11 @@ impl ClayDocument {
         self.ensure_mesh_sculptor(key, &engine_name)?;
 
         let brush = brush.sanitized();
+        // Read before the sculptor is borrowed mutably. A mesh takes an alpha
+        // by a third route — the brush descriptor's own block — and it is not
+        // gated on a combine operation, which is the SDF side's vocabulary.
+        let alpha = self.alpha_for(brush, Combine::Relief).cloned();
+        let alpha = alpha.as_ref();
         let preset = StrokePreset {
             spacing: brush.flow,
             ..StrokePreset::default()
@@ -1407,6 +1450,20 @@ impl ClayDocument {
                 clayspace_model::Falloff::Smooth => claycore::MeshFalloff::Smooth,
                 clayspace_model::Falloff::Gaussian => claycore::MeshFalloff::Gaussian,
             },
+            // A stamp scaling the per-vertex weight, borrowed for the call.
+            // The same kernel the SDF alpha uses, so one texture reads
+            // identically on a mesh and on a field.
+            alpha: alpha.map(|alpha| claycore::AlphaStamp {
+                samples: &alpha.samples,
+                width: alpha.width as i32,
+                height: alpha.height as i32,
+                // All zeroes: the surface normal under the brush centre,
+                // which is what a detail stamp on a mesh wants.
+                direction: [0.0; 3],
+                tangent: [1.0, 0.0, 0.0],
+                // Zero: the brush's own diameter.
+                extent: 0.0,
+            }),
             // Flatten and Scrape mean "everything under this disc", and a
             // surface walk refuses to flatten across a groove — which is not
             // what either verb says.
@@ -1767,6 +1824,18 @@ impl ClayDocument {
                 .map_err(ModelError::engine)?
         };
 
+        // Read before the loop: `alpha_for` borrows the document, and the
+        // grid is borrowed mutably for the duration of the strokes.
+        let alpha = self
+            .alpha
+            .as_ref()
+            .filter(|_| brush.alpha)
+            .filter(|_| {
+                clayspace_model::AlphaSupport::of(Representation::Voxel, self.combine.op).accepted()
+            })
+            .cloned();
+        let alpha = alpha.as_ref();
+
         let before = grid.change_count().map_err(ModelError::engine)?;
 
         for sample in samples {
@@ -1776,6 +1845,30 @@ impl ClayDocument {
                 (sample.position[2] / voxel_size).round() as i32,
             ];
             let result = match tool {
+                // An alpha carve is its own entry point rather than a
+                // parameter on the others: the engine has no alpha on the
+                // ordinary voxel verbs, so a brush set to use a stamp carves
+                // with it. That is what the stamp is for on a grid — pores and
+                // fabric cut into a surface already there — and a tool that
+                // deposits would have nothing to modulate.
+                _ if alpha.is_some() => {
+                    let alpha = alpha.expect("checked in the guard");
+                    grid.sculpt_carve_alpha(
+                        cell,
+                        &params,
+                        &alpha.samples,
+                        alpha.width as i32,
+                        alpha.height as i32,
+                        // Unlike the mesh brush's block, this entry point
+                        // refuses a zero-length direction outright — measured:
+                        // "a null or empty grid, or a zero-length direction".
+                        // So the stamp's plane is oriented by the outward
+                        // normal of a roughly convex form, which is the
+                        // direction from the origin to the sample.
+                        outward(sample.position),
+                        material,
+                    )
+                }
                 ToolKind::Suavizar | ToolKind::Relaxar => grid.sculpt_smooth(cell, &params),
                 ToolKind::Inflar => grid.sculpt_inflate(cell, &params, 1),
                 ToolKind::Pincar => grid.sculpt_pinch(cell, &params),
@@ -1883,6 +1976,14 @@ impl SculptModel for ClayDocument {
 
     fn combine(&self) -> CombineSettings {
         self.combine
+    }
+
+    fn set_alpha(&mut self, alpha: Option<Alpha>) {
+        self.alpha = alpha;
+    }
+
+    fn alpha_name(&self) -> Option<String> {
+        self.alpha.as_ref().map(|alpha| alpha.name.clone())
     }
 
     fn apply_operation(
@@ -2602,6 +2703,7 @@ impl ClayDocument {
             mask: None,
             symmetry: [false; 3],
             combine: CombineSettings::for_strokes(),
+            alpha: None,
             next_key,
             selected: None,
             armature: None,
