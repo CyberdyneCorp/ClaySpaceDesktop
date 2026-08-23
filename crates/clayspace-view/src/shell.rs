@@ -56,6 +56,9 @@ pub struct ShellState<'a> {
     /// Documents opened lately, most recent first.
     pub recent: &'a [std::path::PathBuf],
     /// The exchange panels: whether they are open, and what they would do.
+    pub show_repair: bool,
+    /// What is wrong with the active grid. `None` where it is not one.
+    pub repair: Option<clayspace_model::RepairReport>,
     pub show_convert: bool,
     /// What the conversion panel is set to, and what that would cost.
     ///
@@ -332,6 +335,10 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                 // document already holds, and states what it costs first.
                 if ui.button(s.action_convert).clicked() {
                     queue.push(Command::ToggleConvert);
+                    ui.close_menu();
+                }
+                if ui.button(s.action_repair).clicked() {
+                    queue.push(Command::ToggleRepair);
                     ui.close_menu();
                 }
                 if ui.button(s.action_import).clicked() {
@@ -854,6 +861,60 @@ pub fn attribution_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &m
 /// A panel rather than a bare file dialog, because the one real decision —
 /// whether the model becomes a reference or becomes clay — cannot be made
 /// after the fact, and a native dialog has nowhere to ask it.
+/// Pre-bake repair: what is wrong with a grid, and the two verbs that fix it.
+///
+/// The report comes first and is shown whether or not anything is repaired. A
+/// sealed void is invisible until something needs the model to be solid, so a
+/// sculptor cannot see the problem by looking — and a repair that ran before
+/// saying what it would change would be asking consent for something unstated.
+pub fn repair_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    if !state.show_repair {
+        return;
+    }
+    let s = state.strings;
+    let mut open = true;
+    egui::Window::new(s.action_repair)
+        .open(&mut open)
+        .resizable(false)
+        .collapsible(false)
+        .show(ctx, |ui| {
+            ui.set_min_width(300.0);
+            let Some(report) = state.repair else {
+                ui.label(
+                    egui::RichText::new(s.repair_voxel_only)
+                        .size(type_scale::LABEL)
+                        .color(Tokens::text_dim()),
+                );
+                return;
+            };
+
+            if report.airtight {
+                ui.label(
+                    egui::RichText::new(s.repair_airtight)
+                        .size(type_scale::LABEL)
+                        .color(Tokens::text_dim()),
+                );
+            } else {
+                readout(ui, s.repair_voids, thousands(report.enclosed_voids));
+                readout(ui, s.repair_largest, thousands(report.largest_void));
+            }
+
+            ui.add_space(space::SECTION);
+            if ui.button(s.repair_close_holes).clicked() {
+                queue.push(Command::CloseHoles);
+            }
+            // Offered only where there is something to fill: a button that can
+            // only report having done nothing is worse than one that is not
+            // there.
+            if !report.airtight && ui.button(s.repair_fill_voids).clicked() {
+                queue.push(Command::FillVoids);
+            }
+        });
+    if !open {
+        queue.push(Command::ToggleRepair);
+    }
+}
+
 /// The conversion panel: where a layer crosses to another representation.
 ///
 /// Its whole job is to state the losses *before* the crossing runs. They are

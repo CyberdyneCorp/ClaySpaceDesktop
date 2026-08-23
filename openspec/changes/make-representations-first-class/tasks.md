@@ -61,10 +61,10 @@
 
 - [ ] 6.1 Wrap and expose the voxel verbs not yet reached: carve-with-alpha, flood select, box fill, line fill
 - [ ] 6.2 Wrap and expose the cube and sphere paint/erase brushes with their falloff curves
-- [ ] 6.3 Wrap and expose pre-bake repair: report, close holes, fill voids
-- [ ] 6.4 Add a repair panel that reports before it changes anything
-- [ ] 6.5 Expose regional refinement through `clay_voxel_add_level_region`
-- [ ] 6.6 Test that a repair's report changes after the repair it describes
+- [x] 6.3 Wrap and expose pre-bake repair: report, close holes, fill voids
+- [x] 6.4 Add a repair panel that reports before it changes anything
+- [x] 6.5 Expose regional refinement through `clay_voxel_add_level_region`
+- [x] 6.6 Test that a repair's report changes after the repair it describes
 
 ## 7. Phase 3 — voxel sculpt layers
 

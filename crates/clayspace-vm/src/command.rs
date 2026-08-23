@@ -56,6 +56,12 @@ pub enum Command {
     /// Opens or closes the panel that crosses a layer to another
     /// representation.
     ToggleConvert,
+    /// Opens or closes the pre-bake repair panel.
+    ToggleRepair,
+    /// Seals perforations in the active grid.
+    CloseHoles,
+    /// Fills every empty cell the outside cannot reach.
+    FillVoids,
     /// What the conversion panel is set to.
     SetConversion(ConversionSettings),
     /// Crosses the active layer, adding a new one.
@@ -155,6 +161,7 @@ impl Command {
                 | Self::ToggleImport
                 | Self::ToggleExport
                 | Self::ToggleConvert
+                | Self::ToggleRepair
                 | Self::SetImportSettings(_)
                 | Self::SetExportSettings(_)
                 // Choosing what a crossing would do changes nothing; running
@@ -233,6 +240,9 @@ impl Command {
             Self::SetImportSettings(_) => "import settings",
             Self::SetExportSettings(_) => "export settings",
             Self::ToggleConvert => "convert panel",
+            Self::ToggleRepair => "repair panel",
+            Self::CloseHoles => "close holes",
+            Self::FillVoids => "fill voids",
             Self::SetConversion(_) => "conversion settings",
             Self::RunConversion => "convert",
             Self::RunImport => "import",

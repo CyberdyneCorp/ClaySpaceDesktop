@@ -255,6 +255,7 @@ impl SculptViewModel {
             | Command::ApplyMaskOp(_)
             | Command::ExtrudeMask(_)
             | Command::ToggleConvert
+            | Command::ToggleRepair
             | Command::SetConversion(_)
             | Command::RunConversion
             | Command::SetLayerVisible(..)
@@ -262,6 +263,10 @@ impl SculptViewModel {
             | Command::RemoveLayer(_) => {}
             // The layer changed, so what the shelf offers and what the brush
             // is set to may both belong to a different representation now.
+            // Pre-bake repairs move the surface, so the history and the
+            // statistics both change — the composition root runs them and
+            // refreshes, exactly as it does a conversion.
+            Command::CloseHoles | Command::FillVoids => {}
             Command::SelectLayer(_) => self.follow_the_active_layer(),
             Command::ToggleSymmetry(axis) => {
                 let index = match axis {

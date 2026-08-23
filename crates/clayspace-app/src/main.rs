@@ -16,8 +16,8 @@ use clayspace_app::{
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
     AutosavePolicy, Detail, DetailPolicy, Diagnostics, ExchangeModel, ExportSettings,
-    ExportWarning, Format, FrameLog, ImportSettings, RecentDocuments, Recovery, SkinSettings,
-    Units, ViewPresetKind, FRAME,
+    ExportWarning, Format, FrameLog, ImportSettings, LayerOperation, RecentDocuments, Recovery,
+    SculptModel, SkinSettings, Units, ViewPresetKind, FRAME,
 };
 use clayspace_view::shell::{self, region, ArmatureState, ShellState};
 use clayspace_view::{
@@ -165,6 +165,7 @@ struct App {
     show_import: bool,
     show_export: bool,
     /// The conversion panel, and what it is set to.
+    show_repair: bool,
     show_convert: bool,
     conversion: clayspace_model::ConversionSettings,
     import: ImportSettings,
@@ -255,6 +256,7 @@ impl App {
             show_attribution: false,
             show_import: false,
             show_export: false,
+            show_repair: false,
             show_convert: false,
             conversion: clayspace_model::ConversionSettings::default(),
             import: ImportSettings::default(),
@@ -1212,6 +1214,28 @@ impl App {
         }
     }
 
+    /// Runs a layer operation, with the pointer saying it is working.
+    ///
+    /// Unbounded like a conversion: a repair walks the whole grid rather than
+    /// what a brush reached.
+    fn run_operation(&mut self, operation: LayerOperation) {
+        let outcome = self.busy(|app| {
+            app.timed(operation.label(), |app| {
+                app.document
+                    .with(|document| document.apply_operation(operation))
+            })
+        });
+        match outcome {
+            Ok(_) => {
+                self.scene.refresh();
+                self.document_vm.touched();
+                self.sync_geometry();
+                self.sync_mesh_layers();
+            }
+            Err(e) => eprintln!("a operação foi recusada: {e}"),
+        }
+    }
+
     /// Crosses the active layer, with the pointer saying it is working.
     ///
     /// Unbounded: the work follows the region and the resolution, not the
@@ -1315,6 +1339,9 @@ impl App {
             Command::ToggleConvert => self.show_convert = !self.show_convert,
             Command::SetConversion(settings) => self.conversion = settings.sanitized(),
             Command::RunConversion => self.run_conversion(),
+            Command::ToggleRepair => self.show_repair = !self.show_repair,
+            Command::CloseHoles => self.run_operation(LayerOperation::CloseHoles { passes: 1 }),
+            Command::FillVoids => self.run_operation(LayerOperation::FillVoids),
             _ => {}
         }
         if matches!(command, Command::SelectLayer(_)) {
@@ -1409,6 +1436,13 @@ impl App {
             mask: *self.mask.state().get(),
             armature: self.armature_state(),
             recent: self.recent.paths(),
+            show_repair: self.show_repair,
+            // Asked of the document each frame the panel is open, so a repair
+            // shows its own result rather than the state before it.
+            repair: self
+                .show_repair
+                .then(|| self.document.with(|d| d.repair_report()))
+                .flatten(),
             show_convert: self.show_convert,
             conversion: self.conversion,
             // Asked of the document, which is the only layer that can see the
@@ -1478,6 +1512,7 @@ impl App {
             shell::diagnostics_window(ctx, &state, &mut queue);
             shell::attribution_window(ctx, &state, &mut queue);
             shell::convert_window(ctx, &state, &mut queue);
+            shell::repair_window(ctx, &state, &mut queue);
             shell::import_window(ctx, &state, &mut queue);
             shell::export_window(ctx, &state, &mut queue);
             egui::CentralPanel::default()

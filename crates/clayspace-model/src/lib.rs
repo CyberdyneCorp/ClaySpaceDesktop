@@ -25,7 +25,7 @@ pub mod tools;
 pub mod units;
 
 pub use armature::{Armature, ArmatureModel, NodeIndex, SkinSettings, Zsphere};
-pub use conversion::{ConversionSettings, Cost, Direction, Refusal};
+pub use conversion::{ConversionSettings, Cost, Direction, Refusal, RepairReport};
 pub use detail::DetailPolicy;
 pub use diagnostics::{Diagnostics, DiagnosticsModel, Fallback};
 pub use document::{DocumentModel, OpenError};

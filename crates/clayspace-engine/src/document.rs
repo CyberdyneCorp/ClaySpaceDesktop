@@ -1441,6 +1441,62 @@ impl ClayDocument {
             .map(|hit| hit.position)
     }
 
+    /// What is wrong with the active voxel layer, before anything is repaired.
+    ///
+    /// `None` where the active layer is not a grid. Asked separately from the
+    /// repair itself, and asked first: a repair changes the sculpt, and a
+    /// sculptor who cannot see what it would change is being asked to consent
+    /// to something unstated.
+    pub fn repair_report(&mut self) -> Option<clayspace_model::RepairReport> {
+        if self.active_representation() != Representation::Voxel {
+            return None;
+        }
+        let engine_name = self.active_layer().engine_name.clone();
+        let (_, grid) = self.document.voxel_layer(&engine_name).ok()?;
+        let report = grid.repair_report().ok()?;
+        Some(clayspace_model::RepairReport {
+            enclosed_voids: report.enclosed_voids,
+            void_cells: report.void_cells,
+            largest_void: report.largest_void,
+            airtight: report.airtight,
+        })
+    }
+
+    /// The pre-bake verbs and the level stack, which reach a grid directly.
+    fn apply_voxel_operation(
+        &mut self,
+        operation: clayspace_model::LayerOperation,
+    ) -> Result<EditOutcome, ModelError> {
+        let engine_name = self.active_layer().engine_name.clone();
+        let layer_id = self.active_layer().id;
+        {
+            let (_, mut grid) = self
+                .document
+                .voxel_layer(&engine_name)
+                .map_err(ModelError::engine)?;
+            match operation {
+                clayspace_model::LayerOperation::CloseHoles { passes } => grid
+                    .repair_close_holes(passes.clamp(1, 16), None)
+                    .map_err(ModelError::engine)?,
+                clayspace_model::LayerOperation::FillVoids => {
+                    grid.repair_fill_voids(None).map_err(ModelError::engine)?
+                }
+                clayspace_model::LayerOperation::RefineRegion { min, max } => {
+                    grid.add_level_region(min, max)
+                        .map(|_| ())
+                        .map_err(ModelError::engine)?;
+                }
+                _ => return Ok(EditOutcome::NOTHING),
+            }
+        }
+        // The whole layer may have moved: a repair is not bounded by a brush.
+        self.refill(layer_id, &[])?;
+        Ok(EditOutcome {
+            changed: true,
+            dirty_bricks: self.dirty.len(),
+        })
+    }
+
     /// The triangles of every visible mesh layer, combined for the viewport.
     ///
     /// A mesh layer has no bricks, so the surface built from the cache cannot
@@ -1764,16 +1820,26 @@ impl SculptModel for ClayDocument {
         operation: clayspace_model::LayerOperation,
     ) -> Result<EditOutcome, ModelError> {
         if !operation.applies_to(self.active_representation()) {
+            // The operation's own row, so the refusal names where it applies
+            // rather than restating one representation's answer for all of
+            // them — which told a sculptor on a field that filling voids
+            // "applies to mesh layers".
             return Err(ModelError::Unavailable(
                 clayspace_model::Unavailable::NoVerbHere {
                     active: self.active_representation(),
-                    verbs: clayspace_model::Verbs {
-                        sdf: None,
-                        voxel: None,
-                        mesh: Some("clay_mesh_sculptor_deform"),
-                    },
+                    verbs: operation.verbs(),
                 },
             ));
+        }
+        // The voxel operations reach a grid rather than a sculptor, and none
+        // of them needs one built.
+        if matches!(
+            operation,
+            clayspace_model::LayerOperation::CloseHoles { .. }
+                | clayspace_model::LayerOperation::FillVoids
+                | clayspace_model::LayerOperation::RefineRegion { .. }
+        ) {
+            return self.apply_voxel_operation(operation);
         }
         let layer = self.active_layer();
         if !layer.carries_geometry {
@@ -1847,6 +1913,13 @@ impl SculptModel for ClayDocument {
                         .map_err(ModelError::engine)?;
                     lattice.set_offset(at, offset).map_err(ModelError::engine)?;
                     sculptor.apply_lattice(&lattice, Some(&mut deltas))
+                }
+                // Routed above, before a sculptor was asked for: these reach a
+                // grid and none of them needs one.
+                clayspace_model::LayerOperation::CloseHoles { .. }
+                | clayspace_model::LayerOperation::FillVoids
+                | clayspace_model::LayerOperation::RefineRegion { .. } => {
+                    return Ok(EditOutcome::NOTHING)
                 }
             }
             .map_err(ModelError::engine)?;

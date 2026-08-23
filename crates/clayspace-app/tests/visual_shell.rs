@@ -139,6 +139,8 @@ fn state<'a>(
     ShellState {
         shortcuts: shortcuts(),
         representation: clayspace_model::Representation::Sdf,
+        show_repair: false,
+        repair: None,
         show_convert: false,
         conversion: clayspace_model::ConversionSettings::default(),
         conversion_cost: None,
@@ -259,6 +261,7 @@ fn capture_shell(harness: &Harness, state: &ShellState<'_>, name: &str) -> clays
         shell::diagnostics_window(ctx, state, &mut queue);
         shell::attribution_window(ctx, state, &mut queue);
         shell::convert_window(ctx, state, &mut queue);
+        shell::repair_window(ctx, state, &mut queue);
         shell::import_window(ctx, state, &mut queue);
         shell::export_window(ctx, state, &mut queue);
     };
@@ -725,4 +728,59 @@ fn the_conversion_panel_states_what_a_crossing_costs() {
         clayspace_model::Direction::from_representation(clayspace_model::Representation::Sdf).len(),
         1
     );
+}
+
+/// The repair panel reports before it offers to change anything.
+///
+/// A sealed void is invisible until something needs the model to be solid, so
+/// the report is the only way a sculptor learns there is one — and a repair
+/// that ran before saying what it would change would be asking consent for
+/// something unstated.
+#[test]
+fn the_repair_panel_reports_before_it_repairs() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01", "MatCap Cinza 02", "Gesso"];
+    let report = diagnostics();
+
+    let mut damaged = state(strings, &scene, &materials, &report);
+    damaged.show_repair = true;
+    damaged.repair = Some(clayspace_model::RepairReport {
+        enclosed_voids: 3,
+        void_cells: 812,
+        largest_void: 500,
+        airtight: false,
+    });
+    let shown = capture_shell(&harness, &damaged, "67-repair-voids");
+
+    // Airtight: the fill button has nothing to do, so it is not offered. A
+    // button that can only report having done nothing is worse than absence.
+    let mut airtight = state(strings, &scene, &materials, &report);
+    airtight.show_repair = true;
+    airtight.repair = Some(clayspace_model::RepairReport {
+        airtight: true,
+        ..Default::default()
+    });
+    let clean = capture_shell(&harness, &airtight, "67-repair-airtight");
+
+    let differing = shown
+        .pixels
+        .chunks_exact(4)
+        .zip(clean.pixels.chunks_exact(4))
+        .filter(|(a, b)| a != b)
+        .count();
+    assert!(
+        differing > 500,
+        "a grid with voids and an airtight one drew the same panel \
+         ({differing} pixels differ), so the report is not reaching it"
+    );
+
+    // And on a layer that cannot have a report at all.
+    let mut field = state(strings, &scene, &materials, &report);
+    field.show_repair = true;
+    field.repair = None;
+    let _ = capture_shell(&harness, &field, "67-repair-not-a-grid");
 }

@@ -194,6 +194,30 @@ impl VoxelField {
     }
 
     /// Discards the finest level.
+    /// Refines a region rather than the whole grid.
+    ///
+    /// The point of the level stack: block out coarse, then pay for detail
+    /// only where the detail goes. A whole-grid `add_level` pays for it
+    /// everywhere, which on a large sculpt is most of the memory budget spent
+    /// on the parts nobody is looking at.
+    pub fn add_level_region(&mut self, min: [f32; 3], max: [f32; 3]) -> Result<usize> {
+        let mut level = 0;
+        // SAFETY: valid handle, two arrays of three floats, out-parameter
+        // written on success.
+        check(
+            unsafe {
+                sys::clay_voxel_add_level_region(
+                    self.as_ptr(),
+                    min.as_ptr(),
+                    max.as_ptr(),
+                    &mut level,
+                )
+            },
+            "clay_voxel_add_level_region",
+        )?;
+        Ok(level)
+    }
+
     pub fn drop_level(&mut self) -> Result<()> {
         // SAFETY: valid handle.
         check(

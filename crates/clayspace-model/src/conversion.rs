@@ -120,6 +120,22 @@ impl ConversionSettings {
     }
 }
 
+/// What is wrong with a voxel grid, before it is baked.
+///
+/// Reported before anything is repaired, always: a repair changes the sculpt,
+/// and a sculptor who cannot see what it would change is being asked to
+/// consent to something unstated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RepairReport {
+    /// Empty regions the outside cannot reach.
+    pub enclosed_voids: usize,
+    /// Their total size, in cells.
+    pub void_cells: usize,
+    pub largest_void: usize,
+    /// Set when there are no enclosed voids at all.
+    pub airtight: bool,
+}
+
 /// Why a conversion was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Refusal {

@@ -97,6 +97,21 @@ pub enum LayerOperation {
         span: f32,
         angle: f32,
     },
+    /// Seals perforations, by the same pocket rule the cavity fill uses.
+    ///
+    /// Voxel-only: a field has no holes to close — it is continuous — and a
+    /// mesh's topology may not change, which closing one would.
+    CloseHoles { passes: i32 },
+    /// Fills every empty cell the outside cannot reach.
+    ///
+    /// A sealed void is invisible until something needs the model to be solid,
+    /// which is why this is a *pre-bake* verb rather than a sculpting one.
+    FillVoids,
+    /// Refines the grid over a region, rather than everywhere.
+    ///
+    /// The point of a level stack: block out coarse, then pay for detail only
+    /// where the detail goes.
+    RefineRegion { min: [f32; 3], max: [f32; 3] },
     /// A free-form deformation cage, by the offset of one control point.
     ///
     /// Sent per drag rather than as a whole cage: the interface owns the cage
@@ -116,6 +131,45 @@ impl LayerOperation {
             Self::Taper { .. } => "taper",
             Self::Twist { .. } => "twist",
             Self::LatticeDrag { .. } => "lattice",
+            Self::CloseHoles { .. } => "close holes",
+            Self::FillVoids => "fill voids",
+            Self::RefineRegion { .. } => "refine",
+        }
+    }
+
+    /// The engine verb this operation invokes, per representation.
+    ///
+    /// So a refusal can say where the operation *does* apply rather than
+    /// restating one representation's answer for all of them — which is what a
+    /// hardcoded refusal did, telling a sculptor on a field that filling voids
+    /// "applies to mesh layers".
+    pub fn verbs(self) -> Verbs {
+        match self {
+            Self::Taper { .. } | Self::Twist { .. } => Verbs {
+                sdf: None,
+                voxel: None,
+                mesh: Some("clay_mesh_sculptor_deform"),
+            },
+            Self::LatticeDrag { .. } => Verbs {
+                sdf: None,
+                voxel: None,
+                mesh: Some("clay_mesh_sculptor_lattice"),
+            },
+            Self::CloseHoles { .. } => Verbs {
+                sdf: None,
+                voxel: Some("clay_voxel_repair_close_holes"),
+                mesh: None,
+            },
+            Self::FillVoids => Verbs {
+                sdf: None,
+                voxel: Some("clay_voxel_repair_fill_voids"),
+                mesh: None,
+            },
+            Self::RefineRegion { .. } => Verbs {
+                sdf: None,
+                voxel: Some("clay_voxel_add_level_region"),
+                mesh: None,
+            },
         }
     }
 
@@ -125,8 +179,15 @@ impl LayerOperation {
     /// deformers on the edit list rather than as operations on a layer, and a
     /// cage is deliberately mesh-only: ZBrush and Blender both apply FFD
     /// forward to vertices, which a mesh allows and an implicit field does not.
+    /// One lookup into [`LayerOperation::verbs`], so the two cannot disagree
+    /// about where an operation applies.
+    ///
+    /// Taper, twist and the cage are mesh-only because they are forward point
+    /// maps, which a mesh allows and an implicit field does not. The pre-bake
+    /// verbs are voxel-only because a field is continuous and has no holes to
+    /// close, and a mesh's topology may not change.
     pub fn applies_to(self, representation: Representation) -> bool {
-        representation == Representation::Mesh
+        self.verbs().on(representation).is_some()
     }
 }
 
