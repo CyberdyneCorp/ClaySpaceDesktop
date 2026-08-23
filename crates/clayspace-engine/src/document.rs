@@ -1701,6 +1701,24 @@ impl ClayDocument {
         //
         // Harmless for the two verbs that ignore it, and right for a single
         // stamp, which reads the descriptor's direction whatever the verb.
+        // The whole gesture, which is what Grab carries its region by, scaled
+        // by the intensity.
+        //
+        // Scaled here because the descriptor's `strength` weights the falloff
+        // rather than the displacement, so a Grab was carrying its region the
+        // gesture's whole length whatever Intensidade said. Blender's Grab
+        // carries it by the drag *times* the strength — measured, a 1.737 drag
+        // at 0.65 moves its furthest vertex 1.129, which is exactly the
+        // product — and matching that is what makes the slider mean the same
+        // thing in both.
+        let gesture = {
+            let (first, last) = (samples[0].position, samples[samples.len() - 1].position);
+            [
+                (last[0] - first[0]) * brush.intensity,
+                (last[1] - first[1]) * brush.intensity,
+                (last[2] - first[2]) * brush.intensity,
+            ]
+        };
         // One stamp's worth of it, not the whole gesture. The engine resolves
         // the path into stamps a spacing apart and applies the descriptor's
         // direction at each one, so handing it the gesture's full travel
@@ -1784,15 +1802,46 @@ impl ClayDocument {
             let Some((_, sculptor)) = held.as_mut() else {
                 return Ok(EditOutcome::NOTHING);
             };
-            let moved = sculptor
-                .apply_stroke(
-                    &points,
-                    &preset,
-                    stamp,
-                    self.mask.as_ref(),
-                    Some(&mut deltas),
-                )
-                .map_err(ModelError::engine)?;
+            let moved = if verb == claycore::MeshBrush::Grab {
+                // One stamp at the point the gesture took hold of, carrying
+                // that region by the whole drag — which is what Grab is, in
+                // Blender and in ZBrush both.
+                //
+                // Not a resolved stroke. `apply_stroke` walks the path and
+                // moves the brush centre along it, so a drag that leaves the
+                // surface takes the centre with it and the later stamps reach
+                // no material at all: measured, a 120-pixel drag carried the
+                // centre 2.118 from a unit sphere's middle and left a dent
+                // where a lobe should have come out. A single stamp reads the
+                // descriptor's own radius, strength and direction — which a
+                // stroke ignores — so the region is the one under the anchor
+                // and the displacement is the gesture's, whole.
+                //
+                // Snakehook and Nudge stay on the stroke path deliberately:
+                // one re-anchors on every stamp so its region walks with the
+                // pull, and the other pushes along the surface. Neither is a
+                // region carried somewhere.
+                sculptor
+                    .stamp(
+                        claycore::MeshStamp {
+                            direction: gesture,
+                            ..stamp
+                        },
+                        self.mask.as_ref(),
+                        Some(&mut deltas),
+                    )
+                    .map_err(ModelError::engine)?
+            } else {
+                sculptor
+                    .apply_stroke(
+                        &points,
+                        &preset,
+                        stamp,
+                        self.mask.as_ref(),
+                        Some(&mut deltas),
+                    )
+                    .map_err(ModelError::engine)?
+            };
             // Refit rather than refresh: topology is fixed, so the ray-query
             // tree stays a valid partition and only its bounds went stale,
             // which is proportional to the brush instead of to the mesh.
@@ -1942,6 +1991,13 @@ impl ClayDocument {
     /// Turning the surface walk off does not help: measured at 7.18x either
     /// way.
     const NUDGE_PUSH: f32 = 0.15;
+
+    /// Cells of margin around a removed layer's bounds.
+    ///
+    /// One brick's worth and then some: the cache marks bricks that *overlap*
+    /// the box, and a surface sitting on the bounds contributes to the brick
+    /// beyond them.
+    const BRICK_MARGIN: f32 = 16.0;
 
     /// Chunk keys drained from a grid in one go.
     ///
@@ -2135,6 +2191,25 @@ impl ClayDocument {
     /// leave the viewport showing the sculpt as it was before the edit, which
     /// is exactly the failure this number exists to prevent.
     pub fn mesh_revision(&mut self) -> u64 {
+        // Which layers this path draws at all, and whether each is shown.
+        //
+        // Adding a mesh layer moves no vertex and touches no grid, so without
+        // this the number did not change when one appeared — and the viewport,
+        // which uploads only when it changes, never uploaded it. A crossing
+        // into a mesh drew nothing: what stayed on screen was the *field* the
+        // source layer still contributed, and removing that source left an
+        // empty viewport with 62,576 vertices sitting unuploaded. The first
+        // stroke moved a vertex, changed the number the old way, and the mesh
+        // appeared — which is exactly how it was reported.
+        let carried = self
+            .layers
+            .iter()
+            .filter(|layer| layer.representation != Representation::Sdf)
+            .fold(0xcbf2_9ce4_8422_2325u64, |hash, layer| {
+                let shown = u64::from(layer.visible && layer.carries_geometry);
+                (hash ^ (layer.key.0 << 1 | shown)).wrapping_mul(0x1000_0000_01b3)
+            });
+
         let names: Vec<String> = self
             .layers
             .iter()
@@ -2151,7 +2226,10 @@ impl ClayDocument {
             sum.wrapping_add(counted)
         });
         let meshes = (self.mesh_undo.len() as u64) << 32 | self.mesh_redo.len() as u64;
-        meshes.wrapping_mul(31).wrapping_add(grids)
+        meshes
+            .wrapping_mul(31)
+            .wrapping_add(grids)
+            .wrapping_add(carried)
     }
 
     /// How stretched the active mesh layer's triangles are.
@@ -3046,6 +3124,25 @@ impl SceneModel for ClayDocument {
             ));
         }
         let id = self.layers[index].id;
+        // Where it was, asked while it is still there to ask.
+        //
+        // The cache holds the *evaluated field*, brick by brick. Removing a
+        // layer takes it out of the document and leaves every brick it
+        // contributed to exactly as it was, so the surface goes on being drawn
+        // and goes on being picked — measured, a sphere removed from a
+        // two-layer document still answered a raycast at [0, 0, 1] and still
+        // meshed to the same 298,680 triangles, through an incremental sync
+        // and through a full rebuild alike. Only reopening the file looked
+        // right, because that builds the cache from nothing.
+        //
+        // Marking the *remaining* active layer is not enough and never was:
+        // the stale bricks belong to the layer that left.
+        let region = self.document.layer_bounds(id).ok().flatten().or_else(|| {
+            // A grid keeps its extent here rather than in the engine, which
+            // reports a layer's SDF bounds and a voxel layer has none.
+            self.layers[index].voxel_bounds
+        });
+
         self.document.remove_layer(id).map_err(ModelError::engine)?;
         self.layers.remove(index);
         self.active = self.active.min(self.layers.len() - 1);
@@ -3054,6 +3151,18 @@ impl SceneModel for ClayDocument {
         }
         let active = self.active_layer().id;
         self.refill(active, &[])?;
+        // Re-evaluated against the document as it is now, which is what drops
+        // what the removed layer left behind. After the refill above, so the
+        // two cannot fight over the same bricks.
+        if let Some((min, max)) = region {
+            // Padded, because a brick the surface only grazes still holds a
+            // piece of it and a box drawn exactly on the bounds can miss the
+            // outermost one.
+            let pad = self.cache.config().voxel_size * Self::BRICK_MARGIN;
+            let min = std::array::from_fn(|i| min[i] - pad);
+            let max = std::array::from_fn(|i| max[i] + pad);
+            self.refill_region(min, max)?;
+        }
         Ok(())
     }
 

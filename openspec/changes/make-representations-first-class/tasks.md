@@ -319,7 +319,49 @@ before and after, which reads as how much a verb shredded the surface.
     segment before re-applying the gesture from its anchor would buy the
     preview back and needs the engine to hold a gesture open across calls.
 
-**Still open**: Camada is better but weak (0.0086 against Blender's 0.341).
+- [x] 13.7 Make a drag pull rather than slide
+  - Reported as "it seems we're sliding the faces, instead of actually
+    moving", which was exact. The interface picked the surface under the
+    pointer at **every** sample, so every position landed on the form and the
+    motion between two of them was a walk along it — the skin stretched and
+    folded and nothing was carried anywhere. A drag across the silhouette lost
+    half its samples outright: ten of twenty-one.
+  - A dragging verb now takes hold once and follows the pointer at the anchor's
+    depth (`input::dragged_to`, with its own tests). And Mover is applied as
+    one stamp at the anchor rather than a resolved stroke: a stroke walks the
+    brush centre along the path, so a drag leaving the surface takes the centre
+    with it and the later stamps reach nothing — measured, a dent where a lobe
+    should have been.
+  - The drag is scaled by the intensity, because the descriptor's `strength`
+    weights the falloff and not the displacement. Blender's Grab carries its
+    region by drag × strength; matched, ours moves its furthest vertex 1.128
+    against Blender's 1.129 on the same gesture.
+
+- [x] 13.8 Clear a removed layer out of the cache
+  - Reported as the starting form sitting under the sculpt and never changing,
+    with the real result only after a save and a reopen. The brick cache holds
+    the evaluated field, and the removal marked the *remaining* active layer
+    dirty — which cannot help, because the stale bricks belong to the layer
+    that left. Measured: the removed sphere still meshed to the same 298,680
+    triangles through an incremental sync and a full rebuild alike, and still
+    answered a raycast at [0, 0, 1]; 17,160 and no hit once its own region is
+    re-evaluated. Hiding was always right and is held by the same test.
+
+- [x] 13.9 Upload a mesh layer the moment it exists
+  - Reported as everything disappearing when the SDF layer was deleted, and
+    coming back the moment sculpting began. `mesh_revision` is what the
+    viewport watches to decide whether to upload the carried layers, and
+    adding a mesh layer moves no vertex and touches no grid — so it did not
+    change and the layer was never uploaded. A crossing only *looked* right
+    because the source layer was still contributing to the field: the sphere
+    on screen was the field. Remove the source and there is nothing, with
+    62,576 vertices sitting unuploaded; make a stroke and the old number moves
+    and they appear. Which layers are carried, and whether each is shown, are
+    part of the number now.
+
+**Still open**: Move reaches 8.3% of the sphere against Blender's 0.9% for the
+same nominal radius, which is a units question and not a defect found. Camada
+is better but weak (0.0086 against Blender's 0.341).
 Pintar and Borrar do nothing on a colourless mesh and Pintar reports success
 while doing it. Move covers 27% of the sphere to Blender's 1.8% at the same
 nominal radius, which is a units question rather than a defect found.

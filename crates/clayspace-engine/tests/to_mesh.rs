@@ -270,3 +270,56 @@ fn a_mesh_layer_answers_the_pointer_before_its_first_stroke() {
         "a ray nowhere near the mesh reported a hit"
     );
 }
+
+/// A layer the viewport must draw changes the number it watches.
+///
+/// The viewport uploads the carried layers only when `mesh_revision` changes,
+/// and adding a mesh layer moves no vertex and touches no grid — so the number
+/// did not change and the mesh was never uploaded. A crossing appeared to work
+/// only because the *source* layer was still contributing to the field: the
+/// sphere on screen was the field, not the mesh. Removing the source then left
+/// an empty viewport with 62,576 vertices sitting unuploaded, and the first
+/// stroke brought them back, which is exactly how it was reported.
+#[test]
+fn a_new_mesh_layer_changes_what_the_viewport_watches() {
+    let Some(mut document) = document() else {
+        return;
+    };
+    let empty = document.mesh_revision();
+
+    let made = document
+        .convert_layer(Direction::SdfToMesh, 0.05, 0)
+        .expect("the crossing was refused");
+    let crossed = document.mesh_revision();
+    assert_ne!(
+        crossed, empty,
+        "crossing into a mesh left the viewport's number where it was, so the \
+         layer it made is never uploaded and never drawn"
+    );
+    let (positions, _, _, indices) = document.visible_mesh_geometry();
+    assert!(
+        !indices.is_empty() && !positions.is_empty(),
+        "there was nothing to upload in the first place"
+    );
+
+    // Hiding it is the same question from the other side: the viewport has to
+    // stop drawing it, and it only looks again when the number moves.
+    document.set_layer_visible(made, false).expect("hide");
+    let hidden = document.mesh_revision();
+    assert_ne!(
+        hidden, crossed,
+        "hiding a mesh layer left the number where it was, so the viewport \
+         goes on drawing it"
+    );
+    assert!(
+        document.visible_mesh_geometry().3.is_empty(),
+        "a hidden mesh layer is still offered to the viewport"
+    );
+
+    document.set_layer_visible(made, true).expect("show");
+    assert_eq!(
+        document.mesh_revision(),
+        crossed,
+        "showing it again should read as the state it was in before hiding"
+    );
+}

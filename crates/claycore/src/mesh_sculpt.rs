@@ -643,19 +643,24 @@ impl MeshSculptor {
     /// Zero for a stamp that reached nothing, that was fully masked, or whose
     /// settings amount to no displacement — all three are ordinary outcomes
     /// rather than failures.
-    pub fn stamp(&mut self, stamp: MeshStamp<'_>, mask: Option<&Mask>) -> Result<usize> {
+    pub fn stamp(
+        &mut self,
+        stamp: MeshStamp<'_>,
+        mask: Option<&Mask>,
+        deltas: Option<&mut MeshDeltas>,
+    ) -> Result<usize> {
         let desc = stamp.as_raw();
         let mut moved = 0;
         // SAFETY: valid handle and a descriptor carrying its own size; the
-        // mask is either a valid handle or null, which the entry point allows,
-        // as is a null deltas.
+        // mask and the deltas are each either a valid handle or null, both of
+        // which the entry point allows.
         check(
             unsafe {
                 sys::clay_mesh_sculptor_stamp(
                     self.raw.as_ptr(),
                     &desc,
                     mask.map_or(std::ptr::null(), |m| m.as_ptr() as *const _),
-                    std::ptr::null_mut(),
+                    deltas.map_or(std::ptr::null_mut(), |d| d.raw.as_ptr()),
                     &mut moved,
                 )
             },

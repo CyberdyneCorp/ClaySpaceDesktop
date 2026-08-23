@@ -275,3 +275,95 @@ fn a_move_on_a_mesh_can_be_taken_back() {
          recorded as vertex deltas and has to come back exactly"
     );
 }
+
+/// Move *pulls* the form; it does not slide its skin across it.
+///
+/// The complaint that found this: "it seems we're sliding the faces, instead
+/// of actually moving". It was exact. The interface picked the surface under
+/// the pointer at every sample, so every position landed *on* the form and the
+/// motion between two of them was a walk along it. Nothing was ever carried
+/// anywhere: the skin stretched and folded, and a drag that crossed the
+/// silhouette stopped sending samples at all — measured, ten of twenty-one
+/// survived.
+///
+/// A drag carries what it took hold of along the plane it was picked on, which
+/// is what lets it leave the form. Against Blender's Grab, matched sphere and
+/// the same 1.737 drag at strength 0.65:
+///
+///   delivery                    furthest vertex moved   reached out to
+///   picked every sample                 0.649                1.000
+///   carried, and Blender's              1.128 / 1.129        1.617 / 1.508
+///
+/// Picked, the surface never leaves the unit sphere it started as. Carried, a
+/// lobe comes out of it.
+#[test]
+fn a_move_pulls_a_lobe_out_rather_than_sliding_the_surface() {
+    let Some(policy) = BackendPolicy::discover(None).ok() else {
+        return;
+    };
+    let Ok(mut document) = ClayDocument::new(policy).and_then(ClayDocument::with_starting_form)
+    else {
+        return;
+    };
+    document
+        .convert_layer(Direction::SdfToMesh, 0.03, 0)
+        .expect("into a mesh");
+
+    // Take hold of the front of the sphere and carry it straight out, which is
+    // what the pointer does once the anchor stops being re-picked.
+    let anchor = SculptModel::pick(&document, [0.0, 0.0, 4.0], [0.0, 0.0, -1.0])
+        .expect("the press found no surface");
+    let travel = 1.737f32;
+    let samples: Vec<GestureSample> = (0..=20)
+        .map(|step| {
+            let t = step as f32 / 20.0;
+            GestureSample {
+                position: [anchor[0] + t * travel, anchor[1], anchor[2]],
+                pressure: 1.0,
+                time: t,
+            }
+        })
+        .collect();
+
+    let intensity = 0.65;
+    let before = document.visible_mesh_geometry().0;
+    document
+        .apply_stroke(
+            ToolKind::Mover,
+            BrushSettings {
+                size: 0.5,
+                intensity,
+                ..BrushSettings::default()
+            },
+            &samples,
+            [false; 3],
+        )
+        .expect("Move was refused");
+    let after = document.visible_mesh_geometry().0;
+
+    let reach = after
+        .iter()
+        .map(|p| (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt())
+        .fold(0.0f32, f32::max);
+    assert!(
+        reach > 1.3,
+        "the furthest point is {reach} from the centre, so nothing was pulled \
+         out of a sphere of radius 1 — the surface slid instead of moving"
+    );
+
+    // And by the drag times the intensity, which is what Blender's Grab does
+    // and what makes the slider mean the same thing in both.
+    let furthest = before
+        .iter()
+        .zip(&after)
+        .map(|(a, b)| {
+            ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2) + (b[2] - a[2]).powi(2)).sqrt()
+        })
+        .fold(0.0f32, f32::max);
+    let expected = travel * intensity;
+    assert!(
+        (furthest - expected).abs() < 0.05,
+        "the furthest vertex moved {furthest}, against the {expected} a drag \
+         of {travel} at intensity {intensity} should carry it"
+    );
+}

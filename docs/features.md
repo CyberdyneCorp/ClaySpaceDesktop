@@ -89,6 +89,35 @@ between representations*, where SDF and voxel layers both reach one. Either way
 it is the same kind of thing from here on: the verbs reach both, the quality
 readout measures both, and a save writes both.
 
+**A drag pulls; it does not slide.** The interface picks the surface under the
+pointer for a stamping verb, because that is where the stamp belongs. A
+*dragging* verb takes hold once and then follows the pointer, carrying what it
+took hold of along the plane it was picked on — which is what lets a drag leave
+the form and pull a lobe out of it.
+
+Picking every sample instead put every position *on* the surface, so the motion
+between two of them was a walk along it: the skin stretched and folded and
+nothing was carried anywhere, and a drag that crossed the silhouette stopped
+sending samples at all. Against Blender's Grab, matched sphere and the same
+1.737 drag at strength 0.65:
+
+| delivery | furthest vertex moved | reached out to |
+|---|---|---|
+| picked every sample | 0.649 | 1.000 |
+| carried | 1.128 | 1.617 |
+| Blender | 1.129 | 1.508 |
+
+Picked, the surface never leaves the unit sphere it started as.
+
+Mover is applied as **one stamp at the anchor** rather than as a resolved
+stroke, for the same reason: a stroke walks the brush centre along the path, so
+a drag that leaves the surface takes the centre with it and the later stamps
+reach no material. A single stamp reads the descriptor's own radius, strength
+and direction — which a stroke ignores — so the region is the one under the
+anchor and the displacement is the gesture's. Puxar and Nudge stay on the
+stroke path deliberately: one re-anchors on every stamp so its region walks
+with the pull, the other pushes along the surface.
+
 **A drag is held whole.** Mover and Puxar anchor on the first stamp and carry
 that region by the motion that follows, so a gesture cut into segments is
 several grabs, each anchoring afresh where the last stopped — on screen, a
@@ -275,6 +304,27 @@ more: **the topology is the sampling lattice's and nothing here re-flows it.**
 What comes out is dense and uniform, with no edge loop following anything — it
 sculpts, and it is the input a retopology pass replaces rather than the output
 one produces.
+
+**A layer the viewport has to draw changes the number it watches.** The
+carried layers — meshes and grids — are uploaded only when `mesh_revision`
+changes, and adding a mesh layer moves no vertex and touches no grid. So a
+crossing into a mesh left the number where it was and the layer was never
+uploaded: what stayed on screen was the *field* the source layer still
+contributed, and removing that source left an empty viewport with the mesh's
+62,576 vertices sitting unuploaded. The first stroke moved a vertex, changed
+the number the old way, and the mesh appeared. Which layers are carried, and
+whether each is shown, are part of the number now.
+
+**A removed layer stops being drawn.** The brick cache holds the evaluated
+field brick by brick, and removing a layer used to take it out of the document
+while leaving every brick it had contributed to exactly as it was — so the
+surface went on being drawn and went on answering a raycast. It looked like the
+form you started from sitting under the sculpt and never changing, with the
+real result appearing only after a save and a reopen, which builds the cache
+from nothing. Measured: a removed sphere still meshed to the same 298,680
+triangles through an incremental sync and a full rebuild alike, against 17,160
+once its region is re-evaluated. Hiding a layer was always right; both are held
+by `a_removed_layer_stops_being_drawn`.
 
 **A crossing produces a new layer and leaves the source alone**, and it is
 **not undoable** — the panel says so. A conversion produces no engine undo

@@ -172,6 +172,12 @@ struct App {
     conversion: clayspace_model::ConversionSettings,
     import: ImportSettings,
     export: ExportSettings,
+    /// What a dragging verb took hold of, and where the pointer was then.
+    ///
+    /// Mover, Puxar and Nudge follow the pointer from the point they took
+    /// hold of; every other verb stamps where the pointer is. Held for the
+    /// length of one gesture and cleared with it.
+    drag_anchor: Option<([f32; 3], egui::Pos2)>,
     /// The layer being renamed and what its field holds.
     ///
     /// Held here rather than inside the widget so the View stays a pure
@@ -272,6 +278,7 @@ impl App {
             import: ImportSettings::default(),
             export: ExportSettings::default(),
             renaming: None,
+            drag_anchor: None,
             rig_plane: None,
             rig_depth_at_press: 0,
             strings: Strings::for_locale(Locale::default()),
@@ -1164,11 +1171,44 @@ impl App {
         }
     }
 
-    /// Sends a stroke sample at the pointer, if it met the surface.
+    /// Sends a stroke sample at the pointer.
+    ///
+    /// A stamping verb wants the surface under the pointer, so it picks. A
+    /// *dragging* one — Mover, Puxar, Nudge — takes hold once and then follows
+    /// the pointer, carrying what it took hold of along the plane it was
+    /// picked on.
+    ///
+    /// Picking every sample is what made a drag slide rather than pull. Every
+    /// position then lands *on* the surface, so the motion between two of them
+    /// is a walk along it and the form is never carried anywhere — its skin
+    /// stretches across it and folds over. It also ended a gesture the moment
+    /// the pointer crossed the silhouette, because a pick that finds nothing
+    /// sends nothing.
     fn stroke_at(&mut self, point: egui::Pos2, begin: bool) {
-        let Some((position, _)) = self.pick_at(point) else {
-            return;
+        let dragging = self.sculpt.tool().get().is_path_driven();
+        let position = if begin {
+            let Some((hit, _)) = self.pick_at(point) else {
+                return;
+            };
+            self.drag_anchor = dragging.then_some((hit, point));
+            hit
+        } else if let Some((anchor, press)) = self.drag_anchor {
+            let Some(viewport) = self.viewport else {
+                return;
+            };
+            let Some(carried) =
+                clayspace_app::input::dragged_to(&self.camera, viewport, anchor, press, point)
+            else {
+                return;
+            };
+            carried
+        } else {
+            let Some((hit, _)) = self.pick_at(point) else {
+                return;
+            };
+            hit
         };
+
         let command = if begin {
             Command::BeginStroke {
                 position,
@@ -1207,7 +1247,12 @@ impl App {
 
         if input.released && self.drag != Drag::None {
             match self.drag {
-                Drag::Sculpt => self.apply(Command::EndStroke),
+                Drag::Sculpt => {
+                    self.apply(Command::EndStroke);
+                    // The hold is over. Left standing, the next gesture would
+                    // follow the pointer from where this one took hold.
+                    self.drag_anchor = None;
+                }
                 Drag::Rig => {
                     self.armature.release();
                     self.rig_plane = None;
@@ -1499,6 +1544,11 @@ impl App {
         // child drops its mip. Not the gesture's shading — that is owed to
         // [`App::refine_geometry`], which pays it off across the frames after
         // the pointer stops rather than all of it in this one.
+        // However a gesture ends, the hold ends with it — a cancelled one as
+        // much as a finished one.
+        if matches!(command, Command::EndStroke | Command::CancelStroke) {
+            self.drag_anchor = None;
+        }
         if matches!(command, Command::EndStroke | Command::CancelStroke) {
             self.build_mips();
         }

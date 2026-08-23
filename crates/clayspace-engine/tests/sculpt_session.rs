@@ -382,7 +382,10 @@ fn brush_shaping_reaches_the_engine_without_error() {
 
 mod scene {
     use super::*;
-    use clayspace_model::{LayerKey, Protection, Representation, SceneModel};
+    use clayspace_model::{
+        BrushSettings, Combine, CombineSettings, GestureSample, LayerKey, Protection,
+        Representation, SceneModel,
+    };
     use clayspace_vm::SceneViewModel;
 
     fn document() -> ClayDocument {
@@ -505,6 +508,86 @@ mod scene {
             .expect_err("a document keeps a layer to sculpt on");
         assert!(error.to_string().contains("layer"), "{error}");
         assert_eq!(doc.scene().layers.len(), 1);
+    }
+
+    /// A removed layer stops being drawn, and stops being picked.
+    ///
+    /// The brick cache holds the *evaluated field*, brick by brick. Removing a
+    /// layer took it out of the document and left every brick it had
+    /// contributed to exactly as it was: the surface went on being drawn and
+    /// went on answering a raycast. Reported as the starting sphere sitting
+    /// under a sculpt and never changing, with the real result only appearing
+    /// after a save and a reopen — which builds the cache from nothing.
+    ///
+    /// Marking the *remaining* active layer, which is what the removal did,
+    /// cannot help: the stale bricks belong to the layer that left. Measured
+    /// on a two-layer document, the removed sphere still meshed to the same
+    /// 298,680 triangles through an incremental sync and through a full
+    /// rebuild alike; against 17,160 once its region is re-evaluated.
+    ///
+    /// Hiding a layer was always right, and this is the tripwire for it too.
+    #[test]
+    fn a_removed_layer_stops_being_drawn() {
+        let mut doc = document();
+        let sphere = doc.scene().active.expect("the starting form");
+
+        // Somewhere else to keep, so the removal is allowed at all.
+        let other = doc
+            .add_layer("Outra", Representation::Sdf)
+            .expect("a layer");
+        doc.set_active_layer(other).expect("activate it");
+        doc.set_combine(CombineSettings {
+            op: Combine::Add,
+            ..CombineSettings::for_strokes()
+        });
+        doc.apply_stroke(
+            ToolKind::Padrao,
+            BrushSettings {
+                size: 0.35,
+                intensity: 1.0,
+                ..BrushSettings::default()
+            },
+            &[GestureSample {
+                position: [2.2, 0.0, 0.0],
+                pressure: 1.0,
+                time: 0.0,
+            }],
+            [false; 3],
+        )
+        .expect("the stroke was refused");
+
+        let down_the_axis = ([0.0, 0.0, 4.0], [0.0, 0.0, -1.0]);
+        assert!(
+            SculptModel::pick(&doc, down_the_axis.0, down_the_axis.1).is_some(),
+            "the sphere is not there to begin with"
+        );
+
+        // Hidden, which has always worked, and shown again.
+        doc.set_layer_visible(sphere, false).expect("hide");
+        assert!(
+            SculptModel::pick(&doc, down_the_axis.0, down_the_axis.1).is_none(),
+            "a hidden layer is still picked"
+        );
+        doc.set_layer_visible(sphere, true).expect("show");
+        assert!(
+            SculptModel::pick(&doc, down_the_axis.0, down_the_axis.1).is_some(),
+            "showing a layer again did not bring it back"
+        );
+
+        // And removed.
+        doc.remove_layer(sphere).expect("remove");
+        assert!(
+            SculptModel::pick(&doc, down_the_axis.0, down_the_axis.1).is_none(),
+            "a removed layer is still in the cache: it draws and it is picked, \
+             and only reopening the file would say otherwise"
+        );
+
+        // What is left is still there — the removal cleared one layer's
+        // region and not the document.
+        assert!(
+            SculptModel::pick(&doc, [2.2, 0.0, 4.0], [0.0, 0.0, -1.0]).is_some(),
+            "removing one layer took the other with it"
+        );
     }
 
     #[test]
