@@ -721,3 +721,68 @@ mod following_the_active_layer {
         );
     }
 }
+
+/// A drag on a mesh layer reaches the model as ONE stroke, not several.
+///
+/// Grab anchors on the first stamp and carries that region by the motion that
+/// follows, so a gesture cut into segments is several grabs, each anchoring
+/// afresh where the last stopped. On screen that is a crumpled crease along
+/// the path where the form should have been pulled.
+///
+/// Measured against Blender's Grab over MCP — matched sphere, same brush
+/// radius in world units, same strength, same drag: one call reaches 9.8% of
+/// the mesh and moves it 0.707, Blender reaches 11.4% and moves 0.779, and the
+/// same gesture in two segments reaches 19.0% and moves 0.569 — two anchors
+/// sharing one drag.
+#[test]
+fn a_mesh_drag_reaches_the_model_as_one_stroke() {
+    let drag = |vm: &mut SculptViewModel| {
+        vm.dispatch(Command::BeginStroke {
+            position: [0.0, 0.0, 1.0],
+            pressure: 1.0,
+        })
+        .expect("begin");
+        // Far enough that a segmenting ViewModel applies several times: the
+        // threshold is three stamp gaps and this crosses it repeatedly.
+        for step in 1..=24 {
+            let t = step as f32 / 24.0;
+            vm.dispatch(Command::ContinueStroke {
+                position: [t * 2.0, t * 0.5, 1.0],
+                pressure: 1.0,
+            })
+            .expect("continue");
+        }
+        vm.dispatch(Command::EndStroke).expect("end");
+    };
+
+    let (mut mesh, mesh_calls) = fixture_with(|model| {
+        model.representation.set(Representation::Mesh);
+    });
+    mesh.dispatch(Command::SelectTool(ToolKind::Mover))
+        .expect("tool");
+    drag(&mut mesh);
+    let mesh_strokes = mesh_calls.borrow().strokes.len();
+    assert_eq!(
+        mesh_strokes, 1,
+        "a mesh drag reached the model as {mesh_strokes} strokes; each one \
+         anchors afresh, so the form is creased along the path instead of \
+         pulled"
+    );
+
+    // The control. A field takes the same gesture in segments, which is what
+    // gives it a live surface while the pointer is down — nothing here
+    // changed that.
+    let (mut field, field_calls) = fixture_with(|model| {
+        model.representation.set(Representation::Sdf);
+    });
+    field
+        .dispatch(Command::SelectTool(ToolKind::Mover))
+        .expect("tool");
+    drag(&mut field);
+    let field_strokes = field_calls.borrow().strokes.len();
+    assert!(
+        field_strokes > 1,
+        "a field drag stopped being segmented ({field_strokes} stroke), so it \
+         no longer draws while the pointer is down"
+    );
+}

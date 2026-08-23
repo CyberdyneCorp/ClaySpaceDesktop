@@ -241,7 +241,27 @@ impl MeshStamp<'_> {
     /// not outlive the stamp it came from — every caller here passes it
     /// straight into one C call and drops it.
     fn as_raw(&self) -> sys::clay_mesh_brush_desc {
+        // The engine's defaults first, then what this stamp means — which is
+        // the arrangement `clay_mesh_brush_defaults` exists for: "so a host
+        // fills in what it means and takes the rest".
+        //
+        // Starting from a zeroed descriptor took *nothing* instead, and the
+        // fields this type does not name are not all harmlessly zero:
+        //
+        //   polish_angle       0 is a fully closed gate, so POLISH smoothed
+        //                      nothing anywhere — measured, it moved not one
+        //                      vertex even across a crease cut for it
+        //   layer_height       0 is a zero ceiling, so LAYER deposited almost
+        //                      nothing — measured at 0.0086 against DRAW's
+        //                      0.6778 on the same stroke
+        //   smooth_iterations  documented as 1..MAX, and 0 is neither
+        //
+        // A failure to read them is not fatal: the zeroed descriptor is what
+        // this did before, and it still carries a valid struct_size.
         let mut raw = sys::clay_mesh_brush_desc::sized();
+        // SAFETY: a valid versioned descriptor out-parameter, whose
+        // struct_size is set above as the boundary requires.
+        let _ = unsafe { sys::clay_mesh_brush_defaults(&mut raw) };
         raw.verb = self.verb.to_raw();
         raw.center = self.center;
         raw.radius = self.radius;

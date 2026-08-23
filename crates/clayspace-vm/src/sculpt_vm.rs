@@ -321,7 +321,7 @@ impl SculptViewModel {
                 // Refuse before collecting anything, so an unavailable tool
                 // cannot accumulate a gesture it will never apply.
                 self.ensure_tool_available()?;
-                let tool_is_region = self.tool.get().is_region_based();
+                let tool_is_region = self.holds_the_whole_gesture(*self.tool.get());
                 self.gesture_entries = 0;
                 let mut stroke = ActiveStroke::default();
                 stroke.push(position, pressure);
@@ -335,6 +335,9 @@ impl SculptViewModel {
             }
             Command::ContinueStroke { position, pressure } => {
                 let tool = *self.tool.get();
+                // Asked before the stroke is borrowed: it reads the model, and
+                // the borrow below is exclusive.
+                let whole = self.holds_the_whole_gesture(tool);
                 let Some(stroke) = self.stroke.as_mut() else {
                     return Ok(());
                 };
@@ -343,7 +346,7 @@ impl SculptViewModel {
                 // A region tool is applied once, when the gesture is complete.
                 // Segmenting it stacks a replacement per segment and the
                 // result crumbles.
-                if !tool.is_region_based() && stroke.segment_is_worth_applying(&brush) {
+                if !whole && stroke.segment_is_worth_applying(&brush) {
                     return self.apply_segment();
                 }
             }
@@ -496,6 +499,39 @@ impl SculptViewModel {
             ));
         }
         Ok(())
+    }
+
+    /// Whether this tool waits for the whole gesture before applying any of it.
+    ///
+    /// A region tool always does: it acts on the area the gesture encloses, and
+    /// segmenting one stacks a replacement per segment until the result
+    /// crumbles.
+    ///
+    /// A *dragging* tool on a **mesh layer** does too, and that is the less
+    /// obvious half. Grab anchors on the first stamp and carries that region by
+    /// the motion that follows, so a gesture cut into segments is several
+    /// grabs, each anchoring afresh where the last stopped. Measured against
+    /// Blender's Grab over MCP — matched sphere, same brush radius in world
+    /// units, same strength, same drag across the front:
+    ///
+    ///   delivery            reached   moved the surface by
+    ///   one call             9.8%           0.707
+    ///   Blender             11.4%           0.779
+    ///   two segments        19.0%           0.569
+    ///
+    /// Segmented it reaches nearly twice as far and moves less, because two
+    /// anchors share the drag — on screen that is a crumpled crease along the
+    /// path instead of the form being pulled. Held whole it lands where
+    /// Blender's does.
+    ///
+    /// The cost is that a mesh drag shows nothing until the pointer comes up.
+    /// That is worth paying: the alternative is a live preview of the wrong
+    /// answer. Reverting each segment before re-applying the gesture from its
+    /// anchor would buy the preview back, and needs the engine to hold a
+    /// gesture open across calls.
+    fn holds_the_whole_gesture(&self, tool: ToolKind) -> bool {
+        tool.is_region_based()
+            || (tool.is_path_driven() && self.model.active_representation() == Representation::Mesh)
     }
 
     /// Sends the part of the gesture the model has not seen yet.

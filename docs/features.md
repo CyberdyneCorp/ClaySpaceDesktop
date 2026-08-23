@@ -89,6 +89,23 @@ between representations*, where SDF and voxel layers both reach one. Either way
 it is the same kind of thing from here on: the verbs reach both, the quality
 readout measures both, and a save writes both.
 
+**A drag is held whole.** Mover and Puxar anchor on the first stamp and carry
+that region by the motion that follows, so a gesture cut into segments is
+several grabs, each anchoring afresh where the last stopped — on screen, a
+crumpled crease along the path where the form should have been pulled. On a
+mesh layer the whole gesture goes to the model in one call. Measured against
+Blender's Grab over MCP, matched sphere and the same drag:
+
+| delivery | reached | moved the surface by |
+|---|---|---|
+| one call | 9.8% | 0.707 |
+| Blender | 11.4% | 0.779 |
+| two segments | 19.0% | 0.569 |
+
+The cost is that a mesh drag shows nothing until the pointer comes up, which
+is worth paying over a live preview of the wrong answer. A field still segments
+and still draws while the pointer is down.
+
 **The pointer finds it from the moment it becomes active.** A pick against a
 mesh layer is answered by the mesh sculptor's own raycast, and the sculptor was
 built by the first stroke — but the interface places a stroke where the pick
@@ -117,6 +134,24 @@ leaves the other where it was.
 (`clay_item_volume_move_topological` is a different call and is not this one —
 it takes an item carrying a volume and is refused on anything else, so it
 belongs to the SDF side.)
+
+**A mesh stroke never builds on itself**, whatever Acumular says — the field
+and the grid are unaffected and it means what it means there. Not a preference:
+the verbs that displace along a *per-vertex* normal read the normals the
+previous stamp just moved, so building up feeds a stamp's output back into its
+own next input. Measured against Blender's brushes over MCP — matched sphere,
+same brush radius in world units, same strength, same stroke — as the mean
+angle between adjacent vertex normals before and after:
+
+| verb | accumulating | clamped | Blender |
+|---|---|---|---|
+| Inflar | 5.04x | 1.18x | 1.00x |
+| Pinçar | 9.41x | 1.83x | 1.00x |
+| Vinco | 3.71x | 1.34x | 1.00x |
+| Padrão | 1.11x | 1.08x | 1.00x |
+
+Padrão is the control and barely moves either way: it uses the *region's*
+averaged normal, so there is nothing to feed back.
 
 Twelve of them are tools that already existed — a smooth is a smooth whichever
 representation it lands on — and four are new: Argila, Vinco, Pintar and

@@ -52,7 +52,7 @@ fn mask_the_middle(document: &mut ClayDocument) -> bool {
         .map(|i| {
             let t = i as f32 / 4.0;
             GestureSample {
-                position: [(t - 0.5) * 0.2, 0.0, 1.0],
+                position: [(t - 0.5) * 1.2, 0.0, 1.0],
                 pressure: 1.0,
                 time: t,
             }
@@ -127,6 +127,12 @@ fn a_mask_does_not_yet_protect_a_region_from_a_subtracting_edit() {
 /// A mask still gates *authoring*, which is the half that does work: a brush
 /// does not deposit where the mask protects. Held so that closing the gap does
 /// not quietly cost the protection that already exists.
+///
+/// The mask has to be wider than the brush for that to be a question with an
+/// answer, which is the whole of what was wrong with the earlier version —
+/// see the assertion. Measured at the centre of a protected strip against an
+/// unmasked document taking the same stroke: 1.0005 against 1.1400, on a
+/// sphere that started at 1.0. The protection is close to total.
 #[test]
 fn a_mask_still_keeps_a_brush_from_depositing() {
     let (Some(mut open), Some(mut protected)) = (document(), document()) else {
@@ -139,8 +145,19 @@ fn a_mask_still_keeps_a_brush_from_depositing() {
 
     let raised = centre(&open).expect("a surface");
     let held = centre(&protected).expect("a surface");
+    // A real margin, not a sign test. This assertion used to read `held <
+    // raised` over a mask 0.2 wide under a brush of radius 0.3 — the brush
+    // reached across the protected strip from both sides, so the centre was
+    // deposited into either way and the two differed by 7e-7 on a 0.14
+    // deposit. It passed on rounding, and the first change to touch the stroke
+    // path in any way flipped the last bits and broke it.
+    //
+    // The mask is wider than the brush now, which is the only arrangement in
+    // which "the brush did not deposit here" is a question with an answer —
+    // and asked properly the answer is emphatic: 1.0005 against 1.1400, which
+    // is the sphere it started as.
     assert!(
-        held < raised,
+        held < raised - 0.005,
         "the mask did not keep the brush from depositing ({held} against an \
          unmasked {raised}), so masking protects nothing at all"
     );

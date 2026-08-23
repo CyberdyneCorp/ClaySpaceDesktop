@@ -1665,9 +1665,68 @@ impl ClayDocument {
         // it straight through so more flow spread them further apart. On Move
         // that is what decides whether a drag emits a second stamp at all, and
         // a drag that emits one stamp has no motion to drag by.
-        let preset = self.preset(brush, tool);
+        let mut preset = self.preset(brush, tool);
+        // A mesh stroke does not build on itself, whatever the brush says.
+        //
+        // Not a preference: the mesh verbs that displace along a *per-vertex*
+        // normal read the normals the previous stamp just moved, so building
+        // up feeds a stamp's own output back into its next input. Measured
+        // against Blender's brushes on a matched sphere — same radius in world
+        // units, same strength, same stroke — as the mean angle between
+        // adjacent vertex normals, before against after:
+        //
+        //   verb     building up   clamped   Blender
+        //   Inflar      5.04x       1.18x     1.00x
+        //   Pinçar      9.41x       1.83x     1.00x
+        //   Vinco       3.71x       1.34x     1.00x
+        //   Padrão      1.11x       1.08x     1.00x
+        //
+        // Padrão is the control and barely moves either way: it uses the
+        // *region's* averaged normal, so there is nothing to feed back.
+        //
+        // Here rather than in `Shaping::default` because it is a fact about
+        // these verbs and not about brushes — the same reason `MAX_JITTER`
+        // lives beside the preset. The field and the grid are unaffected, and
+        // Acumular still means what it means there.
+        preset.accumulation = claycore::Accumulation::Clamped;
+        // Where the gesture travelled, which is what a verb that pushes along
+        // the surface has to be told.
+        //
+        // `apply_stroke` derives a direction for GRAB and SNAKEHOOK from the
+        // motion between stamps and for nothing else — so NUDGE, which
+        // projects the drag into each vertex's tangent plane, was handed the
+        // descriptor's default of all zeroes and pushed material nowhere. It
+        // moved not one vertex at any size, intensity or stroke length, while
+        // Blender's equivalent moved 5% of the mesh on the same stroke.
+        //
+        // Harmless for the two verbs that ignore it, and right for a single
+        // stamp, which reads the descriptor's direction whatever the verb.
+        // One stamp's worth of it, not the whole gesture. The engine resolves
+        // the path into stamps a spacing apart and applies the descriptor's
+        // direction at each one, so handing it the gesture's full travel
+        // applies that travel once per stamp — measured, a 0.9 drag pushed the
+        // surface 1.82 where Blender's Nudge pushed 0.16. A spacing is what
+        // the motion between two stamps actually is, which is the same
+        // quantity GRAB drags by.
+        let travel = {
+            let (first, last) = (samples[0].position, samples[samples.len() - 1].position);
+            let step = [last[0] - first[0], last[1] - first[1], last[2] - first[2]];
+            let length = step.iter().map(|axis| axis * axis).sum::<f32>().sqrt();
+            // Scaled by the intensity here because the engine does not: a
+            // stamp's strength weights the verbs that displace, and NUDGE
+            // moves by the vector it is handed. Measured before this, the
+            // Intensidade slider moved the surface 0.5753 at 0.2, at 0.65 and
+            // at 1.0 — the same number three times.
+            let stamp = preset.spacing * brush.size * brush.intensity * Self::NUDGE_PUSH;
+            if length > f32::EPSILON {
+                std::array::from_fn(|i| step[i] / length * stamp.min(length))
+            } else {
+                [0.0; 3]
+            }
+        };
         let stamp = claycore::MeshStamp {
             verb,
+            direction: travel,
             center: samples[0].position,
             // Carried even though a stroke ignores both, because the same
             // descriptor is what a single stamp would use and a descriptor
@@ -1862,6 +1921,27 @@ impl ClayDocument {
             dirty_bricks: self.dirty.len(),
         })
     }
+
+    /// What fraction of a stamp's spacing NUDGE pushes by.
+    ///
+    /// A calibration, and stated as one. NUDGE projects the drag into *each
+    /// vertex's own* tangent plane, so neighbouring vertices on a curved cap
+    /// are pushed in diverging directions and a large push shears them apart.
+    /// Measured as the mean angle between adjacent vertex normals, against the
+    /// same surface before the stroke:
+    ///
+    ///   push        surface moved   roughness
+    ///   1 spacing       0.776         12.23x
+    ///   1/2 spacing     0.361          7.18x
+    ///   0.15 spacing    0.049          1.43x
+    ///
+    /// Blender's Nudge moves 0.164 on the same stroke at 1.00x, so ours is
+    /// rougher than its equivalent at any given displacement — that is the
+    /// engine's tangent-plane push and not something a factor here can undo.
+    /// This keeps it inside the band every other mesh verb now sits in.
+    /// Turning the surface walk off does not help: measured at 7.18x either
+    /// way.
+    const NUDGE_PUSH: f32 = 0.15;
 
     /// Chunk keys drained from a grid in one go.
     ///

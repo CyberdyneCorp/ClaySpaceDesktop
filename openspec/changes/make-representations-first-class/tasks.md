@@ -251,3 +251,75 @@ was true of two of them and of the third only if you had a file to import.
     stamp has no motion to drag by — which is why Move looked broken rather
     than merely coarse. Both fixed by using the shared preset the SDF path
     already had.
+
+## 13. Measured against Blender, and what that found
+
+Driven over the Blender MCP addon on a matched sphere: same brush radius in
+world units (`unprojected_size`), same strength, same stroke, and the same
+metric computed on both sides — the mean angle between adjacent vertex normals
+before and after, which reads as how much a verb shredded the surface.
+**Blender scored 1.00x on every brush.** Ours did not.
+
+- [x] 13.1 Stop a mesh stroke building on itself
+  - Inflar 5.04x, Pinçar 9.41x, Vinco 3.71x. Padrão, the control, 1.11x —
+    it displaces along the *region's* averaged normal, so nothing compounds.
+    The rest displace along each vertex's own normal or gather toward a centre,
+    and a building stroke feeds each stamp back into the normals the next one
+    reads. Clamped on the mesh path now; ratios fall to 1.18x, 1.83x, 1.34x.
+  - Scoped to that path rather than to `Shaping::default`, and that was a
+    correction: changing the domain default broke four `masking.rs` tests, and
+    the evidence for the change was entirely from mesh verbs. It is a fact
+    about those verbs, not about brushes — the same reason `MAX_JITTER` lives
+    beside the preset. The field and the grid are untouched.
+- [x] 13.2 Give Nudge a direction
+  - `clay_mesh_sculptor_apply_stroke` derives a drag direction for GRAB and
+    SNAKEHOOK and for nothing else, so NUDGE — which projects the drag into
+    each vertex's tangent plane — was handed the descriptor's default of all
+    zeroes. It moved **not one vertex** at any size, intensity or stroke
+    length; Blender's moved 5% of the mesh on the same stroke. It also ignored
+    Intensidade, which the engine never applies to this verb, so the slider now
+    reaches it through the vector.
+  - The magnitude is a calibration and is labelled one: ours is rougher than
+    Blender's at any given displacement, which is the engine's tangent-plane
+    push rather than something a constant fixes. `NUDGE_PUSH` carries the
+    measurements.
+- [x] 13.3 Take the engine's brush defaults
+  - `MeshStamp::as_raw` built the descriptor from a **zeroed** struct, so every
+    field the type does not name was 0 — and those are not harmlessly zero.
+    `polish_angle: 0` is a fully closed gate, so Polir smoothed nothing even
+    across a crease cut for it; `layer_height: 0` is a zero ceiling, so Camada
+    moved 0.0086 against Padrão's 0.678. `clay_mesh_brush_defaults` exists for
+    exactly this — "so a host fills in what it means and takes the rest" — and
+    we were taking nothing.
+- [x] 13.4 Hold it with a measurement, not a picture
+  - `visual_mesh_verbs.rs`: no verb may exceed 2.0x roughness, and every verb
+    the shelf offers must move something. Captures beside them.
+- [x] 13.5 Make the mask test measure masking
+  - It asserted `held < raised` over a mask 0.2 wide under a brush of radius
+    0.3 — the brush reached across the strip from both sides, so the two
+    differed by 7e-7 on a 0.14 deposit and it passed on rounding. The mask is
+    wider than the brush now, and asked properly the answer is emphatic:
+    1.0005 against an unmasked 1.1400, on a sphere that started at 1.0.
+  - An intermediate reading said a building stroke defeats masking. It does
+    not — that measurement was taken against a polluted fixture and is wrong.
+    The protection above is with accumulation on.
+
+- [x] 13.6 Hold a mesh drag as one gesture
+  - The first thing found and the last thing fixed. The ViewModel applies a
+    stroke in segments as the pointer travels, which is what keeps a field
+    live under the pointer — but Grab anchors on its first stamp, so segments
+    are several grabs, each anchoring where the last stopped. Against Blender's
+    Grab on a matched sphere with the same drag: one call reaches 9.8% and
+    moves 0.707, Blender 11.4% and 0.779, two segments 19.0% and 0.569. Two
+    anchors sharing one drag, which is the crease along the path.
+  - Ruled out on the way: the geodesic falloff, which makes no difference to
+    Grab at all — measured identical either way. Blender's Grab and ZBrush's
+    plain Move are Euclidean, but that is not what was wrong here.
+  - A mesh drag now shows nothing until the pointer comes up. Reverting each
+    segment before re-applying the gesture from its anchor would buy the
+    preview back and needs the engine to hold a gesture open across calls.
+
+**Still open**: Camada is better but weak (0.0086 against Blender's 0.341).
+Pintar and Borrar do nothing on a colourless mesh and Pintar reports success
+while doing it. Move covers 27% of the sphere to Blender's 1.8% at the same
+nominal radius, which is a units question rather than a defect found.
