@@ -140,6 +140,27 @@ pub trait SculptModel {
         }
     }
 
+    /// Applies something a gesture cannot express.
+    ///
+    /// The second verb beside `apply_stroke` — see [`crate::LayerOperation`]
+    /// for why the two are separate rather than one widened call. Provided, so
+    /// a double that models no operations refuses them rather than having to
+    /// spell out a refusal it never reaches.
+    fn apply_operation(
+        &mut self,
+        operation: crate::LayerOperation,
+    ) -> Result<EditOutcome, ModelError> {
+        let _ = operation;
+        Err(ModelError::Unavailable(crate::Unavailable::NoVerbHere {
+            active: self.active_representation(),
+            verbs: crate::Verbs {
+                sdf: None,
+                voxel: None,
+                mesh: None,
+            },
+        }))
+    }
+
     /// Applies part or all of a gesture with the given tool.
     ///
     /// A whole gesture at once lets the engine's stroke engine decide stamp

@@ -1708,6 +1708,115 @@ impl SculptModel for ClayDocument {
         }
     }
 
+    fn apply_operation(
+        &mut self,
+        operation: clayspace_model::LayerOperation,
+    ) -> Result<EditOutcome, ModelError> {
+        if !operation.applies_to(self.active_representation()) {
+            return Err(ModelError::Unavailable(
+                clayspace_model::Unavailable::NoVerbHere {
+                    active: self.active_representation(),
+                    verbs: clayspace_model::Verbs {
+                        sdf: None,
+                        voxel: None,
+                        mesh: Some("clay_mesh_sculptor_deform"),
+                    },
+                },
+            ));
+        }
+        let layer = self.active_layer();
+        if !layer.carries_geometry {
+            return Err(ModelError::Unavailable(
+                clayspace_model::Unavailable::MissingAttribute { needs: "mesh" },
+            ));
+        }
+        let key = layer.key;
+        let engine_name = layer.engine_name.clone();
+        let layer_id = layer.id;
+        self.ensure_mesh_sculptor(key, &engine_name)?;
+
+        // Recorded like a stroke, because it is one edit to a sculptor and one
+        // thing a user did.
+        let mut deltas = claycore::MeshDeltas::new().map_err(ModelError::engine)?;
+        let moved = {
+            let mut held = self.mesh_sculptor.borrow_mut();
+            let Some((_, sculptor)) = held.as_mut() else {
+                return Ok(EditOutcome::NOTHING);
+            };
+            let moved = match operation {
+                clayspace_model::LayerOperation::Taper {
+                    axis,
+                    span,
+                    scale_start,
+                    scale_end,
+                } => sculptor.deform(
+                    claycore::MeshDeformer {
+                        verb: claycore::MeshDeform::Taper,
+                        axis,
+                        span,
+                        scale_start,
+                        scale_end,
+                        ..claycore::MeshDeformer::default()
+                    },
+                    self.mask.as_ref(),
+                    Some(&mut deltas),
+                ),
+                clayspace_model::LayerOperation::Twist { axis, span, angle } => sculptor.deform(
+                    claycore::MeshDeformer {
+                        verb: claycore::MeshDeform::Twist,
+                        axis,
+                        span,
+                        angle,
+                        ..claycore::MeshDeformer::default()
+                    },
+                    self.mask.as_ref(),
+                    Some(&mut deltas),
+                ),
+                clayspace_model::LayerOperation::LatticeDrag {
+                    divisions,
+                    at,
+                    offset,
+                } => {
+                    // The cage is built here from the layer's own bounds and
+                    // the one drag being applied. Holding a cage across drags
+                    // would mean the document owning a piece of interface
+                    // state; rebuilding it is cheap next to walking the
+                    // vertices, which happens either way.
+                    // The layer's own bounds, falling back to a unit box for
+                    // a layer the engine reports none for — a cage has to be
+                    // somewhere, and a box around the origin is where a
+                    // sculptor would expect to find one.
+                    let (min, max) = self
+                        .document
+                        .layer_bounds(layer_id)
+                        .ok()
+                        .flatten()
+                        .unwrap_or(([-1.0; 3], [1.0; 3]));
+                    let mut lattice = claycore::MeshLattice::new(min, max, divisions)
+                        .map_err(ModelError::engine)?;
+                    lattice.set_offset(at, offset).map_err(ModelError::engine)?;
+                    sculptor.apply_lattice(&lattice, Some(&mut deltas))
+                }
+            }
+            .map_err(ModelError::engine)?;
+            sculptor.refit().map_err(ModelError::engine)?;
+            moved
+        };
+
+        if deltas.vertex_count().map_err(ModelError::engine)? > 0 {
+            self.mesh_undo.push(MeshGesture {
+                layer: key,
+                deltas,
+                engine_depth: self.engine_undo_depth(),
+            });
+            self.mesh_redo.clear();
+        }
+        Ok(EditOutcome {
+            changed: moved > 0,
+            dirty_bricks: 0,
+        })
+    }
+
     fn pick(&self, origin: [f32; 3], direction: [f32; 3]) -> Option<[f32; 3]> {
         // A mesh layer is in neither the tape nor the brick cache, so a field
         // raycast could never see one — which is why a press on a mesh layer

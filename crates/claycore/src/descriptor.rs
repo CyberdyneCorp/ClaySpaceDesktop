@@ -53,6 +53,7 @@ descriptors! {
     sys::clay_volume_params,
     sys::clay_mesh_brush_desc,
     sys::clay_mesh_hit,
+    sys::clay_mesh_deform_desc,
     sys::clay_field_report,
     sys::clay_consolidation_params,
     sys::clay_consolidation_cost,

@@ -45,16 +45,17 @@
 - [x] 5.1 Wrap `clay_mesh_sculptor_create` / `destroy` / `refresh` / `refit` / `quality` in `claycore`
 - [x] 5.2 Wrap `clay_mesh_sculptor_stamp` and `clay_mesh_sculptor_apply_stroke`
 - [x] 5.3 Hold a mesh sculptor per mesh layer in `ClayDocument`, created on first sculpt and invalidated when the geometry is replaced
-- [x] 5.4 Route a stroke on an active mesh layer to the mesh sculptor
+- [x] 5.4 Route a stroke on an active mesh layer to the mesh sculptor — the model half; the viewport half is 5.14
 - [x] 5.5 Add the sixteen mesh brushes to the capability table and the shelf
 - [x] 5.6 Make mesh layers pickable, so a press sculpts rather than orbits
 - [x] 5.7 Record a mesh gesture as one undoable action that reverts bit-exactly
 - [x] 5.8 Report the mesh quality figure and name retopology as the remedy when a stroke passes it
 - [x] 5.9 Test that indices and quads are byte-identical across a stroke
 - [x] 5.10 Wrap and expose paint and smear, refusing a mesh with no colour attribute with a stated reason
-- [ ] 5.11 Wrap and expose `clay_mesh_sculptor_deform` for taper and twist as layer operations
-- [ ] 5.12 Wrap and expose the mesh lattice cage
-- [ ] 5.13 Visual captures for the mesh brushes, before and after
+- [x] 5.11 Wrap and expose `clay_mesh_sculptor_deform` for taper and twist as layer operations
+- [x] 5.12 Wrap and expose the mesh lattice cage
+- [!] 5.13 Visual captures for the mesh brushes, before and after — **blocked**: the viewport draws only the brick-cache surface, and a mesh layer is not in it, so a sculpted mesh renders as nothing. Pre-existing (an imported mesh has never been drawn, only carried and exported) and made critical by mesh sculpting
+- [ ] 5.14 Draw mesh layers in the viewport: a second geometry source beside `SurfaceGeometry`, since a mesh layer has no bricks. This is the other half of 5.4's "the viewport shows the result"
 
 ## 6. Phase 3 — voxel vocabulary
 

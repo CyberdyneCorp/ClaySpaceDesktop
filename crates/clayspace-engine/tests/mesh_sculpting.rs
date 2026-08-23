@@ -337,3 +337,105 @@ fn the_mesh_reports_what_its_queries_cost() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+/// Deformers and the cage: the operations a gesture cannot express.
+///
+/// A deformer states something about the *form* — no centre, no radius, no
+/// falloff — and a cage is dragged by control points, so neither has a stroke
+/// to be resolved from. They go through `apply_operation`, the second verb
+/// beside `apply_stroke`, rather than widening the one path a latency budget
+/// is measured against.
+mod operations {
+    use super::*;
+    use clayspace_model::LayerOperation;
+
+    fn taper() -> LayerOperation {
+        LayerOperation::Taper {
+            axis: [0.0, 1.0, 0.0],
+            span: 2.0,
+            scale_start: 1.0,
+            scale_end: 0.5,
+        }
+    }
+
+    #[test]
+    fn a_deformer_reaches_every_vertex_without_a_brush_position() {
+        let Some((mut document, path)) = with_imported_mesh("deform") else {
+            return;
+        };
+        let before = document.stats();
+        let outcome = document
+            .apply_operation(taper())
+            .expect("taper is a mesh operation");
+        assert!(outcome.changed, "the taper moved nothing");
+        let after = document.stats();
+        assert_eq!(
+            (after.triangles, after.vertices),
+            (before.triangles, before.vertices),
+            "a deformer changed the topology"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_twist_and_a_lattice_drag_are_both_accepted() {
+        let Some((mut document, path)) = with_imported_mesh("twist") else {
+            return;
+        };
+        document
+            .apply_operation(LayerOperation::Twist {
+                axis: [0.0, 1.0, 0.0],
+                span: 2.0,
+                angle: 0.6,
+            })
+            .expect("twist is a mesh operation");
+        document
+            .apply_operation(LayerOperation::LatticeDrag {
+                divisions: [3, 3, 3],
+                at: [1, 2, 1],
+                offset: [0.15, 0.0, 0.0],
+            })
+            .expect("a cage drag is a mesh operation");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// One operation is one undo, on the same stack a stroke uses.
+    #[test]
+    fn an_operation_is_undoable_like_a_gesture() {
+        let Some((mut document, path)) = with_imported_mesh("deform-undo") else {
+            return;
+        };
+        let before = document.history().depth;
+        document.apply_operation(taper()).expect("taper");
+        assert_eq!(document.history().depth, before + 1);
+        assert!(document.undo().expect("undo"));
+        assert_eq!(document.history().depth, before);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A cage is mesh-only on purpose: ZBrush and Blender both apply FFD
+    /// forward to vertices, which a mesh allows and an implicit field does not.
+    #[test]
+    fn an_operation_is_refused_on_a_field() {
+        let Some((mut document, path)) = with_imported_mesh("deform-sdf") else {
+            return;
+        };
+        let sdf = document
+            .scene()
+            .layers
+            .iter()
+            .find(|layer| layer.representation == Representation::Sdf)
+            .map(|layer| layer.key)
+            .expect("the starting form");
+        document.set_active_layer(sdf).expect("activate");
+
+        let error = document
+            .apply_operation(taper())
+            .expect_err("a field has no forward point map to apply");
+        assert!(
+            error.to_string().contains("mesh"),
+            "the refusal must name where the operation does apply: {error}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+}

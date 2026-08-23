@@ -74,6 +74,62 @@ impl Verbs {
     }
 }
 
+/// Something done to a layer that a gesture cannot express.
+///
+/// The design calls this the second verb beside `apply_stroke`. A deformer
+/// states something about the *form* — no centre, no radius, no falloff — and
+/// a cage is dragged by its control points, so neither has a gesture to be
+/// resolved from. Widening a stroke to carry them would make every caller and
+/// every double handle cases that are not strokes, on the one path a latency
+/// budget is measured against.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LayerOperation {
+    /// The cross-section scale ramps along an axis.
+    Taper {
+        axis: [f32; 3],
+        span: f32,
+        scale_start: f32,
+        scale_end: f32,
+    },
+    /// Rotation about an axis ramps along it, in radians across the span.
+    Twist {
+        axis: [f32; 3],
+        span: f32,
+        angle: f32,
+    },
+    /// A free-form deformation cage, by the offset of one control point.
+    ///
+    /// Sent per drag rather than as a whole cage: the interface owns the cage
+    /// and the document owns the vertices, and shipping the cage across on
+    /// every drag would copy it for each control point moved.
+    LatticeDrag {
+        divisions: [i32; 3],
+        at: [i32; 3],
+        offset: [f32; 3],
+    },
+}
+
+impl LayerOperation {
+    /// What the history calls it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Taper { .. } => "taper",
+            Self::Twist { .. } => "twist",
+            Self::LatticeDrag { .. } => "lattice",
+        }
+    }
+
+    /// Which representations can accept it.
+    ///
+    /// Mesh only, for all three. Taper and twist exist on the SDF side as
+    /// deformers on the edit list rather than as operations on a layer, and a
+    /// cage is deliberately mesh-only: ZBrush and Blender both apply FFD
+    /// forward to vertices, which a mesh allows and an implicit field does not.
+    pub fn applies_to(self, representation: Representation) -> bool {
+        representation == Representation::Mesh
+    }
+}
+
 /// What the active layer can accept right now.
 ///
 /// Grouped rather than passed as loose flags because the list grows: a tool

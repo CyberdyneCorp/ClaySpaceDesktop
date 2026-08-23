@@ -208,6 +208,186 @@ impl MeshStamp {
     }
 }
 
+/// A whole-form deformer, and the frame it acts in.
+///
+/// A different kind of thing from a brush, and deliberately so: no centre, no
+/// radius, no falloff, because a deformer states something about the *form*
+/// and a brush about a dab.
+///
+/// Applied as FORWARD point maps once per vertex — the opposite direction to
+/// the SDF deformers of the same name, which must run backwards to answer
+/// "where did the material at this point come from". Forwards is both the
+/// easier direction and the exact one, so a tapered mesh and a tapered field
+/// are the same shape.
+///
+/// There is deliberately no bend: its map folds distinct points onto the same
+/// place past a gentle angle, so no forward map exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MeshDeform {
+    /// The cross-section scale ramps across the span.
+    Taper,
+    /// Rotation about the axis ramps across the span.
+    Twist,
+}
+
+impl MeshDeform {
+    pub const ALL: [MeshDeform; 2] = [Self::Taper, Self::Twist];
+
+    fn to_raw(self) -> i32 {
+        (match self {
+            Self::Taper => sys::clay_mesh_deform::CLAY_MESH_DEFORM_TAPER,
+            Self::Twist => sys::clay_mesh_deform::CLAY_MESH_DEFORM_TWIST,
+        }) as i32
+    }
+}
+
+/// What a deformer does, and over what.
+#[derive(Debug, Clone, Copy)]
+pub struct MeshDeformer {
+    pub verb: MeshDeform,
+    pub origin: [f32; 3],
+    pub axis: [f32; 3],
+    /// How far along `axis` the ramp runs. Must be positive.
+    pub span: f32,
+    /// Taper: the cross-section scale at each end of the span. 1 and 1 is the
+    /// identity.
+    pub scale_start: f32,
+    pub scale_end: f32,
+    /// Twist: total rotation across the span, in radians. 0 is the identity.
+    pub angle: f32,
+}
+
+impl Default for MeshDeformer {
+    fn default() -> Self {
+        Self {
+            verb: MeshDeform::Taper,
+            origin: [0.0; 3],
+            axis: [0.0, 1.0, 0.0],
+            span: 1.0,
+            scale_start: 1.0,
+            scale_end: 1.0,
+            angle: 0.0,
+        }
+    }
+}
+
+impl MeshDeformer {
+    fn to_raw(self) -> sys::clay_mesh_deform_desc {
+        let mut raw = sys::clay_mesh_deform_desc::sized();
+        raw.verb = self.verb.to_raw();
+        raw.origin = self.origin;
+        raw.axis = self.axis;
+        raw.span = self.span;
+        raw.scale_start = self.scale_start;
+        raw.scale_end = self.scale_end;
+        raw.angle = self.angle;
+        raw
+    }
+}
+
+/// A free-form deformation cage over a mesh — ZBrush's Gizmo, in effect.
+///
+/// The one ZBrush gizmo deformer that is not an SDF deformer here, and
+/// deliberately: ZBrush and Blender both apply FFD *forward* to vertices,
+/// which a mesh allows and an implicit field does not.
+pub struct MeshLattice {
+    raw: NonNull<sys::clay_mesh_lattice>,
+}
+
+impl MeshLattice {
+    /// A cage over a box, with control points per axis.
+    pub fn new(min: [f32; 3], max: [f32; 3], divisions: [i32; 3]) -> Result<Self> {
+        // SAFETY: two arrays of three floats and three counts; returns an
+        // owned handle or null.
+        let raw = unsafe {
+            sys::clay_mesh_lattice_create(
+                min.as_ptr(),
+                max.as_ptr(),
+                divisions[0],
+                divisions[1],
+                divisions[2],
+            )
+        };
+        NonNull::new(raw)
+            .map(|raw| Self { raw })
+            .ok_or_else(|| raw_failure("clay_mesh_lattice_create", ErrorKind::Backend))
+    }
+
+    /// Control points per axis, after the engine's own clamping.
+    pub fn divisions(&self) -> Result<[i32; 3]> {
+        let (mut nx, mut ny, mut nz) = (0, 0, 0);
+        // SAFETY: valid handle, three out-parameters written on success.
+        check(
+            unsafe {
+                sys::clay_mesh_lattice_divisions(self.raw.as_ptr(), &mut nx, &mut ny, &mut nz)
+            },
+            "clay_mesh_lattice_divisions",
+        )?;
+        Ok([nx, ny, nz])
+    }
+
+    /// Drags one control point.
+    pub fn set_offset(&mut self, at: [i32; 3], offset: [f32; 3]) -> Result<()> {
+        // SAFETY: valid handle, an index the entry point range-checks, and an
+        // array of three floats.
+        check(
+            unsafe {
+                sys::clay_mesh_lattice_set_offset(
+                    self.raw.as_ptr(),
+                    at[0],
+                    at[1],
+                    at[2],
+                    offset.as_ptr(),
+                )
+            },
+            "clay_mesh_lattice_set_offset",
+        )
+    }
+
+    /// Where a control point is now — rest plus offset, which is what a gizmo
+    /// draws.
+    pub fn position(&self, at: [i32; 3]) -> Result<[f32; 3]> {
+        let mut out = [0.0; 3];
+        // SAFETY: valid handle, a range-checked index, and an array of three
+        // floats written on success.
+        check(
+            unsafe {
+                sys::clay_mesh_lattice_position(
+                    self.raw.as_ptr(),
+                    at[0],
+                    at[1],
+                    at[2],
+                    out.as_mut_ptr(),
+                )
+            },
+            "clay_mesh_lattice_position",
+        )?;
+        Ok(out)
+    }
+
+    /// Whether no control point has been dragged.
+    ///
+    /// Worth asking before applying one: an untouched cage moves every point
+    /// by exactly zero, and paying for that over every vertex is a cost with
+    /// nothing to show.
+    pub fn is_identity(&self) -> Result<bool> {
+        let mut identity = 0;
+        // SAFETY: valid handle, out-parameter written on success.
+        check(
+            unsafe { sys::clay_mesh_lattice_is_identity(self.raw.as_ptr(), &mut identity) },
+            "clay_mesh_lattice_is_identity",
+        )?;
+        Ok(identity != 0)
+    }
+}
+
+impl Drop for MeshLattice {
+    fn drop(&mut self) {
+        // SAFETY: owned handle, released exactly once.
+        unsafe { sys::clay_mesh_lattice_destroy(self.raw.as_ptr()) };
+    }
+}
+
 /// A sparse, coalesced record of what a gesture moved.
 ///
 /// The undo a mesh stroke cannot get from the edit list: a vertex displacement
@@ -472,6 +652,57 @@ impl MeshSculptor {
             normal: hit.normal,
             seed_class: hit.seed_class,
         }))
+    }
+
+    /// Applies a whole-form deformer to every vertex.
+    ///
+    /// Not a brush: it takes no position, because a deformer states something
+    /// about the form rather than about a dab.
+    pub fn deform(
+        &mut self,
+        deformer: MeshDeformer,
+        mask: Option<&Mask>,
+        deltas: Option<&mut MeshDeltas>,
+    ) -> Result<usize> {
+        let desc = deformer.to_raw();
+        let mut moved = 0;
+        // SAFETY: valid handle and a descriptor carrying its own size; the
+        // mask and the record are both nullable.
+        check(
+            unsafe {
+                sys::clay_mesh_sculptor_deform(
+                    self.raw.as_ptr(),
+                    &desc,
+                    mask.map_or(std::ptr::null(), |m| m.as_ptr() as *const _),
+                    deltas.map_or(std::ptr::null_mut(), |d| d.raw.as_ptr()),
+                    &mut moved,
+                )
+            },
+            "clay_mesh_sculptor_deform",
+        )?;
+        Ok(moved)
+    }
+
+    /// Applies a cage to every vertex.
+    pub fn apply_lattice(
+        &mut self,
+        lattice: &MeshLattice,
+        deltas: Option<&mut MeshDeltas>,
+    ) -> Result<usize> {
+        let mut moved = 0;
+        // SAFETY: both handles are valid; the record is nullable.
+        check(
+            unsafe {
+                sys::clay_mesh_sculptor_lattice(
+                    self.raw.as_ptr(),
+                    lattice.raw.as_ptr(),
+                    deltas.map_or(std::ptr::null_mut(), |d| d.raw.as_ptr()),
+                    &mut moved,
+                )
+            },
+            "clay_mesh_sculptor_lattice",
+        )?;
+        Ok(moved)
     }
 
     /// Updates the ray-query tree for the vertices the last stamp moved.
