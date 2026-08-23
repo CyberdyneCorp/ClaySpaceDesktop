@@ -65,11 +65,12 @@ fn passes(document: &ClayDocument) -> Vec<clayspace_model::SculptLayer> {
 
 /// How many cells the grid holds.
 ///
-/// The grid itself rather than anything derived from it. A raycast marches the
-/// document's *field*, which a voxel layer is not in, and crossing the grid
-/// back into a field to march it would add a layer and change the thing being
-/// measured — so what a pass does is counted in cells, which is also the unit
-/// the pass records in.
+/// The grid itself rather than anything derived from it. A raycast would work —
+/// a voxel layer *is* evaluated into the document's field, and `pick` finds it
+/// — but it answers with whichever surface is nearest, and a pass dialled
+/// between 0 and 1 moves the surface by a fraction of a cell. Counting cells
+/// measures the pass in the unit the pass records in, and cannot be fooled by
+/// a fraction landing between two rays.
 fn cells(document: &mut ClayDocument) -> usize {
     document
         .occupied_cells()
