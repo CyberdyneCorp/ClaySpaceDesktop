@@ -72,6 +72,10 @@ are nested under it in the layer panel: record a pass, keep sculpting, and dial
 its strength back afterwards. Not undo, which is a stack you pop; this is a
 slider you keep, and it survives a save and a reload.
 
+A layer row is renamed with a double-click on its name and carries its own menu
+on a right-click, with *Renomear* and *Excluir* — the latter disabled, with the
+reason on it, for the last layer a document has.
+
 **Arquivo** carries the document lifecycle and mesh import/export; **Ajuda**
 carries the diagnostics report and the attribution manifest.
 

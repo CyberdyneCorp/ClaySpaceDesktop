@@ -44,6 +44,18 @@ pub enum Command {
     SetLayerVisible(LayerKey, bool),
     AddLayer,
     RemoveLayer(LayerKey),
+    /// Starts renaming a layer, with its current name in the field.
+    ///
+    /// A mode rather than a dialog: a layer stack is renamed in place, and a
+    /// modal for one word would stop the sculptor to ask for it.
+    BeginRenameLayer(LayerKey),
+    /// What the rename field holds now. Not an edit — nothing reaches the
+    /// document until the name is committed.
+    EditLayerName(String),
+    /// Commits the field to the layer it was opened on.
+    CommitRenameLayer,
+    /// Abandons it, leaving the name as it was.
+    CancelRenameLayer,
 
     // -- documents --------------------------------------------------------
     // Handled by the composition root rather than a ViewModel: each one may
@@ -198,6 +210,16 @@ impl Command {
                 // Choosing how the *next* edit combines changes nothing yet;
                 // the stroke that follows is the entry.
                 | Self::SetCombine(_)
+                // Opening, typing into and abandoning the rename field change
+                // nothing in the document. Committing does, and it takes the
+                // composition root's own path for the reason import does: the
+                // draft lives there, the ViewModel refreshes the panel itself,
+                // and a *refused* commit must not mark the document modified
+                // for a name it did not accept.
+                | Self::BeginRenameLayer(_)
+                | Self::EditLayerName(_)
+                | Self::CancelRenameLayer
+                | Self::CommitRenameLayer
                 // Import *does* change the document, but it goes through the
                 // composition root's own path — dialog, then model — and
                 // marks the document itself. Routing it through the ordinary
@@ -249,6 +271,10 @@ impl Command {
             Self::SetLayerVisible(..) => "layer visibility",
             Self::AddLayer => "new layer",
             Self::RemoveLayer(_) => "remove layer",
+            Self::BeginRenameLayer(_) => "rename layer",
+            Self::EditLayerName(_) => "layer name",
+            Self::CommitRenameLayer => "rename layer",
+            Self::CancelRenameLayer => "cancel rename",
             Self::ToggleSymmetry(_) => "symmetry",
             Self::NewArmature => "new armature",
             Self::ToggleArmatureEditing => "edit armature",
@@ -342,6 +368,15 @@ impl CommandQueue {
 
     pub fn len(&self) -> usize {
         self.commands.len()
+    }
+
+    /// What is queued, without taking it.
+    ///
+    /// For tests that drive the interface with real input and then ask what it
+    /// asked for — the only way to check that a menu entry is wired to the
+    /// command it names.
+    pub fn commands(&self) -> &[Command] {
+        &self.commands
     }
 
     /// Takes everything queued, leaving the queue empty.

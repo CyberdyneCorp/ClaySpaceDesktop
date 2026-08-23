@@ -132,6 +132,11 @@ pub struct Strings {
     pub label_units: &'static str,
     pub label_backend: &'static str,
     pub label_new_layer: &'static str,
+    /// Renaming and removing a layer, from the row's own menu.
+    pub action_rename_layer: &'static str,
+    pub action_remove_layer: &'static str,
+    /// Why a layer cannot be removed, shown on the disabled entry.
+    pub layer_last_one: &'static str,
     pub label_spheres: &'static str,
     pub label_skin: &'static str,
     pub label_mirror_new: &'static str,
@@ -265,6 +270,9 @@ const PT_BR: Strings = Strings {
     label_units: "Unidades",
     label_backend: "Aceleração",
     label_new_layer: "Nova camada",
+    action_rename_layer: "Renomear",
+    action_remove_layer: "Excluir",
+    layer_last_one: "um documento guarda ao menos uma camada",
     label_spheres: "Esferas",
     label_skin: "Pele",
     label_mirror_new: "Espelhar novas",
@@ -390,6 +398,9 @@ const EN_US: Strings = Strings {
     label_units: "Units",
     label_backend: "Acceleration",
     label_new_layer: "New layer",
+    action_rename_layer: "Rename",
+    action_remove_layer: "Delete",
+    layer_last_one: "a document keeps at least one layer",
     label_spheres: "Spheres",
     label_skin: "Skin",
     label_mirror_new: "Mirror new",
@@ -520,6 +531,9 @@ const ES_419: Strings = Strings {
     label_units: "Unidades",
     label_backend: "Aceleración",
     label_new_layer: "Nueva capa",
+    action_rename_layer: "Renombrar",
+    action_remove_layer: "Eliminar",
+    layer_last_one: "un documento guarda al menos una capa",
     label_spheres: "Esferas",
     label_skin: "Piel",
     label_mirror_new: "Reflejar nuevas",
@@ -593,7 +607,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 96] {
+    pub fn all(&self) -> [&'static str; 99] {
         [
             self.menu_file,
             self.menu_edit,
@@ -655,6 +669,9 @@ impl Strings {
             self.label_units,
             self.label_backend,
             self.label_new_layer,
+            self.action_rename_layer,
+            self.action_remove_layer,
+            self.layer_last_one,
             self.label_spheres,
             self.label_skin,
             self.label_mirror_new,

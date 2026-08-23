@@ -67,8 +67,21 @@ fn engine_blend(profile: BlendProfile) -> Blend {
     }
 }
 
+/// One chunk's triangles, as the viewport wants them.
+///
+/// Indices are relative to this chunk's own first vertex, so a chunk can be
+/// replaced or dropped without touching its neighbours' — which is what the
+/// engine's ranges promise: a voxel face belongs to exactly one cell in
+/// exactly one chunk, so there is nothing to weld across a seam.
+#[derive(Debug, Default)]
+struct ChunkGeometry {
+    positions: Vec<[f32; 3]>,
+    normals: Vec<[f32; 3]>,
+    colors: Vec<[f32; 3]>,
+    indices: Vec<u32>,
+}
+
 /// A layer the document holds, and what it is made of.
-#[derive(Clone)]
 struct Layer {
     id: LayerId,
     /// A stable handle the interface uses. Engine ids are not guaranteed to
@@ -94,6 +107,25 @@ struct Layer {
     visible: bool,
     protection: Protection,
     intensity: u8,
+    /// Where this layer's grid is, in world space. `None` for the other two
+    /// representations and for an empty grid.
+    ///
+    /// Cached for the reason the pass stack is: reading a grid needs a mutable
+    /// borrow of the document and `bounds` takes a shared one. Without it the
+    /// question had no answer at all — `layer_bounds` reports a layer's SDF
+    /// extent and a voxel layer has no SDF content, so Frame All on a sculpted
+    /// grid framed the default box and the conversion panel measured the
+    /// region as zero.
+    voxel_bounds: Option<([f32; 3], [f32; 3])>,
+    /// This layer's grid as triangles, one entry per chunk.
+    ///
+    /// Kept per chunk so an edit costs the edit. Meshing a grid whole after
+    /// every stroke is what it used to do, and it does not scale: measured on
+    /// a 0.01 grid, one 3.2 ms dab cost **309 ms** to re-mesh, against a 50 ms
+    /// budget, and rising with the sculpt. Draining the engine's own
+    /// dirty-chunk set and re-meshing only those costs 3.3 ms and does not
+    /// rise.
+    voxel_chunks: std::collections::BTreeMap<[i32; 3], ChunkGeometry>,
     /// The recorded passes on this layer, bottom-up.
     ///
     /// Cached rather than read on demand, for the same reason the armature
@@ -141,6 +173,18 @@ pub struct ClayDocument {
     /// Bricks dirtied since the viewport last caught up.
     dirty: Vec<BrickKey>,
     stats: SceneStats,
+    /// Chunk keys re-meshed by the last refresh.
+    ///
+    /// A measurement rather than bookkeeping: it is what says an edit costs
+    /// the edit, and it is what a test can assert on without timing anything.
+    meshed_chunks: usize,
+    /// Triangles and vertices the *carried* layers handed the viewport.
+    ///
+    /// Kept apart from `stats` because the two are recorded at different
+    /// moments by different parts of the viewport — the surface cache reports
+    /// after it meshes, the carried layers when they are assembled — and a
+    /// single field would have each overwrite the other's contribution.
+    carried: (usize, usize),
     /// Bricks the surface occupies, refreshed with the stats.
     ///
     /// Kept because the detail policy needs a size and asking the cache for
@@ -270,6 +314,8 @@ impl ClayDocument {
                 visible: true,
                 protection: Protection::default(),
                 intensity: 100,
+                voxel_bounds: None,
+                voxel_chunks: std::collections::BTreeMap::new(),
                 sculpt_layers: Vec::new(),
             }],
             active: 0,
@@ -280,6 +326,8 @@ impl ClayDocument {
             recording_pass: false,
             dirty: Vec::new(),
             stats: SceneStats::default(),
+            carried: (0, 0),
+            meshed_chunks: 0,
             surface_brick_count: 0,
             mesh_sculptor: std::cell::RefCell::new(None),
             mesh_undo: Vec::new(),
@@ -463,6 +511,8 @@ impl ClayDocument {
             visible: true,
             protection: Protection::default(),
             intensity: 100,
+            voxel_bounds: None,
+            voxel_chunks: std::collections::BTreeMap::new(),
             sculpt_layers: Vec::new(),
         });
         self.active = self.layers.len() - 1;
@@ -691,6 +741,8 @@ impl ClayDocument {
             visible: true,
             protection: Protection::default(),
             intensity: 100,
+            voxel_bounds: None,
+            voxel_chunks: std::collections::BTreeMap::new(),
             sculpt_layers: Vec::new(),
         });
         self.active = self.layers.len() - 1;
@@ -838,17 +890,15 @@ impl ClayDocument {
             .map(|stats| stats.surface_bricks as usize)
             .unwrap_or(self.surface_brick_count);
         self.stats = SceneStats {
-            // Reported once the viewport meshes; until then nothing has been
-            // built and the interface says so rather than showing a zero that
-            // reads as an empty document.
+            // The surface cache's own counts, as it recorded them. What the
+            // *interface* is told is these plus the carried layers', which
+            // `stats` composes — classifying "nothing has been built yet" from
+            // the field alone called a document holding one sculpted grid
+            // empty.
             triangles: self.stats.triangles,
             vertices: self.stats.vertices,
             objects: self.layers.len().max(1),
-            detail: if self.stats.triangles == 0 {
-                clayspace_model::Detail::Pending
-            } else {
-                self.stats.detail
-            },
+            detail: self.stats.detail,
         };
     }
 
@@ -1562,6 +1612,29 @@ impl ClayDocument {
         })
     }
 
+    /// Where a ray meets the active layer's grid.
+    ///
+    /// Through a read-only borrow of the grid, which is what lets this answer
+    /// from a `&self` method: the engine's lookup takes a mutable document
+    /// handle because one call serves reads and writes, and a picking ray
+    /// writes nothing.
+    ///
+    /// The engine reports the distance to the entry face of the first occupied
+    /// cell, along the direction it normalized — so the position is the origin
+    /// plus the *unit* direction times that distance, and a caller passing an
+    /// unnormalized direction still gets the right point.
+    fn pick_active_grid(&self, origin: [f32; 3], direction: [f32; 3]) -> Option<[f32; 3]> {
+        let layer = self.active_layer();
+        let (_, grid) = self.document.voxel_reader(&layer.engine_name).ok()?;
+        let hit = grid.raycast(origin, direction).ok().flatten()?;
+        let length = direction.iter().map(|axis| axis * axis).sum::<f32>().sqrt();
+        if length <= f32::EPSILON {
+            return None;
+        }
+        Some(std::array::from_fn(|i| {
+            origin[i] + direction[i] / length * hit.distance
+        }))
+    }
     /// Where a ray meets the active mesh layer's triangles.
     ///
     /// Answered by the sculptor's own tree, through the cell that field is
@@ -1641,12 +1714,22 @@ impl ClayDocument {
         })
     }
 
-    /// The triangles of every visible mesh layer, combined for the viewport.
+    /// Chunk keys drained from a grid in one go.
     ///
-    /// A mesh layer has no bricks, so the surface built from the cache cannot
-    /// contain it. This is the second geometry source that draws one, and it
-    /// is combined across layers because the viewport draws one buffer: the
-    /// indices of each layer are shifted past the vertices already collected.
+    /// The engine stages the whole queue on the first call after a large edit
+    /// and holds it until the drain finishes, so this bounds the loop's
+    /// iterations rather than its memory. A stroke dirties single figures.
+    const VOXEL_CHUNK_BATCH: usize = 1024;
+
+    /// The triangles of every visible mesh and voxel layer, for the viewport.
+    ///
+    /// Neither representation has bricks, so the surface built from the cache
+    /// cannot contain either: the cache holds the document's SDF field, and a
+    /// voxel layer carries no SDF content — the engine says so outright, and a
+    /// document holding nothing but a sculpted grid meshed to zero triangles
+    /// because of it. This is the second geometry source, and it is combined
+    /// across layers because the viewport draws one buffer: the indices of
+    /// each layer are shifted past the vertices already collected.
     ///
     /// Hidden layers are left out rather than uploaded and skipped — the point
     /// of hiding one is not to pay for it.
@@ -1654,22 +1737,54 @@ impl ClayDocument {
     pub fn visible_mesh_geometry(
         &mut self,
     ) -> (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<u32>) {
-        let names: Vec<String> = self
+        // Every grid first, visible or not: the dirty set is the engine's and
+        // draining it is what keeps a chunk's geometry in step with its cells.
+        // Skipping a hidden layer would leave its keys queued, and showing it
+        // again would then re-mesh the whole backlog in one frame.
+        self.meshed_chunks = 0;
+        for index in 0..self.layers.len() {
+            if let Err(e) = self.refresh_voxel_chunks(index) {
+                eprintln!("a camada de voxels não pôde ser remalhada: {e}");
+            }
+        }
+
+        // Sized once from what the chunks hold, so assembling a worked grid
+        // is a copy rather than a dozen reallocations of a growing buffer.
+        let (mut vertices, mut triangles) = (0, 0);
+        for layer in &self.layers {
+            for chunk in layer.voxel_chunks.values() {
+                vertices += chunk.positions.len();
+                triangles += chunk.indices.len();
+            }
+        }
+        let mut positions = Vec::with_capacity(vertices);
+        let mut normals = Vec::with_capacity(vertices);
+        let mut colors = Vec::with_capacity(vertices);
+        let mut indices = Vec::with_capacity(triangles);
+
+        let drawn: Vec<(usize, Representation, String)> = self
             .layers
             .iter()
-            .filter(|layer| {
-                layer.representation == Representation::Mesh
-                    && layer.carries_geometry
-                    && layer.visible
-            })
-            .map(|layer| layer.engine_name.clone())
+            .enumerate()
+            .filter(|(_, layer)| layer.carries_geometry && layer.visible)
+            .filter(|(_, layer)| layer.representation != Representation::Sdf)
+            .map(|(index, layer)| (index, layer.representation, layer.engine_name.clone()))
             .collect();
 
-        let mut positions = Vec::new();
-        let mut normals = Vec::new();
-        let mut colors = Vec::new();
-        let mut indices = Vec::new();
-        for name in names {
+        for (index, representation, name) in drawn {
+            if representation == Representation::Voxel {
+                // Spliced from what was meshed per chunk. The ranges partition
+                // the mesh, so concatenating them is the whole of the join —
+                // there is no seam to weld, unlike the brick cache's.
+                for chunk in self.layers[index].voxel_chunks.values() {
+                    let base = positions.len() as u32;
+                    indices.extend(chunk.indices.iter().map(|i| i + base));
+                    positions.extend_from_slice(&chunk.positions);
+                    normals.extend_from_slice(&chunk.normals);
+                    colors.extend_from_slice(&chunk.colors);
+                }
+                continue;
+            }
             let Ok((p, n, c, i)) = self.document.read_mesh_layer(&name) else {
                 continue;
             };
@@ -1679,17 +1794,135 @@ impl ClayDocument {
             normals.extend(n);
             colors.extend(c);
         }
+
+        // What the viewport was handed, so the interface can count what is on
+        // screen rather than only what the brick cache built. A mesh or voxel
+        // layer draws triangles the surface cache knows nothing about, and the
+        // panel used to report a sculpted grid as an empty document.
+        self.carried = (indices.len() / 3, positions.len());
         (positions, normals, colors, indices)
     }
 
-    /// A number that changes when a mesh layer's geometry does.
+    /// Brings one voxel layer's cached chunks in line with its grid.
+    ///
+    /// The engine keeps the dirty set: a write that changes a cell dirties its
+    /// chunk, and one on a chunk face also dirties the chunk across it, whose
+    /// exposed faces it changed. Draining it and re-meshing only those keys is
+    /// what makes an edit cost the edit. A grid loaded from a file or given a
+    /// level reports every chunk it wrote, so the first display and an
+    /// incremental one are this same path.
+    ///
+    /// A key whose chunk a stroke emptied comes back with an empty range —
+    /// that is precisely the key whose geometry has to be *dropped*, so it is
+    /// removed rather than stored as nothing.
+    fn refresh_voxel_chunks(&mut self, index: usize) -> Result<(), ModelError> {
+        if self.layers[index].representation != Representation::Voxel {
+            return Ok(());
+        }
+        let engine_name = self.layers[index].engine_name.clone();
+        // Split by field: the layer list and the document are disjoint, but
+        // `&mut self` for one while the other is borrowed is not.
+        let Self {
+            document,
+            layers,
+            meshed_chunks: meshed,
+            ..
+        } = self;
+        let (_, mut grid) = document
+            .voxel_layer(&engine_name)
+            .map_err(ModelError::engine)?;
+
+        loop {
+            let (keys, remaining) = grid
+                .take_dirty_chunks(Self::VOXEL_CHUNK_BATCH)
+                .map_err(ModelError::engine)?;
+            if keys.is_empty() {
+                break;
+            }
+            let (mesh, ranges) = grid.mesh_chunks(&keys).map_err(ModelError::engine)?;
+            *meshed += keys.len();
+            let positions = mesh.positions();
+            let normals = mesh.normals();
+            let colors = mesh.colors();
+            let indices = mesh.indices();
+
+            for range in ranges {
+                let chunks = &mut layers[index].voxel_chunks;
+                if range.index_count == 0 {
+                    chunks.remove(&range.key);
+                    continue;
+                }
+                let vertices = range.vertex_first..range.vertex_first + range.vertex_count;
+                let span = range.index_first..range.index_first + range.index_count;
+                let base = range.vertex_first as u32;
+                chunks.insert(
+                    range.key,
+                    ChunkGeometry {
+                        positions: positions[vertices.clone()].to_vec(),
+                        // The greedy mesher supplies both. The fallbacks are
+                        // what a mesh layer missing them gets, and are here so
+                        // a future mesher that omits one still draws.
+                        normals: normals
+                            .map(|n| n[vertices.clone()].to_vec())
+                            .unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; range.vertex_count]),
+                        colors: colors
+                            .map(|c| c[vertices].to_vec())
+                            .unwrap_or_else(|| vec![[1.0; 3]; range.vertex_count]),
+                        // Rebased onto this chunk's own first vertex, so the
+                        // slice stands alone and can be spliced anywhere.
+                        indices: indices[span].iter().map(|i| i - base).collect(),
+                    },
+                );
+            }
+
+            if remaining == 0 {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// How many chunks the last assembly re-meshed.
+    ///
+    /// Zero on a frame where no grid changed, and a handful after a dab — the
+    /// whole point of draining the engine's dirty set rather than meshing the
+    /// grid. Exposed so a test can hold it to that without measuring time,
+    /// which on a shared machine measures the machine.
+    pub fn meshed_chunks(&self) -> usize {
+        self.meshed_chunks
+    }
+
+    /// A number that changes when the carried geometry does.
     ///
     /// So the viewport can tell whether its copy is stale without comparing
-    /// the triangles. A mesh gesture is the only thing that moves them, and
-    /// every one of those lands on the undo stack — so the two stack depths
-    /// say it, and an undo changes the answer as surely as a stroke does.
-    pub fn mesh_revision(&self) -> u64 {
-        (self.mesh_undo.len() as u64) << 32 | self.mesh_redo.len() as u64
+    /// the triangles. A mesh gesture is the only thing that moves a mesh
+    /// layer's vertices, and every one of those lands on the undo stack — so
+    /// the two stack depths say it, and an undo changes the answer as surely
+    /// as a stroke does.
+    ///
+    /// A grid says it itself: the engine counts every change to one, so the
+    /// counts are read rather than a revision being bumped at each of the
+    /// dozen sites that can touch a grid. A site that forgot to bump would
+    /// leave the viewport showing the sculpt as it was before the edit, which
+    /// is exactly the failure this number exists to prevent.
+    pub fn mesh_revision(&mut self) -> u64 {
+        let names: Vec<String> = self
+            .layers
+            .iter()
+            .filter(|layer| layer.representation == Representation::Voxel)
+            .map(|layer| layer.engine_name.clone())
+            .collect();
+        let grids = names.iter().fold(0u64, |sum, name| {
+            let counted = self
+                .document
+                .voxel_layer(name)
+                .ok()
+                .and_then(|(_, grid)| grid.change_count().ok())
+                .unwrap_or(0);
+            sum.wrapping_add(counted)
+        });
+        let meshes = (self.mesh_undo.len() as u64) << 32 | self.mesh_redo.len() as u64;
+        meshes.wrapping_mul(31).wrapping_add(grids)
     }
 
     /// How stretched the active mesh layer's triangles are.
@@ -1948,15 +2181,18 @@ impl ClayDocument {
         // can take its own.
         let _ = grid;
 
-        // A stroke made while a pass is recording grows that pass, so what the
-        // panel shows about it — its cell count, its cost — is out of date the
-        // moment the stroke lands. Refreshed only while recording: reading the
-        // stack costs a call per pass, and off a recording there is nothing
-        // new to read.
-        if self.recording_pass {
-            let key = self.active_layer().key;
-            self.refresh_sculpt_layers(key)?;
-        }
+        // What the panel knows about this grid is out of date the moment the
+        // stroke lands: a stroke made while a pass is recording grows that
+        // pass, and every stroke moves where the grid is. Both are re-read
+        // here.
+        //
+        // Unconditional, where the pass stack alone used to be refreshed only
+        // while recording. Off a recording there is no stack to walk, so this
+        // costs one lookup and two counters — and the extent has to be right
+        // whether or not a pass is being recorded, because Frame All does not
+        // know about passes.
+        let key = self.active_layer().key;
+        self.refresh_sculpt_layers(key)?;
 
         Ok(EditOutcome {
             changed: true,
@@ -2167,6 +2403,13 @@ impl SculptModel for ClayDocument {
         if self.active_representation() == Representation::Mesh {
             return self.pick_active_mesh(origin, direction);
         }
+        // A grid is in neither either, for the same reason and with the same
+        // consequence: a press on a voxel layer orbited instead of sculpting,
+        // because the field a raycast marches carries no voxel content. The
+        // engine picks a grid itself.
+        if self.active_representation() == Representation::Voxel {
+            return self.pick_active_grid(origin, direction);
+        }
         // Against the cache rather than the document: the cost is the ray's
         // path through the band rather than a march against the whole tape.
         self.cache
@@ -2238,12 +2481,39 @@ impl SculptModel for ClayDocument {
     }
 
     fn stats(&self) -> SceneStats {
-        self.stats
+        // The surface built from the brick cache, plus the layers carried
+        // beside it. Reported together because they are drawn together: a
+        // sculptor counting polygons wants what is on screen, and a mesh or
+        // voxel layer is on screen without being in the cache.
+        let (triangles, vertices) = (
+            self.stats.triangles + self.carried.0,
+            self.stats.vertices + self.carried.1,
+        );
+        SceneStats {
+            triangles,
+            vertices,
+            objects: self.stats.objects,
+            // Reported once something has been meshed; until then the
+            // interface says so rather than showing a zero that reads as an
+            // empty document.
+            detail: if triangles == 0 {
+                clayspace_model::Detail::Pending
+            } else {
+                self.stats.detail
+            },
+        }
     }
 
     fn bounds(&self) -> Option<([f32; 3], [f32; 3])> {
-        let layer = self.active_layer().id;
-        self.document.layer_bounds(layer).ok().flatten()
+        let layer = self.active_layer();
+        // A grid says where it is itself. `layer_bounds` answers with a
+        // layer's SDF extent, which a voxel layer does not have — it reported
+        // nothing for one however much material was in it, so Frame All framed
+        // the default box over a sculpt that was somewhere else.
+        if layer.representation == Representation::Voxel {
+            return layer.voxel_bounds;
+        }
+        self.document.layer_bounds(layer.id).ok().flatten()
     }
 }
 
@@ -2414,6 +2684,8 @@ impl SceneModel for ClayDocument {
             visible: true,
             protection: Protection::default(),
             intensity: 100,
+            voxel_bounds: None,
+            voxel_chunks: std::collections::BTreeMap::new(),
             sculpt_layers: Vec::new(),
         });
         self.active = self.layers.len() - 1;
@@ -2623,6 +2895,8 @@ impl SceneModel for ClayDocument {
             visible: true,
             protection: Protection::default(),
             intensity: 100,
+            voxel_bounds: None,
+            voxel_chunks: std::collections::BTreeMap::new(),
             sculpt_layers: Vec::new(),
         });
         Ok(key)
@@ -2808,6 +3082,8 @@ impl ClayDocument {
                         })
                         .unwrap_or_default(),
                     intensity: 100,
+                    voxel_bounds: None,
+                    voxel_chunks: std::collections::BTreeMap::new(),
                     sculpt_layers: Vec::new(),
                 }
             })
@@ -2831,6 +3107,8 @@ impl ClayDocument {
             policy,
             dirty: Vec::new(),
             stats: SceneStats::default(),
+            carried: (0, 0),
+            meshed_chunks: 0,
             surface_brick_count: 0,
             mesh_sculptor: std::cell::RefCell::new(None),
             mesh_undo: Vec::new(),
@@ -3025,6 +3303,8 @@ impl ClayDocument {
             visible: true,
             protection: Protection::default(),
             intensity: 100,
+            voxel_bounds: None,
+            voxel_chunks: std::collections::BTreeMap::new(),
             sculpt_layers: Vec::new(),
         });
         self.refresh_stats();
@@ -3117,7 +3397,20 @@ impl ClayDocument {
                 bytes: grid.sculpt_layer_bytes(layer).unwrap_or(0),
             });
         }
+        // Cell (x, y, z) covers [x, x+1) per axis, so the far corner is one
+        // cell past the last occupied one.
+        let size = grid.voxel_size().unwrap_or(0.0);
+        let extent = grid.bounds().ok().flatten().filter(|_| size > 0.0).map(
+            |(min, max): ([i32; 3], [i32; 3])| {
+                (
+                    std::array::from_fn(|i| min[i] as f32 * size),
+                    std::array::from_fn(|i| (max[i] + 1) as f32 * size),
+                )
+            },
+        );
+
         self.layers[index].sculpt_layers = stack;
+        self.layers[index].voxel_bounds = extent;
         Ok(())
     }
 }
@@ -3473,10 +3766,19 @@ impl ClayDocument {
         };
         let active_id = self.layers.get(self.active).map(|layer| layer.id);
 
+        // Moved out rather than cloned. A surviving layer carries its meshed
+        // chunks, which are megabytes on a worked grid, and this runs on every
+        // undo — copying them would make taking one step back cost more than
+        // the step did.
+        let mut kept: std::collections::HashMap<LayerId, Layer> = std::mem::take(&mut self.layers)
+            .into_iter()
+            .map(|layer| (layer.id, layer))
+            .collect();
+
         let mut rebuilt = Vec::with_capacity(ids.len());
         for id in &ids {
-            if let Some(known) = self.layers.iter().find(|layer| layer.id == *id) {
-                rebuilt.push(known.clone());
+            if let Some(known) = kept.remove(id) {
+                rebuilt.push(known);
                 continue;
             }
             let info = self.document.layer_info(*id).ok();
@@ -3507,6 +3809,8 @@ impl ClayDocument {
                     })
                     .unwrap_or_default(),
                 intensity: 100,
+                voxel_bounds: None,
+                voxel_chunks: std::collections::BTreeMap::new(),
                 sculpt_layers: Vec::new(),
             });
         }

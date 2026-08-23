@@ -17,7 +17,7 @@ use clayspace_model::{
 };
 use clayspace_view::shell::{self, region, ShellState};
 use clayspace_view::{Locale, OffscreenTarget, Strings, Tokens};
-use clayspace_vm::CommandQueue;
+use clayspace_vm::{Command, CommandQueue};
 use support::Harness;
 
 /// A scene with enough in it to fill the panels.
@@ -177,6 +177,7 @@ fn state<'a>(
         tool_status: None,
         symmetry: [true, false, false],
         scene,
+        renaming: None,
         stats: SceneStats {
             triangles: 2_356_789,
             vertices: 1_178_394,
@@ -215,8 +216,101 @@ fn state<'a>(
 const SHELL_WIDTH: u32 = 1280;
 const SHELL_HEIGHT: u32 = 800;
 
+/// Lays the whole shell out in one egui frame.
+///
+/// One definition, so a capture and a probe of where something landed are
+/// looking at the same interface rather than at two arrangements that happen
+/// to agree today.
+fn build_shell(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    egui::TopBottomPanel::top("menu")
+        .exact_height(region::MENU_BAR)
+        .show(ctx, |ui| shell::menu_bar(ui, state, queue));
+    egui::TopBottomPanel::top("options")
+        .exact_height(region::OPTIONS_BAR)
+        .show(ctx, |ui| shell::options_bar(ui, state, queue));
+    egui::TopBottomPanel::bottom("status")
+        .exact_height(region::STATUS)
+        .show(ctx, |ui| shell::status_bar(ui, state, queue));
+    egui::TopBottomPanel::bottom("shelf")
+        .exact_height(region::SHELF)
+        .show(ctx, |ui| {
+            egui::ScrollArea::horizontal().show(ui, |ui| shell::brush_shelf(ui, state, queue));
+        });
+    egui::SidePanel::left("left")
+        .exact_width(region::LEFT)
+        .show(ctx, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| shell::left_panel(ui, state, queue));
+        });
+    egui::SidePanel::right("right")
+        .exact_width(region::RIGHT)
+        .show(ctx, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| shell::right_panel(ui, state, queue));
+        });
+    egui::CentralPanel::default()
+        .frame(egui::Frame::new().fill(Tokens::ground()))
+        .show(ctx, |ui| {
+            ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                shell::viewport_bar(ui, state, queue);
+            });
+        });
+    shell::diagnostics_window(ctx, state, queue);
+    shell::attribution_window(ctx, state, queue);
+    shell::convert_window(ctx, state, queue);
+    shell::repair_window(ctx, state, queue);
+    shell::import_window(ctx, state, queue);
+    shell::export_window(ctx, state, queue);
+}
+
+/// Runs the shell without capturing it, so a test can ask where a widget went.
+///
+/// Two passes for the same reason the capture takes two: a scroll area and an
+/// area both measure before they place anything.
+fn probe_shell(state: &ShellState<'_>) -> egui::Context {
+    let ctx = egui::Context::default();
+    shell::apply_theme(&ctx);
+    let mut queue = CommandQueue::new();
+    for _ in 0..2 {
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(SHELL_WIDTH as f32, SHELL_HEIGHT as f32),
+                )),
+                ..Default::default()
+            },
+            |ctx| build_shell(ctx, state, &mut queue),
+        );
+    }
+    ctx
+}
+
 /// Draws the whole shell into one egui frame and returns the captured image.
 fn capture_shell(harness: &Harness, state: &ShellState<'_>, name: &str) -> clayspace_view::Image {
+    capture_shell_after(harness, state, name, &[], |queue| {
+        // Nothing was clicked, so the interface must not have emitted
+        // anything: commands are the only channel out of a View.
+        assert!(
+            queue.is_empty(),
+            "drawing the interface emitted {} commands without any input",
+            queue.len()
+        );
+    })
+}
+
+/// The same, with pointer events delivered before the captured frame.
+///
+/// One entry per frame of input, because a menu takes two gestures: the
+/// right-click that opens it and the click that chooses an entry, and an entry
+/// cannot be clicked on the frame the menu is still measuring. `inspect` sees
+/// the commands the input produced, which is the other half of what such a
+/// test is for — a menu that draws and is wired to nothing looks identical.
+fn capture_shell_after(
+    harness: &Harness,
+    state: &ShellState<'_>,
+    name: &str,
+    frames: &[Vec<egui::Event>],
+    inspect: impl FnOnce(&CommandQueue),
+) -> clayspace_view::Image {
     let ctx = egui::Context::default();
     shell::apply_theme(&ctx);
 
@@ -229,48 +323,7 @@ fn capture_shell(harness: &Harness, state: &ShellState<'_>, name: &str) -> clays
         ..Default::default()
     };
 
-    let mut build = |ctx: &egui::Context| {
-        egui::TopBottomPanel::top("menu")
-            .exact_height(region::MENU_BAR)
-            .show(ctx, |ui| shell::menu_bar(ui, state, &mut queue));
-        egui::TopBottomPanel::top("options")
-            .exact_height(region::OPTIONS_BAR)
-            .show(ctx, |ui| shell::options_bar(ui, state, &mut queue));
-        egui::TopBottomPanel::bottom("status")
-            .exact_height(region::STATUS)
-            .show(ctx, |ui| shell::status_bar(ui, state, &mut queue));
-        egui::TopBottomPanel::bottom("shelf")
-            .exact_height(region::SHELF)
-            .show(ctx, |ui| {
-                egui::ScrollArea::horizontal()
-                    .show(ui, |ui| shell::brush_shelf(ui, state, &mut queue));
-            });
-        egui::SidePanel::left("left")
-            .exact_width(region::LEFT)
-            .show(ctx, |ui| {
-                egui::ScrollArea::vertical()
-                    .show(ui, |ui| shell::left_panel(ui, state, &mut queue));
-            });
-        egui::SidePanel::right("right")
-            .exact_width(region::RIGHT)
-            .show(ctx, |ui| {
-                egui::ScrollArea::vertical()
-                    .show(ui, |ui| shell::right_panel(ui, state, &mut queue));
-            });
-        egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(Tokens::ground()))
-            .show(ctx, |ui| {
-                ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                    shell::viewport_bar(ui, state, &mut queue);
-                });
-            });
-        shell::diagnostics_window(ctx, state, &mut queue);
-        shell::attribution_window(ctx, state, &mut queue);
-        shell::convert_window(ctx, state, &mut queue);
-        shell::repair_window(ctx, state, &mut queue);
-        shell::import_window(ctx, state, &mut queue);
-        shell::export_window(ctx, state, &mut queue);
-    };
+    let mut build = |ctx: &egui::Context| build_shell(ctx, state, &mut queue);
 
     // Two passes, not one. An auto-sized `egui::Area` — which is what a window
     // is — spends its first frame measuring and paints nothing, so a
@@ -278,21 +331,31 @@ fn capture_shell(harness: &Harness, state: &ShellState<'_>, name: &str) -> clays
     // to one with the window closed. The panels do not need this; the window
     // does, and one capture path is better than two.
     let first = ctx.run(raw_input(), &mut build);
-    let output = ctx.run(raw_input(), &mut build);
+    let mut output = ctx.run(raw_input(), &mut build);
 
-    // The interface must not have mutated anything to draw itself; commands
-    // are the only channel out, and nothing was clicked.
-    assert!(
-        queue.is_empty(),
-        "drawing the interface emitted {} commands without any input",
-        queue.len()
-    );
+    for events in frames {
+        // The frame the input lands on, and then the frame that draws what it
+        // opened — a menu is an `Area` and measures before it paints, exactly
+        // as a window does.
+        let _ = ctx.run(
+            egui::RawInput {
+                events: events.clone(),
+                ..raw_input()
+            },
+            &mut build,
+        );
+        let _ = ctx.run(raw_input(), &mut build);
+        output = ctx.run(raw_input(), &mut build);
+    }
 
     let target = OffscreenTarget::new(&harness.gpu, SHELL_WIDTH, SHELL_HEIGHT);
     // The font atlas arrives in the first pass's deltas, so both are applied
     // and only the second is tessellated.
     let image = render_egui(harness, &ctx, [first, output], &target);
     support::save(&image, name);
+    // After the capture is written, so a failing expectation still leaves the
+    // picture that explains it.
+    inspect(&queue);
     image
 }
 
@@ -789,4 +852,286 @@ fn the_repair_panel_reports_before_it_repairs() {
     field.show_repair = true;
     field.repair = None;
     let _ = capture_shell(&harness, &field, "67-repair-not-a-grid");
+}
+
+/// The rename field replaces the name it is editing, in place.
+///
+/// The panel's own state is what this proves: the field draws where the label
+/// was, on the row it was opened over and on no other. That is the part a
+/// model test cannot reach — `layer_rename.rs` already holds the engine to
+/// renaming the right layer, and it would still pass if the field appeared on
+/// every row at once.
+#[test]
+fn renaming_a_layer_draws_a_field_in_its_row() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+
+    let report = diagnostics();
+    let plain = state(strings, &scene, &materials, &report);
+    let before = capture_shell(&harness, &plain, "67-rename-before");
+
+    let report = diagnostics();
+    let mut editing = state(strings, &scene, &materials, &report);
+    editing.renaming = Some((LayerKey(12), "Poros_finos"));
+    let after = capture_shell(&harness, &editing, "67-rename-field");
+
+    // The rows of the layer stack, from the top of the left panel down. The
+    // field is a filled text box where a label was, so the row it is on
+    // changes a great deal and the rows around it must not change at all —
+    // which is the claim: one row is being renamed, not the stack.
+    let mut changed_rows: Vec<(u32, usize)> = Vec::new();
+    let mut run = 0usize;
+    let mut start = 0u32;
+    for y in 0..before.height {
+        let mut differing = 0usize;
+        for x in 0..region_width(&before) {
+            if before.pixel(x, y) != after.pixel(x, y) {
+                differing += 1;
+            }
+        }
+        if differing > 0 {
+            if run == 0 {
+                start = y;
+            }
+            run += 1;
+        } else if run > 0 {
+            changed_rows.push((start, run));
+            run = 0;
+        }
+    }
+    if run > 0 {
+        changed_rows.push((start, run));
+    }
+
+    let total: usize = changed_rows.iter().map(|(_, height)| height).sum();
+    assert!(
+        total > 0,
+        "opening the rename field changed nothing in the left panel, so it did \
+         not draw — see target/visual/67-rename-field.png"
+    );
+    // One band, not several: a field drawn on every row, or a layout shifted
+    // by the field's height, would spread the difference down the stack.
+    assert_eq!(
+        changed_rows.len(),
+        1,
+        "the rename field changed {} separate bands of the left panel ({changed_rows:?}); \
+         it belongs to one row",
+        changed_rows.len()
+    );
+    let (_, height) = changed_rows[0];
+    assert!(
+        (8..=40).contains(&height),
+        "the changed band is {height} pixels tall, which is not one layer row"
+    );
+}
+
+/// The width of the left panel, for comparisons that must ignore the viewport.
+///
+/// The capture is one pixel per logical unit, so the region's own widths are
+/// the answer without scaling.
+fn region_width(image: &clayspace_view::Image) -> u32 {
+    let width = (region::RAIL + region::LEFT) as u32;
+    width.min(image.width)
+}
+
+/// A right-click on a layer row, as egui receives one.
+fn right_click(at: egui::Pos2) -> Vec<egui::Event> {
+    click(at, egui::PointerButton::Secondary)
+}
+
+/// A left-click on a menu entry.
+fn left_click(at: egui::Pos2) -> Vec<egui::Event> {
+    click(at, egui::PointerButton::Primary)
+}
+
+fn click(at: egui::Pos2, button: egui::PointerButton) -> Vec<egui::Event> {
+    vec![
+        egui::Event::PointerMoved(at),
+        egui::Event::PointerButton {
+            pos: at,
+            button,
+            pressed: true,
+            modifiers: egui::Modifiers::default(),
+        },
+        egui::Event::PointerButton {
+            pos: at,
+            button,
+            pressed: false,
+            modifiers: egui::Modifiers::default(),
+        },
+    ]
+}
+
+/// The two entries of a layer's menu, relative to where it was opened.
+///
+/// A menu is laid out below and to the right of the pointer, so its entries
+/// are found from the click rather than from the panel. The offsets are the
+/// frame's own padding and one entry's height — small enough that landing on
+/// the wrong one is caught by the assertion, not silently tolerated.
+const RENAME_ENTRY: egui::Vec2 = egui::Vec2::new(37.0, 17.0);
+const DELETE_ENTRY: egui::Vec2 = egui::Vec2::new(37.0, 42.0);
+
+/// Renaming and deleting are reachable from a layer row.
+///
+/// The layer stack had no way to do either: the model has carried
+/// `rename_layer` and `remove_layer` since the beginning and the panel offered
+/// neither. Driven with real input rather than inspected as state, because
+/// every part of this can fail on its own — a menu can fail to open, and an
+/// entry that opens can be wired to nothing.
+#[test]
+fn a_layer_row_offers_renaming_and_deleting() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+
+    // The top of the stack, which is the last layer in evaluation order.
+    let top = scene.layers.last().expect("a layer").key;
+
+    let report = diagnostics();
+    let plain = state(strings, &scene, &materials, &report);
+    let closed = capture_shell(&harness, &plain, "68-layer-menu-closed");
+    let row = row_centre(&plain, top);
+
+    // Opened and left open, which is the picture worth keeping.
+    let report = diagnostics();
+    let opened_state = state(strings, &scene, &materials, &report);
+    let opened = capture_shell_after(
+        &harness,
+        &opened_state,
+        "68-layer-menu",
+        &[right_click(row)],
+        |queue| {
+            // Opening a menu is not an edit. Anything here would mean the
+            // right-click also selected or renamed something.
+            assert!(
+                queue.is_empty(),
+                "opening the layer menu emitted {:?}",
+                queue.commands()
+            );
+        },
+    );
+    let differing = differing_pixels(&closed, &opened);
+    assert!(
+        differing > 400,
+        "right-clicking a layer row changed {differing} pixels, so no menu \
+         opened — see target/visual/68-layer-menu.png"
+    );
+
+    let report = diagnostics();
+    let rename_state = state(strings, &scene, &materials, &report);
+    capture_shell_after(
+        &harness,
+        &rename_state,
+        "68-layer-menu-rename",
+        &[right_click(row), left_click(row + RENAME_ENTRY)],
+        |queue| {
+            assert_eq!(
+                queue.commands(),
+                [Command::BeginRenameLayer(top)],
+                "Renomear did not open the rename field on the row it was on"
+            );
+        },
+    );
+
+    let report = diagnostics();
+    let delete_state = state(strings, &scene, &materials, &report);
+    capture_shell_after(
+        &harness,
+        &delete_state,
+        "68-layer-menu-delete",
+        &[right_click(row), left_click(row + DELETE_ENTRY)],
+        |queue| {
+            assert_eq!(
+                queue.commands(),
+                [Command::RemoveLayer(top)],
+                "Excluir did not remove the row it was on"
+            );
+        },
+    );
+}
+
+/// The last layer's Delete is offered as refused rather than as working.
+///
+/// `removing_the_only_layer_is_refused` holds the model to the rule. This
+/// holds the interface to *saying* it, which is the difference between a
+/// sculptor learning the rule and a sculptor finding an error in the status
+/// area after the fact.
+#[test]
+fn the_last_layer_cannot_be_deleted_from_its_menu() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let mut lone = scene();
+    lone.layers.truncate(1);
+    let only = lone.layers[0].key;
+    lone.active = Some(only);
+    let materials = ["MatCap Cinza 01"];
+
+    let report = diagnostics();
+    let probe = state(strings, &lone, &materials, &report);
+    let row = row_centre(&probe, only);
+
+    let report = diagnostics();
+    let lone_state = state(strings, &lone, &materials, &report);
+    capture_shell_after(
+        &harness,
+        &lone_state,
+        "68-layer-menu-one",
+        &[right_click(row), left_click(row + DELETE_ENTRY)],
+        |queue| {
+            assert!(
+                queue.is_empty(),
+                "the only layer's Excluir was live and emitted {:?}",
+                queue.commands()
+            );
+        },
+    );
+
+    // And the menu did open — otherwise the assertion above passes for the
+    // wrong reason, which is how the first version of this test passed.
+    let report = diagnostics();
+    let rename_state = state(strings, &lone, &materials, &report);
+    capture_shell_after(
+        &harness,
+        &rename_state,
+        "68-layer-menu-one-rename",
+        &[right_click(row), left_click(row + RENAME_ENTRY)],
+        |queue| {
+            assert_eq!(
+                queue.commands(),
+                [Command::BeginRenameLayer(only)],
+                "the only layer has no menu at all, so Excluir being quiet \
+                 says nothing about it being disabled"
+            );
+        },
+    );
+}
+
+/// Where a layer's row is, asked of the interface that drew it.
+fn row_centre(state: &ShellState<'_>, key: LayerKey) -> egui::Pos2 {
+    probe_shell(state)
+        .read_response(shell::layer_row_id(key))
+        .map(|response| response.rect.center())
+        .unwrap_or_else(|| panic!("the layer stack drew no row for {key:?}"))
+}
+
+/// How many pixels differ between two captures.
+fn differing_pixels(a: &clayspace_view::Image, b: &clayspace_view::Image) -> usize {
+    let mut n = 0;
+    for y in 0..a.height.min(b.height) {
+        for x in 0..a.width.min(b.width) {
+            if a.pixel(x, y) != b.pixel(x, y) {
+                n += 1;
+            }
+        }
+    }
+    n
 }

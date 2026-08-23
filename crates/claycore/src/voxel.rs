@@ -895,6 +895,174 @@ impl VoxelField {
         Mesh::from_raw(mesh, "clay_voxel_mesh")
     }
 
+    /// Meshes the grid as a rounded form rather than as boxes.
+    ///
+    /// Surface nets over occupancy sampled at cell centres: one vertex per
+    /// surface cell, at the centroid of that cell's edge crossings. The
+    /// greedy mesh [`VoxelGrid::mesh`] returns is the export path and is
+    /// correct for hard-surface work; this is the one a sculpt is looked at
+    /// through, because axis-aligned quads are the wrong picture of clay.
+    ///
+    /// `blur` is extra smoothing, in passes of a 3x3x3 box over occupancy,
+    /// and the trade runs both ways: at 0 nothing is filtered and nothing can
+    /// be lost, but the surface still terraces; at 1 it reads as clay and an
+    /// isolated voxel falls under the isolevel and is gone. The engine
+    /// defaults to 0 for that reason, and so does anything here that has a
+    /// sculptor's thin detail to lose.
+    ///
+    /// A preview mesh: per the surface-nets contract a cell the surface
+    /// crosses twice gets one vertex and the sheets pinch, so it is neither
+    /// manifold nor watertight.
+    ///
+    /// Two things to know before drawing a sculpt with it, both measured on a
+    /// 0.01 grid holding 429,098 cells:
+    ///
+    /// - It carries **no vertex normals**, where [`VoxelField::mesh`] does. A
+    ///   host that lights by normal draws a flat silhouette from this and has
+    ///   to compute its own.
+    /// - It is whole-grid and has no chunked form, so an edit costs the model:
+    ///   152 ms against the greedy mesh's 16 ms, and 3.3 ms for the chunks a
+    ///   dab actually dirties. [`VoxelField::take_dirty_chunks`] and
+    ///   [`VoxelField::mesh_chunks`] are the interactive path.
+    pub fn mesh_smooth(&self, blur: i32) -> Result<Mesh> {
+        let mut mesh = std::ptr::null_mut();
+        // SAFETY: valid handle; `mesh` written only on success.
+        check(
+            unsafe { sys::clay_voxel_mesh_smooth(self.as_ptr(), blur, &mut mesh) },
+            "clay_voxel_mesh_smooth",
+        )?;
+        Mesh::from_raw(mesh, "clay_voxel_mesh_smooth")
+    }
+
+    /// The chunk keys whose geometry a host must rebuild, drained.
+    ///
+    /// Capacity in, count out, and the remainder stays queued — the shape
+    /// [`crate::BrickCache::take_dirty`] uses. Every public mutation reports
+    /// through this: a write that changes a cell dirties its chunk, and one on
+    /// a chunk face also dirties the chunk across it, whose exposed faces it
+    /// changed. A chunk emptied to nothing is reported too, because that is
+    /// the key whose geometry has to be *removed*.
+    ///
+    /// The engine's drain is all-or-nothing, so a key can be reported twice
+    /// across two drains — re-meshing a chunk that did not change is wasted
+    /// work, never a wrong surface.
+    ///
+    /// A grid just created from a file, rasterized, or given a level reports
+    /// every chunk it wrote, so a first display and an incremental one are the
+    /// same code path.
+    pub fn take_dirty_chunks(&mut self, max: usize) -> Result<(Vec<[i32; 3]>, usize)> {
+        if max == 0 {
+            return Ok((Vec::new(), 0));
+        }
+        let mut keys = vec![[0i32; 3]; max];
+        let mut count = max;
+        let mut remaining = 0usize;
+        // SAFETY: `keys` is valid for `max` triples of int32 and is laid out
+        // as a packed array of them; `count` carries that capacity in and the
+        // filled length out.
+        check(
+            unsafe {
+                sys::clay_voxel_take_dirty_chunks(
+                    self.as_ptr(),
+                    keys.as_mut_ptr() as *mut i32,
+                    &mut count,
+                    &mut remaining,
+                )
+            },
+            "clay_voxel_take_dirty_chunks",
+        )?;
+        keys.truncate(count);
+        Ok((keys, remaining))
+    }
+
+    /// Meshes only the named chunks, and says what each one contributed.
+    ///
+    /// The surface over those chunks is exactly the one [`VoxelField::mesh`]
+    /// describes — the exposure test reads the neighbour cell wherever it
+    /// lives, including in a chunk that was not named. What differs is the
+    /// merge: greedy quads clamped to a chunk boundary emit more, smaller
+    /// quads over the identical surface, never a crack.
+    ///
+    /// The ranges *partition* the mesh, so a host may overwrite or drop one
+    /// key's slice without consulting its neighbours' — unlike the brick
+    /// cache, whose marching cells straddle a boundary. A key naming a chunk
+    /// the grid no longer holds is not an error: its range is empty, and that
+    /// is exactly the key whose geometry the host must drop.
+    pub fn mesh_chunks(&self, keys: &[[i32; 3]]) -> Result<(Mesh, Vec<ChunkRange>)> {
+        let mut ranges = vec![sys::clay_voxel_chunk_mesh_range::default(); keys.len()];
+        let mut mesh = std::ptr::null_mut();
+        // SAFETY: `keys` is a packed array of int32 triples of the length
+        // given, `ranges` holds one element per key, and `mesh` is written
+        // only on success.
+        check(
+            unsafe {
+                sys::clay_voxel_mesh_chunks(
+                    self.as_ptr(),
+                    keys.as_ptr() as *const i32,
+                    keys.len(),
+                    ranges.as_mut_ptr(),
+                    &mut mesh,
+                )
+            },
+            "clay_voxel_mesh_chunks",
+        )?;
+        let mesh = Mesh::from_raw(mesh, "clay_voxel_mesh_chunks")?;
+        Ok((
+            mesh,
+            ranges
+                .into_iter()
+                .map(|range| ChunkRange {
+                    key: range.key,
+                    vertex_first: range.vertex_first as usize,
+                    vertex_count: range.vertex_count as usize,
+                    index_first: range.index_first as usize,
+                    index_count: range.index_count as usize,
+                })
+                .collect(),
+        ))
+    }
+
+    // -- picking ------------------------------------------------------------
+
+    /// The first occupied cell along a ray, and how far away it is.
+    ///
+    /// The direction is normalized by the engine, and the distance is to the
+    /// entry point of that cell — so the world position of the hit is the
+    /// origin plus the *unit* direction times the distance.
+    ///
+    /// `None` where the ray meets nothing, which is not an error: most rays a
+    /// pointer casts miss.
+    pub fn raycast(&self, origin: [f32; 3], direction: [f32; 3]) -> Result<Option<VoxelHit>> {
+        let mut hit = 0i32;
+        let mut cell = [0i32; 3];
+        let mut face = 0i32;
+        let mut adjacent = [0i32; 3];
+        let mut distance = 0.0f32;
+        // SAFETY: valid handle, two three-element inputs, and out-parameters
+        // that are written only on a hit — `hit` always.
+        check(
+            unsafe {
+                sys::clay_voxel_raycast(
+                    self.as_ptr(),
+                    origin.as_ptr(),
+                    direction.as_ptr(),
+                    &mut hit,
+                    cell.as_mut_ptr(),
+                    &mut face,
+                    adjacent.as_mut_ptr(),
+                    &mut distance,
+                )
+            },
+            "clay_voxel_raycast",
+        )?;
+        Ok((hit != 0).then_some(VoxelHit {
+            cell,
+            adjacent,
+            face,
+            distance,
+        }))
+    }
+
     /// Pulls the masked patch off as a solid grid the caller owns.
     pub fn mask_extrude(&self, mask: &MaskField, params: MaskExtrudeParams) -> Result<VoxelGrid> {
         let raw_params = params.to_raw();
@@ -963,6 +1131,64 @@ impl Drop for VoxelGrid {
         // SAFETY: owned handle, released exactly once. A grid borrowed from a
         // document is a `VoxelGridRef`, which has no `Drop`.
         unsafe { sys::clay_voxel_grid_destroy(self.inner.as_ptr()) };
+    }
+}
+
+/// What one chunk contributed to a chunked mesh.
+///
+/// The ranges partition the mesh — no vertex is shared between two keys — so
+/// one key's slice can be replaced or dropped on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChunkRange {
+    pub key: [i32; 3],
+    pub vertex_first: usize,
+    pub vertex_count: usize,
+    pub index_first: usize,
+    pub index_count: usize,
+}
+
+/// What a picking ray met in a grid.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VoxelHit {
+    /// The first occupied cell along the ray.
+    pub cell: [i32; 3],
+    /// The empty neighbour across the face it was entered through, which is
+    /// where a voxel placed by that click goes.
+    pub adjacent: [i32; 3],
+    /// Which face that was, as a `clay_voxel_face`.
+    pub face: i32,
+    /// World distance from the origin to the entry point.
+    pub distance: f32,
+}
+
+/// A voxel grid belonging to a document, borrowed for reading.
+///
+/// A shared borrow, so only the grid's `&self` operations reach through it —
+/// there is no `DerefMut`. The engine's lookup takes a mutable document handle
+/// because one call serves reads and writes; nothing obtained this way can
+/// write, which is what lets a question about a grid be asked from a `&self`
+/// method that has no mutable document to offer.
+#[derive(Debug)]
+pub struct VoxelReader<'doc> {
+    inner: VoxelField,
+    _doc: PhantomData<&'doc Document>,
+}
+
+impl VoxelReader<'_> {
+    fn from_raw(raw: *mut sys::clay_voxel_grid, operation: &'static str) -> Result<Self> {
+        NonNull::new(raw)
+            .map(|raw| Self {
+                inner: VoxelField { raw },
+                _doc: PhantomData,
+            })
+            .ok_or_else(|| raw_failure(operation, ErrorKind::NotFound))
+    }
+}
+
+impl Deref for VoxelReader<'_> {
+    type Target = VoxelField;
+    fn deref(&self) -> &VoxelField {
+        &self.inner
     }
 }
 
@@ -1050,6 +1276,35 @@ impl Document {
         Ok((
             LayerId(layer),
             VoxelGridRef::from_raw(grid, "clay_document_voxel_layer")?,
+        ))
+    }
+
+    /// Borrows a voxel layer's grid for reading only.
+    ///
+    /// The same lookup as [`Document::voxel_layer`], through a shared borrow.
+    /// It is spelled separately rather than by relaxing that one because the
+    /// mutable borrow is what keeps two writable handles to one grid from
+    /// existing; a reader cannot write, so any number of them are fine.
+    pub fn voxel_reader(&self, name: &str) -> Result<(LayerId, VoxelReader<'_>)> {
+        let c_name = crate::cstring(name, "clay_document_voxel_layer")?;
+        let mut layer: sys::clay_layer_id = Default::default();
+        let mut grid = std::ptr::null_mut();
+        // SAFETY: as above. The handle the engine writes is borrowed from the
+        // document and is never wrapped in anything that destroys it.
+        check(
+            unsafe {
+                sys::clay_document_voxel_layer(
+                    self.as_ptr(),
+                    c_name.as_ptr(),
+                    &mut layer,
+                    &mut grid,
+                )
+            },
+            "clay_document_voxel_layer",
+        )?;
+        Ok((
+            LayerId(layer),
+            VoxelReader::from_raw(grid, "clay_document_voxel_layer")?,
         ))
     }
 }

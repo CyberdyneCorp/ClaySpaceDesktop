@@ -52,7 +52,9 @@ pub use reader::Reader;
 pub use sculpt::{
     resolve_stroke, FlattenMode, FlattenParams, MoveParams, RelaxParams, VolumeParams,
 };
-pub use voxel::{Cell, RepairReport, VoxelField, VoxelGrid, VoxelGridRef};
+pub use voxel::{
+    Cell, ChunkRange, RepairReport, VoxelField, VoxelGrid, VoxelGridRef, VoxelHit, VoxelReader,
+};
 
 use claycore_sys as sys;
 
