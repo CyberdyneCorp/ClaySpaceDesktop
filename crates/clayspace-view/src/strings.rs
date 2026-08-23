@@ -175,6 +175,8 @@ pub struct Strings {
     pub action_undo: &'static str,
     pub action_redo: &'static str,
     pub action_frame_all: &'static str,
+    /// A mesh layer's own edges, drawn over it.
+    pub action_polyframe: &'static str,
     pub action_new: &'static str,
     pub action_open: &'static str,
     pub action_open_recent: &'static str,
@@ -305,6 +307,7 @@ const PT_BR: Strings = Strings {
     action_undo: "Desfazer",
     action_redo: "Refazer",
     action_frame_all: "Enquadrar tudo",
+    action_polyframe: "Malha aparente",
     action_new: "Novo",
     action_open: "Abrir…",
     action_open_recent: "Abrir recente",
@@ -434,6 +437,7 @@ const EN_US: Strings = Strings {
     action_undo: "Undo",
     action_redo: "Redo",
     action_frame_all: "Frame all",
+    action_polyframe: "Polyframe",
     action_new: "New",
     action_open: "Open…",
     action_open_recent: "Open recent",
@@ -568,6 +572,7 @@ const ES_419: Strings = Strings {
     action_undo: "Deshacer",
     action_redo: "Rehacer",
     action_frame_all: "Encuadrar todo",
+    action_polyframe: "Malla visible",
     action_new: "Nuevo",
     action_open: "Abrir…",
     action_open_recent: "Abrir reciente",
@@ -612,7 +617,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 99] {
+    pub fn all(&self) -> [&'static str; 100] {
         [
             self.menu_file,
             self.menu_edit,
@@ -683,6 +688,7 @@ impl Strings {
             self.action_undo,
             self.action_redo,
             self.action_frame_all,
+            self.action_polyframe,
             self.action_new,
             self.action_open,
             self.action_open_recent,

@@ -129,6 +129,8 @@ pub struct ShellState<'a> {
     pub stats: SceneStats,
 
     pub view_preset: ViewPresetKind,
+    /// Whether a mesh layer is drawn with its own edges over it.
+    pub polyframe: bool,
     pub material: &'a str,
     pub materials: &'a [&'a str],
 
@@ -405,6 +407,15 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                 }
                 if item(ui, state, s.action_frame_all, Action::FrameAll).clicked() {
                     queue.push(Command::FrameAll);
+                    ui.close_menu();
+                }
+                // Checked, because it is a state and not an action: a menu
+                // entry that toggles something has to say which way it is.
+                if ui
+                    .selectable_label(state.polyframe, s.action_polyframe)
+                    .clicked()
+                {
+                    queue.push(Command::TogglePolyframe);
                     ui.close_menu();
                 }
             });

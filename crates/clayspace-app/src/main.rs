@@ -1403,6 +1403,7 @@ impl App {
             Action::Redo => Command::Redo,
             Action::FrameAll => Command::FrameAll,
             Action::NextMaterial => Command::NextMaterial,
+            Action::TogglePolyframe => Command::TogglePolyframe,
             Action::ViewPerspective => Command::SetViewPreset(ViewPresetKind::Perspective),
             Action::ViewFront => Command::SetViewPreset(ViewPresetKind::Front),
             Action::ViewSide => Command::SetViewPreset(ViewPresetKind::Side),
@@ -1609,6 +1610,7 @@ impl App {
                 .map(|(key, draft)| (*key, draft.as_str())),
             stats: *self.sculpt.stats().get(),
             view_preset: *self.sculpt.view_preset().get(),
+            polyframe: *self.sculpt.polyframe().get(),
             material,
             materials: &materials,
             can_undo: history.can_undo,
@@ -1745,6 +1747,12 @@ impl App {
         } else {
             graphics.geometry.mesh()
         };
+        // Presentation, so it is pushed rather than stored: the ViewModel owns
+        // whether the polyframe is on and the renderer owns whether it draws,
+        // and reading it here each frame is what keeps them from drifting.
+        graphics
+            .renderer
+            .set_polyframe(*self.sculpt.polyframe().get());
         graphics.renderer.render(
             &graphics.gpu,
             &view,

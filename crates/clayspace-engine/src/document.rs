@@ -1651,13 +1651,28 @@ impl ClayDocument {
         // gated on a combine operation, which is the SDF side's vocabulary.
         let alpha = self.alpha_for(brush, Combine::Relief).cloned();
         let alpha = alpha.as_ref();
-        let preset = StrokePreset {
-            spacing: brush.flow,
-            ..StrokePreset::default()
-        };
+        // The shared preset, which is where a mesh stroke's radius and
+        // strength have to come from: the engine states that
+        // `clay_mesh_sculptor_apply_stroke` IGNORES the descriptor's radius
+        // and strength and takes each stamp's from the preset. This used to
+        // build its own carrying only `spacing`, so a mesh stroke ran at the
+        // engine's default radius of 0.25 whatever the brush said — measured,
+        // sizes 0.1, 0.5 and 1.0 all moved the same 944 vertices, and
+        // Intensidade was inert the same way.
+        //
+        // Spacing was also inverted here against every other path: the design
+        // reads flow as "more flow, stamps closer together", and this passed
+        // it straight through so more flow spread them further apart. On Move
+        // that is what decides whether a drag emits a second stamp at all, and
+        // a drag that emits one stamp has no motion to drag by.
+        let preset = self.preset(brush, tool);
         let stamp = claycore::MeshStamp {
             verb,
             center: samples[0].position,
+            // Carried even though a stroke ignores both, because the same
+            // descriptor is what a single stamp would use and a descriptor
+            // that disagreed with the preset would be a trap for the next
+            // caller.
             radius: brush.size,
             strength: brush.intensity,
             falloff: match brush.shaping.falloff {

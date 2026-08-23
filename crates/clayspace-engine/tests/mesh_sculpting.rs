@@ -460,3 +460,63 @@ mod operations {
         let _ = std::fs::remove_file(&path);
     }
 }
+
+/// The brush's size and intensity reach a mesh stroke.
+///
+/// They did not. The engine states that `clay_mesh_sculptor_apply_stroke`
+/// **ignores the descriptor's radius and strength** and takes each stamp's
+/// from the preset — and the mesh path built its own preset carrying only
+/// spacing, so every mesh stroke ran at the engine's default radius of 0.25
+/// whatever the brush said. Measured before the fix: sizes 0.1, 0.5 and 1.0
+/// each moved exactly the same 944 vertices.
+///
+/// The same line had spacing inverted against every other path. The design
+/// reads flow as "more flow, stamps closer together" and the SDF path spells
+/// that `1.0 - flow`; the mesh path passed it straight through, so more flow
+/// spread the stamps further apart. On a dragging verb that decides whether a
+/// second stamp is emitted at all, and a stroke of one stamp has no motion to
+/// drag by — which is why Move looked broken rather than merely coarse.
+#[test]
+fn the_brush_size_reaches_a_mesh_stroke() {
+    let Some((mut small, small_path)) = with_imported_mesh("size-small") else {
+        return;
+    };
+    let Some((mut large, large_path)) = with_imported_mesh("size-large") else {
+        return;
+    };
+
+    let reached = |document: &mut ClayDocument, size: f32| -> usize {
+        let before = document.visible_mesh_geometry().0;
+        document
+            .apply_stroke(
+                ToolKind::Inflar,
+                BrushSettings {
+                    size,
+                    intensity: 1.0,
+                    ..BrushSettings::default()
+                },
+                &[GestureSample {
+                    position: [0.0, 0.0, 1.0],
+                    pressure: 1.0,
+                    time: 0.0,
+                }],
+                [false; 3],
+            )
+            .expect("the stroke was refused");
+        let after = document.visible_mesh_geometry().0;
+        before.iter().zip(&after).filter(|(a, b)| a != b).count()
+    };
+
+    let few = reached(&mut small, 0.1);
+    let many = reached(&mut large, 0.6);
+    assert!(few > 0, "the small brush moved nothing at all");
+    assert!(
+        many > few * 3,
+        "a brush six times the size reached {many} vertices against {few}. \
+         The size is not reaching the stroke, so Tamanho is inert on a mesh \
+         layer"
+    );
+
+    let _ = std::fs::remove_file(&small_path);
+    let _ = std::fs::remove_file(&large_path);
+}

@@ -164,3 +164,82 @@ fn a_grid_becomes_a_mesh_that_draws() {
          target/visual/71-mesh-from-grid.png"
     );
 }
+
+/// The polyframe draws the mesh's own edges over it.
+///
+/// ZBrush's PolyF, and it answers the one question a shaded surface hides: how
+/// much geometry is actually there. A sculptor deciding whether a mesh wants
+/// retopology — which is exactly what a crossing into a mesh hands them — is
+/// reading its density, and a smooth grey ball says nothing about that.
+///
+/// Drawn through the renderer's mesh-layer path rather than the surface one,
+/// because that is where a mesh layer lives and where the edges are built.
+#[test]
+fn the_polyframe_draws_a_mesh_layers_edges() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let Some(mut document) = document() else {
+        return;
+    };
+    document
+        .convert_layer(Direction::SdfToMesh, 0.06, 0)
+        .expect("the crossing was refused");
+
+    let camera = framed(&document);
+    let (vertices, indices) = carried(&mut document);
+    assert!(!indices.is_empty(), "nothing to draw edges on");
+    harness
+        .renderer
+        .set_mesh_layers(&harness.gpu, &vertices, &indices);
+
+    // Nothing in the surface slot: the mesh layer is the whole subject, and
+    // the polyframe is drawn over the mesh layers rather than over it.
+    let surface = clayspace_view::GpuMesh::new(&harness.gpu);
+
+    harness.renderer.set_polyframe(false);
+    let plain = harness.capture(&surface, &camera, false, "72-polyframe-off");
+    harness.renderer.set_polyframe(true);
+    let wired = harness.capture(&surface, &camera, false, "72-polyframe-on");
+
+    let differing = (0..plain.height)
+        .flat_map(|y| (0..plain.width).map(move |x| (x, y)))
+        .filter(|(x, y)| plain.pixel(*x, *y) != wired.pixel(*x, *y))
+        .count();
+    assert!(
+        differing > 3000,
+        "turning the polyframe on changed {differing} pixels, so it did not \
+         draw — see target/visual/72-polyframe-on.png"
+    );
+
+    // Ink, not light: the lines are dark and translucent, so the surface they
+    // cover has to come out darker on average rather than merely different.
+    let mean = |image: &Image| -> f64 {
+        let lit: Vec<u8> = image
+            .pixels
+            .chunks_exact(4)
+            .filter(|p| (0..3).any(|c| p[c].abs_diff(image.pixel(4, 4)[c]) > 12))
+            .map(|p| p[0])
+            .collect();
+        lit.iter().map(|&v| v as f64).sum::<f64>() / lit.len().max(1) as f64
+    };
+    let (before, after) = (mean(&plain), mean(&wired));
+    assert!(
+        after < before,
+        "the surface reads {after:.1} with the polyframe on and {before:.1} \
+         with it off; the edges are drawn in ink and must darken what they \
+         cover"
+    );
+
+    // And off again is off: a toggle that only goes one way is not a toggle.
+    harness.renderer.set_polyframe(false);
+    let again = harness.capture(&surface, &camera, false, "72-polyframe-off-again");
+    let lingering = (0..plain.height)
+        .flat_map(|y| (0..plain.width).map(move |x| (x, y)))
+        .filter(|(x, y)| plain.pixel(*x, *y) != again.pixel(*x, *y))
+        .count();
+    assert_eq!(
+        lingering, 0,
+        "the polyframe stayed on after being turned off"
+    );
+}

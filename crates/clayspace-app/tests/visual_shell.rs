@@ -178,6 +178,7 @@ fn state<'a>(
         symmetry: [true, false, false],
         scene,
         renaming: None,
+        polyframe: false,
         stats: SceneStats {
             triangles: 2_356_789,
             vertices: 1_178_394,

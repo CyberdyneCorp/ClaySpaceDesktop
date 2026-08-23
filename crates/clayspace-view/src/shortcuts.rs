@@ -149,6 +149,7 @@ pub enum Action {
     Redo,
     FrameAll,
     NextMaterial,
+    TogglePolyframe,
     ViewPerspective,
     ViewFront,
     ViewSide,
@@ -165,7 +166,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 21] = [
+    pub const ALL: [Action; 22] = [
         Self::NewDocument,
         Self::OpenDocument,
         Self::Save,
@@ -174,6 +175,7 @@ impl Action {
         Self::Redo,
         Self::FrameAll,
         Self::NextMaterial,
+        Self::TogglePolyframe,
         Self::ViewPerspective,
         Self::ViewFront,
         Self::ViewSide,
@@ -237,6 +239,10 @@ impl Default for Shortcuts {
         // other hand is sculpting.
         bind(Chord::plain(Key::F), Action::FrameAll);
         bind(Chord::plain(Key::M), Action::NextMaterial);
+        // ZBrush's PolyF is Shift+F, and F alone is already taken here by
+        // framing — so the shifted pair keeps both where a ZBrush hand
+        // expects them.
+        bind(Chord::shift(Key::F), Action::TogglePolyframe);
         bind(Chord::plain(Key::Digit1), Action::ViewPerspective);
         bind(Chord::plain(Key::Digit2), Action::ViewFront);
         bind(Chord::plain(Key::Digit3), Action::ViewSide);

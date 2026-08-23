@@ -213,3 +213,41 @@ was true of two of them and of the third only if you had a file to import.
     now assert the opposite and say why the old reading was wrong. The quality
     readout gains from it too: a sculptor deciding whether a mesh needs
     retopology wants the figure before they start, not after.
+
+## 12. The polyframe, and what Move actually does
+
+- [x] 12.1 Draw a mesh layer's own edges over it
+  - ZBrush's PolyF, on **Visualizar → Malha aparente** and Shift+F (F alone is
+    already framing, so the shifted pair keeps both where a ZBrush hand expects
+    them). A line list over the mesh layers' own vertex buffer — an index
+    buffer rather than a second mesh, because the positions are already
+    uploaded — with a depth bias so the lines sit in front of the triangles
+    they outline instead of fighting them.
+  - Edges are deduplicated. Not to halve the buffer: the lines are translucent,
+    so an edge shared by two triangles and emitted twice is blended twice and
+    the interior reads heavier than the silhouette.
+- [x] 12.2 Establish whether Move and Move Topological reach a mesh
+  - **Move: yes, and always was** — the capability table binds it to
+    `clay_mesh_sculptor_stamp (GRAB)`. What it was not was *reachable*, for the
+    reason in 11.3.
+  - **Move Topological: yes, and it is the only kind there is.** The engine's
+    mesh brush descriptor carries `geodesic` and defaults it on; this
+    application sets it for every verb but Planar and Raspar. Measured on a
+    horseshoe whose tips are 0.71 apart through the air and 2.36 around the
+    arc: a brush reaching 1.0 drags one and leaves the other.
+    `clay_item_volume_move_topological` is a different call — it takes an item
+    carrying a volume — and belongs to the SDF side.
+- [x] 12.3 Make the brush's size and intensity reach a mesh stroke
+  - Found while measuring 12.2, and a real defect. The engine states that
+    `clay_mesh_sculptor_apply_stroke` **ignores the descriptor's radius and
+    strength** and takes each stamp's from the preset; the mesh path built its
+    own preset carrying only spacing, so every mesh stroke ran at the engine's
+    default radius of 0.25 whatever the brush said — sizes 0.1, 0.5 and 1.0 all
+    moved the same 944 vertices, and Intensidade was inert the same way.
+  - The same line had spacing inverted against every other path: the design
+    reads flow as "more flow, stamps closer together" and the SDF path spells
+    that `1.0 - flow`, while this passed it through raw. On a dragging verb
+    that decides whether a second stamp is emitted at all, and a stroke of one
+    stamp has no motion to drag by — which is why Move looked broken rather
+    than merely coarse. Both fixed by using the shared preset the SDF path
+    already had.

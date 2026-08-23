@@ -104,11 +104,34 @@ polygon is created, split or deleted, so `indices` and quads come out byte for
 byte and a model that has just been retopologized can be refined without
 spending the retopology.
 
+**The falloff is measured along the surface, not through the air** — ZBrush's
+*Move Topological*, and on a mesh it is the only kind there is. The engine's
+brush descriptor carries a `geodesic` flag ("a brush on the upper lip must not
+drag the chin through a closed mouth") and defaults it on; this application
+sets it for every verb except Planar and Raspar, which mean "everything under
+this disc" and whose surface walk would refuse to flatten across a groove.
+`mesh_move.rs` measures it on a horseshoe whose tips are 0.71 apart through the
+air and 2.36 apart around the arc: a brush reaching 1.0 drags one tip and
+leaves the other where it was.
+
+(`clay_item_volume_move_topological` is a different call and is not this one —
+it takes an item carrying a volume and is refused on anything else, so it
+belongs to the SDF side.)
+
 Twelve of them are tools that already existed — a smooth is a smooth whichever
 representation it lands on — and four are new: Argila, Vinco, Pintar and
 Borrar. The two colour verbs refuse a mesh carrying no colour attribute rather
 than creating one, because twelve bytes a vertex is a real cost to hide behind
 a stroke.
+
+**Malha aparente** (Visualizar, or Shift+F) draws the mesh's own edges over
+it — ZBrush's polyframe. It answers the one question a shaded surface hides:
+how much geometry is actually there. That is the question a crossing into a
+mesh hands you, since what comes out is the sampling lattice's topology and
+the density is the whole of what decides whether it wants retopology. The edges
+are deduplicated before they are drawn: they are translucent, and an edge
+emitted once per triangle would be blended twice, making the interior read
+heavier than the silhouette.
 
 **Taper, twist and a lattice cage** reach a mesh layer too, as operations on
 the form rather than brushes: no centre, no radius, no falloff. There is

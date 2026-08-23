@@ -93,3 +93,18 @@ fn overlay_fs(input: OverlayOutput) -> @location(0) vec4<f32> {
 fn membrane_fs(input: OverlayOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(input.color.rgb, 0.30);
 }
+
+// The polyframe: the mesh's own edges, drawn over it.
+//
+// Its own fragment entry rather than the overlay's, which takes the vertex
+// colour — a mesh layer's vertices are near-white, so a wireframe drawn that
+// way is white on white. This is a fixed dark line instead, translucent so a
+// dense mesh reads as a tone rather than filling in solid.
+//
+// The colour is here rather than in the theme because it is not a surface the
+// theme tokens describe: it is ink over whatever material is beneath, and it
+// has to stay legible against every matcap rather than against one panel.
+@fragment
+fn wire_fs(input: OverlayOutput) -> @location(0) vec4<f32> {
+    return vec4<f32>(0.10, 0.11, 0.13, 0.55);
+}

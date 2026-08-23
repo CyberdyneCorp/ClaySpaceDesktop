@@ -71,6 +71,8 @@ pub struct SculptViewModel {
     symmetry: Observable<[bool; 3]>,
     view_preset: Observable<ViewPresetKind>,
     grid: Observable<bool>,
+    /// Whether a mesh layer is drawn with its edges over it.
+    polyframe: Observable<bool>,
 
     history: Observable<HistoryState>,
     stats: Observable<SceneStats>,
@@ -123,6 +125,10 @@ impl SculptViewModel {
             symmetry: Observable::new([true, false, false]),
             view_preset: Observable::new(ViewPresetKind::Perspective),
             grid: Observable::new(true),
+            // Off by default. A polyframe over a dense mesh is a lot of ink,
+            // and it is asked for when a question about density comes up
+            // rather than kept on.
+            polyframe: Observable::new(false),
             history: Observable::new(history),
             stats: Observable::new(stats),
             tool_status: Observable::new(None),
@@ -158,6 +164,10 @@ impl SculptViewModel {
 
     pub fn view_preset(&self) -> &Observable<ViewPresetKind> {
         &self.view_preset
+    }
+
+    pub fn polyframe(&self) -> &Observable<bool> {
+        &self.polyframe
     }
 
     pub fn grid(&self) -> &Observable<bool> {
@@ -356,6 +366,10 @@ impl SculptViewModel {
             Command::ToggleGrid => {
                 let current = *self.grid.get();
                 self.grid.set(!current);
+            }
+            Command::TogglePolyframe => {
+                let current = *self.polyframe.get();
+                self.polyframe.set(!current);
             }
             // Framing and material are the renderer's business; the ViewModel
             // records nothing for them because they change no state it owns.

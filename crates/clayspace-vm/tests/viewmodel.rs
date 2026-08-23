@@ -562,6 +562,34 @@ fn the_view_preset_and_grid_are_observable() {
     assert_ne!(*vm.grid().get(), before);
 }
 
+/// The polyframe is a state the interface reads, not an action it fires.
+///
+/// It has to be observable for the same reason the grid is: the menu shows it
+/// checked and the renderer is told each frame, and both read the same value.
+/// Off to begin with — a polyframe over a dense mesh is a lot of ink, and it
+/// is asked for when a question about density comes up rather than kept on.
+#[test]
+fn the_polyframe_is_an_observable_state() {
+    let (mut vm, _) = fixture();
+    assert!(
+        !*vm.polyframe().get(),
+        "the polyframe starts on, so every mesh layer opens covered in ink"
+    );
+
+    let mut watcher = Watcher::new();
+    watcher.accept(vm.polyframe());
+    vm.dispatch(Command::TogglePolyframe).expect("polyframe");
+    assert!(
+        watcher.take_change(vm.polyframe()),
+        "the change was not seen"
+    );
+    assert!(*vm.polyframe().get());
+
+    // And back, because a toggle that only goes one way is not a toggle.
+    vm.dispatch(Command::TogglePolyframe).expect("polyframe");
+    assert!(!*vm.polyframe().get());
+}
+
 #[test]
 fn setting_the_preset_already_active_schedules_no_redraw() {
     let (mut vm, _) = fixture();
