@@ -14,10 +14,10 @@ use std::rc::Rc;
 
 use clayspace_engine::ClayDocument;
 use clayspace_model::{
-    Armature, ArmatureModel, BrushSettings, DocumentModel, EditOutcome, ExchangeModel,
-    ExportSettings, ExtrudeSettings, GestureSample, HistoryState, ImportSettings, LayerCost,
-    LayerKey, MaskModel, MaskOp, MaskState, ModelError, NodeIndex, OpenError, Protection,
-    Representation, Scene, SceneModel, SceneStats, SculptModel, SkinSettings, ToolKind,
+    Armature, ArmatureModel, BrushSettings, CombineSettings, DocumentModel, EditOutcome,
+    ExchangeModel, ExportSettings, ExtrudeSettings, GestureSample, HistoryState, ImportSettings,
+    LayerCost, LayerKey, MaskModel, MaskOp, MaskState, ModelError, NodeIndex, OpenError,
+    Protection, Representation, Scene, SceneModel, SceneStats, SculptModel, SkinSettings, ToolKind,
 };
 
 /// A handle to the one document.
@@ -45,6 +45,37 @@ impl SculptModel for SharedDocument {
 
     fn active_layer_editable(&self) -> bool {
         self.0.borrow().active_layer_editable()
+    }
+
+    // Every provided method of `SculptModel` is forwarded here as well, and
+    // the ones below are why. A default exists so a *double* that models one
+    // representation need not spell out answers it has none for; this is not a
+    // double, it is the one document, and inheriting a default means quietly
+    // answering for it. `set_combine` was the one that showed it: the options
+    // bar dispatched the command, the ViewModel called the model, the default
+    // discarded it, and fourteen combine operations drew the same picture. Any
+    // provided method added to the trait belongs here too.
+    fn active_layer_carries_geometry(&self) -> bool {
+        self.0.borrow().active_layer_carries_geometry()
+    }
+
+    fn active_layer_visible(&self) -> bool {
+        self.0.borrow().active_layer_visible()
+    }
+
+    fn apply_operation(
+        &mut self,
+        operation: clayspace_model::LayerOperation,
+    ) -> Result<EditOutcome, ModelError> {
+        self.0.borrow_mut().apply_operation(operation)
+    }
+
+    fn set_combine(&mut self, combine: CombineSettings) {
+        self.0.borrow_mut().set_combine(combine);
+    }
+
+    fn combine(&self) -> CombineSettings {
+        self.0.borrow().combine()
     }
 
     fn apply_stroke(

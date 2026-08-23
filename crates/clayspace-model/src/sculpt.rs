@@ -180,6 +180,21 @@ pub trait SculptModel {
         symmetry: [bool; 3],
     ) -> Result<EditOutcome, ModelError>;
 
+    /// How the next SDF edit combines with what is under it.
+    ///
+    /// State rather than a fifth argument to `apply_stroke`: the choice is made
+    /// once in the options bar and then holds across every stroke, exactly as
+    /// symmetry does, and threading it through each call would put the same
+    /// value in every call site whether it was doing anything or not. Defaulted
+    /// so a double that models one representation refuses nothing new.
+    fn set_combine(&mut self, combine: crate::CombineSettings) {
+        let _ = combine;
+    }
+
+    fn combine(&self) -> crate::CombineSettings {
+        crate::CombineSettings::for_strokes()
+    }
+
     /// Where a ray meets the surface, if anywhere.
     fn pick(&self, origin: [f32; 3], direction: [f32; 3]) -> Option<[f32; 3]>;
 

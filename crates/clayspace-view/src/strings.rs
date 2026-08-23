@@ -84,6 +84,10 @@ pub struct Strings {
     pub label_intensity: &'static str,
     pub label_size: &'static str,
     pub label_flow: &'static str,
+    /// How an SDF edit meets what is under it.
+    pub label_combine: &'static str,
+    /// How sharply the join is made.
+    pub label_blend: &'static str,
     pub label_symmetry: &'static str,
     pub label_resolution: &'static str,
     pub label_smoothing: &'static str,
@@ -195,6 +199,8 @@ const PT_BR: Strings = Strings {
     label_intensity: "Intensidade",
     label_size: "Tamanho",
     label_flow: "Fluxo",
+    label_combine: "Operação",
+    label_blend: "Junção",
     label_symmetry: "Simetria",
     label_resolution: "Resolução",
     label_smoothing: "Suavização",
@@ -298,6 +304,8 @@ const EN_US: Strings = Strings {
     label_intensity: "Intensity",
     label_size: "Size",
     label_flow: "Flow",
+    label_combine: "Operation",
+    label_blend: "Join",
     label_symmetry: "Symmetry",
     label_resolution: "Resolution",
     label_smoothing: "Smoothing",
@@ -404,6 +412,8 @@ const ES_419: Strings = Strings {
     label_intensity: "Intensidad",
     label_size: "Tamaño",
     label_flow: "Flujo",
+    label_combine: "Operación",
+    label_blend: "Unión",
     label_symmetry: "Simetría",
     label_resolution: "Resolución",
     label_smoothing: "Suavizado",
@@ -495,7 +505,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 74] {
+    pub fn all(&self) -> [&'static str; 76] {
         [
             self.menu_file,
             self.menu_edit,
@@ -519,6 +529,8 @@ impl Strings {
             self.label_intensity,
             self.label_size,
             self.label_flow,
+            self.label_combine,
+            self.label_blend,
             self.label_symmetry,
             self.label_resolution,
             self.label_smoothing,

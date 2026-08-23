@@ -62,6 +62,12 @@ pub struct SculptViewModel {
     /// status line can say so rather than leaving it unexplained.
     substituted: bool,
     brush: Observable<BrushSettings>,
+    /// How the next SDF edit combines with what is under it.
+    ///
+    /// One setting for the document rather than one per tool: it is a property
+    /// of the edit being made, and a sculptor who sets an operation and then
+    /// changes brush expects to still be cutting.
+    combine: Observable<clayspace_model::CombineSettings>,
     symmetry: Observable<[bool; 3]>,
     view_preset: Observable<ViewPresetKind>,
     grid: Observable<bool>,
@@ -113,6 +119,7 @@ impl SculptViewModel {
             // disagreeing: the ViewModel is what the options bar shows, and a
             // bar reading "X on" over a document with no mirror is a lie
             // before the user has touched anything.
+            combine: Observable::new(clayspace_model::CombineSettings::for_strokes()),
             symmetry: Observable::new([true, false, false]),
             view_preset: Observable::new(ViewPresetKind::Perspective),
             grid: Observable::new(true),
@@ -139,6 +146,10 @@ impl SculptViewModel {
 
     pub fn brush(&self) -> &Observable<BrushSettings> {
         &self.brush
+    }
+
+    pub fn combine(&self) -> &Observable<clayspace_model::CombineSettings> {
+        &self.combine
     }
 
     pub fn symmetry(&self) -> &Observable<[bool; 3]> {
@@ -220,6 +231,12 @@ impl SculptViewModel {
                     let (row, index) = self.slot(tool);
                     self.brush.set(self.brushes[row][index]);
                     self.refresh_tool_status();
+                }
+            }
+            Command::SetCombine(combine) => {
+                let combine = combine.sanitized();
+                if self.combine.set_if_changed(combine) {
+                    self.model.set_combine(combine);
                 }
             }
             Command::SetBrushSize(size) => self.edit_brush(|b| b.size = size),

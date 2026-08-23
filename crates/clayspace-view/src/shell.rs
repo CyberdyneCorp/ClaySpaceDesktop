@@ -10,9 +10,10 @@
 //! along the trailing edge, and a status area.
 
 use clayspace_model::{
-    BrushSettings, Diagnostics, Direction, ExportMesher, ExportSettings, ExportWarning,
-    ExtrudeSettings, ExtrudeSide, Falloff, ImportAs, ImportSettings, LayerSummary, MaskOp,
-    MaskState, RecentDocuments, Representation, Scene, SceneStats, ToolKind, Units, ViewPresetKind,
+    BlendProfile, BrushSettings, Combine, CombineSettings, Diagnostics, Direction, ExportMesher,
+    ExportSettings, ExportWarning, ExtrudeSettings, ExtrudeSide, Falloff, ImportAs, ImportSettings,
+    LayerSummary, MaskOp, MaskState, RecentDocuments, Representation, Scene, SceneStats, ToolKind,
+    Units, ViewPresetKind,
 };
 use clayspace_vm::{Axis, Command, CommandQueue};
 
@@ -100,6 +101,8 @@ pub struct ShellState<'a> {
     /// is what decides the shelf's contents rather than a fixed list.
     pub representation: Representation,
     pub brush: BrushSettings,
+    /// How the next SDF edit combines with what is under it.
+    pub combine: CombineSettings,
     /// Why the active tool cannot be used, when it cannot.
     pub tool_status: Option<&'a str>,
     pub symmetry: [bool; 3],
@@ -549,6 +552,15 @@ pub fn options_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
             }
         });
 
+        // The combine vocabulary is the SDF side's alone: cells are set or
+        // cleared and vertices are moved, so neither has a join to make. The
+        // controls are absent rather than greyed because there is no
+        // representation-independent meaning for them to be disabled *from*.
+        if state.representation == Representation::Sdf {
+            ui.add_space(space::SECTION);
+            combine_controls(ui, state, queue);
+        }
+
         // Why the tool cannot be used, where the user is looking when they try.
         if let Some(reason) = state.tool_status {
             // The ViewModel carries no locale, so a status it raises itself
@@ -565,6 +577,86 @@ pub fn options_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
                     .size(type_scale::LABEL)
                     .color(Tokens::accent()),
             );
+        }
+    });
+}
+
+/// The combine operation, its join profile, and how wide the join reaches.
+///
+/// Three controls rather than one list of their product: an operation with a
+/// hard join and the same one rounded are the same operation and different
+/// shapes, and a list of seventy entries is not a vocabulary anybody learns.
+fn combine_controls(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    let settings = state.combine;
+
+    ui.vertical(|ui| {
+        ui.set_width(150.0);
+        ui.label(
+            egui::RichText::new(s.label_combine)
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+        );
+        egui::ComboBox::from_id_salt("combine-op")
+            .selected_text(settings.op.label())
+            .width(150.0)
+            .show_ui(ui, |ui| {
+                for op in Combine::offered_for_strokes() {
+                    if ui.selectable_label(op == settings.op, op.label()).clicked()
+                        && op != settings.op
+                    {
+                        queue.push(Command::SetCombine(CombineSettings { op, ..settings }));
+                    }
+                }
+            });
+    });
+
+    // A profile and a width describe how a *join* is rounded. Replace discards
+    // what was under it and Paint touches no surface, so neither makes one —
+    // and offering the controls beside them would be offering two that do
+    // nothing.
+    if !settings.op.takes_a_blend() {
+        return;
+    }
+
+    ui.add_space(space::SNUG);
+    ui.vertical(|ui| {
+        ui.set_width(140.0);
+        ui.label(
+            egui::RichText::new(s.label_blend)
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+        );
+        egui::ComboBox::from_id_salt("combine-blend")
+            .selected_text(settings.blend.label())
+            .width(140.0)
+            .show_ui(ui, |ui| {
+                for blend in BlendProfile::ALL {
+                    if ui
+                        .selectable_label(blend == settings.blend, blend.label())
+                        .clicked()
+                        && blend != settings.blend
+                    {
+                        queue.push(Command::SetCombine(CombineSettings { blend, ..settings }));
+                    }
+                }
+            });
+    });
+
+    ui.add_space(space::SNUG);
+    ui.vertical(|ui| {
+        ui.set_width(150.0);
+        // The same number means the amplitude a stroke displaces by for the
+        // relief family and the width of the join for every other operation,
+        // so the label follows the operation rather than being fixed.
+        if let Some(radius) = slider(
+            ui,
+            settings.radius_label(),
+            settings.radius,
+            settings.radius_range(),
+            3,
+        ) {
+            queue.push(Command::SetCombine(CombineSettings { radius, ..settings }));
         }
     });
 }

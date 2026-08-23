@@ -10,14 +10,49 @@ use claycore::{
     Op, StrokePreset, VolumeParams,
 };
 use clayspace_model::{
-    Armature, ArmatureModel, BrushSettings, Cost, Direction, DocumentModel, EditOutcome,
-    ExchangeModel, ExportMesher, ExportSettings, ExtrudeSettings, Format, GestureSample,
-    HistoryState, ImportAs, ImportSettings, LayerKey, LayerSummary, MaskModel, MaskOp, MaskState,
-    ModelError, NodeIndex, OpenError, Protection, Refusal, Representation, Scene, SceneModel,
-    SceneNode, SceneStats, SculptModel, SkinSettings, ToolKind,
+    Armature, ArmatureModel, BlendProfile, BrushSettings, Combine, CombineSettings, Cost,
+    Direction, DocumentModel, EditOutcome, ExchangeModel, ExportMesher, ExportSettings,
+    ExtrudeSettings, Format, GestureSample, HistoryState, ImportAs, ImportSettings, LayerKey,
+    LayerSummary, MaskModel, MaskOp, MaskState, ModelError, NodeIndex, OpenError, Protection,
+    Refusal, Representation, Scene, SceneModel, SceneNode, SceneStats, SculptModel, SkinSettings,
+    ToolKind,
 };
 
 use crate::backend::{BackendPolicy, Operation};
+
+/// The engine's op for a combine operation.
+///
+/// Exhaustive rather than defaulted: an unlisted arm falling through to
+/// `Op::Add` is exactly the bug the tool table carries a note about, where a
+/// planing tool deposited spheres and nothing said so.
+fn engine_op(op: Combine) -> Op {
+    match op {
+        Combine::Add => Op::Add,
+        Combine::Subtract => Op::Subtract,
+        Combine::Intersect => Op::Intersect,
+        Combine::Paint => Op::Paint,
+        Combine::Groove => Op::Groove,
+        Combine::Tongue => Op::Tongue,
+        Combine::Pipe => Op::Pipe,
+        Combine::Engrave => Op::Engrave,
+        Combine::Emboss => Op::Emboss,
+        Combine::Inset => Op::Inset,
+        Combine::Shell => Op::Shell,
+        Combine::Replace => Op::Replace,
+        Combine::Relief => Op::Relief,
+        Combine::Incise => Op::Incise,
+    }
+}
+
+fn engine_blend(profile: BlendProfile) -> Blend {
+    match profile {
+        BlendProfile::Hard => Blend::Hard,
+        BlendProfile::Quadratic => Blend::Quadratic,
+        BlendProfile::Cubic => Blend::Cubic,
+        BlendProfile::Circular => Blend::Circular,
+        BlendProfile::Chamfer => Blend::Chamfer,
+    }
+}
 
 /// A layer the document holds, and what it is made of.
 #[derive(Clone)]
@@ -127,6 +162,8 @@ pub struct ClayDocument {
     /// The mirror currently set on the active layer, so it is only rewritten
     /// when it actually changes.
     symmetry: [bool; 3],
+    /// How the next SDF edit combines with what is under it.
+    combine: CombineSettings,
     /// Hands out layer keys. Monotone, so a key is never reused for a
     /// different layer after a removal.
     next_key: u64,
@@ -207,6 +244,7 @@ impl ClayDocument {
             active: 0,
             cache,
             policy,
+            combine: CombineSettings::for_strokes(),
             dirty: Vec::new(),
             stats: SceneStats::default(),
             surface_brick_count: 0,
@@ -891,12 +929,12 @@ impl ClayDocument {
             })
             .collect();
 
-        // Every tool that reaches here is a relief tool. There is no catch-all
-        // arm any more: the one that was here mapped anything unlisted to
-        // `Op::Add`, which adds a *sphere* — so the planing tools deposited
-        // blobs and nothing said so. A tool with no mapping now refuses.
-        let op = match tool {
-            ToolKind::Padrao | ToolKind::Camada | ToolKind::Inflar => Op::Relief,
+        // Every tool that reaches here combines a stamp with the surface.
+        // There is no catch-all arm: the one that was here mapped anything
+        // unlisted to `Op::Add`, which adds a *sphere* — so the planing tools
+        // deposited blobs and nothing said so. A tool with no mapping refuses.
+        match tool {
+            ToolKind::Padrao | ToolKind::Camada | ToolKind::Inflar => {}
             other => {
                 return Err(ModelError::engine(format!(
                     "{} has no mapping onto an SDF verb; it should not have \
@@ -904,19 +942,36 @@ impl ClayDocument {
                     other.label()
                 )))
             }
-        };
+        }
+        let combine = self.combine.sanitized();
 
         let mut stamp = Item::sphere(brush.sanitized().size).map_err(ModelError::engine)?;
-        stamp.set_op(op).map_err(ModelError::engine)?;
-        // For CLAY_OP_RELIEF the item is the *region* and `blend_k` is the
-        // amplitude the surface moves by along its own normal — not a
-        // smoothing distance. It was set to 40% of the radius, which measured
-        // as a displacement of about a sixth of the brush: a stroke that left
-        // the sphere looking untouched. The engine saturates the amplitude at
-        // roughly the radius, so that is what it is asked for, and `strength`
-        // scales it from there.
         stamp
-            .set_blend(Blend::Quadratic, brush.sanitized().size)
+            .set_op(engine_op(combine.op))
+            .map_err(ModelError::engine)?;
+        // The blend distance is two different quantities depending on the op,
+        // which is why the model marks which family this one is in.
+        //
+        // For the displacing ops the item is the *region* and `blend_k` is the
+        // amplitude the surface moves by along its own normal — not a
+        // smoothing distance. It was once set to 40% of the radius, which
+        // measured as a displacement of about a sixth of the brush: a stroke
+        // that left the sphere looking untouched. The engine saturates the
+        // amplitude at roughly the radius, so that is what it is asked for
+        // when the sculptor has not asked for less, and `strength` scales it
+        // from there. For every other op it is the width of the join, and the
+        // sculptor's own zero means a hard one.
+        let distance = if combine.op.displaces_along_the_normal() {
+            if combine.radius > 0.0 {
+                combine.radius
+            } else {
+                brush.sanitized().size
+            }
+        } else {
+            combine.radius
+        };
+        stamp
+            .set_blend(engine_blend(combine.blend), distance)
             .map_err(ModelError::engine)?;
         // The item's rounding is the falloff width, and it was never set at
         // all. Measured, going from zero to the brush radius tripled the
@@ -1822,6 +1877,14 @@ impl SculptModel for ClayDocument {
         }
     }
 
+    fn set_combine(&mut self, combine: CombineSettings) {
+        self.combine = combine.sanitized();
+    }
+
+    fn combine(&self) -> CombineSettings {
+        self.combine
+    }
+
     fn apply_operation(
         &mut self,
         operation: clayspace_model::LayerOperation,
@@ -2538,6 +2601,7 @@ impl ClayDocument {
             mesh_redo: Vec::new(),
             mask: None,
             symmetry: [false; 3],
+            combine: CombineSettings::for_strokes(),
             next_key,
             selected: None,
             armature: None,

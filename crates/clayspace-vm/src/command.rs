@@ -62,6 +62,8 @@ pub enum Command {
     CloseHoles,
     /// Fills every empty cell the outside cannot reach.
     FillVoids,
+    /// How the next SDF edit combines with what is under it.
+    SetCombine(clayspace_model::CombineSettings),
     /// What the conversion panel is set to.
     SetConversion(ConversionSettings),
     /// Crosses the active layer, adding a new one.
@@ -169,6 +171,9 @@ impl Command {
                 // for the same reason import does.
                 | Self::SetConversion(_)
                 | Self::RunConversion
+                // Choosing how the *next* edit combines changes nothing yet;
+                // the stroke that follows is the entry.
+                | Self::SetCombine(_)
                 // Import *does* change the document, but it goes through the
                 // composition root's own path — dialog, then model — and
                 // marks the document itself. Routing it through the ordinary
@@ -243,6 +248,7 @@ impl Command {
             Self::ToggleRepair => "repair panel",
             Self::CloseHoles => "close holes",
             Self::FillVoids => "fill voids",
+            Self::SetCombine(_) => "combine operation",
             Self::SetConversion(_) => "conversion settings",
             Self::RunConversion => "convert",
             Self::RunImport => "import",

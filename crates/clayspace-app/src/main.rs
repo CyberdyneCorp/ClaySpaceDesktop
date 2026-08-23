@@ -1466,6 +1466,7 @@ impl App {
             tool: *self.sculpt.tool().get(),
             representation: self.sculpt.active_representation(),
             brush: *self.sculpt.brush().get(),
+            combine: *self.sculpt.combine().get(),
             tool_status: self.sculpt.tool_status().get().as_deref(),
             symmetry: *self.sculpt.symmetry().get(),
             scene: &scene,
