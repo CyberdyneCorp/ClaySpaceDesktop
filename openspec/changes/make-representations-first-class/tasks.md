@@ -121,3 +121,53 @@
     with the three representations in place, dab median 2.42 ms against a 50 ms
     budget. The macOS baseline still reads 0.29.1 and needs a run on that
     hardware.
+
+## 10. Found while checking the work
+
+Two gaps the task list did not name, both found by asking a question none of
+the existing tests asked.
+
+- [x] 10.1 Rename and delete a layer from the interface
+  - The model has carried `rename_layer` and `remove_layer` from the start and
+    the layer panel offered neither. Both are on a row's own menu now, and a
+    rename also on a double-click; the field opens in place and a refusal
+    leaves what was typed in it. **Excluir** is disabled with its reason for the
+    last layer. Two defects turned up on the way and are held by
+    `visual_shell.rs`: a row sensed clicks only across the width of its own
+    text, so a short name left most of the row dead; and a truncated label
+    registers a hover widget, so a row's interaction had to be claimed *after*
+    the label or long names were shadowed by it.
+- [x] 10.2 Make a voxel sculpt reach the screen
+  - `voxel_tools.rs` and `visual_sculpting.rs` both asked the grid whether it
+    had changed. It always had, and nothing was drawn: the viewport builds its
+    surface from the brick cache, the cache holds the document's SDF field, and
+    the engine states that a voxel layer carries no SDF content. A document
+    holding one sculpted grid meshed to **zero triangles**. Two more parts of
+    the chain had the same assumption — `bounds` answered `None` so Enquadrar
+    tudo framed a default box, and `pick` marched the field so a press orbited
+    instead of sculpting. A grid is now drawn through the mesh-layer path with
+    `clay_voxel_mesh_smooth`, reports its own extent, and is picked with
+    `clay_voxel_raycast`. `clayspace-app/tests/visual_voxel_sculpt.rs` asks the
+    sculptor's question: did it appear, did a second stroke move it, can the
+    pointer find it.
+
+- [x] 10.3 Count what is on screen, not only what the brick cache built
+  - The polygon and vertex counters were fed by `record_geometry`, which only
+    the surface cache calls. A mesh or voxel layer draws triangles it knows
+    nothing about, so a document whose only layer was a sculpted grid reported
+    "Triângulos 0" over a visible sculpt and a detail line saying nothing had
+    been meshed. The two sources are summed now, and the "nothing yet"
+    classification is made on the total.
+- [x] 10.4 Mesh a voxel layer incrementally
+  - Drawing it whole was the first attempt and it does not survive
+    measurement. On a 0.01 grid a 3.2 ms dab cost **309 ms** to re-mesh,
+    against a 50 ms budget and rising with the sculpt — drawn and unusable.
+    `clay_voxel_take_dirty_chunks` reports what an edit dirtied and
+    `clay_voxel_mesh_chunks` meshes only those: 3.3 ms, flat in the sculpt's
+    size. Held by a count of chunks rather than a duration, because a
+    millisecond budget on a shared machine measures the machine.
+  - The same measurement retired the rounded preview. `clay_voxel_mesh_smooth`
+    carries **no vertex normals** — it renders as a flat white silhouette with
+    no form to read, captured and compared before deciding — and it has no
+    chunked variant. A grid is drawn as the boxes it is; the rounded surface is
+    the voxel-to-SDF conversion, which is what that direction is for.

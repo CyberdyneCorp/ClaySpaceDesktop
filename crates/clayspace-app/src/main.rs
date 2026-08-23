@@ -172,6 +172,12 @@ struct App {
     conversion: clayspace_model::ConversionSettings,
     import: ImportSettings,
     export: ExportSettings,
+    /// The layer being renamed and what its field holds.
+    ///
+    /// Held here rather than inside the widget so the View stays a pure
+    /// function of state, and so the draft survives the frame it is typed on
+    /// without egui owning a piece of the document's vocabulary.
+    renaming: Option<(clayspace_model::LayerKey, String)>,
     /// The engine's undo depth when a rig gesture began.
     ///
     /// A rig drag edits once per sample, so a gesture is many engine entries
@@ -265,6 +271,7 @@ impl App {
             conversion: clayspace_model::ConversionSettings::default(),
             import: ImportSettings::default(),
             export: ExportSettings::default(),
+            renaming: None,
             rig_plane: None,
             rig_depth_at_press: 0,
             strings: Strings::for_locale(Locale::default()),
@@ -642,6 +649,15 @@ impl App {
                 eprintln!("the surface could not be meshed: {e}");
             }
         }
+        // And the carried layers, which the surface rebuild does not touch.
+        //
+        // Forgotten rather than compared. `mesh_revision` is derived from what
+        // the document holds, so two documents can report the same number —
+        // one with a mesh layer and no gestures against it and one with
+        // nothing at all both report zero — and the viewport would then keep
+        // drawing the document that was just closed.
+        self.mesh_revision = None;
+        self.sync_mesh_layers();
         self.frame_all();
     }
 
@@ -825,12 +841,16 @@ impl App {
         }
     }
 
-    /// Brings the viewport's copy of the mesh layers up to date.
+    /// Brings the viewport's copy of the carried layers up to date.
     ///
-    /// Only when it is stale. A mesh layer's triangles are copied out whole
-    /// rather than patched per key, so doing it every frame would upload the
-    /// whole of every mesh layer at sixty hertz to show a surface that has not
-    /// moved.
+    /// Mesh layers and voxel grids both, because neither is in the brick cache
+    /// and both are drawn from this one buffer.
+    ///
+    /// Only when it is stale. The triangles are copied out whole rather than
+    /// patched per key — and a grid is re-meshed from scratch, which is the
+    /// whole grid every time (ClayCore #86 is the incremental path) — so doing
+    /// it every frame would rebuild and upload the lot at sixty hertz to show
+    /// a surface that has not moved.
     fn sync_mesh_layers(&mut self) {
         let revision = self.document.with(|document| document.mesh_revision());
         if self.mesh_revision == Some(revision) {
@@ -1290,6 +1310,40 @@ impl App {
         }
     }
 
+    /// Opens the rename field on a layer, seeded with the name it has.
+    ///
+    /// Seeded rather than blank: renaming is usually a correction to what is
+    /// there, and a field that clears itself makes the sculptor retype the
+    /// part they were happy with.
+    fn begin_rename(&mut self, key: clayspace_model::LayerKey) {
+        let name = self
+            .scene
+            .scene()
+            .get()
+            .layer(key)
+            .map(|layer| layer.name.clone());
+        self.renaming = name.map(|name| (key, name));
+    }
+
+    /// Puts the field's name on the layer it was opened over.
+    ///
+    /// The refusals — an empty name, a voxel layer taking a name another one
+    /// already answers to — belong to the model and are stated by it. The
+    /// field stays open when one lands, so the sculptor can fix what they
+    /// typed instead of having it discarded along with the reason.
+    fn commit_rename(&mut self) {
+        let Some((key, draft)) = self.renaming.clone() else {
+            return;
+        };
+        match self.scene.rename(key, &draft) {
+            Ok(()) => {
+                self.renaming = None;
+                self.document_vm.touched();
+            }
+            Err(e) => eprintln!("a camada não pôde ser renomeada: {e}"),
+        }
+    }
+
     /// Crosses the active layer, with the pointer saying it is working.
     ///
     /// Unbounded: the work follows the region and the resolution, not the
@@ -1403,6 +1457,17 @@ impl App {
             Command::RunDeform => self.run_operation(self.deform.operation()),
             Command::CloseHoles => self.run_operation(LayerOperation::CloseHoles { passes: 1 }),
             Command::FillVoids => self.run_operation(LayerOperation::FillVoids),
+            Command::BeginRenameLayer(key) => self.begin_rename(*key),
+            Command::EditLayerName(name) => {
+                if let Some((_, draft)) = self.renaming.as_mut() {
+                    *draft = name.clone();
+                }
+            }
+            Command::CommitRenameLayer => self.commit_rename(),
+            Command::CancelRenameLayer => self.renaming = None,
+            // The stack just changed under the field. Left open it would
+            // commit onto a row that has moved, or onto one that is gone.
+            Command::RemoveLayer(_) => self.renaming = None,
             _ => {}
         }
         if matches!(command, Command::SelectLayer(_)) {
@@ -1538,6 +1603,10 @@ impl App {
             tool_status: self.sculpt.tool_status().get().as_deref(),
             symmetry: *self.sculpt.symmetry().get(),
             scene: &scene,
+            renaming: self
+                .renaming
+                .as_ref()
+                .map(|(key, draft)| (*key, draft.as_str())),
             stats: *self.sculpt.stats().get(),
             view_preset: *self.sculpt.view_preset().get(),
             material,

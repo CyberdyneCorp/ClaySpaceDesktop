@@ -113,6 +113,7 @@ Taken up here, each one flipping a test rather than being read about.
 | [#91](https://github.com/CyberdyneCorp/ClayCore/issues/91) no node enumeration | 0.30.0 | **A reloaded rig is found by enumeration, not by probing ids.** The old scan gave up after sixteen consecutive misses; gaps survive a round trip and are unbounded, so a document whose ids ran `[1, 32..42]` reopened reporting no armature at all. `layer_nodes.rs` |
 | [#92](https://github.com/CyberdyneCorp/ClayCore/issues/92) no layer rename | 0.30.0 | **A rename is saved.** One command, so one undo step. `layer_rename.rs` |
 | [#99](https://github.com/CyberdyneCorp/ClayCore/issues/99) armature has one op per item | 0.30.0 | **Negative ZSpheres are real.** The sign belongs to the node, so the membrane along its links is cut, the sign survives a reload, and a negative may carry a limb. The rig is one item again. `armature_signs.rs` |
+| [#86](https://github.com/CyberdyneCorp/ClayCore/issues/86) whole-grid voxel meshing | 0.30.0 | **A voxel sculpt is drawn incrementally.** `clay_voxel_take_dirty_chunks` reports what an edit dirtied and `clay_voxel_mesh_chunks` meshes only those, so an edit costs the edit: 3.3 ms where meshing the grid whole cost 309 ms and rose with the sculpt. `visual_voxel_sculpt.rs` holds it as a count of chunks rather than a duration |
 
 ### Upstream: released, not yet taken up here
 
@@ -123,7 +124,14 @@ Taken up here, each one flipping a test rather than being read about.
 | Issue | Released | Why it does not change anything here |
 |---|---|---|
 | [#63](https://github.com/CyberdyneCorp/ClayCore/issues/63) partial backend registration | 0.30.0 | A backend that loses one pipeline now registers and says what it lost, and `clay_backend_supports` / `clay_backend_diagnostic` answer why one is missing. Worth surfacing in the diagnostics report; nothing is broken without it |
-| [#86](https://github.com/CyberdyneCorp/ClayCore/issues/86) whole-grid voxel meshing | 0.30.0 | An incremental voxel display path, mirroring the brick cache's. The voxel tools here do not re-mesh per frame, so nothing pays the cost it removes |
+
+The grid's triangles are *meshed* per chunk and still **assembled and
+uploaded whole**: `visible_mesh_geometry` concatenates every chunk into one
+buffer each time anything changes. Measured at 776,614 triangles that is 26 ms
+of the 29 ms an edit costs — inside the 50 ms budget, and the same whole-buffer
+shape a mesh layer has always had. The next step is a per-chunk slot layout in
+that buffer, which is what `SurfaceGeometry` already does for the field side;
+it is not owed until a document holds a grid past about two million triangles.
 
 **One upstream issue is open:**
 [#210](https://github.com/CyberdyneCorp/ClayCore/issues/210), an undo that

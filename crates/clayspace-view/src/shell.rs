@@ -12,9 +12,9 @@
 use clayspace_model::{
     AlphaSupport, BlendProfile, BrushSettings, Combine, CombineSettings, DeformSettings,
     DeformVerb, Diagnostics, Direction, ExportMesher, ExportSettings, ExportWarning,
-    ExtrudeSettings, ExtrudeSide, Falloff, ImportAs, ImportSettings, LayerSummary, MaskOp,
-    MaskState, RecentDocuments, Representation, Scene, SceneStats, SculptLayer, SculptLayerCost,
-    SculptLayerOp, ToolKind, Units, ViewPresetKind,
+    ExtrudeSettings, ExtrudeSide, Falloff, ImportAs, ImportSettings, LayerKey, LayerSummary,
+    MaskOp, MaskState, RecentDocuments, Representation, Scene, SceneStats, SculptLayer,
+    SculptLayerCost, SculptLayerOp, ToolKind, Units, ViewPresetKind,
 };
 use clayspace_vm::{Axis, Command, CommandQueue};
 
@@ -120,6 +120,12 @@ pub struct ShellState<'a> {
     pub symmetry: [bool; 3],
 
     pub scene: &'a Scene,
+    /// Which layer is being renamed and what its field holds.
+    ///
+    /// The draft lives outside the View because the View is a pure function of
+    /// state: a buffer owned by a widget would be the one piece of the
+    /// interface a test could not set up or read back.
+    pub renaming: Option<(LayerKey, &'a str)>,
     pub stats: SceneStats,
 
     pub view_preset: ViewPresetKind,
@@ -973,15 +979,6 @@ fn layer_row(
                     queue.push(Command::SetLayerVisible(layer.key, !layer.visible));
                 }
 
-                let name = egui::RichText::new(&layer.name)
-                    .size(type_scale::BODY)
-                    // Selection is indicated by surface tone and weight, never
-                    // by the accent — that marks the active brush alone.
-                    .color(if active {
-                        Tokens::text()
-                    } else {
-                        Tokens::text_dim()
-                    });
                 // The name gets what is left after the row's right-hand side
                 // is reserved, and truncates into it. A label sized to its own
                 // text takes the whole row and the tag lands on top of it:
@@ -991,23 +988,23 @@ fn layer_row(
                 // right-to-left group inside a horizontal claims the remaining
                 // width, which is the whole of it when the name has not been
                 // bounded first.
-                let width = (ui.available_width() - size::LAYER_ROW_TAIL).max(size::SWATCH);
-                if ui
-                    .allocate_ui_with_layout(
-                        egui::vec2(width, ui.available_height()),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            ui.add(
-                                egui::Label::new(name)
-                                    .truncate()
-                                    .sense(egui::Sense::click()),
-                            )
-                        },
-                    )
-                    .inner
-                    .clicked()
-                {
-                    queue.push(Command::SelectLayer(layer.key));
+                // The height of one widget, not of the rest of the panel:
+                // this strip is *allocated* rather than bounded, so a height
+                // of `available_height` would make the row as tall as the
+                // layer stack has space for.
+                let strip = egui::vec2(
+                    (ui.available_width() - size::LAYER_ROW_TAIL).max(size::SWATCH),
+                    ui.spacing().interact_size.y,
+                );
+                match state.renaming {
+                    Some((key, draft)) if key == layer.key => {
+                        ui.allocate_ui_with_layout(
+                            strip,
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| rename_field(ui, draft, queue),
+                        );
+                    }
+                    _ => layer_name(ui, strip, state, layer, active, queue),
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1167,6 +1164,131 @@ fn sculpt_layer_row(
             }
         });
     });
+}
+
+/// The id the clickable part of a layer's row is registered under.
+///
+/// Public so a test can ask the interface where a row is rather than measuring
+/// it off a capture — a coordinate read from a screenshot is a coordinate that
+/// goes stale the next time anything above it changes height.
+pub fn layer_row_id(key: LayerKey) -> egui::Id {
+    egui::Id::new(("layer-row", key.0))
+}
+
+/// A layer's name, and the two gestures that act on it.
+///
+/// A single click makes the layer active, which is what the panel is mostly
+/// for. A double click renames it in place, which is where every layer stack
+/// puts that gesture — and the row's own menu says so as well, because a
+/// gesture nothing announces is one only its authors know about.
+fn layer_name(
+    ui: &mut egui::Ui,
+    strip: egui::Vec2,
+    state: &ShellState<'_>,
+    layer: &LayerSummary,
+    active: bool,
+    queue: &mut CommandQueue,
+) {
+    let name = egui::RichText::new(&layer.name)
+        .size(type_scale::BODY)
+        // Selection is indicated by surface tone and weight, never by the
+        // accent — that marks the active brush alone.
+        .color(if active {
+            Tokens::text()
+        } else {
+            Tokens::text_dim()
+        });
+    // The whole strip senses the click, not the glyphs. A label senses only
+    // the width its own text takes, so a row named "Base" answered across
+    // sixty pixels and was dead across the rest of itself: clicking the empty
+    // part of the row selected nothing, and right-clicking it opened no menu.
+    //
+    // Interacted under the layer's own id rather than under the positional one
+    // egui would generate. A context menu is keyed by the id of the widget it
+    // hangs off, so a positional id moves the menu's identity whenever a row
+    // moves in the stack — and it gives a test a name to ask the rectangle for
+    // instead of a coordinate measured off a screenshot.
+    let (rect, _) = ui.allocate_exact_size(strip, egui::Sense::hover());
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        |ui| ui.add(egui::Label::new(name).truncate()),
+    );
+    // After the label, not before. A truncated `Label` senses hover so it can
+    // show the full text, and the widget registered last is the one on top —
+    // so an interaction claimed first was shadowed for exactly the rows whose
+    // names were long enough to truncate. Short names worked, long ones were
+    // dead: the two halves of the stack behaved differently for a reason
+    // nothing in the row said.
+    let response = ui.interact(rect, layer_row_id(layer.key), egui::Sense::click());
+    if response.double_clicked() {
+        queue.push(Command::BeginRenameLayer(layer.key));
+    } else if response.clicked() {
+        queue.push(Command::SelectLayer(layer.key));
+    }
+    response.context_menu(|ui| layer_menu(ui, state, layer, queue));
+}
+
+/// What a layer row's own menu offers.
+fn layer_menu(
+    ui: &mut egui::Ui,
+    state: &ShellState<'_>,
+    layer: &LayerSummary,
+    queue: &mut CommandQueue,
+) {
+    let s = state.strings;
+    if ui.button(s.action_rename_layer).clicked() {
+        queue.push(Command::BeginRenameLayer(layer.key));
+        ui.close_menu();
+    }
+    // Disabled with the reason on it rather than offered and refused. The
+    // document keeps one layer to sculpt on, and the model says so — but a
+    // menu entry whose only outcome is an error message in the status area is
+    // one the sculptor has to try before learning anything.
+    let last = state.scene.layers.len() <= 1;
+    let remove = ui.add_enabled(!last, egui::Button::new(s.action_remove_layer));
+    if remove.clicked() {
+        queue.push(Command::RemoveLayer(layer.key));
+        ui.close_menu();
+    }
+    if last {
+        remove.on_hover_text(s.layer_last_one);
+    }
+}
+
+/// The rename field, in the row where the name was.
+///
+/// In place rather than in a dialog: renaming a layer is one word, and a modal
+/// for one word stops the sculptor to ask for it.
+///
+/// Enter commits and Escape abandons — and so does clicking away, which is the
+/// same path: egui surrenders focus for both, and the two are told apart by
+/// whether Enter was the key that did it. A field left open after the pointer
+/// leaves it would swallow the next shortcut typed.
+fn rename_field(ui: &mut egui::Ui, draft: &str, queue: &mut CommandQueue) {
+    let mut text = draft.to_string();
+    let response = ui.add(
+        egui::TextEdit::singleline(&mut text)
+            .desired_width(f32::INFINITY)
+            .font(egui::TextStyle::Body),
+    );
+    // Focused on the frame it appears, and not re-grabbed on the frame it is
+    // surrendered — that frame is the click-away, and taking focus back would
+    // make the field impossible to leave.
+    if !response.has_focus() && !response.lost_focus() {
+        response.request_focus();
+    }
+    if text != draft {
+        queue.push(Command::EditLayerName(text));
+    }
+    if response.lost_focus() {
+        if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            queue.push(Command::CommitRenameLayer);
+        } else {
+            queue.push(Command::CancelRenameLayer);
+        }
+    }
 }
 
 /// A byte count in the largest unit that keeps it readable.

@@ -286,7 +286,11 @@ impl SculptViewModel {
             | Command::SculptLayer(_)
             | Command::SetLayerVisible(..)
             | Command::AddLayer
-            | Command::RemoveLayer(_) => {}
+            | Command::RemoveLayer(_)
+            | Command::BeginRenameLayer(_)
+            | Command::EditLayerName(_)
+            | Command::CommitRenameLayer
+            | Command::CancelRenameLayer => {}
             // The layer changed, so what the shelf offers and what the brush
             // is set to may both belong to a different representation now.
             // Pre-bake repairs move the surface, so the history and the

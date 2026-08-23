@@ -133,6 +133,39 @@ anything, and offers *Preencher vazios* only when there is something to fill.
 which is the point of the level stack: block out coarse, then pay for detail
 only where the detail goes.
 
+**A grid is drawn, framed and picked by its own routes**, not by the ones the
+field uses. The engine is explicit that a voxel layer carries no SDF content,
+and three parts of the application had assumed otherwise:
+
+- The viewport builds its surface from the brick cache, which holds the
+  document's field. A grid is not in it, so a sculpted voxel layer meshed to
+  nothing and rendered as bare ground. It travels the mesh-layer path instead,
+  as the **boxes it is** — greedy quads, meshed a chunk at a time.
+
+  The rounded form was the first choice and it does not survive measurement.
+  `clay_voxel_mesh_smooth` carries **no vertex normals**, so it draws as a flat
+  white silhouette with no form to read; and it is whole-grid with no chunked
+  variant, so an edit costs the model. On a 0.01 grid a 3.2 ms dab cost
+  **309 ms** to re-mesh, against a 50 ms budget and rising with the sculpt.
+  Draining the engine's own dirty-chunk set and meshing only those keys costs
+  **3.3 ms** and does not rise — a 24-chunk sculpt re-meshes 7 chunks for a
+  dab. The rounded surface is a **conversion away**: cross the grid to SDF,
+  which is what that direction is for and where the `Suavização` control lives.
+- The polygon counters count what is on screen. They were fed by the brick
+  cache alone, so a document whose only layer was a sculpted grid drew
+  triangles and reported none of them — "Triângulos 0" over a visible sculpt.
+- **Enquadrar tudo** asks the layer for its extent, which the engine answers
+  from a layer's *SDF* content. A grid reported none however much was in it, so
+  the camera framed a default box. It reports its own extent now.
+- A press asks where the surface is, and a ray that meets nothing orbits the
+  camera. The raycast marches the field, so a press on a voxel layer orbited
+  rather than sculpting. The engine picks a grid directly.
+
+Every one of these passed every test it had, because the tests asked the *grid*
+whether it had changed and it always had. `visual_voxel_sculpt.rs` asks the
+question a sculptor asks instead — did it appear, does a second stroke move it,
+can the pointer find it.
+
 ## Crossing between representations
 
 ClayCore carries SDF, voxel and mesh side by side, and the intended workflow
@@ -325,6 +358,14 @@ the default and only a decisive loss moves the work.
   refused — it is what a cleared text field submits — and two voxel layers are
   not allowed to share one, because a grid is reachable only by name and the
   lookup answers with the first match in stack order.
+
+Both are reached from a layer row's own menu, on a right-click, and a rename
+also from a double-click on the name — where every layer stack puts that
+gesture. The field opens in place, seeded with the name the layer has: Enter
+commits, Escape and clicking away abandon. A refusal leaves the field open with
+what was typed still in it, so the reason can be acted on rather than arriving
+with the work discarded. **Excluir** is disabled with its reason on it for the
+last remaining layer, because a document keeps one to sculpt on.
 
 ## Geometry in and out
 
