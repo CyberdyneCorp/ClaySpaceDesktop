@@ -722,28 +722,28 @@ mod following_the_active_layer {
     }
 }
 
-/// A drag on a mesh layer reaches the model as ONE stroke, not several.
+/// Every segment of a mesh drag carries the gesture from its anchor.
 ///
 /// Grab anchors on the first stamp and carries that region by the motion that
-/// follows, so a gesture cut into segments is several grabs, each anchoring
-/// afresh where the last stopped. On screen that is a crumpled crease along
-/// the path where the form should have been pulled.
+/// follows, so a segment holding only the newest samples is a *second* grab
+/// anchoring where the first stopped. Measured against Blender's Grab over
+/// MCP — matched sphere, same brush radius in world units, same drag: one call
+/// reaches 9.8% of the mesh and moves it 0.707, Blender reaches 11.4% and
+/// moves 0.779, and the same gesture split into two independent segments
+/// reaches 19.0% and moves 0.569 — two anchors sharing one drag.
 ///
-/// Measured against Blender's Grab over MCP — matched sphere, same brush
-/// radius in world units, same strength, same drag: one call reaches 9.8% of
-/// the mesh and moves it 0.707, Blender reaches 11.4% and moves 0.779, and the
-/// same gesture in two segments reaches 19.0% and moves 0.569 — two anchors
-/// sharing one drag.
+/// So the segments stay, because they are what makes the drag *visible* while
+/// it happens, and each one replays the whole gesture instead. The model takes
+/// back what the last segment did before laying it down again, which is what
+/// keeps one drag to one undo.
 #[test]
-fn a_mesh_drag_reaches_the_model_as_one_stroke() {
+fn every_segment_of_a_mesh_drag_replays_it_from_the_anchor() {
     let drag = |vm: &mut SculptViewModel| {
         vm.dispatch(Command::BeginStroke {
             position: [0.0, 0.0, 1.0],
             pressure: 1.0,
         })
         .expect("begin");
-        // Far enough that a segmenting ViewModel applies several times: the
-        // threshold is three stamp gaps and this crosses it repeatedly.
         for step in 1..=24 {
             let t = step as f32 / 24.0;
             vm.dispatch(Command::ContinueStroke {
@@ -755,34 +755,37 @@ fn a_mesh_drag_reaches_the_model_as_one_stroke() {
         vm.dispatch(Command::EndStroke).expect("end");
     };
 
-    let (mut mesh, mesh_calls) = fixture_with(|model| {
+    let (mut mesh, calls) = fixture_with(|model| {
         model.representation.set(Representation::Mesh);
     });
     mesh.dispatch(Command::SelectTool(ToolKind::Mover))
         .expect("tool");
     drag(&mut mesh);
-    let mesh_strokes = mesh_calls.borrow().strokes.len();
-    assert_eq!(
-        mesh_strokes, 1,
-        "a mesh drag reached the model as {mesh_strokes} strokes; each one \
-         anchors afresh, so the form is creased along the path instead of \
-         pulled"
+
+    let strokes = calls.borrow();
+    let drags: Vec<&Vec<GestureSample>> = strokes.strokes.iter().map(|s| &s.1).collect();
+    assert!(
+        drags.len() > 1,
+        "a mesh drag reached the model as {} call(s), so nothing is drawn until \
+         the pointer comes up",
+        drags.len()
     );
 
-    // The control. A field takes the same gesture in segments, which is what
-    // gives it a live surface while the pointer is down — nothing here
-    // changed that.
-    let (mut field, field_calls) = fixture_with(|model| {
-        model.representation.set(Representation::Sdf);
-    });
-    field
-        .dispatch(Command::SelectTool(ToolKind::Mover))
-        .expect("tool");
-    drag(&mut field);
-    let field_strokes = field_calls.borrow().strokes.len();
-    assert!(
-        field_strokes > 1,
-        "a field drag stopped being segmented ({field_strokes} stroke), so it \
-         no longer draws while the pointer is down"
-    );
+    // Every one of them starts where the gesture did. A segment starting
+    // anywhere else is a second grab.
+    let anchor = drags[0][0].position;
+    for (i, samples) in drags.iter().enumerate() {
+        assert_eq!(
+            samples[0].position, anchor,
+            "segment {i} starts at {:?} rather than the gesture's anchor {anchor:?}",
+            samples[0].position
+        );
+    }
+    // And each carries more of it than the last.
+    for pair in drags.windows(2) {
+        assert!(
+            pair[1].len() >= pair[0].len(),
+            "a segment carried fewer samples than the one before it"
+        );
+    }
 }

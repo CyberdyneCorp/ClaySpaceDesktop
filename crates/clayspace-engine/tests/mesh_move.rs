@@ -367,3 +367,79 @@ fn a_move_pulls_a_lobe_out_rather_than_sliding_the_surface() {
          of {travel} at intensity {intensity} should carry it"
     );
 }
+
+/// A drag is visible while it happens, and is still one undo.
+///
+/// Every segment replays the gesture from its anchor, and the model takes back
+/// what the last one did before laying it down again — so the surface follows
+/// the pointer instead of appearing when the pointer comes up, and the whole
+/// drag is one entry however many segments drew it.
+///
+/// Both halves matter. Previewing without taking the last segment back stacks
+/// grab on grab, which is the crease that whole-gesture delivery existed to
+/// avoid; banking each segment would make one drag several undos.
+#[test]
+fn a_drag_is_seen_while_it_happens_and_undone_all_at_once() {
+    let Some(mut document) = horseshoe() else {
+        return;
+    };
+    let start = document.visible_mesh_geometry().0;
+    let depth = SculptModel::history(&document).depth;
+
+    let brush = BrushSettings {
+        size: 0.3,
+        intensity: 1.0,
+        ..BrushSettings::default()
+    };
+    let step = |t: f32| GestureSample {
+        position: [NEAR_TIP[0], NEAR_TIP[1] + t, NEAR_TIP[2]],
+        pressure: 1.0,
+        time: t,
+    };
+
+    // The interface opens a gesture, sends it in pieces, and closes it.
+    document.begin_gesture();
+
+    let half: Vec<GestureSample> = (0..=4).map(|i| step(i as f32 * 0.1)).collect();
+    document
+        .apply_stroke(ToolKind::Mover, brush, &half, [false; 3])
+        .expect("the first segment was refused");
+    let midway = document.visible_mesh_geometry().0;
+    let seen = furthest(&start, &midway, &(0..start.len()).collect::<Vec<_>>());
+    assert!(
+        seen > 0.01,
+        "nothing moved halfway through the drag ({seen}), so the sculptor is \
+         pulling at a surface that does not follow"
+    );
+
+    // The rest of the same gesture, replayed from the anchor.
+    let whole: Vec<GestureSample> = (0..=8).map(|i| step(i as f32 * 0.1)).collect();
+    document
+        .apply_stroke(ToolKind::Mover, brush, &whole, [false; 3])
+        .expect("the second segment was refused");
+    let ended = document.visible_mesh_geometry().0;
+    let total = furthest(&start, &ended, &(0..start.len()).collect::<Vec<_>>());
+    assert!(
+        total > seen,
+        "the drag carried the surface {total} by its end against {seen} \
+         halfway, so replaying took back more than it laid down"
+    );
+
+    document.end_gesture();
+
+    // One entry, not one per segment.
+    let banked = SculptModel::history(&document).depth - depth;
+    assert!(
+        banked <= 1,
+        "a two-segment drag banked {banked} entries; a gesture is one undo"
+    );
+
+    assert!(document.undo().expect("undo"), "undo reported no move");
+    let back = document.visible_mesh_geometry().0;
+    let worst = furthest(&start, &back, &(0..start.len()).collect::<Vec<_>>());
+    assert!(
+        worst < 1e-4,
+        "one undo left the mesh {worst} from where the drag started, so a \
+         segment was banked on its own"
+    );
+}

@@ -359,6 +359,30 @@ before and after, which reads as how much a verb shredded the surface.
     and they appear. Which layers are carried, and whether each is shown, are
     part of the number now.
 
+- [x] 13.10 Show a mesh drag while it happens
+  - The cost 13.6 accepted, now paid off. Segments are back, and each replays
+    the gesture from its anchor rather than carrying only what is new — the
+    model holds the previous segment's vertex deltas, reverts them, and lays
+    the whole gesture down again. `begin_gesture`/`end_gesture` on `SculptModel`
+    say when a gesture is open; only the release banks anything, so one drag is
+    one undo however many segments drew it, and a cancelled gesture takes its
+    preview with it.
+  - The number the viewport watches is bumped by every preview, because a
+    preview banks nothing and would otherwise leave it sitting still while the
+    surface was visibly moving.
+  - And a replayed segment fires on every pointer move rather than after three
+    stamps' worth of travel, which is the threshold a *stamping* segment needs
+    and the reason the first attempt still showed nothing: at the default flow
+    and a brush of 0.858 that threshold is 1.03 world units, most of the way
+    across a unit sphere. Measured, 40 pointer moves now produce 40 updates
+    where they produced none.
+  - It costs about 17 ms a move on a 140,774-vertex mesh, nearly all of it the
+    stamp rather than the buffer it fills (1.2 ms). Dropping the surface walk
+    takes it to 12.8 and is not taken: with the single-stamp path the walk is
+    what makes Move topological, and the horseshoe test fails without it. That
+    measurement also corrects an earlier note that the walk makes no difference
+    to Grab — true of the resolved-stroke path, not of this one.
+
 **Still open**: Move reaches 8.3% of the sphere against Blender's 0.9% for the
 same nominal radius, which is a units question and not a defect found. Camada
 is better but weak (0.0086 against Blender's 0.341).

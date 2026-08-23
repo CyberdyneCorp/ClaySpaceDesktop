@@ -178,6 +178,21 @@ pub struct ClayDocument {
     /// A measurement rather than bookkeeping: it is what says an edit costs
     /// the edit, and it is what a test can assert on without timing anything.
     meshed_chunks: usize,
+    /// The gesture being previewed on a mesh layer, and what it has moved.
+    ///
+    /// A dragging verb is laid down again from its anchor on every segment, so
+    /// what the last segment did has to be taken back first — this is the
+    /// record that takes it back. Promoted to the undo stack when the gesture
+    /// ends, so a drag is still one undo however many segments drew it.
+    live_mesh: Option<(LayerKey, claycore::MeshDeltas)>,
+    /// Whether a gesture is open and should be previewed rather than banked.
+    previewing: bool,
+    /// Bumped by every preview, so the viewport knows to look again.
+    ///
+    /// A preview banks nothing, so nothing else about the document changes and
+    /// the number the viewport watches would sit still while the drag was
+    /// visibly moving the surface.
+    live_generation: u64,
     /// Triangles and vertices the *carried* layers handed the viewport.
     ///
     /// Kept apart from `stats` because the two are recorded at different
@@ -327,6 +342,9 @@ impl ClayDocument {
             dirty: Vec::new(),
             stats: SceneStats::default(),
             carried: (0, 0),
+            live_mesh: None,
+            previewing: false,
+            live_generation: 0,
             meshed_chunks: 0,
             surface_brick_count: 0,
             mesh_sculptor: std::cell::RefCell::new(None),
@@ -1797,11 +1815,23 @@ impl ClayDocument {
         // Recorded per gesture, because that is the unit a sculptor thinks in
         // and the unit `mesh-sculpting` specifies: one gesture, one undo.
         let mut deltas = claycore::MeshDeltas::new().map_err(ModelError::engine)?;
+        // What the last segment of this gesture did, taken back before the
+        // whole gesture is laid down again from its anchor. Without this a
+        // preview would stack segment on segment, which is the crease the
+        // whole-gesture delivery exists to avoid.
+        let previous = self
+            .live_mesh
+            .take()
+            .filter(|(layer, _)| *layer == key)
+            .map(|(_, deltas)| deltas);
         let moved = {
             let mut held = self.mesh_sculptor.borrow_mut();
             let Some((_, sculptor)) = held.as_mut() else {
                 return Ok(EditOutcome::NOTHING);
             };
+            if let Some(previous) = &previous {
+                previous.revert(sculptor).map_err(ModelError::engine)?;
+            }
             let moved = if verb == claycore::MeshBrush::Grab {
                 // One stamp at the point the gesture took hold of, carrying
                 // that region by the whole drag — which is what Grab is, in
@@ -1851,7 +1881,16 @@ impl ClayDocument {
 
         // A gesture that reached nothing is not worth a place on the stack,
         // and putting one there would make an undo appear to do nothing.
-        if deltas.vertex_count().map_err(ModelError::engine)? > 0 {
+        let reached = deltas.vertex_count().map_err(ModelError::engine)? > 0;
+        if self.previewing {
+            // Held rather than banked. The gesture is still open, and every
+            // segment replaces the last — one drag is one undo however many
+            // segments drew it.
+            if reached {
+                self.live_mesh = Some((key, deltas));
+            }
+            self.live_generation = self.live_generation.wrapping_add(1);
+        } else if reached {
             self.mesh_undo.push(MeshGesture {
                 layer: key,
                 deltas,
@@ -2230,6 +2269,9 @@ impl ClayDocument {
             .wrapping_mul(31)
             .wrapping_add(grids)
             .wrapping_add(carried)
+            // A preview banks nothing, so without this the number would sit
+            // still while the drag was visibly moving the surface.
+            .wrapping_add(self.live_generation.wrapping_mul(1_000_003))
     }
 
     /// How stretched the active mesh layer's triangles are.
@@ -2837,6 +2879,25 @@ impl SculptModel for ClayDocument {
             } else {
                 self.stats.detail
             },
+        }
+    }
+
+    fn begin_gesture(&mut self) {
+        self.previewing = true;
+    }
+
+    fn end_gesture(&mut self) {
+        self.previewing = false;
+        // What the preview was holding becomes the edit. One record for the
+        // whole drag, because every segment replaced the last rather than
+        // adding to it.
+        if let Some((layer, deltas)) = self.live_mesh.take() {
+            self.mesh_undo.push(MeshGesture {
+                layer,
+                deltas,
+                engine_depth: self.engine_undo_depth(),
+            });
+            self.mesh_redo.clear();
         }
     }
 
@@ -3476,6 +3537,9 @@ impl ClayDocument {
             dirty: Vec::new(),
             stats: SceneStats::default(),
             carried: (0, 0),
+            live_mesh: None,
+            previewing: false,
+            live_generation: 0,
             meshed_chunks: 0,
             surface_brick_count: 0,
             mesh_sculptor: std::cell::RefCell::new(None),

@@ -118,22 +118,37 @@ anchor and the displacement is the gesture's. Puxar and Nudge stay on the
 stroke path deliberately: one re-anchors on every stamp so its region walks
 with the pull, the other pushes along the surface.
 
-**A drag is held whole.** Mover and Puxar anchor on the first stamp and carry
-that region by the motion that follows, so a gesture cut into segments is
-several grabs, each anchoring afresh where the last stopped — on screen, a
-crumpled crease along the path where the form should have been pulled. On a
-mesh layer the whole gesture goes to the model in one call. Measured against
-Blender's Grab over MCP, matched sphere and the same drag:
+**Every segment of a drag replays it from the anchor.** Mover and Puxar anchor
+on the first stamp and carry that region by the motion that follows, so a
+segment holding only the newest samples is a *second* grab anchoring where the
+first stopped — on screen, a crumpled crease along the path where the form
+should have been pulled. Measured against Blender's Grab over MCP, matched
+sphere and the same drag:
 
 | delivery | reached | moved the surface by |
 |---|---|---|
-| one call | 9.8% | 0.707 |
+| the gesture from its anchor | 9.8% | 0.707 |
 | Blender | 11.4% | 0.779 |
-| two segments | 19.0% | 0.569 |
+| two independent segments | 19.0% | 0.569 |
 
-The cost is that a mesh drag shows nothing until the pointer comes up, which
-is worth paying over a live preview of the wrong answer. A field still segments
-and still draws while the pointer is down.
+Two anchors sharing one drag reach nearly twice as far and move less.
+
+So the segments stay — they are what makes the drag visible while it happens —
+and each replays the whole gesture instead. A replayed segment fires on **every
+pointer move**, where a stamping one waits for three stamps' worth of travel: a
+stamping segment costs a re-mesh of everything it touched, a replayed one costs
+a revert and a single stamp and does not grow with the gesture. At the default
+flow and a brush of 0.858 the stamping threshold is 1.03 world units — most of
+the way across a unit sphere — so waiting for it meant the surface only moved
+when the pointer came up.
+
+It costs about 17 ms a move on a 140,774-vertex mesh, nearly all of it the
+stamp itself rather than the buffer it fills (1.2 ms). Dropping the surface
+walk would take it to 12.8, and is not taken: with the single-stamp path the
+walk is what makes Move topological, and `mesh_move.rs` fails without it. The model takes back what the last
+segment did before laying the gesture down again, which is what keeps one drag
+to one undo: only the release banks anything, and a cancelled gesture takes its
+preview with it.
 
 **The pointer finds it from the moment it becomes active.** A pick against a
 mesh layer is answered by the mesh sculptor's own raycast, and the sculptor was
