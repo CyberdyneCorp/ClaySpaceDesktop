@@ -135,17 +135,24 @@ bench:
     cargo run -q -p {{app}} --release --bin bench
 
 # Compare against the recorded baseline. This is the CI gate.
-bench-compare:
+#
+# One baseline per platform. Comparing a Linux run against a macOS recording
+# measures the difference between two machines and calls it a regression, which
+# is worse than no gate: the figures differ by more than any change would.
+bench-compare platform=os():
     cargo run -q -p {{app}} --release --bin bench -- \
-        --baseline benchmarks/baseline-macos-aarch64.json
+        --baseline benchmarks/baseline-{{ if platform == "macos" { "macos-aarch64" } else { "linux-x86_64" } }}.json
 
 # Do this deliberately: the baseline is what future runs are measured against,
-# so re-recording hides whatever regressed since the last one.
+# so re-recording hides whatever regressed since the last one. And record it on
+# the platform it is named for — the file's `conditions` say which machine and
+# which engine produced it, and a mismatch there is the first thing to check
+# when a comparison looks wrong.
 
-# Re-record the performance baseline.
-bench-record:
+# Re-record the performance baseline for this platform.
+bench-record platform=os():
     cargo run -q -p {{app}} --release --bin bench -- \
-        --json benchmarks/baseline-macos-aarch64.json
+        --json benchmarks/baseline-{{ if platform == "macos" { "macos-aarch64" } else { "linux-x86_64" } }}.json
     @echo "baseline re-recorded — commit it with the reason"
 
 # -- packaging ---------------------------------------------------------------

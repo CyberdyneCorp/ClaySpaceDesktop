@@ -1,0 +1,32 @@
+{
+  "conditions": {
+    "scene": "reference-r1",
+    "platform": "linux",
+    "architecture": "x86_64",
+    "backend": "cuda",
+    "engine": "0.39.0",
+    "viewport": [1280, 800]
+  },
+  "figures": {
+    "dab.median": 2.4219,
+    "dab.p95": 2.9316,
+    "frame.median": 0.5541,
+    "frame.p95": 0.6044,
+    "locality.dab_ms": 2.4353,
+    "locality.dab_ms_10x": 3.2398,
+    "locality.key_ratio": 0.7500,
+    "locality.keys_remeshed": 12.0000,
+    "locality.keys_remeshed_10x": 9.0000,
+    "locality.surface_bricks": 1049.0000,
+    "locality.surface_bricks_10x": 9466.0000,
+    "memory.baseline": 1.0244,
+    "memory.budget": 512.0000,
+    "memory.drift": 1.0000,
+    "memory.peak": 1.0215,
+    "startup.backend_discovery": 0.0007,
+    "startup.to_first_document": 25.6366,
+    "tape.dab_after_96_edits": 2.6593,
+    "tape.dab_on_fresh": 2.1400,
+    "tape.growth": 1.2427
+  }
+}

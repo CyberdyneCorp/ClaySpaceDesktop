@@ -109,7 +109,15 @@
 
 ## 9. Close-out
 
-- [ ] 9.1 Re-record the performance baseline, since the tool set and the stroke routing have both changed
-- [ ] 9.2 Update `docs/features.md`'s *Deliberately absent* and *Not built yet* sections
-- [ ] 9.3 Update `README.md`'s input table and feature summary
-- [ ] 9.4 Run the full gate and record the test count
+- [x] 9.1 Re-record the performance baseline, since the tool set and the stroke routing have both changed
+- [x] 9.2 Update `docs/features.md`'s *Deliberately absent* and *Not built yet* sections
+- [x] 9.3 Update `README.md`'s input table and feature summary
+- [x] 9.4 Run the full gate and record the test count
+  - `just check` green: formatting, layering, clippy with `-D warnings`, the
+    whole suite, `openspec validate --all --strict`, and the packaging tools.
+    **687 tests** across 86 binaries and **240 visual captures**, up from 620
+    and 177 when this change opened. The performance gate is per-platform now —
+    `benchmarks/baseline-linux-x86_64.json` recorded against ClayCore 0.39.0
+    with the three representations in place, dab median 2.42 ms against a 50 ms
+    budget. The macOS baseline still reads 0.29.1 and needs a run on that
+    hardware.

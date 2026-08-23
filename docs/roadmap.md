@@ -413,10 +413,22 @@ the digest comparison that waits on it — were red on
 macOS runners, and the pin moved two releases without one. Treat them as
 unknown rather than as blocked.
 
-The performance gate compares against `benchmarks/baseline-macos-aarch64.json`
-and fails on a regression. Budget breaches are printed but not enforced without
+The performance gate compares against the baseline for the platform it runs on
+— `benchmarks/baseline-macos-aarch64.json` or
+`benchmarks/baseline-linux-x86_64.json` — and fails on a regression. One per
+platform because comparing a Linux run against a macOS recording measures the
+difference between two machines and calls it a regression: `just bench-compare`
+picks by `os()`, and each file's `conditions` block says which machine, backend
+and engine produced it. Budget breaches are printed but not enforced without
 `--enforce-budgets`: the specification gates on a change *raising* latency, and
 a gate that is red the day it is installed is one people learn to ignore.
+
+The Linux baseline was recorded after the three representations landed, since
+the tool set and the stroke routing both changed under it: engine 0.39.0, CUDA,
+1280×800, with a dab median of 2.42 ms against a 50 ms budget and a locality
+key ratio of 0.75 against a budget of 2. The macOS baseline still reads engine
+0.29.1 and cannot be re-recorded from here — it takes a run on that hardware,
+the same condition the macOS CI rows are waiting on.
 
 ## Open decisions
 

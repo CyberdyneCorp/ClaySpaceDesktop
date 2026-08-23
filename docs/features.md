@@ -397,6 +397,15 @@ changes it, because that is where a person looks for it.
 Panels cannot be resized or collapsed and shortcuts are fixed. See
 [roadmap.md](roadmap.md).
 
+**A brush colour.** Nothing in the application chooses one. The voxel paint and
+erase verbs deposit a fixed clay tone, and the SDF combine list leaves `Pintar`
+out for the same reason — it is a real engine operation that would colour
+nothing, and the brick cache meshes the surface with colours off, so what it
+wrote would not be drawn either. Measured at four blend radii, a paint stroke on
+a field moves nothing and changes no pixel. The operation stays in the
+vocabulary so the mapping onto the engine is complete, and it comes back when
+there is a colour to paint with.
+
 ## Deliberately absent
 
 **Soft-body dynamics.** The design's *Dinâmica* panel shows gravity, rigidity
@@ -411,6 +420,29 @@ blend or a deformer belonging to another layer until it is converted, and
 paying that conversion quantises the exact vertices and drops the edge loops,
 which is precisely what made it worth keeping as a mesh. Convert it if you mean
 to subtract from it; the panel says what that costs.
+
+**An alpha stamp on an SDF stroke.** Alphas reach a voxel grid and a mesh, each
+by its own route, and both are measured moving the surface. A field takes one as
+a deformer appended to an item, and a stroke does not place an item — it hands
+the engine a template scaled to each stamp's radius, and the deformer chain hung
+off that template does not travel with it. Measured: the same stroke with an
+alpha at amplitude 0, 0.05 and 0.25 leaves one surface under both `CLAY_OP_ADD`
+and `CLAY_OP_RELIEF`, while the same alpha on a placed item changes the surface
+and grades with the amplitude. So the control states the refusal — naming the
+stroke rather than the representation, since two of the three take a stamp —
+instead of passing an alpha that would be discarded. `claycore`'s
+`alpha_deformer` test fails the day the stroke carries the chain.
+
+**A mask gating an operation.** A mask gates *authoring*: a brush does not
+deposit where the mask protects. It does not gate an item already in the edit
+list, so a subtracting stroke crossing a protected region takes the material
+anyway. `clay_item_set_gate` is the entry point that would close that and it is
+accepted and inert in 0.39.0 — measured with a mask sampling 1.0 at the cut's own
+centre and 65,752 cells painted, at every width and threshold tried, never
+refusing. The wrapper is written and matches the documented contract; the
+application does not call it, because a call per stroke that does nothing is a
+cost with no benefit and a promise the interface could not keep. Both
+`mask_gate` tests fail when the engine honours it.
 
 **Windows.** Out of scope for this change.
 
