@@ -133,6 +133,8 @@ struct App {
     /// triangles are copied whole or not at all. Comparing a revision is what
     /// keeps "not at all" the usual answer.
     mesh_revision: Option<u64>,
+    /// The cage revision the drawn surface was warped at.
+    cage_revision: Option<u64>,
     /// The mask revision the drawn surface was sampled at.
     ///
     /// Separate from `mesh_revision` because the brick surface is uploaded
@@ -300,6 +302,7 @@ impl App {
             detail_policy: DetailPolicy::default(),
             shortcuts: Shortcuts::default(),
             mesh_revision: None,
+            cage_revision: None,
             mask_revision: None,
             edited_this_frame: false,
             detail_camera: None,
@@ -719,6 +722,7 @@ impl App {
         // drawing the document that was just closed.
         self.mesh_revision = None;
         self.mask_revision = None;
+        self.cage_revision = None;
         self.sync_mesh_layers();
         self.frame_all();
     }
@@ -970,6 +974,29 @@ impl App {
             let gpu = graphics.gpu.clone();
             app.document
                 .with(|document| graphics.geometry.refresh_mask(&gpu, document));
+        });
+    }
+
+    /// Brings the drawn surface's idea of the cage up to date.
+    ///
+    /// Its own pass because a cage moves no clay until it is applied: the
+    /// document is unchanged, so `sync_geometry` has nothing to re-mesh and
+    /// the field surface would sit still while the sculptor pulled a corner
+    /// across the viewport. On a mesh layer this does nothing — that route
+    /// previews by being deformed, which is exact.
+    fn sync_cage(&mut self) {
+        let revision = self.document.with(|document| document.cage_revision());
+        if self.cage_revision == Some(revision) {
+            return;
+        }
+        self.cage_revision = Some(revision);
+        self.timed("gaiola", |app| {
+            let Some(graphics) = app.graphics.as_mut() else {
+                return;
+            };
+            let gpu = graphics.gpu.clone();
+            app.document
+                .with(|document| graphics.geometry.preview_cage(&gpu, document));
         });
     }
 
@@ -2161,6 +2188,7 @@ impl App {
             ]
         });
         self.sync_mesh_layers();
+        self.sync_cage();
         self.sync_mask();
         self.sync_lattice_view();
         self.sync_symmetry_overlay();

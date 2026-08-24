@@ -213,6 +213,9 @@ pub struct ClayDocument {
     lattice: Option<Cage>,
     /// A mask the tools consult, when one has been painted.
     mask: Option<Mask>,
+    /// Changes whenever the cage does — its points, its selection or its
+    /// resolution.
+    cage_revision: u64,
     /// Changes whenever the mask does.
     ///
     /// A mask stroke moves no clay and dirties no brick, which is right — it
@@ -366,6 +369,7 @@ impl ClayDocument {
             mesh_redo: Vec::new(),
             lattice: None,
             mask: None,
+            cage_revision: 0,
             mask_revision: 0,
             symmetry,
             next_key: 2,
@@ -3751,6 +3755,7 @@ impl ClayDocument {
             mesh_redo: Vec::new(),
             lattice: None,
             mask: None,
+            cage_revision: 0,
             mask_revision: 0,
             symmetry: [false; 3],
             combine: CombineSettings::for_strokes(),
@@ -4153,6 +4158,7 @@ impl LatticeModel for ClayDocument {
             * MARGIN;
         let divisions = clayspace_model::clamp_divisions(divisions, representation);
         let count = divisions.iter().map(|n| *n as usize).product();
+        self.cage_revision = self.cage_revision.wrapping_add(1);
         self.lattice = Some(Cage {
             layer: key,
             representation,
@@ -4173,6 +4179,7 @@ impl LatticeModel for ClayDocument {
         };
         let count = cage.point_count();
         cage.selection = index.filter(|at| *at < count).into_iter().collect();
+        self.cage_revision = self.cage_revision.wrapping_add(1);
     }
 
     fn toggle_lattice_point(&mut self, index: usize) {
@@ -4190,12 +4197,14 @@ impl LatticeModel for ClayDocument {
             }
             Err(at) => cage.selection.insert(at, index),
         }
+        self.cage_revision = self.cage_revision.wrapping_add(1);
     }
 
     fn set_gizmo_mode(&mut self, mode: GizmoMode) {
         if let Some(cage) = self.lattice.as_mut() {
             cage.mode = mode;
         }
+        self.cage_revision = self.cage_revision.wrapping_add(1);
     }
 
     fn begin_gizmo_drag(&mut self, handle: GizmoHandle, anchor: [f32; 3]) {
@@ -4223,6 +4232,7 @@ impl LatticeModel for ClayDocument {
             let rest = cage.rest(*at);
             cage.offsets[*at] = std::array::from_fn(|axis| now[axis] - rest[axis]);
         }
+        self.cage_revision = self.cage_revision.wrapping_add(1);
         self.preview_cage();
         Ok(())
     }
@@ -4248,6 +4258,7 @@ impl LatticeModel for ClayDocument {
         // does not compound.
         let rest = cage.rest(index);
         cage.offsets[index] = std::array::from_fn(|axis| to[axis] - rest[axis]);
+        self.cage_revision = self.cage_revision.wrapping_add(1);
         self.preview_cage();
         Ok(())
     }
@@ -4259,6 +4270,7 @@ impl LatticeModel for ClayDocument {
         // An untouched cage is exactly the identity, and applying one pays for
         // a pass over every vertex — or, on a field, a deformer per item — to
         // move everything by zero.
+        self.cage_revision = self.cage_revision.wrapping_add(1);
         if cage.is_identity() {
             self.discard_cage_preview();
             return Ok(());
@@ -4277,6 +4289,7 @@ impl LatticeModel for ClayDocument {
     }
 
     fn cancel_lattice(&mut self) {
+        self.cage_revision = self.cage_revision.wrapping_add(1);
         // Whatever the preview is showing goes with the cage. Abandoning one
         // and leaving the form bent would be the opposite of what Esc means
         // everywhere else here.
@@ -4323,33 +4336,7 @@ impl ClayDocument {
         let engine_name = self.layers[index].engine_name.clone();
         self.ensure_mesh_sculptor(cage.layer, &engine_name)?;
 
-        let mut lattice = claycore::MeshLattice::new(cage.min, cage.max, cage.divisions)
-            .map_err(ModelError::engine)?;
-        // The engine may have clamped the divisions it accepted, so the drags
-        // are placed by *its* grid rather than by ours — a cage that disagreed
-        // would put a sculptor's corner drag on some interior point.
-        let accepted = lattice.divisions().map_err(ModelError::engine)?;
-        if accepted != cage.divisions {
-            return Err(ModelError::engine(format!(
-                "o motor aceitou uma gaiola {accepted:?} onde esta é {:?}",
-                cage.divisions
-            )));
-        }
-        for at in 0..cage.point_count() {
-            let offset = cage.offsets[at];
-            if offset.iter().all(|axis| *axis == 0.0) {
-                continue;
-            }
-            let [nx, ny, _] = cage.divisions.map(|n| n as usize);
-            let coordinate = [
-                (at % nx) as i32,
-                ((at / nx) % ny) as i32,
-                (at / (nx * ny)) as i32,
-            ];
-            lattice
-                .set_offset(coordinate, offset)
-                .map_err(ModelError::engine)?;
-        }
+        let lattice = Self::cage_lattice(cage)?;
 
         let mut deltas = claycore::MeshDeltas::new().map_err(ModelError::engine)?;
         // What the last preview did, taken back before the cage is laid down
@@ -4394,6 +4381,77 @@ impl ClayDocument {
         }
         self.refresh_stats();
         Ok(())
+    }
+
+    /// The cage as a claycore lattice, with every drag placed on it.
+    ///
+    /// One builder for the two things that need one — applying a cage to a
+    /// mesh, and reading the warp back to preview one on a field — so the two
+    /// cannot come to different answers about where a sculptor's corner drag
+    /// went.
+    fn cage_lattice(cage: &Cage) -> Result<claycore::MeshLattice, ModelError> {
+        let mut lattice = claycore::MeshLattice::new(cage.min, cage.max, cage.divisions)
+            .map_err(ModelError::engine)?;
+        // The engine may have clamped the divisions it accepted, so the drags
+        // are placed by *its* grid rather than by ours — a cage that disagreed
+        // would put a sculptor's corner drag on some interior point.
+        let accepted = lattice.divisions().map_err(ModelError::engine)?;
+        if accepted != cage.divisions {
+            return Err(ModelError::engine(format!(
+                "o motor aceitou uma gaiola {accepted:?} onde esta é {:?}",
+                cage.divisions
+            )));
+        }
+        for at in 0..cage.point_count() {
+            let offset = cage.offsets[at];
+            if offset.iter().all(|axis| *axis == 0.0) {
+                continue;
+            }
+            let [nx, ny, _] = cage.divisions.map(|n| n as usize);
+            let coordinate = [
+                (at % nx) as i32,
+                ((at / nx) % ny) as i32,
+                (at / (nx * ny)) as i32,
+            ];
+            lattice
+                .set_offset(coordinate, offset)
+                .map_err(ModelError::engine)?;
+        }
+        Ok(lattice)
+    }
+
+    /// What the cage would move each of these points by.
+    ///
+    /// `None` when there is no cage up, when it is untouched, or when the
+    /// active layer is a mesh — a mesh previews by being deformed, and asking
+    /// for displacements there would be the same work twice.
+    ///
+    /// This is the *forward* warp, and the field's own deformer is the inverse
+    /// one. They are not the same map: the engine states the difference is
+    /// under 1.5% of the drag, being a term proportional to how the basis
+    /// varies along the displacement. That is a preview's error budget and not
+    /// an edit's, which is exactly the trade a preview is for — the surface
+    /// that lands on Deformar is the engine's, computed the engine's way.
+    pub fn cage_warp(&self, points: &[[f32; 3]]) -> Option<Vec<[f32; 3]>> {
+        let cage = self.lattice.as_ref()?;
+        if cage.representation == Representation::Mesh || cage.is_identity() {
+            return None;
+        }
+        let lattice = Self::cage_lattice(cage).ok()?;
+        points
+            .iter()
+            .map(|point| lattice.displacement(*point).ok())
+            .collect()
+    }
+
+    /// Changes whenever the cage does.
+    ///
+    /// The counterpart to `mask_revision` for the other thing that is drawn
+    /// and is not geometry. A cage moves no clay until it is applied, so
+    /// nothing the surface reports would tell the viewport to warp what it is
+    /// already holding.
+    pub fn cage_revision(&self) -> u64 {
+        self.cage_revision
     }
 
     /// Shows what the cage would do, without committing to it.

@@ -669,3 +669,29 @@ gizmo for — has no route here yet.
     rather than keeping what is on screen: a preview holds the deltas of one
     pass, and turning that into the edit would leave the undo stack describing
     a gesture rather than a deformation.
+
+- [x] 17.6 Preview a field cage too
+  - Reported after 17.5 shipped: the mesh preview was visible and the field one
+    was not. It was documented as a cost, and it did not have to be one.
+  - `clay_mesh_lattice_displacement` — "exposed so a host can preview the warp
+    without applying it" — was not wrapped. It is now, and the preview moves
+    the vertices the viewport already holds rather than touching the document,
+    so no lattice arithmetic is written twice and nothing is recorded.
+  - It is the **forward** map where the field's own deformer is the inverse
+    one, so the size of the difference is the whole question. Measured against
+    the engine's own result on a cage spanning ±1.1: **0.6% of the drag** at
+    0.05, 0.10 and 0.25, and 16% at 0.50 — a drag most of the way across the
+    box. A test holds the preview to under 5% at a quarter-box drag. What lands
+    on Deformar is the engine's, computed the engine's way.
+  - Two things measured on the way that are worth having written down:
+    - The engine's header quotes the forward/inverse difference as "under 1.5%
+      of the drag". At a drag of 45% of the cage's half-width it is 16%. The
+      header's number is a measurement of their case, not a bound.
+    - A probe that showed the same applied result for a 2×2×2 corner drag and a
+      4×4×4 all-layer drag looked like the field cage doing no FFD at all.
+      Dragging a *single* corner settled it: +z reaches 1.2 while −z and ±x
+      barely move. The earlier probe dragged every +z point, which on a
+      symmetric sphere gives nearly the same answer at any resolution.
+  - The rest positions are kept so the surface can be put back, and dropped on
+    a re-mesh: the vertices they described are gone, and the next preview
+    stores them again from what is there now.

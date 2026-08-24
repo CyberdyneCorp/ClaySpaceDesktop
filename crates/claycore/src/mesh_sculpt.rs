@@ -459,6 +459,30 @@ impl MeshLattice {
         Ok(out)
     }
 
+    /// What the cage moves a point by — exactly zero everywhere for an
+    /// untouched cage.
+    ///
+    /// The forward warp, read without applying it. A host that draws a surface
+    /// it did not get from this lattice — a field's, marched from the brick
+    /// cache — can show what the cage would do to it by displacing the
+    /// vertices it already has.
+    pub fn displacement(&self, point: [f32; 3]) -> Result<[f32; 3]> {
+        let mut out = [0.0; 3];
+        // SAFETY: valid handle, an array of three floats in and three out,
+        // written on success.
+        check(
+            unsafe {
+                sys::clay_mesh_lattice_displacement(
+                    self.raw.as_ptr(),
+                    point.as_ptr(),
+                    out.as_mut_ptr(),
+                )
+            },
+            "clay_mesh_lattice_displacement",
+        )?;
+        Ok(out)
+    }
+
     /// Whether no control point has been dragged.
     ///
     /// Worth asking before applying one: an untouched cage moves every point

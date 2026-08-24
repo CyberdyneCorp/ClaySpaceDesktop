@@ -15,6 +15,7 @@
 
 mod support;
 
+use clayspace_app::SurfaceGeometry;
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{Direction, GizmoHandle, GizmoMode, LatticeModel, LatticeState, SculptModel};
 use clayspace_view::{Camera, GizmoView, Image, LatticeView, Vertex};
@@ -384,5 +385,144 @@ fn the_bend_reaches_the_screen_while_the_cage_is_being_dragged() {
         "the drawn surface changed {changed} pixels while the cage was being \
          dragged, so the sculptor is setting corners blind and looking at the \
          result only after Deformar. See target/visual/99-preview-during.png"
+    );
+}
+
+// -- a field cage, previewed on the drawn surface ----------------------------
+//
+// The field route cannot preview itself: applying a cage writes a deformer
+// into the document as an undoable edit and refills the layer's whole brick
+// region, 68.8 ms measured. So the preview moves the vertices the viewport
+// already holds, by the warp the engine supplies. Every part of that can fail
+// on its own — the warp can be zero, the vertices can be moved without being
+// uploaded, and the surface can be left bent after the cage comes down.
+
+fn field() -> Option<ClayDocument> {
+    let policy = BackendPolicy::discover(None).ok()?;
+    ClayDocument::new(policy)
+        .and_then(ClayDocument::with_starting_form)
+        .ok()
+}
+
+#[test]
+fn a_field_cage_bends_the_drawn_surface_while_it_is_dragged() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let Some(mut document) = field() else {
+        return;
+    };
+    let camera = framed(&document);
+    let mut geometry = SurfaceGeometry::new(&harness.gpu);
+    geometry
+        .sync(&harness.gpu, &mut document)
+        .expect("the first mesh");
+    let rest = harness.capture(geometry.mesh(), &camera, false, "100-field-cage-rest");
+
+    document.begin_lattice([4, 4, 4]).expect("a cage");
+    let cage = document.lattice();
+    for (index, point) in cage.points.iter().enumerate() {
+        if point[2] <= 0.0 {
+            continue;
+        }
+        document.select_lattice_point(Some(index));
+        document
+            .drag_lattice_point([point[0], point[1], point[2] + 0.25])
+            .expect("the drag was refused");
+    }
+    // Exactly what the application does when the cage's revision moves — and
+    // deliberately without a `sync`, because a cage that has not been applied
+    // has changed nothing for a re-mesh to find.
+    geometry.preview_cage(&harness.gpu, &document);
+    let during = harness.capture(geometry.mesh(), &camera, false, "101-field-cage-during");
+
+    let changed = how_many_differ(&rest, &during);
+    assert!(
+        changed > 2000,
+        "a field cage dragged a quarter of the way across its box changed \
+         {changed} pixels of the drawn surface, so the sculptor pulls a corner \
+         and watches nothing happen. See target/visual/101-field-cage-during.png"
+    );
+}
+
+#[test]
+fn taking_the_field_cage_down_puts_the_surface_back() {
+    // The preview moves vertices the document knows nothing about, so nothing
+    // else would ever put them back.
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let Some(mut document) = field() else {
+        return;
+    };
+    let camera = framed(&document);
+    let mut geometry = SurfaceGeometry::new(&harness.gpu);
+    geometry.sync(&harness.gpu, &mut document).expect("mesh");
+    let rest = harness.capture(geometry.mesh(), &camera, false, "102-field-cage-before");
+
+    document.begin_lattice([4, 4, 4]).expect("a cage");
+    let cage = document.lattice();
+    for (index, point) in cage.points.iter().enumerate() {
+        if point[2] > 0.0 {
+            document.select_lattice_point(Some(index));
+            document
+                .drag_lattice_point([point[0], point[1], point[2] + 0.25])
+                .expect("the drag was refused");
+        }
+    }
+    geometry.preview_cage(&harness.gpu, &document);
+    assert!(
+        how_many_differ(
+            &rest,
+            &harness.capture(geometry.mesh(), &camera, false, "103-field-cage-shown")
+        ) > 2000,
+        "there was no preview to take back"
+    );
+
+    document.cancel_lattice();
+    geometry.preview_cage(&harness.gpu, &document);
+    let after = harness.capture(geometry.mesh(), &camera, false, "104-field-cage-cleared");
+    assert_eq!(
+        how_many_differ(&rest, &after),
+        0,
+        "abandoning the cage left the drawn surface bent, which is a picture \
+         of a document that does not exist"
+    );
+}
+
+#[test]
+fn the_preview_tracks_what_the_engine_will_actually_do() {
+    // The forward warp against the field's own inverse-map deformer. They are
+    // not the same map, and the size of the difference is the whole question:
+    // a preview that pointed the wrong way would be worse than none.
+    let Some(mut previewed) = field() else {
+        return;
+    };
+    previewed.begin_lattice([4, 4, 4]).expect("a cage");
+    let at = SculptModel::pick(&previewed, [0.0, 0.0, 4.0], [0.0, 0.0, -1.0]).expect("surface");
+    let cage = previewed.lattice();
+    let drag = 0.25f32;
+    for (index, point) in cage.points.iter().enumerate() {
+        if point[2] > 0.0 {
+            previewed.select_lattice_point(Some(index));
+            previewed
+                .drag_lattice_point([point[0], point[1], point[2] + drag])
+                .expect("the drag was refused");
+        }
+    }
+    let shown = previewed.cage_warp(&[at]).expect("a field cage warps")[0];
+    let predicted = at[2] + shown[2];
+
+    previewed.apply_lattice().expect("the cage was refused");
+    let actual =
+        SculptModel::pick(&previewed, [0.0, 0.0, 4.0], [0.0, 0.0, -1.0]).expect("surface")[2];
+
+    let error = (actual - predicted).abs() / drag;
+    assert!(
+        error < 0.05,
+        "the preview showed the surface at {predicted} and the engine put it \
+         at {actual}, which is {:.0}% of the drag — a preview is allowed an \
+         error budget an edit is not, but not that one",
+        error * 100.0
     );
 }
