@@ -136,6 +136,44 @@ sphere is symmetric by construction, hence its 82/82. What a sculptor means by
 symmetry is that the *form* comes out symmetric, so that is what the tests
 measure.
 
+### A tube along a curve
+
+**Dinâmica → Tubo por curva** places a curve: click to put a control point
+down, drag one to move it, Del removes the selected ones. What makes it
+different from a brush is not the shape it leaves but that it can be **gone
+back to** — a stroke is over when the pointer comes up, and a curve is a set of
+points that stay where they were put. Nomad calls it a Tube, 3DCoat a spline.
+
+Everything under it was already in the engine: `CLAY_PRIM_SWEPT` carries a
+profile along a guide, `clay_item_add_loft_profile` supplies the profiles,
+`clay_item_set_curve_points` types each point, and
+`clay_layer_set_stroke_points` edits a placed guide undoably. Editing
+**replaces** the sweep rather than adding another, the same way a snakehook
+gesture grows one tendril — otherwise dragging a control point would leave a
+tube behind on every move.
+
+| Control | What it does |
+|---|---|
+| Espessura | Thickness at the selected points, or at all of them where nothing is picked |
+| Junção | **Cantos** straight, **Pelos pontos** Catmull-Rom through them, **Arredondado** a B-spline that rounds corners off |
+| Perfil | Círculo, Quadrado, Hexágono, Triângulo |
+| Aplicar | Leaves the swept form and takes the curve down |
+
+**Two primitives, because they do different things.** A **round** tube is a
+swept-sphere chain — the snakehook's primitive — which takes a radius *per
+point* and so tapers along its whole length. Any other section is the swept
+primitive, and that one **ignores the guide's per-point radius entirely**:
+measured, the same guide swept with radii of 0.05, 0.15 and 0.4 reached 2.901
+every time, the unit profile's own size. Its thickness comes from the profile
+parameters, so a sectioned tube takes the *first* point's thickness at one end
+and the *last* point's at the other and interpolates between — a taper, but not
+a radius per point.
+
+**A curve is an item, so the layer's mirror reflects it.** A tube placed on one
+side of a mirrored layer appears on both, which is what symmetry is for — but a
+tube laid *across* the plane is folded onto itself and reads as symmetric
+whatever its radii do.
+
 ### Pulling a tendril
 
 **Puxar** authors a curve — a chain of spheres swept along the path, tapering
@@ -1076,17 +1114,19 @@ names go through the string tables now. The other 62 label arms across 14 enums
 from `clayspace-model`, so the option bar and the viewport bar stay Portuguese
 whatever the menu says. `Strings::tool` is the shape the rest should follow.
 
-**A curve tool.** Nomad's Tube, 3DCoat's splines: a curve placed with control
-points, edited afterwards, carrying a radius and a 2D profile along its length.
-Every piece is in the engine already — `CLAY_PRIM_SWEPT` sweeps a profile along
-a guide curve, `clay_item_add_loft_profile` supplies the profiles (circle, box,
-hexagon, triangle, trapezoid, vesica, or an arbitrary polygon),
-`clay_item_set_curve_points` types each point hard, Catmull-Rom, B-spline or
-Bezier with handles, and `clay_layer_set_stroke_points` edits a placed curve
-undoably. What is missing is entirely on this side: a tool that places a curve,
-draws its control points and handles, and lets them be dragged. **Puxar** is
-the same primitive driven by a drag instead — a curve you cannot go back and
-edit.
+**Bezier handles on a curve.** The curve tool offers three of the engine's four
+joins. The fourth is a cubic shaped by handles, which needs two more draggable
+things per point and a way to break their symmetry — a tool of its own rather
+than a setting. Worth knowing when it is built: the engine keeps handles in the
+item's *local* space and says so pointedly, because 3DCoat keeps its in screen
+space and "its own users call that a wart" — the curve then means something
+different depending on where the camera was.
+
+**A curve reopened after it is applied.** Applying lets go of the control
+points and leaves an ordinary item. `clay_layer_stroke_points` reads a placed
+guide back — "the exact arguments the call above takes, so what comes out goes
+straight back in" — so picking a placed tube and editing it again is reachable;
+nothing does it yet.
 
 **A manipulator outside the cage.** The move/turn/scale widget acts on a
 lattice selection and on nothing else. Transforming a whole layer with it —

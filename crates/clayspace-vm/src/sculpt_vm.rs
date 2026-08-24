@@ -308,6 +308,16 @@ impl SculptViewModel {
             | Command::ToggleZsphereNegative
             | Command::SetSkinThickness(_)
             | Command::ApplyMaskOp(_)
+            | Command::ToggleCurve
+            | Command::AddCurvePoint(..)
+            | Command::SelectCurvePoint(_)
+            | Command::ToggleCurvePoint(_)
+            | Command::DragCurve(_)
+            | Command::SetCurveRadius(_)
+            | Command::SetCurveJoin(_)
+            | Command::SetCurveProfile(_)
+            | Command::RemoveCurvePoints
+            | Command::ApplyCurve
             | Command::ToggleLattice
             | Command::SetLatticeDivisions(_)
             | Command::SelectLatticePoint(_)

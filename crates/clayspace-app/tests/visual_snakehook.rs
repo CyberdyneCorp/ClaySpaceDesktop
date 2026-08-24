@@ -246,3 +246,88 @@ fn the_tendril_is_drawn_as_one_form() {
          target/visual/snakehook-after.png"
     );
 }
+
+// -- the curve tool ----------------------------------------------------------
+//
+// The other half of the same primitives. Puxar drives a curve with a drag and
+// the curve is gone when the pointer comes up; this places one whose points
+// stay where they were put — which is the whole of what Nomad's Tube and
+// 3DCoat's splines are for.
+
+#[test]
+fn a_curve_sweeps_a_tube_that_can_be_gone_back_to() {
+    use clayspace_model::{CurveModel, CurveProfile};
+
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let Some(mut document) = sphere() else {
+        return;
+    };
+    let mut camera = Camera::default();
+    camera.frame_bounds([-2.2, -2.2, -2.2].into(), [2.2, 2.2, 2.2].into());
+
+    let mut geometry = SurfaceGeometry::new(&harness.gpu);
+    geometry.sync(&harness.gpu, &mut document).expect("mesh");
+    let bare = harness.capture(geometry.mesh(), &camera, false, "curve-none");
+
+    document.begin_curve();
+    for (at, radius) in [
+        ([-1.4f32, 0.6, 0.0], 0.10f32),
+        ([-0.5, 1.5, 0.0], 0.16),
+        ([0.5, 1.5, 0.0], 0.16),
+        ([1.4, 0.6, 0.0], 0.10),
+    ] {
+        document
+            .add_curve_point(at, radius)
+            .expect("the point was refused");
+    }
+    geometry.sync(&harness.gpu, &mut document).expect("re-mesh");
+    let swept = harness.capture(geometry.mesh(), &camera, false, "curve-swept");
+
+    let drawn = bare
+        .pixels
+        .chunks_exact(4)
+        .zip(swept.pixels.chunks_exact(4))
+        .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 12))
+        .count();
+    assert!(
+        drawn > 2000,
+        "the curve swept {drawn} pixels of tube. See \
+         target/visual/curve-swept.png"
+    );
+
+    // Gone back to: a control point lifted, and the tube follows.
+    document.select_curve_point(Some(1));
+    document.drag_curve([0.0, 0.7, 0.0]).expect("refused");
+    geometry.sync(&harness.gpu, &mut document).expect("re-mesh");
+    let moved = harness.capture(geometry.mesh(), &camera, false, "curve-edited");
+    let changed = swept
+        .pixels
+        .chunks_exact(4)
+        .zip(moved.pixels.chunks_exact(4))
+        .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 12))
+        .count();
+    assert!(
+        changed > 800,
+        "lifting a control point changed {changed} pixels, so the curve \
+         cannot be gone back to — which is the whole of what it is for"
+    );
+
+    // And the profile is the tube's cross-section, not its size.
+    document
+        .set_curve_profile(CurveProfile::Square)
+        .expect("refused");
+    geometry.sync(&harness.gpu, &mut document).expect("re-mesh");
+    let square = harness.capture(geometry.mesh(), &camera, false, "curve-square");
+    let differs = moved
+        .pixels
+        .chunks_exact(4)
+        .zip(square.pixels.chunks_exact(4))
+        .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 12))
+        .count();
+    assert!(
+        differs > 300,
+        "a square section drew the same {differs} pixels as a round one"
+    );
+}

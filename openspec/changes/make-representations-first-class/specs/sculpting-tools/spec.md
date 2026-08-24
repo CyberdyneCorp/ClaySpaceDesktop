@@ -243,3 +243,23 @@ A symmetric stroke SHALL remain one undo step.
 #### Scenario: A mirrored drag is a reflection
 - **WHEN** a drag is made outward along an axis with symmetry on that axis
 - **THEN** the far side travels the opposite way by the same amount
+
+### Requirement: A curve places a tube that can be edited afterwards
+The application SHALL let a sculptor place a curve by putting control points
+down, move those points afterwards, and sweep a tube along it.
+
+Editing a control point SHALL replace the swept form rather than adding
+another, and abandoning the curve SHALL take its form with it.
+
+#### Scenario: A tube follows its control points
+- **WHEN** a control point of a placed curve is moved
+- **THEN** the tube follows it
+- **AND** the layer holds one swept form, not one per move
+
+#### Scenario: A curve needs two points to sweep along
+- **WHEN** a curve has one control point
+- **THEN** nothing is swept
+
+#### Scenario: Abandoning a curve leaves nothing behind
+- **WHEN** a curve is taken down without being applied
+- **THEN** the form is exactly as it was

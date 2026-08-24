@@ -25,7 +25,7 @@ use clayspace_view::{
     Overlays, Renderer, Shortcuts, Strings, SurfaceLoss, Vertex, ViewPreset, WindowSurface,
 };
 use clayspace_vm::{
-    ArmatureViewModel, Axis, Command, CommandQueue, DocumentViewModel, Grab, Guard,
+    ArmatureViewModel, Axis, Command, CommandQueue, CurveViewModel, DocumentViewModel, Grab, Guard,
     LatticeViewModel, MaskViewModel, SceneViewModel, SculptViewModel,
 };
 use winit::application::ApplicationHandler;
@@ -123,6 +123,8 @@ enum Drag {
     Cage,
     /// Dragging the manipulator on the selection.
     Gizmo,
+    /// Dragging a curve's control point.
+    Curve,
 }
 
 struct App {
@@ -132,6 +134,9 @@ struct App {
     document_vm: DocumentViewModel,
     mask: MaskViewModel,
     lattice: LatticeViewModel,
+    curve: CurveViewModel,
+    /// The plane a curve drag runs on, and where it started.
+    curve_drag: Option<([f32; 3], [f32; 3], [f32; 3])>,
     /// The plane a lattice drag runs on: an anchor and a normal facing the eye.
     cage_plane: Option<([f32; 3], [f32; 3])>,
     /// The manipulator handle in hand, and the plane its drag runs on.
@@ -291,6 +296,7 @@ impl App {
         let document_vm = DocumentViewModel::new(Box::new(document.clone()), "Sem título");
         let mask = MaskViewModel::new(Box::new(document.clone()));
         let lattice = LatticeViewModel::new(Box::new(document.clone()));
+        let curve = CurveViewModel::new(Box::new(document.clone()));
         let armature = ArmatureViewModel::new(Box::new(document.clone()));
 
         // Read before the marker for this session is written, or every run
@@ -320,6 +326,8 @@ impl App {
             document_vm,
             mask,
             lattice,
+            curve,
+            curve_drag: None,
             cage_plane: None,
             gizmo_drag: None,
             armature,
@@ -1103,6 +1111,98 @@ impl App {
         Some(std::array::from_fn(|i| origin[i] + direction[i] * reach))
     }
 
+    /// A curve press: grab a control point, or place a new one.
+    ///
+    /// Before the cage and before the surface, for the reason each of those is
+    /// before the next: a curve's points are drawn over everything and sit
+    /// away from the form, so a press meant for one would otherwise find the
+    /// clay behind it.
+    fn begin_curve_press(&mut self, point: egui::Pos2, add: bool) -> bool {
+        let curve = self.curve.state().get().clone();
+        if !curve.active {
+            return false;
+        }
+        let Some(ray) = self.ray_at(point) else {
+            return false;
+        };
+        let positions: Vec<[f32; 3]> = curve.points.iter().map(|p| p.position).collect();
+        let handle = Self::curve_handle(&curve);
+        if let Some(index) = Self::nearest_along(&positions, ray, handle * Self::CAGE_GRAB) {
+            if add {
+                self.handle(Command::ToggleCurvePoint(index));
+                return true;
+            }
+            // The plane the drag runs on: facing the camera, through the point
+            // that was grabbed — the plane a person is picturing when they
+            // pull a control point sideways.
+            let (_, direction) = ray;
+            let normal = [-direction[0], -direction[1], -direction[2]];
+            let at = positions[index];
+            self.curve_drag = Self::on_plane(ray, at, normal).map(|from| (at, normal, from));
+            self.handle(Command::SelectCurvePoint(Some(index)));
+            return true;
+        }
+
+        // Nothing under the pointer: place a point. On the surface where the
+        // ray meets it, and otherwise on the plane through the curve's last
+        // point — a curve is drawn *off* the form as often as on it, and a
+        // press that missed the clay used to do nothing at all.
+        let radius = *self.curve.radius().get();
+        let at = match self.pick_at(point) {
+            Some((hit, _)) => Some(hit),
+            None => {
+                let anchor = positions.last().copied().unwrap_or([0.0; 3]);
+                let (_, direction) = ray;
+                Self::on_plane(ray, anchor, [-direction[0], -direction[1], -direction[2]])
+            }
+        };
+        let Some(at) = at else {
+            return false;
+        };
+        self.handle(Command::AddCurvePoint(at, radius));
+        true
+    }
+
+    /// Where a curve drag has reached, as a displacement from where it began.
+    fn curve_drag_to(&self, point: egui::Pos2) -> Option<[f32; 3]> {
+        let (_, normal, from) = self.curve_drag?;
+        let anchor = self.curve_drag?.0;
+        let now = Self::on_plane(self.ray_at(point)?, anchor, normal)?;
+        Some(std::array::from_fn(|axis| now[axis] - from[axis]))
+    }
+
+    /// How big a curve's control-point handle is, in world units.
+    fn curve_handle(curve: &clayspace_model::CurveState) -> f32 {
+        let mut min = [f32::MAX; 3];
+        let mut max = [f32::MIN; 3];
+        for point in &curve.points {
+            for axis in 0..3 {
+                min[axis] = min[axis].min(point.position[axis]);
+                max[axis] = max[axis].max(point.position[axis]);
+            }
+        }
+        let span = (0..3)
+            .map(|axis| max[axis] - min[axis])
+            .fold(0.0f32, f32::max);
+        // A floor, because a curve of one point has no span at all and its
+        // handle still has to be grabbable.
+        (span * Self::CAGE_HANDLE).max(0.02)
+    }
+
+    /// The point a ray passes nearest to, within a radius. Nearest *along* the
+    /// ray, so one in front takes a press over one behind it.
+    fn nearest_along(points: &[[f32; 3]], ray: ([f32; 3], [f32; 3]), reach: f32) -> Option<usize> {
+        let mut best: Option<(usize, f32)> = None;
+        for (index, at) in points.iter().enumerate() {
+            if let Some(along) = Self::ray_hits(ray, *at, reach) {
+                if best.is_none_or(|(_, closest)| along < closest) {
+                    best = Some((index, along));
+                }
+            }
+        }
+        best.map(|(index, _)| index)
+    }
+
     /// Begins a cage gesture, if the press landed on a control point.
     ///
     /// Returns whether it did. A press that misses every handle falls through
@@ -1298,9 +1398,14 @@ impl App {
         (cage.rest_span * Self::CAGE_HANDLE).max(1e-4)
     }
 
-    /// Brings the viewport's copy of the cage up to date.
+    /// Brings the viewport's copy of the cage and the curve up to date.
+    ///
+    /// One overlay for both. A cage and a curve are the same picture — points
+    /// with lines between them, one of them in hand — so they share the
+    /// renderer's, and only one can be up at a time in any case.
     fn sync_lattice_view(&mut self) {
         let cage = self.lattice.state().get().clone();
+        let curve = self.curve.state().get().clone();
         let Some(graphics) = self.graphics.as_mut() else {
             return;
         };
@@ -1310,6 +1415,26 @@ impl App {
         // reaching.
         graphics.renderer.set_ghosted(cage.active);
         if !cage.active {
+            // The curve, which shares the overlay. Its points are drawn like a
+            // cage's and joined in a chain — the control polygon rather than
+            // the tessellated curve, because what a sculptor drags are the
+            // points and the sweep already shows the curve itself.
+            if curve.active {
+                let points: Vec<[f32; 3]> =
+                    curve.points.iter().map(|point| point.position).collect();
+                let edges = curve.edges();
+                graphics.renderer.set_lattice(
+                    &gpu,
+                    clayspace_view::LatticeView {
+                        points: &points,
+                        edges: &edges,
+                        selected: &curve.selection,
+                        gizmo: None,
+                        handle: Self::curve_handle(&curve),
+                    },
+                );
+                return;
+            }
             graphics.renderer.set_lattice(
                 &gpu,
                 clayspace_view::LatticeView {
@@ -1668,6 +1793,7 @@ impl App {
                     // seams — and once per gesture, with the pointer up.
                     self.settle_geometry();
                 }
+                Drag::Curve => self.curve_drag = None,
                 Drag::Gizmo => {
                     self.gizmo_drag = None;
                     self.handle(Command::EndGizmoDrag);
@@ -1692,22 +1818,32 @@ impl App {
             let rigged = self.rigging
                 && button == egui::PointerButton::Primary
                 && self.begin_rig(point, input);
-            // The manipulator before the control points, because it is drawn
-            // over them and sits on the selection: a press on the green arrow
-            // would otherwise find whichever point happens to be behind it.
-            let manipulated =
-                !rigged && button == egui::PointerButton::Primary && self.begin_gizmo_drag(point);
+            // A curve's points are drawn over everything and sit away from the
+            // form, so they take the press before the cage and before the clay.
+            let on_curve = !rigged
+                && button == egui::PointerButton::Primary
+                && self.begin_curve_press(point, input.smooth_modifier);
+            // The manipulator before the cage's control points, because it is
+            // drawn over them and sits on the selection: a press on the green
+            // arrow would otherwise find whichever point is behind it.
+            let manipulated = !rigged
+                && !on_curve
+                && button == egui::PointerButton::Primary
+                && self.begin_gizmo_drag(point);
             // And both before the surface is asked about, because a control
             // point sits *outside* the form: a press on a corner handle would
             // otherwise find the clay behind it and start a stroke on the
             // layer the cage is there to bend.
             let caged = !rigged
+                && !on_curve
                 && !manipulated
                 && button == egui::PointerButton::Primary
                 && self.begin_cage_drag(point, input.smooth_modifier);
-            let on_surface = !rigged && !manipulated && !caged && self.pick_at(point).is_some();
+            let on_surface =
+                !rigged && !on_curve && !manipulated && !caged && self.pick_at(point).is_some();
             let started = match button {
                 _ if rigged => Drag::Rig,
+                _ if on_curve => Drag::Curve,
                 _ if manipulated => Drag::Gizmo,
                 _ if caged => Drag::Cage,
                 egui::PointerButton::Middle => Drag::Pan,
@@ -1744,6 +1880,23 @@ impl App {
                 Drag::Sculpt => {
                     if let Some(point) = input.pointer {
                         self.stroke_at(point, false, StrokeModifiers::default());
+                    }
+                }
+                Drag::Curve => {
+                    if let Some(by) = input.pointer.and_then(|point| self.curve_drag_to(point)) {
+                        self.handle(Command::DragCurve(by));
+                        // Re-anchored, because the model moves the points by a
+                        // displacement: sending the whole travel every frame
+                        // would move them by it again each time.
+                        if let Some((anchor, normal, _)) = self.curve_drag {
+                            if let Some(now) = input
+                                .pointer
+                                .and_then(|point| self.ray_at(point))
+                                .and_then(|ray| Self::on_plane(ray, anchor, normal))
+                            {
+                                self.curve_drag = Some((anchor, normal, now));
+                            }
+                        }
                     }
                 }
                 Drag::Gizmo => {
@@ -1939,6 +2092,7 @@ impl App {
         // past its own interface to ask.
         self.lattice
             .dispatch(&command, self.sculpt.active_representation());
+        self.curve.dispatch(&command);
         // A rig belongs to a layer, so choosing another layer changes which
         // one — or whether there is one at all.
         match &command {
@@ -2099,6 +2253,8 @@ impl App {
             mask_steps: *self.mask.steps().get(),
             voxel_display: self.document.with(|d| d.voxel_display()),
             voxel_blur: self.document.with(|d| d.voxel_blur()),
+            curve: self.curve.state().get().clone(),
+            curve_radius: *self.curve.radius().get(),
             lattice: self.lattice.state().get().clone(),
             lattice_divisions: *self.lattice.divisions().get(),
             document_name: document_name.as_str(),

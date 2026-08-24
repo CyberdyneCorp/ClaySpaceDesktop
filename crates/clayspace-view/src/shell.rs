@@ -93,6 +93,10 @@ pub struct ShellState<'a> {
     /// occupancy is filtered before the smooth one is taken.
     pub voxel_display: clayspace_model::VoxelDisplay,
     pub voxel_blur: clayspace_model::SmoothBlur,
+    /// The curve being placed, while one is up, and the thickness a new point
+    /// would be given.
+    pub curve: clayspace_model::CurveState,
+    pub curve_radius: f32,
     /// The cage around the form, while one is up.
     pub lattice: clayspace_model::LatticeState,
     /// What a fresh cage would be built with.
@@ -552,6 +556,17 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                     .clicked()
                 {
                     queue.push(Command::ApplyLattice);
+                    ui.close_menu();
+                }
+                ui.separator();
+                // A curve is the other thing in this menu that is placed
+                // rather than brushed: a set of points that stay where they
+                // were put, which is what makes it something to go back to.
+                if ui
+                    .selectable_label(state.curve.active, s.action_curve)
+                    .clicked()
+                {
+                    queue.push(Command::ToggleCurve);
                     ui.close_menu();
                 }
             });
@@ -1910,6 +1925,70 @@ pub fn export_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut Co
 }
 
 /// Material, geometry, resolution and brush controls.
+/// The curve being placed: how thick, how its points join, what it sweeps.
+///
+/// Only while one is up. Placing one is a menu entry, and a section that stood
+/// there whether or not a curve existed would push the rest of the panel down
+/// for nothing — the same bargain the cage's section makes.
+fn curve_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    use clayspace_model::{CurveJoin, CurveProfile};
+    let s = state.strings;
+    heading(ui, s.section_curve);
+
+    if let Some(value) = slider(ui, s.label_curve_radius, state.curve_radius, 0.01..=0.6, 3) {
+        queue.push(Command::SetCurveRadius(value));
+    }
+
+    ui.label(
+        egui::RichText::new(s.label_curve_join)
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    );
+    ui.horizontal_wrapped(|ui| {
+        for join in CurveJoin::ALL {
+            if ui
+                .selectable_label(state.curve.join == join, join.label())
+                .clicked()
+            {
+                queue.push(Command::SetCurveJoin(join));
+            }
+        }
+    });
+
+    ui.label(
+        egui::RichText::new(s.label_curve_profile)
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    );
+    ui.horizontal_wrapped(|ui| {
+        for profile in CurveProfile::ALL {
+            if ui
+                .selectable_label(state.curve.profile == profile, profile.label())
+                .clicked()
+            {
+                queue.push(Command::SetCurveProfile(profile));
+            }
+        }
+    });
+
+    // Enabled only once there is something to sweep along: one point is a
+    // point, and the engine refuses a guide below two.
+    if ui
+        .add_enabled(
+            state.curve.can_be_swept(),
+            egui::Button::new(s.action_curve_apply),
+        )
+        .clicked()
+    {
+        queue.push(Command::ApplyCurve);
+    }
+    ui.label(
+        egui::RichText::new(s.hint_curve)
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    );
+}
+
 /// How a voxel layer is drawn.
 ///
 /// A display setting and nothing more: the engine keeps the choice an argument
@@ -2173,6 +2252,10 @@ pub fn right_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
     // question, and the answer belongs beside the layer it is asked about.
     if state.representation == Representation::Voxel {
         voxel_section(ui, state, queue);
+    }
+
+    if state.curve.active {
+        curve_section(ui, state, queue);
     }
 
     if state.lattice.active {

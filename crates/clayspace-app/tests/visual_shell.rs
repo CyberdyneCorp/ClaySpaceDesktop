@@ -153,6 +153,8 @@ fn state<'a>(
         },
         extrude: clayspace_model::ExtrudeSettings::default(),
         mask_steps: 1,
+        curve: clayspace_model::CurveState::default(),
+        curve_radius: 0.12,
         voxel_display: clayspace_model::VoxelDisplay::default(),
         voxel_blur: clayspace_model::SmoothBlur::default(),
         lattice: clayspace_model::LatticeState::default(),

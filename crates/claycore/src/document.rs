@@ -98,6 +98,42 @@ impl Item {
         Self::new(sys::clay_prim::CLAY_PRIM_STROKE as i32, &[])
     }
 
+    /// A profile carried along a guide curve — the primitive a tube is.
+    ///
+    /// The guide is the item's own curve points, set with
+    /// [`Item::set_curve_points`]; the profiles are added with
+    /// [`Item::add_profile`], and the engine is explicit that neither is a new
+    /// kind of thing: "a guide is not a new kind of curve and a swept profile
+    /// is not a new kind of profile". `easing` is the one parameter, indexing
+    /// the curve that interpolates between profiles along the guide.
+    pub fn swept(easing: f32) -> Result<Self> {
+        Self::new(sys::clay_prim::CLAY_PRIM_SWEPT as i32, &[easing])
+    }
+
+    /// One 2D profile of a lift primitive — a loft's or a sweep's.
+    ///
+    /// Two or more are interpolated evenly along the guide; one is carried
+    /// unchanged. A lift with none set uses a unit circle.
+    pub fn add_profile(&mut self, profile: Profile, params: &[f32]) -> Result<()> {
+        // SAFETY: a valid item, an enum the entry point range-checks, and a
+        // slice whose length is passed beside it. No polygon here — the
+        // arbitrary-vertex form takes its own array, and null with a zero
+        // count is what "not a polygon" spells.
+        check(
+            unsafe {
+                sys::clay_item_add_loft_profile(
+                    self.as_ptr(),
+                    profile as i32,
+                    params.as_ptr(),
+                    params.len(),
+                    std::ptr::null(),
+                    0,
+                )
+            },
+            "clay_item_add_loft_profile",
+        )
+    }
+
     /// A tree of spheres, skinned by one sphere-swept cone per node-parent
     /// pair — the engine's words, and ZBrush's ZSpheres.
     ///
@@ -422,6 +458,25 @@ impl Drop for Document {
         // because `Document` is neither `Copy` nor `Clone`.
         unsafe { sys::clay_document_destroy(self.raw.as_ptr()) };
     }
+}
+
+/// The 2D cross-section a lift primitive carries.
+///
+/// The parameters each one takes are its own, and are listed beside it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Profile {
+    /// `r`
+    Circle = 0,
+    /// `hx hy`
+    Box = 1,
+    /// `r`, the face radius
+    Hexagon = 2,
+    /// `r`
+    Triangle = 3,
+    /// `bottom top half_height`
+    Trapezoid = 4,
+    /// `r d`
+    Vesica = 5,
 }
 
 /// How a curve point joins the one after it.

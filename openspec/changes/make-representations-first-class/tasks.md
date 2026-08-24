@@ -1057,3 +1057,49 @@ B-spline or Bezier with handles, and `clay_layer_set_stroke_points` edits a
 placed curve undoably. What is missing is entirely on this side: a tool that
 places a curve, draws its control points and handles, and lets them be dragged.
 Recorded under *Not built yet*.
+
+## 24. A tube along a curve
+
+- [x] 24.1 Place a curve, and go back to it
+  - Asked for after the snakehook fix: Nomad's Tube. What makes it different
+    from a brush is not the shape it leaves but that it can be gone back to —
+    a stroke is over when the pointer comes up, and a curve is a set of points
+    that stay where they were put.
+  - Every piece was already in the engine and none of it needed writing there:
+    `CLAY_PRIM_SWEPT`, `clay_item_add_loft_profile`,
+    `clay_item_set_curve_points` and `clay_layer_set_stroke_points`. The three
+    that were unwrapped are now.
+  - Editing **replaces** the sweep rather than adding another, the same way a
+    snakehook gesture grows one tendril. A test drags a control point eight
+    times and requires the layer to hold what it held before.
+  - The curve shares the cage's overlay — points with lines between them, one
+    in hand is the same picture — and its press takes precedence over the cage
+    and the surface, because its points are drawn over everything and sit away
+    from the form.
+
+- [x] 24.2 Two primitives, because they do different things
+  - The swept primitive **ignores the guide's per-point radius**. Measured, the
+    same guide swept with radii of 0.05, 0.15 and 0.4 reached 2.901 every time
+    — the unit profile's own size — because a sweep's thickness is its profile
+    parameters. The first attempt swept a unit circle and drew a fat ribbon.
+  - So a **round** tube is a swept-sphere chain instead, the snakehook's
+    primitive, which takes a radius per point and tapers along its length. Any
+    other section is the sweep, taking the first point's thickness at one end
+    and the last point's at the other — a taper, and not a radius per point.
+    Both are stated in the docs rather than left to be discovered.
+  - A sweep needs **two or more** profiles: the engine refuses fewer, and two
+    is what a taper is.
+
+- [x] 24.3 Three things the tests found
+  - Removing the sweep left it on screen. `mark_dirty_layer` marks the layer's
+    extent *after* the removal, which no longer reaches where the tube was —
+    the same fault removing a layer already had, and the same fix: capture the
+    region first and refill it padded.
+  - A taper measured at the curve's *end points* reads the same whatever it
+    does, because that is where the chain's spherical cap sits. Sampled inside
+    the span instead.
+  - And a taper measured across a mirrored layer reads symmetric to the last
+    digit — 0.37354326 at both ends. A curve is an *item* and the layer mirror
+    reflects items, so a tube laid across the plane is folded onto itself. That
+    is the mirror doing what a mirror does; it has its own test now so nobody
+    else spends an hour on it.

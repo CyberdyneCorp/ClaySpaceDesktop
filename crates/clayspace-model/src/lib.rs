@@ -14,6 +14,7 @@ pub mod alpha;
 pub mod armature;
 pub mod combine;
 pub mod conversion;
+pub mod curve;
 pub mod detail;
 pub mod diagnostics;
 pub mod document;
@@ -36,6 +37,7 @@ pub use combine::{BlendProfile, Combine, CombineSettings, StrokeModifiers};
 pub use conversion::{
     ConversionSettings, Cost, DeformSettings, DeformVerb, Direction, Refusal, RepairReport,
 };
+pub use curve::{CurveJoin, CurveModel, CurvePoint, CurveProfile, CurveState, FEWEST_POINTS};
 pub use detail::DetailPolicy;
 pub use diagnostics::{Diagnostics, DiagnosticsModel, Fallback};
 pub use document::{DocumentModel, OpenError};
