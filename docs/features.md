@@ -920,6 +920,33 @@ sits inside a torso — and picking the far one makes a chest impossible to grab
   full surface is drawn instead, and an edit returns to it. See
   [Known-degraded](#known-degraded) for what the coarse surface looks like.
 
+### Reference images
+
+**Vista → Imagens de referência…** (View → Reference images) opens a panel with
+a row for each of the three orthogonal planes. Load a PNG onto a plane and it
+hangs behind the origin on that plane, to sculpt from.
+
+- One picture a plane, each with its own placement: shown or not, opacity,
+  height, an offset across and up within the plane, and how far back it sits.
+  **Width follows the image's own proportions** — a reference is never
+  squashed, whichever plane it is on.
+- **The clay is always in front**, from every angle. The quad sits behind the
+  origin, but that alone stops holding once the camera swings past its plane,
+  so references are drawn first and write no depth. A guide that occludes the
+  form it is guiding has stopped being a guide.
+- The file's own alpha is kept and multiplied by the opacity, so a cut-out
+  placed at half opacity is still a cut-out. Colour is kept — unlike an alpha
+  stamp, which is flattened to one scalar a pixel — and palette PNGs are
+  expanded, since an index read as a colour is not a picture of anything.
+- PNG only, refused by name rather than by a decoder message, with the same
+  reasons an alpha stamp is refused for.
+- **Not part of the document.** A reference is what the sculptor is working
+  *from*, not what they are making, and a document carrying someone else's
+  photograph is a document that cannot be shared. Loading, moving, fading or
+  clearing one does not mark the document modified. The paths and placements
+  are remembered with the session instead — see
+  [Documents and sessions](#documents-and-sessions).
+
 ## Language
 
 **Vista → Idioma** (View → Language) chooses between three complete
@@ -1079,6 +1106,13 @@ absent on others.
   so the next save asks; and it is marked modified, because it is.
 - Session state lives in Application Support on macOS and `$XDG_STATE_HOME` on
   Linux. State, not cache: losing it costs work.
+- The **reference images** are session state too: each plane's file path and
+  placement, written down beside the recent list. The path and not the pixels —
+  a cache of the images would be a second copy of someone else's photograph,
+  kept without being asked. A file that has since moved is dropped on the way
+  in, the way a recent document that is gone is, and a line that does not parse
+  is dropped rather than defaulted: a reference placed somewhere the sculptor
+  did not put it is worse than one that is simply gone.
 
 ## Diagnostics
 
@@ -1109,8 +1143,9 @@ Panels cannot be resized or collapsed and shortcuts are fixed. See
 
 **The rest of the domain's vocabulary, in more than one language.** The brush
 names go through the string tables now. The other 62 label arms across 14 enums
-— `Combine`, `BlendProfile`, `ViewPresetKind`, `MaskOp`, `GizmoMode`,
-`ExtrudeSide`, `Falloff` and the rest — are still Portuguese literals returned
+— `Combine`, `BlendProfile`, `ViewPresetKind`, `RefPlane`, `MaskOp`,
+`GizmoMode`, `ExtrudeSide`, `Falloff` and the rest — are still Portuguese
+literals returned
 from `clayspace-model`, so the option bar and the viewport bar stay Portuguese
 whatever the menu says. `Strings::tool` is the shape the rest should follow.
 

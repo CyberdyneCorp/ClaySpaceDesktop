@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use clayspace_model::{Locale, RecentDocuments, Recovery};
+use clayspace_model::{Locale, RecentDocuments, Recovery, RememberedReference};
 
 /// The application's own directory, and the files in it.
 #[derive(Debug, Clone)]
@@ -56,6 +56,10 @@ impl SessionStore {
 
     fn recent_path(&self) -> PathBuf {
         self.root.join("recentes.txt")
+    }
+
+    fn reference_path(&self) -> PathBuf {
+        self.root.join("referências.txt")
     }
 
     fn ensure_root(&self) -> std::io::Result<()> {
@@ -120,6 +124,28 @@ impl SessionStore {
             return;
         }
         let _ = std::fs::write(self.root.join("locale"), locale.tag());
+    }
+
+    /// The reference images the last session had placed.
+    ///
+    /// Pruned on the way in, like the recent list and for the same reason: a
+    /// plane that says it holds a drawing and shows nothing is worse than an
+    /// empty plane.
+    pub fn load_references(&self) -> Vec<RememberedReference> {
+        let text = std::fs::read_to_string(self.reference_path()).unwrap_or_default();
+        let mut entries = clayspace_model::read_references(&text);
+        entries.retain(|entry| entry.path.is_file());
+        entries
+    }
+
+    pub fn save_references(&self, entries: &[RememberedReference]) {
+        if self.ensure_root().is_err() {
+            return;
+        }
+        let _ = std::fs::write(
+            self.reference_path(),
+            clayspace_model::write_references(entries),
+        );
     }
 
     pub fn load_recent(&self) -> RecentDocuments {
@@ -266,9 +292,47 @@ mod tests {
     }
 
     #[test]
+    fn the_placed_references_survive_a_restart() {
+        use clayspace_model::{RefPlane, ReferenceSettings};
+
+        let scratch = Scratch::new("references");
+        let store = &scratch.0;
+        let drawing = store.root().join("frente.png");
+        touch(&drawing);
+        let gone = store.root().join("perdido.png");
+        touch(&gone);
+
+        let entries = vec![
+            RememberedReference {
+                plane: RefPlane::Front,
+                path: drawing.clone(),
+                settings: ReferenceSettings {
+                    opacity: 0.25,
+                    height: 3.0,
+                    ..ReferenceSettings::default()
+                },
+            },
+            RememberedReference {
+                plane: RefPlane::Side,
+                path: gone.clone(),
+                settings: ReferenceSettings::default(),
+            },
+        ];
+        store.save_references(&entries);
+        std::fs::remove_file(&gone).expect("remove");
+
+        let read = store.load_references();
+        assert_eq!(read.len(), 1, "a file that is gone was offered anyway");
+        assert_eq!(read[0].path, drawing);
+        assert!((read[0].settings.opacity - 0.25).abs() < 1e-6);
+        assert!((read[0].settings.height - 3.0).abs() < 1e-6);
+    }
+
+    #[test]
     fn a_store_with_no_directory_yet_reads_as_empty_rather_than_failing() {
         let scratch = Scratch::new("absent");
         assert!(scratch.0.load_recent().is_empty());
+        assert!(scratch.0.load_references().is_empty());
         assert_eq!(scratch.0.recovery(), Recovery::Nothing);
     }
 

@@ -14,9 +14,11 @@
 pub mod alpha;
 pub mod backend;
 pub mod document;
+mod reference;
 
 pub use alpha::read_alpha;
 pub use backend::{BackendPolicy, Operation, SelectionReason, UnavailableBackend};
 pub use document::ClayDocument;
+pub use reference::read_reference;
 
 pub use claycore;

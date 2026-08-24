@@ -24,6 +24,7 @@ pub mod instrument;
 pub mod lattice;
 pub mod locale;
 pub mod mask;
+pub mod reference;
 pub mod scene;
 pub mod sculpt;
 pub mod session;
@@ -51,6 +52,10 @@ pub use lattice::{
 };
 pub use locale::Locale;
 pub use mask::{can_extrude, ExtrudeSettings, ExtrudeSide, MaskModel, MaskOp, MaskState};
+pub use reference::{
+    read_references, write_references, RefPlane, ReferenceImage, ReferenceSettings,
+    RememberedReference,
+};
 pub use scene::{
     LayerCost, LayerKey, LayerSummary, Protection, Scene, SceneModel, SceneNode, SculptLayer,
     SculptLayerCost, SculptLayerOp,

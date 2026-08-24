@@ -442,9 +442,14 @@ impl SculptViewModel {
                 let current = *self.polyframe.get();
                 self.polyframe.set(!current);
             }
-            // Framing and material are the renderer's business; the ViewModel
-            // records nothing for them because they change no state it owns.
-            Command::FrameAll
+            // Framing, material and the reference images are somebody else's
+            // business; the ViewModel records nothing for them because they
+            // change no state it owns.
+            Command::ToggleReferences
+            | Command::LoadReference(_)
+            | Command::ClearReference(_)
+            | Command::SetReferenceSettings(..)
+            | Command::FrameAll
             | Command::NextMaterial
             | Command::NextDisplayUnit
             | Command::SetLocale(_)

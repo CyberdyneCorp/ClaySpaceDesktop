@@ -452,6 +452,11 @@ pub struct Renderer {
     /// The translucent skin between the spheres, drawn while rigging.
     membrane_mesh: GpuMesh,
     membrane_pipeline: wgpu::RenderPipeline,
+    /// The reference images, one quad a plane, and the pipeline that draws
+    /// them.
+    reference_pipeline: wgpu::RenderPipeline,
+    /// Per plane: the quad, and the bind group carrying its texture.
+    references: std::collections::BTreeMap<usize, (GpuMesh, wgpu::BindGroup)>,
     /// The surface drawn through, while a deformation cage is up.
     ghost_pipeline: wgpu::RenderPipeline,
     ghosted: bool,
@@ -716,6 +721,24 @@ impl Renderer {
                 wgpu::PrimitiveTopology::TriangleList,
                 false,
             ),
+            // Blended, unculled, and writing no depth. Drawn first and
+            // leaving the depth buffer alone, a reference is *always* behind
+            // the clay — including when the camera has swung round to the far
+            // side of its plane, which is the whole point: a guide that
+            // occludes the form it is guiding has stopped being a guide.
+            // Unculled because the top plane's quad is seen from below as
+            // often as from above.
+            reference_pipeline: make_pipeline(
+                gpu,
+                &layout,
+                &shader,
+                format,
+                "reference_vs",
+                "reference_fs",
+                wgpu::PrimitiveTopology::TriangleList,
+                false,
+            ),
+            references: std::collections::BTreeMap::new(),
             ghosted: false,
             pipeline,
             overlay_pipeline,
@@ -815,6 +838,52 @@ impl Renderer {
             .upload(gpu, &membrane_vertices, &membrane_indices);
         let (vertices, indices) = armature_geometry(view);
         self.armature_mesh.upload(gpu, &vertices, &indices);
+    }
+
+    /// Places one reference image, or takes it away.
+    ///
+    /// `None` clears the plane. The corners come from the domain, which knows
+    /// where a plane's axes are and keeps the picture's proportions — this
+    /// places nothing itself.
+    pub fn set_reference(&mut self, gpu: &Gpu, plane: usize, placed: Option<Reference<'_>>) {
+        let Some(placed) = placed else {
+            self.references.remove(&plane);
+            return;
+        };
+        let Reference {
+            pixels,
+            width,
+            height,
+            corners,
+            opacity,
+        } = placed;
+        let view = upload_reference(gpu, pixels, width, height);
+        let bind_group = make_bind_group(
+            gpu,
+            &self.bind_group_layout,
+            &self.camera_buffer,
+            &self.material_buffer,
+            &view,
+            &self.sampler,
+        );
+        // The uv rides in the vertex colour's first two channels and the
+        // opacity in the third, which is what `reference_vs` reads. The
+        // alternative is an attribute on every vertex of every mesh in the
+        // scene, paid by the surface to serve a quad.
+        let uv = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+        let vertices: Vec<Vertex> = corners
+            .iter()
+            .zip(uv)
+            .map(|(position, uv)| Vertex {
+                position: *position,
+                normal: [0.0, 1.0, 0.0],
+                color: [uv[0], uv[1], opacity],
+                mask: 0.0,
+            })
+            .collect();
+        let mut mesh = GpuMesh::new(gpu);
+        mesh.upload(gpu, &vertices, &[0, 1, 2, 0, 2, 3]);
+        self.references.insert(plane, (mesh, bind_group));
     }
 
     /// The lattice cage, drawn over the form it wraps.
@@ -1018,6 +1087,21 @@ impl Renderer {
                 );
                 pass.draw_indexed(0..self.overlay_mesh.index_count, 0, 0..1);
             }
+
+            // The references first, and writing no depth, so everything else
+            // is drawn over them whichever side of them the camera is on.
+            for (mesh, bind_group) in self.references.values() {
+                if mesh.is_empty() {
+                    continue;
+                }
+                pass.set_pipeline(&self.reference_pipeline);
+                pass.set_bind_group(0, bind_group, &[]);
+                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+            }
+            // Back to the scene's own bindings, which the loop above replaced.
+            pass.set_bind_group(0, &self.bind_group, &[]);
 
             // Through, while a cage is up. One choice for both the surface and
             // the mesh layers: a document with one of each half solid and half
@@ -1497,6 +1581,45 @@ fn upload_matcap(gpu: &Gpu, matcap: MatCap) -> wgpu::TextureView {
         },
         wgpu::util::TextureDataOrder::LayerMajor,
         &pixels,
+    );
+    texture.create_view(&wgpu::TextureViewDescriptor::default())
+}
+
+/// One reference image, as the viewport is given it.
+#[derive(Debug, Clone, Copy)]
+pub struct Reference<'a> {
+    /// RGBA, `width * height * 4` bytes.
+    pub pixels: &'a [u8],
+    pub width: u32,
+    pub height: u32,
+    /// Where the quad sits, bottom-left first and anticlockwise.
+    pub corners: [[f32; 3]; 4],
+    pub opacity: f32,
+}
+
+/// Puts a reference image on a texture.
+fn upload_reference(gpu: &Gpu, pixels: &[u8], width: u32, height: u32) -> wgpu::TextureView {
+    let texture = gpu.device.create_texture_with_data(
+        &gpu.queue,
+        &wgpu::TextureDescriptor {
+            label: Some("reference"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            // sRGB, like the matcap beside it: a photograph stored as sRGB and
+            // sampled as linear comes out washed out, which on a reference
+            // reads as the opacity being wrong.
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        },
+        wgpu::util::TextureDataOrder::LayerMajor,
+        pixels,
     );
     texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
