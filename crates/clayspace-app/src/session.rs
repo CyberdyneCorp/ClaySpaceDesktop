@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use clayspace_model::{RecentDocuments, Recovery};
+use clayspace_model::{Locale, RecentDocuments, Recovery};
 
 /// The application's own directory, and the files in it.
 #[derive(Debug, Clone)]
@@ -101,6 +101,27 @@ impl SessionStore {
     }
 
     /// Reads the recent list, dropping entries whose file is gone.
+    /// The language the interface was last set to.
+    ///
+    /// `None` where nothing has been chosen — which is a first run, and is
+    /// what lets the system's own language be honoured that once instead of
+    /// being overruled by a preference nobody set.
+    pub fn load_locale(&self) -> Option<Locale> {
+        let tag = std::fs::read_to_string(self.root.join("locale")).ok()?;
+        let tag = tag.trim();
+        // Only a tag we actually recognise. `from_tag` answers with the
+        // default for anything else, and taking that would turn a corrupted
+        // file into a silent preference the user never set.
+        Locale::ALL.into_iter().find(|locale| locale.tag() == tag)
+    }
+
+    pub fn save_locale(&self, locale: Locale) {
+        if self.ensure_root().is_err() {
+            return;
+        }
+        let _ = std::fs::write(self.root.join("locale"), locale.tag());
+    }
+
     pub fn load_recent(&self) -> RecentDocuments {
         let text = std::fs::read_to_string(self.recent_path()).unwrap_or_default();
         let mut recent = RecentDocuments::from_paths(

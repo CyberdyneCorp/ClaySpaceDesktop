@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use clayspace_model::{
     ConversionSettings, ExportSettings, ExtrudeSettings, Falloff, GizmoHandle, GizmoMode,
-    ImportSettings, LayerKey, MaskOp, StrokeModifiers, ToolKind, ViewPresetKind,
+    ImportSettings, LayerKey, Locale, MaskOp, StrokeModifiers, ToolKind, ViewPresetKind,
 };
 
 /// A change to the application or the document.
@@ -192,6 +192,8 @@ pub enum Command {
     /// Cycles what lengths are shown in. Presentation only: no geometry
     /// moves, which is what makes it safe to put on a single click.
     NextDisplayUnit,
+    /// Which language the interface is presented in.
+    SetLocale(Locale),
     /// Shows or hides the attribution manifest.
     ToggleAttribution,
     /// Shows or hides the diagnostics report.
@@ -216,6 +218,7 @@ impl Command {
                 | Self::ToggleGrid
                 | Self::TogglePolyframe
                 | Self::NextDisplayUnit
+                | Self::SetLocale(_)
                 | Self::ToggleAttribution
                 | Self::ToggleDiagnostics
                 | Self::CopyDiagnostics
@@ -389,6 +392,7 @@ impl Command {
             Self::RunImport => "import",
             Self::RunExport => "export",
             Self::NextDisplayUnit => "display unit",
+            Self::SetLocale(_) => "idioma",
             Self::ToggleAttribution => "attribution",
             Self::ToggleDiagnostics => "diagnostics",
             Self::CopyDiagnostics => "copy diagnostics",

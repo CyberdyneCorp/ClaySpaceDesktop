@@ -762,3 +762,40 @@ gizmo for — has no route here yet.
     measures the deposit's extent for the same reason: the greedy mesher merges
     quads differently either side of the seam, giving 164 vertices against 152
     for a deposit that is exactly symmetric.
+
+## 19. A language, and a way to choose it
+
+- [x] 19.1 Put the language in a menu
+  - Three complete translations — pt-BR, en-US, es-419 — shipped from the
+    beginning with no way to choose between them. The locale came from
+    `Locale::default()` at startup and was never asked about again, so
+    `Locale::from_tag`, written for exactly this, was called by nothing.
+  - **Vista → Idioma**, each language named in itself. That is the one rule a
+    language menu has: a reader who cannot read the current interface still has
+    to be able to find their own.
+  - `Locale` moved from `clayspace-view` into `clayspace-model`, beside the
+    display unit it is a sibling of. A language is a *preference*, and a View
+    may not own a type a Command has to carry — the layering check would have
+    said so.
+  - `Strings` carries its own locale now, so the menu's tick and the words on
+    screen cannot disagree about what the interface is in.
+
+- [x] 19.2 Open in English, and honour the system before that
+  - The default was Brazilian Portuguese, which is the design's own language
+    and not what a first-time reader can necessarily make sense of. English
+    now, with the reason written where the default is.
+  - A system tag still wins on a first run: `LC_ALL`, `LC_MESSAGES` or `LANG`,
+    read from the environment rather than through a crate — three variables are
+    not worth a dependency to audit and license. Matched by language rather
+    than region, so `pt_PT`, `en_GB` and `es_ES` each find their translation.
+  - The choice is written to the session directory as a tag and read back only
+    if it is one of the three: `from_tag` answers with the default for anything
+    else, and taking that would turn a corrupted file into a preference nobody
+    set. A test round-trips every locale through its tag.
+
+**Still open**: the *vocabulary* the domain names — 82 label arms across 15
+enums, from `ToolKind` and `Combine` to `MaskOp` and `GizmoMode` — are
+Portuguese literals returned from `clayspace-model` rather than looked up in
+the string tables. Switching language translates the chrome and leaves the
+brush shelf and the option bar in Portuguese. Routing them through the tables
+is a change of its own.
