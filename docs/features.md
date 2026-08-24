@@ -137,6 +137,15 @@ Measured on a unit sphere with a 0.2 wall: **Para fora** takes the surface to
 **Centrado** reaches 1.1015 — half the thickness above the surface, which is
 what half each way means.
 
+**Extrudar needs something to sample.** `clay_document_mask_extrude` samples a
+*layer's field*, and a grid has a verb of its own that works from its cells
+without a conversion — so an SDF layer and a voxel layer both extrude, and both
+produce an SDF row, so the operation means one thing whatever it was run on. A
+**mesh layer has neither**: the entry is greyed there, and the reason names the
+way round, which is a crossing to SDF. It was offered on all three and worked
+on one, with the refusal going into a notice nothing displayed — a click that
+did nothing at all.
+
 Three of these took an amount the interface could not set: `Expandir`,
 `Contrair` and `Suavizar máscara` were dispatched with a hard-coded 1, and an
 extrusion with every default it was born with, so its thickness, rounding and
@@ -399,6 +408,83 @@ Every one of these passed every test it had, because the tests asked the *grid*
 whether it had changed and it always had. `visual_voxel_sculpt.rs` asks the
 question a sculptor asks instead — did it appear, does a second stroke move it,
 can the pointer find it.
+
+## The deformation cage
+
+ZBrush spells it the Gizmo Lattice, Blender the Lattice modifier, Maya an FFD.
+All three show the same thing and so does this: a box of control points around
+the model, dragged directly in the viewport, with the form following.
+
+**Dinâmica → Gaiola de deformação** puts one up, sized to what the layer
+actually contains and standing a little proud of it — a corner point buried in
+the clay is not a handle. Drag a point; **Deformar** bends the layer through
+the cage and takes the cage down. Nothing moves until then: a cage is worked
+in, across many pulls, and a form that lurched on every drag could not be aimed.
+
+The whole cage is **one undo** however many points were dragged, because that
+is the unit a sculptor thinks in — they bent the form once. An untouched cage
+is exactly the identity and applying one is a no-op rather than a pass over
+every vertex to move them all by zero.
+
+A press on a control point takes the primary button before the surface does.
+That is not an ordering detail: a control point sits *outside* the form, so a
+press on a corner handle would otherwise find the clay behind it and start a
+stroke on the layer the cage is there to bend.
+
+**Two routes, two ceilings**, and the difference is the mechanism rather than a
+limit someone picked:
+
+| Layer | Route | Points per axis | How |
+|---|---|---|---|
+| Mesh | `clay_mesh_sculptor_lattice` | 2–**32** | Forward. Each vertex evaluated once; nothing inverts, iterates or approximates |
+| SDF | `clay_layer_lattice_gizmo` | 2–**4** | An inverse point map, resolved into one lattice deformer per item and evaluated at every sample |
+| Voxel | — | — | Neither a forward vertex pass nor a deformer stack. The entry is greyed, naming the crossing |
+
+Measured on a unit sphere: pulling the four top corners of a 2×2×2 cage up by
+0.5 takes the mesh's highest point from 0.9999 to 1.4772 — a corner control
+point is interpolated, so dragging one moves that corner of the box exactly.
+The same pull forward on a 4×4×4 field cage takes its reach from 1.000 to
+1.5777.
+
+### The manipulator
+
+A click selects one control point; **Shift-click** adds or removes one without
+disturbing the rest. That is what the manipulator exists for — dragging points
+one at a time needs no widget, and turning a whole face of the cage cannot be
+done without one.
+
+It sits on the **middle of the selection**, not on the last point picked, so
+adding a point moves the widget to where the selection is. One widget with
+three modes — **Mover**, **Girar**, **Escalar**, chosen in the GAIOLA section —
+which is what ZBrush and Maya both settled on: the hand stays where it is and
+the mode is what changes.
+
+Shapes rather than colours alone carry the meaning: an arrow slides, a ring
+turns, a box scales. A person reaching for a handle is not reading a legend,
+and the three axis colours are the one part of this a colour-blind sculptor
+cannot use.
+
+- An **axis** drag is constrained to that axis. Pulling the green arrow means
+  "up", not "up and a little sideways because my hand drifted".
+- The **centre** moves freely in the view plane, and scales uniformly. Rotation
+  has no centre handle: turning about the axis facing the eye is what the outer
+  ring is for, and a second widget meaning the same thing is one more thing to
+  hit by accident.
+- A **scale never passes through zero**, either way. A drag that overshot the
+  pivot would turn the form inside out with no way back but undo.
+- A drag is resolved **from its anchor every frame** rather than accumulated.
+  Transforming what the last frame produced compounds a rotation into a spiral
+  and a scale into a runaway.
+
+An axis drag runs on the plane containing that axis and most nearly facing the
+eye — not on a plane facing the camera outright, which would make an axis
+pointing at the viewer unmovable: the pointer could travel a long way and its
+projection onto the axis would barely change.
+
+Press order in the viewport is **manipulator, then control points, then the
+surface**. The manipulator is drawn over the cage and sits on the selection, and
+the cage sits outside the form; without that order a press on the green arrow
+finds a control point behind it, and a press on a corner handle finds the clay.
 
 ## Crossing between representations
 
@@ -710,6 +796,11 @@ changes it, because that is where a person looks for it.
 
 Panels cannot be resized or collapsed and shortcuts are fixed. See
 [roadmap.md](roadmap.md).
+
+**A manipulator outside the cage.** The move/turn/scale widget acts on a
+lattice selection and on nothing else. Transforming a whole layer with it —
+which is the other thing both references use a gizmo for — has no route here
+yet.
 
 **A brush colour.** Nothing in the application chooses one. The voxel paint and
 erase verbs deposit a fixed clay tone, and the SDF combine list leaves `Pintar`

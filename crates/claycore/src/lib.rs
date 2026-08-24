@@ -39,7 +39,7 @@ pub use brick::{
 };
 pub use brush::{Accumulation, BrushParams, BrushShape, Falloff, StrokePreset, StrokeSample};
 pub use consolidate::{ConsolidationCost, ConsolidationParams, FieldReport};
-pub use document::{prim, ArmatureEdit, Document, Item, LayerId, NodeId};
+pub use document::{prim, ArmatureEdit, Document, GizmoCage, Item, LayerId, NodeId};
 pub use error::{ClayError, ErrorKind, Result};
 pub use mask::{ExtrudeSide, Mask, MaskExtrudeParams, MaskField, MaskRef};
 pub use mesh::{ImportBudget, Mesh, MeshLayerDesc, MeshParams, MeshValidity, Mesher, VertexLayout};

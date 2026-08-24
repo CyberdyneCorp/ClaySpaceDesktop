@@ -18,7 +18,9 @@ pub mod detail;
 pub mod diagnostics;
 pub mod document;
 pub mod exchange;
+pub mod gizmo;
 pub mod instrument;
+pub mod lattice;
 pub mod mask;
 pub mod scene;
 pub mod sculpt;
@@ -38,8 +40,12 @@ pub use document::{DocumentModel, OpenError};
 pub use exchange::{
     ExchangeModel, ExportMesher, ExportSettings, ExportWarning, Format, ImportAs, ImportSettings,
 };
+pub use gizmo::{GizmoDrag, GizmoHandle, GizmoMode};
 pub use instrument::{FrameLog, Stall, FRAME};
-pub use mask::{ExtrudeSettings, ExtrudeSide, MaskModel, MaskOp, MaskState};
+pub use lattice::{
+    can_be_caged, clamp_divisions, division_limit, LatticeModel, LatticeState, MIN_DIVISIONS,
+};
+pub use mask::{can_extrude, ExtrudeSettings, ExtrudeSide, MaskModel, MaskOp, MaskState};
 pub use scene::{
     LayerCost, LayerKey, LayerSummary, Protection, Scene, SceneModel, SceneNode, SculptLayer,
     SculptLayerCost, SculptLayerOp,

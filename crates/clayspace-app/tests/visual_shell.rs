@@ -153,6 +153,8 @@ fn state<'a>(
         },
         extrude: clayspace_model::ExtrudeSettings::default(),
         mask_steps: 1,
+        lattice: clayspace_model::LatticeState::default(),
+        lattice_divisions: [3; 3],
         // A rig, mid-edit, so the capture shows the armature section and the
         // menu entries that depend on it rather than a row of grey.
         armature: clayspace_view::ArmatureState {
@@ -1305,8 +1307,16 @@ fn drag(from: egui::Pos2, to: egui::Pos2) -> Vec<Vec<egui::Event>> {
     ]
 }
 
-/// The Passos slider, in the MÁSCARA section of the inspector.
-const STEPS_SLIDER: egui::Pos2 = egui::Pos2::new(1070.0, 643.0);
+/// Where a named slider's handle is, asked of the interface that drew it.
+///
+/// Not a pixel coordinate: panels grow, and a coordinate that found the Passos
+/// slider found the cage's Pontos por eixo the day a section landed above it.
+fn slider_centre(state: &ShellState<'_>, label: &str) -> egui::Pos2 {
+    probe_shell(state)
+        .memory(|memory| memory.data.get_temp::<egui::Rect>(shell::slider_id(label)))
+        .unwrap_or_else(|| panic!("the inspector drew no slider labelled {label:?}"))
+        .center()
+}
 
 #[test]
 fn the_steps_slider_sets_the_amount() {
@@ -1322,12 +1332,13 @@ fn the_steps_slider_sets_the_amount() {
     let report = diagnostics();
     let mut set = state(strings, &scene, &materials, &report);
     set.mask_steps = 5;
+    let steps = slider_centre(&set, strings.label_mask_steps);
 
     capture_shell_after(
         &harness,
         &set,
         "81-mask-steps",
-        &drag(STEPS_SLIDER, STEPS_SLIDER + egui::vec2(50.0, 0.0)),
+        &drag(steps, steps + egui::vec2(50.0, 0.0)),
         |queue| {
             let steps: Vec<i32> = queue
                 .commands()
@@ -1347,6 +1358,156 @@ fn the_steps_slider_sets_the_amount() {
             assert!(
                 last > 5,
                 "dragging the slider to the right set {last} steps, down from 5"
+            );
+        },
+    );
+}
+
+/// Where the first Extrudar entry falls once the Máscaras menu is open.
+const EXTRUDE_ENTRY: egui::Vec2 = egui::Vec2::new(0.0, 232.0);
+
+#[test]
+fn extrudar_is_offered_on_a_field_and_greyed_on_a_mesh() {
+    // It was offered everywhere and worked on one of the three. On a mesh the
+    // engine refuses — there is no field to sample and no mesh-sculptor
+    // equivalent — and the refusal went into a notice nobody read, so the
+    // entry was a click that did nothing at all.
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let field = state(strings, &scene, &materials, &report);
+    capture_shell_after(
+        &harness,
+        &field,
+        "82-extrude-field",
+        &[
+            left_click(MASKS_MENU),
+            left_click(MASKS_MENU + EXTRUDE_ENTRY),
+        ],
+        |queue| {
+            let extrusions: Vec<&Command> = queue
+                .commands()
+                .iter()
+                .filter(|command| matches!(command, Command::ExtrudeMask(_)))
+                .collect();
+            assert_eq!(
+                extrusions.len(),
+                1,
+                "Extrudar on a field emitted {:?}. See \
+                 target/visual/82-extrude-field.png",
+                queue.commands()
+            );
+        },
+    );
+
+    let mut mesh = state(strings, &scene, &materials, &report);
+    mesh.representation = clayspace_model::Representation::Mesh;
+    capture_shell_after(
+        &harness,
+        &mesh,
+        "83-extrude-mesh",
+        &[
+            left_click(MASKS_MENU),
+            left_click(MASKS_MENU + EXTRUDE_ENTRY),
+        ],
+        |queue| {
+            assert!(
+                queue.commands().is_empty(),
+                "Extrudar was live on a mesh layer and emitted {:?}, which the \
+                 engine refuses. See target/visual/83-extrude-mesh.png",
+                queue.commands()
+            );
+        },
+    );
+}
+
+/// Where the Dinâmica menu sits in the bar, and where its first entry falls.
+const DYNAMICS_MENU: egui::Pos2 = egui::Pos2::new(296.0, 13.0);
+const CAGE_ENTRY: egui::Vec2 = egui::Vec2::new(0.0, 30.0);
+
+#[test]
+fn the_cage_is_raised_from_the_menu_and_worked_in_the_panel() {
+    // Two halves that fail independently: the menu can draw an entry wired to
+    // nothing, and the panel can show a section for a cage that is not up.
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let down = state(strings, &scene, &materials, &report);
+    capture_shell_after(
+        &harness,
+        &down,
+        "90-cage-menu",
+        &[
+            left_click(DYNAMICS_MENU),
+            left_click(DYNAMICS_MENU + CAGE_ENTRY),
+        ],
+        |queue| {
+            assert_eq!(
+                queue.commands(),
+                [Command::ToggleLattice],
+                "the Dinâmica menu's cage entry emitted {:?}. See \
+                 target/visual/90-cage-menu.png",
+                queue.commands()
+            );
+        },
+    );
+
+    // The section is not in the panel until a cage is up: it is where a cage
+    // is *worked*, and one standing there whether or not a cage existed pushed
+    // the sections below it past the bottom of the panel.
+    let bare = capture_shell(&harness, &down, "91-cage-panel-none");
+    let mut up = state(strings, &scene, &materials, &report);
+    up.lattice = clayspace_model::LatticeState {
+        active: true,
+        divisions: [3; 3],
+        points: vec![[0.0; 3]; 27],
+        selection: vec![0],
+        mode: clayspace_model::GizmoMode::Move,
+        touched: true,
+    };
+    let worked = capture_shell(&harness, &up, "92-cage-panel");
+    assert!(
+        differing_pixels(&bare, &worked) > 400,
+        "the inspector drew the same panel with a cage up and without one"
+    );
+
+    // And its own control is reachable, which the mask's stopped being the day
+    // a section landed above it.
+    let divisions = slider_centre(&up, strings.label_cage_divisions);
+    capture_shell_after(
+        &harness,
+        &up,
+        "93-cage-divisions",
+        &drag(divisions, divisions + egui::vec2(40.0, 0.0)),
+        |queue| {
+            let asked: Vec<[i32; 3]> = queue
+                .commands()
+                .iter()
+                .filter_map(|command| match command {
+                    Command::SetLatticeDivisions(divisions) => Some(*divisions),
+                    _ => None,
+                })
+                .collect();
+            let last = asked.last().copied().unwrap_or_else(|| {
+                panic!(
+                    "dragging Pontos por eixo emitted {:?} and no divisions",
+                    queue.commands()
+                )
+            });
+            assert!(
+                last[0] > 3 && last == [last[0]; 3],
+                "the cage was asked for {last:?}, which is not a uniform grid \
+                 finer than the three it was at"
             );
         },
     );

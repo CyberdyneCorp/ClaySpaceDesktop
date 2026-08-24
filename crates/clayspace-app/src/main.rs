@@ -25,8 +25,8 @@ use clayspace_view::{
     Overlays, Renderer, Shortcuts, Strings, SurfaceLoss, Vertex, ViewPreset, WindowSurface,
 };
 use clayspace_vm::{
-    ArmatureViewModel, Axis, Command, CommandQueue, DocumentViewModel, Grab, Guard, MaskViewModel,
-    SceneViewModel, SculptViewModel,
+    ArmatureViewModel, Axis, Command, CommandQueue, DocumentViewModel, Grab, Guard,
+    LatticeViewModel, MaskViewModel, SceneViewModel, SculptViewModel,
 };
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -77,6 +77,22 @@ fn report(policy: &BackendPolicy) {
 const ATTRIBUTION: &str = include_str!("../../../ATTRIBUTION.md");
 
 /// What the pointer is doing.
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn length(v: [f32; 3]) -> f32 {
+    v.iter().map(|c| c * c).sum::<f32>().sqrt()
+}
+
+/// A manipulator drag: which handle, and the plane it runs on as an anchor
+/// and a normal.
+type GizmoGesture = (clayspace_model::GizmoHandle, ([f32; 3], [f32; 3]));
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Drag {
     None,
@@ -85,6 +101,10 @@ enum Drag {
     Pan,
     /// A ZSphere gesture. The plane it runs on is held alongside.
     Rig,
+    /// Dragging a lattice control point, on the plane held alongside.
+    Cage,
+    /// Dragging the manipulator on the selection.
+    Gizmo,
 }
 
 struct App {
@@ -93,6 +113,11 @@ struct App {
     scene: SceneViewModel,
     document_vm: DocumentViewModel,
     mask: MaskViewModel,
+    lattice: LatticeViewModel,
+    /// The plane a lattice drag runs on: an anchor and a normal facing the eye.
+    cage_plane: Option<([f32; 3], [f32; 3])>,
+    /// The manipulator handle in hand, and the plane its drag runs on.
+    gizmo_drag: Option<GizmoGesture>,
     armature: ArmatureViewModel,
     policy: BackendPolicy,
 
@@ -222,11 +247,30 @@ struct Graphics {
 }
 
 impl App {
+    /// A control-point handle, as a fraction of the cage's longest side.
+    ///
+    /// Small enough not to hide the form it wraps, big enough to be a handle.
+    const CAGE_HANDLE: f32 = 0.022;
+    /// How far a manipulator axis reaches, as a multiple of a cage handle.
+    ///
+    /// Long enough to grab without covering the selection it sits on, which is
+    /// what a person is looking at while they aim it.
+    const GIZMO_REACH: f32 = 12.0;
+    /// How wide a manipulator handle's grab radius is, against its reach.
+    const GIZMO_GRAB: f32 = 0.16;
+    /// How much wider than the handle the grab radius is.
+    ///
+    /// Larger than what is drawn on purpose: a handle a person can see and
+    /// cannot hit is worse than one drawn a little small, and this is the same
+    /// slack a pointer target gets everywhere else.
+    const CAGE_GRAB: f32 = 2.2;
+
     fn new(document: SharedDocument, policy: BackendPolicy) -> Self {
         let sculpt = SculptViewModel::new(Box::new(document.clone()));
         let scene = SceneViewModel::new(Box::new(document.clone()));
         let document_vm = DocumentViewModel::new(Box::new(document.clone()), "Sem título");
         let mask = MaskViewModel::new(Box::new(document.clone()));
+        let lattice = LatticeViewModel::new(Box::new(document.clone()));
         let armature = ArmatureViewModel::new(Box::new(document.clone()));
 
         // Read before the marker for this session is written, or every run
@@ -247,6 +291,9 @@ impl App {
             scene,
             document_vm,
             mask,
+            lattice,
+            cage_plane: None,
+            gizmo_drag: None,
             armature,
             policy,
             camera: Camera::default(),
@@ -970,7 +1017,16 @@ impl App {
     /// a shoulder sideways.
     fn on_rig_plane(&self, point: egui::Pos2) -> Option<[f32; 3]> {
         let (anchor, normal) = self.rig_plane?;
-        let (origin, direction) = self.ray_at(point)?;
+        Self::on_plane(self.ray_at(point)?, anchor, normal)
+    }
+
+    /// Where a ray meets a plane given by a point on it and its normal.
+    ///
+    /// Shared by the rig and the cage because it is the same question twice:
+    /// a handle lives in three dimensions, the pointer has two, and the plane
+    /// facing the camera through the handle is the one a person is picturing.
+    fn on_plane(ray: ([f32; 3], [f32; 3]), anchor: [f32; 3], normal: [f32; 3]) -> Option<[f32; 3]> {
+        let (origin, direction) = ray;
         let slope: f32 = (0..3).map(|i| direction[i] * normal[i]).sum();
         if slope.abs() < 1e-6 {
             return None; // Looking along the plane; nothing to meet.
@@ -982,11 +1038,248 @@ impl App {
         if reach <= 0.0 {
             return None; // Behind the eye.
         }
-        Some([
-            origin[0] + direction[0] * reach,
-            origin[1] + direction[1] * reach,
-            origin[2] + direction[2] * reach,
-        ])
+        Some(std::array::from_fn(|i| origin[i] + direction[i] * reach))
+    }
+
+    /// Begins a cage gesture, if the press landed on a control point.
+    ///
+    /// Returns whether it did. A press that misses every handle falls through
+    /// to sculpting or orbiting, so a cage can be looked around without being
+    /// taken down — the same bargain the rig makes.
+    fn begin_cage_drag(&mut self, point: egui::Pos2, add: bool) -> bool {
+        let cage = self.lattice.state().get().clone();
+        if !cage.active {
+            return false;
+        }
+        let Some((origin, direction)) = self.ray_at(point) else {
+            return false;
+        };
+        // The nearest handle to the ray, and only if the ray actually passes
+        // through it. Measured in world units against the handle's own size —
+        // picking in screen space would make a distant cage unusable and a
+        // close one grab points it is nowhere near.
+        let reach = Self::cage_handle(&cage) * Self::CAGE_GRAB;
+        let mut best: Option<(usize, f32)> = None;
+        for (index, position) in cage.points.iter().enumerate() {
+            let to: [f32; 3] = std::array::from_fn(|axis| position[axis] - origin[axis]);
+            let along: f32 = (0..3).map(|axis| to[axis] * direction[axis]).sum();
+            if along <= 0.0 {
+                continue; // Behind the eye.
+            }
+            let miss: f32 = (0..3)
+                .map(|axis| (to[axis] - direction[axis] * along).powi(2))
+                .sum::<f32>()
+                .sqrt();
+            if miss > reach {
+                continue;
+            }
+            // Nearest along the ray rather than nearest to it, so a near
+            // handle wins over a far one the ray happens to graze more
+            // centrally.
+            if best.is_none_or(|(_, closest)| along < closest) {
+                best = Some((index, along));
+            }
+        }
+        let Some((index, _)) = best else {
+            return false;
+        };
+        // The plane the drag runs on: facing the camera, through the handle
+        // that was grabbed. A cage point lives in three dimensions and the
+        // pointer has two, and this is the plane a person is already picturing
+        // when they pull a corner sideways.
+        let normal = [-direction[0], -direction[1], -direction[2]];
+        self.cage_plane = Some((cage.points[index], normal));
+        // Held, the press adds to the selection rather than replacing it —
+        // which is the only way to build the several-point selection the
+        // manipulator exists to transform. No drag follows an adding press:
+        // the point that was just added is not necessarily the one in hand.
+        if add {
+            self.handle(Command::ToggleLatticePoint(index));
+            self.cage_plane = None;
+            return true;
+        }
+        self.handle(Command::SelectLatticePoint(Some(index)));
+        true
+    }
+
+    /// Begins a manipulator drag, if the press landed on one of its handles.
+    ///
+    /// Before the control points, because the manipulator is drawn over them
+    /// and sits on the selection: a press on the green arrow would otherwise
+    /// find whichever control point happens to be behind it.
+    fn begin_gizmo_drag(&mut self, point: egui::Pos2) -> bool {
+        let cage = self.lattice.state().get().clone();
+        let Some(pivot) = cage.pivot().filter(|_| cage.active) else {
+            return false;
+        };
+        let Some(ray) = self.ray_at(point) else {
+            return false;
+        };
+        let reach = Self::cage_handle(&cage) * Self::GIZMO_REACH;
+        let Some(handle) = Self::handle_under(&cage, pivot, reach, ray) else {
+            return false;
+        };
+        // The plane the drag runs on. An axis handle uses the plane containing
+        // that axis and most nearly facing the eye — a plane facing the camera
+        // outright would make an axis pointing at the viewer unmovable, since
+        // the pointer could travel a long way and the projection onto the axis
+        // would barely change.
+        let (_, direction) = ray;
+        let facing = [-direction[0], -direction[1], -direction[2]];
+        let normal = match handle.axis() {
+            Some(axis) => {
+                let side = cross(axis, facing);
+                let normal = cross(side, axis);
+                if length(normal) < 1e-4 {
+                    facing
+                } else {
+                    normal
+                }
+            }
+            None => facing,
+        };
+        let Some(anchor) = Self::on_plane(ray, pivot, normal) else {
+            return false;
+        };
+        self.gizmo_drag = Some((handle, (pivot, normal)));
+        self.handle(Command::BeginGizmoDrag(handle, anchor));
+        true
+    }
+
+    /// Which handle a ray passes through, if any.
+    ///
+    /// The nearest along the ray wins, so a handle in front takes a press over
+    /// one behind it — which is what a person aiming at what they can see
+    /// expects.
+    fn handle_under(
+        cage: &clayspace_model::LatticeState,
+        pivot: [f32; 3],
+        reach: f32,
+        ray: ([f32; 3], [f32; 3]),
+    ) -> Option<clayspace_model::GizmoHandle> {
+        use clayspace_model::GizmoHandle;
+        let slack = reach * Self::GIZMO_GRAB;
+        let mut best: Option<(GizmoHandle, f32)> = None;
+        let mut consider = |handle: GizmoHandle, at: [f32; 3], radius: f32| {
+            if let Some(along) = Self::ray_hits(ray, at, radius) {
+                if best.is_none_or(|(_, closest)| along < closest) {
+                    best = Some((handle, along));
+                }
+            }
+        };
+
+        for index in 0..3 {
+            let handle = GizmoHandle::Axis(index);
+            let Some(axis) = handle.axis() else { continue };
+            if cage.mode == clayspace_model::GizmoMode::Rotate {
+                // A ring is grabbed anywhere along it, so several points
+                // around it are tested rather than one — a ring tested only at
+                // its four cardinal points is a ring with four handles.
+                for step in 0..16 {
+                    let angle = step as f32 / 16.0 * std::f32::consts::TAU;
+                    let (u, v) = ((index + 1) % 3, (index + 2) % 3);
+                    let mut at = pivot;
+                    at[u] += angle.cos() * reach;
+                    at[v] += angle.sin() * reach;
+                    consider(handle, at, slack);
+                }
+                continue;
+            }
+            // The tip, which is where the arrowhead or the box is and where a
+            // person aims. Grabbing the shaft anywhere along it would take
+            // presses meant for the control points it passes over.
+            let tip = std::array::from_fn(|i| pivot[i] + axis[i] * reach);
+            consider(handle, tip, slack);
+        }
+        if cage.mode != clayspace_model::GizmoMode::Rotate {
+            consider(GizmoHandle::Centre, pivot, slack);
+        }
+        best.map(|(handle, _)| handle)
+    }
+
+    /// How far along a ray a sphere is hit, if it is.
+    fn ray_hits(ray: ([f32; 3], [f32; 3]), centre: [f32; 3], radius: f32) -> Option<f32> {
+        let (origin, direction) = ray;
+        let to: [f32; 3] = std::array::from_fn(|i| centre[i] - origin[i]);
+        let along: f32 = (0..3).map(|i| to[i] * direction[i]).sum();
+        if along <= 0.0 {
+            return None; // Behind the eye.
+        }
+        let miss: f32 = (0..3)
+            .map(|i| (to[i] - direction[i] * along).powi(2))
+            .sum::<f32>()
+            .sqrt();
+        (miss <= radius).then_some(along)
+    }
+
+    /// Where a pointer ray meets the plane the manipulator drag runs on.
+    fn on_gizmo_plane(&self, point: egui::Pos2) -> Option<[f32; 3]> {
+        let (_, (anchor, normal)) = self.gizmo_drag?;
+        Self::on_plane(self.ray_at(point)?, anchor, normal)
+    }
+
+    /// Where a pointer ray meets the plane a cage drag runs on.
+    fn on_cage_plane(&self, point: egui::Pos2) -> Option<[f32; 3]> {
+        let (anchor, normal) = self.cage_plane?;
+        Self::on_plane(self.ray_at(point)?, anchor, normal)
+    }
+
+    /// How big a control-point handle is, in world units.
+    ///
+    /// From the cage's own extent rather than fixed, so a cage around a
+    /// thumbnail and one around a bust both get a handle a person can hit.
+    fn cage_handle(cage: &clayspace_model::LatticeState) -> f32 {
+        let mut min = [f32::MAX; 3];
+        let mut max = [f32::MIN; 3];
+        for point in &cage.points {
+            for axis in 0..3 {
+                min[axis] = min[axis].min(point[axis]);
+                max[axis] = max[axis].max(point[axis]);
+            }
+        }
+        let span = (0..3)
+            .map(|axis| max[axis] - min[axis])
+            .fold(0.0f32, f32::max);
+        (span * Self::CAGE_HANDLE).max(1e-4)
+    }
+
+    /// Brings the viewport's copy of the cage up to date.
+    fn sync_lattice_view(&mut self) {
+        let cage = self.lattice.state().get().clone();
+        let Some(graphics) = self.graphics.as_mut() else {
+            return;
+        };
+        let gpu = graphics.gpu.clone();
+        if !cage.active {
+            graphics.renderer.set_lattice(
+                &gpu,
+                clayspace_view::LatticeView {
+                    points: &[],
+                    edges: &[],
+                    selected: &[],
+                    gizmo: None,
+                    handle: 0.0,
+                },
+            );
+            return;
+        }
+        let edges = cage.edges();
+        let handle = Self::cage_handle(&cage);
+        graphics.renderer.set_lattice(
+            &gpu,
+            clayspace_view::LatticeView {
+                points: &cage.points,
+                edges: &edges,
+                selected: &cage.selection,
+                gizmo: cage.pivot().map(|pivot| clayspace_view::GizmoView {
+                    pivot,
+                    mode: cage.mode,
+                    reach: handle * Self::GIZMO_REACH,
+                    hovered: self.gizmo_drag.map(|(handle, _)| handle),
+                }),
+                handle,
+            },
+        );
     }
 
     /// Begins a rig gesture, if the press landed on a sphere.
@@ -1316,6 +1609,16 @@ impl App {
                     // seams — and once per gesture, with the pointer up.
                     self.settle_geometry();
                 }
+                Drag::Gizmo => {
+                    self.gizmo_drag = None;
+                    self.handle(Command::EndGizmoDrag);
+                }
+                Drag::Cage => {
+                    // The cage keeps its selection with the pointer up, so the
+                    // point just dragged stays the one in hand — a sculptor
+                    // adjusting a corner does it in several pulls, not one.
+                    self.cage_plane = None;
+                }
                 _ => {}
             }
             self.drag = Drag::None;
@@ -1330,9 +1633,24 @@ impl App {
             let rigged = self.rigging
                 && button == egui::PointerButton::Primary
                 && self.begin_rig(point, input);
-            let on_surface = !rigged && self.pick_at(point).is_some();
+            // The manipulator before the control points, because it is drawn
+            // over them and sits on the selection: a press on the green arrow
+            // would otherwise find whichever point happens to be behind it.
+            let manipulated =
+                !rigged && button == egui::PointerButton::Primary && self.begin_gizmo_drag(point);
+            // And both before the surface is asked about, because a control
+            // point sits *outside* the form: a press on a corner handle would
+            // otherwise find the clay behind it and start a stroke on the
+            // layer the cage is there to bend.
+            let caged = !rigged
+                && !manipulated
+                && button == egui::PointerButton::Primary
+                && self.begin_cage_drag(point, input.smooth_modifier);
+            let on_surface = !rigged && !manipulated && !caged && self.pick_at(point).is_some();
             let started = match button {
                 _ if rigged => Drag::Rig,
+                _ if manipulated => Drag::Gizmo,
+                _ if caged => Drag::Cage,
                 egui::PointerButton::Middle => Drag::Pan,
                 egui::PointerButton::Secondary => Drag::Orbit,
                 // On the surface it sculpts; off it, it orbits. That is
@@ -1363,6 +1681,16 @@ impl App {
                 Drag::Sculpt => {
                     if let Some(point) = input.pointer {
                         self.stroke_at(point, false, StrokeModifiers::default());
+                    }
+                }
+                Drag::Gizmo => {
+                    if let Some(at) = input.pointer.and_then(|point| self.on_gizmo_plane(point)) {
+                        self.handle(Command::DragGizmo(at));
+                    }
+                }
+                Drag::Cage => {
+                    if let Some(at) = input.pointer.and_then(|point| self.on_cage_plane(point)) {
+                        self.handle(Command::DragLatticePoint(at));
                     }
                 }
                 Drag::Rig => {
@@ -1543,6 +1871,11 @@ impl App {
             eprintln!("{e}");
         }
         self.mask.dispatch(&command);
+        // The representation is handed in rather than looked up: a cage's
+        // resolution ceiling is the layer's, and the ViewModel may not reach
+        // past its own interface to ask.
+        self.lattice
+            .dispatch(&command, self.sculpt.active_representation());
         // A rig belongs to a layer, so choosing another layer changes which
         // one — or whether there is one at all.
         match &command {
@@ -1701,6 +2034,8 @@ impl App {
             show_attribution: self.show_attribution,
             extrude: *self.mask.extrude_settings().get(),
             mask_steps: *self.mask.steps().get(),
+            lattice: self.lattice.state().get().clone(),
+            lattice_divisions: *self.lattice.divisions().get(),
             document_name: document_name.as_str(),
             modified: *self.document_vm.modified().get(),
             tool: *self.sculpt.tool().get(),
@@ -1708,7 +2043,18 @@ impl App {
             brush: *self.sculpt.brush().get(),
             combine: *self.sculpt.combine().get(),
             alpha: alpha_name.as_deref(),
-            tool_status: self.sculpt.tool_status().get().as_deref(),
+            // The options bar's one "why that did not happen" line, shared.
+            //
+            // A mask refusal used to be written into an Observable nobody
+            // read, so extruding on a layer that has no field to extrude from
+            // did nothing at all and said nothing at all. The mask's notice
+            // comes first because it is raised by an explicit action, where a
+            // tool status is a standing condition.
+            tool_status: self.mask.notice().get().as_deref().or(self
+                .sculpt
+                .tool_status()
+                .get()
+                .as_deref()),
             symmetry: *self.sculpt.symmetry().get(),
             scene: &scene,
             renaming: self
@@ -1816,6 +2162,7 @@ impl App {
         });
         self.sync_mesh_layers();
         self.sync_mask();
+        self.sync_lattice_view();
         self.sync_symmetry_overlay();
         self.sync_armature_view();
         // After the frame's commands, so a camera move made in it is the one

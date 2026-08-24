@@ -150,3 +150,53 @@ Each menu entry SHALL show the amount it would apply.
 #### Scenario: An operation with no amount is left alone
 - **WHEN** an amount is set and Inverter is chosen
 - **THEN** the operation carries no amount
+
+### Requirement: A deformation cage bends the whole form
+The application SHALL offer a lattice cage around the active layer, sized to
+what that layer contains, with control points drawn in the viewport and
+draggable directly.
+
+The cage SHALL be worked in rather than applied per drag: the form follows when
+the cage is applied, and the whole cage SHALL be one undo step however many
+control points were dragged.
+
+The cage SHALL be offered wherever the engine has a route for it, at the
+resolution that route accepts, and refused readably where it has none.
+
+#### Scenario: A cage wraps the form and bends it
+- **WHEN** a cage is put around a layer and its top control points are dragged up
+- **AND** the cage is applied
+- **THEN** the top of the form has moved by the same amount
+- **AND** one undo puts it back
+
+#### Scenario: An untouched cage changes nothing
+- **WHEN** a cage is put up and applied without dragging anything
+- **THEN** the form is unchanged and no history entry is recorded
+
+#### Scenario: A layer with no lattice route says so
+- **WHEN** a cage is asked for on a voxel layer
+- **THEN** it is refused with a reason naming the crossing that would work
+
+### Requirement: A manipulator transforms a selection of control points
+The application SHALL let a sculptor select more than one lattice control point
+and move, turn or scale the selection with one manipulator.
+
+The manipulator SHALL sit on the middle of the selection, and an axis handle
+SHALL constrain its drag to that axis.
+
+A drag SHALL be resolved from where it started rather than accumulated across
+frames, and a scale SHALL never pass through zero.
+
+#### Scenario: A whole face is moved at once
+- **WHEN** the four control points of a cage's face are selected
+- **AND** the manipulator's vertical axis is dragged up
+- **THEN** all four move up together and none moves sideways
+
+#### Scenario: A turn is about the selection's own middle
+- **WHEN** a selection is turned a quarter about an axis
+- **THEN** each point ends a quarter turn about the selection's middle
+- **AND** nothing moves along the axis turned about
+
+#### Scenario: A wandering drag lands where it ends
+- **WHEN** a drag passes through an intermediate point before settling
+- **THEN** the result is the same as a drag straight to where it settled

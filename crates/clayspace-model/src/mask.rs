@@ -6,6 +6,7 @@
 //! of their own rather than more entries in [`crate::tools::ToolKind`].
 
 use crate::sculpt::ModelError;
+use crate::Representation;
 
 /// Which way a masked patch is pulled when it is extruded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -68,6 +69,17 @@ impl ExtrudeSettings {
             border_smooth: self.border_smooth.clamp(0, 16),
         }
     }
+}
+
+/// Whether the masked patch of a layer of this representation can be pulled off
+/// as a wall.
+///
+/// A field is sampled and a grid has a verb of its own; a mesh has neither, and
+/// the engine refuses it with "this layer has no field to extrude from". Asked
+/// before the entry is offered, so what a sculptor meets is a grey menu item
+/// with a reason rather than a click that does nothing — which is what it was.
+pub fn can_extrude(representation: Representation) -> bool {
+    !matches!(representation, Representation::Mesh)
 }
 
 /// What can be done to a mask, as opposed to through one.

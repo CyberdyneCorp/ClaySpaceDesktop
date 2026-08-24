@@ -302,6 +302,16 @@ impl SculptViewModel {
             | Command::ToggleZsphereNegative
             | Command::SetSkinThickness(_)
             | Command::ApplyMaskOp(_)
+            | Command::ToggleLattice
+            | Command::SetLatticeDivisions(_)
+            | Command::SelectLatticePoint(_)
+            | Command::ToggleLatticePoint(_)
+            | Command::SetGizmoMode(_)
+            | Command::BeginGizmoDrag(..)
+            | Command::DragGizmo(_)
+            | Command::EndGizmoDrag
+            | Command::DragLatticePoint(_)
+            | Command::ApplyLattice
             | Command::SetMaskSteps(_)
             | Command::SetExtrudeSettings(_)
             | Command::ExtrudeMask(_)

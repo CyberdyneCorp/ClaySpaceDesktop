@@ -12,6 +12,7 @@ use crate::camera::Camera;
 use crate::gpu::{Framebuffer, Gpu};
 use crate::matcap::MatCap;
 use crate::palette;
+use clayspace_model::{GizmoHandle, GizmoMode};
 
 /// One vertex, in the layout the shader and the engine's copy both use.
 ///
@@ -344,6 +345,44 @@ pub struct ArmatureView<'a> {
     pub root: Option<u32>,
 }
 
+/// The lattice cage, as the viewport draws it.
+///
+/// Positions rather than a box and divisions, because the whole point of a
+/// cage is that its points have been *moved* — a box would draw the cage as it
+/// was before the sculptor touched it.
+pub struct LatticeView<'a> {
+    /// Every control point, x fastest.
+    pub points: &'a [[f32; 3]],
+    /// Index pairs joined by a cage edge.
+    pub edges: &'a [(u32, u32)],
+    /// Which control points are in hand.
+    pub selected: &'a [usize],
+    /// The manipulator on that selection, when there is one.
+    pub gizmo: Option<GizmoView>,
+    /// How big a control point handle is, in world units.
+    ///
+    /// Handed in rather than fixed, because a cage around a thumbnail and one
+    /// around a bust want the same handle *on screen* and the model's units do
+    /// not know which it is.
+    pub handle: f32,
+}
+
+/// The manipulator on the selection.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GizmoView {
+    /// Where it sits: the middle of the selection.
+    pub pivot: [f32; 3],
+    pub mode: GizmoMode,
+    /// How long an axis is, in world units.
+    ///
+    /// Handed in for the reason the control-point handle is: a manipulator on
+    /// a thumbnail and one on a bust want the same size to the hand, and the
+    /// model's units do not know which it is.
+    pub reach: f32,
+    /// The handle under the pointer or being dragged, drawn brighter.
+    pub hovered: Option<GizmoHandle>,
+}
+
 /// Which plane the symmetry indicator sits on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymmetryAxis {
@@ -408,6 +447,8 @@ pub struct Renderer {
     cursor_mesh: GpuMesh,
     /// The ZSphere rig, drawn over the surface it skins.
     armature_mesh: GpuMesh,
+    /// The lattice cage's edges and control-point handles.
+    lattice_mesh: GpuMesh,
     /// The translucent skin between the spheres, drawn while rigging.
     membrane_mesh: GpuMesh,
     membrane_pipeline: wgpu::RenderPipeline,
@@ -687,6 +728,7 @@ impl Renderer {
             mesh_layers: GpuMesh::new(gpu),
             cursor_mesh: GpuMesh::new(gpu),
             armature_mesh: GpuMesh::new(gpu),
+            lattice_mesh: GpuMesh::new(gpu),
             membrane_mesh: GpuMesh::new(gpu),
             scene_viewport: None,
             gizmo_mesh: {
@@ -757,6 +799,17 @@ impl Renderer {
             .upload(gpu, &membrane_vertices, &membrane_indices);
         let (vertices, indices) = armature_geometry(view);
         self.armature_mesh.upload(gpu, &vertices, &indices);
+    }
+
+    /// The lattice cage, drawn over the form it wraps.
+    ///
+    /// Lines for the cage and a small box at every control point, in the same
+    /// overlay pass the rig uses: both are scaffolding rather than clay, and
+    /// scaffolding that is occluded by the thing it annotates is not
+    /// scaffolding.
+    pub fn set_lattice(&mut self, gpu: &Gpu, view: LatticeView<'_>) {
+        let (vertices, indices) = lattice_geometry(view);
+        self.lattice_mesh.upload(gpu, &vertices, &indices);
     }
 
     /// Confines the scene to a rectangle of the frame, in physical pixels.
@@ -1003,6 +1056,16 @@ impl Renderer {
                     wgpu::IndexFormat::Uint32,
                 );
                 pass.draw_indexed(0..self.armature_mesh.index_count, 0, 0..1);
+            }
+
+            if !self.lattice_mesh.is_empty() {
+                pass.set_pipeline(&self.overlay_pipeline);
+                pass.set_vertex_buffer(0, self.lattice_mesh.vertices.slice(..));
+                pass.set_index_buffer(
+                    self.lattice_mesh.indices.slice(..),
+                    wgpu::IndexFormat::Uint32,
+                );
+                pass.draw_indexed(0..self.lattice_mesh.index_count, 0, 0..1);
             }
 
             // The navigation gizmo, in its own corner viewport so it keeps a
@@ -1632,6 +1695,160 @@ fn membrane_geometry(view: &ArmatureView<'_>) -> (Vec<Vertex>, Vec<u32>) {
 ///
 /// Three rings rather than one: a single ring lies in the view plane and a rig
 /// then reads as flat, which is exactly the information a rig has to convey.
+/// The cage: a line along every edge, and a box at every control point.
+///
+/// Line topology, drawn by the overlay pipeline. The handles are boxes rather
+/// than spheres because a box reads as a *handle* — something to grab — where a
+/// sphere at this size reads as a bead on a wire, and because twelve lines cost
+/// what one sphere's ring costs.
+/// The three axis colours, which every application that has a manipulator
+/// spells the same way: x red, y green, z blue.
+const AXIS_COLOURS: [[f32; 3]; 3] = [[0.85, 0.24, 0.24], [0.36, 0.76, 0.30], [0.28, 0.45, 0.88]];
+
+/// The manipulator: three axes and, where the mode has one, a centre.
+///
+/// Line topology like the cage, and shapes rather than colours alone carry the
+/// meaning — an arrow slides, a ring turns, a box scales — because a person
+/// reaching for a handle is not reading a legend, and because the three
+/// colours are the one part of this a colour-blind sculptor cannot use.
+fn gizmo_geometry_for(view: GizmoView, segment: &mut impl FnMut(Vec3, Vec3, [f32; 3])) {
+    const RING_SEGMENTS: usize = 40;
+    let pivot = Vec3::from(view.pivot);
+    let lit = |handle: GizmoHandle, base: [f32; 3]| {
+        if view.hovered == Some(handle) {
+            [1.0, 0.85, 0.4]
+        } else {
+            base
+        }
+    };
+
+    for index in 0..3 {
+        let handle = GizmoHandle::Axis(index);
+        let colour = lit(handle, AXIS_COLOURS[index]);
+        let mut unit = Vec3::ZERO;
+        unit[index] = 1.0;
+        let (u, v) = ((index + 1) % 3, (index + 2) % 3);
+        let mut across = Vec3::ZERO;
+        across[u] = 1.0;
+        let mut other = Vec3::ZERO;
+        other[v] = 1.0;
+
+        match view.mode {
+            GizmoMode::Rotate => {
+                // A ring in the plane perpendicular to the axis: what turns
+                // about it.
+                for step in 0..RING_SEGMENTS {
+                    let angle =
+                        |at: usize| at as f32 / RING_SEGMENTS as f32 * std::f32::consts::TAU;
+                    let at = |a: f32| pivot + (across * a.cos() + other * a.sin()) * view.reach;
+                    segment(at(angle(step)), at(angle(step + 1)), colour);
+                }
+            }
+            mode => {
+                let tip = pivot + unit * view.reach;
+                segment(pivot, tip, colour);
+                if mode == GizmoMode::Move {
+                    // An arrowhead: four lines back from the tip, which reads
+                    // as a direction from any angle.
+                    let head = view.reach * 0.18;
+                    for corner in 0..4 {
+                        let (s, c) = (corner as f32 / 4.0 * std::f32::consts::TAU).sin_cos();
+                        segment(
+                            tip,
+                            tip - unit * head + (across * c + other * s) * head * 0.5,
+                            colour,
+                        );
+                    }
+                } else {
+                    // A box: what scales.
+                    let box_size = view.reach * 0.08;
+                    cube(tip, box_size, colour, segment);
+                }
+            }
+        }
+    }
+
+    if let Some(handle) = GizmoHandle::all_for(view.mode)
+        .into_iter()
+        .find(|handle| *handle == GizmoHandle::Centre)
+    {
+        // A square facing no particular way, drawn on all three planes so it
+        // reads as a centre from any angle rather than vanishing edge-on.
+        let colour = lit(handle, [0.82, 0.78, 0.42]);
+        let size = view.reach * 0.14;
+        cube(pivot, size, colour, segment);
+    }
+}
+
+/// The twelve edges of a cube, spelled as the four along each axis.
+fn cube(centre: Vec3, size: f32, colour: [f32; 3], segment: &mut impl FnMut(Vec3, Vec3, [f32; 3])) {
+    for axis in 0..3 {
+        let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+        for corner in 0..4 {
+            let mut from = [0.0f32; 3];
+            from[u] = if corner & 1 == 0 { -size } else { size };
+            from[v] = if corner & 2 == 0 { -size } else { size };
+            from[axis] = -size;
+            let mut to = from;
+            to[axis] = size;
+            segment(centre + Vec3::from(from), centre + Vec3::from(to), colour);
+        }
+    }
+}
+
+fn lattice_geometry(view: LatticeView<'_>) -> (Vec<Vertex>, Vec<u32>) {
+    let mut vertices: Vec<Vertex> = Vec::new();
+    let mut indices: Vec<u32> = Vec::new();
+
+    let mut segment = |from: Vec3, to: Vec3, color: [f32; 3]| {
+        let base = vertices.len() as u32;
+        for position in [from, to] {
+            vertices.push(Vertex {
+                position: position.into(),
+                normal: [0.0, 1.0, 0.0],
+                color,
+                mask: 0.0,
+            });
+        }
+        indices.push(base);
+        indices.push(base + 1);
+    };
+
+    // The cage itself, quiet: it is a frame of reference, and a bright one
+    // would compete with the form it is wrapped around.
+    const CAGE: [f32; 3] = [0.62, 0.45, 0.28];
+    const POINT: [f32; 3] = [0.78, 0.60, 0.38];
+    const SELECTED: [f32; 3] = [1.0, 0.72, 0.30];
+
+    for (from, to) in view.edges {
+        let (Some(a), Some(b)) = (
+            view.points.get(*from as usize),
+            view.points.get(*to as usize),
+        ) else {
+            continue;
+        };
+        segment(Vec3::from(*a), Vec3::from(*b), CAGE);
+    }
+
+    for (index, point) in view.points.iter().enumerate() {
+        let selected = view.selected.binary_search(&index).is_ok();
+        let color = if selected { SELECTED } else { POINT };
+        // Bigger when it is the one in hand, so which point is being dragged
+        // is legible without reading the colour — which a sculptor looking at
+        // the form is not doing.
+        let size = view.handle * if selected { 1.6 } else { 1.0 };
+        let centre = Vec3::from(*point);
+        cube(centre, size, color, &mut segment);
+    }
+
+    // The manipulator last, so it draws over the cage it acts on.
+    if let Some(gizmo) = view.gizmo {
+        gizmo_geometry_for(gizmo, &mut segment);
+    }
+
+    (vertices, indices)
+}
+
 fn armature_geometry(view: ArmatureView<'_>) -> (Vec<Vertex>, Vec<u32>) {
     const SEGMENTS: usize = 24;
     /// How far outside the skin the hoops sit.
