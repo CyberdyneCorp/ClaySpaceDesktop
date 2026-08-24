@@ -58,18 +58,7 @@ fn surface(document: &mut ClayDocument) -> (Vec<Vertex>, Vec<u32>) {
 
 /// The handle size the application computes, spelled the same way.
 fn handle(cage: &LatticeState) -> f32 {
-    let mut min = [f32::MAX; 3];
-    let mut max = [f32::MIN; 3];
-    for point in &cage.points {
-        for axis in 0..3 {
-            min[axis] = min[axis].min(point[axis]);
-            max[axis] = max[axis].max(point[axis]);
-        }
-    }
-    (0..3)
-        .map(|axis| max[axis] - min[axis])
-        .fold(0.0f32, f32::max)
-        * 0.022
+    cage.rest_span * 0.022
 }
 
 fn how_many_differ(a: &Image, b: &Image) -> usize {
@@ -524,5 +513,101 @@ fn the_preview_tracks_what_the_engine_will_actually_do() {
          at {actual}, which is {:.0}% of the drag — a preview is allowed an \
          error budget an edit is not, but not that one",
         error * 100.0
+    );
+}
+
+// -- what a cage takes over --------------------------------------------------
+//
+// Three things reported from using it. A cage is a mode, and none of these was
+// treating it as one.
+
+#[test]
+fn the_form_is_drawn_through_while_a_cage_is_up() {
+    // Half the control points are behind the form, and a solid surface hides
+    // exactly the handles that need reaching. Blender's X-ray and ZBrush's
+    // Ghost do the same thing for the same reason.
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let Some(mut document) = meshed() else {
+        return;
+    };
+    let camera = framed(&document);
+    let (vertices, indices) = surface(&mut document);
+    let mut mesh = clayspace_view::GpuMesh::new(&harness.gpu);
+    mesh.upload(&harness.gpu, &vertices, &indices);
+
+    document.begin_lattice([2, 2, 2]).expect("a cage");
+    let cage = document.lattice();
+    let edges = cage.edges();
+    let with_cage = |harness: &mut Harness, ghosted: bool, name: &str| {
+        harness.renderer.set_ghosted(ghosted);
+        harness.renderer.set_lattice(
+            &harness.gpu,
+            LatticeView {
+                points: &cage.points,
+                edges: &edges,
+                selected: &[],
+                gizmo: None,
+                handle: handle(&cage),
+            },
+        );
+        harness.capture(&mesh, &camera, false, name)
+    };
+    let solid = with_cage(&mut harness, false, "105-cage-solid");
+    let ghosted = with_cage(&mut harness, true, "106-cage-ghosted");
+    harness.renderer.set_ghosted(false);
+
+    let changed = how_many_differ(&solid, &ghosted);
+    assert!(
+        changed > 4000,
+        "the form was drawn the same way with a cage up and without one, so \
+         the control points behind it are still hidden ({changed} pixels). See \
+         target/visual/106-cage-ghosted.png"
+    );
+
+    // Seen through, not turned off: the form is still readable as a form.
+    let ground = ghosted.pixel(4, 4);
+    let visible = ghosted
+        .pixels
+        .chunks_exact(4)
+        .filter(|p| (0..3).any(|c| p[c].abs_diff(ground[c]) > 12))
+        .count();
+    let was = solid
+        .pixels
+        .chunks_exact(4)
+        .filter(|p| (0..3).any(|c| p[c].abs_diff(ground[c]) > 12))
+        .count();
+    assert!(
+        visible as f64 > was as f64 * 0.8,
+        "the ghosted form covers {visible} pixels against {was} solid, which \
+         is a surface turned off rather than one seen through"
+    );
+}
+
+#[test]
+fn a_handle_keeps_its_size_when_another_point_is_dragged() {
+    // Reported: selecting a point and moving it made every other handle grow.
+    // The size came from the cage's *current* extent, so hauling one corner
+    // out inflated the whole set — and the targets a sculptor was aiming at
+    // swelled under the pointer as they worked.
+    let Some(mut document) = meshed() else {
+        return;
+    };
+    document.begin_lattice([2, 2, 2]).expect("a cage");
+    let before = handle(&document.lattice());
+
+    let cage = document.lattice();
+    document.select_lattice_point(Some(7));
+    let point = cage.points[7];
+    document
+        .drag_lattice_point([point[0] + 3.0, point[1] + 3.0, point[2] + 3.0])
+        .expect("the drag was refused");
+
+    let after = handle(&document.lattice());
+    assert!(
+        (after - before).abs() < 1e-6,
+        "a corner hauled three units out took the handle size from {before} to \
+         {after}"
     );
 }

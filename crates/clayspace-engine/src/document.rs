@@ -4127,6 +4127,9 @@ impl LatticeModel for ClayDocument {
                 .collect(),
             selection: cage.selection.clone(),
             mode: cage.mode,
+            rest_span: (0..3)
+                .map(|axis| cage.max[axis] - cage.min[axis])
+                .fold(0.0f32, f32::max),
             touched: !cage.is_identity(),
         }
     }

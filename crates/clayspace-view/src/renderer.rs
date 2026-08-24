@@ -452,6 +452,9 @@ pub struct Renderer {
     /// The translucent skin between the spheres, drawn while rigging.
     membrane_mesh: GpuMesh,
     membrane_pipeline: wgpu::RenderPipeline,
+    /// The surface drawn through, while a deformation cage is up.
+    ghost_pipeline: wgpu::RenderPipeline,
+    ghosted: bool,
     /// The rectangle of the frame the scene is drawn into, in physical pixels.
     scene_viewport: Option<[f32; 4]>,
     gizmo_mesh: GpuMesh,
@@ -701,6 +704,19 @@ impl Renderer {
         );
 
         Self {
+            // Uncalled: no back-face culling and so no depth write, which is
+            // what lets the far half of the cage read through the form.
+            ghost_pipeline: make_pipeline(
+                gpu,
+                &layout,
+                &shader,
+                format,
+                "vs_main",
+                "fs_ghost",
+                wgpu::PrimitiveTopology::TriangleList,
+                false,
+            ),
+            ghosted: false,
             pipeline,
             overlay_pipeline,
             wire_pipeline,
@@ -839,6 +855,14 @@ impl Renderer {
     pub fn set_mesh_layers(&mut self, gpu: &Gpu, vertices: &[Vertex], indices: &[u32]) {
         self.mesh_layers.upload(gpu, vertices, indices);
         self.upload_edges(gpu, indices);
+    }
+
+    /// Whether the surface is drawn through.
+    ///
+    /// On while a deformation cage is up: the sculptor is aiming at control
+    /// points, and half of them are behind the form.
+    pub fn set_ghosted(&mut self, on: bool) {
+        self.ghosted = on;
     }
 
     /// Whether the mesh layers are drawn with their own edges over them.
@@ -995,8 +1019,17 @@ impl Renderer {
                 pass.draw_indexed(0..self.overlay_mesh.index_count, 0, 0..1);
             }
 
+            // Through, while a cage is up. One choice for both the surface and
+            // the mesh layers: a document with one of each half solid and half
+            // ghosted would read as two objects.
+            let surface = if self.ghosted {
+                &self.ghost_pipeline
+            } else {
+                &self.pipeline
+            };
+
             if !mesh.is_empty() {
-                pass.set_pipeline(&self.pipeline);
+                pass.set_pipeline(surface);
                 pass.set_vertex_buffer(0, mesh.vertices.slice(..));
                 pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..mesh.index_count, 0, 0..1);
@@ -1007,7 +1040,7 @@ impl Renderer {
             // occlusion as everything else. Drawn after the surface only
             // because the depth test settles which is in front.
             if !self.mesh_layers.is_empty() {
-                pass.set_pipeline(&self.pipeline);
+                pass.set_pipeline(surface);
                 pass.set_vertex_buffer(0, self.mesh_layers.vertices.slice(..));
                 pass.set_index_buffer(
                     self.mesh_layers.indices.slice(..),

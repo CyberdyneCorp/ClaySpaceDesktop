@@ -111,6 +111,26 @@ fn membrane_fs(input: OverlayOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(input.color.rgb, 0.30);
 }
 
+// The same surface, drawn through. While a deformation cage is up the sculptor
+// is aiming at control points, and half of them are behind the form — a solid
+// surface hides exactly the handles that need reaching. Blender's X-ray and
+// ZBrush's Ghost do the same thing for the same reason.
+//
+// The alpha is high enough that the form is still readable as a form: this is
+// a surface seen through, not a surface turned off.
+const GHOST_ALPHA: f32 = 0.42;
+
+@fragment
+fn fs_ghost(input: VertexOutput) -> @location(0) vec4<f32> {
+    let n = normalize(input.view_normal);
+    let uv = vec2<f32>(n.x * 0.5 + 0.5, 0.5 - n.y * 0.5);
+    let lit = textureSample(matcap_texture, matcap_sampler, uv).rgb;
+    let modulation = mix(vec3<f32>(1.0), input.color, material.tint.a);
+    let shaded = lit * material.tint.rgb * modulation;
+    let frozen = clamp(input.mask, 0.0, 1.0) * MASK_STRENGTH;
+    return vec4<f32>(mix(shaded, MASK_COLOR, frozen), GHOST_ALPHA);
+}
+
 // The polyframe: the mesh's own edges, drawn over it.
 //
 // Its own fragment entry rather than the overlay's, which takes the vertex

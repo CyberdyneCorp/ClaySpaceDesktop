@@ -477,6 +477,26 @@ point is interpolated, so dragging one moves that corner of the box exactly.
 The same pull forward on a 4×4×4 field cage takes its reach from 1.000 to
 1.5777.
 
+### A cage is a mode
+
+While one is up the layer is being *deformed*, and three things follow from
+that:
+
+- **The brushes are off.** A press that misses a control point orbits rather
+  than sculpting. It used to fall through to the brush, so a slip while aiming
+  sculpted the very form the cage was there to bend — and the strokes it left
+  made the next control point harder to hit. Orbiting rather than nothing, so
+  the cage can still be turned to look at from behind without being taken down.
+- **The form is drawn through.** Half the control points are behind it, and a
+  solid surface hides exactly the handles that need reaching. Blender's X-ray
+  and ZBrush's Ghost do the same thing for the same reason. Seen through, not
+  turned off: the form stays readable as a form.
+- **Handles keep their size.** They are sized from the box the cage was *built*
+  with, not from where its points are now. Sized from the current extent — as
+  they were at first — hauling one corner out inflated every other handle, so
+  the targets a sculptor was aiming at swelled under the pointer as they
+  worked.
+
 ### The manipulator
 
 A click selects one control point; **Shift-click** adds or removes one without

@@ -695,3 +695,25 @@ gizmo for — has no route here yet.
   - The rest positions are kept so the surface can be put back, and dropped on
     a re-mesh: the vertices they described are gone, and the next preview
     stores them again from what is there now.
+
+- [x] 17.7 Make a cage behave like a mode
+  - Three things reported from using it, and none of them was treating a cage
+    as the mode it is.
+  - **The brushes kept working.** A press that missed a control point fell
+    through to the brush, so a slip while aiming sculpted the very form the
+    cage was there to bend — and the blobs it left made the next point harder
+    to hit. The rule moved out of the event loop into `input::press_sculpts`,
+    with its reasons and three tests: a rule with three clauses and no test is
+    how a mode stops being a mode. It orbits rather than doing nothing, so a
+    cage can still be turned to look at from behind.
+  - **The form is drawn through** while a cage is up. Half the control points
+    are behind it and a solid surface hides exactly the handles that need
+    reaching. A `fs_ghost` entry and a pipeline with no back-face culling — and
+    so no depth write — which is what lets the far half of the cage read
+    through. Held to being *seen through* rather than turned off: a test
+    requires the ghosted form to still cover four fifths of what the solid one
+    did.
+  - **Handles inflated as the cage grew.** The size came from the cage's
+    current extent, so hauling one corner out grew every other handle and the
+    targets a sculptor was aiming at swelled under the pointer. `rest_span`
+    carries the box the cage was built with, and the size comes from that.

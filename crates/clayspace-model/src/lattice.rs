@@ -70,6 +70,13 @@ pub struct LatticeState {
     pub selection: Vec<usize>,
     /// Which of the manipulator's three modes is in force.
     pub mode: GizmoMode,
+    /// The longest side of the box the cage was *built* with, in world units.
+    ///
+    /// The rest box and not the current one, because this is what sizes the
+    /// control-point handles — and a handle sized from where the points are
+    /// now grows every time one is dragged out, so pulling a single corner
+    /// inflated every other handle on screen.
+    pub rest_span: f32,
     /// Whether any point has been dragged.
     ///
     /// An untouched cage is exactly the identity, and applying one would pay
@@ -231,6 +238,7 @@ mod tests {
             points: vec![[0.0; 3]; count],
             selection: Vec::new(),
             mode: GizmoMode::default(),
+            rest_span: 1.0,
             touched: false,
         }
     }
@@ -318,6 +326,7 @@ mod selection_tests {
                 .collect(),
             selection: Vec::new(),
             mode: GizmoMode::Move,
+            rest_span: 2.0,
             touched: false,
         }
     }
@@ -359,5 +368,43 @@ mod selection_tests {
                 "point {at} disagreed about being selected"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod handle_tests {
+    use super::*;
+
+    #[test]
+    fn the_handle_size_is_the_rest_box_and_not_the_dragged_one() {
+        // Reported: selecting a point and moving it made every *other* handle
+        // grow. The size came from the cage's current extent, so pulling one
+        // corner out inflated the whole set — and the handles a sculptor was
+        // aiming at moved under the pointer as they worked.
+        let mut cage = LatticeState {
+            active: true,
+            divisions: [2, 2, 2],
+            points: (0..8)
+                .map(|at| {
+                    [
+                        if at & 1 == 0 { -1.0 } else { 1.0 },
+                        if at & 2 == 0 { -1.0 } else { 1.0 },
+                        if at & 4 == 0 { -1.0 } else { 1.0 },
+                    ]
+                })
+                .collect(),
+            selection: Vec::new(),
+            mode: GizmoMode::Move,
+            rest_span: 2.0,
+            touched: false,
+        };
+        let before = cage.rest_span;
+        // One corner hauled a long way out.
+        cage.points[7] = [9.0, 9.0, 9.0];
+        cage.touched = true;
+        assert_eq!(
+            cage.rest_span, before,
+            "dragging a corner changed what the handles are sized from"
+        );
     }
 }

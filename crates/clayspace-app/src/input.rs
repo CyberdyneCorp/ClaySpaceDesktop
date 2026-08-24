@@ -85,6 +85,24 @@ impl ViewportInput {
     }
 }
 
+/// Whether a press should start a stroke, or turn the camera instead.
+///
+/// Here rather than inline in the event loop because it is a rule rather than
+/// a step, and because a rule with three clauses and no test is how a mode
+/// stops being a mode.
+///
+/// - A press that misses the surface orbits. That is ZBrush's rule, and the
+///   only one that leaves a trackpad with no comfortable right-drag able to
+///   turn the model.
+/// - The orbit modifier forces it, on the surface or off it.
+/// - **A cage takes the whole viewport.** While one is up the layer is being
+///   deformed, and a press that misses a control point used to fall through to
+///   the brush — so a slip while aiming sculpted the very form the cage was
+///   there to bend, and the strokes it left made the next point harder to hit.
+pub fn press_sculpts(on_surface: bool, orbit_modifier: bool, caged: bool) -> bool {
+    on_surface && !orbit_modifier && !caged
+}
+
 /// The world-space ray through a point of the viewport.
 ///
 /// Free-standing, and used by the binary rather than reimplemented there, so a
@@ -249,5 +267,36 @@ mod drag_tests {
             egui::pos2(-40.0, 300.0)
         )
         .is_none());
+    }
+}
+
+#[cfg(test)]
+mod press_tests {
+    use super::press_sculpts;
+
+    #[test]
+    fn a_press_on_the_surface_sculpts_and_one_off_it_orbits() {
+        assert!(press_sculpts(true, false, false));
+        assert!(!press_sculpts(false, false, false));
+    }
+
+    #[test]
+    fn the_orbit_modifier_forces_orbiting_wherever_it_lands() {
+        assert!(!press_sculpts(true, true, false));
+        assert!(!press_sculpts(false, true, false));
+    }
+
+    #[test]
+    fn a_cage_takes_the_whole_viewport() {
+        // Reported from using it: with a cage up, a press that missed a
+        // control point sculpted the form the cage was there to bend, and the
+        // blobs it left made the next point harder to hit.
+        assert!(
+            !press_sculpts(true, false, true),
+            "a press on the surface still sculpted while a cage was up"
+        );
+        // Orbiting rather than nothing, so a cage can be turned to look at
+        // from behind without being taken down.
+        assert!(!press_sculpts(false, false, true));
     }
 }
