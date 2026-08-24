@@ -1351,3 +1351,66 @@ fn the_steps_slider_sets_the_amount() {
         },
     );
 }
+
+/// Where the first Extrudar entry falls once the Máscaras menu is open.
+const EXTRUDE_ENTRY: egui::Vec2 = egui::Vec2::new(0.0, 232.0);
+
+#[test]
+fn extrudar_is_offered_on_a_field_and_greyed_on_a_mesh() {
+    // It was offered everywhere and worked on one of the three. On a mesh the
+    // engine refuses — there is no field to sample and no mesh-sculptor
+    // equivalent — and the refusal went into a notice nobody read, so the
+    // entry was a click that did nothing at all.
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let field = state(strings, &scene, &materials, &report);
+    capture_shell_after(
+        &harness,
+        &field,
+        "82-extrude-field",
+        &[
+            left_click(MASKS_MENU),
+            left_click(MASKS_MENU + EXTRUDE_ENTRY),
+        ],
+        |queue| {
+            let extrusions: Vec<&Command> = queue
+                .commands()
+                .iter()
+                .filter(|command| matches!(command, Command::ExtrudeMask(_)))
+                .collect();
+            assert_eq!(
+                extrusions.len(),
+                1,
+                "Extrudar on a field emitted {:?}. See \
+                 target/visual/82-extrude-field.png",
+                queue.commands()
+            );
+        },
+    );
+
+    let mut mesh = state(strings, &scene, &materials, &report);
+    mesh.representation = clayspace_model::Representation::Mesh;
+    capture_shell_after(
+        &harness,
+        &mesh,
+        "83-extrude-mesh",
+        &[
+            left_click(MASKS_MENU),
+            left_click(MASKS_MENU + EXTRUDE_ENTRY),
+        ],
+        |queue| {
+            assert!(
+                queue.commands().is_empty(),
+                "Extrudar was live on a mesh layer and emitted {:?}, which the \
+                 engine refuses. See target/visual/83-extrude-mesh.png",
+                queue.commands()
+            );
+        },
+    );
+}

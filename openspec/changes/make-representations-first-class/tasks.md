@@ -536,3 +536,25 @@ nominal radius, which is a units question rather than a defect found.
     Expandir is clicked, and the command that comes out has to carry the
     panel's five. A menu entry that draws and is wired to nothing looks
     identical, and so does a slider.
+
+- [x] 16.3 Make Extrudar work where it can, and say so where it cannot
+  - Reported as not working, and it was not: every test above ran on an SDF
+    layer, and `clay_document_mask_extrude` samples a *layer's field*. On the
+    mesh layer a sculptor is most likely to be on it refused outright — "this
+    layer has no field to extrude from" — and so did a grid.
+  - Worse, the refusal was invisible. `MaskViewModel::notice` was an
+    `Observable` nothing read, so the entry was a click that did nothing at all
+    and said nothing at all. It reaches the options bar's status line now,
+    which is the one place the application already uses to say why something
+    did not happen.
+  - A grid has its own verb, `clay_voxel_mask_extrude`, wrapped in `claycore`
+    since the beginning and never bound. It works from the cells the grid
+    already knows are on its surface rather than through a sampled field, which
+    is what avoids a conversion. Measured: a 0.2 wall on a grid whose surface
+    sits at 0.100 reaches 0.246. Both paths produce an SDF row, so Extrudar
+    means one thing whatever it was run on.
+  - A mesh has neither verb. `can_extrude` lives in the domain and the menu
+    asks it before offering the entry, so what a sculptor meets is a grey item
+    whose reason names the crossing that would let it work. Held by a shell
+    test that clicks the entry on both and checks that one emits a command and
+    the other does not.

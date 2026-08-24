@@ -73,6 +73,8 @@ pub struct Strings {
     pub label_mask_steps: &'static str,
     /// How many cells are frozen.
     pub label_mask_cells: &'static str,
+    /// Why an extrusion is unavailable on the active layer.
+    pub status_extrude_needs_a_field: &'static str,
     /// An extrusion's wall thickness.
     pub label_extrude_thickness: &'static str,
     /// Rounding on the extruded rim.
@@ -237,6 +239,8 @@ const PT_BR: Strings = Strings {
     section_mask: "MÁSCARA",
     label_mask_steps: "Passos",
     label_mask_cells: "Células congeladas",
+    status_extrude_needs_a_field:
+        "Uma camada de malha não tem campo para extrudar. Converta-a para SDF primeiro.",
     label_extrude_thickness: "Espessura",
     label_extrude_round: "Arredondar",
     label_extrude_smooth: "Suavizar borda",
@@ -374,6 +378,8 @@ const EN_US: Strings = Strings {
     section_mask: "MASK",
     label_mask_steps: "Steps",
     label_mask_cells: "Frozen cells",
+    status_extrude_needs_a_field:
+        "A mesh layer has no field to extrude from. Cross it to SDF first.",
     label_extrude_thickness: "Thickness",
     label_extrude_round: "Round",
     label_extrude_smooth: "Smooth edge",
@@ -511,6 +517,8 @@ const ES_419: Strings = Strings {
     section_mask: "MÁSCARA",
     label_mask_steps: "Passos",
     label_mask_cells: "Células congeladas",
+    status_extrude_needs_a_field:
+        "Uma camada de malha não tem campo para extrudir. Converta-a para SDF primeiro.",
     label_extrude_thickness: "Espessura",
     label_extrude_round: "Arredondar",
     label_extrude_smooth: "Suavizar borda",
@@ -652,7 +660,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 107] {
+    pub fn all(&self) -> [&'static str; 108] {
         [
             self.menu_file,
             self.menu_edit,
@@ -665,6 +673,7 @@ impl Strings {
             self.section_mask,
             self.label_mask_steps,
             self.label_mask_cells,
+            self.status_extrude_needs_a_field,
             self.label_extrude_thickness,
             self.label_extrude_round,
             self.label_extrude_smooth,

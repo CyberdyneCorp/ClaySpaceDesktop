@@ -3974,6 +3974,62 @@ impl ClayDocument {
     }
 }
 
+impl ClayDocument {
+    /// Pulls the masked patch off a *grid*, as a layer of its own.
+    ///
+    /// `clay_voxel_mask_extrude` rather than the document's: a grid already
+    /// knows which of its cells are on its surface, so resampling it into a
+    /// field would cost a conversion and lose the palette. The engine states
+    /// the two agree to within a voxel.
+    ///
+    /// What comes back is a grid the caller owns, and it becomes an SDF layer
+    /// — the same kind of row the field path produces, so "Extrudar" means one
+    /// thing whatever it was run on. Unblurred: a wall is a thickness, and
+    /// rounding it off is the rim controls' job rather than the crossing's.
+    fn extrude_from_grid(&mut self, settings: ExtrudeSettings) -> Result<(), ModelError> {
+        let engine_name = self.active_layer().engine_name.clone();
+        // Split by field, because the grid borrows the document exclusively
+        // and the mask is a sibling.
+        let Self { document, mask, .. } = self;
+        let mask = mask.as_ref().expect("checked by the caller");
+        let extruded = {
+            let (_, grid) = document
+                .voxel_layer(&engine_name)
+                .map_err(ModelError::engine)?;
+            grid.mask_extrude(mask, extrude_params(settings))
+                .map_err(ModelError::engine)?
+        };
+        let id = document
+            .voxel_to_layer(&extruded, "Extrusão", 0)
+            .map_err(ModelError::engine)?;
+        let key = self.adopt_engine_layer(id, "Extrusão", Representation::Sdf)?;
+        self.after_conversion(key)?;
+        Ok(())
+    }
+}
+
+/// The engine's extrusion parameters, spelled once.
+///
+/// Both verbs take the same descriptor and disagreeing about it would be the
+/// kind of drift that shows up as "the wall is a different thickness on a
+/// grid".
+fn extrude_params(settings: ExtrudeSettings) -> claycore::MaskExtrudeParams {
+    claycore::MaskExtrudeParams {
+        thickness: settings.thickness,
+        side: match settings.side {
+            clayspace_model::ExtrudeSide::Outward => claycore::ExtrudeSide::Outward,
+            clayspace_model::ExtrudeSide::Inward => claycore::ExtrudeSide::Inward,
+            clayspace_model::ExtrudeSide::Centred => claycore::ExtrudeSide::Centred,
+        },
+        threshold: None,
+        border_round: settings.border_round,
+        border_smooth: settings.border_smooth,
+        // The grid's own resolution is the only one available there, and the
+        // field path has always taken the default.
+        cell_size: None,
+    }
+}
+
 impl MaskModel for ClayDocument {
     fn mask_state(&self) -> MaskState {
         match &self.mask {
@@ -4037,25 +4093,28 @@ impl MaskModel for ClayDocument {
             return Err(ModelError::engine("a máscara está vazia"));
         }
 
+        // Three representations, two verbs, one of them absent.
+        //
+        // `clay_document_mask_extrude` samples a *layer's field*, so it refuses
+        // a mesh and a grid alike — "this layer has no field to extrude from",
+        // which is what a sculptor got: nothing happened and nothing said why.
+        // A grid has its own verb and it was never bound. A mesh has neither,
+        // and the honest answer there is the route that does work.
+        match self.active_representation() {
+            Representation::Voxel => return self.extrude_from_grid(settings),
+            Representation::Mesh => {
+                return Err(ModelError::engine(
+                    "uma camada de malha não tem campo para extrudar; \
+                     converta-a para SDF primeiro",
+                ))
+            }
+            Representation::Sdf => {}
+        }
+
         let layer = self.active_layer().id;
         let item = self
             .document
-            .mask_extrude(
-                layer,
-                mask,
-                claycore::MaskExtrudeParams {
-                    thickness: settings.thickness,
-                    side: match settings.side {
-                        clayspace_model::ExtrudeSide::Outward => claycore::ExtrudeSide::Outward,
-                        clayspace_model::ExtrudeSide::Inward => claycore::ExtrudeSide::Inward,
-                        clayspace_model::ExtrudeSide::Centred => claycore::ExtrudeSide::Centred,
-                    },
-                    threshold: None,
-                    border_round: settings.border_round,
-                    border_smooth: settings.border_smooth,
-                    cell_size: None,
-                },
-            )
+            .mask_extrude(layer, mask, extrude_params(settings))
             .map_err(ModelError::engine)?;
 
         // Into a layer of its own. An extrusion is a new piece of geometry, not

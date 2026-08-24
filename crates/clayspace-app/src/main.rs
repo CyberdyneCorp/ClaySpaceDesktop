@@ -1708,7 +1708,18 @@ impl App {
             brush: *self.sculpt.brush().get(),
             combine: *self.sculpt.combine().get(),
             alpha: alpha_name.as_deref(),
-            tool_status: self.sculpt.tool_status().get().as_deref(),
+            // The options bar's one "why that did not happen" line, shared.
+            //
+            // A mask refusal used to be written into an Observable nobody
+            // read, so extruding on a layer that has no field to extrude from
+            // did nothing at all and said nothing at all. The mask's notice
+            // comes first because it is raised by an explicit action, where a
+            // tool status is a standing condition.
+            tool_status: self.mask.notice().get().as_deref().or(self
+                .sculpt
+                .tool_status()
+                .get()
+                .as_deref()),
             symmetry: *self.sculpt.symmetry().get(),
             scene: &scene,
             renaming: self

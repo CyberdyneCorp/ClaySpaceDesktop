@@ -137,6 +137,15 @@ Measured on a unit sphere with a 0.2 wall: **Para fora** takes the surface to
 **Centrado** reaches 1.1015 — half the thickness above the surface, which is
 what half each way means.
 
+**Extrudar needs something to sample.** `clay_document_mask_extrude` samples a
+*layer's field*, and a grid has a verb of its own that works from its cells
+without a conversion — so an SDF layer and a voxel layer both extrude, and both
+produce an SDF row, so the operation means one thing whatever it was run on. A
+**mesh layer has neither**: the entry is greyed there, and the reason names the
+way round, which is a crossing to SDF. It was offered on all three and worked
+on one, with the refusal going into a notice nothing displayed — a click that
+did nothing at all.
+
 Three of these took an amount the interface could not set: `Expandir`,
 `Contrair` and `Suavizar máscara` were dispatched with a hard-coded 1, and an
 extrusion with every default it was born with, so its thickness, rounding and

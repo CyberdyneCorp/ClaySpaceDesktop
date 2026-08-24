@@ -16,8 +16,8 @@
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
-    BrushSettings, ExtrudeSettings, ExtrudeSide, GestureSample, MaskModel, MaskOp, SceneModel,
-    SculptModel, ToolKind,
+    BrushSettings, Direction, ExtrudeSettings, ExtrudeSide, GestureSample, MaskModel, MaskOp,
+    Representation, SceneModel, SculptModel, ToolKind,
 };
 
 /// A sphere with a patch of its near face frozen.
@@ -436,4 +436,141 @@ fn extruding_an_empty_mask_is_refused_rather_than_making_an_empty_layer() {
         layers,
         "a refused extrusion left a layer behind"
     );
+}
+
+// -- Extrudar, from each representation --------------------------------------
+//
+// Every test above runs on an SDF layer, and that is exactly how this shipped
+// broken: `clay_document_mask_extrude` samples a *layer's field*, so it refuses
+// a mesh and a grid alike — "this layer has no field to extrude from". On the
+// mesh layer a sculptor is most likely to be on, Extrudar did nothing, and the
+// refusal was written into a notice nobody read.
+
+/// Freezes the patch facing the camera on whatever the active layer is.
+fn freeze_near_face(document: &mut ClayDocument) {
+    let at = SculptModel::pick(document, [0.0, 0.0, 4.0], [0.0, 0.0, -1.0])
+        .expect("the layer has a near face");
+    let samples: Vec<GestureSample> = (0..4)
+        .map(|i| GestureSample {
+            position: at,
+            pressure: 1.0,
+            time: i as f32 * 0.1,
+        })
+        .collect();
+    document
+        .apply_stroke(
+            ToolKind::Mascara,
+            BrushSettings {
+                size: 0.3,
+                intensity: 1.0,
+                ..BrushSettings::default()
+            },
+            &samples,
+            [false; 3],
+        )
+        .expect("the mask stroke was refused");
+}
+
+#[test]
+fn extrudar_pulls_a_wall_off_a_grid() {
+    // `clay_voxel_mask_extrude` has been in the engine all along and was never
+    // bound: a grid already knows which of its cells are on its surface, so it
+    // needs no sampled field. The document's verb was the only one wired, and
+    // it refused a grid.
+    let Some(policy) = BackendPolicy::discover(None).ok() else {
+        return;
+    };
+    let Ok(mut document) = ClayDocument::new(policy) else {
+        return;
+    };
+    document.add_voxel_layer("Voxels", 0.05).expect("a grid");
+    document
+        .apply_stroke(
+            ToolKind::Padrao,
+            BrushSettings {
+                size: 0.3,
+                intensity: 1.0,
+                ..BrushSettings::default()
+            },
+            &[GestureSample {
+                position: [0.0, 0.0, 0.0],
+                pressure: 1.0,
+                time: 0.0,
+            }],
+            [false; 3],
+        )
+        .expect("the deposit was refused");
+    freeze_near_face(&mut document);
+
+    let before =
+        SculptModel::pick(&document, [0.0, 0.0, 4.0], [0.0, 0.0, -1.0]).expect("surface")[2];
+    let layers = document.scene().layers.len();
+    document
+        .extrude_mask(ExtrudeSettings {
+            thickness: 0.2,
+            side: ExtrudeSide::Outward,
+            border_round: 0.0,
+            border_smooth: 0,
+        })
+        .expect("extruding a grid was refused");
+
+    assert_eq!(
+        document.scene().layers.len(),
+        layers + 1,
+        "extruding a grid made no layer"
+    );
+    let after =
+        SculptModel::pick(&document, [0.0, 0.0, 4.0], [0.0, 0.0, -1.0]).expect("surface")[2];
+    assert!(
+        after > before + 0.1,
+        "the wall reached {after} from {before}, which is not a 0.2 plate \
+         standing on the grid's surface"
+    );
+    // An SDF row, like the field path's: Extrudar means one thing whatever it
+    // was run on, and the row it makes can be sculpted, hidden or thrown away
+    // the same way either time.
+    assert_eq!(
+        document.active_representation(),
+        Representation::Sdf,
+        "the extrusion did not arrive as a field layer"
+    );
+}
+
+#[test]
+fn extrudar_on_a_mesh_says_what_to_do_instead() {
+    // There is no engine verb for it: neither `clay_document_mask_extrude`,
+    // which samples a field a mesh layer does not have, nor a mesh-sculptor
+    // equivalent. The refusal has to name the way round rather than being a
+    // click that does nothing.
+    let Some(mut document) = masked() else {
+        return;
+    };
+    document
+        .convert_layer(Direction::SdfToMesh, 0.05, 0)
+        .expect("into a mesh");
+    freeze_near_face(&mut document);
+    let layers = document.scene().layers.len();
+
+    let refused = document
+        .extrude_mask(ExtrudeSettings::default())
+        .expect_err("extruding a mesh layer");
+    let said = refused.to_string();
+    assert!(
+        said.contains("SDF"),
+        "the refusal does not name the way round: {said}"
+    );
+    assert_eq!(
+        document.scene().layers.len(),
+        layers,
+        "a refused extrusion left a layer behind"
+    );
+}
+
+#[test]
+fn every_representation_says_whether_it_can_be_extruded() {
+    // The menu asks this before offering the entry, so the two cannot drift
+    // apart into a menu that offers what the engine refuses.
+    assert!(clayspace_model::can_extrude(Representation::Sdf));
+    assert!(clayspace_model::can_extrude(Representation::Voxel));
+    assert!(!clayspace_model::can_extrude(Representation::Mesh));
 }

@@ -520,10 +520,23 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                     }
                 }
                 ui.separator();
+                // A mesh has no field to extrude from and the engine refuses
+                // it. Grey with the reason on it rather than a click that does
+                // nothing, which is what it was — and the reason names the way
+                // round, which is a crossing this application already offers.
+                let extrudable = clayspace_model::can_extrude(state.representation);
                 for side in ExtrudeSide::ALL {
                     let label = format!("{} — {}", s.action_extrude, side.label());
                     if ui
-                        .add_enabled(state.mask.is_active(), egui::Button::new(label))
+                        .add_enabled(
+                            state.mask.is_active() && extrudable,
+                            egui::Button::new(label),
+                        )
+                        .on_disabled_hover_text(if extrudable {
+                            ""
+                        } else {
+                            s.status_extrude_needs_a_field
+                        })
                         .clicked()
                     {
                         queue.push(Command::ExtrudeMask(ExtrudeSettings {
