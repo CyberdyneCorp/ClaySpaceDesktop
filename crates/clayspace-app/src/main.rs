@@ -2057,7 +2057,15 @@ impl App {
         }
 
         if input.over_viewport && input.scroll != 0.0 {
-            self.camera.zoom(input.scroll);
+            // What is under the pointer, so the zoom is aimed at it and stops
+            // against it. `None` where the ray meets nothing — over empty
+            // space there is nothing to stop at, and a wheel that refused to
+            // move would read as broken.
+            let focus = input
+                .pointer
+                .and_then(|point| self.pick_at(point))
+                .map(|(hit, _)| hit);
+            self.camera.zoom_toward(input.scroll, focus);
         }
     }
 

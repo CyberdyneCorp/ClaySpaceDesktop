@@ -1104,9 +1104,48 @@ Recorded under *Not built yet*.
     is the mirror doing what a mirror does; it has its own test now so nobody
     else spends an hour on it.
 
-## 25. Something to sculpt from
+## 25. Zooming at the clay rather than through it
 
-- [x] 25.1 A picture on each plane, behind the clay
+- [x] 25.1 Stop against the surface
+  - Reported: the zoom goes inside the object. It did — `Camera::zoom` clamped
+    the distance to an arbitrary floor of 0.01 and nothing in it knew where the
+    surface was, so a few notches too many put the eye through the clay and the
+    sculpt turned inside out.
+  - The camera stops a little short of what the pointer's ray met. What must
+    stay between them is a *fraction* of the gap, so the standoff is the same
+    on screen at any scale — a fixed one would be a mile on a thumbnail and
+    nothing on a bust — and never less than twice the near plane, since a
+    surface closer than that is clipped away, which looks exactly like having
+    gone through it.
+  - Only ever a limit on coming *in*. Pulling back past the surface is ordinary
+    and has its own test.
+
+- [x] 25.2 Aim it, the way Blender does
+  - The pivot follows a quarter of the way toward the focus, so the point under
+    the pointer drifts to the middle and the next orbit turns around what was
+    being looked at. Partial rather than complete: snapping the pivot onto the
+    surface would swing the view on every notch.
+  - With nothing under the pointer it is the plain multiplicative zoom. There
+    is nothing to stop at over empty space, and a wheel that refused to move
+    would read as broken.
+
+- [x] 25.3 Two tests that were measuring the wrong thing
+  - A visual test took the corner pixel as the background, which is a fine
+    stand-in until the form fills the frame — and a form filling the frame is
+    exactly the case being watched. At that point the corner *is* clay,
+    everything reads as background, and a full frame measured as an empty one.
+    Against the renderer's own background now.
+  - And an assertion that twenty notches would come within 0.05 of the clay was
+    a number picked rather than derived: the multiplicative rate is a tenth of
+    what is left per notch, so twenty close about six sevenths of the gap and
+    the standoff is nowhere near binding. The test says that instead.
+  - `the_old_behaviour_would_have_failed_this` holds the plain zoom to still
+    driving the distance inside a unit sphere, because a test that passes on
+    both the fix and the fault is not a test.
+
+## 26. Something to sculpt from
+
+- [x] 26.1 A picture on each plane, behind the clay
   - `RefPlane` names the three planes the view presets look down; perspective
     has none, because a reference is a flat thing seen square on and one
     hanging in a perspective view is a billboard rather than a guide.
@@ -1121,7 +1160,7 @@ Recorded under *Not built yet*.
     whichever thing the PNG was going to be, and one of them already reads
     well in three languages.
 
-- [x] 25.2 What a reference keeps that a stamp does not
+- [x] 26.2 What a reference keeps that a stamp does not
   - Colour. A stamp is flattened to one scalar a pixel; a photograph in grey is
     a different reference from the one the sculptor chose. Grey is spread
     across the three channels rather than left in one, or a texture sampled
@@ -1132,7 +1171,7 @@ Recorded under *Not built yet*.
     bother with: it can afford to read an index as a grey level, and a palette
     index read as a *colour* is not a picture of anything.
 
-- [x] 25.3 Always behind, and why that is not the depth test
+- [x] 26.3 Always behind, and why that is not the depth test
   - The quad sits behind the origin, so ordinarily the depth test alone would
     put the form in front. It does not, once the camera swings past the plane
     — and a guide that occludes the form it is guiding has stopped being a
@@ -1145,7 +1184,7 @@ Recorded under *Not built yet*.
     attribute on every vertex of every mesh in the scene, paid by the surface
     to serve three quads.
 
-- [x] 25.4 Not part of the document
+- [x] 26.4 Not part of the document
   - A reference is what the sculptor is working *from*, not what they are
     making: a document carrying someone else's photograph is a document that
     cannot be shared. None of the three commands marks the document modified.
@@ -1157,4 +1196,3 @@ Recorded under *Not built yet*.
   - A line that does not parse is dropped rather than defaulted: a reference
     placed somewhere the sculptor did not put it is worse than one that is
     gone, because the second is obvious and the first is not.
-
