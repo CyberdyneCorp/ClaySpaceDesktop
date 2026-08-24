@@ -127,10 +127,11 @@ impl ReferenceViewModel {
                 self.settings.set(all);
                 self.revision += 1;
             }
-            Command::ClearReference(plane) => {
-                if self.placed[*plane as usize].is_some() {
-                    self.place(*plane, None);
-                }
+            // Guarded rather than unconditional: clearing a plane that holds
+            // nothing would bump the revision and have the viewport re-upload
+            // three pictures to arrive back where it was.
+            Command::ClearReference(plane) if self.placed[*plane as usize].is_some() => {
+                self.place(*plane, None);
             }
             // Loading asks for a file, which happens above this layer; the
             // picture comes back through `place`.
