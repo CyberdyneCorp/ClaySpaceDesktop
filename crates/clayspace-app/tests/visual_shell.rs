@@ -1608,3 +1608,51 @@ fn every_table_knows_which_language_it_is() {
         );
     }
 }
+
+#[test]
+fn the_brush_shelf_is_in_the_interfaces_language() {
+    // The shelf showed `ToolKind::label()` — the domain's own Portuguese — on
+    // all three representations whatever the language was, so choosing English
+    // translated the chrome and left Padrão, Inflar and Máscara on the shelf.
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let mut shots = Vec::new();
+    for locale in [Locale::PtBr, Locale::EnUs, Locale::Es419] {
+        let strings = Strings::for_locale(locale);
+        let state = state(strings, &scene, &materials, &report);
+        shots.push(capture_shell(
+            &harness,
+            &state,
+            &format!("110-shelf-{}", locale.tag()),
+        ));
+    }
+
+    // The shelf is the bottom band, below the status bar's height. Comparing
+    // only there keeps this about the brushes rather than about the panels,
+    // which were already translated.
+    let band = |image: &clayspace_view::Image| {
+        let top = SHELL_HEIGHT - region::SHELF as u32 - region::STATUS as u32;
+        let mut differing = 0usize;
+        for y in top..(SHELL_HEIGHT - region::STATUS as u32) {
+            for x in 0..image.width {
+                differing += usize::from(image.pixel(x, y) != shots[0].pixel(x, y));
+            }
+        }
+        differing
+    };
+    assert!(
+        band(&shots[1]) > 500,
+        "the English shelf draws the same {} pixels as the Portuguese one, so \
+         the brush names are not translated. See target/visual/110-shelf-en-US.png",
+        band(&shots[1])
+    );
+    assert!(
+        band(&shots[2]) > 300,
+        "the Spanish shelf draws the same pixels as the Portuguese one"
+    );
+}

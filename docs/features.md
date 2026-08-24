@@ -761,13 +761,24 @@ between them**: the locale came from `Locale::default()` at startup and was
 never asked about again, so `Locale::from_tag` — written for exactly this — was
 called by nothing.
 
-**Not yet translated**: the *vocabulary* the domain names — tool names, combine
+**The brush names are translated.** All twenty, on all three representations —
+the shelf and the status bar's last action both read them from the interface's
+own table. They were `ToolKind::label()`, the domain's own Portuguese, shown
+whatever the language was. `ToolKind::label` keeps that Portuguese for the
+places that are not the interface: history entries, engine refusals and the
+diagnostics report, none of which has a language.
+
+One thing worth naming, because it reads as correct to anyone checking a single
+language: Portuguese **Borrar** is *smear* and Spanish **Borrar** is *erase*.
+Carried straight across, the Spanish shelf would name the smudge brush "erase"
+and leave the erase brush with the smudge's name. The two swap places —
+`Apagar` → `Borrar`, `Borrar` → `Difuminar` — and a test says so.
+
+**Not yet translated**: the rest of the vocabulary the domain names — combine
 operations, view presets, mask operations, gizmo modes, extrude sides, falloff
-curves and the rest. Those are **82 labels across 15 enums**, returned as
-Portuguese `&'static str` from `clayspace-model` rather than through the string
-tables, so an English interface still shows `Padrão`, `Inflar`, `Relevo` and
-`Perspectiva`. Switching language translates the chrome and not the shelf. See
-*Not built yet*.
+curves. Those are **62 further label arms across 14 enums**, so an English
+interface still shows `Relevo`, `Quadrática` and `Perspectiva` in the option
+and viewport bars. See *Not built yet*.
 
 ## Interface
 
@@ -917,12 +928,12 @@ changes it, because that is where a person looks for it.
 Panels cannot be resized or collapsed and shortcuts are fixed. See
 [roadmap.md](roadmap.md).
 
-**The domain's vocabulary, in more than one language.** The language setting
-translates the interface's own strings, which live in one table per locale. The
-names the domain gives things — 82 labels across 15 enums, from `ToolKind` and
-`Combine` to `MaskOp` and `GizmoMode` — are Portuguese literals returned from
-`clayspace-model`, so the brush shelf and the option bar stay Portuguese
-whatever the menu says. Routing them through the tables is the work.
+**The rest of the domain's vocabulary, in more than one language.** The brush
+names go through the string tables now. The other 62 label arms across 14 enums
+— `Combine`, `BlendProfile`, `ViewPresetKind`, `MaskOp`, `GizmoMode`,
+`ExtrudeSide`, `Falloff` and the rest — are still Portuguese literals returned
+from `clayspace-model`, so the option bar and the viewport bar stay Portuguese
+whatever the menu says. `Strings::tool` is the shape the rest should follow.
 
 **A manipulator outside the cage.** The move/turn/scale widget acts on a
 lattice selection and on nothing else. Transforming a whole layer with it —

@@ -14,6 +14,18 @@ pub use clayspace_model::Locale;
 /// error rather than a placeholder that ships.
 #[derive(Debug, Clone, Copy)]
 pub struct Strings {
+    /// What each brush is called, in the order of [`ToolKind::ALL`].
+    ///
+    /// An array rather than twenty named fields because the names are one
+    /// vocabulary rather than twenty unrelated strings — and a fixed length
+    /// means a tool added without a name for it is a compile error, which is
+    /// the same guarantee the named fields give.
+    ///
+    /// Here rather than on `ToolKind` because a name is a *word*, and the
+    /// domain has no language. `ToolKind::label` keeps its Portuguese for the
+    /// places that are not the interface: history entries, engine refusals and
+    /// the diagnostics report.
+    pub tool_names: [&'static str; clayspace_model::ToolKind::ALL.len()],
     /// Which language this table is. Carried with the words rather than beside
     /// them, so the language menu's tick and the words on screen cannot
     /// disagree about what the interface is in.
@@ -203,6 +215,28 @@ pub struct Strings {
 
 /// The Portuguese strings, which the design specifies.
 const PT_BR: Strings = Strings {
+    tool_names: [
+        "Padrão",
+        "Inflar",
+        "Suavizar",
+        "Mover",
+        "Pinçar",
+        "Raspar",
+        "Planar",
+        "Preencher",
+        "Camada",
+        "Máscara",
+        "Puxar",
+        "Polir",
+        "Relaxar",
+        "Nudge",
+        "Trim",
+        "Argila",
+        "Vinco",
+        "Pintar",
+        "Borrar",
+        "Apagar",
+    ],
     locale: Locale::PtBr,
     menu_file: "Arquivo",
     menu_edit: "Editar",
@@ -351,6 +385,28 @@ const PT_BR: Strings = Strings {
 
 /// The English strings.
 const EN_US: Strings = Strings {
+    tool_names: [
+        "Standard",
+        "Inflate",
+        "Smooth",
+        "Move",
+        "Pinch",
+        "Scrape",
+        "Planar",
+        "Fill",
+        "Layer",
+        "Mask",
+        "Snake Hook",
+        "Polish",
+        "Relax",
+        "Nudge",
+        "Trim",
+        "Clay",
+        "Crease",
+        "Paint",
+        "Smear",
+        "Erase",
+    ],
     locale: Locale::EnUs,
     menu_file: "File",
     menu_edit: "Edit",
@@ -498,6 +554,28 @@ const EN_US: Strings = Strings {
 
 /// The Latin American Spanish strings.
 const ES_419: Strings = Strings {
+    tool_names: [
+        "Estándar",
+        "Inflar",
+        "Suavizar",
+        "Mover",
+        "Pellizcar",
+        "Raspar",
+        "Aplanar",
+        "Rellenar",
+        "Capa",
+        "Máscara",
+        "Gancho",
+        "Pulir",
+        "Relajar",
+        "Empujar",
+        "Recortar",
+        "Arcilla",
+        "Pliegue",
+        "Pintar",
+        "Difuminar",
+        "Borrar",
+    ],
     locale: Locale::Es419,
     menu_file: "Archivo",
     menu_edit: "Editar",
@@ -652,12 +730,31 @@ const ES_419: Strings = Strings {
 };
 
 impl Strings {
+    /// What a brush is called, in this language.
+    ///
+    /// Falls back to the domain's own name for a tool missing from
+    /// `ToolKind::ALL` — a shelf entry with no word on it is worse than one in
+    /// the wrong language, and the fixed-length table makes that unreachable
+    /// anyway.
+    pub fn tool(&self, tool: clayspace_model::ToolKind) -> &'static str {
+        clayspace_model::ToolKind::ALL
+            .iter()
+            .position(|known| *known == tool)
+            .and_then(|at| self.tool_names.get(at).copied())
+            .unwrap_or_else(|| tool.label())
+    }
+
     pub fn for_locale(locale: Locale) -> &'static Strings {
         match locale {
             Locale::PtBr => &PT_BR,
             Locale::EnUs => &EN_US,
             Locale::Es419 => &ES_419,
         }
+    }
+
+    /// Every brush name, for a test that checks the whole vocabulary at once.
+    pub fn tool_names(&self) -> &[&'static str] {
+        &self.tool_names
     }
 
     /// Every string, for tests that check the whole table at once.
@@ -817,6 +914,89 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn every_brush_has_a_name_in_every_language() {
+        // The brush shelf showed `ToolKind::label()` — the domain's own
+        // Portuguese — on all three representations whatever the interface
+        // language was, so choosing English translated the chrome and left
+        // Padrão, Inflar and Relevo on the shelf.
+        use clayspace_model::ToolKind;
+        for locale in Locale::ALL {
+            let strings = Strings::for_locale(locale);
+            for tool in ToolKind::ALL {
+                let name = strings.tool(tool);
+                assert!(
+                    !name.is_empty(),
+                    "{:?} has no name in {}",
+                    tool,
+                    locale.label()
+                );
+            }
+            // Distinct, because two brushes sharing a name on the shelf is a
+            // shelf a sculptor cannot use.
+            let mut seen = std::collections::BTreeSet::new();
+            for tool in ToolKind::ALL {
+                assert!(
+                    seen.insert(strings.tool(tool)),
+                    "{} names two brushes {:?}",
+                    locale.label(),
+                    strings.tool(tool)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_brush_names_are_translated_rather_than_copied() {
+        // Portuguese and Spanish are close enough that a copied vocabulary
+        // would pass unnoticed, and English is where a missed one shows.
+        use clayspace_model::ToolKind;
+        let translated = |from: Locale, to: Locale| {
+            ToolKind::ALL
+                .iter()
+                .filter(|tool| {
+                    Strings::for_locale(from).tool(**tool) != Strings::for_locale(to).tool(**tool)
+                })
+                .count()
+        };
+        assert!(
+            translated(Locale::PtBr, Locale::EnUs) >= 15,
+            "only {} of twenty brushes differ between Portuguese and English",
+            translated(Locale::PtBr, Locale::EnUs)
+        );
+        assert!(
+            translated(Locale::PtBr, Locale::Es419) >= 8,
+            "only {} of twenty brushes differ between Portuguese and Spanish",
+            translated(Locale::PtBr, Locale::Es419)
+        );
+        // The Portuguese table is the domain's own vocabulary, which is what
+        // makes `ToolKind::label` safe to keep using off the interface.
+        for tool in ToolKind::ALL {
+            assert_eq!(
+                Strings::for_locale(Locale::PtBr).tool(tool),
+                tool.label(),
+                "the Portuguese shelf disagrees with the domain about {tool:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_false_friend_is_not_carried_across() {
+        // Portuguese `Borrar` is smear and Spanish `Borrar` is erase. Carried
+        // straight across, the Spanish shelf would name the smudge brush
+        // "erase" and leave the erase brush with the smudge's name — two
+        // brushes, both wrong, and the mistake reads as correct to anyone
+        // checking one language at a time.
+        use clayspace_model::ToolKind;
+        let es = Strings::for_locale(Locale::Es419);
+        assert_eq!(es.tool(ToolKind::Apagar), "Borrar");
+        assert_eq!(es.tool(ToolKind::Borrar), "Difuminar");
+        assert_eq!(
+            Strings::for_locale(Locale::PtBr).tool(ToolKind::Borrar),
+            "Borrar"
+        );
     }
 
     #[test]

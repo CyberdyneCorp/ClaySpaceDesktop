@@ -2125,7 +2125,16 @@ impl App {
             memory,
             backend: &backend,
             units: self.units,
-            last_action: (!last.label.is_empty()).then_some((last.label.as_str(), last.changed)),
+            // The tool's name comes from the interface's own table where a
+            // tool made the action; the label is the fallback for the ones no
+            // tool made, and for the log, which has no language.
+            last_action: (!last.label.is_empty()).then(|| {
+                let named = last
+                    .tool
+                    .map(|tool| self.strings.tool(tool))
+                    .unwrap_or(last.label.as_str());
+                (named, last.changed)
+            }),
         };
 
         let output = context.run(raw_input, |ctx| {

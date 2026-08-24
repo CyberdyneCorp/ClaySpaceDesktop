@@ -521,7 +521,7 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
             });
             ui.menu_button(s.menu_brushes, |ui| {
                 for tool in ToolKind::ALL {
-                    if ui.button(tool.label()).clicked() {
+                    if ui.button(s.tool(tool)).clicked() {
                         queue.push(Command::SelectTool(tool));
                         ui.close_menu();
                     }
@@ -2189,7 +2189,7 @@ pub fn brush_shelf(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
                 );
                 paint_sphere(ui, rect, Tokens::text_dim(), active);
                 ui.label(
-                    egui::RichText::new(tool.label())
+                    egui::RichText::new(state.strings.tool(tool))
                         .size(type_scale::LABEL)
                         // The accent, on the active brush and nowhere else.
                         .color(if active {
