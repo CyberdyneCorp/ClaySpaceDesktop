@@ -222,6 +222,33 @@ Measured on a sphere with a bump and a dent beside it: upright, planing takes
 the bump from 1.1150 to 1.1145 and leaves the hollow at 0.8923; held, it fills
 the hollow to 0.9004 and leaves the bump exactly where it was.
 
+### Which voxel brushes have a sign
+
+Three of the engine's voxel verbs come in **documented pairs**, and only one
+half of each was ever asked for:
+
+| Brush | Held | The engine's own words |
+|---|---|---|
+| Padrão, Camada | erases | — |
+| **Inflar** | **erodes** | *"amount > 0 dilates, < 0 erodes"* — the binding passed a hard `1` |
+| **Pinçar** | **spreads** | `clay_voxel_sculpt_magnify`, *"pinch's inverse, sharing its walk so the two cannot drift apart"* |
+| **Apagar** | **deposits** | the one tool whose upright verb is the removal |
+| Suavizar, Relaxar | nothing | a majority filter has no sign |
+| Nudge | nothing | a smudge's direction *is* its sign |
+| Raspar | nothing | see below |
+
+**Raspar looked like a pair and is not.** Turning the scrape's normal over
+moves 2580 indices to 2568 — both directions remove, because the normal there
+is a fixed up-vector rather than the surface's own, so flipping it scrapes some
+other face rather than reversing the verb. Left unbound: a guess dressed as a
+feature is worse than an honest absence.
+
+**Pintar is inert on a grid, and says so.** It colours cells that are already
+there, and the palette holds one entry because nothing in the application
+chooses a brush colour — so it paints cells the colour they already are and
+reports `changed: false`. That is the gap under *Not built yet* rather than a
+broken binding.
+
 ### Held keys
 
 Two keys change what the stroke in your hand does, for the length of that

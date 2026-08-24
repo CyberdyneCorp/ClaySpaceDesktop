@@ -893,3 +893,46 @@ is a change of its own.
   - The fixture is unmirrored throughout now, on both sides of the seam, which
     is what the recorded roughness ceiling was calibrated on. Symmetry is
     measured in `sdf_brushes.rs`, which is where it belongs.
+
+## 21. Every voxel brush: it works, it takes a sign, it mirrors
+
+- [x] 21.1 Symmetry already worked; the sign did not
+  - The same three questions asked of the SDF shelf, and a different answer.
+    Voxel symmetry landed with the mesh's — a grid has no layer mirror either,
+    so its strokes are reflected — and all eight shaping brushes mirror. What
+    was missing was the opposite.
+  - Three engine verbs come in documented pairs and only one half of each was
+    ever asked for: `sculpt_inflate` (*"amount > 0 dilates, < 0 erodes"*, and
+    the binding passed a hard `1`), `sculpt_magnify` (*"pinch's inverse,
+    sharing its walk so the two cannot drift apart"*, wrapped in `claycore` and
+    reached by nothing), and `erase_brush` against `set_brush` for Apagar,
+    whose upright verb is the removal so its opposite runs the other way round.
+  - A fourth looked like a pair and is not. Turning the scrape's normal over
+    moved 2580 indices to 2568 — both directions removing, because the normal
+    there is a fixed up-vector rather than the surface's own. Left unbound: a
+    guess dressed as a feature is worse than an honest absence.
+  - Pintar is inert and honest about it — 0 of 1848 vertex colours changed and
+    `changed: false` reported. The palette holds one entry because nothing
+    chooses a brush colour, so it paints cells the colour they already are.
+
+- [x] 21.2 Two fixtures that were lying, and one instrument that could not
+  - The first fixture packed material only where the stroke lands. Half the
+    voxel verbs *reshape* rather than deposit, so the mirrored copy met an
+    empty grid and every reshaping brush read as "symmetry does nothing" —
+    the fixture's fault. A slab across the whole of x fixed it.
+  - The first symmetry metric asked whether the far side *grew*. Suavizar's far
+    side went from 814 vertices to 518: it was smoothed, not skipped. Asking
+    whether it *changed* is the question.
+  - And pixels turned out to be the wrong instrument for a grid altogether. A
+    perfectly mirrored deposit scores 0.33 against its own reflection — cells
+    are cubes, the greedy mesher merges quads differently either side of the
+    seam, and a MatCap-lit blocky ribbon in perspective is not pixel-symmetric.
+    The relative form does not hold either: mirroring lowers the score for five
+    of six and *raises* it for Pinçar, 0.4189 against 0.3834. The visual test
+    captures both frames per brush and asserts only that each reached the
+    screen; symmetry is measured on the cells in `voxel_brushes.rs`.
+  - Three dead ends before that, each ruled out by measurement rather than
+    argument: the dither (every verb dithers below full strength against a hash
+    of the *cell coordinate*, which is not symmetric), the wobble in the slab
+    (not an even function of x), and the camera (framing a slab's own bounds
+    puts it off the mirror plane).
