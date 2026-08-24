@@ -669,3 +669,51 @@ gizmo for — has no route here yet.
     rather than keeping what is on screen: a preview holds the deltas of one
     pass, and turning that into the edit would leave the undo stack describing
     a gesture rather than a deformation.
+
+- [x] 17.6 Preview a field cage too
+  - Reported after 17.5 shipped: the mesh preview was visible and the field one
+    was not. It was documented as a cost, and it did not have to be one.
+  - `clay_mesh_lattice_displacement` — "exposed so a host can preview the warp
+    without applying it" — was not wrapped. It is now, and the preview moves
+    the vertices the viewport already holds rather than touching the document,
+    so no lattice arithmetic is written twice and nothing is recorded.
+  - It is the **forward** map where the field's own deformer is the inverse
+    one, so the size of the difference is the whole question. Measured against
+    the engine's own result on a cage spanning ±1.1: **0.6% of the drag** at
+    0.05, 0.10 and 0.25, and 16% at 0.50 — a drag most of the way across the
+    box. A test holds the preview to under 5% at a quarter-box drag. What lands
+    on Deformar is the engine's, computed the engine's way.
+  - Two things measured on the way that are worth having written down:
+    - The engine's header quotes the forward/inverse difference as "under 1.5%
+      of the drag". At a drag of 45% of the cage's half-width it is 16%. The
+      header's number is a measurement of their case, not a bound.
+    - A probe that showed the same applied result for a 2×2×2 corner drag and a
+      4×4×4 all-layer drag looked like the field cage doing no FFD at all.
+      Dragging a *single* corner settled it: +z reaches 1.2 while −z and ±x
+      barely move. The earlier probe dragged every +z point, which on a
+      symmetric sphere gives nearly the same answer at any resolution.
+  - The rest positions are kept so the surface can be put back, and dropped on
+    a re-mesh: the vertices they described are gone, and the next preview
+    stores them again from what is there now.
+
+- [x] 17.7 Make a cage behave like a mode
+  - Three things reported from using it, and none of them was treating a cage
+    as the mode it is.
+  - **The brushes kept working.** A press that missed a control point fell
+    through to the brush, so a slip while aiming sculpted the very form the
+    cage was there to bend — and the blobs it left made the next point harder
+    to hit. The rule moved out of the event loop into `input::press_sculpts`,
+    with its reasons and three tests: a rule with three clauses and no test is
+    how a mode stops being a mode. It orbits rather than doing nothing, so a
+    cage can still be turned to look at from behind.
+  - **The form is drawn through** while a cage is up. Half the control points
+    are behind it and a solid surface hides exactly the handles that need
+    reaching. A `fs_ghost` entry and a pipeline with no back-face culling — and
+    so no depth write — which is what lets the far half of the cage read
+    through. Held to being *seen through* rather than turned off: a test
+    requires the ghosted form to still cover four fifths of what the solid one
+    did.
+  - **Handles inflated as the cage grew.** The size came from the cage's
+    current extent, so hauling one corner out grew every other handle and the
+    targets a sculptor was aiming at swelled under the pointer. `rest_span`
+    carries the box the cage was built with, and the size comes from that.

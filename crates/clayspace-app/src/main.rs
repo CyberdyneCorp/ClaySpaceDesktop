@@ -133,6 +133,8 @@ struct App {
     /// triangles are copied whole or not at all. Comparing a revision is what
     /// keeps "not at all" the usual answer.
     mesh_revision: Option<u64>,
+    /// The cage revision the drawn surface was warped at.
+    cage_revision: Option<u64>,
     /// The mask revision the drawn surface was sampled at.
     ///
     /// Separate from `mesh_revision` because the brick surface is uploaded
@@ -300,6 +302,7 @@ impl App {
             detail_policy: DetailPolicy::default(),
             shortcuts: Shortcuts::default(),
             mesh_revision: None,
+            cage_revision: None,
             mask_revision: None,
             edited_this_frame: false,
             detail_camera: None,
@@ -719,6 +722,7 @@ impl App {
         // drawing the document that was just closed.
         self.mesh_revision = None;
         self.mask_revision = None;
+        self.cage_revision = None;
         self.sync_mesh_layers();
         self.frame_all();
     }
@@ -970,6 +974,29 @@ impl App {
             let gpu = graphics.gpu.clone();
             app.document
                 .with(|document| graphics.geometry.refresh_mask(&gpu, document));
+        });
+    }
+
+    /// Brings the drawn surface's idea of the cage up to date.
+    ///
+    /// Its own pass because a cage moves no clay until it is applied: the
+    /// document is unchanged, so `sync_geometry` has nothing to re-mesh and
+    /// the field surface would sit still while the sculptor pulled a corner
+    /// across the viewport. On a mesh layer this does nothing — that route
+    /// previews by being deformed, which is exact.
+    fn sync_cage(&mut self) {
+        let revision = self.document.with(|document| document.cage_revision());
+        if self.cage_revision == Some(revision) {
+            return;
+        }
+        self.cage_revision = Some(revision);
+        self.timed("gaiola", |app| {
+            let Some(graphics) = app.graphics.as_mut() else {
+                return;
+            };
+            let gpu = graphics.gpu.clone();
+            app.document
+                .with(|document| graphics.geometry.preview_cage(&gpu, document));
         });
     }
 
@@ -1229,18 +1256,11 @@ impl App {
     /// From the cage's own extent rather than fixed, so a cage around a
     /// thumbnail and one around a bust both get a handle a person can hit.
     fn cage_handle(cage: &clayspace_model::LatticeState) -> f32 {
-        let mut min = [f32::MAX; 3];
-        let mut max = [f32::MIN; 3];
-        for point in &cage.points {
-            for axis in 0..3 {
-                min[axis] = min[axis].min(point[axis]);
-                max[axis] = max[axis].max(point[axis]);
-            }
-        }
-        let span = (0..3)
-            .map(|axis| max[axis] - min[axis])
-            .fold(0.0f32, f32::max);
-        (span * Self::CAGE_HANDLE).max(1e-4)
+        // From the box the cage was *built* with, not from where its points
+        // are now. Sized from the current extent, every handle grew whenever
+        // any one of them was dragged out — so the targets a sculptor was
+        // aiming at swelled under the pointer as they worked.
+        (cage.rest_span * Self::CAGE_HANDLE).max(1e-4)
     }
 
     /// Brings the viewport's copy of the cage up to date.
@@ -1250,6 +1270,10 @@ impl App {
             return;
         };
         let gpu = graphics.gpu.clone();
+        // Drawn through while a cage is up: half the control points are behind
+        // the form, and a solid surface hides exactly the handles that need
+        // reaching.
+        graphics.renderer.set_ghosted(cage.active);
         if !cage.active {
             graphics.renderer.set_lattice(
                 &gpu,
@@ -1653,12 +1677,16 @@ impl App {
                 _ if caged => Drag::Cage,
                 egui::PointerButton::Middle => Drag::Pan,
                 egui::PointerButton::Secondary => Drag::Orbit,
-                // On the surface it sculpts; off it, it orbits. That is
-                // ZBrush's rule, and it is the only one that leaves a Mac
-                // trackpad — which has no comfortable right-drag — able to
-                // turn the model.
-                _ if input.orbit_modifier || !on_surface => Drag::Orbit,
-                _ => Drag::Sculpt,
+                // The rule lives in `input`, with its reasons and its tests.
+                _ if clayspace_app::input::press_sculpts(
+                    on_surface,
+                    input.orbit_modifier,
+                    self.lattice.state().get().active,
+                ) =>
+                {
+                    Drag::Sculpt
+                }
+                _ => Drag::Orbit,
             };
             self.drag = started;
             if started == Drag::Rig {
@@ -2161,6 +2189,7 @@ impl App {
             ]
         });
         self.sync_mesh_layers();
+        self.sync_cage();
         self.sync_mask();
         self.sync_lattice_view();
         self.sync_symmetry_overlay();

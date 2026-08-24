@@ -433,11 +433,29 @@ drag replaces the last rather than adding to it, so the preview never
 compounds and the whole gesture is still one undo. Abandoning the cage takes
 the preview back with it.
 
-**On a field it does not**, and that is a cost rather than an oversight: the
-field route writes a lattice deformer into the document as an undoable edit and
-refills the layer's whole brick region — **68.8 ms** for one apply on the
-starting form. That is not a thing to do on every pointer move, so there the
-cage moves live and the surface follows when it is applied.
+**On a field the drawn surface follows too**, by a different route. Applying a
+field cage writes a deformer into the document as an undoable edit and refills
+the layer's whole brick region — **68.8 ms** for one apply on the starting form
+— which is not a thing to do on every pointer move. So the preview moves the
+vertices the viewport already holds, by the warp the engine supplies
+(`clay_mesh_lattice_displacement`, which exists for exactly this), and no
+lattice arithmetic is written twice.
+
+That warp is the **forward** map where the field's own deformer is the inverse
+one. They are not the same map, and the size of the difference is the whole
+question. Measured against the engine's own result on a cage spanning ±1.1:
+
+| Drag | Preview against the engine |
+|---|---|
+| 0.05, 0.10, 0.25 | **0.6%** of the drag |
+| 0.50 | 16% of the drag |
+
+So the preview tracks closely for ordinary work and drifts on a drag most of
+the way across the box. That is a preview's error budget rather than an edit's:
+what lands on **Deformar** is the engine's, computed the engine's way, and the
+surface settles onto it. Taking the cage down puts the drawn surface back — the
+preview moved vertices the document knows nothing about, so nothing else ever
+would.
 
 A press on a control point takes the primary button before the surface does.
 That is not an ordering detail: a control point sits *outside* the form, so a
@@ -458,6 +476,26 @@ Measured on a unit sphere: pulling the four top corners of a 2×2×2 cage up by
 point is interpolated, so dragging one moves that corner of the box exactly.
 The same pull forward on a 4×4×4 field cage takes its reach from 1.000 to
 1.5777.
+
+### A cage is a mode
+
+While one is up the layer is being *deformed*, and three things follow from
+that:
+
+- **The brushes are off.** A press that misses a control point orbits rather
+  than sculpting. It used to fall through to the brush, so a slip while aiming
+  sculpted the very form the cage was there to bend — and the strokes it left
+  made the next control point harder to hit. Orbiting rather than nothing, so
+  the cage can still be turned to look at from behind without being taken down.
+- **The form is drawn through.** Half the control points are behind it, and a
+  solid surface hides exactly the handles that need reaching. Blender's X-ray
+  and ZBrush's Ghost do the same thing for the same reason. Seen through, not
+  turned off: the form stays readable as a form.
+- **Handles keep their size.** They are sized from the box the cage was *built*
+  with, not from where its points are now. Sized from the current extent — as
+  they were at first — hauling one corner out inflated every other handle, so
+  the targets a sculptor was aiming at swelled under the pointer as they
+  worked.
 
 ### The manipulator
 

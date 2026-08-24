@@ -15,6 +15,7 @@
 
 mod support;
 
+use clayspace_app::SurfaceGeometry;
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{Direction, GizmoHandle, GizmoMode, LatticeModel, LatticeState, SculptModel};
 use clayspace_view::{Camera, GizmoView, Image, LatticeView, Vertex};
@@ -57,18 +58,7 @@ fn surface(document: &mut ClayDocument) -> (Vec<Vertex>, Vec<u32>) {
 
 /// The handle size the application computes, spelled the same way.
 fn handle(cage: &LatticeState) -> f32 {
-    let mut min = [f32::MAX; 3];
-    let mut max = [f32::MIN; 3];
-    for point in &cage.points {
-        for axis in 0..3 {
-            min[axis] = min[axis].min(point[axis]);
-            max[axis] = max[axis].max(point[axis]);
-        }
-    }
-    (0..3)
-        .map(|axis| max[axis] - min[axis])
-        .fold(0.0f32, f32::max)
-        * 0.022
+    cage.rest_span * 0.022
 }
 
 fn how_many_differ(a: &Image, b: &Image) -> usize {
@@ -384,5 +374,240 @@ fn the_bend_reaches_the_screen_while_the_cage_is_being_dragged() {
         "the drawn surface changed {changed} pixels while the cage was being \
          dragged, so the sculptor is setting corners blind and looking at the \
          result only after Deformar. See target/visual/99-preview-during.png"
+    );
+}
+
+// -- a field cage, previewed on the drawn surface ----------------------------
+//
+// The field route cannot preview itself: applying a cage writes a deformer
+// into the document as an undoable edit and refills the layer's whole brick
+// region, 68.8 ms measured. So the preview moves the vertices the viewport
+// already holds, by the warp the engine supplies. Every part of that can fail
+// on its own — the warp can be zero, the vertices can be moved without being
+// uploaded, and the surface can be left bent after the cage comes down.
+
+fn field() -> Option<ClayDocument> {
+    let policy = BackendPolicy::discover(None).ok()?;
+    ClayDocument::new(policy)
+        .and_then(ClayDocument::with_starting_form)
+        .ok()
+}
+
+#[test]
+fn a_field_cage_bends_the_drawn_surface_while_it_is_dragged() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let Some(mut document) = field() else {
+        return;
+    };
+    let camera = framed(&document);
+    let mut geometry = SurfaceGeometry::new(&harness.gpu);
+    geometry
+        .sync(&harness.gpu, &mut document)
+        .expect("the first mesh");
+    let rest = harness.capture(geometry.mesh(), &camera, false, "100-field-cage-rest");
+
+    document.begin_lattice([4, 4, 4]).expect("a cage");
+    let cage = document.lattice();
+    for (index, point) in cage.points.iter().enumerate() {
+        if point[2] <= 0.0 {
+            continue;
+        }
+        document.select_lattice_point(Some(index));
+        document
+            .drag_lattice_point([point[0], point[1], point[2] + 0.25])
+            .expect("the drag was refused");
+    }
+    // Exactly what the application does when the cage's revision moves — and
+    // deliberately without a `sync`, because a cage that has not been applied
+    // has changed nothing for a re-mesh to find.
+    geometry.preview_cage(&harness.gpu, &document);
+    let during = harness.capture(geometry.mesh(), &camera, false, "101-field-cage-during");
+
+    let changed = how_many_differ(&rest, &during);
+    assert!(
+        changed > 2000,
+        "a field cage dragged a quarter of the way across its box changed \
+         {changed} pixels of the drawn surface, so the sculptor pulls a corner \
+         and watches nothing happen. See target/visual/101-field-cage-during.png"
+    );
+}
+
+#[test]
+fn taking_the_field_cage_down_puts_the_surface_back() {
+    // The preview moves vertices the document knows nothing about, so nothing
+    // else would ever put them back.
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let Some(mut document) = field() else {
+        return;
+    };
+    let camera = framed(&document);
+    let mut geometry = SurfaceGeometry::new(&harness.gpu);
+    geometry.sync(&harness.gpu, &mut document).expect("mesh");
+    let rest = harness.capture(geometry.mesh(), &camera, false, "102-field-cage-before");
+
+    document.begin_lattice([4, 4, 4]).expect("a cage");
+    let cage = document.lattice();
+    for (index, point) in cage.points.iter().enumerate() {
+        if point[2] > 0.0 {
+            document.select_lattice_point(Some(index));
+            document
+                .drag_lattice_point([point[0], point[1], point[2] + 0.25])
+                .expect("the drag was refused");
+        }
+    }
+    geometry.preview_cage(&harness.gpu, &document);
+    assert!(
+        how_many_differ(
+            &rest,
+            &harness.capture(geometry.mesh(), &camera, false, "103-field-cage-shown")
+        ) > 2000,
+        "there was no preview to take back"
+    );
+
+    document.cancel_lattice();
+    geometry.preview_cage(&harness.gpu, &document);
+    let after = harness.capture(geometry.mesh(), &camera, false, "104-field-cage-cleared");
+    assert_eq!(
+        how_many_differ(&rest, &after),
+        0,
+        "abandoning the cage left the drawn surface bent, which is a picture \
+         of a document that does not exist"
+    );
+}
+
+#[test]
+fn the_preview_tracks_what_the_engine_will_actually_do() {
+    // The forward warp against the field's own inverse-map deformer. They are
+    // not the same map, and the size of the difference is the whole question:
+    // a preview that pointed the wrong way would be worse than none.
+    let Some(mut previewed) = field() else {
+        return;
+    };
+    previewed.begin_lattice([4, 4, 4]).expect("a cage");
+    let at = SculptModel::pick(&previewed, [0.0, 0.0, 4.0], [0.0, 0.0, -1.0]).expect("surface");
+    let cage = previewed.lattice();
+    let drag = 0.25f32;
+    for (index, point) in cage.points.iter().enumerate() {
+        if point[2] > 0.0 {
+            previewed.select_lattice_point(Some(index));
+            previewed
+                .drag_lattice_point([point[0], point[1], point[2] + drag])
+                .expect("the drag was refused");
+        }
+    }
+    let shown = previewed.cage_warp(&[at]).expect("a field cage warps")[0];
+    let predicted = at[2] + shown[2];
+
+    previewed.apply_lattice().expect("the cage was refused");
+    let actual =
+        SculptModel::pick(&previewed, [0.0, 0.0, 4.0], [0.0, 0.0, -1.0]).expect("surface")[2];
+
+    let error = (actual - predicted).abs() / drag;
+    assert!(
+        error < 0.05,
+        "the preview showed the surface at {predicted} and the engine put it \
+         at {actual}, which is {:.0}% of the drag — a preview is allowed an \
+         error budget an edit is not, but not that one",
+        error * 100.0
+    );
+}
+
+// -- what a cage takes over --------------------------------------------------
+//
+// Three things reported from using it. A cage is a mode, and none of these was
+// treating it as one.
+
+#[test]
+fn the_form_is_drawn_through_while_a_cage_is_up() {
+    // Half the control points are behind the form, and a solid surface hides
+    // exactly the handles that need reaching. Blender's X-ray and ZBrush's
+    // Ghost do the same thing for the same reason.
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let Some(mut document) = meshed() else {
+        return;
+    };
+    let camera = framed(&document);
+    let (vertices, indices) = surface(&mut document);
+    let mut mesh = clayspace_view::GpuMesh::new(&harness.gpu);
+    mesh.upload(&harness.gpu, &vertices, &indices);
+
+    document.begin_lattice([2, 2, 2]).expect("a cage");
+    let cage = document.lattice();
+    let edges = cage.edges();
+    let with_cage = |harness: &mut Harness, ghosted: bool, name: &str| {
+        harness.renderer.set_ghosted(ghosted);
+        harness.renderer.set_lattice(
+            &harness.gpu,
+            LatticeView {
+                points: &cage.points,
+                edges: &edges,
+                selected: &[],
+                gizmo: None,
+                handle: handle(&cage),
+            },
+        );
+        harness.capture(&mesh, &camera, false, name)
+    };
+    let solid = with_cage(&mut harness, false, "105-cage-solid");
+    let ghosted = with_cage(&mut harness, true, "106-cage-ghosted");
+    harness.renderer.set_ghosted(false);
+
+    let changed = how_many_differ(&solid, &ghosted);
+    assert!(
+        changed > 4000,
+        "the form was drawn the same way with a cage up and without one, so \
+         the control points behind it are still hidden ({changed} pixels). See \
+         target/visual/106-cage-ghosted.png"
+    );
+
+    // Seen through, not turned off: the form is still readable as a form.
+    let ground = ghosted.pixel(4, 4);
+    let visible = ghosted
+        .pixels
+        .chunks_exact(4)
+        .filter(|p| (0..3).any(|c| p[c].abs_diff(ground[c]) > 12))
+        .count();
+    let was = solid
+        .pixels
+        .chunks_exact(4)
+        .filter(|p| (0..3).any(|c| p[c].abs_diff(ground[c]) > 12))
+        .count();
+    assert!(
+        visible as f64 > was as f64 * 0.8,
+        "the ghosted form covers {visible} pixels against {was} solid, which \
+         is a surface turned off rather than one seen through"
+    );
+}
+
+#[test]
+fn a_handle_keeps_its_size_when_another_point_is_dragged() {
+    // Reported: selecting a point and moving it made every other handle grow.
+    // The size came from the cage's *current* extent, so hauling one corner
+    // out inflated the whole set — and the targets a sculptor was aiming at
+    // swelled under the pointer as they worked.
+    let Some(mut document) = meshed() else {
+        return;
+    };
+    document.begin_lattice([2, 2, 2]).expect("a cage");
+    let before = handle(&document.lattice());
+
+    let cage = document.lattice();
+    document.select_lattice_point(Some(7));
+    let point = cage.points[7];
+    document
+        .drag_lattice_point([point[0] + 3.0, point[1] + 3.0, point[2] + 3.0])
+        .expect("the drag was refused");
+
+    let after = handle(&document.lattice());
+    assert!(
+        (after - before).abs() < 1e-6,
+        "a corner hauled three units out took the handle size from {before} to \
+         {after}"
     );
 }

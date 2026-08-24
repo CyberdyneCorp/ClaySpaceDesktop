@@ -184,6 +184,7 @@ mod tests {
                 points: vec![[0.0; 3]; count],
                 selection: Vec::new(),
                 mode: GizmoMode::default(),
+                rest_span: 2.0,
                 touched: false,
             };
             Ok(())
