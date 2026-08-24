@@ -1103,3 +1103,42 @@ Recorded under *Not built yet*.
     reflects items, so a tube laid across the plane is folded onto itself. That
     is the mirror doing what a mirror does; it has its own test now so nobody
     else spends an hour on it.
+
+## 25. Zooming at the clay rather than through it
+
+- [x] 25.1 Stop against the surface
+  - Reported: the zoom goes inside the object. It did — `Camera::zoom` clamped
+    the distance to an arbitrary floor of 0.01 and nothing in it knew where the
+    surface was, so a few notches too many put the eye through the clay and the
+    sculpt turned inside out.
+  - The camera stops a little short of what the pointer's ray met. What must
+    stay between them is a *fraction* of the gap, so the standoff is the same
+    on screen at any scale — a fixed one would be a mile on a thumbnail and
+    nothing on a bust — and never less than twice the near plane, since a
+    surface closer than that is clipped away, which looks exactly like having
+    gone through it.
+  - Only ever a limit on coming *in*. Pulling back past the surface is ordinary
+    and has its own test.
+
+- [x] 25.2 Aim it, the way Blender does
+  - The pivot follows a quarter of the way toward the focus, so the point under
+    the pointer drifts to the middle and the next orbit turns around what was
+    being looked at. Partial rather than complete: snapping the pivot onto the
+    surface would swing the view on every notch.
+  - With nothing under the pointer it is the plain multiplicative zoom. There
+    is nothing to stop at over empty space, and a wheel that refused to move
+    would read as broken.
+
+- [x] 25.3 Two tests that were measuring the wrong thing
+  - A visual test took the corner pixel as the background, which is a fine
+    stand-in until the form fills the frame — and a form filling the frame is
+    exactly the case being watched. At that point the corner *is* clay,
+    everything reads as background, and a full frame measured as an empty one.
+    Against the renderer's own background now.
+  - And an assertion that twenty notches would come within 0.05 of the clay was
+    a number picked rather than derived: the multiplicative rate is a tenth of
+    what is left per notch, so twenty close about six sevenths of the gap and
+    the standoff is nowhere near binding. The test says that instead.
+  - `the_old_behaviour_would_have_failed_this` holds the plain zoom to still
+    driving the distance inside a unit sphere, because a test that passes on
+    both the fix and the fault is not a test.

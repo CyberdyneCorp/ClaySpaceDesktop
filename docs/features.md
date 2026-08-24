@@ -877,6 +877,30 @@ sits inside a torso — and picking the far one makes a chest impossible to grab
 
 ## Viewport
 
+### Zooming
+
+The wheel zooms **at what is under the pointer** and stops a little short of
+it, which is Blender's behaviour and two things rather than one:
+
+- **It stops against the clay.** The distance used to be clamped to an
+  arbitrary floor rather than to anything in the scene, so a few notches too
+  many put the eye through the surface and the sculpt turned inside out. The
+  camera now comes as close as it likes and never through: what must stay
+  between it and the surface is a *fraction* of the gap — so the standoff is
+  the same on screen whatever scale the sculpt is at, where a fixed one would
+  be a mile on a thumbnail and nothing on a bust — and never less than a little
+  in front of the near plane, since a surface closer than that is clipped away,
+  which looks exactly like having gone through it.
+- **The pivot follows part of the way**, so the point under the pointer drifts
+  toward the middle and the next orbit turns around what you were looking at.
+  Partial rather than complete: snapping the pivot onto the surface would swing
+  the view on every notch.
+
+Two things it does *not* do. Zooming **out** is never held back — the standoff
+limits coming in and nothing else. And with the pointer over empty space it is
+the plain multiplicative zoom, because there is nothing there to stop at and a
+wheel that refused to move would read as broken.
+
 - MatCap shading with five built-in materials, generated rather than shipped as
   assets. Vertex colours modulate the material where a mesh carries them.
 - Ambient occlusion, so the surface darkens where it closes in on itself. A
