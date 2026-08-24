@@ -89,6 +89,10 @@ pub struct ShellState<'a> {
     pub extrude: ExtrudeSettings,
     /// How far Expandir, Contrair and Suavizar máscara reach.
     pub mask_steps: i32,
+    /// Which picture of a voxel layer the viewport draws, and how much its
+    /// occupancy is filtered before the smooth one is taken.
+    pub voxel_display: clayspace_model::VoxelDisplay,
+    pub voxel_blur: clayspace_model::SmoothBlur,
     /// The cage around the form, while one is up.
     pub lattice: clayspace_model::LatticeState,
     /// What a fresh cage would be built with.
@@ -1906,6 +1910,70 @@ pub fn export_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut Co
 }
 
 /// Material, geometry, resolution and brush controls.
+/// How a voxel layer is drawn.
+///
+/// A display setting and nothing more: the engine keeps the choice an argument
+/// rather than grid state so two hosts sharing a document cannot disagree
+/// about what it looks like, and nothing here touches a cell.
+fn voxel_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    use clayspace_model::{SmoothBlur, VoxelDisplay};
+    let s = state.strings;
+    heading(ui, s.section_geometry);
+
+    ui.label(
+        egui::RichText::new(s.label_voxel_display)
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    );
+    ui.horizontal_wrapped(|ui| {
+        for display in VoxelDisplay::ALL {
+            let on = state.voxel_display == display;
+            let button = egui::Button::new(
+                egui::RichText::new(display.label())
+                    .size(type_scale::LABEL)
+                    .color(if on {
+                        Tokens::text()
+                    } else {
+                        Tokens::text_dim()
+                    }),
+            )
+            .fill(if on {
+                Tokens::raised()
+            } else {
+                Tokens::panel()
+            });
+            if ui.add(button).clicked() {
+                queue.push(Command::SetVoxelDisplay(display, state.voxel_blur));
+            }
+        }
+    });
+
+    if state.voxel_display != VoxelDisplay::Smooth {
+        return;
+    }
+    if let Some(value) = slider(
+        ui,
+        s.label_voxel_blur,
+        state.voxel_blur.passes() as f32,
+        0.0..=SmoothBlur::MOST as f32,
+        0,
+    ) {
+        queue.push(Command::SetVoxelDisplay(
+            state.voxel_display,
+            SmoothBlur::new(value.round() as i32),
+        ));
+    }
+    // Said where it is true rather than left for a sculptor to find out from a
+    // missing finger.
+    if state.voxel_blur.can_lose_detail() {
+        ui.label(
+            egui::RichText::new(s.hint_voxel_blur)
+                .size(type_scale::LABEL)
+                .color(Tokens::accent()),
+        );
+    }
+}
+
 /// The cage a sculptor is working in: how fine it is, and applying it.
 ///
 /// Only while one is up. A cage is raised from the Dinâmica menu, and a
@@ -2099,6 +2167,12 @@ pub fn right_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
                 queue.push(Command::RemoveZsphere);
             }
         }
+    }
+
+    // A grid is boxes; whether it should *look* like boxes is a separate
+    // question, and the answer belongs beside the layer it is asked about.
+    if state.representation == Representation::Voxel {
+        voxel_section(ui, state, queue);
     }
 
     if state.lattice.active {

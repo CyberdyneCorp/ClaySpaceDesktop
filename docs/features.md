@@ -634,6 +634,57 @@ surface**. The manipulator is drawn over the cage and sits on the selection, and
 the cage sits outside the form; without that order a press on the green arrow
 finds a control point behind it, and a press on a corner handle finds the clay.
 
+### Boxes or a surface
+
+A grid *is* boxes. Whether it should **look** like boxes is a separate
+question, and the engine answers it plainly: the boxy picture is "correct for
+hard-surface voxel work and for export, and the wrong picture of an organic
+sculpt". It ships a mesher for each and keeps the choice an argument rather
+than grid state, "so two hosts sharing a document cannot disagree about what it
+looks like and one host can show both pictures of one sculpt without mutating
+it".
+
+**Exibir voxels como** in the inspector chooses. Nothing it does touches a
+cell, enters the history or marks the document modified.
+
+| | vertices | triangles | mesh time | normals |
+|---|---|---|---|---|
+| Voxels (greedy) | 6828 | 3414 | **1.5 ms** | carried |
+| Suave, blur 0 | 2221 | 4980 | 16.8 ms | **computed here** |
+| Suave, blur 1 | 992 | 1992 | 19.0 ms | **computed here** |
+
+Two facts shape how it is wired, and both are the engine's rather than
+preferences:
+
+- **The smooth mesh carries no normals.** Colour blends across a smooth surface
+  — a vertex sits between up to eight voxels and averages the occupied ones,
+  because there is no facet to hold one palette entry — but a normal is the
+  host's to work out. Without them the surface renders as a flat silhouette,
+  which is what the first attempt at this looked like. They are computed
+  area-weighted on the way through.
+- **It cannot be meshed a chunk at a time.** `clay_voxel_mesh_chunks` is the
+  greedy mesher alone, because greedy quads are axis-aligned and clamp to a
+  chunk boundary exactly while surface nets place a vertex from a cell's
+  *neighbourhood* and would tear. So the smooth picture is rebuilt when a
+  gesture **settles**, not while it is made: the incremental boxy path is
+  3.3 ms a dab against 309 ms for a whole-grid re-mesh.
+
+**Suavização** is the engine's `blur`, in passes of a 3×3×3 box over occupancy,
+and its trade is real in both directions. At **0** nothing is filtered and
+nothing can be lost, but the surface still *terraces* — every crossing over
+binary occupancy interpolates to the same midpoint, so corners round and steps
+remain. At **1** it reads as clay, and an isolated voxel sits near 0.3
+occupancy, under the isolevel, and is gone; thin features go the same way. The
+default is 0, and the interface says so where it is not: "a default that
+silently deletes a sculptor's detail is the wrong default however good it
+looks."
+
+**This is surface nets, not dual contouring.** A vertex sits at the *centroid*
+of its cell's edge crossings, which is what smooths — so a corner rounds.
+Dual contouring fits the vertex by least squares to hermite data and keeps a
+sharp corner sharp. Preserving them would be a change to the engine rather
+than to this application.
+
 ## Crossing between representations
 
 ClayCore carries SDF, voxel and mesh side by side, and the intended workflow

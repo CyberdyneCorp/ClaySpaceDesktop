@@ -153,6 +153,8 @@ fn state<'a>(
         },
         extrude: clayspace_model::ExtrudeSettings::default(),
         mask_steps: 1,
+        voxel_display: clayspace_model::VoxelDisplay::default(),
+        voxel_blur: clayspace_model::SmoothBlur::default(),
         lattice: clayspace_model::LatticeState::default(),
         lattice_divisions: [3; 3],
         // A rig, mid-edit, so the capture shows the armature section and the

@@ -12,7 +12,8 @@ use std::path::PathBuf;
 
 use clayspace_model::{
     ConversionSettings, ExportSettings, ExtrudeSettings, Falloff, GizmoHandle, GizmoMode,
-    ImportSettings, LayerKey, Locale, MaskOp, StrokeModifiers, ToolKind, ViewPresetKind,
+    ImportSettings, LayerKey, Locale, MaskOp, SmoothBlur, StrokeModifiers, ToolKind,
+    ViewPresetKind, VoxelDisplay,
 };
 
 /// A change to the application or the document.
@@ -194,6 +195,9 @@ pub enum Command {
     NextDisplayUnit,
     /// Which language the interface is presented in.
     SetLocale(Locale),
+    /// Which picture of a voxel layer the viewport draws, and how much its
+    /// occupancy is filtered before the smooth one is taken.
+    SetVoxelDisplay(VoxelDisplay, SmoothBlur),
     /// Shows or hides the attribution manifest.
     ToggleAttribution,
     /// Shows or hides the diagnostics report.
@@ -219,6 +223,9 @@ impl Command {
                 | Self::TogglePolyframe
                 | Self::NextDisplayUnit
                 | Self::SetLocale(_)
+                // A picture of a grid, not a change to one. The engine keeps
+                // it an argument rather than grid state for the same reason.
+                | Self::SetVoxelDisplay(..)
                 | Self::ToggleAttribution
                 | Self::ToggleDiagnostics
                 | Self::CopyDiagnostics
@@ -393,6 +400,7 @@ impl Command {
             Self::RunExport => "export",
             Self::NextDisplayUnit => "display unit",
             Self::SetLocale(_) => "idioma",
+            Self::SetVoxelDisplay(..) => "exibição de voxels",
             Self::ToggleAttribution => "attribution",
             Self::ToggleDiagnostics => "diagnostics",
             Self::CopyDiagnostics => "copy diagnostics",
