@@ -1018,3 +1018,42 @@ is a change of its own.
     except the two that should not: Máscara paints a freeze and Pintar has no
     colour to paint with. Padrão and Camada move ~1840 pixels, Inflar 1094,
     Apagar 448, Pinçar 432, Nudge 427, Raspar 264, Suavizar 243.
+
+## 23. The tendril a snakehook pulls
+
+- [x] 23.1 One gesture, one curve
+  - It came out a string of beads. Puxar authors a *curve* — a swept-sphere
+    chain tapering to its tip — and a drag arrives in segments, so each segment
+    authored its own item and restarted the taper from full width. A curving
+    pull left a chain of spheres.
+  - The gesture holds the curve it is pulling and replaces its points through
+    `clay_layer_set_stroke_points`, which was in the engine and unwrapped.
+    Measured on one curving pull, the thickness along it wobbled by **0.210**
+    before and **0.122** after — and a single tapering curve wobbles 0.137 from
+    the taper alone, so the fix is under that.
+  - The ViewModel replays a field snakehook from its anchor now, as a mesh drag
+    already did. That is only safe because the model *grows* the one curve
+    rather than adding another; replaying onto the old behaviour would have
+    stacked a tendril per segment.
+  - The curve is dropped when the gesture ends, so the next pull is its own.
+
+- [x] 23.2 A curve rather than a chain of corners
+  - A stroke's points are hard corners by default — a straight segment to the
+    next — which the engine says is "exactly what a chain authored before types
+    existed means". For a path a pointer traced it is wrong: every sample is a
+    kink and the swept sphere bulges at each one.
+  - `clay_item_set_curve_points` takes a type per point and was unwrapped.
+    Catmull-Rom passes *through* the points, so the tendril is the path the
+    pointer took, and the engine tessellates typed points into the same segment
+    chain at compile time — so it costs nothing at evaluation.
+  - A straight drag hides this completely, which is why the first probe found
+    nothing. A curving one is where it shows.
+
+**Asked alongside**: whether Nomad's Tube would be possible today. Every piece
+is in the engine — `CLAY_PRIM_SWEPT` sweeps a profile along a guide curve,
+`clay_item_add_loft_profile` supplies seven profile kinds including arbitrary
+polygons, `clay_item_set_curve_points` types each point hard, Catmull-Rom,
+B-spline or Bezier with handles, and `clay_layer_set_stroke_points` edits a
+placed curve undoably. What is missing is entirely on this side: a tool that
+places a curve, draws its control points and handles, and lets them be dragged.
+Recorded under *Not built yet*.

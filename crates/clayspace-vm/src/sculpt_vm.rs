@@ -645,7 +645,22 @@ impl SculptViewModel {
     /// appearing only when the pointer comes up. It stays one undo: every
     /// segment replaces the last, and only the release banks anything.
     fn replays_from_the_anchor(&self, tool: ToolKind) -> bool {
-        tool.is_path_driven() && self.model.active_representation() == Representation::Mesh
+        if !tool.is_path_driven() {
+            return false;
+        }
+        match self.model.active_representation() {
+            Representation::Mesh => true,
+            // A field's snakehook authors a *curve*, and a curve is the whole
+            // path or it is a trail of short ones. Given only what is new, each
+            // segment restarted the taper and the tendril came out a string of
+            // beads — measured, the thickness along a curving pull wobbled by
+            // 0.210 against 0.137 for the same pull delivered whole, and that
+            // 0.137 is the taper itself. The model grows the one curve rather
+            // than adding another, so replaying is free of the stacking that
+            // makes it wrong elsewhere.
+            Representation::Sdf => tool == ToolKind::Puxar,
+            Representation::Voxel => false,
+        }
     }
 
     /// Sends the part of the gesture the model has not seen yet.

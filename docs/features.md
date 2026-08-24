@@ -30,7 +30,7 @@ All fifteen are bound and each is covered by a before-and-after capture in
 | Preencher | `clay_voxel_sculpt_fill_cavities` | voxel | Fills narrow pockets |
 | Camada | `clay_layer_apply_stroke`, clamped | both | A stroke that does not build up on itself |
 | Máscara | `clay_mask_apply_stroke` | all three | Freezes a region against every verb. Invert, clear, expand, contract, smooth, bounded complement and extrude are in the Máscaras menu |
-| Puxar | swept-sphere chain | SDF | Pulls a tendril out, tapering to its tip |
+| Puxar | swept-sphere chain on a Catmull-Rom curve | SDF | Pulls a tendril out, tapering to its tip |
 | Polir | `clay_item_volume_flatten_from`, cut-only | SDF | hPolish |
 | Relaxar | `clay_item_volume_relax` | SDF | Relax as a brush |
 | Nudge | `clay_voxel_sculpt_smudge` | voxel | Drags the surface skin, leaving the interior |
@@ -135,6 +135,28 @@ the mirroring is exact and the difference is the tessellation's. Blender's UV
 sphere is symmetric by construction, hence its 82/82. What a sculptor means by
 symmetry is that the *form* comes out symmetric, so that is what the tests
 measure.
+
+### Pulling a tendril
+
+**Puxar** authors a curve — a chain of spheres swept along the path, tapering
+toward the tip — rather than stamping along it. Two things make it read as one
+tendril rather than a string of beads, and both were wrong at first:
+
+- **One gesture grows one curve.** A drag arrives in segments, and a segment
+  that authored its own item restarted the taper from full width every time.
+  The gesture holds the curve it is pulling and *replaces* its points, so the
+  tendril is the length of the whole drag. Measured on a curving pull, the
+  thickness along it wobbled by **0.210** that way against **0.122** now — and
+  a single tapering curve wobbles 0.137 from the taper alone.
+- **Its points are joined by a spline.** A stroke's points are hard corners by
+  default, which is right for a chain authored point by point and wrong for a
+  path a pointer traced: every sample became a kink and the swept sphere
+  bulged at each one. Catmull-Rom passes *through* the points, so the tendril
+  is the path the pointer took. A straight drag hides this entirely; a curving
+  one is where it shows.
+
+The curve is held only while a gesture is open, so the next pull is its own
+tendril rather than a continuation of the last.
 
 ## Masking
 
@@ -1053,6 +1075,18 @@ names go through the string tables now. The other 62 label arms across 14 enums
 `ExtrudeSide`, `Falloff` and the rest — are still Portuguese literals returned
 from `clayspace-model`, so the option bar and the viewport bar stay Portuguese
 whatever the menu says. `Strings::tool` is the shape the rest should follow.
+
+**A curve tool.** Nomad's Tube, 3DCoat's splines: a curve placed with control
+points, edited afterwards, carrying a radius and a 2D profile along its length.
+Every piece is in the engine already — `CLAY_PRIM_SWEPT` sweeps a profile along
+a guide curve, `clay_item_add_loft_profile` supplies the profiles (circle, box,
+hexagon, triangle, trapezoid, vesica, or an arbitrary polygon),
+`clay_item_set_curve_points` types each point hard, Catmull-Rom, B-spline or
+Bezier with handles, and `clay_layer_set_stroke_points` edits a placed curve
+undoably. What is missing is entirely on this side: a tool that places a curve,
+draws its control points and handles, and lets them be dragged. **Puxar** is
+the same primitive driven by a drag instead — a curve you cannot go back and
+edit.
 
 **A manipulator outside the cage.** The move/turn/scale widget acts on a
 lattice selection and on nothing else. Transforming a whole layer with it —

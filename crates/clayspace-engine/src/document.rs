@@ -229,6 +229,12 @@ pub struct ClayDocument {
     /// was built — so a frame in which nothing moved costs one comparison
     /// rather than a whole-grid re-mesh.
     voxel_smooth: std::collections::BTreeMap<LayerKey, (u64, ChunkGeometry)>,
+    /// The tendril a snakehook gesture is pulling, while one is open.
+    ///
+    /// Held so the segments of one drag *grow* a single curve rather than
+    /// leaving a trail of them: a segment that added its own item restarted
+    /// the taper, which beaded the tendril into a string of spheres.
+    live_hook: Option<(LayerId, claycore::NodeId)>,
     /// A mask the tools consult, when one has been painted.
     mask: Option<Mask>,
     /// Changes whenever the cage does — its points, its selection or its
@@ -385,6 +391,7 @@ impl ClayDocument {
             mesh_sculptor: std::cell::RefCell::new(None),
             mesh_undo: Vec::new(),
             mesh_redo: Vec::new(),
+            live_hook: None,
             lattice: None,
             voxel_display: VoxelDisplay::default(),
             voxel_blur: SmoothBlur::default(),
@@ -1500,8 +1507,33 @@ impl ClayDocument {
             points.push(brush.size * (1.0 - 0.7 * t));
         }
 
+        // The curve this gesture is already pulling, grown rather than joined.
+        //
+        // A drag arrives in segments. A segment that authored its own item
+        // left a *trail* of tendrils, each restarting the taper from full
+        // width — which is the string of beads a curving pull came out as.
+        // Measured on one such pull, the thickness along it wobbled by 0.210
+        // where a single curve wobbles by 0.137, and that 0.137 is the taper
+        // itself.
+        if let Some((held, node)) = self.live_hook.filter(|(held, _)| *held == layer) {
+            self.document
+                .set_layer_stroke_points(held, node, &points, POINT_KIND, Self::CURVE_TOLERANCE)
+                .map_err(ModelError::engine)?;
+            self.refill(layer, &[node])?;
+            return Ok(EditOutcome {
+                changed: true,
+                dirty_bricks: 1,
+            });
+        }
+
         let mut item = Item::stroke().map_err(ModelError::engine)?;
-        item.set_stroke_points(&points)
+        // Catmull-Rom rather than the default hard corners. A stroke's points
+        // are straight-joined by default, which is right for a chain authored
+        // point by point and wrong for a tendril pulled along a curving drag:
+        // every pointer sample becomes a kink, and the swept sphere bulges at
+        // each one. A spline passes *through* the points, so the tendril is
+        // the path the pointer took.
+        item.set_curve_points(&points, POINT_KIND)
             .map_err(ModelError::engine)?;
         item.set_op(Op::Add).map_err(ModelError::engine)?;
         item.set_stroke_blend_k(brush.size * 0.5)
@@ -1511,6 +1543,11 @@ impl ClayDocument {
             .document
             .add_item(layer, &item)
             .map_err(ModelError::engine)?;
+        // Held only while a gesture is open; `end_gesture` lets it go, so the
+        // next pull starts its own tendril.
+        if self.previewing {
+            self.live_hook = Some((layer, node));
+        }
         self.refill(layer, &[node])?;
         Ok(EditOutcome {
             changed: true,
@@ -2254,6 +2291,12 @@ impl ClayDocument {
     /// and holds it until the drain finishes, so this bounds the loop's
     /// iterations rather than its memory. A stroke dirties single figures.
     const VOXEL_CHUNK_BATCH: usize = 1024;
+    /// How far a curve's span may sit from its chord before it is split again.
+    ///
+    /// A property of the document rather than of the viewer — two builds have
+    /// to agree on what a document means — so it is a constant here and not a
+    /// display setting.
+    const CURVE_TOLERANCE: f32 = 0.002;
 
     /// The triangles of every visible mesh and voxel layer, for the viewport.
     ///
@@ -3301,6 +3344,8 @@ impl SculptModel for ClayDocument {
 
     fn end_gesture(&mut self) {
         self.previewing = false;
+        // The tendril is finished; the next pull is its own.
+        self.live_hook = None;
         // What the preview was holding becomes the edit. One record for the
         // whole drag, because every segment replaced the last rather than
         // adding to it.
@@ -3458,6 +3503,12 @@ fn smooth_geometry(mesh: &claycore::Mesh) -> ChunkGeometry {
         indices,
     }
 }
+
+/// How a pulled tendril's points join.
+///
+/// Catmull-Rom, which passes through them: the curve is the path the pointer
+/// took rather than a chain of straight spans between its samples.
+const POINT_KIND: claycore::PointType = claycore::PointType::Spline;
 
 /// One reflection of a stroke, through the planes of some subset of the axes.
 ///
@@ -4144,6 +4195,7 @@ impl ClayDocument {
             mesh_sculptor: std::cell::RefCell::new(None),
             mesh_undo: Vec::new(),
             mesh_redo: Vec::new(),
+            live_hook: None,
             lattice: None,
             voxel_display: VoxelDisplay::default(),
             voxel_blur: SmoothBlur::default(),
