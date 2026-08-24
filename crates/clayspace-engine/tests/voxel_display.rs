@@ -58,37 +58,38 @@ fn drawn(document: &mut ClayDocument) -> (Vec<[f32; 3]>, Vec<[f32; 3]>, usize) {
 }
 
 #[test]
-fn the_boxes_are_what_a_grid_draws_until_it_is_asked_otherwise() {
-    // The default, and not only out of caution: it is the correct picture for
-    // hard-surface work, it is what exports, and it is the only one the engine
-    // can mesh a chunk at a time.
+fn a_grid_draws_its_form_until_it_is_asked_for_its_cells() {
+    // The default. A sculptor is shaping a form, not a lattice, and the cells
+    // are a fact about the storage — but the blur stays at zero, because a
+    // default that silently deletes detail is the wrong one however good it
+    // looks.
     let Some(mut document) = sculpted() else {
         return;
     };
-    assert_eq!(document.voxel_display(), VoxelDisplay::Boxes);
+    assert_eq!(document.voxel_display(), VoxelDisplay::Smooth);
     assert_eq!(document.voxel_blur().passes(), 0);
-    let (_, _, boxes) = drawn(&mut document);
-    assert!(boxes > 0, "the grid drew nothing at all");
+    let (_, _, smooth) = drawn(&mut document);
+    assert!(smooth > 0, "the grid drew nothing at all");
 }
 
 #[test]
-fn the_smooth_picture_is_a_different_surface_over_the_same_cells() {
+fn the_two_pictures_are_different_surfaces_over_the_same_cells() {
     let Some(mut document) = sculpted() else {
         return;
     };
-    let (_, _, boxes) = drawn(&mut document);
+    let (_, _, smooth) = drawn(&mut document);
     let cells = document.stats().objects;
 
     document
-        .set_voxel_display(VoxelDisplay::Smooth, SmoothBlur::default())
-        .expect("the smooth mesh was refused");
-    let (_, _, smooth) = drawn(&mut document);
+        .set_voxel_display(VoxelDisplay::Boxes, SmoothBlur::default())
+        .expect("the boxes were refused");
+    let (_, _, boxes) = drawn(&mut document);
 
     assert_ne!(
-        smooth, boxes,
-        "asking for the smooth picture drew the same {boxes} indices"
+        boxes, smooth,
+        "asking for the cells drew the same {smooth} indices"
     );
-    assert!(smooth > 0, "the smooth picture drew nothing");
+    assert!(boxes > 0, "the boxy picture drew nothing");
     assert_eq!(
         document.stats().objects,
         cells,
@@ -98,9 +99,13 @@ fn the_smooth_picture_is_a_different_surface_over_the_same_cells() {
 
     // And back, exactly.
     document
-        .set_voxel_display(VoxelDisplay::Boxes, SmoothBlur::default())
-        .expect("the boxes were refused");
-    assert_eq!(drawn(&mut document).2, boxes, "the boxes did not come back");
+        .set_voxel_display(VoxelDisplay::Smooth, SmoothBlur::default())
+        .expect("the smooth mesh was refused");
+    assert_eq!(
+        drawn(&mut document).2,
+        smooth,
+        "the smooth surface did not come back"
+    );
 }
 
 #[test]
@@ -216,5 +221,69 @@ fn the_picture_is_a_setting_and_not_an_edit() {
         document.history().depth,
         before,
         "changing the picture recorded an edit"
+    );
+}
+
+#[test]
+fn the_smooth_surface_keeps_up_with_the_brush() {
+    // It used to be rebuilt only when a gesture settled, which was right while
+    // the boxes were the default and wrong once the smooth surface is what a
+    // sculptor sees: a form that waited for the pointer to come up would lag a
+    // whole gesture behind the brush.
+    //
+    // It is rebuilt where the geometry is assembled now, guarded on the grid's
+    // change count — a whole-grid mesh is 17 to 21 ms and a comparison is
+    // nothing, so the cost is paid when something moved and not otherwise.
+    let Some(mut document) = sculpted() else {
+        return;
+    };
+    let before = drawn(&mut document).0.len();
+
+    document
+        .apply_stroke(
+            ToolKind::Padrao,
+            BrushSettings {
+                size: 0.3,
+                intensity: 1.0,
+                ..BrushSettings::default()
+            },
+            &[GestureSample {
+                position: [0.0, 0.8, 0.0],
+                pressure: 1.0,
+                time: 0.0,
+            }],
+            [false; 3],
+        )
+        .expect("the stroke was refused");
+
+    // No settle, no explicit rebuild: just what the viewport asks for.
+    assert_ne!(
+        drawn(&mut document).0.len(),
+        before,
+        "a dab did not reach the smooth surface without a settle, so the form \
+         lags the brush by a whole gesture"
+    );
+}
+
+#[test]
+fn an_unchanged_grid_is_not_meshed_again() {
+    // The guard that lets the rebuild sit on the frame path. Without it every
+    // frame would pay for a whole-grid mesh to redraw a form nobody touched.
+    let Some(mut document) = sculpted() else {
+        return;
+    };
+    let first = drawn(&mut document);
+    let again = drawn(&mut document);
+    assert_eq!(
+        first.0, again.0,
+        "two reads of an untouched grid gave different surfaces"
+    );
+    // The revision is what the viewport watches, and it must sit still too.
+    let settled = document.mesh_revision();
+    assert_eq!(
+        settled,
+        document.mesh_revision(),
+        "an untouched grid kept moving its revision, so the viewport would \
+         re-upload the same surface every frame"
     );
 }

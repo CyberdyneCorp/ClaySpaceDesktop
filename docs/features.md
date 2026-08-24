@@ -644,14 +644,23 @@ than grid state, "so two hosts sharing a document cannot disagree about what it
 looks like and one host can show both pictures of one sculpt without mutating
 it".
 
-**Exibir voxels como** in the inspector chooses. Nothing it does touches a
-cell, enters the history or marks the document modified.
+**The smooth surface is the default.** A sculptor is shaping a form, not a
+lattice, and the cells a grid is stored in are a fact about the storage —
+showing them by default would make a voxel layer the odd one out for a reason
+that belongs to how it is kept rather than to what it is. **Exibir voxels como**
+in the inspector switches to the boxes when seeing the cells is what is wanted.
+Nothing either choice does touches a cell, enters the history or marks the
+document modified.
 
 | | vertices | triangles | mesh time | normals |
 |---|---|---|---|---|
-| Voxels (greedy) | 6828 | 3414 | **1.5 ms** | carried |
-| Suave, blur 0 | 2221 | 4980 | 16.8 ms | **computed here** |
+| Voxels (greedy) | 6828 | 3414 | 1.5 ms | carried |
+| **Suave, blur 0** (default) | 2221 | 4980 | 16.8 ms | **computed here** |
 | Suave, blur 1 | 992 | 1992 | 19.0 ms | **computed here** |
+
+The smooth surface is also the *smaller* mesh — a third of the vertices at
+0.05, and 11,390 against 21,268 at 0.02, because a box mesh spends vertices on
+corners the form does not have.
 
 Two facts shape how it is wired, and both are the engine's rather than
 preferences:
@@ -665,9 +674,12 @@ preferences:
 - **It cannot be meshed a chunk at a time.** `clay_voxel_mesh_chunks` is the
   greedy mesher alone, because greedy quads are axis-aligned and clamp to a
   chunk boundary exactly while surface nets place a vertex from a cell's
-  *neighbourhood* and would tear. So the smooth picture is rebuilt when a
-  gesture **settles**, not while it is made: the incremental boxy path is
-  3.3 ms a dab against 309 ms for a whole-grid re-mesh.
+  *neighbourhood* and would tear. So it is rebuilt **whole**, guarded on the
+  grid's own change count: a frame in which nothing moved costs one comparison,
+  and one in which something did costs a re-mesh. Measured, 17.3 ms at a 0.05
+  voxel size, 18.0 at 0.03 and 20.6 at 0.02 — flat enough in the size of the
+  grid to sit on the frame path rather than waiting for a gesture to settle,
+  which a form that lagged the brush by a whole stroke would have to.
 
 **Suavização** is the engine's `blur`, in passes of a 3×3×3 box over occupancy,
 and its trade is real in both directions. At **0** nothing is filtered and

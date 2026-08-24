@@ -225,7 +225,10 @@ pub struct ClayDocument {
     /// Whole-grid and held apart from `voxel_chunks`, because it is not
     /// chunked and cannot be: `clay_voxel_mesh_chunks` is the greedy mesher
     /// alone. Rebuilt when a gesture settles rather than while it is made.
-    voxel_smooth: std::collections::BTreeMap<LayerKey, ChunkGeometry>,
+    /// Keyed by layer, and carrying the grid's change count at the moment it
+    /// was built — so a frame in which nothing moved costs one comparison
+    /// rather than a whole-grid re-mesh.
+    voxel_smooth: std::collections::BTreeMap<LayerKey, (u64, ChunkGeometry)>,
     /// A mask the tools consult, when one has been painted.
     mask: Option<Mask>,
     /// Changes whenever the cage does — its points, its selection or its
@@ -2278,6 +2281,14 @@ impl ClayDocument {
                 eprintln!("a camada de voxels não pôde ser remalhada: {e}");
             }
         }
+        // And the smooth surface, where that is the picture. Here beside the
+        // chunks rather than left to the caller: this method's job is to hand
+        // back what the viewport draws, and a consumer that did not know to
+        // ask would silently get the boxes instead. Cheap when nothing moved —
+        // the grid's change count is compared first.
+        if let Err(e) = self.resmooth_voxels() {
+            eprintln!("a malha suave não pôde ser reconstruída: {e}");
+        }
 
         // Sized once from what the chunks hold, so assembling a worked grid
         // is a copy rather than a dozen reallocations of a growing buffer.
@@ -2306,7 +2317,7 @@ impl ClayDocument {
             if representation == Representation::Voxel {
                 // The smooth picture, where one has been built. Whole-grid and
                 // so a single splice, unlike the chunked boxes below.
-                if let Some(smooth) = self.voxel_smooth.get(&self.layers[index].key) {
+                if let Some((_, smooth)) = self.voxel_smooth.get(&self.layers[index].key) {
                     let base = positions.len() as u32;
                     indices.extend(smooth.indices.iter().map(|i| i + base));
                     positions.extend_from_slice(&smooth.positions);
@@ -2449,18 +2460,32 @@ impl ClayDocument {
             .collect();
         let blur = self.voxel_blur.passes();
         for (key, engine_name) in grids {
-            let mesh = {
+            let (changes, mesh) = {
                 let (_, grid) = self
                     .document
                     .voxel_layer(&engine_name)
                     .map_err(ModelError::engine)?;
-                grid.mesh_smooth(blur).map_err(ModelError::engine)?
+                let changes = grid.change_count().map_err(ModelError::engine)?;
+                // Nothing has moved since this was built, so there is nothing
+                // to rebuild. This is what lets the call sit on the frame path
+                // rather than only on a settle: a whole-grid mesh is 17 to 21
+                // ms and a comparison is nothing, so the cost is paid when the
+                // sculptor changes something and not otherwise.
+                if self
+                    .voxel_smooth
+                    .get(&key)
+                    .is_some_and(|(built, _)| *built == changes)
+                {
+                    continue;
+                }
+                (changes, grid.mesh_smooth(blur).map_err(ModelError::engine)?)
             };
             if mesh.vertex_count() == 0 {
                 self.voxel_smooth.remove(&key);
                 continue;
             }
-            self.voxel_smooth.insert(key, smooth_geometry(&mesh));
+            self.voxel_smooth
+                .insert(key, (changes, smooth_geometry(&mesh)));
         }
         Ok(())
     }
@@ -2488,6 +2513,10 @@ impl ClayDocument {
         }
         self.voxel_display = display;
         self.voxel_blur = blur;
+        // Dropped rather than compared: the filtering changed, so the stored
+        // mesh is stale even though no cell moved and its change count is the
+        // one it was built at.
+        self.voxel_smooth.clear();
         self.resmooth_voxels()
     }
 
@@ -2591,7 +2620,7 @@ impl ClayDocument {
             .wrapping_add(
                 self.voxel_smooth
                     .values()
-                    .fold(0u64, |sum, mesh| {
+                    .fold(0u64, |sum, (_, mesh)| {
                         sum.wrapping_add(mesh.positions.len() as u64)
                     })
                     .wrapping_mul(3_000_017),

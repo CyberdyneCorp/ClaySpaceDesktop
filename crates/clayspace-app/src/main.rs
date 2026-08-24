@@ -944,6 +944,15 @@ impl App {
     /// it every frame would rebuild and upload the lot at sixty hertz to show
     /// a surface that has not moved.
     fn sync_mesh_layers(&mut self) {
+        // Before the revision is read, so a grid that moved has its smooth
+        // surface rebuilt and the revision reflects it. Cheap when nothing
+        // moved — the engine compares the grid's change count first — which is
+        // what lets this sit here rather than only on a settle: a surface that
+        // waited for the pointer to come up would lag a whole gesture behind
+        // the brush.
+        if let Err(e) = self.document.with(ClayDocument::resmooth_voxels) {
+            eprintln!("a malha suave não pôde ser reconstruída: {e}");
+        }
         let revision = self.document.with(|document| document.mesh_revision());
         if self.mesh_revision == Some(revision) {
             return;
@@ -1027,14 +1036,6 @@ impl App {
     }
 
     fn settle_geometry_now(&mut self) {
-        // The smooth picture of a grid, which cannot be meshed a chunk at a
-        // time and so waits for the gesture to end. `clay_voxel_mesh_chunks`
-        // is the greedy mesher alone: greedy quads clamp to a chunk boundary
-        // exactly, and surface nets place a vertex from a cell's neighbourhood
-        // and would tear.
-        if let Err(e) = self.document.with(ClayDocument::resmooth_voxels) {
-            eprintln!("a malha suave não pôde ser reconstruída: {e}");
-        }
         let Some(graphics) = self.graphics.as_mut() else {
             return;
         };
