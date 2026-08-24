@@ -1688,6 +1688,7 @@ impl ClayDocument {
         tool: ToolKind,
         brush: BrushSettings,
         samples: &[GestureSample],
+        symmetry: [bool; 3],
     ) -> Result<EditOutcome, ModelError> {
         let Some(verb) = mesh_verb(tool) else {
             // The capability table says this tool has no mesh binding and the
@@ -1901,46 +1902,72 @@ impl ClayDocument {
             if let Some(previous) = &previous {
                 previous.revert(sculptor).map_err(ModelError::engine)?;
             }
-            let moved = if verb == claycore::MeshBrush::Grab {
-                // One stamp at the point the gesture took hold of, carrying
-                // that region by the whole drag — which is what Grab is, in
-                // Blender and in ZBrush both.
-                //
-                // Not a resolved stroke. `apply_stroke` walks the path and
-                // moves the brush centre along it, so a drag that leaves the
-                // surface takes the centre with it and the later stamps reach
-                // no material at all: measured, a 120-pixel drag carried the
-                // centre 2.118 from a unit sphere's middle and left a dent
-                // where a lobe should have come out. A single stamp reads the
-                // descriptor's own radius, strength and direction — which a
-                // stroke ignores — so the region is the one under the anchor
-                // and the displacement is the gesture's, whole.
-                //
-                // Snakehook and Nudge stay on the stroke path deliberately:
-                // one re-anchors on every stamp so its region walks with the
-                // pull, and the other pushes along the surface. Neither is a
-                // region carried somewhere.
-                sculptor
-                    .stamp(
-                        claycore::MeshStamp {
-                            direction: gesture,
-                            ..stamp
-                        },
-                        self.mask.as_ref(),
-                        Some(&mut deltas),
-                    )
-                    .map_err(ModelError::engine)?
-            } else {
-                sculptor
-                    .apply_stroke(
-                        &points,
-                        &preset,
-                        stamp,
-                        self.mask.as_ref(),
-                        Some(&mut deltas),
-                    )
-                    .map_err(ModelError::engine)?
-            };
+            // Every reflection the enabled axes call for, the unmirrored
+            // stroke among them. Two axes give four dabs and three give eight,
+            // which is what both references do — measured in Blender on a
+            // 64x32 sphere, one dab moved 82 vertices on +x with symmetry off,
+            // 82 on each side with x on, and 161 on each of four quadrants
+            // with x and y on.
+            //
+            // All of them into the *same* `MeshDeltas`, so a symmetric gesture
+            // is one undo and the preview's revert takes every copy back
+            // together.
+            let mut moved = 0;
+            for mirror in mirrors(symmetry) {
+                let moved_here = if verb == claycore::MeshBrush::Grab {
+                    // One stamp at the point the gesture took hold of, carrying
+                    // that region by the whole drag — which is what Grab is, in
+                    // Blender and in ZBrush both.
+                    //
+                    // Not a resolved stroke. `apply_stroke` walks the path and
+                    // moves the brush centre along it, so a drag that leaves the
+                    // surface takes the centre with it and the later stamps reach
+                    // no material at all: measured, a 120-pixel drag carried the
+                    // centre 2.118 from a unit sphere's middle and left a dent
+                    // where a lobe should have come out. A single stamp reads the
+                    // descriptor's own radius, strength and direction — which a
+                    // stroke ignores — so the region is the one under the anchor
+                    // and the displacement is the gesture's, whole.
+                    //
+                    // Snakehook and Nudge stay on the stroke path deliberately:
+                    // one re-anchors on every stamp so its region walks with the
+                    // pull, and the other pushes along the surface. Neither is a
+                    // region carried somewhere.
+                    sculptor
+                        .stamp(
+                            claycore::MeshStamp {
+                                direction: mirror.vector(gesture),
+                                center: mirror.point(stamp.center),
+                                ..stamp
+                            },
+                            self.mask.as_ref(),
+                            Some(&mut deltas),
+                        )
+                        .map_err(ModelError::engine)?
+                } else {
+                    let path: Vec<[f32; 5]> = points
+                        .iter()
+                        .map(|sample| {
+                            let at = mirror.point([sample[0], sample[1], sample[2]]);
+                            [at[0], at[1], at[2], sample[3], sample[4]]
+                        })
+                        .collect();
+                    sculptor
+                        .apply_stroke(
+                            &path,
+                            &preset,
+                            claycore::MeshStamp {
+                                direction: mirror.vector(stamp.direction),
+                                center: mirror.point(stamp.center),
+                                ..stamp
+                            },
+                            self.mask.as_ref(),
+                            Some(&mut deltas),
+                        )
+                        .map_err(ModelError::engine)?
+                };
+                moved += moved_here;
+            }
             // Refit rather than refresh: topology is fixed, so the ray-query
             // tree stays a valid partition and only its bounds went stale,
             // which is proportional to the brush instead of to the mesh.
@@ -2545,6 +2572,7 @@ impl ClayDocument {
         tool: ToolKind,
         brush: BrushSettings,
         samples: &[GestureSample],
+        symmetry: [bool; 3],
     ) -> Result<EditOutcome, ModelError> {
         let index = self.active;
         let engine_name = self.layers[index].engine_name.clone();
@@ -2603,76 +2631,89 @@ impl ClayDocument {
 
         let before = grid.change_count().map_err(ModelError::engine)?;
 
+        // The same reflections a mesh stroke takes, and for the same reason: a
+        // grid has no layer mirror either — `clay_set_layer_mirror` reflects a
+        // layer's *items*, and a grid has cells. The mirror plane is the one
+        // the cell lattice already puts at coordinate zero.
+        let mirrors = mirrors(symmetry);
         for sample in samples {
-            let cell = [
-                (sample.position[0] / voxel_size).round() as i32,
-                (sample.position[1] / voxel_size).round() as i32,
-                (sample.position[2] / voxel_size).round() as i32,
-            ];
-            let result = match tool {
-                // An alpha carve is its own entry point rather than a
-                // parameter on the others: the engine has no alpha on the
-                // ordinary voxel verbs, so a brush set to use a stamp carves
-                // with it. That is what the stamp is for on a grid — pores and
-                // fabric cut into a surface already there — and a tool that
-                // deposits would have nothing to modulate.
-                _ if alpha.is_some() => {
-                    let alpha = alpha.expect("checked in the guard");
-                    grid.sculpt_carve_alpha(
-                        cell,
-                        &params,
-                        &alpha.samples,
-                        alpha.width as i32,
-                        alpha.height as i32,
-                        // Unlike the mesh brush's block, this entry point
-                        // refuses a zero-length direction outright — measured:
-                        // "a null or empty grid, or a zero-length direction".
-                        // So the stamp's plane is oriented by the outward
-                        // normal of a roughly convex form, which is the
-                        // direction from the origin to the sample.
-                        outward(sample.position),
-                        material,
-                    )
-                }
-                ToolKind::Suavizar | ToolKind::Relaxar => grid.sculpt_smooth(cell, &params),
-                ToolKind::Inflar => grid.sculpt_inflate(cell, &params, 1),
-                ToolKind::Pincar => grid.sculpt_pinch(cell, &params),
-                ToolKind::Raspar => grid.sculpt_scrape(cell, &params, [0.0, 1.0, 0.0], 0.0),
-                // At full strength, whatever Intensidade says.
-                //
-                // Every voxel verb dithers its writes against a hash of the
-                // cell coordinate when strength is below 1 — that is how a
-                // soft stamp works on binary occupancy. For a *repair* verb
-                // that is incoherent: Preencher closes a one-cell hole or it
-                // does not, and dithering means it scatters the very repairs
-                // it was asked to make. Measured, with the same perforated
-                // material: 0 cells closed at the default intensity, 6 at
-                // full strength. `voxel_tools.rs` is the regression.
-                ToolKind::Preencher => {
-                    let solid = BrushParams {
-                        strength: 1.0,
-                        ..params
-                    };
-                    grid.sculpt_fill_cavities(cell, &solid, 2)
-                }
-                ToolKind::Nudge => grid.sculpt_smudge(cell, &params, [1.0, 0.0, 0.0]),
-                // Colours cells that are already there rather than depositing
-                // any: a grid's palette always exists, so this creates nothing
-                // that was not already stored — unlike on a mesh, where the
-                // colour attribute is twelve bytes a vertex and is refused
-                // rather than created.
-                ToolKind::Pintar => grid.paint_brush(cell, &params, material),
-                ToolKind::Apagar => grid.erase_brush(cell, &params),
-                // Anything else deposits material, which is what a default
-                // brush does on a voxel grid — or takes it away, where the
-                // invert modifier is held. Occupancy is binary, so there is no
-                // sign to turn over here as there is on a field and on a mesh:
-                // the opposite of putting a cell there is removing it, which is
-                // the verb Apagar already names.
-                _ if brush.invert => grid.erase_brush(cell, &params),
-                _ => grid.set_brush(cell, &params, material),
-            };
-            result.map_err(ModelError::engine)?;
+            for mirror in &mirrors {
+                let at = mirror.point(sample.position);
+                let cell = [
+                    (at[0] / voxel_size).round() as i32,
+                    (at[1] / voxel_size).round() as i32,
+                    (at[2] / voxel_size).round() as i32,
+                ];
+                let result = match tool {
+                    // An alpha carve is its own entry point rather than a
+                    // parameter on the others: the engine has no alpha on the
+                    // ordinary voxel verbs, so a brush set to use a stamp carves
+                    // with it. That is what the stamp is for on a grid — pores and
+                    // fabric cut into a surface already there — and a tool that
+                    // deposits would have nothing to modulate.
+                    _ if alpha.is_some() => {
+                        let alpha = alpha.expect("checked in the guard");
+                        grid.sculpt_carve_alpha(
+                            cell,
+                            &params,
+                            &alpha.samples,
+                            alpha.width as i32,
+                            alpha.height as i32,
+                            // Unlike the mesh brush's block, this entry point
+                            // refuses a zero-length direction outright — measured:
+                            // "a null or empty grid, or a zero-length direction".
+                            // So the stamp's plane is oriented by the outward
+                            // normal of a roughly convex form, which is the
+                            // direction from the origin to the sample.
+                            outward(at),
+                            material,
+                        )
+                    }
+                    ToolKind::Suavizar | ToolKind::Relaxar => grid.sculpt_smooth(cell, &params),
+                    ToolKind::Inflar => grid.sculpt_inflate(cell, &params, 1),
+                    ToolKind::Pincar => grid.sculpt_pinch(cell, &params),
+                    ToolKind::Raspar => grid.sculpt_scrape(cell, &params, [0.0, 1.0, 0.0], 0.0),
+                    // At full strength, whatever Intensidade says.
+                    //
+                    // Every voxel verb dithers its writes against a hash of the
+                    // cell coordinate when strength is below 1 — that is how a
+                    // soft stamp works on binary occupancy. For a *repair* verb
+                    // that is incoherent: Preencher closes a one-cell hole or it
+                    // does not, and dithering means it scatters the very repairs
+                    // it was asked to make. Measured, with the same perforated
+                    // material: 0 cells closed at the default intensity, 6 at
+                    // full strength. `voxel_tools.rs` is the regression.
+                    ToolKind::Preencher => {
+                        let solid = BrushParams {
+                            strength: 1.0,
+                            ..params
+                        };
+                        grid.sculpt_fill_cavities(cell, &solid, 2)
+                    }
+                    // The smudge direction turns over with the stroke, or the
+                    // mirrored half would be dragged the same way in world space
+                    // rather than as a reflection.
+                    ToolKind::Nudge => {
+                        grid.sculpt_smudge(cell, &params, mirror.vector([1.0, 0.0, 0.0]))
+                    }
+                    // Colours cells that are already there rather than depositing
+                    // any: a grid's palette always exists, so this creates nothing
+                    // that was not already stored — unlike on a mesh, where the
+                    // colour attribute is twelve bytes a vertex and is refused
+                    // rather than created.
+                    ToolKind::Pintar => grid.paint_brush(cell, &params, material),
+                    ToolKind::Apagar => grid.erase_brush(cell, &params),
+                    // Anything else deposits material, which is what a default
+                    // brush does on a voxel grid — or takes it away, where the
+                    // invert modifier is held. Occupancy is binary, so there is no
+                    // sign to turn over here as there is on a field and on a mesh:
+                    // the opposite of putting a cell there is removing it, which is
+                    // the verb Apagar already names.
+                    _ if brush.invert => grid.erase_brush(cell, &params),
+                    _ => grid.set_brush(cell, &params, material),
+                };
+                result.map_err(ModelError::engine)?;
+            }
         }
 
         // The count is what distinguishes a live edit from a dead one; a
@@ -2761,8 +2802,8 @@ impl SculptModel for ClayDocument {
                 ToolKind::Planar | ToolKind::Polir => self.flatten_stroke(brush, samples),
                 _ => self.stroke_sdf(tool, brush, samples, symmetry),
             },
-            Representation::Voxel => self.stroke_voxel(tool, brush, samples),
-            Representation::Mesh => self.stroke_mesh(tool, brush, samples),
+            Representation::Voxel => self.stroke_voxel(tool, brush, samples, symmetry),
+            Representation::Mesh => self.stroke_mesh(tool, brush, samples, symmetry),
         }
     }
 
@@ -3120,6 +3161,60 @@ impl Cage {
             .iter()
             .all(|offset| offset.iter().all(|axis| *axis == 0.0))
     }
+}
+
+/// One reflection of a stroke, through the planes of some subset of the axes.
+///
+/// A mesh has no layer mirror to lean on — `clay_set_layer_mirror` reflects a
+/// layer's *items*, and a mesh layer has vertices instead — so symmetry here
+/// is what it is in Blender and ZBrush: the stroke itself is mirrored and
+/// applied again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Mirror([bool; 3]);
+
+impl Mirror {
+    /// A point reflected through the planes this mirror names.
+    ///
+    /// Through the mesh's own origin, which is where both references put the
+    /// symmetry plane and where the layer mirror puts it on a field.
+    fn point(self, at: [f32; 3]) -> [f32; 3] {
+        std::array::from_fn(|axis| if self.0[axis] { -at[axis] } else { at[axis] })
+    }
+
+    /// The same for a direction.
+    ///
+    /// A reflection is its own inverse and fixes the plane, so a vector
+    /// reflects exactly as a point does — but it is spelled separately because
+    /// forgetting it is the bug that makes a mirrored Grab pull the wrong way.
+    fn vector(self, direction: [f32; 3]) -> [f32; 3] {
+        self.point(direction)
+    }
+}
+
+/// Every reflection a set of enabled axes calls for, the identity first.
+///
+/// Two axes give four and three give eight: the full subset lattice, which is
+/// what a sculptor means by "symmetric in x and y" — the four quadrants, not
+/// the two halves twice.
+fn mirrors(symmetry: [bool; 3]) -> Vec<Mirror> {
+    let mut out = vec![Mirror([false; 3])];
+    for axis in 0..3 {
+        if !symmetry[axis] {
+            continue;
+        }
+        // Each new axis doubles the set: everything so far, and everything so
+        // far reflected once more.
+        out.extend(
+            out.clone()
+                .into_iter()
+                .map(|Mirror(mut axes)| {
+                    axes[axis] = true;
+                    Mirror(axes)
+                })
+                .collect::<Vec<_>>(),
+        );
+    }
+    out
 }
 
 /// Which engine verb a tool invokes on a mesh layer.

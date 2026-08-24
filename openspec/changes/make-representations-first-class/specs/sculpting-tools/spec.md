@@ -220,3 +220,26 @@ step, and SHALL be taken back when the cage is abandoned.
 #### Scenario: Abandoning a cage abandons its preview
 - **WHEN** a cage is dragged and then cancelled
 - **THEN** the form is exactly as it was
+
+### Requirement: Symmetry reaches every representation
+The application SHALL apply the enabled symmetry axes to strokes on mesh and
+voxel layers as well as on fields.
+
+Each enabled axis SHALL add a full-strength copy of the stroke reflected
+through that plane, and several axes SHALL give every combination of their
+reflections. A reflected stroke's direction SHALL be reflected with it.
+
+A symmetric stroke SHALL remain one undo step.
+
+#### Scenario: The other side comes out the same
+- **WHEN** a dab is made on a mesh layer with X symmetry on
+- **THEN** the form stands the same at the dab and at its mirror
+- **AND** the halves the other axes would reach are untouched
+
+#### Scenario: Two axes give four
+- **WHEN** a dab is made with X and Y symmetry on
+- **THEN** all four quadrants carry the same form
+
+#### Scenario: A mirrored drag is a reflection
+- **WHEN** a drag is made outward along an axis with symmetry on that axis
+- **THEN** the far side travels the opposite way by the same amount
