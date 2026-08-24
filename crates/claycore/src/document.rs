@@ -98,6 +98,42 @@ impl Item {
         Self::new(sys::clay_prim::CLAY_PRIM_STROKE as i32, &[])
     }
 
+    /// A profile carried along a guide curve — the primitive a tube is.
+    ///
+    /// The guide is the item's own curve points, set with
+    /// [`Item::set_curve_points`]; the profiles are added with
+    /// [`Item::add_profile`], and the engine is explicit that neither is a new
+    /// kind of thing: "a guide is not a new kind of curve and a swept profile
+    /// is not a new kind of profile". `easing` is the one parameter, indexing
+    /// the curve that interpolates between profiles along the guide.
+    pub fn swept(easing: f32) -> Result<Self> {
+        Self::new(sys::clay_prim::CLAY_PRIM_SWEPT as i32, &[easing])
+    }
+
+    /// One 2D profile of a lift primitive — a loft's or a sweep's.
+    ///
+    /// Two or more are interpolated evenly along the guide; one is carried
+    /// unchanged. A lift with none set uses a unit circle.
+    pub fn add_profile(&mut self, profile: Profile, params: &[f32]) -> Result<()> {
+        // SAFETY: a valid item, an enum the entry point range-checks, and a
+        // slice whose length is passed beside it. No polygon here — the
+        // arbitrary-vertex form takes its own array, and null with a zero
+        // count is what "not a polygon" spells.
+        check(
+            unsafe {
+                sys::clay_item_add_loft_profile(
+                    self.as_ptr(),
+                    profile as i32,
+                    params.as_ptr(),
+                    params.len(),
+                    std::ptr::null(),
+                    0,
+                )
+            },
+            "clay_item_add_loft_profile",
+        )
+    }
+
     /// A tree of spheres, skinned by one sphere-swept cone per node-parent
     /// pair — the engine's words, and ZBrush's ZSpheres.
     ///
@@ -177,6 +213,43 @@ impl Item {
     ///
     /// The radius travels with each point, which is what lets a tendril taper
     /// toward its tip.
+    /// The same chain, with every point joined to the next by a curve rather
+    /// than a straight segment.
+    ///
+    /// A stroke's points are hard corners by default, which is right for a
+    /// chain authored before types existed and wrong for a tendril pulled
+    /// along a curving drag: every sample becomes a kink. Catmull-Rom passes
+    /// *through* the points, so the curve is the path the pointer took.
+    ///
+    /// Tessellated into the same segment chain at compile time, so it costs
+    /// nothing at evaluation and no backend knows it exists.
+    pub fn set_curve_points(&mut self, points_xyzr: &[f32], kind: PointType) -> Result<()> {
+        if points_xyzr.len() % 4 != 0 {
+            return Err(crate::raw_failure(
+                "clay_item_set_curve_points",
+                ErrorKind::InvalidArgument,
+            ));
+        }
+        let count = points_xyzr.len() / 4;
+        let types = vec![kind as i32; count];
+        // SAFETY: `count` quadruples and `count` types, both guaranteed by the
+        // length check and the vector above; the two handle arrays are
+        // optional and null leaves them at their defaults.
+        check(
+            unsafe {
+                sys::clay_item_set_curve_points(
+                    self.as_ptr(),
+                    points_xyzr.as_ptr(),
+                    count,
+                    types.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                )
+            },
+            "clay_item_set_curve_points",
+        )
+    }
+
     pub fn set_stroke_points(&mut self, points_xyzr: &[f32]) -> Result<()> {
         if points_xyzr.len() % 4 != 0 {
             return Err(crate::raw_failure(
@@ -385,6 +458,42 @@ impl Drop for Document {
         // because `Document` is neither `Copy` nor `Clone`.
         unsafe { sys::clay_document_destroy(self.raw.as_ptr()) };
     }
+}
+
+/// The 2D cross-section a lift primitive carries.
+///
+/// The parameters each one takes are its own, and are listed beside it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Profile {
+    /// `r`
+    Circle = 0,
+    /// `hx hy`
+    Box = 1,
+    /// `r`, the face radius
+    Hexagon = 2,
+    /// `r`
+    Triangle = 3,
+    /// `bottom top half_height`
+    Trapezoid = 4,
+    /// `r d`
+    Vesica = 5,
+}
+
+/// How a curve point joins the one after it.
+///
+/// A stroke's points are hard corners by default — a straight segment to the
+/// next — which is exactly what a chain authored before types existed means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PointType {
+    /// A straight segment to the next point.
+    #[default]
+    Hard = 0,
+    /// Catmull-Rom, passing *through* the points.
+    Spline = 1,
+    /// A uniform cubic B-spline: approximating, so it rounds corners.
+    BSpline = 2,
+    /// A cubic shaped by the handles, which this wrapper does not carry.
+    Bezier = 3,
 }
 
 /// A lattice cage placed in the world, over a whole SDF layer.
@@ -856,6 +965,55 @@ impl Document {
             "clay_layer_lattice_gizmo_preview",
         )?;
         Ok(count)
+    }
+
+    /// Replaces a placed stroke or curve's whole point list, undoably.
+    ///
+    /// A whole-list replace rather than granular edits: a curve is tens of
+    /// points, so this costs less than the bookkeeping granular commands would
+    /// need and its inverse is exact.
+    ///
+    /// This is what lets a gesture *grow* a curve rather than leave a trail of
+    /// them. A tendril dragged across the viewport arrives in segments, and a
+    /// segment that added its own item would bead the result — each one
+    /// restarting the taper — where replacing the one item's points gives a
+    /// single curve the length of the whole drag.
+    pub fn set_layer_stroke_points(
+        &mut self,
+        layer: LayerId,
+        node: NodeId,
+        points_xyzr: &[f32],
+        kind: PointType,
+        tolerance: f32,
+    ) -> Result<()> {
+        if points_xyzr.len() % 4 != 0 {
+            return Err(crate::raw_failure(
+                "clay_layer_set_stroke_points",
+                ErrorKind::InvalidArgument,
+            ));
+        }
+        let count = points_xyzr.len() / 4;
+        let types = vec![kind as i32; count];
+        // SAFETY: a valid document, a layer and node the engine range-checks,
+        // `count` quadruples and `count` types guaranteed by the length check,
+        // and null for the two optional handle arrays.
+        check(
+            unsafe {
+                sys::clay_layer_set_stroke_points(
+                    self.as_ptr(),
+                    layer.0,
+                    node.0,
+                    points_xyzr.as_ptr(),
+                    count,
+                    types.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    tolerance,
+                )
+            },
+            "clay_layer_set_stroke_points",
+        )
     }
 
     pub fn voxel_to_layer(

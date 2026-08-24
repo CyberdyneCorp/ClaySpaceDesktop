@@ -42,6 +42,19 @@ pub struct Strings {
     pub menu_masks: &'static str,
     /// Starting and stopping mask painting.
     pub action_paint_mask: &'static str,
+    /// The curve section of the inspector.
+    pub section_curve: &'static str,
+    /// Placing a curve, and letting it go.
+    pub action_curve: &'static str,
+    pub action_curve_apply: &'static str,
+    /// How thick the tube is.
+    pub label_curve_radius: &'static str,
+    /// How the control points join.
+    pub label_curve_join: &'static str,
+    /// The tube's cross-section.
+    pub label_curve_profile: &'static str,
+    /// How to place and shape one.
+    pub hint_curve: &'static str,
     /// How a voxel layer is drawn.
     pub label_voxel_display: &'static str,
     /// How much the occupancy is filtered before the smooth surface is taken.
@@ -253,6 +266,13 @@ const PT_BR: Strings = Strings {
     menu_dynamics: "Dinâmica",
     menu_masks: "Máscaras",
     action_paint_mask: "Pintar máscara",
+    section_curve: "CURVA",
+    action_curve: "Tubo por curva",
+    action_curve_apply: "Aplicar",
+    label_curve_radius: "Espessura",
+    label_curve_join: "Junção",
+    label_curve_profile: "Perfil",
+    hint_curve: "Clique para pôr um ponto · arraste um ponto para movê-lo · Del remove",
     label_voxel_display: "Exibir voxels como",
     label_voxel_blur: "Suavização",
     hint_voxel_blur: "Acima de zero apaga voxels isolados e detalhes finos",
@@ -426,6 +446,13 @@ const EN_US: Strings = Strings {
     menu_dynamics: "Dynamics",
     menu_masks: "Masks",
     action_paint_mask: "Paint mask",
+    section_curve: "CURVE",
+    action_curve: "Tube along a curve",
+    action_curve_apply: "Apply",
+    label_curve_radius: "Thickness",
+    label_curve_join: "Join",
+    label_curve_profile: "Profile",
+    hint_curve: "Click to place a point · drag one to move it · Del removes",
     label_voxel_display: "Draw voxels as",
     label_voxel_blur: "Blur",
     hint_voxel_blur: "Above zero deletes isolated voxels and thin detail",
@@ -598,6 +625,13 @@ const ES_419: Strings = Strings {
     menu_dynamics: "Dinámica",
     menu_masks: "Máscaras",
     action_paint_mask: "Pintar máscara",
+    section_curve: "CURVA",
+    action_curve: "Tubo por curva",
+    action_curve_apply: "Aplicar",
+    label_curve_radius: "Grosor",
+    label_curve_join: "Unión",
+    label_curve_profile: "Perfil",
+    hint_curve: "Clic para poner un punto · arrastra uno para moverlo · Supr elimina",
     label_voxel_display: "Mostrar vóxeles como",
     label_voxel_blur: "Suavizado",
     hint_voxel_blur: "Por encima de cero borra vóxeles aislados y detalles finos",
@@ -773,7 +807,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 118] {
+    pub fn all(&self) -> [&'static str; 125] {
         [
             self.menu_file,
             self.menu_edit,
@@ -783,6 +817,13 @@ impl Strings {
             self.menu_brushes,
             self.menu_dynamics,
             self.menu_masks,
+            self.section_curve,
+            self.action_curve,
+            self.action_curve_apply,
+            self.label_curve_radius,
+            self.label_curve_join,
+            self.label_curve_profile,
+            self.hint_curve,
             self.label_voxel_display,
             self.label_voxel_blur,
             self.hint_voxel_blur,

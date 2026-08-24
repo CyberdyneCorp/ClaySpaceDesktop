@@ -11,12 +11,12 @@ use claycore::{
 };
 use clayspace_model::{
     Alpha, Armature, ArmatureModel, BlendProfile, BrushSettings, Combine, CombineSettings, Cost,
-    Direction, DocumentModel, EditOutcome, ExchangeModel, ExportMesher, ExportSettings,
-    ExtrudeSettings, Format, GestureSample, GizmoDrag, GizmoHandle, GizmoMode, HistoryState,
-    ImportAs, ImportSettings, LatticeModel, LatticeState, LayerKey, LayerSummary, MaskModel,
-    MaskOp, MaskState, ModelError, NodeIndex, OpenError, Protection, Refusal, Representation,
-    Scene, SceneModel, SceneNode, SceneStats, SculptModel, SkinSettings, SmoothBlur, ToolKind,
-    VoxelDisplay,
+    CurveJoin, CurveModel, CurvePoint, CurveProfile, CurveState, Direction, DocumentModel,
+    EditOutcome, ExchangeModel, ExportMesher, ExportSettings, ExtrudeSettings, Format,
+    GestureSample, GizmoDrag, GizmoHandle, GizmoMode, HistoryState, ImportAs, ImportSettings,
+    LatticeModel, LatticeState, LayerKey, LayerSummary, MaskModel, MaskOp, MaskState, ModelError,
+    NodeIndex, OpenError, Protection, Refusal, Representation, Scene, SceneModel, SceneNode,
+    SceneStats, SculptModel, SkinSettings, SmoothBlur, ToolKind, VoxelDisplay,
 };
 
 use crate::backend::{BackendPolicy, Operation};
@@ -229,6 +229,18 @@ pub struct ClayDocument {
     /// was built — so a frame in which nothing moved costs one comparison
     /// rather than a whole-grid re-mesh.
     voxel_smooth: std::collections::BTreeMap<LayerKey, (u64, ChunkGeometry)>,
+    /// The curve being placed or edited, and the node its sweep is placed as.
+    ///
+    /// The node is held so an edit *replaces* the sweep rather than adding
+    /// another beside it — the same reason a snakehook gesture holds its
+    /// tendril, and the same entry point.
+    curve: Option<Curve>,
+    /// The tendril a snakehook gesture is pulling, while one is open.
+    ///
+    /// Held so the segments of one drag *grow* a single curve rather than
+    /// leaving a trail of them: a segment that added its own item restarted
+    /// the taper, which beaded the tendril into a string of spheres.
+    live_hook: Option<(LayerId, claycore::NodeId)>,
     /// A mask the tools consult, when one has been painted.
     mask: Option<Mask>,
     /// Changes whenever the cage does — its points, its selection or its
@@ -385,6 +397,8 @@ impl ClayDocument {
             mesh_sculptor: std::cell::RefCell::new(None),
             mesh_undo: Vec::new(),
             mesh_redo: Vec::new(),
+            curve: None,
+            live_hook: None,
             lattice: None,
             voxel_display: VoxelDisplay::default(),
             voxel_blur: SmoothBlur::default(),
@@ -1500,8 +1514,33 @@ impl ClayDocument {
             points.push(brush.size * (1.0 - 0.7 * t));
         }
 
+        // The curve this gesture is already pulling, grown rather than joined.
+        //
+        // A drag arrives in segments. A segment that authored its own item
+        // left a *trail* of tendrils, each restarting the taper from full
+        // width — which is the string of beads a curving pull came out as.
+        // Measured on one such pull, the thickness along it wobbled by 0.210
+        // where a single curve wobbles by 0.137, and that 0.137 is the taper
+        // itself.
+        if let Some((held, node)) = self.live_hook.filter(|(held, _)| *held == layer) {
+            self.document
+                .set_layer_stroke_points(held, node, &points, POINT_KIND, Self::CURVE_TOLERANCE)
+                .map_err(ModelError::engine)?;
+            self.refill(layer, &[node])?;
+            return Ok(EditOutcome {
+                changed: true,
+                dirty_bricks: 1,
+            });
+        }
+
         let mut item = Item::stroke().map_err(ModelError::engine)?;
-        item.set_stroke_points(&points)
+        // Catmull-Rom rather than the default hard corners. A stroke's points
+        // are straight-joined by default, which is right for a chain authored
+        // point by point and wrong for a tendril pulled along a curving drag:
+        // every pointer sample becomes a kink, and the swept sphere bulges at
+        // each one. A spline passes *through* the points, so the tendril is
+        // the path the pointer took.
+        item.set_curve_points(&points, POINT_KIND)
             .map_err(ModelError::engine)?;
         item.set_op(Op::Add).map_err(ModelError::engine)?;
         item.set_stroke_blend_k(brush.size * 0.5)
@@ -1511,6 +1550,11 @@ impl ClayDocument {
             .document
             .add_item(layer, &item)
             .map_err(ModelError::engine)?;
+        // Held only while a gesture is open; `end_gesture` lets it go, so the
+        // next pull starts its own tendril.
+        if self.previewing {
+            self.live_hook = Some((layer, node));
+        }
         self.refill(layer, &[node])?;
         Ok(EditOutcome {
             changed: true,
@@ -2254,6 +2298,12 @@ impl ClayDocument {
     /// and holds it until the drain finishes, so this bounds the loop's
     /// iterations rather than its memory. A stroke dirties single figures.
     const VOXEL_CHUNK_BATCH: usize = 1024;
+    /// How far a curve's span may sit from its chord before it is split again.
+    ///
+    /// A property of the document rather than of the viewer — two builds have
+    /// to agree on what a document means — so it is a constant here and not a
+    /// display setting.
+    const CURVE_TOLERANCE: f32 = 0.002;
 
     /// The triangles of every visible mesh and voxel layer, for the viewport.
     ///
@@ -3301,6 +3351,8 @@ impl SculptModel for ClayDocument {
 
     fn end_gesture(&mut self) {
         self.previewing = false;
+        // The tendril is finished; the next pull is its own.
+        self.live_hook = None;
         // What the preview was holding becomes the edit. One record for the
         // whole drag, because every segment replaced the last rather than
         // adding to it.
@@ -3458,6 +3510,73 @@ fn smooth_geometry(mesh: &claycore::Mesh) -> ChunkGeometry {
         indices,
     }
 }
+
+/// A curve being placed, and the sweep it is showing.
+struct Curve {
+    layer: LayerKey,
+    points: Vec<CurvePoint>,
+    selection: Vec<usize>,
+    join: CurveJoin,
+    profile: CurveProfile,
+    /// The placed sweep, once there are enough points to have one.
+    node: Option<claycore::NodeId>,
+}
+
+impl Curve {
+    /// The guide as the engine takes it: x, y, z, radius per point.
+    fn guide(&self) -> Vec<f32> {
+        self.points
+            .iter()
+            .flat_map(|point| {
+                [
+                    point.position[0],
+                    point.position[1],
+                    point.position[2],
+                    point.radius,
+                ]
+            })
+            .collect()
+    }
+}
+
+/// How a join reaches the engine.
+fn point_type(join: CurveJoin) -> claycore::PointType {
+    match join {
+        CurveJoin::Corners => claycore::PointType::Hard,
+        CurveJoin::Through => claycore::PointType::Spline,
+        CurveJoin::Rounded => claycore::PointType::BSpline,
+    }
+}
+
+/// How many of the two parameters a profile actually reads.
+fn profile_params(profile: claycore::Profile) -> usize {
+    match profile {
+        claycore::Profile::Box => 2,
+        _ => 1,
+    }
+}
+
+/// The profile, and a parameter block sized for it.
+///
+/// The values are overwritten with the radius at that end of the guide: a
+/// swept profile carries its own size, because the guide's per-point radius
+/// reaches only the chain primitive.
+fn profile_of(profile: CurveProfile) -> (claycore::Profile, [f32; 2]) {
+    match profile {
+        // Never reached: a round tube is a swept-sphere chain instead, which
+        // takes a radius per point where this primitive takes one per end.
+        CurveProfile::Circle => (claycore::Profile::Circle, [1.0, 1.0]),
+        CurveProfile::Square => (claycore::Profile::Box, [1.0, 1.0]),
+        CurveProfile::Hexagon => (claycore::Profile::Hexagon, [1.0, 1.0]),
+        CurveProfile::Triangle => (claycore::Profile::Triangle, [1.0, 1.0]),
+    }
+}
+
+/// How a pulled tendril's points join.
+///
+/// Catmull-Rom, which passes through them: the curve is the path the pointer
+/// took rather than a chain of straight spans between its samples.
+const POINT_KIND: claycore::PointType = claycore::PointType::Spline;
 
 /// One reflection of a stroke, through the planes of some subset of the axes.
 ///
@@ -4144,6 +4263,8 @@ impl ClayDocument {
             mesh_sculptor: std::cell::RefCell::new(None),
             mesh_undo: Vec::new(),
             mesh_redo: Vec::new(),
+            curve: None,
+            live_hook: None,
             lattice: None,
             voxel_display: VoxelDisplay::default(),
             voxel_blur: SmoothBlur::default(),
@@ -4505,6 +4626,293 @@ fn extrude_params(settings: ExtrudeSettings) -> claycore::MaskExtrudeParams {
         // The grid's own resolution is the only one available there, and the
         // field path has always taken the default.
         cell_size: None,
+    }
+}
+
+impl CurveModel for ClayDocument {
+    fn curve(&self) -> CurveState {
+        let Some(curve) = self.curve.as_ref() else {
+            return CurveState::default();
+        };
+        CurveState {
+            active: true,
+            points: curve.points.clone(),
+            selection: curve.selection.clone(),
+            join: curve.join,
+            profile: curve.profile,
+        }
+    }
+
+    fn begin_curve(&mut self) {
+        self.cancel_curve();
+        self.curve = Some(Curve {
+            layer: self.active_layer().key,
+            points: Vec::new(),
+            selection: Vec::new(),
+            join: CurveJoin::default(),
+            profile: CurveProfile::default(),
+            node: None,
+        });
+    }
+
+    fn add_curve_point(&mut self, at: [f32; 3], radius: f32) -> Result<(), ModelError> {
+        let Some(curve) = self.curve.as_mut() else {
+            return Ok(());
+        };
+        curve.points.push(CurvePoint {
+            position: at,
+            radius: radius.max(1e-3),
+        });
+        // The new point is the one in hand: a person who just placed it is
+        // most likely to want to move it.
+        curve.selection = vec![curve.points.len() - 1];
+        self.reshape_curve()
+    }
+
+    fn select_curve_point(&mut self, index: Option<usize>) {
+        let Some(curve) = self.curve.as_mut() else {
+            return;
+        };
+        let count = curve.points.len();
+        curve.selection = index.filter(|at| *at < count).into_iter().collect();
+    }
+
+    fn toggle_curve_point(&mut self, index: usize) {
+        let Some(curve) = self.curve.as_mut() else {
+            return;
+        };
+        if index >= curve.points.len() {
+            return;
+        }
+        match curve.selection.binary_search(&index) {
+            Ok(at) => {
+                curve.selection.remove(at);
+            }
+            Err(at) => curve.selection.insert(at, index),
+        }
+    }
+
+    fn drag_curve(&mut self, by: [f32; 3]) -> Result<(), ModelError> {
+        let Some(curve) = self.curve.as_mut() else {
+            return Ok(());
+        };
+        for index in curve.selection.clone() {
+            let Some(point) = curve.points.get_mut(index) else {
+                continue;
+            };
+            for (at, step) in point.position.iter_mut().zip(by) {
+                *at += step;
+            }
+        }
+        self.reshape_curve()
+    }
+
+    fn set_curve_radius(&mut self, radius: f32) -> Result<(), ModelError> {
+        let Some(curve) = self.curve.as_mut() else {
+            return Ok(());
+        };
+        let radius = radius.max(1e-3);
+        // The selection where there is one, and the whole curve where there is
+        // not: setting a thickness with nothing picked means the tube, not
+        // nothing.
+        if curve.selection.is_empty() {
+            for point in curve.points.iter_mut() {
+                point.radius = radius;
+            }
+        } else {
+            for index in curve.selection.clone() {
+                if let Some(point) = curve.points.get_mut(index) {
+                    point.radius = radius;
+                }
+            }
+        }
+        self.reshape_curve()
+    }
+
+    fn set_curve_join(&mut self, join: CurveJoin) -> Result<(), ModelError> {
+        if let Some(curve) = self.curve.as_mut() {
+            curve.join = join;
+        }
+        self.reshape_curve()
+    }
+
+    fn set_curve_profile(&mut self, profile: CurveProfile) -> Result<(), ModelError> {
+        // The profile is the item's, not the guide's, so this cannot be a
+        // point-list replace — the sweep is placed again from scratch.
+        self.retire_curve_node()?;
+        if let Some(curve) = self.curve.as_mut() {
+            curve.profile = profile;
+        }
+        self.reshape_curve()
+    }
+
+    fn remove_curve_points(&mut self) -> Result<(), ModelError> {
+        let Some(curve) = self.curve.as_mut() else {
+            return Ok(());
+        };
+        if curve.selection.is_empty() {
+            return Ok(());
+        }
+        let doomed = std::mem::take(&mut curve.selection);
+        for index in doomed.iter().rev() {
+            if *index < curve.points.len() {
+                curve.points.remove(*index);
+            }
+        }
+        // A guide below two points has nothing to sweep along, and the engine
+        // refuses to cut one there rather than ignoring it. Taking the sweep
+        // down is the honest answer: the curve is still being placed.
+        if curve.points.len() < clayspace_model::FEWEST_POINTS {
+            self.retire_curve_node()?;
+            return Ok(());
+        }
+        self.reshape_curve()
+    }
+
+    fn apply_curve(&mut self) -> Result<(), ModelError> {
+        // The sweep is already placed; applying is letting go of the curve
+        // that shaped it. What stays behind is an ordinary item in the layer.
+        self.curve = None;
+        Ok(())
+    }
+
+    fn cancel_curve(&mut self) {
+        if let Err(e) = self.retire_curve_node() {
+            eprintln!("a curva não pôde ser removida: {e}");
+        }
+        self.curve = None;
+    }
+}
+
+impl ClayDocument {
+    /// Places the sweep, or replaces the guide of the one already placed.
+    ///
+    /// Replacing rather than adding, for the reason a snakehook gesture grows
+    /// one tendril: a curve edited by dragging a point would otherwise leave a
+    /// sweep behind on every move.
+    fn reshape_curve(&mut self) -> Result<(), ModelError> {
+        let Some(curve) = self.curve.as_ref() else {
+            return Ok(());
+        };
+        if curve.points.len() < clayspace_model::FEWEST_POINTS {
+            return Ok(());
+        }
+        let index = self.index_of(curve.layer)?;
+        let layer = self.layers[index].id;
+        let guide = curve.guide();
+        let kind = point_type(curve.join);
+
+        if let Some(node) = curve.node {
+            self.document
+                .set_layer_stroke_points(layer, node, &guide, kind, Self::CURVE_TOLERANCE)
+                .map_err(ModelError::engine)?;
+            return self.refill(layer, &[node]);
+        }
+
+        let mut item = self.curve_item(curve, &guide, kind)?;
+        item.set_op(Op::Add).map_err(ModelError::engine)?;
+
+        let node = self
+            .document
+            .add_item(layer, &item)
+            .map_err(ModelError::engine)?;
+        if let Some(curve) = self.curve.as_mut() {
+            curve.node = Some(node);
+        }
+        self.refill(layer, &[node])
+    }
+
+    /// The item a curve sweeps, which is a different primitive depending on
+    /// the section asked for.
+    ///
+    /// A **round** tube is a swept-sphere chain — `CLAY_PRIM_STROKE`, the
+    /// snakehook's primitive — because that one takes a radius *per point* and
+    /// so tapers along its whole length, which is what a sculptor drags a
+    /// thickness for.
+    ///
+    /// Any other section is `CLAY_PRIM_SWEPT`, which carries a real profile
+    /// along the guide. Measured, that primitive **ignores the guide's
+    /// per-point radius entirely** — a tube swept with radii of 0.05, 0.15 and
+    /// 0.4 reached 2.901 every time, the unit circle's size — because its
+    /// thickness comes from the profile parameters instead. So the thickness
+    /// there is the *first* point's at one end and the *last* point's at the
+    /// other, interpolated between: the engine needs two or more profiles and
+    /// spreads them evenly along the guide, which is a taper and not a radius
+    /// per point.
+    fn curve_item(
+        &self,
+        curve: &Curve,
+        guide: &[f32],
+        kind: claycore::PointType,
+    ) -> Result<claycore::Item, ModelError> {
+        if curve.profile == CurveProfile::Circle {
+            let mut item = claycore::Item::stroke().map_err(ModelError::engine)?;
+            item.set_curve_points(guide, kind)
+                .map_err(ModelError::engine)?;
+            // The chain's own smoothing, so consecutive spans meet without a
+            // crease where the radius steps.
+            let thinnest = curve
+                .points
+                .iter()
+                .map(|point| point.radius)
+                .fold(f32::MAX, f32::min);
+            item.set_stroke_blend_k(thinnest * 0.5)
+                .map_err(ModelError::engine)?;
+            return Ok(item);
+        }
+
+        let (profile, mut params) = profile_of(curve.profile);
+        let mut item = claycore::Item::swept(0.0).map_err(ModelError::engine)?;
+        // Two, because the engine refuses fewer — "a loft or sweep needs two
+        // or more profiles" — and because two is what a taper is.
+        for radius in [
+            curve.points.first().map_or(0.1, |point| point.radius),
+            curve.points.last().map_or(0.1, |point| point.radius),
+        ] {
+            for value in params.iter_mut() {
+                *value = radius;
+            }
+            item.add_profile(profile, &params[..profile_params(profile)])
+                .map_err(ModelError::engine)?;
+        }
+        item.set_curve_points(guide, kind)
+            .map_err(ModelError::engine)?;
+        Ok(item)
+    }
+
+    /// Takes the placed sweep back out, leaving the curve's points alone.
+    fn retire_curve_node(&mut self) -> Result<(), ModelError> {
+        let Some(curve) = self.curve.as_mut() else {
+            return Ok(());
+        };
+        let Some(node) = curve.node.take() else {
+            return Ok(());
+        };
+        let key = curve.layer;
+        let index = self.index_of(key)?;
+        let layer = self.layers[index].id;
+        // The region *before* the removal, because after it the layer no
+        // longer reaches where the tube was and marking its extent would leave
+        // those bricks holding a sweep that is gone. The same reason removing
+        // a layer captures its bounds first.
+        let vacated = self.document.layer_bounds(layer).ok().flatten();
+        self.document
+            .remove_node(layer, node)
+            .map_err(ModelError::engine)?;
+        match vacated {
+            Some((min, max)) => {
+                // Padded, because a brick the surface only grazes still holds
+                // a piece of it and a box drawn exactly on the bounds can miss
+                // the outermost one.
+                let pad = self.cache.config().voxel_size * Self::BRICK_MARGIN;
+                self.refill(layer, &[])?;
+                self.refill_region(
+                    std::array::from_fn(|i| min[i] - pad),
+                    std::array::from_fn(|i| max[i] + pad),
+                )
+            }
+            None => self.refill(layer, &[]),
+        }
     }
 }
 

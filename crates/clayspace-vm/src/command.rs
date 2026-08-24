@@ -11,9 +11,9 @@
 use std::path::PathBuf;
 
 use clayspace_model::{
-    ConversionSettings, ExportSettings, ExtrudeSettings, Falloff, GizmoHandle, GizmoMode,
-    ImportSettings, LayerKey, Locale, MaskOp, SmoothBlur, StrokeModifiers, ToolKind,
-    ViewPresetKind, VoxelDisplay,
+    ConversionSettings, CurveJoin, CurveProfile, ExportSettings, ExtrudeSettings, Falloff,
+    GizmoHandle, GizmoMode, ImportSettings, LayerKey, Locale, MaskOp, SmoothBlur, StrokeModifiers,
+    ToolKind, ViewPresetKind, VoxelDisplay,
 };
 
 /// A change to the application or the document.
@@ -21,6 +21,24 @@ use clayspace_model::{
 pub enum Command {
     // -- tools ------------------------------------------------------------
     SelectTool(ToolKind),
+    /// Starts a curve, or takes the one that is up down.
+    ToggleCurve,
+    /// Appends a control point at the end of the curve.
+    AddCurvePoint([f32; 3], f32),
+    /// The control point under the pointer, or none. Replaces the selection.
+    SelectCurvePoint(Option<usize>),
+    /// Adds or removes one control point without disturbing the rest.
+    ToggleCurvePoint(usize),
+    /// Moves every selected control point by a displacement.
+    DragCurve([f32; 3]),
+    /// How thick the tube is at the selected points, or at all of them.
+    SetCurveRadius(f32),
+    SetCurveJoin(CurveJoin),
+    SetCurveProfile(CurveProfile),
+    /// Removes the selected control points.
+    RemoveCurvePoints,
+    /// Leaves the swept form and takes the curve down.
+    ApplyCurve,
     /// Puts a lattice cage around the active layer, or takes one down.
     ToggleLattice,
     /// How many control points the cage has per axis.
@@ -271,6 +289,8 @@ impl Command {
                 // dragging one all change the *cage* and not the clay. Only
                 // applying it is an edit — which is also what makes the whole
                 // cage one undo.
+                // Placing and shaping a curve is authoring, and every one of
+                // these reaches the document — so none of them is listed here.
                 | Self::ToggleLattice
                 | Self::SetLatticeDivisions(_)
                 | Self::SelectLatticePoint(_)
@@ -325,6 +345,15 @@ impl Command {
     pub fn label(&self) -> &'static str {
         match self {
             Self::SelectTool(_) => "select tool",
+            Self::ToggleCurve => "curva",
+            Self::AddCurvePoint(..) => "ponto da curva",
+            Self::SelectCurvePoint(_) | Self::ToggleCurvePoint(_) => "escolher ponto",
+            Self::DragCurve(_) => "arrastar curva",
+            Self::SetCurveRadius(_) => "espessura do tubo",
+            Self::SetCurveJoin(_) => "junção da curva",
+            Self::SetCurveProfile(_) => "perfil do tubo",
+            Self::RemoveCurvePoints => "remover pontos",
+            Self::ApplyCurve => "aplicar curva",
             Self::ToggleLattice => "gaiola",
             Self::SetLatticeDivisions(_) => "divisões da gaiola",
             Self::SelectLatticePoint(_) => "escolher ponto",

@@ -14,11 +14,12 @@ use std::rc::Rc;
 
 use clayspace_engine::ClayDocument;
 use clayspace_model::{
-    Armature, ArmatureModel, BrushSettings, CombineSettings, DocumentModel, EditOutcome,
-    ExchangeModel, ExportSettings, ExtrudeSettings, GestureSample, GizmoHandle, GizmoMode,
-    HistoryState, ImportSettings, LatticeModel, LatticeState, LayerCost, LayerKey, MaskModel,
-    MaskOp, MaskState, ModelError, NodeIndex, OpenError, Protection, Representation, Scene,
-    SceneModel, SceneStats, SculptModel, SkinSettings, ToolKind,
+    Armature, ArmatureModel, BrushSettings, CombineSettings, CurveJoin, CurveModel, CurveProfile,
+    CurveState, DocumentModel, EditOutcome, ExchangeModel, ExportSettings, ExtrudeSettings,
+    GestureSample, GizmoHandle, GizmoMode, HistoryState, ImportSettings, LatticeModel,
+    LatticeState, LayerCost, LayerKey, MaskModel, MaskOp, MaskState, ModelError, NodeIndex,
+    OpenError, Protection, Representation, Scene, SceneModel, SceneStats, SculptModel,
+    SkinSettings, ToolKind,
 };
 
 /// A handle to the one document.
@@ -210,6 +211,45 @@ impl MaskModel for SharedDocument {
 
     fn extrude_mask(&mut self, settings: ExtrudeSettings) -> Result<(), ModelError> {
         self.0.borrow_mut().extrude_mask(settings)
+    }
+}
+
+impl CurveModel for SharedDocument {
+    fn curve(&self) -> CurveState {
+        self.0.borrow().curve()
+    }
+    fn begin_curve(&mut self) {
+        self.0.borrow_mut().begin_curve()
+    }
+    fn add_curve_point(&mut self, at: [f32; 3], radius: f32) -> Result<(), ModelError> {
+        self.0.borrow_mut().add_curve_point(at, radius)
+    }
+    fn select_curve_point(&mut self, index: Option<usize>) {
+        self.0.borrow_mut().select_curve_point(index)
+    }
+    fn toggle_curve_point(&mut self, index: usize) {
+        self.0.borrow_mut().toggle_curve_point(index)
+    }
+    fn drag_curve(&mut self, by: [f32; 3]) -> Result<(), ModelError> {
+        self.0.borrow_mut().drag_curve(by)
+    }
+    fn set_curve_radius(&mut self, radius: f32) -> Result<(), ModelError> {
+        self.0.borrow_mut().set_curve_radius(radius)
+    }
+    fn set_curve_join(&mut self, join: CurveJoin) -> Result<(), ModelError> {
+        self.0.borrow_mut().set_curve_join(join)
+    }
+    fn set_curve_profile(&mut self, profile: CurveProfile) -> Result<(), ModelError> {
+        self.0.borrow_mut().set_curve_profile(profile)
+    }
+    fn remove_curve_points(&mut self) -> Result<(), ModelError> {
+        self.0.borrow_mut().remove_curve_points()
+    }
+    fn apply_curve(&mut self) -> Result<(), ModelError> {
+        self.0.borrow_mut().apply_curve()
+    }
+    fn cancel_curve(&mut self) {
+        self.0.borrow_mut().cancel_curve()
     }
 }
 
