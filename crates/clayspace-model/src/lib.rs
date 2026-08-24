@@ -28,7 +28,7 @@ pub mod units;
 
 pub use alpha::{Alpha, AlphaRefusal, AlphaSupport};
 pub use armature::{Armature, ArmatureModel, NodeIndex, SkinSettings, Zsphere};
-pub use combine::{BlendProfile, Combine, CombineSettings};
+pub use combine::{BlendProfile, Combine, CombineSettings, StrokeModifiers};
 pub use conversion::{
     ConversionSettings, Cost, DeformSettings, DeformVerb, Direction, Refusal, RepairReport,
 };

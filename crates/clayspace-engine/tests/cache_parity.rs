@@ -125,6 +125,7 @@ fn every_brush_the_interface_can_produce_moves_the_cache() {
                     size,
                     intensity,
                     flow: 0.8,
+                    invert: false,
                     shaping: Shaping {
                         noise,
                         falloff: Falloff::Smooth,

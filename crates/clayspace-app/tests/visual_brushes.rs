@@ -188,6 +188,7 @@ fn exercise(harness: &mut Harness, tool: ToolKind) -> Option<Outcome> {
             Command::BeginStroke {
                 position,
                 pressure: 1.0,
+                modifiers: Default::default(),
             }
         };
 

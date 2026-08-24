@@ -1195,7 +1195,18 @@ impl ClayDocument {
                 )))
             }
         }
-        let combine = self.combine.sanitized();
+        // Turned over where the modifier is held and the operation has an
+        // opposite: Add becomes Subtract, Emboss becomes Engrave, Relief
+        // becomes Incise. An operation with no opposite — Intersect, Replace,
+        // a seam — is left as it is rather than quietly becoming some other
+        // verb, which is what `inverted` answering `None` means.
+        let combine = {
+            let settings = self.combine.sanitized();
+            match brush.invert.then(|| settings.op.inverted()).flatten() {
+                Some(op) => clayspace_model::CombineSettings { op, ..settings },
+                None => settings,
+            }
+        };
 
         let mut stamp = Item::sphere(brush.sanitized().size).map_err(ModelError::engine)?;
         stamp
@@ -1782,12 +1793,26 @@ impl ClayDocument {
             verb,
             direction: travel,
             center: samples[0].position,
-            // Carried even though a stroke ignores both, because the same
-            // descriptor is what a single stamp would use and a descriptor
-            // that disagreed with the preset would be a trap for the next
-            // caller.
+            // The radius is carried even though a resolved stroke replaces it
+            // per stamp, because the same descriptor is what a single stamp
+            // uses and one that disagreed with the preset would be a trap for
+            // the next caller.
             radius: brush.size,
-            strength: brush.intensity,
+            // The strength is not merely carried: a resolved stroke
+            // *multiplies* it by each stamp's own, so this is where a mesh
+            // stroke's sign lives.
+            //
+            // Which is why holding the invert key turns this over rather than
+            // the preset's strength. The preset's is contracted to [0, 1] and
+            // the stroke resolver drops any stamp whose strength is not
+            // positive, so a negative preset strength is not a dig — it is
+            // nothing at all, which is what it measured as: a full sweep with
+            // the key held moved no vertex and reported no change.
+            strength: if brush.invert {
+                -brush.intensity
+            } else {
+                brush.intensity
+            },
             falloff: match brush.shaping.falloff {
                 clayspace_model::Falloff::Constant => claycore::MeshFalloff::Constant,
                 clayspace_model::Falloff::Linear => claycore::MeshFalloff::Linear,
@@ -2586,7 +2611,12 @@ impl ClayDocument {
                 ToolKind::Pintar => grid.paint_brush(cell, &params, material),
                 ToolKind::Apagar => grid.erase_brush(cell, &params),
                 // Anything else deposits material, which is what a default
-                // brush does on a voxel grid.
+                // brush does on a voxel grid — or takes it away, where the
+                // invert modifier is held. Occupancy is binary, so there is no
+                // sign to turn over here as there is on a field and on a mesh:
+                // the opposite of putting a cell there is removing it, which is
+                // the verb Apagar already names.
+                _ if brush.invert => grid.erase_brush(cell, &params),
                 _ => grid.set_brush(cell, &params, material),
             };
             result.map_err(ModelError::engine)?;

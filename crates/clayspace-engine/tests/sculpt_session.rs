@@ -33,6 +33,7 @@ fn stroke_across_the_form(vm: &mut SculptViewModel) -> Result<(), clayspace_mode
     vm.dispatch(Command::BeginStroke {
         position: *first,
         pressure: 1.0,
+        modifiers: Default::default(),
     })?;
     for point in rest {
         vm.dispatch(Command::ContinueStroke {
@@ -217,6 +218,7 @@ fn an_unavailable_tool_is_refused_against_a_real_document() {
         .dispatch(Command::BeginStroke {
             position: [0.0, 0.0, 1.0],
             pressure: 1.0,
+            modifiers: Default::default(),
         })
         .expect_err("a voxel verb on an SDF layer must be refused");
     assert!(error.to_string().contains("voxel"), "{error}");
@@ -246,6 +248,7 @@ fn a_voxel_layer_accepts_its_own_verbs() {
     vm.dispatch(Command::BeginStroke {
         position: [0.0, 0.0, 0.0],
         pressure: 1.0,
+        modifiers: Default::default(),
     })
     .expect("begin");
     vm.dispatch(Command::ContinueStroke {
@@ -271,6 +274,7 @@ fn a_stroke_over_empty_space_is_not_an_error() {
             Command::BeginStroke {
                 position,
                 pressure: 1.0,
+                modifiers: Default::default(),
             }
         } else {
             Command::ContinueStroke {
@@ -334,6 +338,7 @@ fn a_frame_drawn_tool_refuses_a_surface_stroke() {
         .dispatch(Command::BeginStroke {
             position: [0.0, 0.0, 1.0],
             pressure: 1.0,
+            modifiers: Default::default(),
         })
         .expect_err("Trim's gesture is a shape on the frame, not a stroke");
     assert!(
@@ -352,6 +357,7 @@ fn a_move_under_the_resolution_changes_nothing() {
     vm.dispatch(Command::BeginStroke {
         position: [0.0, 0.0, 1.0],
         pressure: 1.0,
+        modifiers: Default::default(),
     })
     .expect("begin");
     vm.dispatch(Command::EndStroke).expect("end");
@@ -468,6 +474,7 @@ mod scene {
             .dispatch(Command::BeginStroke {
                 position: [0.0, 0.0, 1.0],
                 pressure: 1.0,
+                modifiers: Default::default(),
             })
             .expect_err("a locked layer accepts no edit");
         assert!(error.to_string().contains("locked"), "{error}");

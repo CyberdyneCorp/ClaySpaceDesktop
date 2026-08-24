@@ -125,6 +125,7 @@ fn draw_with(harness: &mut Harness, settings: CombineSettings, name: &str) -> Op
             Command::BeginStroke {
                 position,
                 pressure: 1.0,
+                modifiers: Default::default(),
             }
         };
         let _ = vm.dispatch(command);
