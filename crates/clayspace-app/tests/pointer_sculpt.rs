@@ -61,6 +61,7 @@ impl Fixture {
                 Command::BeginStroke {
                     position,
                     pressure: 1.0,
+                    modifiers: Default::default(),
                 }
             } else {
                 Command::ContinueStroke {

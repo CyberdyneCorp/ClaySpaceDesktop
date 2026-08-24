@@ -73,6 +73,8 @@ pub struct SculptViewModel {
     grid: Observable<bool>,
     /// Whether a mesh layer is drawn with its edges over it.
     polyframe: Observable<bool>,
+    /// What was held when the current gesture began. Cleared with it.
+    modifiers: clayspace_model::StrokeModifiers,
 
     history: Observable<HistoryState>,
     stats: Observable<SceneStats>,
@@ -129,6 +131,7 @@ impl SculptViewModel {
             // and it is asked for when a question about density comes up
             // rather than kept on.
             polyframe: Observable::new(false),
+            modifiers: clayspace_model::StrokeModifiers::default(),
             history: Observable::new(history),
             stats: Observable::new(stats),
             tool_status: Observable::new(None),
@@ -317,11 +320,19 @@ impl SculptViewModel {
                 self.symmetry.update(|axes| axes[index] = !axes[index]);
             }
 
-            Command::BeginStroke { position, pressure } => {
+            Command::BeginStroke {
+                position,
+                pressure,
+                modifiers,
+            } => {
                 // Refuse before collecting anything, so an unavailable tool
                 // cannot accumulate a gesture it will never apply.
                 self.ensure_tool_available()?;
-                let tool_is_region = self.holds_the_whole_gesture(*self.tool.get());
+                // Held for the gesture. The shelf still shows the tool that was
+                // chosen — letting go of the key returns to it — so this is a
+                // substitution rather than a selection.
+                self.modifiers = modifiers;
+                let tool_is_region = self.holds_the_whole_gesture(self.stroking_tool());
                 // The model is told a gesture is open, so a dragging verb on a
                 // mesh can preview it — take back what the last segment did and
                 // lay the whole gesture down again from its anchor — instead of
@@ -339,7 +350,7 @@ impl SculptViewModel {
                 }
             }
             Command::ContinueStroke { position, pressure } => {
-                let tool = *self.tool.get();
+                let tool = self.stroking_tool();
                 // Asked before the stroke is borrowed: it reads the model, and
                 // the borrow below is exclusive.
                 let whole = self.holds_the_whole_gesture(tool);
@@ -367,6 +378,7 @@ impl SculptViewModel {
                 // banked and then taken back with everything else rather than
                 // being left on the surface.
                 self.model.end_gesture();
+                self.modifiers = clayspace_model::StrokeModifiers::default();
                 return self.abandon_gesture();
             }
 
@@ -556,6 +568,20 @@ impl SculptViewModel {
         }
     }
 
+    /// The tool this stroke is actually using, which a held modifier can
+    /// substitute.
+    fn stroking_tool(&self) -> ToolKind {
+        self.modifiers.tool(*self.tool.get())
+    }
+
+    /// The brush this stroke is actually using.
+    fn stroking_brush(&self) -> BrushSettings {
+        BrushSettings {
+            invert: self.modifiers.invert,
+            ..*self.brush.get()
+        }
+    }
+
     /// Whether a segment carries the gesture from its anchor rather than only
     /// what is new since the last one.
     ///
@@ -578,7 +604,7 @@ impl SculptViewModel {
     ///
     /// The stroke stays open: this is a piece of it, not the end of it.
     fn apply_segment(&mut self) -> Result<(), ModelError> {
-        let tool = *self.tool.get();
+        let tool = self.stroking_tool();
         // Asked before the stroke is borrowed: it reads the model.
         let replay = self.replays_from_the_anchor(tool);
         let Some(stroke) = self.stroke.as_ref() else {
@@ -603,7 +629,7 @@ impl SculptViewModel {
         let before = self.model.history().depth;
         let outcome =
             self.model
-                .apply_stroke(tool, *self.brush.get(), pending, *self.symmetry.get());
+                .apply_stroke(tool, self.stroking_brush(), pending, *self.symmetry.get());
         let recorded = self.model.history().depth.saturating_sub(before);
 
         // Marked applied whether or not the engine accepted them. Re-sending a
@@ -630,6 +656,8 @@ impl SculptViewModel {
         // The gesture is over: what was previewed becomes the edit, and one
         // undo takes the whole drag back however many segments drew it.
         self.model.end_gesture();
+        // And the keys that were held with it stop meaning anything.
+        self.modifiers = clayspace_model::StrokeModifiers::default();
         self.close_gesture();
         applied
     }

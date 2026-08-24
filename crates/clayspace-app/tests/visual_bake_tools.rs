@@ -125,6 +125,7 @@ fn stroke_with(harness: &mut Harness, tool: ToolKind, name: &str) -> Option<(Ima
             Command::BeginStroke {
                 position,
                 pressure: 1.0,
+                modifiers: Default::default(),
             }
         } else {
             Command::ContinueStroke {

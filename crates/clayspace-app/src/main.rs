@@ -17,7 +17,7 @@ use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
     AutosavePolicy, Detail, DetailPolicy, Diagnostics, ExchangeModel, ExportSettings,
     ExportWarning, Format, FrameLog, ImportSettings, LayerOperation, RecentDocuments, Recovery,
-    SceneModel, SculptModel, SkinSettings, Units, ViewPresetKind, FRAME,
+    SceneModel, SculptModel, SkinSettings, StrokeModifiers, Units, ViewPresetKind, FRAME,
 };
 use clayspace_view::shell::{self, region, ArmatureState, ShellState};
 use clayspace_view::{
@@ -1184,8 +1184,14 @@ impl App {
     /// stretches across it and folds over. It also ended a gesture the moment
     /// the pointer crossed the silhouette, because a pick that finds nothing
     /// sends nothing.
-    fn stroke_at(&mut self, point: egui::Pos2, begin: bool) {
-        let dragging = self.sculpt.tool().get().is_path_driven();
+    fn stroke_at(&mut self, point: egui::Pos2, begin: bool, modifiers: StrokeModifiers) {
+        // The tool the gesture will actually use, which is not the one on the
+        // shelf when a modifier is held. Asked here because it decides where
+        // the *following* samples come from: a dragging verb carries its
+        // anchor across a plane, and everything else picks the surface afresh.
+        // Reading the shelf instead would carry a Shift-held smooth across a
+        // plane it never touches.
+        let dragging = modifiers.tool(*self.sculpt.tool().get()).is_path_driven();
         let position = if begin {
             let Some((hit, _)) = self.pick_at(point) else {
                 return;
@@ -1213,6 +1219,7 @@ impl App {
             Command::BeginStroke {
                 position,
                 pressure: 1.0,
+                modifiers,
             }
         } else {
             Command::ContinueStroke {
@@ -1300,7 +1307,14 @@ impl App {
                 self.rig_depth_at_press = self.engine_undo_depth();
             }
             if started == Drag::Sculpt {
-                self.stroke_at(point, true);
+                // Read at the press and carried for the gesture: a key caught
+                // or released mid-drag would change the verb under the
+                // sculptor's hand, and neither reference does that.
+                let modifiers = StrokeModifiers {
+                    smooth: input.smooth_modifier,
+                    invert: input.invert_modifier,
+                };
+                self.stroke_at(point, true, modifiers);
             }
         }
 
@@ -1308,7 +1322,7 @@ impl App {
             match self.drag {
                 Drag::Sculpt => {
                     if let Some(point) = input.pointer {
-                        self.stroke_at(point, false);
+                        self.stroke_at(point, false, StrokeModifiers::default());
                     }
                 }
                 Drag::Rig => {

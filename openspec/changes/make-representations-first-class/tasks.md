@@ -411,3 +411,36 @@ is better but weak (0.0086 against Blender's 0.341).
 Pintar and Borrar do nothing on a colourless mesh and Pintar reports success
 while doing it. Move covers 27% of the sphere to Blender's 1.8% at the same
 nominal radius, which is a units question rather than a defect found.
+
+## 14. The keys a sculptor holds
+
+- [x] 14.1 Hold Shift to smooth, hold Ctrl to invert
+  - Both references let a sculptor reach the two most-used alternatives without
+    leaving the tool in hand. The keys are read at the press and held for the
+    gesture — a key caught mid-drag would change the verb under the sculptor's
+    hand, and neither reference does that — and the shelf never moves, so
+    letting go returns to the selected tool without re-picking it.
+  - **Ctrl and not Alt**, which is how ZBrush spells it: Alt already forces the
+    drag to orbit, which is ZBrush's own rule and the one that leaves a
+    trackpad with no second button able to turn the model, and while rigging it
+    means "move this sphere". Blender spells invert Ctrl and Ctrl is free here
+    during a stroke. Shift was unclaimed either way.
+  - Inverting is three different mechanisms because the three representations
+    are: a field turns the combine operation over (Add/Subtract,
+    Emboss/Engrave, Relief/Incise, and `None` for an operation with no
+    opposite, which is left alone rather than quietly becoming another verb); a
+    mesh negates the brush strength; a grid erases, because occupancy is binary
+    and there is no sign to turn.
+  - The first attempt negated the *stroke preset's* strength on the mesh, and
+    measured as no change at all: the preset's strength is contracted to
+    `[0, 1]` and the resolver drops any stamp whose strength is not positive.
+    The descriptor's strength is the signed one, and a resolved stroke
+    multiplies the two — so that is where the sign lives. Measured on a unit
+    sphere, the same sweep reaches 1.054 upright and 0.945 held, which is
+    symmetric to within a thousandth.
+  - The header's note that a stroke IGNORES the descriptor's radius and
+    strength is half right: the radius is replaced per stamp, the strength is
+    multiplied.
+  - Whether the following samples come from a plane or from a fresh surface
+    pick is decided by the *substituted* tool. Reading the shelf would carry a
+    Shift-held smooth across a drag plane it never touches.

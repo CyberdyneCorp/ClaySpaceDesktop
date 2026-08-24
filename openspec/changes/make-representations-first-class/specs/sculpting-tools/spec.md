@@ -84,3 +84,27 @@ including combine operations, and not only to brush strokes.
 #### Scenario: A mask protects against a boolean
 - **WHEN** a region is masked and a subtracting edit crosses it
 - **THEN** the masked region is not cut
+
+### Requirement: Held keys substitute the verb and the sign for one gesture
+The application SHALL let a sculptor smooth or take material away with the tool
+already in hand, by holding a key for the length of one stroke, without
+changing what the shelf has selected.
+
+The keys SHALL be read at the press and held for the whole gesture, so a key
+caught or released mid-drag does not change the verb under the sculptor's hand.
+
+Inverting SHALL mean what it means on the active representation: a field turns
+its combine operation over, a mesh negates its brush strength, and a grid
+erases rather than deposits. An operation with no opposite SHALL be left as it
+is rather than becoming a different verb.
+
+#### Scenario: Shift smooths whatever is selected
+- **WHEN** a stroke is begun with Shift held while a build-up tool is selected
+- **THEN** every segment of that stroke smooths
+- **AND** the next stroke, made without the key, builds up again
+
+#### Scenario: The invert key digs on every representation
+- **WHEN** the same stroke is made with the invert key held
+- **THEN** a field is cut where it would have been raised
+- **AND** a mesh vertex moves inward where it would have moved outward
+- **AND** a grid's cells are cleared where they would have been set

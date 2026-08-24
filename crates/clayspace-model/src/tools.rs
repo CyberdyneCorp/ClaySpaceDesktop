@@ -686,6 +686,12 @@ pub struct BrushSettings {
     /// uses it — which is the right grain, because a sculptor wants the detail
     /// brush stamped and the blockout brush plain.
     pub alpha: bool,
+    /// Whether this stroke takes material away rather than putting it there.
+    ///
+    /// Transient: set from the modifier held when the press landed, not stored
+    /// with the tool. A brush that remembered it would come back inverted the
+    /// next time it was chosen, which no reference does and nobody expects.
+    pub invert: bool,
 }
 
 /// How a stamp is shaped, beyond its size and strength.
@@ -765,6 +771,7 @@ impl Default for BrushSettings {
             intensity: 0.65,
             flow: 0.80,
             alpha: false,
+            invert: false,
             shaping: Shaping::default(),
         }
     }
@@ -786,6 +793,7 @@ impl BrushSettings {
                 ..self.shaping
             },
             alpha: self.alpha,
+            invert: self.invert,
         }
     }
 }
@@ -1036,6 +1044,7 @@ mod tests {
             size: -5.0,
             intensity: 4.0,
             flow: 0.0,
+            invert: false,
             shaping: Shaping {
                 noise: 8.0,
                 smoothing: 1.0,

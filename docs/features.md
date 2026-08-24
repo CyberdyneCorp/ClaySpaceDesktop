@@ -82,6 +82,44 @@ producing an error you cannot act on.
 Symmetry about X, Y and Z is applied through the layer's mirror, so both halves
 belong to one operation and undo together.
 
+### Held keys
+
+Two keys change what the stroke in your hand does, for the length of that
+stroke only. Both are read **at the press** and held for the gesture: a key
+caught or let go mid-drag would change the verb under the sculptor's hand, and
+neither ZBrush nor Blender does that. The shelf never moves, so letting go
+returns to the tool that is selected without having to re-pick it.
+
+| Key | Effect |
+|---|---|
+| **Shift** | Smooth instead, whatever tool is selected |
+| **Ctrl** | Take material away rather than put it there |
+
+**Ctrl and not Alt**, which is what ZBrush spells it. Alt already forces the
+drag to orbit — ZBrush's own rule, and the one that leaves a trackpad with no
+second button able to turn the model — and while rigging it means "move this
+sphere". Blender spells invert Ctrl, and Ctrl is free here during a stroke.
+
+Inverting means a different thing on each representation, and each one is what
+that representation has:
+
+- On a **field** the combine operation is turned over: Add becomes Subtract,
+  Emboss becomes Engrave, Relief becomes Incise. An operation with no opposite
+  — Intersect, Replace, a seam — is left as it is rather than quietly becoming
+  some other verb.
+- On a **mesh** the brush descriptor's strength is negated, which is signed for
+  every verb that has a sign: Padrão digs, Inflar deflates, Vinco cuts. Note
+  that this is the *descriptor's* strength and not the stroke preset's — the
+  preset's is contracted to `[0, 1]` and the resolver drops any stamp whose
+  strength is not positive, so a negative preset strength is not a dig but
+  nothing at all. Measured on a unit sphere, a sweep raises the surface to
+  1.054 upright and lowers it to 0.945 held.
+- On a **grid** occupancy is binary, so there is no sign to turn: the opposite
+  of putting a cell there is removing it, which is `Apagar`'s verb.
+
+Holding both is a smooth. Sharpening is a different verb rather than a smooth
+turned over, and neither reference offers an inverted smooth.
+
 ## Sculpting a mesh layer
 
 A mesh layer comes from an import or from a **crossing** — see *Crossing

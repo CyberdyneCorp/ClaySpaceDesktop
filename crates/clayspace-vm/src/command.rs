@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use clayspace_model::{
     ConversionSettings, ExportSettings, ExtrudeSettings, Falloff, ImportSettings, LayerKey, MaskOp,
-    ToolKind, ViewPresetKind,
+    StrokeModifiers, ToolKind, ViewPresetKind,
 };
 
 /// A change to the application or the document.
@@ -127,6 +127,12 @@ pub enum Command {
     BeginStroke {
         position: [f32; 3],
         pressure: f32,
+        /// What was held down when the press landed.
+        ///
+        /// On the press and not on every sample: a modifier caught and
+        /// released mid-drag would change the verb under the sculptor's hand,
+        /// and neither reference does that.
+        modifiers: StrokeModifiers,
     },
     /// The stroke continued. Samples accumulate until it ends.
     ContinueStroke {
@@ -450,6 +456,7 @@ mod tests {
             Command::BeginStroke {
                 position: [0.0; 3],
                 pressure: 1.0,
+                modifiers: Default::default(),
             },
             Command::EndStroke,
             Command::Undo,

@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 use clayspace_model::{
     BrushSettings, EditOutcome, GestureSample, HistoryState, ModelError, Representation,
-    SceneStats, SculptModel, ToolKind, ViewPresetKind,
+    SceneStats, SculptModel, StrokeModifiers, ToolKind, ViewPresetKind,
 };
 use clayspace_vm::{Axis, Command, SculptViewModel, Watcher};
 
@@ -169,6 +169,7 @@ fn draw(vm: &mut SculptViewModel, points: &[[f32; 3]]) -> Result<(), ModelError>
     vm.dispatch(Command::BeginStroke {
         position: *first,
         pressure: 1.0,
+        modifiers: Default::default(),
     })?;
     for point in rest {
         vm.dispatch(Command::ContinueStroke {
@@ -227,6 +228,7 @@ fn samples_carry_increasing_time_and_clamped_pressure() {
     vm.dispatch(Command::BeginStroke {
         position: [0.0; 3],
         pressure: 4.0,
+        modifiers: Default::default(),
     })
     .expect("begin");
     vm.dispatch(Command::ContinueStroke {
@@ -261,6 +263,7 @@ fn a_cancelled_stroke_is_taken_back_off_the_model() {
     vm.dispatch(Command::BeginStroke {
         position: [0.0; 3],
         pressure: 1.0,
+        modifiers: Default::default(),
     })
     .expect("begin");
     vm.dispatch(Command::ContinueStroke {
@@ -326,6 +329,7 @@ fn an_unavailable_tool_refuses_before_collecting_a_gesture() {
         .dispatch(Command::BeginStroke {
             position: [0.0; 3],
             pressure: 1.0,
+            modifiers: Default::default(),
         })
         .expect_err("a voxel verb on an SDF layer must be refused");
 
@@ -364,6 +368,7 @@ fn a_protected_layer_refuses_every_tool() {
         .dispatch(Command::BeginStroke {
             position: [0.0; 3],
             pressure: 1.0,
+            modifiers: Default::default(),
         })
         .expect_err("a locked layer accepts no edit");
     assert!(error.to_string().contains("locked"), "{error}");
@@ -742,6 +747,7 @@ fn every_segment_of_a_mesh_drag_replays_it_from_the_anchor() {
         vm.dispatch(Command::BeginStroke {
             position: [0.0, 0.0, 1.0],
             pressure: 1.0,
+            modifiers: Default::default(),
         })
         .expect("begin");
         for step in 1..=24 {
@@ -809,6 +815,7 @@ fn a_mesh_stroke_is_applied_while_it_is_made() {
         vm.dispatch(Command::BeginStroke {
             position: [0.0, 0.0, 1.0],
             pressure: 1.0,
+            modifiers: Default::default(),
         })
         .expect("begin");
         for step in 1..=40 {
@@ -856,5 +863,136 @@ fn a_mesh_stroke_is_applied_while_it_is_made() {
         calls.borrow().strokes.len(),
         1,
         "the field bake did not arrive when the gesture closed"
+    );
+}
+
+// -- held keys ---------------------------------------------------------------
+
+/// Draws a short stroke with the given keys held for the whole of it.
+fn draw_holding(vm: &mut SculptViewModel, modifiers: StrokeModifiers) {
+    vm.dispatch(Command::BeginStroke {
+        position: [0.0, 0.0, 1.0],
+        pressure: 1.0,
+        modifiers,
+    })
+    .expect("begin");
+    for step in 1..=8 {
+        vm.dispatch(Command::ContinueStroke {
+            position: [step as f32 * 0.05, 0.0, 1.0],
+            pressure: 1.0,
+        })
+        .expect("continue");
+    }
+    vm.dispatch(Command::EndStroke).expect("end");
+}
+
+#[test]
+fn holding_smooth_substitutes_the_verb_for_the_gesture() {
+    let (mut vm, calls) = fixture_with(|_| {});
+    vm.dispatch(Command::SelectTool(ToolKind::Padrao))
+        .expect("tool");
+
+    draw_holding(
+        &mut vm,
+        StrokeModifiers {
+            smooth: true,
+            invert: false,
+        },
+    );
+
+    let held = calls.borrow();
+    assert!(
+        !held.strokes.is_empty(),
+        "the stroke never reached the model"
+    );
+    for (tool, ..) in held.strokes.iter() {
+        assert_eq!(
+            *tool,
+            ToolKind::Suavizar,
+            "a segment of a Shift-held stroke arrived as {tool:?}; half the \
+             drag would build up and the other half smooth it"
+        );
+    }
+    drop(held);
+
+    // The shelf never moved. Letting go returns to the chosen tool without the
+    // sculptor having to re-pick it.
+    assert_eq!(*vm.tool().get(), ToolKind::Padrao);
+    let before = calls.borrow().strokes.len();
+    draw_holding(&mut vm, StrokeModifiers::default());
+    let after: Vec<ToolKind> = calls.borrow().strokes[before..]
+        .iter()
+        .map(|s| s.0)
+        .collect();
+    assert!(
+        after.iter().all(|t| *t == ToolKind::Padrao),
+        "letting Shift go left the brush smoothing: {after:?}"
+    );
+}
+
+#[test]
+fn holding_invert_turns_the_brush_over_without_changing_the_verb() {
+    let (mut vm, calls) = fixture_with(|_| {});
+    vm.dispatch(Command::SelectTool(ToolKind::Padrao))
+        .expect("tool");
+
+    draw_holding(
+        &mut vm,
+        StrokeModifiers {
+            smooth: false,
+            invert: true,
+        },
+    );
+
+    let held = calls.borrow();
+    assert!(
+        !held.strokes.is_empty(),
+        "the stroke never reached the model"
+    );
+    for (tool, _, _, brush) in held.strokes.iter() {
+        assert_eq!(*tool, ToolKind::Padrao, "inverting picked a different verb");
+        assert!(
+            brush.invert,
+            "a segment of a Ctrl-held stroke arrived upright, so the sculptor \
+             adds clay where they asked to take it away"
+        );
+    }
+    drop(held);
+
+    // And the shelf's brush is untouched: the next stroke builds up again.
+    assert!(!vm.brush().get().invert);
+    let before = calls.borrow().strokes.len();
+    draw_holding(&mut vm, StrokeModifiers::default());
+    assert!(
+        calls.borrow().strokes[before..].iter().all(|s| !s.3.invert),
+        "letting Ctrl go left the brush inverted"
+    );
+}
+
+#[test]
+fn a_cancelled_stroke_lets_the_held_keys_go() {
+    let (mut vm, calls) = fixture_with(|_| {});
+    vm.dispatch(Command::SelectTool(ToolKind::Padrao))
+        .expect("tool");
+    vm.dispatch(Command::BeginStroke {
+        position: [0.0, 0.0, 1.0],
+        pressure: 1.0,
+        modifiers: StrokeModifiers {
+            smooth: true,
+            invert: true,
+        },
+    })
+    .expect("begin");
+    vm.dispatch(Command::CancelStroke).expect("cancel");
+
+    let before = calls.borrow().strokes.len();
+    draw_holding(&mut vm, StrokeModifiers::default());
+    let after: Vec<(ToolKind, bool)> = calls.borrow().strokes[before..]
+        .iter()
+        .map(|s| (s.0, s.3.invert))
+        .collect();
+    assert!(
+        !after.is_empty() && after.iter().all(|(t, i)| *t == ToolKind::Padrao && !i),
+        "an abandoned gesture kept its keys held into the next one: {after:?}"
     );
 }

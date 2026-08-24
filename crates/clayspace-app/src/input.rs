@@ -38,6 +38,16 @@ pub struct ViewportInput {
     pub orbit_modifier: bool,
     /// Whether the platform's command modifier is held.
     pub command_modifier: bool,
+    /// Whether Shift is held: smooth instead, whatever tool is selected.
+    pub smooth_modifier: bool,
+    /// Whether Control is held: take material away rather than put it there.
+    ///
+    /// Control and not Alt, which both references would spell differently and
+    /// this application cannot. Alt already forces the drag to orbit — ZBrush's
+    /// own rule, and the one that leaves a trackpad able to turn the model —
+    /// so ZBrush's Alt-to-invert has nowhere to go. Blender spells invert
+    /// Control, and Control is free here while a stroke is being made.
+    pub invert_modifier: bool,
 }
 
 impl ViewportInput {
@@ -66,6 +76,11 @@ impl ViewportInput {
             // button worth reaching for.
             orbit_modifier: i.modifiers.alt,
             command_modifier: i.modifiers.command,
+            smooth_modifier: i.modifiers.shift,
+            // `ctrl` rather than `command`: on macOS the platform modifier is
+            // Command, which belongs to the menus, and Control is the free one
+            // — the same key Blender uses.
+            invert_modifier: i.modifiers.ctrl,
         })
     }
 }

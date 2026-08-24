@@ -160,6 +160,40 @@ impl Combine {
     /// it discards what was there — and Paint touches no surface to join, so
     /// offering a profile beside either is offering a control that does
     /// nothing.
+    /// The same operation with its sign turned over, where that means
+    /// anything.
+    ///
+    /// What a sculptor holding the invert modifier expects: the brush takes
+    /// material away rather than putting it there. Add and Subtract are each
+    /// other's answer; Emboss raises where Engrave cuts, and Tongue fills
+    /// where Groove hollows.
+    ///
+    /// `None` where the operation has no opposite to offer — Intersect,
+    /// Replace and Paint say nothing about adding or removing, and inverting
+    /// one would have to invent a meaning rather than turn one over. The
+    /// stroke is then left as it is rather than quietly becoming a different
+    /// verb.
+    pub fn inverted(self) -> Option<Self> {
+        Some(match self {
+            Self::Add => Self::Subtract,
+            Self::Subtract => Self::Add,
+            Self::Engrave => Self::Emboss,
+            Self::Emboss => Self::Engrave,
+            Self::Groove => Self::Tongue,
+            Self::Tongue => Self::Groove,
+            Self::Incise => Self::Relief,
+            Self::Relief => Self::Incise,
+            // Pipe and Inset are seams rather than deposits, and Shell is a
+            // thickness; none of them has an opposite that is still itself.
+            Self::Intersect
+            | Self::Replace
+            | Self::Paint
+            | Self::Pipe
+            | Self::Inset
+            | Self::Shell => return None,
+        })
+    }
+
     pub fn takes_a_blend(self) -> bool {
         !matches!(self, Self::Replace | Self::Paint)
     }
@@ -428,5 +462,116 @@ mod tests {
         for op in Combine::ALL {
             assert_eq!(op.moves_the_surface(), op != Combine::Paint, "{op:?}");
         }
+    }
+}
+
+/// What a held modifier does to the stroke about to be made.
+///
+/// Sampled when the press lands and held for the gesture, as ZBrush and
+/// Blender both do: a modifier caught and released mid-drag would change the
+/// verb under the sculptor's hand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct StrokeModifiers {
+    /// Smooth instead, whatever tool is selected.
+    ///
+    /// Shift, in both references. It is a *substitution* rather than a setting:
+    /// the shelf still shows the tool that was chosen, because letting go of
+    /// the key returns to it.
+    pub smooth: bool,
+    /// Take material away rather than put it there.
+    ///
+    /// Blender's Ctrl. ZBrush spells it Alt, which this application cannot:
+    /// Alt already forces the drag to orbit, which is ZBrush's own rule and
+    /// the one that leaves a trackpad able to turn the model.
+    pub invert: bool,
+}
+
+impl StrokeModifiers {
+    /// Whether either of them is asking for anything.
+    pub fn any(self) -> bool {
+        self.smooth || self.invert
+    }
+
+    /// The tool a stroke actually uses.
+    ///
+    /// Smoothing wins over inverting where both are held: an inverted smooth
+    /// is not a thing either reference offers, and sharpening is a different
+    /// verb rather than a smooth with its sign turned over.
+    pub fn tool(self, chosen: crate::ToolKind) -> crate::ToolKind {
+        if self.smooth {
+            crate::ToolKind::Suavizar
+        } else {
+            chosen
+        }
+    }
+}
+
+#[cfg(test)]
+mod modifier_tests {
+    use super::*;
+
+    /// Turning an operation over twice is where it started.
+    #[test]
+    fn inverting_twice_is_the_operation_again() {
+        for op in Combine::ALL {
+            let Some(other) = op.inverted() else { continue };
+            assert_eq!(
+                other.inverted(),
+                Some(op),
+                "{op:?} inverts to {other:?}, which does not invert back to it"
+            );
+            assert_ne!(other, op, "{op:?} inverts to itself");
+        }
+    }
+
+    /// And the ones with no opposite say so rather than inventing one.
+    #[test]
+    fn an_operation_with_no_opposite_says_so() {
+        for op in [
+            Combine::Intersect,
+            Combine::Replace,
+            Combine::Paint,
+            Combine::Shell,
+        ] {
+            assert_eq!(
+                op.inverted(),
+                None,
+                "{op:?} claims an opposite; inverting it would be inventing a \
+                 meaning rather than turning one over"
+            );
+        }
+        // The one a sculptor reaches for most has one.
+        assert_eq!(Combine::Add.inverted(), Some(Combine::Subtract));
+    }
+
+    /// Smoothing wins over inverting, and neither held is the chosen tool.
+    #[test]
+    fn the_modifiers_choose_the_tool() {
+        use crate::ToolKind;
+        let none = StrokeModifiers::default();
+        assert!(!none.any());
+        assert_eq!(none.tool(ToolKind::Padrao), ToolKind::Padrao);
+
+        let smooth = StrokeModifiers {
+            smooth: true,
+            invert: false,
+        };
+        assert_eq!(smooth.tool(ToolKind::Padrao), ToolKind::Suavizar);
+
+        // Inverting alone leaves the tool alone: it is the *brush* that turns
+        // over, not the verb.
+        let invert = StrokeModifiers {
+            smooth: false,
+            invert: true,
+        };
+        assert_eq!(invert.tool(ToolKind::Padrao), ToolKind::Padrao);
+
+        // Both: an inverted smooth is not a thing either reference offers, and
+        // sharpening is a different verb rather than a smooth turned over.
+        let both = StrokeModifiers {
+            smooth: true,
+            invert: true,
+        };
+        assert_eq!(both.tool(ToolKind::Padrao), ToolKind::Suavizar);
     }
 }
