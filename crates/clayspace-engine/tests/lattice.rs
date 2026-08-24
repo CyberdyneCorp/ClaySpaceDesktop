@@ -505,3 +505,212 @@ fn the_manipulator_does_nothing_with_nothing_selected() {
     assert_eq!(document.lattice().points, before);
     assert!(!document.lattice().touched);
 }
+
+// -- seeing it while it happens ----------------------------------------------
+//
+// A cage that showed nothing until it was applied made the sculptor aim blind:
+// they set every corner, pressed Deformar, looked at the result and started
+// again. The forward route deforms vertices they already have, so a preview is
+// one pass and taking it back is one more.
+
+#[test]
+fn the_bend_is_shown_while_the_cage_is_dragged() {
+    let Some(mut document) = meshed() else {
+        return;
+    };
+    let rest = top(&mut document);
+    document.begin_lattice([2, 2, 2]).expect("a cage");
+    select_the_far_face(&mut document, 1);
+    let pivot = document.lattice().pivot().expect("a middle");
+
+    document.set_gizmo_mode(GizmoMode::Move);
+    document.begin_gizmo_drag(GizmoHandle::Axis(1), pivot);
+    document
+        .drag_gizmo([pivot[0], pivot[1] + 0.5, pivot[2]])
+        .expect("the drag was refused");
+
+    // Mid-gesture, with nothing applied and nothing banked.
+    let shown = top(&mut document);
+    assert!(
+        (shown - (rest + 0.5)).abs() < 0.05,
+        "the form still stands at {shown} from {rest} while the cage is being \
+         dragged, so a sculptor is aiming blind"
+    );
+    assert!(
+        document.history().depth == 0 || document.lattice().active,
+        "a preview banked an edit"
+    );
+}
+
+#[test]
+fn a_preview_does_not_compound_across_frames() {
+    // The lattice is absolute — offsets from rest, evaluated against the
+    // original vertices — so laying it over a surface a previous frame already
+    // bent doubles the deformation on every pointer move. What the last
+    // preview did is taken back first.
+    let Some(mut stepped) = meshed() else {
+        return;
+    };
+    stepped.begin_lattice([2, 2, 2]).expect("a cage");
+    select_the_far_face(&mut stepped, 1);
+    let pivot = stepped.lattice().pivot().expect("a middle");
+    stepped.set_gizmo_mode(GizmoMode::Move);
+    stepped.begin_gizmo_drag(GizmoHandle::Axis(1), pivot);
+    // Twenty frames, as a pointer crossing the viewport would send.
+    for step in 1..=20 {
+        let by = step as f32 / 20.0 * 0.5;
+        stepped
+            .drag_gizmo([pivot[0], pivot[1] + by, pivot[2]])
+            .expect("the drag was refused");
+    }
+    let after_many = top(&mut stepped);
+
+    let Some(mut once) = meshed() else {
+        return;
+    };
+    once.begin_lattice([2, 2, 2]).expect("a cage");
+    select_the_far_face(&mut once, 1);
+    once.set_gizmo_mode(GizmoMode::Move);
+    once.begin_gizmo_drag(GizmoHandle::Axis(1), pivot);
+    once.drag_gizmo([pivot[0], pivot[1] + 0.5, pivot[2]])
+        .expect("the drag was refused");
+
+    assert!(
+        (after_many - top(&mut once)).abs() < 1e-3,
+        "twenty frames of one drag left the form at {after_many} where one \
+         frame left it at {}, so each frame is bending what the last one bent",
+        top(&mut once)
+    );
+}
+
+#[test]
+fn the_viewport_is_told_to_look_again_on_every_drag() {
+    // A mesh layer is not in the brick cache, so nothing else about this edit
+    // would say the surface had moved — and the viewport uploads only when the
+    // revision changes.
+    let Some(mut document) = meshed() else {
+        return;
+    };
+    document.begin_lattice([2, 2, 2]).expect("a cage");
+    select_the_far_face(&mut document, 1);
+    let pivot = document.lattice().pivot().expect("a middle");
+    document.set_gizmo_mode(GizmoMode::Move);
+    document.begin_gizmo_drag(GizmoHandle::Axis(1), pivot);
+
+    let mut seen = std::collections::BTreeSet::new();
+    for step in 1..=5 {
+        document
+            .drag_gizmo([pivot[0], pivot[1] + step as f32 * 0.1, pivot[2]])
+            .expect("the drag was refused");
+        seen.insert(document.mesh_revision());
+    }
+    assert_eq!(
+        seen.len(),
+        5,
+        "five drags produced {} distinct revisions, so the viewport would draw \
+         a form that has visibly moved as though it had not",
+        seen.len()
+    );
+}
+
+#[test]
+fn a_previewed_cage_is_still_one_undo() {
+    // Every drag replaces the last rather than adding to it, so bending a form
+    // is one undo however many times a corner was adjusted on the way.
+    let Some(mut document) = meshed() else {
+        return;
+    };
+    let rest = top(&mut document);
+    let before = document.history().depth;
+    document.begin_lattice([2, 2, 2]).expect("a cage");
+    select_the_far_face(&mut document, 1);
+    let pivot = document.lattice().pivot().expect("a middle");
+    document.set_gizmo_mode(GizmoMode::Move);
+    document.begin_gizmo_drag(GizmoHandle::Axis(1), pivot);
+    for step in 1..=10 {
+        document
+            .drag_gizmo([pivot[0], pivot[1] + step as f32 * 0.05, pivot[2]])
+            .expect("the drag was refused");
+    }
+    document.end_gizmo_drag();
+    document.apply_lattice().expect("the cage was refused");
+
+    assert_eq!(
+        document.history().depth,
+        before + 1,
+        "ten drags left more than one entry on the stack"
+    );
+    let applied = top(&mut document);
+    assert!(
+        (applied - (rest + 0.5)).abs() < 0.05,
+        "applying after a preview left the form at {applied} rather than where \
+         the preview was showing it"
+    );
+    document.undo().expect("undo");
+    assert!(
+        (top(&mut document) - rest).abs() < 1e-3,
+        "one undo did not give the form back"
+    );
+}
+
+#[test]
+fn cancelling_takes_the_preview_back() {
+    let Some(mut document) = meshed() else {
+        return;
+    };
+    let rest = top(&mut document);
+    // Not zero: the fixture crossed a sphere into a mesh, and both are edits.
+    let before = document.history().depth;
+    document.begin_lattice([2, 2, 2]).expect("a cage");
+    lift(&mut document, 1, 0.5);
+
+    // It really was showing something, or the assertion below passes for the
+    // wrong reason.
+    assert!(
+        top(&mut document) > rest + 0.4,
+        "there was no preview to take back"
+    );
+    document.cancel_lattice();
+    assert!(
+        (top(&mut document) - rest).abs() < 1e-4,
+        "abandoning a cage left the form bent at {}, which is the opposite of \
+         what abandoning a gesture means everywhere else here",
+        top(&mut document)
+    );
+    assert_eq!(
+        document.history().depth,
+        before,
+        "cancelling banked an edit"
+    );
+}
+
+#[test]
+fn a_field_cage_moves_its_points_without_previewing_the_surface() {
+    // No preview there, and deliberately: the field route writes a lattice
+    // deformer into the document as an undoable edit and refills the layer's
+    // whole brick region — 68.8 ms measured for one apply on the starting
+    // form, against 11.2 ms for a mesh preview on 62,576 vertices. That is not
+    // a thing to do on every pointer move, so the cage moves live and the
+    // surface follows when it is applied.
+    let Some(mut document) = sphere() else {
+        return;
+    };
+    let rest = reach(&document);
+    document.begin_lattice([4, 4, 4]).expect("a cage");
+    lift(&mut document, 2, 0.5);
+
+    assert!(
+        document.lattice().touched,
+        "the cage's own points did not move"
+    );
+    assert!(
+        (reach(&document) - rest).abs() < 1e-3,
+        "a field cage previewed the surface at {} from {rest}",
+        reach(&document)
+    );
+    document.apply_lattice().expect("the cage was refused");
+    assert!(
+        reach(&document) > rest + 0.3,
+        "applying a field cage did not move the surface"
+    );
+}

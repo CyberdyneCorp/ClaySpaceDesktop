@@ -16,7 +16,7 @@
 mod support;
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
-use clayspace_model::{Direction, GizmoMode, LatticeModel, LatticeState, SculptModel};
+use clayspace_model::{Direction, GizmoHandle, GizmoMode, LatticeModel, LatticeState, SculptModel};
 use clayspace_view::{Camera, GizmoView, Image, LatticeView, Vertex};
 use support::Harness;
 
@@ -336,5 +336,53 @@ fn the_manipulator_sits_on_the_middle_of_the_selection() {
         middle[0].abs() < 1e-4 && middle[2].abs() < 1e-4 && middle[1] > 1.0,
         "the top face's manipulator sits at {middle:?} rather than over the \
          middle of that face"
+    );
+}
+
+#[test]
+fn the_bend_reaches_the_screen_while_the_cage_is_being_dragged() {
+    // The whole point of a preview, and every part of it can fail on its own:
+    // the engine can deform and not raise its revision, and the revision can
+    // move without the geometry the viewport reads changing. So this renders
+    // mid-gesture, with nothing applied.
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let Some(mut document) = meshed() else {
+        return;
+    };
+    let camera = framed(&document);
+    let mut mesh = clayspace_view::GpuMesh::new(&harness.gpu);
+
+    let (vertices, indices) = surface(&mut document);
+    mesh.upload(&harness.gpu, &vertices, &indices);
+    let rest = harness.capture(&mesh, &camera, false, "98-preview-rest");
+
+    document.begin_lattice([2, 2, 2]).expect("a cage");
+    let cage = document.lattice();
+    for (index, point) in cage.points.iter().enumerate() {
+        if point[1] > 0.0 {
+            document.toggle_lattice_point(index);
+        }
+    }
+    let pivot = document.lattice().pivot().expect("a middle");
+    document.set_gizmo_mode(GizmoMode::Move);
+    document.begin_gizmo_drag(GizmoHandle::Axis(1), pivot);
+    document
+        .drag_gizmo([pivot[0], pivot[1] + 0.5, pivot[2]])
+        .expect("the drag was refused");
+
+    // Still mid-gesture: nothing applied, nothing banked, the cage still up.
+    assert!(document.lattice().active, "the cage came down on its own");
+    let (vertices, indices) = surface(&mut document);
+    mesh.upload(&harness.gpu, &vertices, &indices);
+    let during = harness.capture(&mesh, &camera, false, "99-preview-during");
+
+    let changed = how_many_differ(&rest, &during);
+    assert!(
+        changed > 3000,
+        "the drawn surface changed {changed} pixels while the cage was being \
+         dragged, so the sculptor is setting corners blind and looking at the \
+         result only after Deformar. See target/visual/99-preview-during.png"
     );
 }

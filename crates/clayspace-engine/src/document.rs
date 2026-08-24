@@ -4223,6 +4223,7 @@ impl LatticeModel for ClayDocument {
             let rest = cage.rest(*at);
             cage.offsets[*at] = std::array::from_fn(|axis| now[axis] - rest[axis]);
         }
+        self.preview_cage();
         Ok(())
     }
 
@@ -4247,6 +4248,7 @@ impl LatticeModel for ClayDocument {
         // does not compound.
         let rest = cage.rest(index);
         cage.offsets[index] = std::array::from_fn(|axis| to[axis] - rest[axis]);
+        self.preview_cage();
         Ok(())
     }
 
@@ -4258,15 +4260,28 @@ impl LatticeModel for ClayDocument {
         // a pass over every vertex — or, on a field, a deformer per item — to
         // move everything by zero.
         if cage.is_identity() {
+            self.discard_cage_preview();
             return Ok(());
         }
         match cage.representation {
-            Representation::Mesh => self.bend_mesh(&cage),
+            // The preview is taken back and the cage laid down once more, this
+            // time banked. Not "keep what is on screen": a preview holds the
+            // deltas of one pass, and turning that into the edit would leave
+            // the undo stack describing a gesture rather than a deformation.
+            Representation::Mesh => {
+                self.previewing = false;
+                self.bend_mesh(&cage)
+            }
             _ => self.bend_field(&cage),
         }
     }
 
     fn cancel_lattice(&mut self) {
+        // Whatever the preview is showing goes with the cage. Abandoning one
+        // and leaving the form bent would be the opposite of what Esc means
+        // everywhere else here.
+        self.discard_cage_preview();
+        self.previewing = false;
         self.lattice = None;
     }
 }
@@ -4337,16 +4352,39 @@ impl ClayDocument {
         }
 
         let mut deltas = claycore::MeshDeltas::new().map_err(ModelError::engine)?;
+        // What the last preview did, taken back before the cage is laid down
+        // again from the mesh as it was. The lattice is *absolute* — offsets
+        // from rest, evaluated against the original vertices — so applying it
+        // over a surface a previous preview already bent would compound the
+        // deformation on every pointer move.
+        let previous = self
+            .live_mesh
+            .take()
+            .filter(|(layer, _)| *layer == cage.layer)
+            .map(|(_, deltas)| deltas);
         let moved = {
             let mut held = self.mesh_sculptor.borrow_mut();
             let Some((_, sculptor)) = held.as_mut() else {
                 return Ok(());
             };
+            if let Some(previous) = &previous {
+                previous.revert(sculptor).map_err(ModelError::engine)?;
+            }
             sculptor
                 .apply_lattice(&lattice, Some(&mut deltas))
                 .map_err(ModelError::engine)?
         };
-        if moved > 0 {
+        if self.previewing {
+            // Held rather than banked. The cage is still up and every drag
+            // replaces the last, so bending a form is one undo however many
+            // times the sculptor adjusted a corner on the way.
+            if moved > 0 {
+                self.live_mesh = Some((cage.layer, deltas));
+            }
+            // What tells the viewport to look again: a mesh layer is not in
+            // the brick cache, so nothing else about this edit would.
+            self.live_generation = self.live_generation.wrapping_add(1);
+        } else if moved > 0 {
             self.mesh_undo.push(MeshGesture {
                 layer: cage.layer,
                 deltas,
@@ -4356,6 +4394,46 @@ impl ClayDocument {
         }
         self.refresh_stats();
         Ok(())
+    }
+
+    /// Shows what the cage would do, without committing to it.
+    ///
+    /// Only on a mesh. The forward route deforms vertices the sculptor already
+    /// has, so a preview is one pass and taking it back is one more. The field
+    /// route writes a lattice deformer into the document as an undoable edit
+    /// and refills the layer's whole brick region, which is not a thing to do
+    /// on every pointer move — there the cage moves live and the surface
+    /// follows when it is applied.
+    fn preview_cage(&mut self) {
+        let Some(cage) = self.lattice.take() else {
+            return;
+        };
+        if cage.representation == Representation::Mesh && !cage.is_identity() {
+            self.previewing = true;
+            if let Err(e) = self.bend_mesh(&cage) {
+                eprintln!("a gaiola não pôde ser pré-visualizada: {e}");
+            }
+        }
+        self.lattice = Some(cage);
+    }
+
+    /// Takes back whatever a preview is showing, leaving the form as it was.
+    fn discard_cage_preview(&mut self) {
+        let Some((_, deltas)) = self.live_mesh.take() else {
+            return;
+        };
+        let reverted = {
+            let mut held = self.mesh_sculptor.borrow_mut();
+            match held.as_mut() {
+                Some((_, sculptor)) => deltas.revert(sculptor),
+                None => Ok(()),
+            }
+        };
+        if let Err(e) = reverted {
+            eprintln!("a pré-visualização da gaiola não pôde ser desfeita: {e}");
+        }
+        self.live_generation = self.live_generation.wrapping_add(1);
+        self.refresh_stats();
     }
 
     /// Bends a field layer through the cage.

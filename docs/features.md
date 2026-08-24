@@ -426,6 +426,19 @@ is the unit a sculptor thinks in — they bent the form once. An untouched cage
 is exactly the identity and applying one is a no-op rather than a pass over
 every vertex to move them all by zero.
 
+**On a mesh the form follows while you drag.** The forward route deforms
+vertices the sculptor already has, so showing the bend is one pass and taking
+it back is one more — measured at **11.2 ms** a frame on 62,576 vertices. Every
+drag replaces the last rather than adding to it, so the preview never
+compounds and the whole gesture is still one undo. Abandoning the cage takes
+the preview back with it.
+
+**On a field it does not**, and that is a cost rather than an oversight: the
+field route writes a lattice deformer into the document as an undoable edit and
+refills the layer's whole brick region — **68.8 ms** for one apply on the
+starting form. That is not a thing to do on every pointer move, so there the
+cage moves live and the surface follows when it is applied.
+
 A press on a control point takes the primary button before the surface does.
 That is not an ordering detail: a control point sits *outside* the form, so a
 press on a corner handle would otherwise find the clay behind it and start a
