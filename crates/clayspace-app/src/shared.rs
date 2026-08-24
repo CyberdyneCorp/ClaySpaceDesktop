@@ -16,8 +16,9 @@ use clayspace_engine::ClayDocument;
 use clayspace_model::{
     Armature, ArmatureModel, BrushSettings, CombineSettings, DocumentModel, EditOutcome,
     ExchangeModel, ExportSettings, ExtrudeSettings, GestureSample, HistoryState, ImportSettings,
-    LayerCost, LayerKey, MaskModel, MaskOp, MaskState, ModelError, NodeIndex, OpenError,
-    Protection, Representation, Scene, SceneModel, SceneStats, SculptModel, SkinSettings, ToolKind,
+    LatticeModel, LatticeState, LayerCost, LayerKey, MaskModel, MaskOp, MaskState, ModelError,
+    NodeIndex, OpenError, Protection, Representation, Scene, SceneModel, SceneStats, SculptModel,
+    SkinSettings, ToolKind,
 };
 
 /// A handle to the one document.
@@ -209,6 +210,32 @@ impl MaskModel for SharedDocument {
 
     fn extrude_mask(&mut self, settings: ExtrudeSettings) -> Result<(), ModelError> {
         self.0.borrow_mut().extrude_mask(settings)
+    }
+}
+
+impl LatticeModel for SharedDocument {
+    fn lattice(&self) -> LatticeState {
+        self.0.borrow().lattice()
+    }
+
+    fn begin_lattice(&mut self, divisions: [i32; 3]) -> Result<(), ModelError> {
+        self.0.borrow_mut().begin_lattice(divisions)
+    }
+
+    fn select_lattice_point(&mut self, index: Option<usize>) {
+        self.0.borrow_mut().select_lattice_point(index)
+    }
+
+    fn drag_lattice_point(&mut self, to: [f32; 3]) -> Result<(), ModelError> {
+        self.0.borrow_mut().drag_lattice_point(to)
+    }
+
+    fn apply_lattice(&mut self) -> Result<(), ModelError> {
+        self.0.borrow_mut().apply_lattice()
+    }
+
+    fn cancel_lattice(&mut self) {
+        self.0.borrow_mut().cancel_lattice()
     }
 }
 

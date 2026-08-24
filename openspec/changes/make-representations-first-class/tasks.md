@@ -558,3 +558,49 @@ nominal radius, which is a units question rather than a defect found.
     whose reason names the crossing that would let it work. Held by a shell
     test that clicks the entry on both and checks that one emits a command and
     the other does not.
+
+## 17. The deformation cage
+
+- [x] 17.1 Bind both lattice routes
+  - `clay_mesh_sculptor_lattice` was wrapped in `claycore` and reached by
+    nothing above it. `clay_layer_lattice_gizmo`, the field's own route, was
+    not wrapped at all — `GizmoCage` and the two entry points are new.
+  - The ceilings differ and the difference is the mechanism: a mesh is deformed
+    forward, each vertex evaluated once, up to 32 points per axis; a field by
+    an inverse point map resolved into one deformer per item and evaluated at
+    every sample, which the engine caps at 4. A grid has neither and is refused
+    with the crossing named, as Extrudar now is.
+  - The domain owns both numbers (`division_limit`) so the panel's one slider
+    clamps to the active layer's ceiling rather than the View guessing.
+
+- [x] 17.2 Draw the cage, and let the pointer reach it
+  - Lines along the cage's edges and a small box at every control point, in the
+    overlay pass the rig uses — both are scaffolding, and scaffolding occluded
+    by the thing it annotates is not scaffolding. The selected handle is drawn
+    larger as well as brighter, so which point is in hand is legible without
+    reading the colour, which a sculptor watching the form is not doing.
+  - The handle's size comes from the cage's own extent, so a cage around a
+    thumbnail and one around a bust both get a handle a person can hit. The
+    grab radius is wider than what is drawn: a handle you can see and cannot
+    hit is worse than one drawn a little small.
+  - A press on a control point takes the primary button *before* the surface is
+    asked about. A control point sits outside the form, so a press on a corner
+    handle would otherwise find the clay behind it and start a stroke on the
+    layer the cage exists to bend.
+
+- [x] 17.3 Two defects found on the way
+  - `bounds` answers from a layer's *SDF* extent, which a mesh layer does not
+    have — the first cage over a mesh was refused as an empty layer. Measured
+    from the mesh's own vertices now. The same shape as the voxel Frame All
+    defect already recorded in group 10.
+  - The inspector grew past the fold. Adding a cage section above the mask's
+    moved the Passos slider out of the visible panel, which the mask test
+    caught only because it reached the control by pixel coordinate — and it
+    then hit the cage's slider instead and passed for the wrong reason. Sliders
+    carry a stable id now and tests find them by name; the cage is raised from
+    the Dinâmica menu, which was empty, and its panel section appears only
+    while a cage is up.
+
+**Still open**: the transform gizmo — translate, rotate and scale on the
+selection — and with it selecting more than one control point at a time. A
+gizmo is what makes a multi-point selection worth having.

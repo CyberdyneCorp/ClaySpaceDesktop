@@ -409,6 +409,46 @@ whether it had changed and it always had. `visual_voxel_sculpt.rs` asks the
 question a sculptor asks instead — did it appear, does a second stroke move it,
 can the pointer find it.
 
+## The deformation cage
+
+ZBrush spells it the Gizmo Lattice, Blender the Lattice modifier, Maya an FFD.
+All three show the same thing and so does this: a box of control points around
+the model, dragged directly in the viewport, with the form following.
+
+**Dinâmica → Gaiola de deformação** puts one up, sized to what the layer
+actually contains and standing a little proud of it — a corner point buried in
+the clay is not a handle. Drag a point; **Deformar** bends the layer through
+the cage and takes the cage down. Nothing moves until then: a cage is worked
+in, across many pulls, and a form that lurched on every drag could not be aimed.
+
+The whole cage is **one undo** however many points were dragged, because that
+is the unit a sculptor thinks in — they bent the form once. An untouched cage
+is exactly the identity and applying one is a no-op rather than a pass over
+every vertex to move them all by zero.
+
+A press on a control point takes the primary button before the surface does.
+That is not an ordering detail: a control point sits *outside* the form, so a
+press on a corner handle would otherwise find the clay behind it and start a
+stroke on the layer the cage is there to bend.
+
+**Two routes, two ceilings**, and the difference is the mechanism rather than a
+limit someone picked:
+
+| Layer | Route | Points per axis | How |
+|---|---|---|---|
+| Mesh | `clay_mesh_sculptor_lattice` | 2–**32** | Forward. Each vertex evaluated once; nothing inverts, iterates or approximates |
+| SDF | `clay_layer_lattice_gizmo` | 2–**4** | An inverse point map, resolved into one lattice deformer per item and evaluated at every sample |
+| Voxel | — | — | Neither a forward vertex pass nor a deformer stack. The entry is greyed, naming the crossing |
+
+Measured on a unit sphere: pulling the four top corners of a 2×2×2 cage up by
+0.5 takes the mesh's highest point from 0.9999 to 1.4772 — a corner control
+point is interpolated, so dragging one moves that corner of the box exactly.
+The same pull forward on a 4×4×4 field cage takes its reach from 1.000 to
+1.5777.
+
+The gizmo — translate, rotate and scale on the selected points — is not built
+yet; see *Not built yet*.
+
 ## Crossing between representations
 
 ClayCore carries SDF, voxel and mesh side by side, and the intended workflow
@@ -719,6 +759,13 @@ changes it, because that is where a person looks for it.
 
 Panels cannot be resized or collapsed and shortcuts are fixed. See
 [roadmap.md](roadmap.md).
+
+**The transform gizmo.** The deformation cage's control points are dragged one
+at a time, on the plane facing the camera through the handle that was grabbed.
+The gizmo both references put on the selection — translate arrows, rotate
+rings, scale handles and a screen-space square — is not built. Selecting more
+than one point at once goes with it: a gizmo is what makes a multi-point
+selection worth having.
 
 **A brush colour.** Nothing in the application chooses one. The voxel paint and
 erase verbs deposit a fixed clay tone, and the SDF combine list leaves `Pintar`

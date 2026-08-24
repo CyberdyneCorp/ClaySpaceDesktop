@@ -11,7 +11,8 @@ pub mod command;
 pub mod document_vm;
 pub mod history_vm;
 pub mod jobs;
-pub mod mask_vm;
+mod lattice_vm;
+mod mask_vm;
 pub mod notice;
 pub mod observable;
 pub mod scene_vm;
@@ -27,4 +28,5 @@ pub use sculpt_vm::{LastAction, SculptViewModel, TOOL_SUBSTITUTED};
 
 pub use armature_vm::{ArmatureViewModel, Grab};
 pub use document_vm::{DocumentViewModel, Guard};
+pub use lattice_vm::LatticeViewModel;
 pub use mask_vm::MaskViewModel;

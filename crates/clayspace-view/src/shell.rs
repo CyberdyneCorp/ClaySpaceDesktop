@@ -88,6 +88,10 @@ pub struct ShellState<'a> {
     pub extrude: ExtrudeSettings,
     /// How far Expandir, Contrair and Suavizar máscara reach.
     pub mask_steps: i32,
+    /// The cage around the form, while one is up.
+    pub lattice: clayspace_model::LatticeState,
+    /// What a fresh cage would be built with.
+    pub lattice_divisions: [i32; 3],
     pub strings: &'a Strings,
     /// The bindings in force, so a menu item can show the chord that does the
     /// same thing. Borrowed rather than copied because remapping replaces the
@@ -248,6 +252,15 @@ fn readout(ui: &mut egui::Ui, label: &str, value: impl Into<String>) {
     });
 }
 
+/// The id a named slider carries, so a test can find where it went.
+///
+/// Panels grow, and a test that reaches a control by pixel coordinate reaches
+/// a different control the next time a section is added above it — which is
+/// exactly what happened when the cage section landed above the mask's.
+pub fn slider_id(name: &str) -> egui::Id {
+    egui::Id::new(("slider", name))
+}
+
 /// A slider with its value shown monospaced beside it.
 fn slider(
     ui: &mut egui::Ui,
@@ -268,12 +281,22 @@ fn slider(
             numeric(ui, format!("{edited:.decimals$}"));
         });
     });
-    if ui
-        .add(egui::Slider::new(&mut edited, range).show_value(false))
-        .changed()
-    {
+    // Identified by its label, which is what a person would point at. Two
+    // sliders sharing a label in one panel would share an id, and egui would
+    // say so rather than let them fight silently.
+    let response = ui
+        .push_id(slider_id(label), |ui| {
+            ui.add(egui::Slider::new(&mut edited, range).show_value(false))
+        })
+        .inner;
+    if response.changed() {
         changed = Some(edited);
     }
+    // Recorded under a name of our own, because egui derives the widget's id
+    // from the layout and a test cannot guess it. `push_id` scopes it so two
+    // sliders sharing a label in different sections stay apart.
+    ui.ctx()
+        .memory_mut(|memory| memory.data.insert_temp(slider_id(label), response.rect));
     changed
 }
 
@@ -482,7 +505,30 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                     }
                 }
             });
-            ui.menu_button(s.menu_dynamics, |_| {});
+            ui.menu_button(s.menu_dynamics, |ui| {
+                // The menu the deformers belong in, and it was empty. A cage
+                // is raised from here rather than from the inspector because
+                // the inspector is where a cage is *worked*, and a section
+                // that was there whether or not one was up pushed the rest of
+                // the panel past the fold.
+                let cageable = clayspace_model::can_be_caged(state.representation);
+                let up = state.lattice.active;
+                if ui
+                    .add_enabled(cageable, egui::Button::new(s.action_cage))
+                    .on_disabled_hover_text(s.status_cage_needs_a_field)
+                    .clicked()
+                {
+                    queue.push(Command::ToggleLattice);
+                    ui.close_menu();
+                }
+                if ui
+                    .add_enabled(up, egui::Button::new(s.action_bend))
+                    .clicked()
+                {
+                    queue.push(Command::ApplyLattice);
+                    ui.close_menu();
+                }
+            });
             ui.menu_button(s.menu_masks, |ui| {
                 // First, because it is what the rest of the menu operates on:
                 // there is nothing to invert or extrude until a region has
@@ -1838,6 +1884,39 @@ pub fn export_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut Co
 }
 
 /// Material, geometry, resolution and brush controls.
+/// The cage a sculptor is working in: how fine it is, and applying it.
+///
+/// Only while one is up. A cage is raised from the Dinâmica menu, and a
+/// section that stood there whether or not one existed pushed everything below
+/// it past the bottom of the panel.
+fn lattice_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    heading(ui, s.section_lattice);
+
+    // Uniform, because a cage a sculptor can reason about is a grid rather
+    // than a lattice of three different resolutions — and because the one
+    // number is what both engine routes clamp.
+    let limit = clayspace_model::division_limit(state.representation).unwrap_or(2);
+    if let Some(value) = slider(
+        ui,
+        s.label_cage_divisions,
+        state.lattice_divisions[0] as f32,
+        clayspace_model::MIN_DIVISIONS as f32..=limit as f32,
+        0,
+    ) {
+        queue.push(Command::SetLatticeDivisions([value.round() as i32; 3]));
+    }
+
+    if ui.button(s.action_bend).clicked() {
+        queue.push(Command::ApplyLattice);
+    }
+    ui.label(
+        egui::RichText::new(s.hint_cage)
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    );
+}
+
 /// What the mask operations act with.
 ///
 /// Here rather than in the menu because these are amounts, not actions: the
@@ -1971,6 +2050,10 @@ pub fn right_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
                 queue.push(Command::RemoveZsphere);
             }
         }
+    }
+
+    if state.lattice.active {
+        lattice_section(ui, state, queue);
     }
 
     if state.mask.present {

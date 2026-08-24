@@ -20,6 +20,16 @@ use clayspace_model::{
 pub enum Command {
     // -- tools ------------------------------------------------------------
     SelectTool(ToolKind),
+    /// Puts a lattice cage around the active layer, or takes one down.
+    ToggleLattice,
+    /// How many control points the cage has per axis.
+    SetLatticeDivisions([i32; 3]),
+    /// The control point under the pointer, or none.
+    SelectLatticePoint(Option<usize>),
+    /// Moves the selected control point to a world position.
+    DragLatticePoint([f32; 3]),
+    /// Bends the layer through the cage and takes the cage down.
+    ApplyLattice,
     /// Starts painting a mask, or stops and returns to the tool in hand.
     ///
     /// A toggle rather than a plain selection because that is what the key is
@@ -237,6 +247,14 @@ impl Command {
                 // operation. Applying one is, and does mark the document.
                 | Self::SetMaskSteps(_)
                 | Self::SetExtrudeSettings(_)
+                // Putting a cage up, resizing it, choosing a point and
+                // dragging one all change the *cage* and not the clay. Only
+                // applying it is an edit — which is also what makes the whole
+                // cage one undo.
+                | Self::ToggleLattice
+                | Self::SetLatticeDivisions(_)
+                | Self::SelectLatticePoint(_)
+                | Self::DragLatticePoint(_)
                 // Opening, typing into and abandoning the rename field change
                 // nothing in the document. Committing does, and it takes the
                 // composition root's own path for the reason import does: the
@@ -282,6 +300,11 @@ impl Command {
     pub fn label(&self) -> &'static str {
         match self {
             Self::SelectTool(_) => "select tool",
+            Self::ToggleLattice => "gaiola",
+            Self::SetLatticeDivisions(_) => "divisões da gaiola",
+            Self::SelectLatticePoint(_) => "escolher ponto",
+            Self::DragLatticePoint(_) => "arrastar ponto",
+            Self::ApplyLattice => "deformar pela gaiola",
             Self::ToggleMaskPainting => "máscara",
             Self::ApplyMaskOp(op) => op.label(),
             Self::SetMaskSteps(_) => "mask steps",

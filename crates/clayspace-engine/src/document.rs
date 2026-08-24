@@ -12,10 +12,10 @@ use claycore::{
 use clayspace_model::{
     Alpha, Armature, ArmatureModel, BlendProfile, BrushSettings, Combine, CombineSettings, Cost,
     Direction, DocumentModel, EditOutcome, ExchangeModel, ExportMesher, ExportSettings,
-    ExtrudeSettings, Format, GestureSample, HistoryState, ImportAs, ImportSettings, LayerKey,
-    LayerSummary, MaskModel, MaskOp, MaskState, ModelError, NodeIndex, OpenError, Protection,
-    Refusal, Representation, Scene, SceneModel, SceneNode, SceneStats, SculptModel, SkinSettings,
-    ToolKind,
+    ExtrudeSettings, Format, GestureSample, HistoryState, ImportAs, ImportSettings, LatticeModel,
+    LatticeState, LayerKey, LayerSummary, MaskModel, MaskOp, MaskState, ModelError, NodeIndex,
+    OpenError, Protection, Refusal, Representation, Scene, SceneModel, SceneNode, SceneStats,
+    SculptModel, SkinSettings, ToolKind,
 };
 
 use crate::backend::{BackendPolicy, Operation};
@@ -205,6 +205,12 @@ pub struct ClayDocument {
     /// Kept because the detail policy needs a size and asking the cache for
     /// the whole key list every frame would cost more than the policy saves.
     surface_brick_count: usize,
+    /// The cage around the form, while one is up.
+    ///
+    /// Held here rather than in a ViewModel because the *offsets* are the
+    /// engine's business — the interface drags a point in the world and this
+    /// is what knows the box that point belongs to.
+    lattice: Option<Cage>,
     /// A mask the tools consult, when one has been painted.
     mask: Option<Mask>,
     /// Changes whenever the mask does.
@@ -358,6 +364,7 @@ impl ClayDocument {
             mesh_sculptor: std::cell::RefCell::new(None),
             mesh_undo: Vec::new(),
             mesh_redo: Vec::new(),
+            lattice: None,
             mask: None,
             mask_revision: 0,
             symmetry,
@@ -3040,6 +3047,67 @@ impl SculptModel for ClayDocument {
     }
 }
 
+/// The cage the interface is dragging, and the box it belongs to.
+///
+/// Offsets rather than positions, because that is what both engine routes
+/// take and what makes an untouched cage exactly the identity. Positions are
+/// derived on the way out, for the viewport and the pointer.
+struct Cage {
+    /// Which layer it was put around. A cage outlives neither the layer nor a
+    /// change of active layer.
+    layer: LayerKey,
+    representation: Representation,
+    min: [f32; 3],
+    max: [f32; 3],
+    divisions: [i32; 3],
+    /// One displacement per control point, x fastest — the engine's order on
+    /// both routes.
+    offsets: Vec<[f32; 3]>,
+    selected: Option<usize>,
+}
+
+impl Cage {
+    /// Where a control point rests, before anything was dragged.
+    ///
+    /// An axis with a single division would divide by zero; the engine clamps
+    /// divisions to at least two, and so does the domain, so the midpoint
+    /// fallback is defensive rather than reachable.
+    fn rest(&self, index: usize) -> [f32; 3] {
+        let [nx, ny, nz] = self.divisions.map(|n| n.max(1) as usize);
+        let (i, j, k) = (index % nx, (index / nx) % ny, index / (nx * ny));
+        let along = |axis: usize, at: usize, n: usize| {
+            let (lo, hi) = (self.min[axis], self.max[axis]);
+            if n < 2 {
+                (lo + hi) * 0.5
+            } else {
+                lo + (hi - lo) * at as f32 / (n - 1) as f32
+            }
+        };
+        [along(0, i, nx), along(1, j, ny), along(2, k, nz)]
+    }
+
+    /// Where a control point is now.
+    fn position(&self, index: usize) -> [f32; 3] {
+        let rest = self.rest(index);
+        let offset = self.offsets.get(index).copied().unwrap_or([0.0; 3]);
+        std::array::from_fn(|axis| rest[axis] + offset[axis])
+    }
+
+    fn point_count(&self) -> usize {
+        self.divisions
+            .iter()
+            .map(|n| (*n).max(0) as usize)
+            .product()
+    }
+
+    /// Whether nothing has been dragged.
+    fn is_identity(&self) -> bool {
+        self.offsets
+            .iter()
+            .all(|offset| offset.iter().all(|axis| *axis == 0.0))
+    }
+}
+
 /// Which engine verb a tool invokes on a mesh layer.
 ///
 /// Here rather than on `ToolKind`, because `clayspace-model` is the domain and
@@ -3671,6 +3739,7 @@ impl ClayDocument {
             mesh_sculptor: std::cell::RefCell::new(None),
             mesh_undo: Vec::new(),
             mesh_redo: Vec::new(),
+            lattice: None,
             mask: None,
             mask_revision: 0,
             symmetry: [false; 3],
@@ -4027,6 +4096,228 @@ fn extrude_params(settings: ExtrudeSettings) -> claycore::MaskExtrudeParams {
         // The grid's own resolution is the only one available there, and the
         // field path has always taken the default.
         cell_size: None,
+    }
+}
+
+impl LatticeModel for ClayDocument {
+    fn lattice(&self) -> LatticeState {
+        let Some(cage) = self.lattice.as_ref() else {
+            return LatticeState::default();
+        };
+        LatticeState {
+            active: true,
+            divisions: cage.divisions,
+            points: (0..cage.point_count())
+                .map(|at| cage.position(at))
+                .collect(),
+            selected: cage.selected,
+            touched: !cage.is_identity(),
+        }
+    }
+
+    fn begin_lattice(&mut self, divisions: [i32; 3]) -> Result<(), ModelError> {
+        let layer = self.active_layer();
+        let (key, representation) = (layer.key, layer.representation);
+        if !clayspace_model::can_be_caged(representation) {
+            return Err(ModelError::engine(
+                "uma camada de voxels não aceita uma gaiola; \
+                 converta-a para SDF ou malha primeiro",
+            ));
+        }
+        // Sized to what the layer actually contains rather than to a fixed
+        // box: a cage that does not enclose the form has control points with
+        // nothing under them, and the corners a sculptor reaches for first
+        // would be the ones that do least.
+        let Some((min, max)) = self.caged_bounds(representation) else {
+            return Err(ModelError::engine("a camada está vazia"));
+        };
+        // A little proud of the surface, so the cage is grabbable rather than
+        // buried in the clay it is wrapped around — and so a corner point is
+        // outside the form it moves, which is where ZBrush and Blender both
+        // put it.
+        const MARGIN: f32 = 0.05;
+        let pad = (0..3)
+            .map(|axis| max[axis] - min[axis])
+            .fold(0.0f32, f32::max)
+            * MARGIN;
+        let divisions = clayspace_model::clamp_divisions(divisions, representation);
+        let count = divisions.iter().map(|n| *n as usize).product();
+        self.lattice = Some(Cage {
+            layer: key,
+            representation,
+            min: std::array::from_fn(|axis| min[axis] - pad),
+            max: std::array::from_fn(|axis| max[axis] + pad),
+            divisions,
+            offsets: vec![[0.0; 3]; count],
+            selected: None,
+        });
+        Ok(())
+    }
+
+    fn select_lattice_point(&mut self, index: Option<usize>) {
+        if let Some(cage) = self.lattice.as_mut() {
+            cage.selected = index.filter(|at| *at < cage.point_count());
+        }
+    }
+
+    fn drag_lattice_point(&mut self, to: [f32; 3]) -> Result<(), ModelError> {
+        let Some(cage) = self.lattice.as_mut() else {
+            return Ok(());
+        };
+        let Some(index) = cage.selected else {
+            return Ok(());
+        };
+        // The offset from rest rather than an accumulation, so a drag ends
+        // where the pointer ends however many frames it took and a stutter
+        // does not compound.
+        let rest = cage.rest(index);
+        cage.offsets[index] = std::array::from_fn(|axis| to[axis] - rest[axis]);
+        Ok(())
+    }
+
+    fn apply_lattice(&mut self) -> Result<(), ModelError> {
+        let Some(cage) = self.lattice.take() else {
+            return Ok(());
+        };
+        // An untouched cage is exactly the identity, and applying one pays for
+        // a pass over every vertex — or, on a field, a deformer per item — to
+        // move everything by zero.
+        if cage.is_identity() {
+            return Ok(());
+        }
+        match cage.representation {
+            Representation::Mesh => self.bend_mesh(&cage),
+            _ => self.bend_field(&cage),
+        }
+    }
+
+    fn cancel_lattice(&mut self) {
+        self.lattice = None;
+    }
+}
+
+impl ClayDocument {
+    /// The box to wrap a cage around the active layer with.
+    ///
+    /// `bounds` answers from the layer's *SDF* extent, which a mesh layer does
+    /// not have — it reported nothing for one however many triangles were in
+    /// it, so the first cage over a mesh was refused as an empty layer. A mesh
+    /// layer is measured from its own vertices, which is the only place its
+    /// extent lives.
+    fn caged_bounds(&mut self, representation: Representation) -> Option<([f32; 3], [f32; 3])> {
+        if representation != Representation::Mesh {
+            return self.bounds();
+        }
+        let name = self.active_layer().engine_name.clone();
+        let (positions, _, _, _) = self.document.read_mesh_layer(&name).ok()?;
+        let mut min = [f32::MAX; 3];
+        let mut max = [f32::MIN; 3];
+        for vertex in &positions {
+            for axis in 0..3 {
+                min[axis] = min[axis].min(vertex[axis]);
+                max[axis] = max[axis].max(vertex[axis]);
+            }
+        }
+        (!positions.is_empty()).then_some((min, max))
+    }
+
+    /// Bends a mesh layer through the cage, forward.
+    ///
+    /// Forward is why this exists on a mesh at all: a mesh already knows where
+    /// its vertices are, so nothing here inverts, iterates or approximates.
+    /// Recorded through `MeshDeltas` like a stroke, so the whole cage is one
+    /// undo — which is the unit a sculptor thinks in, having bent the form
+    /// once.
+    fn bend_mesh(&mut self, cage: &Cage) -> Result<(), ModelError> {
+        let index = self.index_of(cage.layer)?;
+        let engine_name = self.layers[index].engine_name.clone();
+        self.ensure_mesh_sculptor(cage.layer, &engine_name)?;
+
+        let mut lattice = claycore::MeshLattice::new(cage.min, cage.max, cage.divisions)
+            .map_err(ModelError::engine)?;
+        // The engine may have clamped the divisions it accepted, so the drags
+        // are placed by *its* grid rather than by ours — a cage that disagreed
+        // would put a sculptor's corner drag on some interior point.
+        let accepted = lattice.divisions().map_err(ModelError::engine)?;
+        if accepted != cage.divisions {
+            return Err(ModelError::engine(format!(
+                "o motor aceitou uma gaiola {accepted:?} onde esta é {:?}",
+                cage.divisions
+            )));
+        }
+        for at in 0..cage.point_count() {
+            let offset = cage.offsets[at];
+            if offset.iter().all(|axis| *axis == 0.0) {
+                continue;
+            }
+            let [nx, ny, _] = cage.divisions.map(|n| n as usize);
+            let coordinate = [
+                (at % nx) as i32,
+                ((at / nx) % ny) as i32,
+                (at / (nx * ny)) as i32,
+            ];
+            lattice
+                .set_offset(coordinate, offset)
+                .map_err(ModelError::engine)?;
+        }
+
+        let mut deltas = claycore::MeshDeltas::new().map_err(ModelError::engine)?;
+        let moved = {
+            let mut held = self.mesh_sculptor.borrow_mut();
+            let Some((_, sculptor)) = held.as_mut() else {
+                return Ok(());
+            };
+            sculptor
+                .apply_lattice(&lattice, Some(&mut deltas))
+                .map_err(ModelError::engine)?
+        };
+        if moved > 0 {
+            self.mesh_undo.push(MeshGesture {
+                layer: cage.layer,
+                deltas,
+                engine_depth: self.engine_undo_depth(),
+            });
+            self.mesh_redo.clear();
+        }
+        self.refresh_stats();
+        Ok(())
+    }
+
+    /// Bends a field layer through the cage.
+    ///
+    /// A different mechanism, and the reason the two ceilings differ: the
+    /// engine resolves this into one lattice deformer per item, evaluated at
+    /// every sample, where the mesh route evaluates once per vertex. It is one
+    /// undo step of the engine's own.
+    fn bend_field(&mut self, cage: &Cage) -> Result<(), ModelError> {
+        let index = self.index_of(cage.layer)?;
+        let id = self.layers[index].id;
+        let placed = claycore::GizmoCage {
+            // The cage is already in world coordinates, so it is placed at the
+            // origin unrotated and unscaled and spans the box itself. Carrying
+            // the placement in the box rather than in the transform is what
+            // keeps the point a sculptor dragged and the point the engine
+            // evaluates the same point.
+            position: [0.0; 3],
+            axis: [0.0; 3],
+            angle: 0.0,
+            scale: 1.0,
+            min: cage.min,
+            max: cage.max,
+            divisions: cage.divisions,
+        };
+        let applied = self
+            .document
+            .lattice_gizmo(id, placed, &cage.offsets)
+            .map_err(ModelError::engine)?;
+        if applied == 0 {
+            return Err(ModelError::engine(
+                "a gaiola não alcançou nada nesta camada",
+            ));
+        }
+        // Every item of the layer moved, so the whole of it is dirty.
+        self.refill(id, &[])?;
+        Ok(())
     }
 }
 

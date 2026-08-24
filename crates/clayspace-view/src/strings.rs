@@ -67,6 +67,18 @@ pub struct Strings {
     pub menu_masks: &'static str,
     /// Starting and stopping mask painting.
     pub action_paint_mask: &'static str,
+    /// The lattice section of the inspector.
+    pub section_lattice: &'static str,
+    /// Putting a cage up and taking it down.
+    pub action_cage: &'static str,
+    /// Bending the layer through the cage.
+    pub action_bend: &'static str,
+    /// Control points per axis.
+    pub label_cage_divisions: &'static str,
+    /// Why a cage cannot be put around the active layer.
+    pub status_cage_needs_a_field: &'static str,
+    /// How to use the cage, where a person is when they need it.
+    pub hint_cage: &'static str,
     /// The mask section of the inspector.
     pub section_mask: &'static str,
     /// How far Expandir, Contrair and Suavizar máscara reach.
@@ -236,6 +248,13 @@ const PT_BR: Strings = Strings {
     menu_dynamics: "Dinâmica",
     menu_masks: "Máscaras",
     action_paint_mask: "Pintar máscara",
+    section_lattice: "GAIOLA",
+    action_cage: "Gaiola de deformação",
+    action_bend: "Deformar",
+    label_cage_divisions: "Pontos por eixo",
+    status_cage_needs_a_field:
+        "Uma camada de voxels não aceita uma gaiola. Converta-a para SDF ou malha primeiro.",
+    hint_cage: "Arraste um ponto para dobrar a forma · Deformar aplica",
     section_mask: "MÁSCARA",
     label_mask_steps: "Passos",
     label_mask_cells: "Células congeladas",
@@ -375,6 +394,12 @@ const EN_US: Strings = Strings {
     menu_dynamics: "Dynamics",
     menu_masks: "Masks",
     action_paint_mask: "Paint mask",
+    section_lattice: "LATTICE",
+    action_cage: "Deformation cage",
+    action_bend: "Deform",
+    label_cage_divisions: "Points per axis",
+    status_cage_needs_a_field: "A voxel layer takes no cage. Cross it to SDF or mesh first.",
+    hint_cage: "Drag a point to bend the form · Deform applies it",
     section_mask: "MASK",
     label_mask_steps: "Steps",
     label_mask_cells: "Frozen cells",
@@ -514,6 +539,13 @@ const ES_419: Strings = Strings {
     menu_dynamics: "Dinámica",
     menu_masks: "Máscaras",
     action_paint_mask: "Pintar máscara",
+    section_lattice: "GAIOLA",
+    action_cage: "Gaiola de deformação",
+    action_bend: "Deformar",
+    label_cage_divisions: "Pontos por eixo",
+    status_cage_needs_a_field:
+        "Uma camada de voxels não aceita uma gaiola. Converta-a para SDF ou malha primeiro.",
+    hint_cage: "Arraste um ponto para dobrar a forma · Deformar aplica",
     section_mask: "MÁSCARA",
     label_mask_steps: "Passos",
     label_mask_cells: "Células congeladas",
@@ -660,7 +692,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 108] {
+    pub fn all(&self) -> [&'static str; 114] {
         [
             self.menu_file,
             self.menu_edit,
@@ -669,6 +701,12 @@ impl Strings {
             self.menu_brushes,
             self.menu_dynamics,
             self.menu_masks,
+            self.section_lattice,
+            self.action_cage,
+            self.action_bend,
+            self.label_cage_divisions,
+            self.status_cage_needs_a_field,
+            self.hint_cage,
             self.action_paint_mask,
             self.section_mask,
             self.label_mask_steps,

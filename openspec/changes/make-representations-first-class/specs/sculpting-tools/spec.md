@@ -150,3 +150,29 @@ Each menu entry SHALL show the amount it would apply.
 #### Scenario: An operation with no amount is left alone
 - **WHEN** an amount is set and Inverter is chosen
 - **THEN** the operation carries no amount
+
+### Requirement: A deformation cage bends the whole form
+The application SHALL offer a lattice cage around the active layer, sized to
+what that layer contains, with control points drawn in the viewport and
+draggable directly.
+
+The cage SHALL be worked in rather than applied per drag: the form follows when
+the cage is applied, and the whole cage SHALL be one undo step however many
+control points were dragged.
+
+The cage SHALL be offered wherever the engine has a route for it, at the
+resolution that route accepts, and refused readably where it has none.
+
+#### Scenario: A cage wraps the form and bends it
+- **WHEN** a cage is put around a layer and its top control points are dragged up
+- **AND** the cage is applied
+- **THEN** the top of the form has moved by the same amount
+- **AND** one undo puts it back
+
+#### Scenario: An untouched cage changes nothing
+- **WHEN** a cage is put up and applied without dragging anything
+- **THEN** the form is unchanged and no history entry is recorded
+
+#### Scenario: A layer with no lattice route says so
+- **WHEN** a cage is asked for on a voxel layer
+- **THEN** it is refused with a reason naming the crossing that would work

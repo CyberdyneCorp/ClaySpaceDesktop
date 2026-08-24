@@ -387,6 +387,91 @@ impl Drop for Document {
     }
 }
 
+/// A lattice cage placed in the world, over a whole SDF layer.
+///
+/// The counterpart to [`crate::MeshLattice`], and a different thing under the
+/// hood: a mesh knows where its vertices are and can be deformed forward,
+/// while a field is deformed by an *inverse* point map. The engine resolves
+/// this into one lattice deformer per item, each carrying the transform that
+/// takes that item's frame into the cage's — which is what makes it exact for
+/// a rotated item, where no axis-aligned per-item box could reproduce a
+/// world-placed cage.
+///
+/// Divisions are capped at **4** per axis, against the mesh lattice's 32,
+/// because this is evaluated per sample rather than once per vertex.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GizmoCage {
+    /// Where the cage sits in the world.
+    pub position: [f32; 3],
+    /// Rotation axis; the zero vector means no rotation.
+    pub axis: [f32; 3],
+    pub angle: f32,
+    /// Uniform, and must be positive.
+    pub scale: f32,
+    /// The box the cage spans, in its own space.
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+    /// Control points per axis, clamped to [2, 4] by the engine.
+    pub divisions: [i32; 3],
+}
+
+impl Default for GizmoCage {
+    fn default() -> Self {
+        Self {
+            position: [0.0; 3],
+            axis: [0.0; 3],
+            angle: 0.0,
+            scale: 1.0,
+            min: [-1.0; 3],
+            max: [1.0; 3],
+            divisions: [2; 3],
+        }
+    }
+}
+
+impl GizmoCage {
+    /// How many control points the cage has, which is how many offsets it
+    /// expects.
+    pub fn point_count(self) -> usize {
+        (self.divisions[0].max(0) * self.divisions[1].max(0) * self.divisions[2].max(0)) as usize
+    }
+
+    fn to_raw(self) -> sys::clay_gizmo_cage {
+        sys::clay_gizmo_cage {
+            struct_size: std::mem::size_of::<sys::clay_gizmo_cage>() as u32,
+            position: self.position,
+            axis: self.axis,
+            angle: self.angle,
+            scale: self.scale,
+            box_min: self.min,
+            box_max: self.max,
+            nx: self.divisions[0],
+            ny: self.divisions[1],
+            nz: self.divisions[2],
+        }
+    }
+}
+
+/// The cage's offsets as the engine wants them: x fastest, or nothing at all.
+///
+/// `None` rather than a run of zeroes for an untouched cage, because the entry
+/// point spells that as a null pointer and says it does nothing — handing it
+/// zeroes would ask it to evaluate a deformer per item to move everything by
+/// exactly zero.
+fn flatten_offsets(cage: GizmoCage, offsets: &[[f32; 3]]) -> Result<Option<Vec<f32>>> {
+    if offsets.is_empty() {
+        return Ok(None);
+    }
+    let wanted = cage.point_count();
+    if offsets.len() != wanted {
+        return Err(crate::raw_failure(
+            "clay_layer_lattice_gizmo",
+            crate::ErrorKind::InvalidArgument,
+        ));
+    }
+    Ok(Some(offsets.iter().flatten().copied().collect()))
+}
+
 impl Document {
     /// The raw handle, for sibling modules in this crate only.
     pub(crate) fn as_ptr(&self) -> *mut sys::clay_document {
@@ -703,6 +788,76 @@ impl Document {
     /// procedural history in one direction and is lossy in the other, so the
     /// source staying where it is *is* the way back — undo works until the
     /// session ends, and the layer works after it.
+    /// Warps every item of a layer through a lattice cage, undoably.
+    ///
+    /// `offsets` is one displacement per control point in the cage's own
+    /// space, x fastest — index `(i, j, k)` at `((k * ny + j) * nx + i)` — or
+    /// empty for an untouched cage, which does nothing. Returns how many nodes
+    /// were warped; the whole cage is one undo step.
+    ///
+    /// It reaches every item in the layer on purpose. A lattice's displacement
+    /// outside its box is clamped rather than zero, so material out there
+    /// travels rigidly with the nearest part of the cage — skipping distant
+    /// items would tear the form.
+    pub fn lattice_gizmo(
+        &mut self,
+        layer: LayerId,
+        cage: GizmoCage,
+        offsets: &[[f32; 3]],
+    ) -> Result<usize> {
+        let raw_cage = cage.to_raw();
+        let flat = flatten_offsets(cage, offsets)?;
+        let mut applied = 0;
+        // SAFETY: valid handle, a descriptor carrying its struct_size, and
+        // either null or a buffer of exactly nx*ny*nz*3 floats as the entry
+        // point requires; `applied` is written on success.
+        check(
+            unsafe {
+                sys::clay_layer_lattice_gizmo(
+                    self.as_ptr(),
+                    layer.0,
+                    &raw_cage,
+                    flat.as_ref().map_or(std::ptr::null(), |f| f.as_ptr()),
+                    &mut applied,
+                )
+            },
+            "clay_layer_lattice_gizmo",
+        )?;
+        Ok(applied)
+    }
+
+    /// How many nodes a cage *would* warp, without touching the document.
+    ///
+    /// Asked before applying, because a cage that reaches nothing and reports
+    /// success is harder to notice than one that says so.
+    pub fn lattice_gizmo_reach(
+        &self,
+        layer: LayerId,
+        cage: GizmoCage,
+        offsets: &[[f32; 3]],
+    ) -> Result<usize> {
+        let raw_cage = cage.to_raw();
+        let flat = flatten_offsets(cage, offsets)?;
+        let mut count = 0;
+        // SAFETY: the size-query form — a null buffer with zero capacity asks
+        // for the count only, which is what the entry point documents.
+        check(
+            unsafe {
+                sys::clay_layer_lattice_gizmo_preview(
+                    self.as_ptr(),
+                    layer.0,
+                    &raw_cage,
+                    flat.as_ref().map_or(std::ptr::null(), |f| f.as_ptr()),
+                    std::ptr::null_mut(),
+                    0,
+                    &mut count,
+                )
+            },
+            "clay_layer_lattice_gizmo_preview",
+        )?;
+        Ok(count)
+    }
+
     pub fn voxel_to_layer(
         &mut self,
         grid: &crate::VoxelGrid,
