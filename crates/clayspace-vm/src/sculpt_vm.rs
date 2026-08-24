@@ -71,6 +71,8 @@ pub struct SculptViewModel {
     symmetry: Observable<[bool; 3]>,
     view_preset: Observable<ViewPresetKind>,
     grid: Observable<bool>,
+    /// Whether a mesh layer is drawn with its edges over it.
+    polyframe: Observable<bool>,
 
     history: Observable<HistoryState>,
     stats: Observable<SceneStats>,
@@ -123,6 +125,10 @@ impl SculptViewModel {
             symmetry: Observable::new([true, false, false]),
             view_preset: Observable::new(ViewPresetKind::Perspective),
             grid: Observable::new(true),
+            // Off by default. A polyframe over a dense mesh is a lot of ink,
+            // and it is asked for when a question about density comes up
+            // rather than kept on.
+            polyframe: Observable::new(false),
             history: Observable::new(history),
             stats: Observable::new(stats),
             tool_status: Observable::new(None),
@@ -158,6 +164,10 @@ impl SculptViewModel {
 
     pub fn view_preset(&self) -> &Observable<ViewPresetKind> {
         &self.view_preset
+    }
+
+    pub fn polyframe(&self) -> &Observable<bool> {
+        &self.polyframe
     }
 
     pub fn grid(&self) -> &Observable<bool> {
@@ -311,7 +321,12 @@ impl SculptViewModel {
                 // Refuse before collecting anything, so an unavailable tool
                 // cannot accumulate a gesture it will never apply.
                 self.ensure_tool_available()?;
-                let tool_is_region = self.tool.get().is_region_based();
+                let tool_is_region = self.holds_the_whole_gesture(*self.tool.get());
+                // The model is told a gesture is open, so a dragging verb on a
+                // mesh can preview it — take back what the last segment did and
+                // lay the whole gesture down again from its anchor — instead of
+                // stacking segment on segment.
+                self.model.begin_gesture();
                 self.gesture_entries = 0;
                 let mut stroke = ActiveStroke::default();
                 stroke.push(position, pressure);
@@ -325,6 +340,10 @@ impl SculptViewModel {
             }
             Command::ContinueStroke { position, pressure } => {
                 let tool = *self.tool.get();
+                // Asked before the stroke is borrowed: it reads the model, and
+                // the borrow below is exclusive.
+                let whole = self.holds_the_whole_gesture(tool);
+                let stamps = self.stamps_between_segments(tool);
                 let Some(stroke) = self.stroke.as_mut() else {
                     return Ok(());
                 };
@@ -333,7 +352,7 @@ impl SculptViewModel {
                 // A region tool is applied once, when the gesture is complete.
                 // Segmenting it stacks a replacement per segment and the
                 // result crumbles.
-                if !tool.is_region_based() && stroke.segment_is_worth_applying(&brush) {
+                if !whole && stroke.segment_is_worth_applying(&brush, stamps) {
                     return self.apply_segment();
                 }
             }
@@ -344,6 +363,10 @@ impl SculptViewModel {
                 // leave the sculptor with half a stroke they explicitly said
                 // they did not want.
                 self.stroke = None;
+                // Closed before the revert, so the preview it was holding is
+                // banked and then taken back with everything else rather than
+                // being left on the surface.
+                self.model.end_gesture();
                 return self.abandon_gesture();
             }
 
@@ -356,6 +379,10 @@ impl SculptViewModel {
             Command::ToggleGrid => {
                 let current = *self.grid.get();
                 self.grid.set(!current);
+            }
+            Command::TogglePolyframe => {
+                let current = *self.polyframe.get();
+                self.polyframe.set(!current);
             }
             // Framing and material are the renderer's business; the ViewModel
             // records nothing for them because they change no state it owns.
@@ -484,15 +511,84 @@ impl SculptViewModel {
         Ok(())
     }
 
+    /// Whether this tool waits for the whole gesture before applying any of it.
+    ///
+    /// A region tool does: it acts on the area the gesture encloses, and
+    /// segmenting one stacks a replacement per segment until the result
+    /// crumbles.
+    fn holds_the_whole_gesture(&self, tool: ToolKind) -> bool {
+        // Not on a mesh. A region tool is one that *bakes*: on a field
+        // Suavizar, Relaxar, Planar and Polir sample a region into a volume,
+        // modify it and put it back with a replace, and segmenting that stacks
+        // a replacement per segment until the result crumbles.
+        //
+        // On a mesh they are none of those things — they are ordinary stamps
+        // over the vertices in reach, exactly like Padrão. Held whole, they
+        // arrived only when the pointer came up, which is half of why Suavizar
+        // read as doing nothing: the other half was that it was clamped and
+        // barely smoothed at all.
+        tool.is_region_based() && self.model.active_representation() != Representation::Mesh
+    }
+
+    /// How far a stroke travels before a segment is sent, in stamps.
+    ///
+    /// A segment on a *field* or a *grid* costs a re-mesh of every brick it
+    /// touched, so it waits for three stamps' worth: sending one per pointer
+    /// move would re-mesh the same neighbourhood over and over.
+    ///
+    /// On a mesh nothing is re-meshed — the layer's own triangles are what the
+    /// viewport reads — so a segment costs the stamp and the buffer it fills,
+    /// measured at about 7 ms for a 0.18 brush on 140,774 vertices. One stamp
+    /// is the natural grain there: the engine resolves a stroke into stamps a
+    /// spacing apart, so waiting longer only delays what it was going to do
+    /// anyway, and delay is exactly what a sculptor sees.
+    ///
+    /// Zero for a dragging verb on a mesh, which replays the whole gesture
+    /// from its anchor and is sent on every pointer move.
+    fn stamps_between_segments(&self, tool: ToolKind) -> f32 {
+        if self.model.active_representation() != Representation::Mesh {
+            return STAMPS_PER_SEGMENT;
+        }
+        if self.replays_from_the_anchor(tool) {
+            0.0
+        } else {
+            1.0
+        }
+    }
+
+    /// Whether a segment carries the gesture from its anchor rather than only
+    /// what is new since the last one.
+    ///
+    /// A dragging verb on a mesh does. Grab anchors on the first stamp and
+    /// carries that region by the motion that follows, so a segment holding
+    /// only the newest samples is a *second* grab anchoring where the first
+    /// stopped — measured against Blender, two anchors sharing one drag reach
+    /// nearly twice as far and move less.
+    ///
+    /// Replaying is also what lets the drag be seen while it happens. The
+    /// model takes back what the last segment did and lays the gesture down
+    /// again from its anchor, so the surface follows the pointer rather than
+    /// appearing only when the pointer comes up. It stays one undo: every
+    /// segment replaces the last, and only the release banks anything.
+    fn replays_from_the_anchor(&self, tool: ToolKind) -> bool {
+        tool.is_path_driven() && self.model.active_representation() == Representation::Mesh
+    }
+
     /// Sends the part of the gesture the model has not seen yet.
     ///
     /// The stroke stays open: this is a piece of it, not the end of it.
     fn apply_segment(&mut self) -> Result<(), ModelError> {
+        let tool = *self.tool.get();
+        // Asked before the stroke is borrowed: it reads the model.
+        let replay = self.replays_from_the_anchor(tool);
         let Some(stroke) = self.stroke.as_ref() else {
             return Ok(());
         };
-        let tool = *self.tool.get();
-        let pending = stroke.pending(tool);
+        let pending = if replay {
+            stroke.whole()
+        } else {
+            stroke.pending(tool)
+        };
         // One sample is a whole instruction for a stamping tool and none at
         // all for a dragging one, which needs a start and an end.
         let enough = if tool.is_path_driven() { 2 } else { 1 };
@@ -531,6 +627,9 @@ impl SculptViewModel {
         // undoable only one segment at a time.
         let applied = self.apply_segment();
         self.stroke = None;
+        // The gesture is over: what was previewed becomes the edit, and one
+        // undo takes the whole drag back however many segments drew it.
+        self.model.end_gesture();
         self.close_gesture();
         applied
     }
@@ -711,8 +810,25 @@ impl ActiveStroke {
     /// material than a slow one for the same gesture. Pacing by distance makes
     /// the result depend on the path, which is the only thing the sculptor
     /// controls.
-    fn segment_is_worth_applying(&self, brush: &BrushSettings) -> bool {
-        self.applied < self.samples.len() && self.travelled >= stamp_gap(brush) * STAMPS_PER_SEGMENT
+    /// Whether enough of the gesture has happened to be worth sending.
+    ///
+    /// A stamping segment costs a re-mesh of everything it touched, so it
+    /// waits for three stamps' worth of travel — sending one per pointer move
+    /// would re-mesh the same neighbourhood over and over.
+    ///
+    /// A *replayed* one costs a revert and a single stamp, and does not grow
+    /// with the gesture: the whole drag is laid down from its anchor every
+    /// time, so the work is the same on the first segment and the fortieth.
+    /// It waits for nothing, because waiting is exactly what a sculptor sees.
+    /// At the default flow and a brush of 0.858 the stamping threshold is 1.03
+    /// world units — most of the way across a unit sphere — so a drag reached
+    /// its end before a single segment fired and the surface only moved when
+    /// the pointer came up.
+    fn segment_is_worth_applying(&self, brush: &BrushSettings, stamps: f32) -> bool {
+        if self.applied >= self.samples.len() {
+            return false;
+        }
+        stamps <= 0.0 || self.travelled >= stamp_gap(brush) * stamps
     }
 
     /// The samples not yet sent.
@@ -729,6 +845,11 @@ impl ActiveStroke {
             applied
         };
         &self.samples[from..]
+    }
+
+    /// Every sample since the press, which is what a replayed gesture needs.
+    fn whole(&self) -> &[GestureSample] {
+        &self.samples
     }
 
     fn mark_applied(&mut self) {

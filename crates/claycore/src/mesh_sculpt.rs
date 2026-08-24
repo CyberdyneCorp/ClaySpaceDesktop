@@ -171,6 +171,13 @@ pub struct MeshStamp<'a> {
     pub geodesic: bool,
     /// The colour Paint blends toward.
     pub colour: [f32; 3],
+    /// How many Laplacian passes a smoothing verb runs, 1..=64.
+    ///
+    /// `None` leaves the engine's own default. One pass averages a vertex with
+    /// its one-ring, which smooths at the scale of a single edge rather than
+    /// at the scale of the brush — on a dense mesh that is a change a sculptor
+    /// cannot see.
+    pub smooth_iterations: Option<i32>,
     /// A scalar stamp scaling this brush's per-vertex weight.
     ///
     /// Borrowed for the duration of the call — the engine copies nothing — so
@@ -229,6 +236,7 @@ impl Default for MeshStamp<'_> {
             direction: [0.0; 3],
             geodesic: true,
             colour: [1.0; 3],
+            smooth_iterations: None,
             alpha: None,
         }
     }
@@ -241,7 +249,27 @@ impl MeshStamp<'_> {
     /// not outlive the stamp it came from — every caller here passes it
     /// straight into one C call and drops it.
     fn as_raw(&self) -> sys::clay_mesh_brush_desc {
+        // The engine's defaults first, then what this stamp means — which is
+        // the arrangement `clay_mesh_brush_defaults` exists for: "so a host
+        // fills in what it means and takes the rest".
+        //
+        // Starting from a zeroed descriptor took *nothing* instead, and the
+        // fields this type does not name are not all harmlessly zero:
+        //
+        //   polish_angle       0 is a fully closed gate, so POLISH smoothed
+        //                      nothing anywhere — measured, it moved not one
+        //                      vertex even across a crease cut for it
+        //   layer_height       0 is a zero ceiling, so LAYER deposited almost
+        //                      nothing — measured at 0.0086 against DRAW's
+        //                      0.6778 on the same stroke
+        //   smooth_iterations  documented as 1..MAX, and 0 is neither
+        //
+        // A failure to read them is not fatal: the zeroed descriptor is what
+        // this did before, and it still carries a valid struct_size.
         let mut raw = sys::clay_mesh_brush_desc::sized();
+        // SAFETY: a valid versioned descriptor out-parameter, whose
+        // struct_size is set above as the boundary requires.
+        let _ = unsafe { sys::clay_mesh_brush_defaults(&mut raw) };
         raw.verb = self.verb.to_raw();
         raw.center = self.center;
         raw.radius = self.radius;
@@ -255,6 +283,9 @@ impl MeshStamp<'_> {
         // seed is worse than a slow one.
         raw.seed_class = sys::CLAY_MESH_NO_CLASS;
         raw.color = self.colour;
+        if let Some(iterations) = self.smooth_iterations {
+            raw.smooth_iterations = iterations.clamp(1, 64);
+        }
         // A malformed stamp is dropped rather than refused: the alpha is a
         // modulation, and losing it leaves the verb doing what it would have
         // done without one. Refusing the whole stroke because a texture was
@@ -623,19 +654,24 @@ impl MeshSculptor {
     /// Zero for a stamp that reached nothing, that was fully masked, or whose
     /// settings amount to no displacement — all three are ordinary outcomes
     /// rather than failures.
-    pub fn stamp(&mut self, stamp: MeshStamp<'_>, mask: Option<&Mask>) -> Result<usize> {
+    pub fn stamp(
+        &mut self,
+        stamp: MeshStamp<'_>,
+        mask: Option<&Mask>,
+        deltas: Option<&mut MeshDeltas>,
+    ) -> Result<usize> {
         let desc = stamp.as_raw();
         let mut moved = 0;
         // SAFETY: valid handle and a descriptor carrying its own size; the
-        // mask is either a valid handle or null, which the entry point allows,
-        // as is a null deltas.
+        // mask and the deltas are each either a valid handle or null, both of
+        // which the entry point allows.
         check(
             unsafe {
                 sys::clay_mesh_sculptor_stamp(
                     self.raw.as_ptr(),
                     &desc,
                     mask.map_or(std::ptr::null(), |m| m.as_ptr() as *const _),
-                    std::ptr::null_mut(),
+                    deltas.map_or(std::ptr::null_mut(), |d| d.raw.as_ptr()),
                     &mut moved,
                 )
             },

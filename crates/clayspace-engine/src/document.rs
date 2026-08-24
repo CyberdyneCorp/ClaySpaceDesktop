@@ -178,6 +178,21 @@ pub struct ClayDocument {
     /// A measurement rather than bookkeeping: it is what says an edit costs
     /// the edit, and it is what a test can assert on without timing anything.
     meshed_chunks: usize,
+    /// The gesture being previewed on a mesh layer, and what it has moved.
+    ///
+    /// A dragging verb is laid down again from its anchor on every segment, so
+    /// what the last segment did has to be taken back first — this is the
+    /// record that takes it back. Promoted to the undo stack when the gesture
+    /// ends, so a drag is still one undo however many segments drew it.
+    live_mesh: Option<(LayerKey, claycore::MeshDeltas)>,
+    /// Whether a gesture is open and should be previewed rather than banked.
+    previewing: bool,
+    /// Bumped by every preview, so the viewport knows to look again.
+    ///
+    /// A preview banks nothing, so nothing else about the document changes and
+    /// the number the viewport watches would sit still while the drag was
+    /// visibly moving the surface.
+    live_generation: u64,
     /// Triangles and vertices the *carried* layers handed the viewport.
     ///
     /// Kept apart from `stats` because the two are recorded at different
@@ -327,6 +342,9 @@ impl ClayDocument {
             dirty: Vec::new(),
             stats: SceneStats::default(),
             carried: (0, 0),
+            live_mesh: None,
+            previewing: false,
+            live_generation: 0,
             meshed_chunks: 0,
             surface_brick_count: 0,
             mesh_sculptor: std::cell::RefCell::new(None),
@@ -647,6 +665,8 @@ impl ClayDocument {
             Direction::VoxelToSdf => self.voxels_to_sdf(&name, blur),
             Direction::MeshToVoxel => self.mesh_to_voxels(&name, cell_size),
             Direction::MeshToSdf => self.mesh_to_sdf(&name),
+            Direction::SdfToMesh => self.sdf_to_mesh(&name, cell_size),
+            Direction::VoxelToMesh => self.voxels_to_mesh(&name),
         };
         // Closed on the failing path too: a group left open swallows every
         // edit after it into one undo step, which is a worse bug than the one
@@ -718,6 +738,130 @@ impl ClayDocument {
         self.after_conversion(key)
     }
 
+    /// Marches the active layer's field into triangles, on a layer of its own.
+    ///
+    /// The engine meshes a *document*, not a layer — `clay_document_mesh` takes
+    /// no layer id and there is no layer-scoped mesher. So the other SDF layers
+    /// are hidden across the call and put back afterwards. That is exact rather
+    /// than approximate: the engine states that a hidden layer contributes
+    /// nothing to the field and that showing it again restores the field
+    /// exactly, and it is measured — the starting sphere alone meshes to 57,650
+    /// vertices bounded at ±1, the same document with a blob on a second layer
+    /// to 44,462 bounded past 1.3, and restoring gives the first answer back.
+    ///
+    /// Only SDF layers are hidden. A voxel or mesh layer carries no SDF content,
+    /// so neither reaches this mesher and hiding one would change what the
+    /// viewport draws for no reason.
+    ///
+    /// Marching tetrahedra rather than surface nets: what comes out is going to
+    /// be sculpted and eventually exported, and this is the one the engine
+    /// makes watertight and 2-manifold by construction. Nets is the preview
+    /// mesher and is half the vertices, which is a saving on something a
+    /// sculptor is about to spend an afternoon on.
+    fn sdf_to_mesh(&mut self, name: &str, cell_size: f32) -> Result<LayerKey, ModelError> {
+        if self.bounds().is_none() {
+            return Err(ModelError::Conversion(Refusal::UnboundedRegion));
+        }
+        let source = self.active_layer().id;
+        let hidden: Vec<LayerId> = self
+            .layers
+            .iter()
+            .filter(|layer| layer.id != source)
+            .filter(|layer| layer.representation == Representation::Sdf && layer.visible)
+            .map(|layer| layer.id)
+            .collect();
+
+        let meshed = self.meshed_alone(&hidden, cell_size);
+        // Put back before the result is unwrapped. A failed mesh that left the
+        // document's other layers hidden would be a conversion that quietly
+        // erased the rest of the sculpt.
+        for id in &hidden {
+            self.document
+                .set_layer_visible(*id, true)
+                .map_err(ModelError::engine)?;
+        }
+        let mesh = meshed?;
+        if mesh.index_count() == 0 {
+            return Err(ModelError::Conversion(Refusal::SourceEmpty));
+        }
+        self.attach_meshed_layer(mesh, name)
+    }
+
+    /// Hides `hidden`, meshes what is left, and hands the mesh back.
+    ///
+    /// Separated so the restore above runs whether this succeeds or not.
+    fn meshed_alone(&mut self, hidden: &[LayerId], cell_size: f32) -> Result<Mesh, ModelError> {
+        for id in hidden {
+            self.document
+                .set_layer_visible(*id, false)
+                .map_err(ModelError::engine)?;
+        }
+        self.document
+            .mesh(MeshParams {
+                voxel_size: Some(cell_size),
+                mesher: Mesher::MarchingTetrahedra,
+                ..MeshParams::default()
+            })
+            .map_err(ModelError::engine)
+    }
+
+    /// The active grid's exposed faces as triangles, on a layer of its own.
+    ///
+    /// The greedy mesh, which is what the grid *is* — merged quads per axis
+    /// slice, with the palette colour on the face and a normal per vertex. The
+    /// rounded mesher is not used here for the reason the viewport does not use
+    /// it either: it carries no vertex normals, so what came out would render
+    /// as a flat silhouette and every mesh verb would work on a surface the
+    /// sculptor cannot see.
+    fn voxels_to_mesh(&mut self, name: &str) -> Result<LayerKey, ModelError> {
+        let engine_name = self.active_layer().engine_name.clone();
+        let mesh = {
+            let (_, grid) = self
+                .document
+                .voxel_reader(&engine_name)
+                .map_err(ModelError::engine)?;
+            if grid.occupied_count().map_err(ModelError::engine)? == 0 {
+                return Err(ModelError::Conversion(Refusal::SourceEmpty));
+            }
+            grid.mesh().map_err(ModelError::engine)?
+        };
+        self.attach_meshed_layer(mesh, name)
+    }
+
+    /// Attaches a mesh this application produced as a new layer.
+    ///
+    /// The same call an import uses, so a converted mesh and an imported one
+    /// are the same kind of thing from here on — the mesh verbs reach both, the
+    /// quality readout measures both, and a save writes both. No import scale
+    /// and no ceiling: the geometry came from this document rather than from a
+    /// file, so there is no unit to resolve and nothing untrusted to bound.
+    fn attach_meshed_layer(&mut self, mesh: Mesh, name: &str) -> Result<LayerKey, ModelError> {
+        let id = self
+            .document
+            .attach_mesh_layer(
+                &mesh,
+                &MeshLayerDesc {
+                    name: name.to_string(),
+                    max_vertices: 0,
+                    max_triangles: 0,
+                    import_scale: 1.0,
+                },
+            )
+            .map_err(ModelError::engine)?;
+        let key = self.adopt_engine_layer(id, name, Representation::Mesh)?;
+        // Adopted with triangles already in it, unlike `add_mesh_layer`, which
+        // records a row an import fills later. The mesh verbs are available on
+        // this the moment the crossing returns, which is the whole point of it.
+        if let Some(layer) = self.layers.iter_mut().find(|layer| layer.key == key) {
+            layer.carries_geometry = true;
+        }
+        let made = self.after_conversion(key)?;
+        // Ready for the pointer on the frame the crossing returns, rather than
+        // after a stroke that could not be placed.
+        self.arm_mesh_sculptor();
+        Ok(made)
+    }
+
     /// Registers a layer the engine made on its own.
     ///
     /// The conversions that end in SDF hand back a `LayerId` the engine
@@ -752,6 +896,14 @@ impl ClayDocument {
     /// What every direction owes once its new layer exists.
     fn after_conversion(&mut self, key: LayerKey) -> Result<LayerKey, ModelError> {
         self.reconcile_layers();
+        // A mesh layer has no bricks and is not evaluated, so there is nothing
+        // to refill for one — the viewport draws it through the carried-layer
+        // path instead. Marking it dirty would ask the cache to mark a layer
+        // whose field is empty.
+        if self.active_layer().representation == Representation::Mesh {
+            self.refresh_stats();
+            return Ok(key);
+        }
         // The whole new layer is dirty; nothing about it was there before.
         let layer = self.active_layer().id;
         self.refill(layer, &[])?;
@@ -1517,13 +1669,123 @@ impl ClayDocument {
         // gated on a combine operation, which is the SDF side's vocabulary.
         let alpha = self.alpha_for(brush, Combine::Relief).cloned();
         let alpha = alpha.as_ref();
-        let preset = StrokePreset {
-            spacing: brush.flow,
-            ..StrokePreset::default()
+        // The shared preset, which is where a mesh stroke's radius and
+        // strength have to come from: the engine states that
+        // `clay_mesh_sculptor_apply_stroke` IGNORES the descriptor's radius
+        // and strength and takes each stamp's from the preset. This used to
+        // build its own carrying only `spacing`, so a mesh stroke ran at the
+        // engine's default radius of 0.25 whatever the brush said — measured,
+        // sizes 0.1, 0.5 and 1.0 all moved the same 944 vertices, and
+        // Intensidade was inert the same way.
+        //
+        // Spacing was also inverted here against every other path: the design
+        // reads flow as "more flow, stamps closer together", and this passed
+        // it straight through so more flow spread them further apart. On Move
+        // that is what decides whether a drag emits a second stamp at all, and
+        // a drag that emits one stamp has no motion to drag by.
+        let mut preset = self.preset(brush, tool);
+        // A mesh stroke does not build on itself, whatever the brush says.
+        //
+        // Not a preference: the mesh verbs that displace along a *per-vertex*
+        // normal read the normals the previous stamp just moved, so building
+        // up feeds a stamp's own output back into its next input. Measured
+        // against Blender's brushes on a matched sphere — same radius in world
+        // units, same strength, same stroke — as the mean angle between
+        // adjacent vertex normals, before against after:
+        //
+        //   verb     building up   clamped   Blender
+        //   Inflar      5.04x       1.18x     1.00x
+        //   Pinçar      9.41x       1.83x     1.00x
+        //   Vinco       3.71x       1.34x     1.00x
+        //   Padrão      1.11x       1.08x     1.00x
+        //
+        // Padrão is the control and barely moves either way: it uses the
+        // *region's* averaged normal, so there is nothing to feed back.
+        //
+        // Here rather than in `Shaping::default` because it is a fact about
+        // these verbs and not about brushes — the same reason `MAX_JITTER`
+        // lives beside the preset. The field and the grid are unaffected, and
+        // Acumular still means what it means there.
+        // A mesh stroke does not build on itself — except when it is
+        // *converging*.
+        //
+        // The clamp is here because the verbs that displace along a
+        // per-vertex normal read the normals the previous stamp just moved, so
+        // building up feeds a stamp's output into its own next input and the
+        // surface shreds. A smoothing verb has the opposite character: it
+        // averages toward the neighbourhood, so running it again moves less
+        // each time and converges. Clamping one of those means a sculptor can
+        // never smooth more than a single stamp's worth however long they rub,
+        // which is what "Suavizar does nothing" turned out to be — measured on
+        // a ridge 0.0676 proud of a unit sphere, four passes took it to 1.0670
+        // clamped and 1.0187 accumulating.
+        if !matches!(
+            verb,
+            claycore::MeshBrush::Smooth | claycore::MeshBrush::Relax | claycore::MeshBrush::Polish
+        ) {
+            preset.accumulation = claycore::Accumulation::Clamped;
+        }
+        // Where the gesture travelled, which is what a verb that pushes along
+        // the surface has to be told.
+        //
+        // `apply_stroke` derives a direction for GRAB and SNAKEHOOK from the
+        // motion between stamps and for nothing else — so NUDGE, which
+        // projects the drag into each vertex's tangent plane, was handed the
+        // descriptor's default of all zeroes and pushed material nowhere. It
+        // moved not one vertex at any size, intensity or stroke length, while
+        // Blender's equivalent moved 5% of the mesh on the same stroke.
+        //
+        // Harmless for the two verbs that ignore it, and right for a single
+        // stamp, which reads the descriptor's direction whatever the verb.
+        // The whole gesture, which is what Grab carries its region by, scaled
+        // by the intensity.
+        //
+        // Scaled here because the descriptor's `strength` weights the falloff
+        // rather than the displacement, so a Grab was carrying its region the
+        // gesture's whole length whatever Intensidade said. Blender's Grab
+        // carries it by the drag *times* the strength — measured, a 1.737 drag
+        // at 0.65 moves its furthest vertex 1.129, which is exactly the
+        // product — and matching that is what makes the slider mean the same
+        // thing in both.
+        let gesture = {
+            let (first, last) = (samples[0].position, samples[samples.len() - 1].position);
+            [
+                (last[0] - first[0]) * brush.intensity,
+                (last[1] - first[1]) * brush.intensity,
+                (last[2] - first[2]) * brush.intensity,
+            ]
+        };
+        // One stamp's worth of it, not the whole gesture. The engine resolves
+        // the path into stamps a spacing apart and applies the descriptor's
+        // direction at each one, so handing it the gesture's full travel
+        // applies that travel once per stamp — measured, a 0.9 drag pushed the
+        // surface 1.82 where Blender's Nudge pushed 0.16. A spacing is what
+        // the motion between two stamps actually is, which is the same
+        // quantity GRAB drags by.
+        let travel = {
+            let (first, last) = (samples[0].position, samples[samples.len() - 1].position);
+            let step = [last[0] - first[0], last[1] - first[1], last[2] - first[2]];
+            let length = step.iter().map(|axis| axis * axis).sum::<f32>().sqrt();
+            // Scaled by the intensity here because the engine does not: a
+            // stamp's strength weights the verbs that displace, and NUDGE
+            // moves by the vector it is handed. Measured before this, the
+            // Intensidade slider moved the surface 0.5753 at 0.2, at 0.65 and
+            // at 1.0 — the same number three times.
+            let stamp = preset.spacing * brush.size * brush.intensity * Self::NUDGE_PUSH;
+            if length > f32::EPSILON {
+                std::array::from_fn(|i| step[i] / length * stamp.min(length))
+            } else {
+                [0.0; 3]
+            }
         };
         let stamp = claycore::MeshStamp {
             verb,
+            direction: travel,
             center: samples[0].position,
+            // Carried even though a stroke ignores both, because the same
+            // descriptor is what a single stamp would use and a descriptor
+            // that disagreed with the preset would be a trap for the next
+            // caller.
             radius: brush.size,
             strength: brush.intensity,
             falloff: match brush.shaping.falloff {
@@ -1546,6 +1808,7 @@ impl ClayDocument {
                 // Zero: the brush's own diameter.
                 extent: 0.0,
             }),
+            smooth_iterations: Some(Self::SMOOTH_PASSES),
             // Flatten and Scrape mean "everything under this disc", and a
             // surface walk refuses to flatten across a groove — which is not
             // what either verb says.
@@ -1571,20 +1834,63 @@ impl ClayDocument {
         // Recorded per gesture, because that is the unit a sculptor thinks in
         // and the unit `mesh-sculpting` specifies: one gesture, one undo.
         let mut deltas = claycore::MeshDeltas::new().map_err(ModelError::engine)?;
+        // What the last segment of this gesture did, taken back before the
+        // whole gesture is laid down again from its anchor. Without this a
+        // preview would stack segment on segment, which is the crease the
+        // whole-gesture delivery exists to avoid.
+        let previous = self
+            .live_mesh
+            .take()
+            .filter(|(layer, _)| *layer == key)
+            .map(|(_, deltas)| deltas);
         let moved = {
             let mut held = self.mesh_sculptor.borrow_mut();
             let Some((_, sculptor)) = held.as_mut() else {
                 return Ok(EditOutcome::NOTHING);
             };
-            let moved = sculptor
-                .apply_stroke(
-                    &points,
-                    &preset,
-                    stamp,
-                    self.mask.as_ref(),
-                    Some(&mut deltas),
-                )
-                .map_err(ModelError::engine)?;
+            if let Some(previous) = &previous {
+                previous.revert(sculptor).map_err(ModelError::engine)?;
+            }
+            let moved = if verb == claycore::MeshBrush::Grab {
+                // One stamp at the point the gesture took hold of, carrying
+                // that region by the whole drag — which is what Grab is, in
+                // Blender and in ZBrush both.
+                //
+                // Not a resolved stroke. `apply_stroke` walks the path and
+                // moves the brush centre along it, so a drag that leaves the
+                // surface takes the centre with it and the later stamps reach
+                // no material at all: measured, a 120-pixel drag carried the
+                // centre 2.118 from a unit sphere's middle and left a dent
+                // where a lobe should have come out. A single stamp reads the
+                // descriptor's own radius, strength and direction — which a
+                // stroke ignores — so the region is the one under the anchor
+                // and the displacement is the gesture's, whole.
+                //
+                // Snakehook and Nudge stay on the stroke path deliberately:
+                // one re-anchors on every stamp so its region walks with the
+                // pull, and the other pushes along the surface. Neither is a
+                // region carried somewhere.
+                sculptor
+                    .stamp(
+                        claycore::MeshStamp {
+                            direction: gesture,
+                            ..stamp
+                        },
+                        self.mask.as_ref(),
+                        Some(&mut deltas),
+                    )
+                    .map_err(ModelError::engine)?
+            } else {
+                sculptor
+                    .apply_stroke(
+                        &points,
+                        &preset,
+                        stamp,
+                        self.mask.as_ref(),
+                        Some(&mut deltas),
+                    )
+                    .map_err(ModelError::engine)?
+            };
             // Refit rather than refresh: topology is fixed, so the ray-query
             // tree stays a valid partition and only its bounds went stale,
             // which is proportional to the brush instead of to the mesh.
@@ -1594,7 +1900,16 @@ impl ClayDocument {
 
         // A gesture that reached nothing is not worth a place on the stack,
         // and putting one there would make an undo appear to do nothing.
-        if deltas.vertex_count().map_err(ModelError::engine)? > 0 {
+        let reached = deltas.vertex_count().map_err(ModelError::engine)? > 0;
+        if self.previewing {
+            // Held rather than banked. The gesture is still open, and every
+            // segment replaces the last — one drag is one undo however many
+            // segments drew it.
+            if reached {
+                self.live_mesh = Some((key, deltas));
+            }
+            self.live_generation = self.live_generation.wrapping_add(1);
+        } else if reached {
             self.mesh_undo.push(MeshGesture {
                 layer: key,
                 deltas,
@@ -1713,6 +2028,59 @@ impl ClayDocument {
             dirty_bricks: self.dirty.len(),
         })
     }
+
+    /// What fraction of a stamp's spacing NUDGE pushes by.
+    ///
+    /// A calibration, and stated as one. NUDGE projects the drag into *each
+    /// vertex's own* tangent plane, so neighbouring vertices on a curved cap
+    /// are pushed in diverging directions and a large push shears them apart.
+    /// Measured as the mean angle between adjacent vertex normals, against the
+    /// same surface before the stroke:
+    ///
+    ///   push        surface moved   roughness
+    ///   1 spacing       0.776         12.23x
+    ///   1/2 spacing     0.361          7.18x
+    ///   0.15 spacing    0.049          1.43x
+    ///
+    /// Blender's Nudge moves 0.164 on the same stroke at 1.00x, so ours is
+    /// rougher than its equivalent at any given displacement — that is the
+    /// engine's tangent-plane push and not something a factor here can undo.
+    /// This keeps it inside the band every other mesh verb now sits in.
+    /// Turning the surface walk off does not help: measured at 7.18x either
+    /// way.
+    const NUDGE_PUSH: f32 = 0.15;
+
+    /// How many Laplacian passes a smoothing verb runs per stamp.
+    ///
+    /// The engine's SMOOTH averages a vertex with its *one-ring*, which is a
+    /// high-frequency filter: it takes out tessellation noise and barely
+    /// touches a bump that spans many edges. To smooth at the scale of the
+    /// brush it has to be run many times, and the engine's own default is far
+    /// below what that needs.
+    ///
+    /// Measured on a ridge standing 0.0676 proud of a unit sphere, four
+    /// smoothing passes over it, with the sculptor's accumulation on:
+    ///
+    ///   passes per stamp   ridge left   cost at a 0.18 brush
+    ///    1                   1.0654            —
+    ///    8                   1.0552          4.0 ms
+    ///   16                   1.0466            —
+    ///   32                   1.0343          4.7 ms
+    ///   64                   1.0187          5.4 ms
+    ///
+    /// The engine's ceiling, and cheap at it: the passes are a fraction of the
+    /// cost of finding the region in the first place. At 64 a single stroke
+    /// takes about a quarter of the ridge, so rubbing melts it — which is what
+    /// smoothing does in Blender and in ZBrush, and what it conspicuously did
+    /// not do here.
+    const SMOOTH_PASSES: i32 = 64;
+
+    /// Cells of margin around a removed layer's bounds.
+    ///
+    /// One brick's worth and then some: the cache marks bricks that *overlap*
+    /// the box, and a surface sitting on the bounds contributes to the brick
+    /// beyond them.
+    const BRICK_MARGIN: f32 = 16.0;
 
     /// Chunk keys drained from a grid in one go.
     ///
@@ -1906,6 +2274,25 @@ impl ClayDocument {
     /// leave the viewport showing the sculpt as it was before the edit, which
     /// is exactly the failure this number exists to prevent.
     pub fn mesh_revision(&mut self) -> u64 {
+        // Which layers this path draws at all, and whether each is shown.
+        //
+        // Adding a mesh layer moves no vertex and touches no grid, so without
+        // this the number did not change when one appeared — and the viewport,
+        // which uploads only when it changes, never uploaded it. A crossing
+        // into a mesh drew nothing: what stayed on screen was the *field* the
+        // source layer still contributed, and removing that source left an
+        // empty viewport with 62,576 vertices sitting unuploaded. The first
+        // stroke moved a vertex, changed the number the old way, and the mesh
+        // appeared — which is exactly how it was reported.
+        let carried = self
+            .layers
+            .iter()
+            .filter(|layer| layer.representation != Representation::Sdf)
+            .fold(0xcbf2_9ce4_8422_2325u64, |hash, layer| {
+                let shown = u64::from(layer.visible && layer.carries_geometry);
+                (hash ^ (layer.key.0 << 1 | shown)).wrapping_mul(0x1000_0000_01b3)
+            });
+
         let names: Vec<String> = self
             .layers
             .iter()
@@ -1922,7 +2309,13 @@ impl ClayDocument {
             sum.wrapping_add(counted)
         });
         let meshes = (self.mesh_undo.len() as u64) << 32 | self.mesh_redo.len() as u64;
-        meshes.wrapping_mul(31).wrapping_add(grids)
+        meshes
+            .wrapping_mul(31)
+            .wrapping_add(grids)
+            .wrapping_add(carried)
+            // A preview banks nothing, so without this the number would sit
+            // still while the drag was visibly moving the surface.
+            .wrapping_add(self.live_generation.wrapping_mul(1_000_003))
     }
 
     /// How stretched the active mesh layer's triangles are.
@@ -2037,6 +2430,35 @@ impl ClayDocument {
             .map_err(ModelError::engine)?;
         *self.mesh_sculptor.borrow_mut() = Some((key, sculptor));
         Ok(())
+    }
+
+    /// Builds the mesh sculptor for the active layer, if it needs one.
+    ///
+    /// Called when a layer becomes the one being worked on, which is the
+    /// moment the adjacency pass is worth paying for: it is a discrete thing
+    /// the sculptor did, not something a moving pointer repeats.
+    ///
+    /// It has to happen *before* the first stroke, and that is the whole
+    /// reason this exists. A pick against a mesh layer is answered by the
+    /// sculptor's own raycast, and it used to refuse until the sculptor was
+    /// built — which the first stroke did. But the interface places a stroke
+    /// at what the pick reported and sends nothing when it reports nothing, so
+    /// the first stroke could never arrive: a mesh layer was unsculptable
+    /// through the pointer, imported or converted, and the press orbited the
+    /// camera instead. `to_mesh.rs` is the regression.
+    ///
+    /// A failure is swallowed rather than raised. Selecting a layer is not an
+    /// edit and must not fail because of one, and the stroke path builds the
+    /// sculptor itself and reports properly if it cannot.
+    fn arm_mesh_sculptor(&mut self) {
+        let layer = self.active_layer();
+        if layer.representation != Representation::Mesh || !layer.carries_geometry {
+            return;
+        }
+        let (key, engine_name) = (layer.key, layer.engine_name.clone());
+        if let Err(e) = self.ensure_mesh_sculptor(key, &engine_name) {
+            eprintln!("a malha não pôde ser preparada para escultura: {e}");
+        }
     }
 
     /// Applies a stroke to a voxel layer, using the tool's own verb.
@@ -2504,6 +2926,25 @@ impl SculptModel for ClayDocument {
         }
     }
 
+    fn begin_gesture(&mut self) {
+        self.previewing = true;
+    }
+
+    fn end_gesture(&mut self) {
+        self.previewing = false;
+        // What the preview was holding becomes the edit. One record for the
+        // whole drag, because every segment replaced the last rather than
+        // adding to it.
+        if let Some((layer, deltas)) = self.live_mesh.take() {
+            self.mesh_undo.push(MeshGesture {
+                layer,
+                deltas,
+                engine_depth: self.engine_undo_depth(),
+            });
+            self.mesh_redo.clear();
+        }
+    }
+
     fn bounds(&self) -> Option<([f32; 3], [f32; 3])> {
         let layer = self.active_layer();
         // A grid says where it is itself. `layer_bounds` answers with a
@@ -2583,6 +3024,7 @@ impl SceneModel for ClayDocument {
     fn set_active_layer(&mut self, key: LayerKey) -> Result<(), ModelError> {
         self.active = self.index_of(key)?;
         self.selected = Some(key);
+        self.arm_mesh_sculptor();
         Ok(())
     }
 
@@ -2787,6 +3229,25 @@ impl SceneModel for ClayDocument {
             ));
         }
         let id = self.layers[index].id;
+        // Where it was, asked while it is still there to ask.
+        //
+        // The cache holds the *evaluated field*, brick by brick. Removing a
+        // layer takes it out of the document and leaves every brick it
+        // contributed to exactly as it was, so the surface goes on being drawn
+        // and goes on being picked — measured, a sphere removed from a
+        // two-layer document still answered a raycast at [0, 0, 1] and still
+        // meshed to the same 298,680 triangles, through an incremental sync
+        // and through a full rebuild alike. Only reopening the file looked
+        // right, because that builds the cache from nothing.
+        //
+        // Marking the *remaining* active layer is not enough and never was:
+        // the stale bricks belong to the layer that left.
+        let region = self.document.layer_bounds(id).ok().flatten().or_else(|| {
+            // A grid keeps its extent here rather than in the engine, which
+            // reports a layer's SDF bounds and a voxel layer has none.
+            self.layers[index].voxel_bounds
+        });
+
         self.document.remove_layer(id).map_err(ModelError::engine)?;
         self.layers.remove(index);
         self.active = self.active.min(self.layers.len() - 1);
@@ -2795,6 +3256,18 @@ impl SceneModel for ClayDocument {
         }
         let active = self.active_layer().id;
         self.refill(active, &[])?;
+        // Re-evaluated against the document as it is now, which is what drops
+        // what the removed layer left behind. After the refill above, so the
+        // two cannot fight over the same bricks.
+        if let Some((min, max)) = region {
+            // Padded, because a brick the surface only grazes still holds a
+            // piece of it and a box drawn exactly on the bounds can miss the
+            // outermost one.
+            let pad = self.cache.config().voxel_size * Self::BRICK_MARGIN;
+            let min = std::array::from_fn(|i| min[i] - pad);
+            let max = std::array::from_fn(|i| max[i] + pad);
+            self.refill_region(min, max)?;
+        }
         Ok(())
     }
 
@@ -3108,6 +3581,9 @@ impl ClayDocument {
             dirty: Vec::new(),
             stats: SceneStats::default(),
             carried: (0, 0),
+            live_mesh: None,
+            previewing: false,
+            live_generation: 0,
             meshed_chunks: 0,
             surface_brick_count: 0,
             mesh_sculptor: std::cell::RefCell::new(None),

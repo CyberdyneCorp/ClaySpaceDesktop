@@ -171,3 +171,243 @@ the existing tests asked.
     no form to read, captured and compared before deciding — and it has no
     chunked variant. A grid is drawn as the boxes it is; the rounded surface is
     the voxel-to-SDF conversion, which is what that direction is for.
+
+## 11. Crossing into a mesh
+
+The gap the change's own premise left open: `Direction` had four entries and
+none of them ended in `Mesh`, so "the three representations are first-class"
+was true of two of them and of the third only if you had a file to import.
+
+- [x] 11.1 Add `SdfToMesh` and `VoxelToMesh`
+  - Everything needed was already wrapped — `Document::mesh`,
+    `Document::attach_mesh_layer`, `VoxelField::mesh`. Nothing was missing from
+    ClayCore; the gap was ours.
+  - The engine meshes a *document*, not a layer: `clay_document_mesh` takes no
+    layer id and there is no layer-scoped mesher. The SDF crossing hides the
+    other SDF layers across the call and puts them back, which is exact by the
+    engine's own contract and measured — the starting sphere alone meshes to
+    57,650 vertices bounded at ±1, the same document with a blob on a second
+    layer to 44,462 bounded past 1.3, and the restore gives the first answer
+    back. Voxel and mesh layers are left alone: neither carries SDF content.
+  - Marching tetrahedra for the field, because what comes out is going to be
+    sculpted and exported and that is the watertight, 2-manifold one. The
+    greedy mesh for a grid, because the rounded voxel mesher carries no vertex
+    normals and what came out would render as a flat silhouette.
+- [x] 11.2 State the loss that belongs to these two
+  - `Cost::fixed_topology`, and a line in the panel: the topology is the
+    sampling lattice's and nothing here re-flows it. Dense, uniform, no edge
+    loop following anything — the input a retopology pass replaces rather than
+    the output one produces. Said before the crossing, not discovered after it.
+- [x] 11.3 Make a mesh layer reachable by the pointer
+  - Found while testing 11.1 and the reason "convert to mesh and sculpt" would
+    still not have worked. A pick against a mesh layer is answered by the mesh
+    sculptor's raycast, which refused until the sculptor was built — which only
+    a stroke did. The interface sends no stroke where the pick found nothing,
+    so the first stroke could never arrive: **a mesh layer was unsculptable
+    through the pointer, imported or converted.** The sculptor is armed when
+    the layer becomes active. `to_mesh.rs` holds it in the order the interface
+    goes in — select, point, then stroke.
+  - Two tests in `mesh_sculpting.rs` had written the deadlock down as
+    deliberate — "a pick before any stroke finds nothing, deliberately" and
+    "there is no sculptor before the first stroke, so there is no figure". Both
+    now assert the opposite and say why the old reading was wrong. The quality
+    readout gains from it too: a sculptor deciding whether a mesh needs
+    retopology wants the figure before they start, not after.
+
+## 12. The polyframe, and what Move actually does
+
+- [x] 12.1 Draw a mesh layer's own edges over it
+  - ZBrush's PolyF, on **Visualizar → Malha aparente** and Shift+F (F alone is
+    already framing, so the shifted pair keeps both where a ZBrush hand expects
+    them). A line list over the mesh layers' own vertex buffer — an index
+    buffer rather than a second mesh, because the positions are already
+    uploaded — with a depth bias so the lines sit in front of the triangles
+    they outline instead of fighting them.
+  - Edges are deduplicated. Not to halve the buffer: the lines are translucent,
+    so an edge shared by two triangles and emitted twice is blended twice and
+    the interior reads heavier than the silhouette.
+- [x] 12.2 Establish whether Move and Move Topological reach a mesh
+  - **Move: yes, and always was** — the capability table binds it to
+    `clay_mesh_sculptor_stamp (GRAB)`. What it was not was *reachable*, for the
+    reason in 11.3.
+  - **Move Topological: yes, and it is the only kind there is.** The engine's
+    mesh brush descriptor carries `geodesic` and defaults it on; this
+    application sets it for every verb but Planar and Raspar. Measured on a
+    horseshoe whose tips are 0.71 apart through the air and 2.36 around the
+    arc: a brush reaching 1.0 drags one and leaves the other.
+    `clay_item_volume_move_topological` is a different call — it takes an item
+    carrying a volume — and belongs to the SDF side.
+- [x] 12.3 Make the brush's size and intensity reach a mesh stroke
+  - Found while measuring 12.2, and a real defect. The engine states that
+    `clay_mesh_sculptor_apply_stroke` **ignores the descriptor's radius and
+    strength** and takes each stamp's from the preset; the mesh path built its
+    own preset carrying only spacing, so every mesh stroke ran at the engine's
+    default radius of 0.25 whatever the brush said — sizes 0.1, 0.5 and 1.0 all
+    moved the same 944 vertices, and Intensidade was inert the same way.
+  - The same line had spacing inverted against every other path: the design
+    reads flow as "more flow, stamps closer together" and the SDF path spells
+    that `1.0 - flow`, while this passed it through raw. On a dragging verb
+    that decides whether a second stamp is emitted at all, and a stroke of one
+    stamp has no motion to drag by — which is why Move looked broken rather
+    than merely coarse. Both fixed by using the shared preset the SDF path
+    already had.
+
+## 13. Measured against Blender, and what that found
+
+Driven over the Blender MCP addon on a matched sphere: same brush radius in
+world units (`unprojected_size`), same strength, same stroke, and the same
+metric computed on both sides — the mean angle between adjacent vertex normals
+before and after, which reads as how much a verb shredded the surface.
+**Blender scored 1.00x on every brush.** Ours did not.
+
+- [x] 13.1 Stop a mesh stroke building on itself
+  - Inflar 5.04x, Pinçar 9.41x, Vinco 3.71x. Padrão, the control, 1.11x —
+    it displaces along the *region's* averaged normal, so nothing compounds.
+    The rest displace along each vertex's own normal or gather toward a centre,
+    and a building stroke feeds each stamp back into the normals the next one
+    reads. Clamped on the mesh path now; ratios fall to 1.18x, 1.83x, 1.34x.
+  - Scoped to that path rather than to `Shaping::default`, and that was a
+    correction: changing the domain default broke four `masking.rs` tests, and
+    the evidence for the change was entirely from mesh verbs. It is a fact
+    about those verbs, not about brushes — the same reason `MAX_JITTER` lives
+    beside the preset. The field and the grid are untouched.
+- [x] 13.2 Give Nudge a direction
+  - `clay_mesh_sculptor_apply_stroke` derives a drag direction for GRAB and
+    SNAKEHOOK and for nothing else, so NUDGE — which projects the drag into
+    each vertex's tangent plane — was handed the descriptor's default of all
+    zeroes. It moved **not one vertex** at any size, intensity or stroke
+    length; Blender's moved 5% of the mesh on the same stroke. It also ignored
+    Intensidade, which the engine never applies to this verb, so the slider now
+    reaches it through the vector.
+  - The magnitude is a calibration and is labelled one: ours is rougher than
+    Blender's at any given displacement, which is the engine's tangent-plane
+    push rather than something a constant fixes. `NUDGE_PUSH` carries the
+    measurements.
+- [x] 13.3 Take the engine's brush defaults
+  - `MeshStamp::as_raw` built the descriptor from a **zeroed** struct, so every
+    field the type does not name was 0 — and those are not harmlessly zero.
+    `polish_angle: 0` is a fully closed gate, so Polir smoothed nothing even
+    across a crease cut for it; `layer_height: 0` is a zero ceiling, so Camada
+    moved 0.0086 against Padrão's 0.678. `clay_mesh_brush_defaults` exists for
+    exactly this — "so a host fills in what it means and takes the rest" — and
+    we were taking nothing.
+- [x] 13.4 Hold it with a measurement, not a picture
+  - `visual_mesh_verbs.rs`: no verb may exceed 2.0x roughness, and every verb
+    the shelf offers must move something. Captures beside them.
+- [x] 13.5 Make the mask test measure masking
+  - It asserted `held < raised` over a mask 0.2 wide under a brush of radius
+    0.3 — the brush reached across the strip from both sides, so the two
+    differed by 7e-7 on a 0.14 deposit and it passed on rounding. The mask is
+    wider than the brush now, and asked properly the answer is emphatic:
+    1.0005 against an unmasked 1.1400, on a sphere that started at 1.0.
+  - An intermediate reading said a building stroke defeats masking. It does
+    not — that measurement was taken against a polluted fixture and is wrong.
+    The protection above is with accumulation on.
+
+- [x] 13.6 Hold a mesh drag as one gesture
+  - The first thing found and the last thing fixed. The ViewModel applies a
+    stroke in segments as the pointer travels, which is what keeps a field
+    live under the pointer — but Grab anchors on its first stamp, so segments
+    are several grabs, each anchoring where the last stopped. Against Blender's
+    Grab on a matched sphere with the same drag: one call reaches 9.8% and
+    moves 0.707, Blender 11.4% and 0.779, two segments 19.0% and 0.569. Two
+    anchors sharing one drag, which is the crease along the path.
+  - Ruled out on the way: the geodesic falloff, which makes no difference to
+    Grab at all — measured identical either way. Blender's Grab and ZBrush's
+    plain Move are Euclidean, but that is not what was wrong here.
+  - A mesh drag now shows nothing until the pointer comes up. Reverting each
+    segment before re-applying the gesture from its anchor would buy the
+    preview back and needs the engine to hold a gesture open across calls.
+
+- [x] 13.7 Make a drag pull rather than slide
+  - Reported as "it seems we're sliding the faces, instead of actually
+    moving", which was exact. The interface picked the surface under the
+    pointer at **every** sample, so every position landed on the form and the
+    motion between two of them was a walk along it — the skin stretched and
+    folded and nothing was carried anywhere. A drag across the silhouette lost
+    half its samples outright: ten of twenty-one.
+  - A dragging verb now takes hold once and follows the pointer at the anchor's
+    depth (`input::dragged_to`, with its own tests). And Mover is applied as
+    one stamp at the anchor rather than a resolved stroke: a stroke walks the
+    brush centre along the path, so a drag leaving the surface takes the centre
+    with it and the later stamps reach nothing — measured, a dent where a lobe
+    should have been.
+  - The drag is scaled by the intensity, because the descriptor's `strength`
+    weights the falloff and not the displacement. Blender's Grab carries its
+    region by drag × strength; matched, ours moves its furthest vertex 1.128
+    against Blender's 1.129 on the same gesture.
+
+- [x] 13.8 Clear a removed layer out of the cache
+  - Reported as the starting form sitting under the sculpt and never changing,
+    with the real result only after a save and a reopen. The brick cache holds
+    the evaluated field, and the removal marked the *remaining* active layer
+    dirty — which cannot help, because the stale bricks belong to the layer
+    that left. Measured: the removed sphere still meshed to the same 298,680
+    triangles through an incremental sync and a full rebuild alike, and still
+    answered a raycast at [0, 0, 1]; 17,160 and no hit once its own region is
+    re-evaluated. Hiding was always right and is held by the same test.
+
+- [x] 13.9 Upload a mesh layer the moment it exists
+  - Reported as everything disappearing when the SDF layer was deleted, and
+    coming back the moment sculpting began. `mesh_revision` is what the
+    viewport watches to decide whether to upload the carried layers, and
+    adding a mesh layer moves no vertex and touches no grid — so it did not
+    change and the layer was never uploaded. A crossing only *looked* right
+    because the source layer was still contributing to the field: the sphere
+    on screen was the field. Remove the source and there is nothing, with
+    62,576 vertices sitting unuploaded; make a stroke and the old number moves
+    and they appear. Which layers are carried, and whether each is shown, are
+    part of the number now.
+
+- [x] 13.10 Show a mesh drag while it happens
+  - The cost 13.6 accepted, now paid off. Segments are back, and each replays
+    the gesture from its anchor rather than carrying only what is new — the
+    model holds the previous segment's vertex deltas, reverts them, and lays
+    the whole gesture down again. `begin_gesture`/`end_gesture` on `SculptModel`
+    say when a gesture is open; only the release banks anything, so one drag is
+    one undo however many segments drew it, and a cancelled gesture takes its
+    preview with it.
+  - The number the viewport watches is bumped by every preview, because a
+    preview banks nothing and would otherwise leave it sitting still while the
+    surface was visibly moving.
+  - And a replayed segment fires on every pointer move rather than after three
+    stamps' worth of travel, which is the threshold a *stamping* segment needs
+    and the reason the first attempt still showed nothing: at the default flow
+    and a brush of 0.858 that threshold is 1.03 world units, most of the way
+    across a unit sphere. Measured, 40 pointer moves now produce 40 updates
+    where they produced none.
+  - It costs about 17 ms a move on a 140,774-vertex mesh, nearly all of it the
+    stamp rather than the buffer it fills (1.2 ms). Dropping the surface walk
+    takes it to 12.8 and is not taken: with the single-stamp path the walk is
+    what makes Move topological, and the horseshoe test fails without it. That
+    measurement also corrects an earlier note that the walk makes no difference
+    to Grab — true of the resolved-stroke path, not of this one.
+
+- [x] 13.11 Make Suavizar smooth, and be seen doing it
+  - Reported as no effect at all. Three causes, none of them the same.
+  - The mesh clamp from 13.1 applies to every verb, including the ones that
+    *converge*. A smoothing verb averages toward the neighbourhood, so running
+    it again moves less each time and it cannot shred — clamping one means
+    never smoothing more than a single stamp's worth however long a sculptor
+    rubs. Suavizar, Relaxar and Polir are exempt now.
+  - The engine's SMOOTH is a one-ring Laplacian, a high-frequency filter that
+    barely touches a bump spanning many edges, and `smooth_iterations` was
+    never set so it ran at the engine's default. Measured on a ridge 0.0676
+    proud of a unit sphere, four passes: 1.0670 at the default and clamped,
+    1.0187 at sixty-four passes and accumulating. Cheap — 5.4 ms against 4.0 ms
+    for a 0.18 brush on 140,774 vertices.
+  - And it is *region-based*, so it was held until the pointer came up. That is
+    right on a field, where it bakes a region and puts it back, and wrong on a
+    mesh where it is an ordinary stamp. Mesh segments also fire every one stamp
+    rather than every three, since nothing is re-meshed: measured, a forty-move
+    drag now sends eleven updates where it sent none.
+  - An intermediate reading said accumulation made no difference to Suavizar.
+    It was measured against a build that forced the clamp regardless of the
+    brush, so the flag never reached the engine.
+
+**Still open**: Move reaches 8.3% of the sphere against Blender's 0.9% for the
+same nominal radius, which is a units question and not a defect found. Camada
+is better but weak (0.0086 against Blender's 0.341).
+Pintar and Borrar do nothing on a colourless mesh and Pintar reports success
+while doing it. Move covers 27% of the sphere to Blender's 1.8% at the same
+nominal radius, which is a units question rather than a defect found.

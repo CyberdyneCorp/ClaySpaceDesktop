@@ -91,3 +91,148 @@ pub fn ray_at(
     ];
     Some(camera.ray_through(ndc, viewport.aspect_ratio()))
 }
+
+/// Where a drag has carried the point it took hold of.
+///
+/// A *dragging* verb — Mover, Puxar, Nudge — takes hold of the surface once
+/// and then follows the pointer. Where it follows it to is a question about
+/// the camera and not about the model: the anchor is carried along the plane
+/// it was picked on, which is what makes a drag *away* from the form pull
+/// material out of it.
+///
+/// The alternative, and what this replaces, is to re-pick the surface under
+/// the pointer at every sample. That is right for a verb that stamps — the
+/// stamp belongs where the pointer is — and wrong for one that drags, because
+/// every sample then lands *on* the surface and the motion between two of them
+/// is a walk along it. The form is never pulled anywhere; its skin slides
+/// across it and folds. Dragging off the silhouette is worse than wrong: the
+/// pick finds nothing, no sample is sent, and the stroke quietly stops.
+///
+/// `anchor` is the point the press took hold of, `press` is where the pointer
+/// was then, and `to` is where it is now. The anchor's distance along its own
+/// ray is what fixes the depth, so a perspective camera carries it by the
+/// right amount rather than by a screen distance.
+///
+/// `None` when either point is outside the viewport, which is the one case
+/// with no answer — the ray through it does not exist.
+pub fn dragged_to(
+    camera: &clayspace_view::Camera,
+    viewport: egui::Rect,
+    anchor: [f32; 3],
+    press: egui::Pos2,
+    to: egui::Pos2,
+) -> Option<[f32; 3]> {
+    let (origin, direction) = ray_at(camera, viewport, press)?;
+    // How far along its ray the anchor sits. Projected rather than measured
+    // straight, so a point picked off the ray's centre still reports the depth
+    // the camera sees it at.
+    let depth = (0..3)
+        .map(|i| (anchor[i] - origin[i]) * direction[i])
+        .sum::<f32>();
+    let (moved_origin, moved_direction) = ray_at(camera, viewport, to)?;
+    Some(std::array::from_fn(|i| {
+        moved_origin[i] + moved_direction[i] * depth
+    }))
+}
+
+#[cfg(test)]
+mod drag_tests {
+    use super::*;
+    use clayspace_view::Camera;
+
+    fn viewport() -> egui::Rect {
+        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))
+    }
+
+    /// A pointer that has not moved leaves the anchor where it was.
+    #[test]
+    fn a_drag_that_went_nowhere_carries_nothing() {
+        let camera = Camera::default();
+        let at = egui::pos2(400.0, 300.0);
+        let (origin, direction) = ray_at(&camera, viewport(), at).expect("a ray");
+        let anchor: [f32; 3] = std::array::from_fn(|i| origin[i] + direction[i] * 4.0);
+
+        let held = dragged_to(&camera, viewport(), anchor, at, at).expect("a point");
+        for axis in 0..3 {
+            assert!(
+                (held[axis] - anchor[axis]).abs() < 1e-3,
+                "the anchor moved to {held:?} without the pointer moving from {anchor:?}"
+            );
+        }
+    }
+
+    /// And a pointer that moved carries it, by more than nothing and in the
+    /// direction it went.
+    #[test]
+    fn a_drag_carries_the_anchor_with_the_pointer() {
+        let camera = Camera::default();
+        let press = egui::pos2(400.0, 300.0);
+        let (origin, direction) = ray_at(&camera, viewport(), press).expect("a ray");
+        let anchor: [f32; 3] = std::array::from_fn(|i| origin[i] + direction[i] * 4.0);
+
+        let right = dragged_to(&camera, viewport(), anchor, press, egui::pos2(500.0, 300.0))
+            .expect("a point");
+        let moved: f32 = (0..3)
+            .map(|i| (right[i] - anchor[i]).powi(2))
+            .sum::<f32>()
+            .sqrt();
+        assert!(
+            moved > 0.1,
+            "a hundred pixels of drag carried the anchor {moved}, which is nowhere"
+        );
+
+        // Further pointer, further anchor, and monotonically.
+        let further = dragged_to(&camera, viewport(), anchor, press, egui::pos2(600.0, 300.0))
+            .expect("a point");
+        let further_moved: f32 = (0..3)
+            .map(|i| (further[i] - anchor[i]).powi(2))
+            .sum::<f32>()
+            .sqrt();
+        assert!(
+            further_moved > moved,
+            "twice the drag carried the anchor {further_moved} against {moved}"
+        );
+    }
+
+    /// The anchor stays at the depth it was taken from.
+    ///
+    /// This is what makes the carried point a *translation* of the surface
+    /// rather than another point on it: the drag is free to leave the form,
+    /// which is the whole difference between pulling a lobe out and sliding
+    /// the skin around.
+    #[test]
+    fn a_drag_keeps_the_depth_it_took_hold_at() {
+        let camera = Camera::default();
+        let press = egui::pos2(400.0, 300.0);
+        let (origin, direction) = ray_at(&camera, viewport(), press).expect("a ray");
+        let anchor: [f32; 3] = std::array::from_fn(|i| origin[i] + direction[i] * 4.0);
+
+        let moved = dragged_to(&camera, viewport(), anchor, press, egui::pos2(560.0, 220.0))
+            .expect("a point");
+        let (moved_origin, moved_direction) =
+            ray_at(&camera, viewport(), egui::pos2(560.0, 220.0)).expect("a ray");
+        let depth: f32 = (0..3)
+            .map(|i| (moved[i] - moved_origin[i]) * moved_direction[i])
+            .sum();
+        assert!(
+            (depth - 4.0).abs() < 1e-2,
+            "the carried point sits {depth} along its ray, not the 4.0 the \
+             anchor was taken from"
+        );
+    }
+
+    /// Off the viewport there is no ray and so no answer.
+    #[test]
+    fn a_pointer_outside_the_viewport_has_no_answer() {
+        let camera = Camera::default();
+        let press = egui::pos2(400.0, 300.0);
+        assert!(dragged_to(
+            &camera,
+            viewport(),
+            [0.0, 0.0, 0.0],
+            press,
+            egui::pos2(-40.0, 300.0)
+        )
+        .is_none());
+    }
+}

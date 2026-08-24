@@ -162,6 +162,8 @@ pub struct Strings {
     pub convert_features_vanish: &'static str,
     pub convert_sharp_edges_lost: &'static str,
     pub convert_history_lost: &'static str,
+    /// Shown for a crossing that ends in triangles.
+    pub convert_fixed_topology: &'static str,
     pub convert_not_undoable: &'static str,
     pub convert_cells: &'static str,
     pub convert_run: &'static str,
@@ -173,6 +175,8 @@ pub struct Strings {
     pub action_undo: &'static str,
     pub action_redo: &'static str,
     pub action_frame_all: &'static str,
+    /// A mesh layer's own edges, drawn over it.
+    pub action_polyframe: &'static str,
     pub action_new: &'static str,
     pub action_open: &'static str,
     pub action_open_recent: &'static str,
@@ -288,6 +292,7 @@ const PT_BR: Strings = Strings {
     convert_features_vanish: "detalhes mais finos que isto desaparecem",
     convert_sharp_edges_lost: "arestas vivas viram degraus",
     convert_history_lost: "o histórico paramétrico não volta",
+    convert_fixed_topology: "a topologia é a da grade de amostragem; nada aqui a refaz",
     convert_not_undoable: "não se desfaz: remova a camada criada para voltar atrás",
     convert_cells: "células",
     convert_run: "Converter",
@@ -302,6 +307,7 @@ const PT_BR: Strings = Strings {
     action_undo: "Desfazer",
     action_redo: "Refazer",
     action_frame_all: "Enquadrar tudo",
+    action_polyframe: "Malha aparente",
     action_new: "Novo",
     action_open: "Abrir…",
     action_open_recent: "Abrir recente",
@@ -416,6 +422,7 @@ const EN_US: Strings = Strings {
     convert_features_vanish: "features thinner than this vanish",
     convert_sharp_edges_lost: "sharp edges become a staircase",
     convert_history_lost: "the parametric history does not come back",
+    convert_fixed_topology: "the topology is the sampling lattice's; nothing here re-flows it",
     convert_not_undoable: "not undoable: remove the layer it adds to take it back",
     convert_cells: "cells",
     convert_run: "Convert",
@@ -430,6 +437,7 @@ const EN_US: Strings = Strings {
     action_undo: "Undo",
     action_redo: "Redo",
     action_frame_all: "Frame all",
+    action_polyframe: "Polyframe",
     action_new: "New",
     action_open: "Open…",
     action_open_recent: "Open recent",
@@ -549,6 +557,7 @@ const ES_419: Strings = Strings {
     convert_features_vanish: "los detalles más finos que esto desaparecen",
     convert_sharp_edges_lost: "los bordes vivos se vuelven escalones",
     convert_history_lost: "el historial paramétrico no vuelve",
+    convert_fixed_topology: "la topología es la de la retícula de muestreo; nada aquí la rehace",
     convert_not_undoable: "no se deshace: quite la capa creada para volver atrás",
     convert_cells: "celdas",
     convert_run: "Convertir",
@@ -563,6 +572,7 @@ const ES_419: Strings = Strings {
     action_undo: "Deshacer",
     action_redo: "Rehacer",
     action_frame_all: "Encuadrar todo",
+    action_polyframe: "Malla visible",
     action_new: "Nuevo",
     action_open: "Abrir…",
     action_open_recent: "Abrir reciente",
@@ -607,7 +617,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 99] {
+    pub fn all(&self) -> [&'static str; 100] {
         [
             self.menu_file,
             self.menu_edit,
@@ -678,6 +688,7 @@ impl Strings {
             self.action_undo,
             self.action_redo,
             self.action_frame_all,
+            self.action_polyframe,
             self.action_new,
             self.action_open,
             self.action_open_recent,

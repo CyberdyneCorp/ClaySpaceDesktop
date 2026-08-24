@@ -148,6 +148,11 @@ pub enum Command {
     FrameAll,
     NextMaterial,
     ToggleGrid,
+    /// Whether a mesh layer is drawn with its own edges over it.
+    ///
+    /// ZBrush's polyframe. It answers the one question a shaded surface hides:
+    /// how much geometry is actually there.
+    TogglePolyframe,
     /// Cycles what lengths are shown in. Presentation only: no geometry
     /// moves, which is what makes it safe to put on a single click.
     NextDisplayUnit,
@@ -173,6 +178,7 @@ impl Command {
                 | Self::FrameAll
                 | Self::NextMaterial
                 | Self::ToggleGrid
+                | Self::TogglePolyframe
                 | Self::NextDisplayUnit
                 | Self::ToggleAttribution
                 | Self::ToggleDiagnostics
@@ -293,6 +299,7 @@ impl Command {
             Self::FrameAll => "frame all",
             Self::NextMaterial => "material",
             Self::ToggleGrid => "grid",
+            Self::TogglePolyframe => "polyframe",
             Self::NewDocument => "new document",
             Self::OpenDocument => "open document",
             Self::OpenRecent(_) => "open recent",

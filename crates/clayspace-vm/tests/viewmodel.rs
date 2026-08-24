@@ -562,6 +562,34 @@ fn the_view_preset_and_grid_are_observable() {
     assert_ne!(*vm.grid().get(), before);
 }
 
+/// The polyframe is a state the interface reads, not an action it fires.
+///
+/// It has to be observable for the same reason the grid is: the menu shows it
+/// checked and the renderer is told each frame, and both read the same value.
+/// Off to begin with — a polyframe over a dense mesh is a lot of ink, and it
+/// is asked for when a question about density comes up rather than kept on.
+#[test]
+fn the_polyframe_is_an_observable_state() {
+    let (mut vm, _) = fixture();
+    assert!(
+        !*vm.polyframe().get(),
+        "the polyframe starts on, so every mesh layer opens covered in ink"
+    );
+
+    let mut watcher = Watcher::new();
+    watcher.accept(vm.polyframe());
+    vm.dispatch(Command::TogglePolyframe).expect("polyframe");
+    assert!(
+        watcher.take_change(vm.polyframe()),
+        "the change was not seen"
+    );
+    assert!(*vm.polyframe().get());
+
+    // And back, because a toggle that only goes one way is not a toggle.
+    vm.dispatch(Command::TogglePolyframe).expect("polyframe");
+    assert!(!*vm.polyframe().get());
+}
+
 #[test]
 fn setting_the_preset_already_active_schedules_no_redraw() {
     let (mut vm, _) = fixture();
@@ -692,4 +720,141 @@ mod following_the_active_layer {
             "the SDF layer's size came back as the voxel layer's"
         );
     }
+}
+
+/// Every segment of a mesh drag carries the gesture from its anchor.
+///
+/// Grab anchors on the first stamp and carries that region by the motion that
+/// follows, so a segment holding only the newest samples is a *second* grab
+/// anchoring where the first stopped. Measured against Blender's Grab over
+/// MCP — matched sphere, same brush radius in world units, same drag: one call
+/// reaches 9.8% of the mesh and moves it 0.707, Blender reaches 11.4% and
+/// moves 0.779, and the same gesture split into two independent segments
+/// reaches 19.0% and moves 0.569 — two anchors sharing one drag.
+///
+/// So the segments stay, because they are what makes the drag *visible* while
+/// it happens, and each one replays the whole gesture instead. The model takes
+/// back what the last segment did before laying it down again, which is what
+/// keeps one drag to one undo.
+#[test]
+fn every_segment_of_a_mesh_drag_replays_it_from_the_anchor() {
+    let drag = |vm: &mut SculptViewModel| {
+        vm.dispatch(Command::BeginStroke {
+            position: [0.0, 0.0, 1.0],
+            pressure: 1.0,
+        })
+        .expect("begin");
+        for step in 1..=24 {
+            let t = step as f32 / 24.0;
+            vm.dispatch(Command::ContinueStroke {
+                position: [t * 2.0, t * 0.5, 1.0],
+                pressure: 1.0,
+            })
+            .expect("continue");
+        }
+        vm.dispatch(Command::EndStroke).expect("end");
+    };
+
+    let (mut mesh, calls) = fixture_with(|model| {
+        model.representation.set(Representation::Mesh);
+    });
+    mesh.dispatch(Command::SelectTool(ToolKind::Mover))
+        .expect("tool");
+    drag(&mut mesh);
+
+    let strokes = calls.borrow();
+    let drags: Vec<&Vec<GestureSample>> = strokes.strokes.iter().map(|s| &s.1).collect();
+    assert!(
+        drags.len() > 1,
+        "a mesh drag reached the model as {} call(s), so nothing is drawn until \
+         the pointer comes up",
+        drags.len()
+    );
+
+    // Every one of them starts where the gesture did. A segment starting
+    // anywhere else is a second grab.
+    let anchor = drags[0][0].position;
+    for (i, samples) in drags.iter().enumerate() {
+        assert_eq!(
+            samples[0].position, anchor,
+            "segment {i} starts at {:?} rather than the gesture's anchor {anchor:?}",
+            samples[0].position
+        );
+    }
+    // And each carries more of it than the last.
+    for pair in drags.windows(2) {
+        assert!(
+            pair[1].len() >= pair[0].len(),
+            "a segment carried fewer samples than the one before it"
+        );
+    }
+}
+
+/// A mesh stroke is seen while it is made, whichever verb it is.
+///
+/// Two things kept Suavizar from being seen at all. It is *region-based* —
+/// on a field it samples a region into a volume, modifies it and puts it back
+/// with a replace, which cannot be segmented — so it was held until the
+/// pointer came up. And a mesh segment waited for three stamps' worth of
+/// travel, a threshold that exists because a field segment costs a re-mesh of
+/// every brick it touched.
+///
+/// On a mesh neither applies: these verbs are ordinary stamps over the
+/// vertices in reach, and nothing is re-meshed. The field keeps both
+/// behaviours, and this holds the difference.
+#[test]
+fn a_mesh_stroke_is_applied_while_it_is_made() {
+    let drag = |vm: &mut SculptViewModel| {
+        vm.dispatch(Command::SetBrushSize(0.18)).expect("size");
+        vm.dispatch(Command::BeginStroke {
+            position: [0.0, 0.0, 1.0],
+            pressure: 1.0,
+        })
+        .expect("begin");
+        for step in 1..=40 {
+            let t = step as f32 / 40.0;
+            vm.dispatch(Command::ContinueStroke {
+                position: [t * 0.8, 0.0, 1.0],
+                pressure: 1.0,
+            })
+            .expect("continue");
+        }
+    };
+
+    for tool in [ToolKind::Suavizar, ToolKind::Padrao] {
+        let (mut mesh, calls) = fixture_with(|model| {
+            model.representation.set(Representation::Mesh);
+        });
+        mesh.dispatch(Command::SelectTool(tool)).expect("tool");
+        drag(&mut mesh);
+        let during = calls.borrow().strokes.len();
+        assert!(
+            during > 4,
+            "{:?} on a mesh reached the model {during} time(s) over forty \
+             pointer moves, so the sculptor rubs at a surface that does not \
+             answer until they let go",
+            tool
+        );
+    }
+
+    // The field is unchanged: a bake is still applied once, at the end.
+    let (mut field, calls) = fixture_with(|model| {
+        model.representation.set(Representation::Sdf);
+    });
+    field
+        .dispatch(Command::SelectTool(ToolKind::Suavizar))
+        .expect("tool");
+    drag(&mut field);
+    assert_eq!(
+        calls.borrow().strokes.len(),
+        0,
+        "a field bake was segmented; it stacks a replacement per segment and \
+         the result crumbles"
+    );
+    field.dispatch(Command::EndStroke).expect("end");
+    assert_eq!(
+        calls.borrow().strokes.len(),
+        1,
+        "the field bake did not arrive when the gesture closed"
+    );
 }

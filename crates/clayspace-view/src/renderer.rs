@@ -341,6 +341,18 @@ pub enum SymmetryAxis {
 pub struct Renderer {
     pipeline: wgpu::RenderPipeline,
     overlay_pipeline: wgpu::RenderPipeline,
+    /// The mesh layers' own edges, drawn over them.
+    wire_pipeline: wgpu::RenderPipeline,
+    /// Those edges, as a line list over `mesh_layers`' own vertices.
+    ///
+    /// An index buffer rather than a mesh: the positions are the ones already
+    /// uploaded, and duplicating them to draw lines over them would cost a
+    /// second copy of every vertex for no new information.
+    wire_indices: wgpu::Buffer,
+    wire_index_count: u32,
+    wire_capacity: usize,
+    /// Whether to draw them.
+    polyframe: bool,
     /// Depth in, occlusion out.
     ao_pipeline: wgpu::RenderPipeline,
     /// Occlusion in, multiplied onto the resolved colour.
@@ -514,6 +526,27 @@ impl Renderer {
             false,
         );
 
+        // The polyframe. The overlay's vertex stage — it is the same vertex
+        // buffer, read the same way — with a fragment that draws ink rather
+        // than the vertex colour, and a depth bias so the lines sit in front
+        // of the very triangles they outline instead of fighting them.
+        let wire_pipeline = make_line_pipeline(
+            gpu,
+            &layout,
+            &shader,
+            format,
+            "overlay_vs",
+            "wire_fs",
+            wgpu::DepthBiasState {
+                // Toward the camera. Depth is reversed nowhere here, so a
+                // negative constant is nearer; the slope term is what keeps a
+                // steeply-angled triangle's edge from sinking into it.
+                constant: -2,
+                slope_scale: -1.0,
+                clamp: 0.0,
+            },
+        );
+
         // The occlusion pass and the composite that multiplies it on. Their
         // own module: they bind a depth texture and a uniform of their own, so
         // they share no layout with the scene.
@@ -614,6 +647,11 @@ impl Renderer {
         Self {
             pipeline,
             overlay_pipeline,
+            wire_pipeline,
+            wire_indices: empty_buffer(gpu, "polyframe", wgpu::BufferUsages::INDEX),
+            wire_index_count: 0,
+            wire_capacity: 0,
+            polyframe: false,
             membrane_pipeline,
             ao_pipeline,
             composite_pipeline,
@@ -732,6 +770,59 @@ impl Renderer {
     /// route it took to get here that differs.
     pub fn set_mesh_layers(&mut self, gpu: &Gpu, vertices: &[Vertex], indices: &[u32]) {
         self.mesh_layers.upload(gpu, vertices, indices);
+        self.upload_edges(gpu, indices);
+    }
+
+    /// Whether the mesh layers are drawn with their own edges over them.
+    ///
+    /// ZBrush calls it the polyframe, and it answers the one question a
+    /// wireframe is for: how much geometry is actually there. A sculptor
+    /// deciding whether a mesh wants retopology is reading its density, and a
+    /// shaded surface hides exactly that.
+    pub fn set_polyframe(&mut self, on: bool) {
+        self.polyframe = on;
+    }
+
+    /// The unique edges of a triangle list, as a line list.
+    ///
+    /// Deduplicated, and not only to halve the buffer: the lines are drawn
+    /// translucent, so an edge shared by two triangles and emitted twice is
+    /// blended twice and comes out darker than a boundary edge. A wireframe
+    /// where the interior reads heavier than the silhouette is backwards.
+    fn upload_edges(&mut self, gpu: &Gpu, indices: &[u32]) {
+        let mut seen = std::collections::HashSet::with_capacity(indices.len());
+        let mut edges: Vec<u32> = Vec::with_capacity(indices.len());
+        for triangle in indices.chunks_exact(3) {
+            for (a, b) in [
+                (triangle[0], triangle[1]),
+                (triangle[1], triangle[2]),
+                (triangle[2], triangle[0]),
+            ] {
+                // Ordered, so the same edge reached from either of its two
+                // triangles is the same key.
+                let key = if a < b { (a, b) } else { (b, a) };
+                if seen.insert(key) {
+                    edges.push(key.0);
+                    edges.push(key.1);
+                }
+            }
+        }
+
+        self.wire_index_count = edges.len() as u32;
+        if edges.is_empty() {
+            return;
+        }
+        if edges.len() > self.wire_capacity {
+            self.wire_indices = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("polyframe"),
+                size: (edges.len() * 4) as u64,
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.wire_capacity = edges.len();
+        }
+        gpu.queue
+            .write_buffer(&self.wire_indices, 0, bytemuck::cast_slice(&edges));
     }
 
     /// Rebuilds the overlay geometry for the current settings.
@@ -855,6 +946,14 @@ impl Renderer {
                     wgpu::IndexFormat::Uint32,
                 );
                 pass.draw_indexed(0..self.mesh_layers.index_count, 0, 0..1);
+
+                // And its edges over it, when the polyframe is on. The same
+                // vertex buffer, read as a line list through its own indices.
+                if self.polyframe && self.wire_index_count > 0 {
+                    pass.set_pipeline(&self.wire_pipeline);
+                    pass.set_index_buffer(self.wire_indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..self.wire_index_count, 0, 0..1);
+                }
             }
 
             // The brush cursor, over the surface it will act on.
@@ -1197,6 +1296,65 @@ fn make_pipeline(
                 depth_compare: wgpu::CompareFunction::LessEqual,
                 stencil: Default::default(),
                 bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: samples,
+                ..Default::default()
+            },
+            multiview: None,
+            cache: None,
+        })
+}
+
+/// A line pipeline with a depth bias, for geometry drawn *over* a surface.
+///
+/// Apart from `make_pipeline` only for the bias: a wireframe shares its
+/// vertices with the triangles it outlines, so without one every line lands on
+/// exactly the same depth as the surface and the two flicker against each
+/// other pixel by pixel.
+fn make_line_pipeline(
+    gpu: &Gpu,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    format: wgpu::TextureFormat,
+    vs: &str,
+    fs: &str,
+    bias: wgpu::DepthBiasState,
+) -> wgpu::RenderPipeline {
+    let samples = gpu.sample_count(format);
+    gpu.device
+        .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(fs),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some(vs),
+                buffers: &[Vertex::layout()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some(fs),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: Framebuffer::DEPTH_FORMAT,
+                // Read but not written: the lines are ink over the surface,
+                // and writing their depth would let them occlude each other.
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: Default::default(),
+                bias,
             }),
             multisample: wgpu::MultisampleState {
                 count: samples,

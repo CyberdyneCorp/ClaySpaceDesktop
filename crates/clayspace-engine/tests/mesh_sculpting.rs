@@ -171,23 +171,38 @@ fn the_pointer_finds_an_imported_mesh() {
     let Some((mut document, path)) = with_imported_mesh("pick") else {
         return;
     };
-    // The sculptor is built by the first stroke, and the pick is answered from
-    // its tree — so a pick before any stroke finds nothing, deliberately: a
+    // Before any stroke, which is the order that matters. This used to assert
+    // the opposite — the sculptor was built by the first stroke, so a pick
+    // before one found nothing, and that was written down as deliberate: a
     // pick happens every frame the pointer moves and may not pay for an
     // adjacency pass.
-    assert!(
-        document.pick([0.0, 0.0, 4.0], [0.0, 0.0, -1.0]).is_none(),
-        "a pick built the sculptor, which costs an adjacency pass per frame"
+    //
+    // It was a deadlock. The interface places a stroke where the pick reported
+    // and sends nothing where it reported nothing, so the first stroke could
+    // never arrive and a mesh layer was unsculptable through the pointer. The
+    // adjacency pass is paid once, when the layer becomes active — a discrete
+    // thing the sculptor did, not something a moving pointer repeats.
+    let hit = document.pick([0.0, 0.0, 4.0], [0.0, 0.0, -1.0]).expect(
+        "selecting a mesh layer does not make it pointable, so the first \
+             stroke can never be placed on it",
     );
-
-    dab(&mut document, ToolKind::Padrao, [0.0, 0.0, 1.0]).expect("a stroke");
-
-    let hit = document
-        .pick([0.0, 0.0, 4.0], [0.0, 0.0, -1.0])
-        .expect("a ray down the axis has to meet a sphere at the origin");
     assert!(
         hit[2] > 0.0,
         "the ray came from +z and hit at {hit:?}, which is behind the surface"
+    );
+
+    // A ray that meets nothing still meets nothing: a pick that answered
+    // everywhere would put the brush on empty space.
+    assert!(
+        document.pick([4.0, 4.0, 4.0], [0.0, 0.0, -1.0]).is_none(),
+        "a ray nowhere near the mesh reported a hit"
+    );
+
+    // And it still answers after a stroke, which is what it always did.
+    dab(&mut document, ToolKind::Padrao, [0.0, 0.0, 1.0]).expect("a stroke");
+    assert!(
+        document.pick([0.0, 0.0, 4.0], [0.0, 0.0, -1.0]).is_some(),
+        "the pick stopped answering once the mesh had been sculpted"
     );
     let _ = std::fs::remove_file(&path);
 }
@@ -322,9 +337,15 @@ fn the_mesh_reports_what_its_queries_cost() {
     let Some((mut document, path)) = with_imported_mesh("quality") else {
         return;
     };
+    // Reported from the moment the layer is the one being worked on. This used
+    // to assert there was no figure until the first stroke, because the
+    // sculptor the figure comes from was built by that stroke — the same
+    // deadlock `the_pointer_finds_an_imported_mesh` records, seen from the
+    // readout's side. A sculptor deciding whether a mesh needs retopology
+    // wants the number before they start, not after.
     assert!(
-        document.mesh_quality().is_none(),
-        "there is no sculptor before the first stroke, so there is no figure"
+        document.mesh_quality().is_some(),
+        "a selected mesh layer reports no quality figure at all"
     );
 
     dab(&mut document, ToolKind::Padrao, [0.0, 0.0, 1.0]).expect("a stroke");
@@ -438,4 +459,173 @@ mod operations {
         );
         let _ = std::fs::remove_file(&path);
     }
+}
+
+/// The brush's size and intensity reach a mesh stroke.
+///
+/// They did not. The engine states that `clay_mesh_sculptor_apply_stroke`
+/// **ignores the descriptor's radius and strength** and takes each stamp's
+/// from the preset — and the mesh path built its own preset carrying only
+/// spacing, so every mesh stroke ran at the engine's default radius of 0.25
+/// whatever the brush said. Measured before the fix: sizes 0.1, 0.5 and 1.0
+/// each moved exactly the same 944 vertices.
+///
+/// The same line had spacing inverted against every other path. The design
+/// reads flow as "more flow, stamps closer together" and the SDF path spells
+/// that `1.0 - flow`; the mesh path passed it straight through, so more flow
+/// spread the stamps further apart. On a dragging verb that decides whether a
+/// second stamp is emitted at all, and a stroke of one stamp has no motion to
+/// drag by — which is why Move looked broken rather than merely coarse.
+#[test]
+fn the_brush_size_reaches_a_mesh_stroke() {
+    let Some((mut small, small_path)) = with_imported_mesh("size-small") else {
+        return;
+    };
+    let Some((mut large, large_path)) = with_imported_mesh("size-large") else {
+        return;
+    };
+
+    let reached = |document: &mut ClayDocument, size: f32| -> usize {
+        let before = document.visible_mesh_geometry().0;
+        document
+            .apply_stroke(
+                ToolKind::Inflar,
+                BrushSettings {
+                    size,
+                    intensity: 1.0,
+                    ..BrushSettings::default()
+                },
+                &[GestureSample {
+                    position: [0.0, 0.0, 1.0],
+                    pressure: 1.0,
+                    time: 0.0,
+                }],
+                [false; 3],
+            )
+            .expect("the stroke was refused");
+        let after = document.visible_mesh_geometry().0;
+        before.iter().zip(&after).filter(|(a, b)| a != b).count()
+    };
+
+    let few = reached(&mut small, 0.1);
+    let many = reached(&mut large, 0.6);
+    assert!(few > 0, "the small brush moved nothing at all");
+    assert!(
+        many > few * 3,
+        "a brush six times the size reached {many} vertices against {few}. \
+         The size is not reaching the stroke, so Tamanho is inert on a mesh \
+         layer"
+    );
+
+    let _ = std::fs::remove_file(&small_path);
+    let _ = std::fs::remove_file(&large_path);
+}
+
+/// Smoothing takes a ridge down, rather than politely declining to.
+///
+/// Reported as "Suavizar does nothing", and it did almost nothing: a ridge
+/// standing 0.0676 proud of a unit sphere came down 0.0006 — under one percent
+/// of it — after four passes over it.
+///
+/// Two causes. A mesh stroke is clamped so it cannot build on itself, which is
+/// what stops the verbs that displace along a per-vertex normal from shredding
+/// the surface; a smoothing verb *converges* instead, so clamping one means a
+/// sculptor can never smooth more than a single stamp's worth however long
+/// they rub. And the engine's SMOOTH averages a vertex with its one-ring, a
+/// high-frequency filter that takes out tessellation noise and barely touches
+/// a bump spanning many edges — so it has to be run many times per stamp, and
+/// the engine's own default is far below that.
+///
+/// Measured on the same ridge, four passes over it:
+///
+///   passes per stamp   clamped   accumulating
+///    1                  1.0670      1.0654
+///    8                  1.0646      1.0552
+///   64                  1.0520      1.0187
+#[test]
+fn smoothing_a_mesh_takes_a_ridge_down() {
+    let Some(policy) = BackendPolicy::discover(None).ok() else {
+        return;
+    };
+    let Ok(mut document) = ClayDocument::new(policy).and_then(ClayDocument::with_starting_form)
+    else {
+        return;
+    };
+    document
+        .convert_layer(clayspace_model::Direction::SdfToMesh, 0.02, 0)
+        .expect("into a mesh");
+
+    let sweep = |document: &ClayDocument| -> Vec<GestureSample> {
+        (0..=20)
+            .filter_map(|step| {
+                let t = step as f32 / 20.0;
+                SculptModel::pick(document, [-0.4 + t * 0.8, 0.0, 4.0], [0.0, 0.0, -1.0]).map(
+                    |hit| GestureSample {
+                        position: hit,
+                        pressure: 1.0,
+                        time: t,
+                    },
+                )
+            })
+            .collect()
+    };
+    // How proud the tallest point stands. The sphere started at 1.0, so this
+    // is the ridge's own height — roughness would measure the tessellation
+    // rather than the form, which is why the first attempt at this saw
+    // nothing.
+    let prominence = |document: &mut ClayDocument| -> f32 {
+        document
+            .visible_mesh_geometry()
+            .0
+            .iter()
+            .map(|v| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt())
+            .fold(0.0f32, f32::max)
+    };
+
+    for sample in sweep(&document) {
+        document
+            .apply_stroke(
+                ToolKind::Padrao,
+                BrushSettings {
+                    size: 0.18,
+                    intensity: 0.65,
+                    ..BrushSettings::default()
+                },
+                &[sample],
+                [false; 3],
+            )
+            .expect("the ridge was refused");
+    }
+    let ridge = prominence(&mut document);
+    assert!(
+        ridge > 1.02,
+        "the ridge only stands {ridge} proud of the sphere, so there is \
+         nothing here to smooth"
+    );
+
+    for _ in 0..4 {
+        let samples = sweep(&document);
+        document
+            .apply_stroke(
+                ToolKind::Suavizar,
+                BrushSettings {
+                    size: 0.25,
+                    intensity: 0.65,
+                    ..BrushSettings::default()
+                },
+                &samples,
+                [false; 3],
+            )
+            .expect("Suavizar was refused");
+    }
+    let smoothed = prominence(&mut document);
+
+    // Most of the way back to the sphere it was cut into.
+    let taken = (ridge - smoothed) / (ridge - 1.0);
+    assert!(
+        taken > 0.5,
+        "four passes took {:.0}% of the ridge ({ridge} to {smoothed}); \
+         rubbing at a surface has to melt it",
+        taken * 100.0
+    );
 }

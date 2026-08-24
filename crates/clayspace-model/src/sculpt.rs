@@ -223,6 +223,18 @@ pub trait SculptModel {
     fn stats(&self) -> SceneStats;
 
     /// The document's bounds, for framing.
+    /// A gesture is open; what follows previews it rather than banking it.
+    ///
+    /// A dragging verb on a mesh is laid down again from its anchor on every
+    /// segment, so the model has to know a gesture is in progress in order to
+    /// take back what the last segment did. Provided, because only the mesh
+    /// path has anything to do with it.
+    fn begin_gesture(&mut self) {}
+
+    /// It is over: what was previewed becomes an edit, and one undo takes the
+    /// whole gesture back however many segments drew it.
+    fn end_gesture(&mut self) {}
+
     fn bounds(&self) -> Option<([f32; 3], [f32; 3])>;
 }
 

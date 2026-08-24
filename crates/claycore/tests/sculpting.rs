@@ -650,6 +650,7 @@ mod mesh_sculpting {
                     ..MeshStamp::default()
                 },
                 None,
+                None,
             )
             .expect("stamp");
         assert!(moved > 0, "the stamp reached nothing to move");
@@ -705,6 +706,7 @@ mod mesh_sculpting {
                         direction: [0.0, 0.02, 0.0],
                         ..MeshStamp::default()
                     },
+                    None,
                     None,
                 )
                 .unwrap_or_else(|e| panic!("{verb:?} was refused: {e}"));

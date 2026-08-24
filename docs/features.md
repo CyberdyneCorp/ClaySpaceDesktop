@@ -84,17 +84,152 @@ belong to one operation and undo together.
 
 ## Sculpting a mesh layer
 
-Sixteen fixed-topology verbs reach an imported mesh layer's own vertices, and
+A mesh layer comes from an import or from a **crossing** — see *Crossing
+between representations*, where SDF and voxel layers both reach one. Either way
+it is the same kind of thing from here on: the verbs reach both, the quality
+readout measures both, and a save writes both.
+
+**A drag pulls; it does not slide.** The interface picks the surface under the
+pointer for a stamping verb, because that is where the stamp belongs. A
+*dragging* verb takes hold once and then follows the pointer, carrying what it
+took hold of along the plane it was picked on — which is what lets a drag leave
+the form and pull a lobe out of it.
+
+Picking every sample instead put every position *on* the surface, so the motion
+between two of them was a walk along it: the skin stretched and folded and
+nothing was carried anywhere, and a drag that crossed the silhouette stopped
+sending samples at all. Against Blender's Grab, matched sphere and the same
+1.737 drag at strength 0.65:
+
+| delivery | furthest vertex moved | reached out to |
+|---|---|---|
+| picked every sample | 0.649 | 1.000 |
+| carried | 1.128 | 1.617 |
+| Blender | 1.129 | 1.508 |
+
+Picked, the surface never leaves the unit sphere it started as.
+
+Mover is applied as **one stamp at the anchor** rather than as a resolved
+stroke, for the same reason: a stroke walks the brush centre along the path, so
+a drag that leaves the surface takes the centre with it and the later stamps
+reach no material. A single stamp reads the descriptor's own radius, strength
+and direction — which a stroke ignores — so the region is the one under the
+anchor and the displacement is the gesture's. Puxar and Nudge stay on the
+stroke path deliberately: one re-anchors on every stamp so its region walks
+with the pull, the other pushes along the surface.
+
+**Every segment of a drag replays it from the anchor.** Mover and Puxar anchor
+on the first stamp and carry that region by the motion that follows, so a
+segment holding only the newest samples is a *second* grab anchoring where the
+first stopped — on screen, a crumpled crease along the path where the form
+should have been pulled. Measured against Blender's Grab over MCP, matched
+sphere and the same drag:
+
+| delivery | reached | moved the surface by |
+|---|---|---|
+| the gesture from its anchor | 9.8% | 0.707 |
+| Blender | 11.4% | 0.779 |
+| two independent segments | 19.0% | 0.569 |
+
+Two anchors sharing one drag reach nearly twice as far and move less.
+
+So the segments stay — they are what makes the drag visible while it happens —
+and each replays the whole gesture instead. A replayed segment fires on **every
+pointer move**, and a stamping one on a mesh every **one** stamp, where on a
+field it waits for three: a
+field segment costs a re-mesh of every brick it touched; a mesh one re-meshes
+nothing, because the layer's own triangles are what the viewport reads. At the
+default flow and a brush of 0.858 the field threshold is 1.03 world units —
+most of the way across a unit sphere.
+
+The bake-and-replace verbs are held whole on a field and **not** on a mesh:
+Suavizar, Relaxar, Planar and Polir sample a region into a volume there and
+segmenting that stacks a replacement per segment until the result crumbles,
+while on a mesh they are ordinary stamps over the vertices in reach. Held whole
+on a mesh, Suavizar arrived only when the pointer came up — which was half of
+why it read as doing nothing.
+
+It costs about 17 ms a move on a 140,774-vertex mesh, nearly all of it the
+stamp itself rather than the buffer it fills (1.2 ms). Dropping the surface
+walk would take it to 12.8, and is not taken: with the single-stamp path the
+walk is what makes Move topological, and `mesh_move.rs` fails without it. The model takes back what the last
+segment did before laying the gesture down again, which is what keeps one drag
+to one undo: only the release banks anything, and a cancelled gesture takes its
+preview with it.
+
+**The pointer finds it from the moment it becomes active.** A pick against a
+mesh layer is answered by the mesh sculptor's own raycast, and the sculptor was
+built by the first stroke — but the interface places a stroke where the pick
+reported and sends nothing where it reported nothing, so the first stroke could
+never arrive. A mesh layer was unsculptable through the pointer, imported or
+converted, and a press orbited the camera instead. The sculptor is built when
+the layer is selected: a discrete action, where the adjacency pass it costs is
+worth paying, rather than something a moving pointer repeats.
+
+Sixteen fixed-topology verbs reach a mesh layer's own vertices, and
 all sixteen hold one line above everything else: **topology never changes.** No
 polygon is created, split or deleted, so `indices` and quads come out byte for
 byte and a model that has just been retopologized can be refined without
 spending the retopology.
+
+**The falloff is measured along the surface, not through the air** — ZBrush's
+*Move Topological*, and on a mesh it is the only kind there is. The engine's
+brush descriptor carries a `geodesic` flag ("a brush on the upper lip must not
+drag the chin through a closed mouth") and defaults it on; this application
+sets it for every verb except Planar and Raspar, which mean "everything under
+this disc" and whose surface walk would refuse to flatten across a groove.
+`mesh_move.rs` measures it on a horseshoe whose tips are 0.71 apart through the
+air and 2.36 apart around the arc: a brush reaching 1.0 drags one tip and
+leaves the other where it was.
+
+(`clay_item_volume_move_topological` is a different call and is not this one —
+it takes an item carrying a volume and is refused on anything else, so it
+belongs to the SDF side.)
+
+**A mesh stroke never builds on itself — unless it is *converging*.** The field
+and the grid are unaffected and Acumular means what it means there. Not a
+preference: the verbs that displace along a *per-vertex* normal read the
+normals the previous stamp just moved, so building up feeds a stamp's output
+back into its own next input. A smoothing verb has the opposite character — it
+averages toward the neighbourhood, so running it again moves less each time and
+converges — and clamping one means a sculptor can never smooth more than a
+single stamp's worth however long they rub. Suavizar, Relaxar and Polir are
+exempt for that reason.
+
+**Smoothing runs sixty-four Laplacian passes a stamp.** The engine's SMOOTH
+averages a vertex with its *one-ring*, a high-frequency filter that takes out
+tessellation noise and barely touches a bump spanning many edges. Measured on a
+ridge standing 0.0676 proud of a unit sphere, four passes over it: at the
+engine's own default the ridge came down by under one percent of its height; at
+sixty-four it comes down by nearly three quarters. The passes are cheap next to
+finding the region — 5.4 ms against 4.0 for a 0.18 brush on 140,774 vertices. Measured against Blender's brushes over MCP — matched sphere,
+same brush radius in world units, same strength, same stroke — as the mean
+angle between adjacent vertex normals before and after:
+
+| verb | accumulating | clamped | Blender |
+|---|---|---|---|
+| Inflar | 5.04x | 1.18x | 1.00x |
+| Pinçar | 9.41x | 1.83x | 1.00x |
+| Vinco | 3.71x | 1.34x | 1.00x |
+| Padrão | 1.11x | 1.08x | 1.00x |
+
+Padrão is the control and barely moves either way: it uses the *region's*
+averaged normal, so there is nothing to feed back.
 
 Twelve of them are tools that already existed — a smooth is a smooth whichever
 representation it lands on — and four are new: Argila, Vinco, Pintar and
 Borrar. The two colour verbs refuse a mesh carrying no colour attribute rather
 than creating one, because twelve bytes a vertex is a real cost to hide behind
 a stroke.
+
+**Malha aparente** (Visualizar, or Shift+F) draws the mesh's own edges over
+it — ZBrush's polyframe. It answers the one question a shaded surface hides:
+how much geometry is actually there. That is the question a crossing into a
+mesh hands you, since what comes out is the sampling lattice's topology and
+the density is the whole of what decides whether it wants retopology. The edges
+are deduplicated before they are drawn: they are translucent, and an edge
+emitted once per triangle would be blended twice, making the interior read
+heavier than the silhouette.
 
 **Taper, twist and a lattice cage** reach a mesh layer too, as operations on
 the form rather than brushes: no centre, no radius, no falloff. There is
@@ -170,21 +305,60 @@ can the pointer find it.
 
 ClayCore carries SDF, voxel and mesh side by side, and the intended workflow
 uses more than one: **block out and hard-surface on SDF, free-form sculpt on
-voxels, refine on a mesh when the topology is one you want to keep.** Four
-crossings are offered from **Arquivo → Converter**, each from the active layer:
+voxels, refine on a mesh when the topology is one you want to keep.** Every
+representation reaches both of the others, so **six** crossings are offered from
+**Arquivo → Converter**, each from the active layer:
 
 | From | To | What it does |
 |---|---|---|
 | SDF | voxel | Rasterizes the field into cells over the layer's bounds |
+| SDF | mesh | Marches the field into triangles — watertight and 2-manifold by construction |
 | voxel | SDF | Reads occupancy back, redistanced, as an ordinary operand — one volume item per palette entry, which is what carries the colour |
+| voxel | mesh | The grid's exposed faces as merged quads, with the palette colour on the face |
 | mesh | voxel | Straight from the triangles in one sampling, so a feature thinner than a cell survives where a field detour loses it, and the vertex colours reach the palette |
 | mesh | SDF | Resamples the triangles onto a lattice as a volume item |
+
+The two that end in a mesh are what makes **block out, then sculpt it as a
+mesh** a route through the application rather than a description of one. Until
+they existed the sixteen mesh brushes could only be reached by importing a file.
+
+The engine meshes a *document*, not a layer — `clay_document_mesh` takes no
+layer id and there is no layer-scoped mesher — so the SDF crossing hides the
+other SDF layers across the call and puts them back. That is exact rather than
+approximate: a hidden layer contributes nothing to the field and showing it
+again restores the field exactly, and it is measured. Voxel and mesh layers are
+left alone, because neither carries SDF content and neither reaches that mesher.
 
 **The panel states what the crossing costs before it runs**, computed from the
 cell size rather than written down, so the figures move as you move the slider:
 how far the surface can travel (half a cell), what thickness of feature
 vanishes (one cell), how many cells the region holds, and whether sharp edges,
-colour and the parametric history survive.
+colour and the parametric history survive. A crossing into a mesh states one
+more: **the topology is the sampling lattice's and nothing here re-flows it.**
+What comes out is dense and uniform, with no edge loop following anything — it
+sculpts, and it is the input a retopology pass replaces rather than the output
+one produces.
+
+**A layer the viewport has to draw changes the number it watches.** The
+carried layers — meshes and grids — are uploaded only when `mesh_revision`
+changes, and adding a mesh layer moves no vertex and touches no grid. So a
+crossing into a mesh left the number where it was and the layer was never
+uploaded: what stayed on screen was the *field* the source layer still
+contributed, and removing that source left an empty viewport with the mesh's
+62,576 vertices sitting unuploaded. The first stroke moved a vertex, changed
+the number the old way, and the mesh appeared. Which layers are carried, and
+whether each is shown, are part of the number now.
+
+**A removed layer stops being drawn.** The brick cache holds the evaluated
+field brick by brick, and removing a layer used to take it out of the document
+while leaving every brick it had contributed to exactly as it was — so the
+surface went on being drawn and went on answering a raycast. It looked like the
+form you started from sitting under the sculpt and never changing, with the
+real result appearing only after a save and a reopen, which builds the cache
+from nothing. Measured: a removed sphere still meshed to the same 298,680
+triangles through an incremental sync and a full rebuild alike, against 17,160
+once its region is re-evaluated. Hiding a layer was always right; both are held
+by `a_removed_layer_stops_being_drawn`.
 
 **A crossing produces a new layer and leaves the source alone**, and it is
 **not undoable** — the panel says so. A conversion produces no engine undo
