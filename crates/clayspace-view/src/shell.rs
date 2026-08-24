@@ -21,6 +21,7 @@ use clayspace_vm::{Axis, Command, CommandQueue};
 use crate::design::{size, space, type_scale, Tokens};
 use crate::icons::{self, Icon};
 use crate::shortcuts::{Action, Shortcuts};
+use crate::strings::Locale;
 use crate::strings::Strings;
 
 /// Everything a frame of interface needs to read.
@@ -443,6 +444,27 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                     queue.push(Command::TogglePolyframe);
                     ui.close_menu();
                 }
+                ui.separator();
+                // Three complete translations shipped from the beginning and
+                // there was no way to choose between them: the locale was
+                // taken from `Locale::default()` at startup and never asked
+                // about again, so `Locale::from_tag` — written for exactly
+                // this — was called by nothing.
+                //
+                // Each language is named in *itself*, which is the one rule a
+                // language menu has: a reader who cannot read the current
+                // interface can still find their own.
+                ui.menu_button(s.menu_language, |ui| {
+                    for locale in Locale::ALL {
+                        if ui
+                            .selectable_label(state.strings.locale == locale, locale.label())
+                            .clicked()
+                        {
+                            queue.push(Command::SetLocale(locale));
+                            ui.close_menu();
+                        }
+                    }
+                });
             });
             ui.menu_button(s.menu_sculpt, |ui| {
                 if ui.button(s.action_armature_new).clicked() {

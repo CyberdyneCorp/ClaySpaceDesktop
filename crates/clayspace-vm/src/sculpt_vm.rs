@@ -431,6 +431,7 @@ impl SculptViewModel {
             Command::FrameAll
             | Command::NextMaterial
             | Command::NextDisplayUnit
+            | Command::SetLocale(_)
             | Command::ToggleAttribution
             | Command::ToggleDiagnostics
             | Command::CopyDiagnostics => {}

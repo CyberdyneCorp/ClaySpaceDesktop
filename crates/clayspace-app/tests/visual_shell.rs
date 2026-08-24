@@ -1513,3 +1513,98 @@ fn the_cage_is_raised_from_the_menu_and_worked_in_the_panel() {
         },
     );
 }
+
+// -- the language menu -------------------------------------------------------
+
+/// Where the Vista menu sits, and where its Idioma entry falls once open.
+/// The Portuguese layout's, because that is the one whose coordinates the
+/// other menu tests here already use — the entry is the same entry in every
+/// language.
+const VIEW_MENU: egui::Pos2 = egui::Pos2::new(131.0, 13.0);
+const LANGUAGE_ENTRY: egui::Vec2 = egui::Vec2::new(5.0, 196.0);
+
+#[test]
+fn the_language_can_be_chosen_from_the_menu() {
+    // Three complete translations shipped from the beginning with no way to
+    // choose between them: the locale came from `Locale::default()` at startup
+    // and was never asked about again, so `Locale::from_tag` — written for
+    // exactly this — was called by nothing.
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let state = state(strings, &scene, &materials, &report);
+
+    capture_shell_after(
+        &harness,
+        &state,
+        "107-language-menu",
+        &[left_click(VIEW_MENU)],
+        |queue| {
+            assert!(
+                queue.is_empty(),
+                "opening the View menu emitted {:?} without a choice",
+                queue.commands()
+            );
+        },
+    );
+
+    // The entry is there, and its submenu carries the three languages, each
+    // named in itself — the one rule a language menu has, because a reader who
+    // cannot read the current interface still has to find their own.
+    let opened = capture_shell_after(
+        &harness,
+        &state,
+        "108-language-open",
+        &[
+            left_click(VIEW_MENU),
+            left_click(VIEW_MENU + LANGUAGE_ENTRY),
+            // A frame with no input, so the submenu is measured as well as
+            // placed.
+            Vec::new(),
+        ],
+        |_| {},
+    );
+    let closed = capture_shell(&harness, &state, "109-language-closed");
+    assert!(
+        differing_pixels(&opened, &closed) > 2000,
+        "the Idioma entry opened nothing. See target/visual/108-language-open.png"
+    );
+
+    // A note for whoever reads that capture: the accented letters in
+    // `Português` and `Español` are blank in it. They are not missing from the
+    // font — the Spanish shell's own `Tamaño` renders its `ñ` in
+    // `the_shell_renders_in_every_locale` — but they appear nowhere else in
+    // the interface, so they are glyphs the atlas first meets on the frame
+    // this submenu opens, and this helper applies the atlas deltas of the
+    // first passes only. A window renders continuously and catches up.
+}
+
+#[test]
+fn the_interface_opens_in_english() {
+    // Not the design's own language, and deliberately: the interface has to
+    // open in something a first-time user can read.
+    assert_eq!(Locale::default(), Locale::EnUs);
+    assert_eq!(
+        Strings::for_locale(Locale::default()).menu_file,
+        Strings::for_locale(Locale::EnUs).menu_file
+    );
+}
+
+#[test]
+fn every_table_knows_which_language_it_is() {
+    // Carried with the words, so the menu's tick and the words on screen
+    // cannot disagree about what the interface is in.
+    for locale in Locale::ALL {
+        assert_eq!(
+            Strings::for_locale(locale).locale,
+            locale,
+            "the {} table reports itself as {:?}",
+            locale.tag(),
+            Strings::for_locale(locale).locale
+        );
+    }
+}

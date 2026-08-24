@@ -741,6 +741,34 @@ sits inside a torso — and picking the far one makes a chest impossible to grab
   full surface is drawn instead, and an edit returns to it. See
   [Known-degraded](#known-degraded) for what the coarse surface looks like.
 
+## Language
+
+**Vista → Idioma** (View → Language) chooses between three complete
+translations: **Português (Brasil)**, **English (US)** and **Español
+(Latinoamérica)**. Each is named in itself, which is the one rule a language
+menu has — a reader who cannot read the current interface can still find their
+own. The choice is written to the session directory, so it survives a restart.
+
+The interface **opens in English**. That is not the design's own language and
+it is deliberate: it has to open in something a first-time reader can make
+sense of. A system language still wins over that default on a first run —
+`LC_ALL`, `LC_MESSAGES` or `LANG`, matched by language rather than region, so
+`pt_PT`, `en_GB` and `es_ES` each find their translation. A choice already made
+wins over both.
+
+All three translations shipped from the beginning **with no way to choose
+between them**: the locale came from `Locale::default()` at startup and was
+never asked about again, so `Locale::from_tag` — written for exactly this — was
+called by nothing.
+
+**Not yet translated**: the *vocabulary* the domain names — tool names, combine
+operations, view presets, mask operations, gizmo modes, extrude sides, falloff
+curves and the rest. Those are **82 labels across 15 enums**, returned as
+Portuguese `&'static str` from `clayspace-model` rather than through the string
+tables, so an English interface still shows `Padrão`, `Inflar`, `Relevo` and
+`Perspectiva`. Switching language translates the chrome and not the shelf. See
+*Not built yet*.
+
 ## Interface
 
 The regions from the design: a menu bar, a tool options bar, a left region with
@@ -888,6 +916,13 @@ changes it, because that is where a person looks for it.
 
 Panels cannot be resized or collapsed and shortcuts are fixed. See
 [roadmap.md](roadmap.md).
+
+**The domain's vocabulary, in more than one language.** The language setting
+translates the interface's own strings, which live in one table per locale. The
+names the domain gives things — 82 labels across 15 enums, from `ToolKind` and
+`Combine` to `MaskOp` and `GizmoMode` — are Portuguese literals returned from
+`clayspace-model`, so the brush shelf and the option bar stay Portuguese
+whatever the menu says. Routing them through the tables is the work.
 
 **A manipulator outside the cage.** The move/turn/scale widget acts on a
 lattice selection and on nothing else. Transforming a whole layer with it —

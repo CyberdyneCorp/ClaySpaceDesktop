@@ -21,6 +21,7 @@ pub mod exchange;
 pub mod gizmo;
 pub mod instrument;
 pub mod lattice;
+pub mod locale;
 pub mod mask;
 pub mod scene;
 pub mod sculpt;
@@ -45,6 +46,7 @@ pub use instrument::{FrameLog, Stall, FRAME};
 pub use lattice::{
     can_be_caged, clamp_divisions, division_limit, LatticeModel, LatticeState, MIN_DIVISIONS,
 };
+pub use locale::Locale;
 pub use mask::{can_extrude, ExtrudeSettings, ExtrudeSide, MaskModel, MaskOp, MaskState};
 pub use scene::{
     LayerCost, LayerKey, LayerSummary, Protection, Scene, SceneModel, SceneNode, SculptLayer,

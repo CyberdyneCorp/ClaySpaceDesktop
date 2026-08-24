@@ -76,6 +76,24 @@ fn report(policy: &BackendPolicy) {
 /// understanding that attribution travels with the distribution.
 const ATTRIBUTION: &str = include_str!("../../../ATTRIBUTION.md");
 
+/// The language the machine is set to, as a tag.
+///
+/// Read from the environment rather than through a crate: these are the
+/// variables every desktop Unix sets and the ones a container inherits, and a
+/// dependency to read three environment variables would be a dependency to
+/// audit, license and keep. An empty answer is fine — `Locale::from_tag` gives
+/// the default for anything it does not recognise.
+fn system_language() -> String {
+    for name in ["LC_ALL", "LC_MESSAGES", "LANG"] {
+        if let Ok(value) = std::env::var(name) {
+            if !value.is_empty() && value != "C" && value != "POSIX" {
+                return value;
+            }
+        }
+    }
+    String::new()
+}
+
 /// What the pointer is doing.
 fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [
@@ -287,6 +305,14 @@ impl App {
             None => (RecentDocuments::default(), Recovery::Nothing),
         };
 
+        // What the interface opens in. A choice already made wins; failing
+        // that the system's own language, which `Locale::from_tag` was written
+        // for and which nothing had ever called; failing that English.
+        let locale = store
+            .as_ref()
+            .and_then(SessionStore::load_locale)
+            .unwrap_or_else(|| Locale::from_tag(&system_language()));
+
         Self {
             document,
             sculpt,
@@ -338,7 +364,7 @@ impl App {
             drag_anchor: None,
             rig_plane: None,
             rig_depth_at_press: 0,
-            strings: Strings::for_locale(Locale::default()),
+            strings: Strings::for_locale(locale),
         }
     }
 
@@ -2300,6 +2326,17 @@ impl App {
                 self.request_redraw();
             }
             Command::RunExport => self.export_mesh(),
+            Command::SetLocale(locale) => {
+                // Presentation only, like the display unit: nothing in the
+                // document is touched, so this neither marks it modified nor
+                // enters the history. Written down straight away, because a
+                // language chosen and lost on quit is worse than none.
+                self.strings = Strings::for_locale(locale);
+                if let Some(store) = &self.store {
+                    store.save_locale(locale);
+                }
+                self.request_redraw();
+            }
             Command::NextDisplayUnit => {
                 // Presentation only. Nothing in the document is touched, so
                 // this neither marks it modified nor enters the history.

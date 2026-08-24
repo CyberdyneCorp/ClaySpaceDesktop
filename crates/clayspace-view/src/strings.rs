@@ -6,50 +6,7 @@
 //! it because a tool sold beyond one market needs the fallback path to have
 //! been exercised rather than assumed.
 
-/// Which language the interface is presented in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Locale {
-    /// Brazilian Portuguese — the design's own language.
-    #[default]
-    PtBr,
-    EnUs,
-    /// Latin American Spanish rather than Castilian: the design is Brazilian,
-    /// so the market next door is the one this reaches first, and its
-    /// vocabulary is the one those artists already use.
-    Es419,
-}
-
-impl Locale {
-    pub const ALL: [Locale; 3] = [Self::PtBr, Self::EnUs, Self::Es419];
-
-    /// Picks a locale from a system tag, falling back to the default.
-    ///
-    /// A tag with no translation gets the default rather than untranslated
-    /// keys, which is the difference between an interface in the wrong
-    /// language and one that is broken.
-    pub fn from_tag(tag: &str) -> Self {
-        let tag = tag.to_ascii_lowercase();
-        if tag.starts_with("pt") {
-            Self::PtBr
-        } else if tag.starts_with("en") {
-            Self::EnUs
-        } else if tag.starts_with("es") {
-            // Every Spanish tag, Castilian included: a Madrid interface in
-            // Latin American Spanish is read; one in Portuguese is not.
-            Self::Es419
-        } else {
-            Self::default()
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::PtBr => "Português (Brasil)",
-            Self::EnUs => "English (US)",
-            Self::Es419 => "Español (Latinoamérica)",
-        }
-    }
-}
+pub use clayspace_model::Locale;
 
 /// Everything the interface says.
 ///
@@ -57,10 +14,16 @@ impl Locale {
 /// error rather than a placeholder that ships.
 #[derive(Debug, Clone, Copy)]
 pub struct Strings {
+    /// Which language this table is. Carried with the words rather than beside
+    /// them, so the language menu's tick and the words on screen cannot
+    /// disagree about what the interface is in.
+    pub locale: Locale,
     // Menus
     pub menu_file: &'static str,
     pub menu_edit: &'static str,
     pub menu_view: &'static str,
+    /// The language submenu.
+    pub menu_language: &'static str,
     pub menu_sculpt: &'static str,
     pub menu_brushes: &'static str,
     pub menu_dynamics: &'static str,
@@ -240,9 +203,11 @@ pub struct Strings {
 
 /// The Portuguese strings, which the design specifies.
 const PT_BR: Strings = Strings {
+    locale: Locale::PtBr,
     menu_file: "Arquivo",
     menu_edit: "Editar",
     menu_view: "Vista",
+    menu_language: "Idioma",
     menu_sculpt: "Escultura",
     menu_brushes: "Pincéis",
     menu_dynamics: "Dinâmica",
@@ -386,9 +351,11 @@ const PT_BR: Strings = Strings {
 
 /// The English strings.
 const EN_US: Strings = Strings {
+    locale: Locale::EnUs,
     menu_file: "File",
     menu_edit: "Edit",
     menu_view: "View",
+    menu_language: "Language",
     menu_sculpt: "Sculpt",
     menu_brushes: "Brushes",
     menu_dynamics: "Dynamics",
@@ -531,9 +498,11 @@ const EN_US: Strings = Strings {
 
 /// The Latin American Spanish strings.
 const ES_419: Strings = Strings {
+    locale: Locale::Es419,
     menu_file: "Archivo",
     menu_edit: "Editar",
     menu_view: "Vista",
+    menu_language: "Idioma",
     menu_sculpt: "Escultura",
     menu_brushes: "Pinceles",
     menu_dynamics: "Dinámica",
@@ -692,11 +661,12 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 114] {
+    pub fn all(&self) -> [&'static str; 115] {
         [
             self.menu_file,
             self.menu_edit,
             self.menu_view,
+            self.menu_language,
             self.menu_sculpt,
             self.menu_brushes,
             self.menu_dynamics,
