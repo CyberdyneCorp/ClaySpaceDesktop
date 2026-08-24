@@ -1182,6 +1182,73 @@ impl ClayDocument {
             .flatten()
     }
 
+    /// Points the layer's mirror at the axes the sculptor asked for.
+    ///
+    /// Written only when it changes, so an unchanged setting costs no history
+    /// entry. The engine makes a whole stroke one step by itself, so no group
+    /// is needed around it.
+    ///
+    /// Called for *every* SDF stroke rather than only the item-adding ones.
+    /// The tools that bake — relax, flatten, the surface drag — used to bypass
+    /// this, so the mirror kept whatever it was last set to: the starting form
+    /// turns X on, and a snakehook with symmetry switched **off** still came
+    /// out on both sides because nothing had told the layer otherwise.
+    fn point_the_mirror(&mut self, symmetry: [bool; 3]) -> Result<(), ModelError> {
+        if self.symmetry == symmetry {
+            return Ok(());
+        }
+        let layer = self.active_layer().id;
+        self.document
+            .set_layer_mirror(layer, symmetry, 0.0)
+            .map_err(ModelError::engine)?;
+        self.symmetry = symmetry;
+        Ok(())
+    }
+
+    /// A stroke whose verb rewrites the field rather than adding an item.
+    ///
+    /// The layer mirror reflects a layer's *items*, so it cannot reach these:
+    /// measured, a relax with the mirror on changed the surface under the
+    /// stroke from 1.1467 to 1.1409 and left its reflection at 1.1467
+    /// exactly. They are mirrored the way a mesh stroke is — the stroke
+    /// itself is reflected and run again — which is also the only mechanism
+    /// available on the other two representations.
+    fn baked_stroke(
+        &mut self,
+        tool: ToolKind,
+        brush: BrushSettings,
+        samples: &[GestureSample],
+        symmetry: [bool; 3],
+    ) -> Result<EditOutcome, ModelError> {
+        // The mirror is still pointed where the sculptor asked, because these
+        // verbs share a layer with the ones it does reach.
+        self.point_the_mirror(symmetry)?;
+        let mut outcome = EditOutcome::NOTHING;
+        for mirror in mirrors(symmetry) {
+            let reflected: Vec<GestureSample> = samples
+                .iter()
+                .map(|sample| GestureSample {
+                    position: mirror.point(sample.position),
+                    ..*sample
+                })
+                .collect();
+            let one = match tool {
+                // Drags the assembled surface: the gesture is a displacement,
+                // not a series of stamps.
+                ToolKind::Mover => self.move_surface_stroke(brush, &reflected)?,
+                // Bake-and-relax over the region the stroke covered.
+                ToolKind::Suavizar | ToolKind::Relaxar => self.relax_stroke(brush, &reflected)?,
+                // Bake-and-flatten, cut-only.
+                _ => self.flatten_stroke(brush, &reflected)?,
+            };
+            outcome = EditOutcome {
+                changed: outcome.changed || one.changed,
+                dirty_bricks: outcome.dirty_bricks + one.dirty_bricks,
+            };
+        }
+        Ok(outcome)
+    }
+
     /// Applies a stroke to an SDF layer.
     fn stroke_sdf(
         &mut self,
@@ -1190,6 +1257,7 @@ impl ClayDocument {
         samples: &[GestureSample],
         symmetry: [bool; 3],
     ) -> Result<EditOutcome, ModelError> {
+        self.point_the_mirror(symmetry)?;
         let layer = self.active_layer().id;
         let preset = self.preset(brush, tool);
         let stroke: Vec<claycore::StrokeSample> = samples
@@ -1270,16 +1338,6 @@ impl ClayDocument {
         // a template scaled per stamp — the deformer chain does not travel
         // with it. Measured, and recorded in
         // `claycore/tests/alpha_deformer.rs`.
-
-        // The mirror is written only when it changes, so an unchanged setting
-        // costs no history entry. The engine makes a whole stroke one step by
-        // itself, so no group is needed around it.
-        if self.symmetry != symmetry {
-            self.document
-                .set_layer_mirror(layer, symmetry, 0.0)
-                .map_err(ModelError::engine)?;
-            self.symmetry = symmetry;
-        }
 
         let mask = self.mask.as_deref();
 
@@ -1656,7 +1714,17 @@ impl ClayDocument {
                     // the shape with a half-space, and a ball comes back a box.
                     region_radius: reach + brush.size,
                     falloff: brush.size * 0.5,
-                    mode: claycore::FlattenMode::CutOnly,
+                    // Cut-only is what a planing tool wants: it must not fill
+                    // the dents it is meant to reveal. Held, the invert key
+                    // asks for the other half of that — fill the hollows and
+                    // leave the high ground — which is the one thing "negative
+                    // planing" can mean and the one the engine already has a
+                    // mode for.
+                    mode: if brush.invert {
+                        claycore::FlattenMode::FillOnly
+                    } else {
+                        claycore::FlattenMode::CutOnly
+                    },
                     mask: self.mask.as_deref(),
                 },
                 Self::bake_volume(cell),
@@ -2791,15 +2859,21 @@ impl SculptModel for ClayDocument {
 
         match self.active_representation() {
             Representation::Sdf => match tool {
-                // Drags the assembled surface: the gesture is a displacement,
-                // not a series of stamps.
-                ToolKind::Mover => self.move_surface_stroke(brush, samples),
-                // Pulls a lobe out along the path.
-                ToolKind::Puxar => self.snakehook_stroke(brush, samples),
-                // Bake-and-relax over the region the stroke covered.
-                ToolKind::Suavizar | ToolKind::Relaxar => self.relax_stroke(brush, samples),
-                // Bake-and-flatten, cut-only.
-                ToolKind::Planar | ToolKind::Polir => self.flatten_stroke(brush, samples),
+                // The verbs that rewrite the field rather than adding an item.
+                // The layer mirror cannot reach those, so their strokes are
+                // reflected instead — see `baked_stroke`.
+                ToolKind::Mover
+                | ToolKind::Suavizar
+                | ToolKind::Relaxar
+                | ToolKind::Planar
+                | ToolKind::Polir => self.baked_stroke(tool, brush, samples, symmetry),
+                // Pulls a lobe out along the path, as items — so the layer
+                // mirror does reach it, and pointing the mirror is the whole
+                // of what symmetry means here.
+                ToolKind::Puxar => {
+                    self.point_the_mirror(symmetry)?;
+                    self.snakehook_stroke(brush, samples)
+                }
                 _ => self.stroke_sdf(tool, brush, samples, symmetry),
             },
             Representation::Voxel => self.stroke_voxel(tool, brush, samples, symmetry),

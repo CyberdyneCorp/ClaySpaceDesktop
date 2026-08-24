@@ -830,3 +830,66 @@ is a change of its own.
 `BlendProfile`, `ViewPresetKind`, `MaskOp`, `GizmoMode`, `ExtrudeSide`,
 `Falloff` — leaving the option bar and the viewport bar Portuguese.
 `Strings::tool` is the shape the rest should follow.
+
+## 20. Every SDF brush: it works, it takes a sign, it mirrors
+
+- [x] 20.1 Symmetry, which was broken both ways
+  - Reported as "Smooth has no symmetry on SDF". True, and it was **six**
+    brushes rather than one: the surface drag, both relaxes, both planes and
+    the snakehook all bypassed `stroke_sdf` and so were never handed the axes.
+  - Symmetry on a field is the layer mirror, which reflects a layer's *items*.
+    Five of the six **rewrite the field** instead, and the mirror cannot reach
+    those even when it is on — measured, a relax with X mirrored took the
+    surface under the stroke from 1.1467 to 1.1409 and left its reflection at
+    1.1467 exactly. Their strokes are reflected instead, reusing the `mirrors`
+    helper the mesh and voxel paths already use.
+  - The sixth, the snakehook, adds items, so the mirror does reach it. Its
+    fault pointed the other way and would have gone on being invisible: never
+    *setting* the mirror, it inherited whatever was last asked for, and the
+    starting form turns X on. A snakehook with symmetry switched **off** came
+    out on both sides at 1.4625. `point_the_mirror` is called for every SDF
+    stroke now, and a test asserts the far side is untouched with symmetry off.
+
+- [x] 20.2 The sign, where a brush has one
+  - Depositing already inverted. **Planing did not, and could**: cut-only is
+    what a planing tool wants — it must not fill the dents it is meant to
+    reveal — and `FlattenMode::FillOnly` is the other half, in the engine all
+    along and never asked for. Measured on a sphere with a bump and a dent
+    beside it: upright takes the bump from 1.1150 to 1.1145 and leaves the
+    hollow at 0.8923; held, it fills the hollow to 0.9004 and leaves the bump
+    exactly where it was.
+  - The rest have no opposite, and that is now stated rather than left as an
+    absence: an inverted smooth is not a thing either reference offers, and a
+    drag's direction already *is* its sign. A test asserts the key changes
+    nothing for those, so a brush that quietly gained an opposite would be
+    caught.
+
+- [x] 20.3 Look at each of them
+  - `visual_sdf_symmetry.rs` draws all nine surface brushes mirrored, head-on
+    so the mirror plane is the middle column, and compares each picture with
+    its own reflection.
+  - Two corrections to the instrument, both worth keeping:
+    - Comparing **colour** scores a perfectly mirrored dab at 0.58, because a
+      MatCap shades by the view-space normal and is not itself left-right
+      symmetric. The **silhouette** is what two halves of a symmetric form
+      share; by that measure all nine sit at 0.004.
+    - A bump facing the camera does not change the outline at all, and the bake
+      verbs move a bare sphere by about 0.006. The stroke runs along the limb
+      and the subject is roughened first, which is also the only case in which
+      a sculptor reaches for a relax.
+  - The control — that a brush asked for no symmetry stays on one side — is
+    kept to the two whose work a silhouette can resolve. One-sidedness in a
+    0.006 bake is measured rather than looked at; `sdf_brushes.rs` holds all
+    nine with a raycast.
+
+- [x] 20.4 A regression the existing tests caught
+  - `visual_bake_tools` went from 5.4 to 6.0 roughness. Verified against main
+    before assuming anything, and it was mine.
+  - Its fixture roughened by calling the engine directly with symmetry **off**
+    and then sculpted through a ViewModel whose default is X **on**. The bake
+    tools used to ignore that; now they honour it, so the bake turned the layer
+    mirror on under itself and added a reflected copy of the roughening on top
+    of the original. No sculptor's session changes its mirror halfway.
+  - The fixture is unmirrored throughout now, on both sides of the seam, which
+    is what the recorded roughness ceiling was calibrated on. Symmetry is
+    measured in `sdf_brushes.rs`, which is where it belongs.
