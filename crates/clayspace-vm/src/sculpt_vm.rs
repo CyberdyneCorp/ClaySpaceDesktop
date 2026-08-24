@@ -40,6 +40,12 @@ struct ActiveStroke {
 /// What the last completed operation did, for the status area.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LastAction {
+    /// The tool that made it, where one did.
+    ///
+    /// Carried beside the label rather than instead of it, because the View is
+    /// the only layer with a language: it names the tool from its own table
+    /// and falls back to the label for the actions no tool made.
+    pub tool: Option<ToolKind>,
     pub label: String,
     /// False when the engine reported the edit changed nothing.
     pub changed: bool,
@@ -681,7 +687,7 @@ impl SculptViewModel {
         }
         self.pending_entries = recorded;
 
-        self.record(tool.label(), outcome?);
+        self.record(tool, outcome?);
         Ok(())
     }
 
@@ -761,9 +767,12 @@ impl SculptViewModel {
         });
     }
 
-    fn record(&mut self, label: &str, outcome: EditOutcome) {
+    fn record(&mut self, tool: ToolKind, outcome: EditOutcome) {
         self.last_action.set(LastAction {
-            label: label.to_string(),
+            tool: Some(tool),
+            // Kept as well: the log and the diagnostics read it, and neither
+            // has a language to name a tool in.
+            label: tool.label().to_string(),
             changed: outcome.changed,
         });
 
@@ -792,6 +801,7 @@ impl SculptViewModel {
     fn undo_action(&mut self) -> Result<(), ModelError> {
         let Some(entries) = self.undo_stack.pop() else {
             self.last_action.set(LastAction {
+                tool: None,
                 label: "undo".to_string(),
                 changed: false,
             });
@@ -815,6 +825,7 @@ impl SculptViewModel {
     fn redo_action(&mut self) -> Result<(), ModelError> {
         let Some(entries) = self.redo_stack.pop() else {
             self.last_action.set(LastAction {
+                tool: None,
                 label: "redo".to_string(),
                 changed: false,
             });
@@ -836,6 +847,7 @@ impl SculptViewModel {
 
     fn after_history_change(&mut self, label: &str, moved: bool) {
         self.last_action.set(LastAction {
+            tool: None,
             label: label.to_string(),
             changed: moved,
         });

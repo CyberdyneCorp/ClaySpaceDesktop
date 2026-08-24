@@ -799,3 +799,34 @@ Portuguese literals returned from `clayspace-model` rather than looked up in
 the string tables. Switching language translates the chrome and leaves the
 brush shelf and the option bar in Portuguese. Routing them through the tables
 is a change of its own.
+
+- [x] 19.3 Translate the brush names
+  - Checked as reported and true: the shelf drew `ToolKind::label()` — the
+    domain's own Portuguese — on SDF, voxel and mesh alike, whatever the
+    interface language was. So did the status bar's last action. All twenty.
+  - `Strings::tool` looks them up per locale from a fixed-length array in
+    `ToolKind::ALL`'s order, so a tool added without a name for it is a compile
+    error. Here rather than on `ToolKind` because a name is a *word* and the
+    domain has no language; `ToolKind::label` keeps its Portuguese for history
+    entries, engine refusals and the diagnostics report.
+  - `LastAction` carries the `ToolKind` beside the label rather than instead of
+    it: the View names the tool from its own table, and the label stays for the
+    actions no tool made and for the log.
+  - **A false friend, written down because it reads as correct to anyone
+    checking one language at a time**: Portuguese `Borrar` is *smear* and
+    Spanish `Borrar` is *erase*. Carried straight across, the Spanish shelf
+    would name the smudge brush "erase" and leave the erase brush with the
+    smudge's name — two brushes, both wrong. They swap: `Apagar` → `Borrar`,
+    `Borrar` → `Difuminar`. A test holds it.
+  - Tests: every brush has a distinct non-empty name in every language; the
+    names are translated rather than copied (at least fifteen of twenty differ
+    between Portuguese and English, eight between Portuguese and Spanish); the
+    Portuguese table agrees with the domain, which is what makes
+    `ToolKind::label` safe to keep using off the interface; and the rendered
+    shelf differs between languages, measured on the shelf band alone so it is
+    about the brushes rather than the panels.
+
+**Still open**: 62 further label arms across 14 enums — `Combine`,
+`BlendProfile`, `ViewPresetKind`, `MaskOp`, `GizmoMode`, `ExtrudeSide`,
+`Falloff` — leaving the option bar and the viewport bar Portuguese.
+`Strings::tool` is the shape the rest should follow.
