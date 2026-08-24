@@ -386,10 +386,17 @@ impl SurfaceGeometry {
         self.last_engine_mesh = engine_started.elapsed();
 
         let read_started = std::time::Instant::now();
-        let (vertices, indices) = match &mesh {
+        let (mut vertices, indices) = match &mesh {
             Some(mesh) => read_mesh(mesh)?,
             None => (Vec::new(), Vec::new()),
         };
+        // The frozen region, on the vertices this re-mesh just produced.
+        //
+        // Only these, which is the dirty subset: a dab that re-meshes twenty
+        // bricks samples twenty bricks' worth rather than the whole surface.
+        // A mask that *changes* is the other direction and is
+        // `refresh_mask`'s job.
+        sample_mask(document, &mut vertices);
         self.last_read = read_started.elapsed();
         let split_started = std::time::Instant::now();
 
@@ -502,6 +509,7 @@ impl SurfaceGeometry {
                     position: [0.0; 3],
                     normal: [0.0, 1.0, 0.0],
                     color: [1.0; 3],
+                    mask: 0.0,
                 },
             );
             for (global, index) in local {
@@ -714,6 +722,31 @@ impl SurfaceGeometry {
         self.pending_shading.len()
     }
 
+    /// Re-samples the mask across the whole stored surface, and uploads it.
+    ///
+    /// The mask's own path, separate from `sync`, because painting one moves
+    /// no clay: it dirties no brick, so the incremental re-mesh has nothing to
+    /// re-mesh and would leave the frozen region undrawn. The caller watches
+    /// [`ClayDocument::mask_revision`] and calls this when it moves.
+    ///
+    /// The whole surface rather than a subset. A mask operation — invert,
+    /// expand, the bounded complement — can change any cell of it, and the
+    /// mask keeps no dirty set of its own to narrow it down.
+    pub fn refresh_mask(&mut self, gpu: &Gpu, document: &ClayDocument) {
+        for (key, geometry) in self.keys.iter_mut() {
+            if geometry.vertices.is_empty() {
+                continue;
+            }
+            sample_mask(document, &mut geometry.vertices);
+            self.touched.insert(*key);
+        }
+        if self.touched.is_empty() {
+            return;
+        }
+        self.dirty = true;
+        self.upload(gpu);
+    }
+
     /// Re-meshes the whole surface and compacts the per-key slots.
     ///
     /// No longer needed to close seams. Until ClayCore 0.28.0 a subset mesh
@@ -896,6 +929,29 @@ impl SurfaceGeometry {
     }
 }
 
+/// Writes each vertex's mask weight, when there is a mask to read.
+///
+/// Free-standing so both the incremental path and the whole-surface refresh
+/// spell it the same way, and so the "no mask" case costs one `Option` check
+/// rather than a pass over the vertices.
+fn sample_mask(document: &ClayDocument, vertices: &mut [Vertex]) {
+    let positions: Vec<[f32; 3]> = vertices.iter().map(|v| v.position).collect();
+    match document.mask_at(&positions) {
+        Some(weights) => {
+            for (vertex, weight) in vertices.iter_mut().zip(weights) {
+                vertex.mask = weight;
+            }
+        }
+        // Nothing frozen. Cleared rather than left, because a mask that was
+        // cleared has to stop being drawn.
+        None => {
+            for vertex in vertices.iter_mut() {
+                vertex.mask = 0.0;
+            }
+        }
+    }
+}
+
 /// Reads an engine mesh into the renderer's vertex layout in one pass.
 fn read_mesh(mesh: &Mesh) -> Result<(Vec<Vertex>, Vec<u32>), ClayError> {
     let count = mesh.vertex_count();
@@ -936,6 +992,7 @@ fn read_mesh(mesh: &Mesh) -> Result<(Vec<Vertex>, Vec<u32>), ClayError> {
             position: read(v, Vertex::POSITION_OFFSET),
             normal: read(v, Vertex::NORMAL_OFFSET),
             color: read(v, Vertex::COLOR_OFFSET),
+            mask: 0.0,
         })
         .collect();
 

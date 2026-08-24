@@ -4,6 +4,8 @@
 //! questions. A brush asks "what happens to the surface"; these ask "what
 //! happens to the region that is protected from brushes".
 
+#[cfg(test)]
+use clayspace_model::ExtrudeSide;
 use clayspace_model::{ExtrudeSettings, MaskModel, MaskOp, MaskState};
 
 use crate::command::Command;
@@ -15,6 +17,13 @@ pub struct MaskViewModel {
     state: Observable<MaskState>,
     /// What an extrusion would use, as the panel has it set.
     extrude: Observable<ExtrudeSettings>,
+    /// How far Expandir, Contrair and Suavizar máscara reach.
+    ///
+    /// One control for the three because they are one question — how much —
+    /// even though the engine measures the first two in cells and the third in
+    /// passes. The menu shows the number beside each so the unit is never in
+    /// doubt.
+    steps: Observable<i32>,
     /// The last refusal, for the status area.
     notice: Observable<Option<String>>,
 }
@@ -26,6 +35,7 @@ impl MaskViewModel {
             model,
             state: Observable::new(state),
             extrude: Observable::new(ExtrudeSettings::default()),
+            steps: Observable::new(1),
             notice: Observable::new(None),
         }
     }
@@ -36,6 +46,26 @@ impl MaskViewModel {
 
     pub fn extrude_settings(&self) -> &Observable<ExtrudeSettings> {
         &self.extrude
+    }
+
+    pub fn steps(&self) -> &Observable<i32> {
+        &self.steps
+    }
+
+    /// The operation with the panel's amount filled in.
+    ///
+    /// Asked here rather than in the View so a menu and a shortcut cannot come
+    /// to different answers about how far Expandir reaches.
+    pub fn sized(&self, op: MaskOp) -> MaskOp {
+        let steps = *self.steps.get();
+        match op {
+            MaskOp::Expand(_) => MaskOp::Expand(steps),
+            MaskOp::Contract(_) => MaskOp::Contract(steps),
+            MaskOp::Smooth(_) => MaskOp::Smooth(steps),
+            // Invert, the bounded complement and Clear have no amount: there
+            // is no "invert twice as much".
+            other => other,
+        }
     }
 
     pub fn notice(&self) -> &Observable<Option<String>> {
@@ -63,12 +93,22 @@ impl MaskViewModel {
 
     pub fn dispatch(&mut self, command: &Command) {
         match command {
+            Command::SetMaskSteps(steps) => {
+                self.steps.set_if_changed((*steps).clamp(1, 16));
+            }
+            Command::SetExtrudeSettings(settings) => {
+                self.extrude.set_if_changed(settings.sanitized());
+            }
             Command::ApplyMaskOp(op) => {
-                if !self.can_apply(*op) {
+                // The panel's amount filled in here rather than by the View,
+                // so a menu entry and a shortcut cannot come to different
+                // answers about how far Expandir reaches.
+                let op = self.sized(*op);
+                if !self.can_apply(op) {
                     self.notice.set(Some("não há máscara para editar".into()));
                     return;
                 }
-                match self.model.apply_mask_op(*op) {
+                match self.model.apply_mask_op(op) {
                     Ok(()) => {
                         self.notice.set_if_changed(None);
                     }
@@ -91,5 +131,140 @@ impl MaskViewModel {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use clayspace_model::ModelError;
+
+    #[derive(Default)]
+    struct Recorded {
+        ops: Vec<MaskOp>,
+        extrusions: Vec<ExtrudeSettings>,
+    }
+
+    struct FakeMask {
+        recorded: Rc<RefCell<Recorded>>,
+        cells: usize,
+    }
+
+    impl MaskModel for FakeMask {
+        fn mask_state(&self) -> MaskState {
+            MaskState {
+                present: self.cells > 0,
+                painted_cells: self.cells,
+            }
+        }
+
+        fn apply_mask_op(&mut self, op: MaskOp) -> Result<(), ModelError> {
+            self.recorded.borrow_mut().ops.push(op);
+            Ok(())
+        }
+
+        fn extrude_mask(&mut self, settings: ExtrudeSettings) -> Result<(), ModelError> {
+            self.recorded.borrow_mut().extrusions.push(settings);
+            Ok(())
+        }
+    }
+
+    fn fixture() -> (MaskViewModel, Rc<RefCell<Recorded>>) {
+        let recorded = Rc::new(RefCell::new(Recorded::default()));
+        let model = FakeMask {
+            recorded: recorded.clone(),
+            cells: 4096,
+        };
+        (MaskViewModel::new(Box::new(model)), recorded)
+    }
+
+    #[test]
+    fn the_panels_amount_reaches_the_operation() {
+        // The menu dispatched `Expand(1)` and nothing could change the 1, so
+        // expanding a mask by four cells meant clicking four times.
+        let (mut vm, recorded) = fixture();
+        vm.dispatch(&Command::SetMaskSteps(4));
+        for op in [MaskOp::Expand(1), MaskOp::Contract(1), MaskOp::Smooth(1)] {
+            vm.dispatch(&Command::ApplyMaskOp(op));
+        }
+        assert_eq!(
+            recorded.borrow().ops,
+            vec![MaskOp::Expand(4), MaskOp::Contract(4), MaskOp::Smooth(4)]
+        );
+    }
+
+    #[test]
+    fn an_operation_with_no_amount_is_passed_through() {
+        let (mut vm, recorded) = fixture();
+        vm.dispatch(&Command::SetMaskSteps(7));
+        for op in [MaskOp::Invert, MaskOp::InvertWithinBounds, MaskOp::Clear] {
+            vm.dispatch(&Command::ApplyMaskOp(op));
+        }
+        assert_eq!(
+            recorded.borrow().ops,
+            vec![MaskOp::Invert, MaskOp::InvertWithinBounds, MaskOp::Clear],
+            "an amount was invented for an operation that has none"
+        );
+    }
+
+    #[test]
+    fn the_amount_is_clamped_to_what_the_engine_accepts() {
+        let (mut vm, _) = fixture();
+        vm.dispatch(&Command::SetMaskSteps(0));
+        assert_eq!(*vm.steps().get(), 1, "zero steps is not an operation");
+        vm.dispatch(&Command::SetMaskSteps(-3));
+        assert_eq!(*vm.steps().get(), 1, "a negative expand is a contract");
+        vm.dispatch(&Command::SetMaskSteps(9999));
+        assert_eq!(*vm.steps().get(), 16);
+    }
+
+    #[test]
+    fn the_extrusion_settings_are_held_and_sanitized() {
+        // Every one of these but the side was unreachable: the ViewModel held
+        // an `ExtrudeSettings` that no command could write to, so an extrusion
+        // was always 0.08 thick with a hard rim.
+        let (mut vm, _) = fixture();
+        vm.dispatch(&Command::SetExtrudeSettings(ExtrudeSettings {
+            thickness: 0.25,
+            side: ExtrudeSide::Inward,
+            border_round: 0.04,
+            border_smooth: 6,
+        }));
+        let held = *vm.extrude_settings().get();
+        assert!((held.thickness - 0.25).abs() < 1e-6);
+        assert_eq!(held.side, ExtrudeSide::Inward);
+        assert_eq!(held.border_smooth, 6);
+
+        // And a thickness the engine refuses outright is clamped rather than
+        // becoming a refusal in the middle of a gesture.
+        vm.dispatch(&Command::SetExtrudeSettings(ExtrudeSettings {
+            thickness: 0.0,
+            ..held
+        }));
+        assert!(vm.extrude_settings().get().thickness > 0.0);
+    }
+
+    #[test]
+    fn an_operation_is_refused_when_there_is_no_mask_to_edit() {
+        let recorded = Rc::new(RefCell::new(Recorded::default()));
+        let model = FakeMask {
+            recorded: recorded.clone(),
+            cells: 0,
+        };
+        let mut vm = MaskViewModel::new(Box::new(model));
+        vm.dispatch(&Command::ApplyMaskOp(MaskOp::Invert));
+        assert!(
+            recorded.borrow().ops.is_empty(),
+            "it reached the model anyway"
+        );
+        assert!(vm.notice().get().is_some(), "the refusal said nothing");
+
+        // Clearing nothing is not a refusal: the entry is always there and
+        // pressing it should do the obvious nothing.
+        vm.dispatch(&Command::ApplyMaskOp(MaskOp::Clear));
+        assert_eq!(recorded.borrow().ops, vec![MaskOp::Clear]);
     }
 }

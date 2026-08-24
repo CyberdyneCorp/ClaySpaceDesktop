@@ -444,3 +444,95 @@ nominal radius, which is a units question rather than a defect found.
   - Whether the following samples come from a plane or from a fresh surface
     pick is decided by the *substituted* tool. Reading the shelf would carry a
     Shift-held smooth across a drag plane it never touches.
+
+## 15. Masking, on the key and on the screen
+
+- [x] 15.1 Put mask painting on `M`, as a toggle
+  - Blender's sculpt mode spells masking `M`, and it is the key a hand coming
+    from there reaches for. It held the material cycle; that moved to `Shift+M`
+    rather than the mask taking a modifier, because freezing a region is done
+    constantly while sculpting and changing the display material is done once.
+  - A toggle rather than a plain selection: freezing is a detour from what is
+    being sculpted, and the way back should be the same key rather than a hunt
+    across the shelf. Choosing a tool outright ends the detour, so the next `M`
+    starts a fresh one instead of rewinding past the choice. The toggle goes
+    through the same selection every other tool does, so Máscara keeps its own
+    remembered brush and hands the sculpting brush back unchanged.
+
+- [x] 15.2 Draw the frozen region
+  - It was invisible. The engine has had `clay_mask_sample` all along and the
+    viewport had no idea the mask existed — which is worse than no mask:
+    masking protects almost completely, so a sculptor who freezes a region and
+    finds a brush doing nothing cannot tell a protected surface from a broken
+    tool.
+  - A vertex attribute of its own rather than a darkened vertex colour. Colour
+    modulates the material and is gated on `material.tint.a` — which is zero
+    for a mesh carrying no vertex colours, meaning every SDF surface — so a
+    mask ridden in on it would have been discarded in the shader.
+  - It needs its own upload pass. A mask stroke moves no clay and dirties no
+    brick, deliberately, so the incremental re-mesh has nothing to re-mesh and
+    would leave what was just painted undrawn. `SurfaceGeometry::refresh_mask`
+    re-samples every stored vertex, driven by a `mask_revision` counter the way
+    the carried layers are driven by `mesh_revision`. An ordinary stroke must
+    *not* move that counter, or every dab would pay for a full re-sample; a
+    test holds that.
+  - A re-mesh replaces a brick's vertices outright, so newly meshed vertices
+    are sampled too — the dirty subset only, which is where the cost belongs.
+
+- [x] 15.3 Make the mask tool mean the same thing on all three
+  - Found by the visual test refusing to run. `apply_stroke` asked the
+    representation first, and two of the three arms got the mask wrong: on a
+    grid Máscara fell through to the depositing arm and **added clay** where
+    the sculptor asked to freeze a region (measured: 426 indices of new
+    material into an empty grid, and no mask afterwards), and on a mesh the
+    tool table gave it no verb at all though `stroke_mesh` had been passing the
+    mask to the engine the whole time.
+  - The mask arm is hoisted above the representation match now, because a mask
+    is not part of any representation: it is a world-addressed field the verbs
+    consult. Three tests that counted the mesh shelf against the engine's
+    sixteen fixed-topology brushes count Máscara apart rather than being
+    loosened, so a real seventeenth brush would still be caught.
+
+## 16. The Máscaras menu, entry by entry
+
+- [x] 16.1 Give the operations an amount the interface can set
+  - Three of the six took one and nothing could change it: the menu dispatched
+    `Expand(1)`, `Contract(1)` and `Smooth(1)`, so expanding a mask by four
+    cells meant clicking four times. An extrusion was worse — `ExtrudeSettings`
+    lived in the ViewModel and no command could write to it, so thickness,
+    rim rounding and rim smoothing were unreachable and every wall the
+    application could build was 0.08 thick with a hard edge.
+  - A **MÁSCARA** section of the inspector holds them, shown once a mask exists
+    — which is also when every operation but Limpar becomes usable. The menu
+    spells the amount out beside each entry, because the same entry now does a
+    different amount of work depending on the panel, and the two units it
+    stands for (cells and passes) are not the same quantity.
+  - The amount is filled in by the ViewModel rather than the View, so a menu
+    entry and a shortcut cannot come to different answers.
+
+- [x] 16.2 Measure what each entry actually does
+  - `masking.rs` called Inverter, Suavizar and the bounded complement and
+    asserted nothing whatever about them. Now, per entry:
+    - **Inverter** takes the middle of a patch from 0.992 to 0.008 and the clay
+      beside it from 0.000 to 1.000 — and reaches only where the mask has been
+      allocated, leaving the far side of the model free. Written down rather
+      than discovered: it is what makes the operation finite and why the
+      bounded complement is a separate entry.
+    - **Expandir** and **Contrair** move the cell count in opposite directions
+      and further at four than at one; three of each in sequence returns the
+      patch to within a tenth of where it started, which grey dilation followed
+      by erosion is not obliged to do exactly.
+    - **Suavizar máscara** brings the middle down (0.992 → 0.980 at one pass,
+      0.898 at eight) and spreads the boundary, and softens rather than erases.
+    - **Complemento delimitado** frees the middle and freezes the shoulder
+      while leaving the far side alone, which is the whole difference from
+      Inverter.
+    - **Extrudar** puts the patch in a layer of its own and leaves the mask
+      intact. On a unit sphere with a 0.2 wall: Para fora reaches 1.16, Para
+      dentro leaves the outside at 1.000, Centrado reaches 1.1015 — half the
+      thickness above the surface. Para fora is *not* base plus thickness, so
+      it is held to an ordering rather than to arithmetic it does not obey.
+  - Driven with real clicks at the shell as well: the Máscaras menu is opened,
+    Expandir is clicked, and the command that comes out has to carry the
+    panel's five. A menu entry that draws and is wired to nothing looks
+    identical, and so does a slider.

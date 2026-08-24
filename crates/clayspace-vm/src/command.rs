@@ -20,8 +20,18 @@ use clayspace_model::{
 pub enum Command {
     // -- tools ------------------------------------------------------------
     SelectTool(ToolKind),
+    /// Starts painting a mask, or stops and returns to the tool in hand.
+    ///
+    /// A toggle rather than a plain selection because that is what the key is
+    /// for: freeze a region, then carry on with the brush you were using
+    /// without having to find it on the shelf again.
+    ToggleMaskPainting,
     /// An operation on the mask itself, not through it.
     ApplyMaskOp(MaskOp),
+    /// How far Expandir, Contrair and Suavizar máscara reach.
+    SetMaskSteps(i32),
+    /// What an extrusion would use, as the panel has it set.
+    SetExtrudeSettings(ExtrudeSettings),
     /// Pulls the masked patch off as its own layer.
     ExtrudeMask(ExtrudeSettings),
     SetBrushSize(f32),
@@ -222,6 +232,11 @@ impl Command {
                 // Choosing how the *next* edit combines changes nothing yet;
                 // the stroke that follows is the entry.
                 | Self::SetCombine(_)
+                // The same for the mask panel: dialling how far Expandir
+                // reaches, or how thick an extrusion would be, is not the
+                // operation. Applying one is, and does mark the document.
+                | Self::SetMaskSteps(_)
+                | Self::SetExtrudeSettings(_)
                 // Opening, typing into and abandoning the rename field change
                 // nothing in the document. Committing does, and it takes the
                 // composition root's own path for the reason import does: the
@@ -267,7 +282,10 @@ impl Command {
     pub fn label(&self) -> &'static str {
         match self {
             Self::SelectTool(_) => "select tool",
+            Self::ToggleMaskPainting => "máscara",
             Self::ApplyMaskOp(op) => op.label(),
+            Self::SetMaskSteps(_) => "mask steps",
+            Self::SetExtrudeSettings(_) => "extrude settings",
             Self::ExtrudeMask(_) => "extrude mask",
             Self::SetBrushSize(_) => "brush size",
             Self::SetBrushIntensity(_) => "brush intensity",

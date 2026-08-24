@@ -86,6 +86,8 @@ pub struct ShellState<'a> {
     pub show_attribution: bool,
     /// What an extrusion would use.
     pub extrude: ExtrudeSettings,
+    /// How far Expandir, Contrair and Suavizar máscara reach.
+    pub mask_steps: i32,
     pub strings: &'a Strings,
     /// The bindings in force, so a menu item can show the chord that does the
     /// same thing. Borrowed rather than copied because remapping replaces the
@@ -482,22 +484,37 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
             });
             ui.menu_button(s.menu_dynamics, |_| {});
             ui.menu_button(s.menu_masks, |ui| {
+                // First, because it is what the rest of the menu operates on:
+                // there is nothing to invert or extrude until a region has
+                // been frozen, and the key that does it is spelled out here so
+                // it can be learned from the menu rather than from the manual.
+                if item(ui, state, s.action_paint_mask, Action::ToggleMaskPainting).clicked() {
+                    queue.push(Command::ToggleMaskPainting);
+                    ui.close_menu();
+                }
+                ui.separator();
                 // Disabled rather than hidden: a menu whose entries come and
                 // go is harder to learn than one whose entries are sometimes
                 // grey, and the grey says *why* the tool is unavailable.
+                let steps = state.mask_steps;
                 for op in [
                     MaskOp::Invert,
-                    MaskOp::Expand(1),
-                    MaskOp::Contract(1),
-                    MaskOp::Smooth(1),
+                    MaskOp::Expand(steps),
+                    MaskOp::Contract(steps),
+                    MaskOp::Smooth(steps),
                     MaskOp::InvertWithinBounds,
                     MaskOp::Clear,
                 ] {
                     let enabled = !op.needs_a_mask() || state.mask.is_active();
-                    if ui
-                        .add_enabled(enabled, egui::Button::new(op.label()))
-                        .clicked()
-                    {
+                    // The amount beside the name, because the same menu entry
+                    // now does a different amount of work depending on the
+                    // panel — and the two units it stands for, cells and
+                    // passes, are not the same quantity.
+                    let label = match op.amount() {
+                        Some(amount) => format!("{} · {amount}", op.label()),
+                        None => op.label().to_string(),
+                    };
+                    if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
                         queue.push(Command::ApplyMaskOp(op));
                         ui.close_menu();
                     }
@@ -1808,6 +1825,68 @@ pub fn export_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut Co
 }
 
 /// Material, geometry, resolution and brush controls.
+/// What the mask operations act with.
+///
+/// Here rather than in the menu because these are amounts, not actions: the
+/// menu had `Expandir` fixed at one cell and an extrusion fixed at every
+/// default it was born with, so three of the six operations took a number
+/// nobody could set and the extrusion took four.
+///
+/// Shown only once a mask exists, which is also when every operation but
+/// Limpar becomes usable.
+fn mask_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    heading(ui, s.section_mask);
+    readout(ui, s.label_mask_cells, thousands(state.mask.painted_cells));
+    if let Some(value) = slider(
+        ui,
+        s.label_mask_steps,
+        state.mask_steps as f32,
+        1.0..=16.0,
+        0,
+    ) {
+        queue.push(Command::SetMaskSteps(value.round() as i32));
+    }
+
+    // The extrusion's own four, of which only the side was ever reachable.
+    if let Some(value) = slider(
+        ui,
+        s.label_extrude_thickness,
+        state.extrude.thickness,
+        0.005..=0.5,
+        3,
+    ) {
+        queue.push(Command::SetExtrudeSettings(ExtrudeSettings {
+            thickness: value,
+            ..state.extrude
+        }));
+    }
+    if let Some(value) = slider(
+        ui,
+        s.label_extrude_round,
+        state.extrude.border_round,
+        0.0..=0.2,
+        3,
+    ) {
+        queue.push(Command::SetExtrudeSettings(ExtrudeSettings {
+            border_round: value,
+            ..state.extrude
+        }));
+    }
+    if let Some(value) = slider(
+        ui,
+        s.label_extrude_smooth,
+        state.extrude.border_smooth as f32,
+        0.0..=16.0,
+        0,
+    ) {
+        queue.push(Command::SetExtrudeSettings(ExtrudeSettings {
+            border_smooth: value.round() as i32,
+            ..state.extrude
+        }));
+    }
+}
+
 pub fn right_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
     let s = state.strings;
 
@@ -1879,6 +1958,10 @@ pub fn right_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
                 queue.push(Command::RemoveZsphere);
             }
         }
+    }
+
+    if state.mask.present {
+        mask_section(ui, state, queue);
     }
 
     heading(ui, s.section_brush_controls);

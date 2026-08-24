@@ -29,7 +29,7 @@ All fifteen are bound and each is covered by a before-and-after capture in
 | Planar | `clay_item_volume_flatten_from`, cut-only | SDF | Planes without filling, which keeps a facet crisp |
 | Preencher | `clay_voxel_sculpt_fill_cavities` | voxel | Fills narrow pockets |
 | Camada | `clay_layer_apply_stroke`, clamped | both | A stroke that does not build up on itself |
-| Máscara | `clay_mask_apply_stroke` | both | Freezes a region against every verb. Invert, clear, expand, contract, smooth, bounded complement and extrude are in the Máscaras menu |
+| Máscara | `clay_mask_apply_stroke` | all three | Freezes a region against every verb. Invert, clear, expand, contract, smooth, bounded complement and extrude are in the Máscaras menu |
 | Puxar | swept-sphere chain | SDF | Pulls a tendril out, tapering to its tip |
 | Polir | `clay_item_volume_flatten_from`, cut-only | SDF | hPolish |
 | Relaxar | `clay_item_volume_relax` | SDF | Relax as a brush |
@@ -81,6 +81,67 @@ producing an error you cannot act on.
 
 Symmetry about X, Y and Z is applied through the layer's mirror, so both halves
 belong to one operation and undo together.
+
+## Masking
+
+**M** starts painting a mask and **M** again puts the tool you were using back
+in your hand — the key Blender's sculpt mode uses, and a toggle because
+freezing a region is a detour from what is being sculpted rather than a mode to
+live in. Choosing a tool from the shelf ends the detour, so a later **M** starts
+a fresh one rather than rewinding past the choice. The material cycle, which
+held `M`, is **Shift+M**.
+
+The frozen region is **drawn**: masked clay reads as a dark neutral over the
+shading, at roughly three quarters strength so the form underneath stays
+legible. This is the same as Blender and it is not decoration — masking
+protects the surface almost completely (measured, 1.0005 against 1.1400 for the
+same stroke unmasked), so a sculptor who cannot see the mask cannot tell a
+protected surface from a broken tool.
+
+A mask belongs to **no representation**. It is a world-addressed field the verbs
+consult, so it is painted the same way and honoured the same way on a field, a
+grid and a mesh. That was not true before: on a grid the tool fell through to
+the depositing arm and *added clay* where the sculptor asked to freeze a region,
+and on a mesh it was refused outright even though a mesh stroke had been handing
+the mask to the engine all along. `masking.rs` holds both.
+
+### What the Máscaras menu does
+
+Every entry acts on the mask itself rather than through it. The amounts live in
+the **MÁSCARA** section of the inspector, which appears once a mask exists; the
+menu spells out what it would apply, because the same entry now does a
+different amount of work depending on the panel.
+
+| Entry | What it does | Amount |
+|---|---|---|
+| Inverter | Frees what was frozen and freezes what was free | — |
+| Expandir | Grows the frozen region, in cells | Passos |
+| Contrair | Shrinks it | Passos |
+| Suavizar máscara | Softens the region toward its neighbourhood | Passos |
+| Complemento delimitado | Inverts *inside the region the mask already covers* | — |
+| Limpar | Unfreezes everything | — |
+| Extrudar | Pulls the frozen patch off as a wall in its own layer | Espessura, Arredondar, Suavizar borda, and the side |
+
+**Inverter reaches only where the mask has been.** A mask is a sparse field and
+inverting fills the blocks it has *allocated*, not the universe — the far side
+of the model stays free. That is what makes the operation finite, and it is why
+**Complemento delimitado** is a separate entry: bounded by what the mask
+already covers, it is the "everything except this, here" a sculptor usually
+means.
+
+**Extrudar reads the mask rather than consuming it**, so an extrusion you do
+not like can be thrown away without painting the mask again, and the patch
+arrives as its own layer rather than as an edit to the one it came from.
+Measured on a unit sphere with a 0.2 wall: **Para fora** takes the surface to
+1.16, **Para dentro** leaves the outside at 1.000 and builds inward, and
+**Centrado** reaches 1.1015 — half the thickness above the surface, which is
+what half each way means.
+
+Three of these took an amount the interface could not set: `Expandir`,
+`Contrair` and `Suavizar máscara` were dispatched with a hard-coded 1, and an
+extrusion with every default it was born with, so its thickness, rounding and
+edge smoothing were unreachable and every wall the application could build was
+0.08 thick. `mask_operations.rs` measures each entry and each amount.
 
 ### Held keys
 

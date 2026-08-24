@@ -71,6 +71,7 @@ fn viewport_geometry(document: &mut ClayDocument) -> (Vec<Vertex>, Vec<u32>) {
             position,
             normal,
             color,
+            mask: 0.0,
         })
         .collect();
     (vertices, indices)

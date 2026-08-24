@@ -153,6 +153,7 @@ fn triangle() -> (Vec<clayspace_view::Vertex>, Vec<u32>) {
         position,
         normal: [0.0, 0.0, 1.0],
         color: [1.0, 1.0, 1.0],
+        mask: 0.0,
     };
     (
         vec![

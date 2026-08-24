@@ -709,12 +709,19 @@ mod scene {
 
         doc.set_active_layer(key).expect("activate");
         let offered = ToolKind::for_representation(Representation::Mesh);
+        // Sixteen fixed-topology brushes plus Máscara, which is not one of
+        // them: a mask is a world-addressed field the verbs consult rather
+        // than a way of moving triangles, and it is offered on all three
+        // representations for that reason.
+        let brushes = offered.iter().filter(|t| !t.is_mask_tool()).count();
         assert_eq!(
-            offered.len(),
-            16,
-            "the shelf offers {} tools on a mesh layer against the engine's \
-             sixteen fixed-topology brushes",
-            offered.len()
+            brushes, 16,
+            "the shelf offers {brushes} mesh brushes against the engine's \
+             sixteen fixed-topology ones"
+        );
+        assert!(
+            offered.iter().any(|t| t.is_mask_tool()),
+            "a mesh layer cannot be masked from the shelf"
         );
         // Offered for the representation, and disabled on *this* row: it was
         // recorded by `add_mesh_layer` and its triangles have not arrived, so
@@ -734,9 +741,13 @@ mod scene {
                 tool.label()
             );
         }
-        // A mask stroke, a cavity fill and a shape drawn on the frame are not
-        // vertex verbs, so they are absent rather than disabled.
-        for tool in [ToolKind::Mascara, ToolKind::Preencher, ToolKind::Trim] {
+        // A cavity fill and a shape drawn on the frame are not vertex verbs,
+        // so they are absent rather than disabled. Máscara is not one either
+        // and is still offered, because what it writes is not vertices: it
+        // paints the world-addressed field the vertex verbs consult, and a
+        // mesh that could be protected by a mask but not used to paint one
+        // was a gap rather than a principle.
+        for tool in [ToolKind::Preencher, ToolKind::Trim] {
             assert!(
                 !offered.contains(&tool),
                 "{} was offered on a mesh layer",

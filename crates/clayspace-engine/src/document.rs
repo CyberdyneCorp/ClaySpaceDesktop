@@ -207,6 +207,14 @@ pub struct ClayDocument {
     surface_brick_count: usize,
     /// A mask the tools consult, when one has been painted.
     mask: Option<Mask>,
+    /// Changes whenever the mask does.
+    ///
+    /// A mask stroke moves no clay and dirties no brick, which is right — it
+    /// is state the *next* stroke reads — but it does change what the viewport
+    /// should be drawing, and the surface's own revision cannot say so. The
+    /// counter is what lets the frozen region be shown without re-sampling
+    /// every vertex on every frame.
+    mask_revision: u64,
     /// The sculptor for the mesh layer being sculpted, and which layer it is.
     ///
     /// One at a time rather than one per layer: the adjacency is the expensive
@@ -351,6 +359,7 @@ impl ClayDocument {
             mesh_undo: Vec::new(),
             mesh_redo: Vec::new(),
             mask: None,
+            mask_revision: 0,
             symmetry,
             next_key: 2,
             selected: None,
@@ -1545,7 +1554,12 @@ impl ClayDocument {
         };
 
         // Nothing in the surface moved, and nothing needs re-meshing: a mask
-        // is state the *next* stroke reads.
+        // is state the *next* stroke reads. The viewport still has to be told,
+        // because it draws the frozen region — and a surface that has not
+        // moved reports no dirty brick, so the mask carries its own counter.
+        if painted > 0 {
+            self.mask_revision = self.mask_revision.wrapping_add(1);
+        }
         Ok(EditOutcome {
             changed: painted > 0,
             dirty_bricks: 0,
@@ -2298,6 +2312,29 @@ impl ClayDocument {
     /// dozen sites that can touch a grid. A site that forgot to bump would
     /// leave the viewport showing the sculpt as it was before the edit, which
     /// is exactly the failure this number exists to prevent.
+    /// Changes whenever the mask does.
+    ///
+    /// The counterpart to [`Self::mesh_revision`] for the one piece of state
+    /// that is drawn but is not geometry. A mask stroke moves no clay and
+    /// dirties no brick, so nothing the surface reports would tell the
+    /// viewport to look again.
+    pub fn mask_revision(&self) -> u64 {
+        self.mask_revision
+    }
+
+    /// How frozen each of these points is, or `None` when nothing is masked.
+    ///
+    /// `None` rather than a run of zeroes so the caller can skip the work
+    /// entirely — which is the common case, and the case where sampling every
+    /// vertex of the surface would be pure waste.
+    pub fn mask_at(&self, points: &[[f32; 3]]) -> Option<Vec<f32>> {
+        let mask = self.mask.as_ref()?;
+        if mask.is_empty().unwrap_or(true) {
+            return None;
+        }
+        mask.sample_many(points).ok()
+    }
+
     pub fn mesh_revision(&mut self) -> u64 {
         // Which layers this path draws at all, and whether each is shown.
         //
@@ -2341,6 +2378,11 @@ impl ClayDocument {
             // A preview banks nothing, so without this the number would sit
             // still while the drag was visibly moving the surface.
             .wrapping_add(self.live_generation.wrapping_mul(1_000_003))
+            // The frozen region is drawn on these layers too, and a mask
+            // stroke moves none of their vertices — so without this a mask
+            // painted on a mesh or a grid would be invisible on exactly the
+            // layer it was painted on.
+            .wrapping_add(self.mask_revision.wrapping_mul(2_000_003))
     }
 
     /// How stretched the active mesh layer's triangles are.
@@ -2683,6 +2725,18 @@ impl SculptModel for ClayDocument {
         tool.availability(self.active_layer_state())
             .map_err(ModelError::Unavailable)?;
 
+        // Before the representation is asked, because a mask does not belong
+        // to one. It is a world-addressed field of its own that every layer
+        // consults, and `mask_stroke` touches no layer at all — so routing it
+        // through the three arms only gave each of them a chance to get it
+        // wrong. Two of them did: on a grid it fell through to `set_brush` and
+        // *deposited clay* where the sculptor asked to freeze a region, and on
+        // a mesh the tool table refused it outright though `stroke_mesh` has
+        // been passing the mask to the engine all along.
+        if tool == ToolKind::Mascara {
+            return self.mask_stroke(brush, samples);
+        }
+
         match self.active_representation() {
             Representation::Sdf => match tool {
                 // Drags the assembled surface: the gesture is a displacement,
@@ -2694,8 +2748,6 @@ impl SculptModel for ClayDocument {
                 ToolKind::Suavizar | ToolKind::Relaxar => self.relax_stroke(brush, samples),
                 // Bake-and-flatten, cut-only.
                 ToolKind::Planar | ToolKind::Polir => self.flatten_stroke(brush, samples),
-                // Paints the freeze, and moves nothing.
-                ToolKind::Mascara => self.mask_stroke(brush, samples),
                 _ => self.stroke_sdf(tool, brush, samples, symmetry),
             },
             Representation::Voxel => self.stroke_voxel(tool, brush, samples),
@@ -3620,6 +3672,7 @@ impl ClayDocument {
             mesh_undo: Vec::new(),
             mesh_redo: Vec::new(),
             mask: None,
+            mask_revision: 0,
             symmetry: [false; 3],
             combine: CombineSettings::for_strokes(),
             alpha: None,
@@ -3933,6 +3986,11 @@ impl MaskModel for ClayDocument {
     }
 
     fn apply_mask_op(&mut self, op: MaskOp) -> Result<(), ModelError> {
+        // Bumped up front, and whatever the operation turns out to do: every
+        // one of them changes what is frozen, and a viewport that missed one
+        // would keep drawing the mask as it was. A redundant re-sample costs a
+        // buffer write; a missed one is a lie on the screen.
+        self.mask_revision = self.mask_revision.wrapping_add(1);
         // Clearing a mask that was never painted is a no-op rather than a
         // refusal: the menu entry is always there, and pressing it on an empty
         // mask should do the obvious nothing.

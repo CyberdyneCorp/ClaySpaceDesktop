@@ -164,6 +164,7 @@ pub fn to_vertices(mesh: &Mesh) -> (Vec<Vertex>, Vec<u32>) {
             position: read_vec3(v, Vertex::POSITION_OFFSET),
             normal: read_vec3(v, Vertex::NORMAL_OFFSET),
             color: read_vec3(v, Vertex::COLOR_OFFSET),
+            mask: 0.0,
         })
         .collect();
 

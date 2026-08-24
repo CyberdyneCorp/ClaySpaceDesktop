@@ -465,10 +465,14 @@ impl ToolKind {
                 voxel: Some("clay_voxel_sculpt_smooth"),
                 mesh: Some("clay_mesh_sculptor_stamp (SMOOTH)"),
             },
+            // The one tool that is the same call on all three, because a
+            // mask is not part of any of them: it is a world-addressed field
+            // the verbs consult, and freezing a region of a mesh is the same
+            // act as freezing a region of a field.
             Self::Mascara => Verbs {
                 sdf: Some("clay_mask_apply_stroke"),
                 voxel: Some("clay_mask_apply_stroke"),
-                mesh: None,
+                mesh: Some("clay_mask_apply_stroke"),
             },
             Self::Camada => Verbs {
                 sdf: Some("clay_layer_apply_stroke (clamped accumulation)"),
@@ -878,13 +882,18 @@ mod tests {
     #[test]
     fn the_mesh_vocabulary_is_bound() {
         let mesh = ToolKind::for_representation(Representation::Mesh);
+        // Máscara sits on the mesh shelf and is not one of the sixteen: it
+        // writes no vertices, it paints the world-addressed field the sixteen
+        // consult. Counted apart rather than lumped in, so a real seventeenth
+        // brush would still be caught here.
+        let brushes: Vec<ToolKind> = mesh.iter().copied().filter(|t| !t.is_mask_tool()).collect();
         assert_eq!(
-            mesh.len(),
+            brushes.len(),
             16,
             "the engine has sixteen fixed-topology brushes and {} are bound",
-            mesh.len()
+            brushes.len()
         );
-        for tool in &mesh {
+        for tool in &brushes {
             assert!(
                 tool.verb_on(Representation::Mesh)
                     .is_some_and(|verb| verb.starts_with("clay_mesh_sculptor")),
@@ -892,9 +901,9 @@ mod tests {
                 tool.label()
             );
         }
-        // The three that deliberately have none: a mask stroke, a cavity fill
-        // and a shape drawn on the frame are not vertex verbs.
-        for tool in [ToolKind::Mascara, ToolKind::Preencher, ToolKind::Trim] {
+        // The two that deliberately have none: a cavity fill and a shape drawn
+        // on the frame are not vertex verbs.
+        for tool in [ToolKind::Preencher, ToolKind::Trim] {
             assert!(
                 !tool.exists_on(Representation::Mesh),
                 "{} was given a mesh binding it should not have",
@@ -1019,7 +1028,12 @@ mod tests {
         /// tools reaching a voxel layer is legitimately larger than it.
         const ENGINE_VOXEL_SCULPT_VERBS: usize = 10;
 
-        let mesh = ToolKind::for_representation(Representation::Mesh).len();
+        // Máscara is on all three shelves and is a brush on none of them; see
+        // `the_mesh_vocabulary_is_bound`.
+        let mesh = ToolKind::for_representation(Representation::Mesh)
+            .iter()
+            .filter(|t| !t.is_mask_tool())
+            .count();
         let voxel = ToolKind::for_representation(Representation::Voxel).len();
 
         assert_eq!(

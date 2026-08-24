@@ -15,15 +15,24 @@ use crate::palette;
 
 /// One vertex, in the layout the shader and the engine's copy both use.
 ///
-/// `position` at 0, `normal` at 12, `color` at 24, stride 36. The engine writes
-/// the first two directly into a mapped buffer at these offsets, which is why
-/// the layout is stated once and shared rather than described in two places.
+/// `position` at 0, `normal` at 12, `color` at 24, `mask` at 36, stride 40. The
+/// engine writes the first three directly into a mapped buffer at these
+/// offsets, which is why the layout is stated once and shared rather than
+/// described in two places — and why `mask` is last: the engine's copy names
+/// the offsets it writes and leaves the rest of the stride alone.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Pod, Zeroable)]
 pub struct Vertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
     pub color: [f32; 3],
+    /// How frozen this vertex is, 0 to 1.
+    ///
+    /// An attribute of its own rather than a darkened `color`, because the two
+    /// are different things: colour modulates the material and is gated on the
+    /// mesh actually carrying vertex colours, while a mask has to read on a
+    /// surface that carries none — which is every SDF surface.
+    pub mask: f32,
 }
 
 impl Vertex {
@@ -31,6 +40,7 @@ impl Vertex {
     pub const POSITION_OFFSET: usize = 0;
     pub const NORMAL_OFFSET: usize = 12;
     pub const COLOR_OFFSET: usize = 24;
+    pub const MASK_OFFSET: usize = 36;
 
     fn layout() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
@@ -51,6 +61,11 @@ impl Vertex {
                     offset: Self::COLOR_OFFSET as u64,
                     shader_location: 2,
                     format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: Self::MASK_OFFSET as u64,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Float32,
                 },
             ],
         }
@@ -1404,11 +1419,13 @@ fn overlay_geometry(overlays: Overlays, extent: f32) -> (Vec<Vertex>, Vec<u32>) 
             position: a.into(),
             normal: [0.0, 1.0, 0.0],
             color,
+            mask: 0.0,
         });
         vertices.push(Vertex {
             position: b.into(),
             normal: [0.0, 1.0, 0.0],
             color,
+            mask: 0.0,
         });
         indices.extend_from_slice(&[base, base + 1]);
     };
@@ -1518,6 +1535,7 @@ fn cursor_geometry(cursor: BrushCursor) -> (Vec<Vertex>, Vec<u32>) {
             position: point.into(),
             normal: normal.into(),
             color,
+            mask: 0.0,
         });
         indices.push(i as u32);
         indices.push(((i + 1) % SEGMENTS) as u32);
@@ -1537,6 +1555,7 @@ fn cursor_geometry(cursor: BrushCursor) -> (Vec<Vertex>, Vec<u32>) {
                 position: point.into(),
                 normal: normal.into(),
                 color,
+                mask: 0.0,
             });
         }
     }
@@ -1592,6 +1611,7 @@ fn membrane_geometry(view: &ArmatureView<'_>) -> (Vec<Vertex>, Vec<u32>) {
                     position: (centre + offset * radius * 0.72).into(),
                     normal: offset.into(),
                     color: colour,
+                    mask: 0.0,
                 });
             }
         }
@@ -1642,6 +1662,7 @@ fn armature_geometry(view: ArmatureView<'_>) -> (Vec<Vertex>, Vec<u32>) {
                 position: (centre + offset * radius).into(),
                 normal: [0.0, 1.0, 0.0],
                 color,
+                mask: 0.0,
             });
             indices.push(base + i as u32);
             indices.push(base + ((i + 1) % SEGMENTS) as u32);
@@ -1682,6 +1703,7 @@ fn armature_geometry(view: ArmatureView<'_>) -> (Vec<Vertex>, Vec<u32>) {
                 position: point.into(),
                 normal: [0.0, 1.0, 0.0],
                 color,
+                mask: 0.0,
             });
         }
         indices.push(base);
@@ -1716,11 +1738,13 @@ fn gizmo_geometry() -> (Vec<Vertex>, Vec<u32>) {
                 position: [0.0, 0.0, 0.0],
                 normal: [0.0, 1.0, 0.0],
                 color: tint,
+                mask: 0.0,
             });
             vertices.push(Vertex {
                 position: (end * 0.9).into(),
                 normal: [0.0, 1.0, 0.0],
                 color: tint,
+                mask: 0.0,
             });
             indices.extend_from_slice(&[base, base + 1]);
         }
@@ -1865,10 +1889,14 @@ mod tests {
     fn the_vertex_layout_matches_what_the_engine_is_told() {
         // The engine writes into this layout by byte offset, so a change here
         // that is not mirrored there produces a silently wrong buffer.
-        assert_eq!(Vertex::STRIDE, 36);
+        assert_eq!(Vertex::STRIDE, 40);
         assert_eq!(Vertex::POSITION_OFFSET, 0);
         assert_eq!(Vertex::NORMAL_OFFSET, 12);
         assert_eq!(Vertex::COLOR_OFFSET, 24);
+        // Last on purpose: the engine's copy names the three offsets it
+        // writes and leaves the rest of the stride alone, so the mask can be
+        // written by us either side of that call without being overwritten.
+        assert_eq!(Vertex::MASK_OFFSET, 36);
     }
 
     #[test]

@@ -152,6 +152,7 @@ fn state<'a>(
             painted_cells: 4096,
         },
         extrude: clayspace_model::ExtrudeSettings::default(),
+        mask_steps: 1,
         // A rig, mid-edit, so the capture shows the armature section and the
         // menu entries that depend on it rather than a row of grey.
         armature: clayspace_view::ArmatureState {
@@ -1190,5 +1191,163 @@ fn the_conversion_panel_offers_a_crossing_into_a_mesh() {
         "the panel draws the same thing for a crossing into a mesh and one \
          into a grid, {differing} pixels apart — see \
          target/visual/70-convert-to-mesh.png"
+    );
+}
+
+// -- the mask panel and menu --------------------------------------------------
+//
+// Three of the six mask operations took an amount and the interface had no way
+// to set one: the menu dispatched `Expandir` with a hard-coded 1, and an
+// extrusion with every default it was born with, so its thickness, rounding
+// and edge smoothing were unreachable. The amounts live in a MÁSCARA section
+// of the inspector now, and the menu spells out what it would apply.
+
+/// Where the Máscaras menu sits in the bar, and where its entries fall once it
+/// is open.
+///
+/// The capture is one pixel per logical unit at the size the design specifies,
+/// so these are the design's own coordinates rather than a scaling of them.
+const MASKS_MENU: egui::Pos2 = egui::Pos2::new(359.0, 13.0);
+const EXPAND_ENTRY: egui::Vec2 = egui::Vec2::new(0.0, 92.0);
+
+#[test]
+fn the_mask_section_appears_with_a_mask_and_not_without() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let with = state(strings, &scene, &materials, &report);
+    let masked = capture_shell(&harness, &with, "78-mask-panel");
+
+    let mut without = state(strings, &scene, &materials, &report);
+    without.mask = clayspace_model::MaskState::default();
+    let bare = capture_shell(&harness, &without, "79-mask-panel-none");
+
+    let changed = differing_pixels(&masked, &bare);
+    assert!(
+        changed > 400,
+        "the inspector drew the same {changed} pixels with a mask and without \
+         one, so the MÁSCARA section is not there. See \
+         target/visual/78-mask-panel.png"
+    );
+
+    // And it is confined to the inspector: a section that pushed the shelf or
+    // the viewport around would be a layout change rather than a section.
+    let right_edge = SHELL_WIDTH - region::RIGHT as u32;
+    let outside = (0..masked.height)
+        .flat_map(|y| (0..right_edge).map(move |x| (x, y)))
+        .filter(|(x, y)| masked.pixel(*x, *y) != bare.pixel(*x, *y))
+        .count();
+    assert_eq!(
+        outside, 0,
+        "{outside} pixels outside the inspector changed when the mask section \
+         appeared"
+    );
+}
+
+#[test]
+fn the_mask_menu_applies_the_amount_the_panel_is_set_to() {
+    // A menu entry that draws and is wired to nothing looks identical, and
+    // this one now carries a number that has to come from somewhere. Driven
+    // with real clicks for that reason.
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let mut set = state(strings, &scene, &materials, &report);
+    set.mask_steps = 5;
+    capture_shell_after(
+        &harness,
+        &set,
+        "80-mask-menu",
+        &[
+            left_click(MASKS_MENU),
+            left_click(MASKS_MENU + EXPAND_ENTRY),
+        ],
+        |queue| {
+            assert_eq!(
+                queue.commands(),
+                [Command::ApplyMaskOp(clayspace_model::MaskOp::Expand(5))],
+                "Expandir carried something other than the panel's five \
+                 steps. See target/visual/80-mask-menu.png"
+            );
+        },
+    );
+}
+
+/// A drag across a slider, as egui receives one.
+fn drag(from: egui::Pos2, to: egui::Pos2) -> Vec<Vec<egui::Event>> {
+    vec![
+        vec![
+            egui::Event::PointerMoved(from),
+            egui::Event::PointerButton {
+                pos: from,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            },
+        ],
+        vec![egui::Event::PointerMoved(to)],
+        vec![egui::Event::PointerButton {
+            pos: to,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::default(),
+        }],
+    ]
+}
+
+/// The Passos slider, in the MÁSCARA section of the inspector.
+const STEPS_SLIDER: egui::Pos2 = egui::Pos2::new(1070.0, 643.0);
+
+#[test]
+fn the_steps_slider_sets_the_amount() {
+    // The other half of the pair: the menu applies whatever the panel says,
+    // and this is the panel saying it. A slider that draws and is wired to
+    // nothing looks exactly like one that works.
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let mut set = state(strings, &scene, &materials, &report);
+    set.mask_steps = 5;
+
+    capture_shell_after(
+        &harness,
+        &set,
+        "81-mask-steps",
+        &drag(STEPS_SLIDER, STEPS_SLIDER + egui::vec2(50.0, 0.0)),
+        |queue| {
+            let steps: Vec<i32> = queue
+                .commands()
+                .iter()
+                .filter_map(|command| match command {
+                    Command::SetMaskSteps(steps) => Some(*steps),
+                    _ => None,
+                })
+                .collect();
+            let last = steps.last().copied().unwrap_or_else(|| {
+                panic!(
+                    "dragging the Passos slider emitted {:?} and no amount. See \
+                     target/visual/81-mask-steps.png",
+                    queue.commands()
+                )
+            });
+            assert!(
+                last > 5,
+                "dragging the slider to the right set {last} steps, down from 5"
+            );
+        },
     );
 }

@@ -108,3 +108,45 @@ is rather than becoming a different verb.
 - **THEN** a field is cut where it would have been raised
 - **AND** a mesh vertex moves inward where it would have moved outward
 - **AND** a grid's cells are cleared where they would have been set
+
+### Requirement: A mask is painted and seen on every representation
+The application SHALL offer the mask tool on SDF, voxel and mesh layers alike,
+and painting one SHALL freeze a region rather than change the surface.
+
+The frozen region SHALL be drawn over the surface it protects, on both the
+brick-cache surface and the carried mesh and voxel layers.
+
+A single key SHALL start mask painting and put the previous tool back.
+
+#### Scenario: The mask tool freezes rather than deposits
+- **WHEN** the mask tool is stroked across a voxel layer
+- **THEN** a mask exists afterwards
+- **AND** no material was added to the grid
+
+#### Scenario: A painted mask is visible
+- **WHEN** a mask is painted on the surface
+- **THEN** the drawn surface is darker where the mask covers it
+- **AND** clearing the mask returns the surface to what it was
+
+#### Scenario: An edit beside a mask does not erase what is drawn
+- **WHEN** a stroke re-meshes bricks that carried mask shading
+- **THEN** the frozen region is still drawn afterwards
+
+### Requirement: The mask operations take an amount the interface can set
+The application SHALL let a sculptor set how far Expandir, Contrair and
+Suavizar máscara reach, and what an extrusion's thickness, rim rounding and rim
+smoothing are, and SHALL apply those amounts rather than fixed defaults.
+
+Each menu entry SHALL show the amount it would apply.
+
+#### Scenario: An expansion reaches as far as the panel says
+- **WHEN** the amount is set to four and Expandir is chosen
+- **THEN** the frozen region grows further than it would at one
+
+#### Scenario: An extrusion is as thick as the panel says
+- **WHEN** the thickness is set and the patch is extruded outward
+- **THEN** the wall stands that far off the surface
+
+#### Scenario: An operation with no amount is left alone
+- **WHEN** an amount is set and Inverter is chosen
+- **THEN** the operation carries no amount

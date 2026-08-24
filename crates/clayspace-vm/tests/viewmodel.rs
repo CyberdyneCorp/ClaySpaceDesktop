@@ -996,3 +996,72 @@ fn a_cancelled_stroke_lets_the_held_keys_go() {
         "an abandoned gesture kept its keys held into the next one: {after:?}"
     );
 }
+
+// -- the mask key ------------------------------------------------------------
+
+#[test]
+fn the_mask_key_goes_in_and_comes_back_out() {
+    let (mut vm, _) = fixture_with(|_| {});
+    vm.dispatch(Command::SelectTool(ToolKind::Padrao))
+        .expect("tool");
+
+    vm.dispatch(Command::ToggleMaskPainting).expect("in");
+    assert_eq!(
+        *vm.tool().get(),
+        ToolKind::Mascara,
+        "the key did not reach mask painting"
+    );
+
+    vm.dispatch(Command::ToggleMaskPainting).expect("out");
+    assert_eq!(
+        *vm.tool().get(),
+        ToolKind::Padrao,
+        "the key left the sculptor in mask painting; freezing a region is a \
+         detour from what is being sculpted, and the way back should be the \
+         same key rather than a hunt across the shelf"
+    );
+}
+
+#[test]
+fn choosing_a_tool_while_masking_is_not_undone_by_the_key() {
+    let (mut vm, _) = fixture_with(|_| {});
+    vm.dispatch(Command::SelectTool(ToolKind::Padrao))
+        .expect("tool");
+    vm.dispatch(Command::ToggleMaskPainting).expect("in");
+
+    // Said outright, from the shelf: the detour is over.
+    vm.dispatch(Command::SelectTool(ToolKind::Inflar))
+        .expect("tool");
+    assert_eq!(*vm.tool().get(), ToolKind::Inflar);
+
+    // So the key starts a fresh one rather than rewinding to before the choice.
+    vm.dispatch(Command::ToggleMaskPainting).expect("in again");
+    assert_eq!(*vm.tool().get(), ToolKind::Mascara);
+    vm.dispatch(Command::ToggleMaskPainting).expect("out");
+    assert_eq!(
+        *vm.tool().get(),
+        ToolKind::Inflar,
+        "the key returned to a tool the sculptor had already left"
+    );
+}
+
+#[test]
+fn the_mask_key_keeps_each_tools_own_brush() {
+    // Máscara has its own remembered brush like every other tool, and the
+    // toggle goes through the same selection — a route that bypassed it would
+    // paint a mask with the sculpting brush's size and hand it back changed.
+    let (mut vm, _) = fixture_with(|_| {});
+    vm.dispatch(Command::SelectTool(ToolKind::Padrao))
+        .expect("tool");
+    vm.dispatch(Command::SetBrushSize(0.42)).expect("size");
+
+    vm.dispatch(Command::ToggleMaskPainting).expect("in");
+    vm.dispatch(Command::SetBrushSize(0.11)).expect("size");
+
+    vm.dispatch(Command::ToggleMaskPainting).expect("out");
+    assert!(
+        (vm.brush().get().size - 0.42).abs() < 1e-6,
+        "coming back from the mask left the brush at {}",
+        vm.brush().get().size
+    );
+}
