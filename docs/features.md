@@ -79,8 +79,49 @@ Settings are held **per tool**: switching away and back returns what you left,
 not a default. Values are clamped to what the engine accepts rather than
 producing an error you cannot act on.
 
-Symmetry about X, Y and Z is applied through the layer's mirror, so both halves
-belong to one operation and undo together.
+### Symmetry
+
+Symmetry about X, Y and Z reaches all three representations, and by two
+different mechanisms because the representations are two different things.
+
+On a **field**, through the layer's mirror — `clay_set_layer_mirror` reflects
+the layer's items, so both halves belong to one operation and undo together.
+
+On a **mesh** and on a **grid**, by mirroring the *stroke* and applying it
+again. There is nothing else to reach for: the layer mirror reflects a layer's
+items, and a mesh has vertices while a grid has cells. That is also what both
+references do in the same position. Measured in Blender 5.2, one Draw dab on a
+64×32 sphere:
+
+| Symmetry | +x | −x | +y | −y | Max displacement |
+|---|---|---|---|---|---|
+| none | 82 | 0 | 78 | 0 | 0.18306 |
+| X | 82 | 82 | 156 | 0 | 0.18306 |
+| X and Y | 161 | 161 | 156 | 156 | 0.16893 |
+
+One dab per reflection at full strength, and **two axes give four dabs** rather
+than two — the full subset lattice, which is what a sculptor means by
+"symmetric in x and y": the four quadrants, not the two halves twice. Three
+axes give eight. Every reflection goes into the same set of deltas, so a
+symmetric stroke is one undo however many copies of it the axes called for.
+
+A reflection turns a **direction** over as well as a position. Forgetting that
+is the bug that makes a mirrored Grab send both sides the same way in world
+space — one out of the model and one into it — instead of moving them as a
+pair.
+
+This was inert on both. `apply_stroke` takes the enabled axes and the mesh and
+voxel arms of its dispatch dropped them before the stroke functions ever saw
+them, so every symmetry button in the interface did nothing on anything but a
+field.
+
+**On counting**: our mesh comes from marching cubes, whose vertex density is
+not the same on both sides of a plane — a lone dab moves 497 vertices at one
+place and 272 at its mirror, and a lone dab *at* that mirror moves 272 too, so
+the mirroring is exact and the difference is the tessellation's. Blender's UV
+sphere is symmetric by construction, hence its 82/82. What a sculptor means by
+symmetry is that the *form* comes out symmetric, so that is what the tests
+measure.
 
 ## Masking
 

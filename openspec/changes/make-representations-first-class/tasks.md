@@ -717,3 +717,48 @@ gizmo for — has no route here yet.
     current extent, so hauling one corner out grew every other handle and the
     targets a sculptor was aiming at swelled under the pointer. `rest_span`
     carries the box the cage was built with, and the size comes from that.
+
+## 18. Symmetry, on the two representations that had none
+
+- [x] 18.1 Give a mesh stroke its symmetry axes
+  - It did nothing at all. `apply_stroke` takes the enabled axes and the mesh
+    arm of the dispatch dropped them — `stroke_mesh` was not even *given*
+    them — so every X, Y and Z button was inert on a mesh while working on a
+    field.
+  - No engine-side mesh symmetry to reach for: `clay_set_layer_mirror` reflects
+    a layer's *items*, and a mesh layer has vertices. Both references do the
+    same thing in that position, so the stroke is mirrored and applied again.
+  - Measured in Blender 5.2 on a 64×32 sphere, one Draw dab: 82 vertices on +x
+    with symmetry off; 82 on each side with X on; 161 in each of four quadrants
+    with X and Y on. So one dab per reflection at full strength, and the full
+    subset lattice — two axes give four dabs, three give eight.
+  - Getting Blender to say that took two corrections. `brush_stroke` needs a
+    start *and* a step, not one sample. And in 5.2 sculpt symmetry lives on the
+    **mesh** (`use_mirror_x`), not only on `tool_settings.sculpt` — set on the
+    tool settings alone it reads back as enabled and does nothing, which is
+    what made three runs return identical numbers.
+  - A reflection turns a direction over as well as a position. The mirrored
+    Grab's `direction`, the stroke path and the stamp centre all reflect; the
+    deposit normal and the alpha plane are left at all-zeroes, which means "the
+    region's own normal" and so mirrors with the surface.
+  - Every reflection into the same `MeshDeltas`, so a symmetric stroke is one
+    undo and the preview's revert takes every copy back together.
+
+- [x] 18.2 The same for a grid
+  - The voxel arm dropped the axes too, for the same reason and with the same
+    effect. A grid has no layer mirror either; its cell lattice already puts a
+    plane at coordinate zero. The smudge direction reflects with the stroke.
+
+- [x] 18.3 Measure the form, not the vertices
+  - The obvious test — count what moved on each side — is wrong here, and
+    finding out why was worth the detour. Our mesh comes from marching cubes,
+    whose vertex density is not the same on both sides of a plane: a lone dab
+    moves 497 vertices at one place and 272 at its mirror. A lone dab *at* the
+    mirror moves 272 as well, which is what says the mirroring is exact and the
+    difference belongs to the tessellation. Blender's UV sphere is symmetric by
+    construction, hence its 82/82.
+  - So the tests measure the surface at mirrored places rather than counting
+    vertices, which is also what a sculptor means by symmetry. The voxel test
+    measures the deposit's extent for the same reason: the greedy mesher merges
+    quads differently either side of the seam, giving 164 vertices against 152
+    for a deposit that is exactly symmetric.
