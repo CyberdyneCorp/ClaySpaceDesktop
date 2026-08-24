@@ -86,6 +86,19 @@ different mechanisms because the representations are two different things.
 
 On a **field**, through the layer's mirror — `clay_set_layer_mirror` reflects
 the layer's items, so both halves belong to one operation and undo together.
+That covers the brushes that *add* an item: Padrão, Inflar, Camada and Puxar.
+
+The five that **bake** — Mover, Suavizar, Relaxar, Planar and Polir — rewrite
+the field rather than adding an item, and the mirror cannot reach them.
+Measured, a relax with X mirrored took the surface under the stroke from 1.1467
+to 1.1409 and left its reflection at **1.1467 exactly**. Their strokes are
+reflected instead, the way a mesh's and a grid's are.
+
+All six of those used to bypass the symmetry argument entirely, and the fault
+ran both ways: never *setting* the mirror, they inherited whatever it was last
+told, and the starting form turns X on — so a snakehook with symmetry switched
+**off** came out on both sides at 1.4625. Every SDF stroke points the mirror
+now.
 
 On a **mesh** and on a **grid**, by mirroring the *stroke* and applying it
 again. There is nothing else to reach for: the layer mirror reflects a layer's
@@ -192,6 +205,22 @@ Three of these took an amount the interface could not set: `Expandir`,
 extrusion with every default it was born with, so its thickness, rounding and
 edge smoothing were unreachable and every wall the application could build was
 0.08 thick. `mask_operations.rs` measures each entry and each amount.
+
+### Which brushes have a sign
+
+Holding the invert key turns a brush over where it has an opposite, and does
+nothing where it has not. That is a rule rather than a gap:
+
+| Brush | Held | Why |
+|---|---|---|
+| Padrão, Inflar, Camada | takes material away | depositing has an opposite |
+| Planar, Polir | **fills instead of cutting** | planing is cut-only so it does not fill the dents it reveals; the other half is fill-only, which the engine has had a mode for all along |
+| Suavizar, Relaxar | nothing | an inverted smooth is not a thing either reference offers, and sharpening is a different verb rather than a smooth turned over |
+| Mover, Puxar | nothing | a drag's direction *is* its sign; inverting it is dragging the other way |
+
+Measured on a sphere with a bump and a dent beside it: upright, planing takes
+the bump from 1.1150 to 1.1145 and leaves the hollow at 0.8923; held, it fills
+the hollow to 0.9004 and leaves the bump exactly where it was.
 
 ### Held keys
 

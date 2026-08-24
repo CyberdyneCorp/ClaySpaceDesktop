@@ -23,6 +23,18 @@ use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{BrushSettings, GestureSample, SculptModel, ToolKind};
 use clayspace_view::{Camera, Image};
 use clayspace_vm::{Command, SculptViewModel};
+
+/// What this fixture sculpts with, and what the roughening below matches.
+///
+/// Off, and switched off on the ViewModel too. This test is about *crumbling*
+/// — whether a region verb applied once per segment shreds the surface — and
+/// the roughness ceiling below was measured on an unmirrored subject. Leaving
+/// the ViewModel's default X on while roughening with it off would be a
+/// document whose mirror changes mid-session, which no sculptor's does: the
+/// bake would turn the layer mirror on under itself and add a reflected copy
+/// of the roughening on top of the original. `sdf_brushes.rs` is where
+/// symmetry is measured.
+const SYMMETRY: [bool; 3] = [false; 3];
 use support::Harness;
 
 fn document() -> Option<ClayDocument> {
@@ -97,7 +109,12 @@ fn stroke_with(harness: &mut Harness, tool: ToolKind, name: &str) -> Option<(Ima
                     pressure: 1.0,
                     time: t,
                 }],
-                [false; 3],
+                // The symmetry the ViewModel below will ask for. Roughening
+                // with it off and then sculpting with it on is a document
+                // whose mirror changes mid-session, which no sculptor's does —
+                // and it turned the layer mirror on under the bake, adding a
+                // reflected copy of this roughening on top of itself.
+                SYMMETRY,
             )
             .ok()?;
     }
@@ -116,26 +133,19 @@ fn stroke_with(harness: &mut Harness, tool: ToolKind, name: &str) -> Option<(Ima
     let shared = SharedDocument::new(document);
     let mut vm = SculptViewModel::new(Box::new(shared.clone()));
     vm.dispatch(Command::SelectTool(tool)).ok()?;
-    for i in 0..8 {
-        let t = i as f32 / 7.0;
-        let angle = (t - 0.5) * 1.1;
-        let (s, c) = angle.sin_cos();
-        let position = [s * 1.01, 0.1, c * 1.01];
-        let command = if i == 0 {
-            Command::BeginStroke {
-                position,
-                pressure: 1.0,
-                modifiers: Default::default(),
-            }
-        } else {
-            Command::ContinueStroke {
-                position,
-                pressure: 1.0,
-            }
-        };
-        vm.dispatch(command).ok()?;
+    // The ViewModel starts with X on; this fixture is unmirrored throughout.
+    for (index, axis) in [
+        clayspace_vm::Axis::X,
+        clayspace_vm::Axis::Y,
+        clayspace_vm::Axis::Z,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if vm.symmetry().get()[index] != SYMMETRY[index] {
+            vm.dispatch(Command::ToggleSymmetry(axis)).ok()?;
+        }
     }
-    vm.dispatch(Command::EndStroke).ok()?;
 
     shared
         .with(|document| geometry.rebuild(&harness.gpu, document))
