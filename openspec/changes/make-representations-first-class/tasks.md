@@ -987,3 +987,34 @@ is a change of its own.
   - `SmoothBlur::can_lose_detail` is asked by the interface, which says so in
     the accent colour where it is true — rather than leaving a sculptor to find
     out from a missing finger.
+
+- [x] 22.4 Make the form the default, and make it keep up
+  - Asked for the smooth surface always rather than as an option. A sculptor is
+    shaping a form, not a lattice, and the cells a grid is stored in are a fact
+    about the storage — showing them by default made a voxel layer the odd one
+    out for a reason that belongs to how it is kept. The boxes stay on the
+    toggle, because seeing the cells is sometimes exactly what is wanted and
+    because they are what exports.
+  - The settle was the right home for the rebuild while the boxes were the
+    default and the wrong one the moment the smooth surface is what a sculptor
+    watches: a form that waited for the pointer to come up would lag a whole
+    gesture behind the brush. It is rebuilt where the geometry is assembled
+    now, **guarded on the grid's own change count** — a frame in which nothing
+    moved costs one comparison. Measured, a whole-grid smooth mesh is 17.3 ms
+    at a 0.05 voxel size, 18.0 at 0.03 and 20.6 at 0.02: flat enough in the
+    size of the grid to sit on the frame path.
+  - The rebuild lives inside `visible_mesh_geometry`, beside the chunk refresh
+    it already does, rather than being left to the caller. That method's job is
+    to hand back what the viewport draws, and a consumer that did not know to
+    ask would silently have got the boxes.
+  - Changing the *blur* drops the stored mesh rather than comparing: the
+    filtering changed, so what is held is stale even though no cell moved and
+    its change count still matches.
+  - Two tests for the pair of it: a dab reaches the smooth surface with no
+    settle and no explicit rebuild, and an untouched grid is not meshed again —
+    its surface and its revision both sit still, or the viewport would
+    re-upload the same form every frame.
+  - Checked visually as asked. Every voxel brush changes the smooth picture
+    except the two that should not: Máscara paints a freeze and Pintar has no
+    colour to paint with. Padrão and Camada move ~1840 pixels, Inflar 1094,
+    Apagar 448, Pinçar 432, Nudge 427, Raspar 264, Suavizar 243.

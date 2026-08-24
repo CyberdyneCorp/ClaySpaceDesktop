@@ -15,10 +15,11 @@
 pub enum VoxelDisplay {
     /// One quad per exposed voxel face — the boxes the model actually is.
     ///
-    /// The default, and not only out of caution: it is the correct picture for
-    /// hard-surface work, it is what exports, and it is the only one the
-    /// engine can mesh a chunk at a time. See [`VoxelDisplay::is_incremental`].
-    #[default]
+    /// The correct picture for hard-surface work, and what exports. Not the
+    /// default: a sculptor works on a form, and the cells it is stored in are
+    /// a fact about the storage. Kept because seeing the cells is sometimes
+    /// exactly what is wanted, and because it is the only picture the engine
+    /// can mesh a chunk at a time — see [`VoxelDisplay::is_incremental`].
     Boxes,
     /// Surface nets over the occupancy: one vertex per surface cell, at the
     /// centroid of that cell's edge crossings.
@@ -31,6 +32,12 @@ pub enum VoxelDisplay {
     /// contouring fits a vertex by least squares to the hermite data and so
     /// keeps a sharp corner sharp. This takes the centroid, so corners round.
     /// Preserving them would be a change to the engine rather than to us.
+    ///
+    /// The default. A sculptor is shaping a form, not a lattice, and every
+    /// tool this one sits beside shows the form — so showing the cells by
+    /// default would make a grid the odd one out for a reason that belongs to
+    /// how it is stored.
+    #[default]
     Smooth,
 }
 
@@ -108,12 +115,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_default_is_the_picture_that_loses_nothing() {
-        // Boxes, and no filtering. Both defaults are the engine's own
-        // reasoning: the boxy mesh is the correct picture for hard-surface
-        // work and the only one that meshes incrementally, and a blur that
-        // silently deletes detail is the wrong default however good it looks.
-        assert_eq!(VoxelDisplay::default(), VoxelDisplay::Boxes);
+    fn a_grid_shows_its_form_by_default_and_loses_nothing_doing_it() {
+        // The smooth surface, and no filtering. A sculptor is shaping a form,
+        // not a lattice, and the cells are a fact about the storage — but the
+        // *blur* stays at zero, because a default that silently deletes a
+        // sculptor's detail is the wrong default however good it looks.
+        assert_eq!(VoxelDisplay::default(), VoxelDisplay::Smooth);
         assert_eq!(SmoothBlur::default().passes(), 0);
         assert!(!SmoothBlur::default().can_lose_detail());
     }
