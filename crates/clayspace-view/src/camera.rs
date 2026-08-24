@@ -174,9 +174,68 @@ impl Camera {
         self.target += (-right * delta_x + up * delta_y) * scale;
     }
 
+    /// How close the camera may come to what it is zooming toward.
+    ///
+    /// A fraction of what it can already see rather than a fixed length, so
+    /// the standoff is the same *on screen* whatever scale the sculpt is at: a
+    /// fixed one would be a mile on a thumbnail and nothing on a bust.
+    const STANDOFF: f32 = 0.06;
+
+    /// How much of the way toward the focus the pivot follows.
+    ///
+    /// Blender calls this zooming to the mouse position, and it is what makes
+    /// a zoom feel aimed rather than merely closer: the point under the
+    /// pointer drifts toward the middle as you come in, so the next orbit
+    /// turns around what you were looking at. Partial rather than complete —
+    /// snapping the pivot onto the surface would swing the view on every
+    /// notch.
+    const FOLLOW: f32 = 0.25;
+
     /// Zooms multiplicatively, so each notch feels the same at any distance.
+    ///
+    /// The plain form, with nothing in front of the camera to stop at. It
+    /// still bottoms out, but on an arbitrary floor rather than on the clay —
+    /// which is what "zooming goes inside the model" is.
     pub fn zoom(&mut self, amount: f32) {
-        self.distance = (self.distance * (1.0 - amount * 0.1)).clamp(0.01, 10_000.0);
+        self.zoom_toward(amount, None);
+    }
+
+    /// Zooms toward a point in front of the camera, stopping short of it.
+    ///
+    /// `focus` is where the pointer's ray met the surface, in world space.
+    /// With one, this is Blender's zoom: the camera comes in until it is a
+    /// little way off the clay and then stops, and the pivot follows part of
+    /// the way so the next orbit turns around what was under the pointer.
+    ///
+    /// Without one — the pointer over empty space — it is the plain
+    /// multiplicative zoom, because there is nothing there to stop at and
+    /// refusing to move would read as a broken wheel.
+    pub fn zoom_toward(&mut self, amount: f32, focus: Option<[f32; 3]>) {
+        let wanted = (self.distance * (1.0 - amount * 0.1)).clamp(0.01, 10_000.0);
+        let Some(focus) = focus.map(Vec3::from) else {
+            self.distance = wanted;
+            return;
+        };
+        // Only ever a limit on coming *in*. Pulling back past the surface is
+        // ordinary and must not be caught by any of this.
+        if wanted >= self.distance {
+            self.distance = wanted;
+            return;
+        }
+
+        // What is left between the camera and the clay, and what must stay
+        // left. A fraction of the gap so the standoff is the same on screen at
+        // any scale, and never less than a little in front of the near plane —
+        // a surface closer than that is clipped away, which looks exactly like
+        // having gone through it.
+        let gap = (focus - self.eye()).length();
+        let keep = (gap * Self::STANDOFF).max(self.near * 2.0);
+        let room = (gap - keep).max(0.0);
+        self.distance = wanted.max(self.distance - room);
+
+        // The pivot follows part of the way, so the next orbit turns around
+        // what was under the pointer.
+        self.target += (focus - self.target) * Self::FOLLOW * amount.abs().min(1.0);
     }
 
     /// Points the camera along a preset's axis, keeping the current framing.
@@ -444,5 +503,115 @@ mod tests {
             camera.zoom(-1.0);
         }
         assert!(camera.distance.is_finite(), "zooming out must stay finite");
+    }
+}
+
+#[cfg(test)]
+mod zoom_tests {
+    use super::*;
+
+    /// A camera four units out, looking at the origin, with a surface one unit
+    /// in front of the pivot — the ordinary case of zooming at a sculpt.
+    fn looking_at_a_sphere() -> (Camera, Vec3) {
+        let camera = Camera::default();
+        let eye = camera.eye();
+        let toward = (camera.target - eye).normalize();
+        (camera, eye + toward * (camera.distance - 1.0))
+    }
+
+    #[test]
+    fn zooming_in_stops_short_of_the_surface() {
+        // The reported fault: the camera went inside the model. It can come as
+        // close as it likes and never through.
+        let (mut camera, surface) = looking_at_a_sphere();
+        for _ in 0..200 {
+            camera.zoom_toward(1.0, Some(surface.into()));
+            let gap = (surface - camera.eye()).length();
+            assert!(
+                gap > 0.0,
+                "the camera reached the surface it was zooming at"
+            );
+        }
+        // And it is still in front of it, on the same side it started.
+        let toward = (camera.target - camera.eye()).normalize();
+        let ahead = (surface - camera.eye()).dot(toward);
+        assert!(
+            ahead > 0.0,
+            "the surface ended up behind the camera, which is what going \
+             through it means"
+        );
+    }
+
+    #[test]
+    fn it_gets_closer_every_notch() {
+        // Stopping short must not mean stopping: a wheel that refuses to move
+        // reads as broken, and detail work needs the last stretch.
+        let (mut camera, surface) = looking_at_a_sphere();
+        let start = (surface - camera.eye()).length();
+        let mut gap = start;
+        for _ in 0..20 {
+            camera.zoom_toward(1.0, Some(surface.into()));
+            let now = (surface - camera.eye()).length();
+            assert!(now < gap, "a notch of zoom brought nothing closer");
+            gap = now;
+        }
+        // Most of the way. The rate is the multiplicative one — a notch is a
+        // tenth of what is left — so twenty of them close about six sevenths
+        // of the gap, and the standoff is nowhere near binding yet.
+        assert!(
+            gap < start * 0.2,
+            "twenty notches went from {start} to {gap} from the clay"
+        );
+    }
+
+    #[test]
+    fn zooming_out_is_never_held_back() {
+        // The standoff limits coming in and nothing else. Pulling away past
+        // the surface is ordinary.
+        let (mut camera, surface) = looking_at_a_sphere();
+        let before = camera.distance;
+        camera.zoom_toward(-1.0, Some(surface.into()));
+        assert!(
+            camera.distance > before,
+            "zooming out was caught by the standoff"
+        );
+    }
+
+    #[test]
+    fn the_pivot_follows_what_is_under_the_pointer() {
+        // Blender calls it zooming to the mouse position, and it is what makes
+        // a zoom feel aimed: the point under the pointer drifts toward the
+        // middle, so the next orbit turns around what you were looking at.
+        let mut camera = Camera::default();
+        let eye = camera.eye();
+        let toward = (camera.target - eye).normalize();
+        // Off to one side, as a pointer away from the centre would find.
+        let focus = eye + toward * 3.0 + Vec3::new(0.8, 0.0, 0.0);
+
+        let before = (focus - camera.target).length();
+        camera.zoom_toward(1.0, Some(focus.into()));
+        let after = (focus - camera.target).length();
+        assert!(
+            after < before,
+            "the pivot stayed where it was, so the next orbit turns around \
+             somewhere the sculptor is not looking"
+        );
+        assert!(
+            after > 0.0,
+            "the pivot snapped onto the surface, which swings the view on \
+             every notch"
+        );
+    }
+
+    #[test]
+    fn with_nothing_in_front_it_is_the_plain_zoom() {
+        // The pointer over empty space. There is nothing to stop at, and
+        // refusing to move would read as a broken wheel.
+        let mut aimed = Camera::default();
+        let mut plain = Camera::default();
+        aimed.zoom_toward(1.0, None);
+        plain.zoom(1.0);
+        assert_eq!(aimed.distance, plain.distance);
+        assert_eq!(aimed.target, plain.target);
     }
 }
