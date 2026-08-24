@@ -67,6 +67,18 @@ pub struct Strings {
     pub menu_masks: &'static str,
     /// Starting and stopping mask painting.
     pub action_paint_mask: &'static str,
+    /// The mask section of the inspector.
+    pub section_mask: &'static str,
+    /// How far Expandir, Contrair and Suavizar máscara reach.
+    pub label_mask_steps: &'static str,
+    /// How many cells are frozen.
+    pub label_mask_cells: &'static str,
+    /// An extrusion's wall thickness.
+    pub label_extrude_thickness: &'static str,
+    /// Rounding on the extruded rim.
+    pub label_extrude_round: &'static str,
+    /// Smoothing passes on a copy of the mask, for the rim.
+    pub label_extrude_smooth: &'static str,
     pub action_extrude: &'static str,
     pub menu_window: &'static str,
     pub menu_help: &'static str,
@@ -222,6 +234,12 @@ const PT_BR: Strings = Strings {
     menu_dynamics: "Dinâmica",
     menu_masks: "Máscaras",
     action_paint_mask: "Pintar máscara",
+    section_mask: "MÁSCARA",
+    label_mask_steps: "Passos",
+    label_mask_cells: "Células congeladas",
+    label_extrude_thickness: "Espessura",
+    label_extrude_round: "Arredondar",
+    label_extrude_smooth: "Suavizar borda",
     action_extrude: "Extrudar",
     menu_window: "Janela",
     menu_help: "Ajuda",
@@ -353,6 +371,12 @@ const EN_US: Strings = Strings {
     menu_dynamics: "Dynamics",
     menu_masks: "Masks",
     action_paint_mask: "Paint mask",
+    section_mask: "MASK",
+    label_mask_steps: "Steps",
+    label_mask_cells: "Frozen cells",
+    label_extrude_thickness: "Thickness",
+    label_extrude_round: "Round",
+    label_extrude_smooth: "Smooth edge",
     action_extrude: "Extrude",
     menu_window: "Window",
     menu_help: "Help",
@@ -484,6 +508,12 @@ const ES_419: Strings = Strings {
     menu_dynamics: "Dinámica",
     menu_masks: "Máscaras",
     action_paint_mask: "Pintar máscara",
+    section_mask: "MÁSCARA",
+    label_mask_steps: "Passos",
+    label_mask_cells: "Células congeladas",
+    label_extrude_thickness: "Espessura",
+    label_extrude_round: "Arredondar",
+    label_extrude_smooth: "Suavizar borda",
     action_extrude: "Extruir",
     menu_window: "Ventana",
     menu_help: "Ayuda",
@@ -622,7 +652,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 101] {
+    pub fn all(&self) -> [&'static str; 107] {
         [
             self.menu_file,
             self.menu_edit,
@@ -632,6 +662,12 @@ impl Strings {
             self.menu_dynamics,
             self.menu_masks,
             self.action_paint_mask,
+            self.section_mask,
+            self.label_mask_steps,
+            self.label_mask_cells,
+            self.label_extrude_thickness,
+            self.label_extrude_round,
+            self.label_extrude_smooth,
             self.action_extrude,
             self.menu_window,
             self.menu_help,

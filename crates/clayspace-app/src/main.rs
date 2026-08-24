@@ -1700,6 +1700,7 @@ impl App {
             attribution: ATTRIBUTION,
             show_attribution: self.show_attribution,
             extrude: *self.mask.extrude_settings().get(),
+            mask_steps: *self.mask.steps().get(),
             document_name: document_name.as_str(),
             modified: *self.document_vm.modified().get(),
             tool: *self.sculpt.tool().get(),

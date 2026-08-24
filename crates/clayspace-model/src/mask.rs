@@ -102,6 +102,17 @@ impl MaskOp {
         }
     }
 
+    /// How far the operation reaches, where that is a number at all.
+    ///
+    /// `None` for the three that have no amount: there is no inverting twice
+    /// as much, and clearing is clearing.
+    pub fn amount(self) -> Option<i32> {
+        match self {
+            Self::Expand(steps) | Self::Contract(steps) | Self::Smooth(steps) => Some(steps),
+            Self::Invert | Self::Clear | Self::InvertWithinBounds => None,
+        }
+    }
+
     /// Whether the operation needs a mask to exist first.
     ///
     /// Clearing nothing is not an error, and neither is inverting nothing —

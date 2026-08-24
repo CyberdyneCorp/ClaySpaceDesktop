@@ -302,6 +302,8 @@ impl SculptViewModel {
             | Command::ToggleZsphereNegative
             | Command::SetSkinThickness(_)
             | Command::ApplyMaskOp(_)
+            | Command::SetMaskSteps(_)
+            | Command::SetExtrudeSettings(_)
             | Command::ExtrudeMask(_)
             | Command::ToggleConvert
             | Command::ToggleRepair
