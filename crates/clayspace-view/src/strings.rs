@@ -65,6 +65,8 @@ pub struct Strings {
     pub menu_brushes: &'static str,
     pub menu_dynamics: &'static str,
     pub menu_masks: &'static str,
+    /// Starting and stopping mask painting.
+    pub action_paint_mask: &'static str,
     pub action_extrude: &'static str,
     pub menu_window: &'static str,
     pub menu_help: &'static str,
@@ -219,6 +221,7 @@ const PT_BR: Strings = Strings {
     menu_brushes: "Pincéis",
     menu_dynamics: "Dinâmica",
     menu_masks: "Máscaras",
+    action_paint_mask: "Pintar máscara",
     action_extrude: "Extrudar",
     menu_window: "Janela",
     menu_help: "Ajuda",
@@ -349,6 +352,7 @@ const EN_US: Strings = Strings {
     menu_brushes: "Brushes",
     menu_dynamics: "Dynamics",
     menu_masks: "Masks",
+    action_paint_mask: "Paint mask",
     action_extrude: "Extrude",
     menu_window: "Window",
     menu_help: "Help",
@@ -479,6 +483,7 @@ const ES_419: Strings = Strings {
     menu_brushes: "Pinceles",
     menu_dynamics: "Dinámica",
     menu_masks: "Máscaras",
+    action_paint_mask: "Pintar máscara",
     action_extrude: "Extruir",
     menu_window: "Ventana",
     menu_help: "Ayuda",
@@ -617,7 +622,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 100] {
+    pub fn all(&self) -> [&'static str; 101] {
         [
             self.menu_file,
             self.menu_edit,
@@ -626,6 +631,7 @@ impl Strings {
             self.menu_brushes,
             self.menu_dynamics,
             self.menu_masks,
+            self.action_paint_mask,
             self.action_extrude,
             self.menu_window,
             self.menu_help,

@@ -149,6 +149,7 @@ pub enum Action {
     Redo,
     FrameAll,
     NextMaterial,
+    ToggleMaskPainting,
     TogglePolyframe,
     ViewPerspective,
     ViewFront,
@@ -166,7 +167,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 22] = [
+    pub const ALL: [Action; 23] = [
         Self::NewDocument,
         Self::OpenDocument,
         Self::Save,
@@ -175,6 +176,7 @@ impl Action {
         Self::Redo,
         Self::FrameAll,
         Self::NextMaterial,
+        Self::ToggleMaskPainting,
         Self::TogglePolyframe,
         Self::ViewPerspective,
         Self::ViewFront,
@@ -238,7 +240,13 @@ impl Default for Shortcuts {
         // Bare letters for what a hand on the keyboard reaches for while the
         // other hand is sculpting.
         bind(Chord::plain(Key::F), Action::FrameAll);
-        bind(Chord::plain(Key::M), Action::NextMaterial);
+        // `M` is masking, which is what it is in Blender's sculpt mode and
+        // what a hand coming from there will reach for. It held the material
+        // cycle first; that moved to the shifted pair rather than the mask
+        // taking a modifier, because freezing a region is done constantly
+        // while sculpting and changing the display material is done once.
+        bind(Chord::plain(Key::M), Action::ToggleMaskPainting);
+        bind(Chord::shift(Key::M), Action::NextMaterial);
         // ZBrush's PolyF is Shift+F, and F alone is already taken here by
         // framing — so the shifted pair keeps both where a ZBrush hand
         // expects them.
@@ -344,6 +352,24 @@ mod tests {
                 "{action:?} has no default binding"
             );
         }
+    }
+
+    #[test]
+    fn m_is_masking_and_the_material_cycle_moved_off_it() {
+        // Both references put masking on `M` in a sculpting mode, and it is
+        // the key a hand coming from either will reach for. It was the
+        // material cycle's, which is why this is written down: the collision
+        // is the kind that would otherwise be resolved back the other way by
+        // whoever touches the table next.
+        let shortcuts = Shortcuts::default();
+        assert_eq!(
+            shortcuts.action(Chord::plain(Key::M)),
+            Some(Action::ToggleMaskPainting)
+        );
+        assert_eq!(
+            shortcuts.action(Chord::shift(Key::M)),
+            Some(Action::NextMaterial)
+        );
     }
 
     #[test]

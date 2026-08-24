@@ -343,3 +343,195 @@ fn a_mask_is_as_fine_as_the_surface_it_freezes() {
         })
         .expect("a thin wall should extrude");
 }
+
+// -- seeing the mask ---------------------------------------------------------
+//
+// A mask that cannot be seen is a trap: a sculptor who freezes a region and
+// then finds a brush doing nothing has no way to tell a protected surface from
+// a broken tool. These state the two things the viewport needs from the engine
+// to draw one — a weight at any point, and a signal that it changed.
+
+#[test]
+fn a_mask_can_be_read_at_a_point() {
+    let Some(mut document) = document() else {
+        return;
+    };
+    let frozen = [1.0, 0.0, 0.0];
+    let free = [-1.0, 0.0, 0.0];
+
+    assert_eq!(
+        document.mask_at(&[frozen, free]),
+        None,
+        "an unpainted document reported mask weights; the viewport would sample \
+         every vertex of every surface to draw nothing"
+    );
+
+    freeze(&mut document, frozen);
+    let weights = document
+        .mask_at(&[frozen, free])
+        .expect("a painted mask reads as painted");
+    assert!(
+        weights[0] > 0.5,
+        "the painted spot reads {}, so the frozen region would be drawn as free",
+        weights[0]
+    );
+    assert!(
+        weights[1] < 0.01,
+        "the far side reads {}, so the whole model would be drawn frozen",
+        weights[1]
+    );
+}
+
+#[test]
+fn the_mask_revision_moves_whenever_the_mask_does() {
+    let Some(mut document) = document() else {
+        return;
+    };
+    let start = document.mask_revision();
+
+    freeze(&mut document, [1.0, 0.0, 0.0]);
+    let painted = document.mask_revision();
+    assert_ne!(
+        painted, start,
+        "painting a mask left the revision where it was. A mask stroke moves no \
+         clay and dirties no brick — deliberately, it is state the next stroke \
+         reads — so this counter is the only thing that can tell the viewport \
+         to look again, and what was just painted would stay invisible"
+    );
+
+    document.apply_mask_op(MaskOp::Invert).expect("invert");
+    let inverted = document.mask_revision();
+    assert_ne!(
+        inverted, painted,
+        "inverting the mask left the revision where it was"
+    );
+
+    document.apply_mask_op(MaskOp::Clear).expect("clear");
+    assert_ne!(
+        document.mask_revision(),
+        inverted,
+        "clearing the mask left the revision where it was, so the frozen region \
+         would go on being drawn over clay that is free"
+    );
+    assert_eq!(
+        document.mask_at(&[[1.0, 0.0, 0.0]]),
+        None,
+        "a cleared mask still reads as painted"
+    );
+}
+
+#[test]
+fn a_surface_stroke_leaves_the_mask_revision_alone() {
+    // The other half: the counter drives a re-sample of every drawn vertex, so
+    // a number that moved on every dab would pay that cost on every dab.
+    let Some(mut document) = document() else {
+        return;
+    };
+    freeze(&mut document, [1.0, 0.0, 0.0]);
+    let after_painting = document.mask_revision();
+
+    document
+        .apply_stroke(
+            ToolKind::Padrao,
+            BrushSettings::default(),
+            &[GestureSample {
+                position: [-1.0, 0.0, 0.0],
+                pressure: 1.0,
+                time: 0.0,
+            }],
+            [false; 3],
+        )
+        .expect("the stroke was refused");
+
+    assert_eq!(
+        document.mask_revision(),
+        after_painting,
+        "an ordinary stroke moved the mask's revision, so every dab would \
+         re-sample the mask across the whole surface"
+    );
+}
+
+// -- the tool, on every representation ---------------------------------------
+
+#[test]
+fn the_mask_tool_paints_a_mask_on_a_grid_rather_than_depositing_clay() {
+    // It deposited. `apply_stroke` asked the representation first and a voxel
+    // layer sent every tool to `stroke_voxel`, where Máscara fell through to
+    // the depositing arm — so the tool that exists to protect clay was adding
+    // it, and the mask the sculptor thought they had painted did not exist.
+    // The same shape of defect the SDF path already had and already fixed.
+    let Some(policy) = BackendPolicy::discover(None).ok() else {
+        return;
+    };
+    let Ok(mut document) = ClayDocument::new(policy) else {
+        return;
+    };
+    document.add_voxel_layer("Voxels", 0.05).expect("a grid");
+
+    let outcome = document
+        .apply_stroke(
+            ToolKind::Mascara,
+            BrushSettings {
+                size: 0.3,
+                intensity: 1.0,
+                ..BrushSettings::default()
+            },
+            &[GestureSample {
+                position: [0.0, 0.0, 0.0],
+                pressure: 1.0,
+                time: 0.0,
+            }],
+            [false; 3],
+        )
+        .expect("the mask stroke was refused on a grid");
+
+    assert!(outcome.changed, "the mask stroke reported no change");
+    assert!(
+        document.mask_state().is_active(),
+        "painting a mask on a grid left no mask"
+    );
+    assert!(
+        document.visible_mesh_geometry().3.is_empty(),
+        "the mask stroke put {} indices of material into an empty grid — it \
+         deposited clay where the sculptor asked to freeze a region",
+        document.visible_mesh_geometry().3.len()
+    );
+}
+
+#[test]
+fn the_mask_tool_reaches_a_mesh_layer() {
+    // It was refused there: the tool table gave Máscara no mesh verb, though
+    // `stroke_mesh` has been handing the mask to the engine all along — so a
+    // mesh could be *protected* by a mask and could not be used to paint one.
+    // A mask belongs to no representation; it is a world-addressed field the
+    // verbs consult.
+    let Some(mut document) = document() else {
+        return;
+    };
+    document
+        .convert_layer(clayspace_model::Direction::SdfToMesh, 0.05, 0)
+        .expect("into a mesh");
+
+    let at = SculptModel::pick(&document, [0.0, 0.0, 4.0], [0.0, 0.0, -1.0])
+        .expect("the mesh has a near face");
+    freeze(&mut document, at);
+    assert!(
+        document.mask_state().is_active(),
+        "a mask painted on a mesh layer left no mask"
+    );
+}
+
+#[test]
+fn every_representation_offers_the_mask_tool() {
+    for representation in [
+        clayspace_model::Representation::Sdf,
+        clayspace_model::Representation::Voxel,
+        clayspace_model::Representation::Mesh,
+    ] {
+        assert!(
+            ToolKind::Mascara.exists_on(representation),
+            "Máscara is not offered on {representation:?}, so a sculptor \
+             working there cannot freeze anything"
+        );
+    }
+}

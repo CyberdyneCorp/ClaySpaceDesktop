@@ -113,6 +113,7 @@ fn capture(harness: &Harness, document: &mut ClayDocument, name: &str) {
             position,
             normal,
             color,
+            mask: 0.0,
         })
         .collect();
     let mut mesh = clayspace_view::GpuMesh::new(&harness.gpu);
@@ -189,6 +190,12 @@ fn every_geometry_verb_moves_something() {
     let mut dead = Vec::new();
     for tool in ToolKind::for_representation(Representation::Mesh) {
         if matches!(tool, ToolKind::Pintar | ToolKind::Borrar) {
+            continue;
+        }
+        // Máscara is on the mesh shelf and is *supposed* to move nothing: it
+        // paints the freeze the other verbs consult. Moving a vertex would be
+        // the defect there.
+        if tool.is_mask_tool() {
             continue;
         }
         let Some(mut document) = meshed() else {

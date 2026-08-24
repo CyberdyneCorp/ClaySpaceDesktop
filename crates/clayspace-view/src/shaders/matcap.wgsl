@@ -27,13 +27,25 @@ struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) color: vec3<f32>,
+    // How frozen this vertex is, 0 to 1.
+    @location(3) mask: f32,
 };
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) view_normal: vec3<f32>,
     @location(1) color: vec3<f32>,
+    @location(2) mask: f32,
 };
+
+// What a frozen region reads as, and how far the blend goes at full mask.
+//
+// A dark neutral rather than a hue: the mask says "this will not move", and a
+// colour would read as paint on the clay. Short of 1 on purpose — the surface
+// under the mask stays legible, so a sculptor can still see the form they are
+// protecting, which is how both references draw it.
+const MASK_COLOR: vec3<f32> = vec3<f32>(0.11, 0.12, 0.15);
+const MASK_STRENGTH: f32 = 0.72;
 
 @vertex
 fn vs_main(input: VertexInput) -> VertexOutput {
@@ -41,6 +53,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     out.clip_position = camera.view_projection * vec4<f32>(input.position, 1.0);
     out.view_normal = (camera.view_rotation * vec4<f32>(input.normal, 0.0)).xyz;
     out.color = input.color;
+    out.mask = input.mask;
     return out;
 }
 
@@ -55,7 +68,11 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Vertex colour modulates the material rather than replacing it, so a
     // palette-indexed voxel layer reads as coloured clay and not as flat paint.
     let modulation = mix(vec3<f32>(1.0), input.color, material.tint.a);
-    return vec4<f32>(lit * material.tint.rgb * modulation, 1.0);
+    let shaded = lit * material.tint.rgb * modulation;
+
+    // The frozen region, drawn over the shading rather than in place of it.
+    let frozen = clamp(input.mask, 0.0, 1.0) * MASK_STRENGTH;
+    return vec4<f32>(mix(shaded, MASK_COLOR, frozen), 1.0);
 }
 
 // Overlays — the grid and the symmetry plane — are drawn flat, in their own

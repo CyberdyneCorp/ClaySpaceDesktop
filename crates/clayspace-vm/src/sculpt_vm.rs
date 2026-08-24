@@ -75,6 +75,13 @@ pub struct SculptViewModel {
     polyframe: Observable<bool>,
     /// What was held when the current gesture began. Cleared with it.
     modifiers: clayspace_model::StrokeModifiers,
+    /// What was in hand when mask painting was turned on.
+    ///
+    /// Held so the key can turn it off again: freezing a region is a detour
+    /// from whatever is being sculpted, and a sculptor who takes it should not
+    /// have to find their brush on the shelf afterwards. Cleared by choosing a
+    /// tool outright, which says the detour is over.
+    tool_before_mask: Option<ToolKind>,
 
     history: Observable<HistoryState>,
     stats: Observable<SceneStats>,
@@ -132,6 +139,7 @@ impl SculptViewModel {
             // rather than kept on.
             polyframe: Observable::new(false),
             modifiers: clayspace_model::StrokeModifiers::default(),
+            tool_before_mask: None,
             history: Observable::new(history),
             stats: Observable::new(stats),
             tool_status: Observable::new(None),
@@ -239,12 +247,22 @@ impl SculptViewModel {
     pub fn dispatch(&mut self, command: Command) -> Result<(), ModelError> {
         match command {
             Command::SelectTool(tool) => {
-                self.store_brush();
-                if self.tool.set_if_changed(tool) {
-                    let (row, index) = self.slot(tool);
-                    self.brush.set(self.brushes[row][index]);
-                    self.refresh_tool_status();
-                }
+                // Chosen from the shelf, so the mask key has nothing to
+                // return to: the sculptor has said which tool they want.
+                self.tool_before_mask = None;
+                self.select(tool);
+            }
+            Command::ToggleMaskPainting => {
+                let tool = match self.tool_before_mask.take() {
+                    // Painting already, so this is the way out — back to
+                    // whatever was in hand when the key was first pressed.
+                    Some(previous) => previous,
+                    None => {
+                        self.tool_before_mask = Some(*self.tool.get());
+                        ToolKind::Mascara
+                    }
+                };
+                self.select(tool);
             }
             Command::SetCombine(combine) => {
                 let combine = combine.sanitized();
@@ -565,6 +583,16 @@ impl SculptViewModel {
             0.0
         } else {
             1.0
+        }
+    }
+
+    /// Selects a tool, bringing its remembered brush with it.
+    fn select(&mut self, tool: ToolKind) {
+        self.store_brush();
+        if self.tool.set_if_changed(tool) {
+            let (row, index) = self.slot(tool);
+            self.brush.set(self.brushes[row][index]);
+            self.refresh_tool_status();
         }
     }
 

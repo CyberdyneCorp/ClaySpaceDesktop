@@ -108,6 +108,12 @@ struct App {
     /// triangles are copied whole or not at all. Comparing a revision is what
     /// keeps "not at all" the usual answer.
     mesh_revision: Option<u64>,
+    /// The mask revision the drawn surface was sampled at.
+    ///
+    /// Separate from `mesh_revision` because the brick surface is uploaded
+    /// incrementally and the carried layers are not: a mask change re-samples
+    /// the stored vertices in place rather than re-meshing anything.
+    mask_revision: Option<u64>,
     /// Whether this frame changed the document, which is what says the frame
     /// has nothing spare to spend on [`App::refine_geometry`].
     edited_this_frame: bool,
@@ -247,6 +253,7 @@ impl App {
             detail_policy: DetailPolicy::default(),
             shortcuts: Shortcuts::default(),
             mesh_revision: None,
+            mask_revision: None,
             edited_this_frame: false,
             detail_camera: None,
             window: None,
@@ -664,6 +671,7 @@ impl App {
         // nothing at all both report zero — and the viewport would then keep
         // drawing the document that was just closed.
         self.mesh_revision = None;
+        self.mask_revision = None;
         self.sync_mesh_layers();
         self.frame_all();
     }
@@ -865,24 +873,56 @@ impl App {
         }
         self.mesh_revision = Some(revision);
         self.timed("camadas de malha", |app| {
-            let (positions, normals, colors, indices) = app
-                .document
-                .with(|document| document.visible_mesh_geometry());
-            let vertices: Vec<Vertex> = positions
-                .into_iter()
-                .zip(normals)
-                .zip(colors)
-                .map(|((position, normal), color)| Vertex {
-                    position,
-                    normal,
-                    color,
-                })
-                .collect();
+            let (vertices, indices) = app.document.with(|document| {
+                let (positions, normals, colors, indices) = document.visible_mesh_geometry();
+                // The frozen region reaches a carried layer the same way it
+                // reaches the brick surface, and from the same sample call —
+                // a mask is world-addressed, so it does not care which of the
+                // three representations a vertex came out of.
+                let frozen = document.mask_at(&positions);
+                let vertices: Vec<Vertex> = positions
+                    .into_iter()
+                    .zip(normals)
+                    .zip(colors)
+                    .enumerate()
+                    .map(|(at, ((position, normal), color))| Vertex {
+                        position,
+                        normal,
+                        color,
+                        mask: frozen.as_ref().map_or(0.0, |weights| weights[at]),
+                    })
+                    .collect();
+                (vertices, indices)
+            });
             let Some(graphics) = app.graphics.as_mut() else {
                 return;
             };
             let gpu = graphics.gpu.clone();
             graphics.renderer.set_mesh_layers(&gpu, &vertices, &indices);
+        });
+    }
+
+    /// Brings the drawn surface's idea of the frozen region up to date.
+    ///
+    /// Its own pass because a mask stroke moves no clay: it dirties no brick,
+    /// so `sync_geometry` has nothing to re-mesh and would leave what was just
+    /// painted undrawn. Only when the mask has actually changed, which is the
+    /// same bargain `sync_mesh_layers` makes — this re-samples every stored
+    /// vertex, and doing that at sixty hertz to show a mask nobody touched
+    /// would be the whole frame budget.
+    fn sync_mask(&mut self) {
+        let revision = self.document.with(|document| document.mask_revision());
+        if self.mask_revision == Some(revision) {
+            return;
+        }
+        self.mask_revision = Some(revision);
+        self.timed("máscara", |app| {
+            let Some(graphics) = app.graphics.as_mut() else {
+                return;
+            };
+            let gpu = graphics.gpu.clone();
+            app.document
+                .with(|document| graphics.geometry.refresh_mask(&gpu, document));
         });
     }
 
@@ -1364,6 +1404,7 @@ impl App {
                 self.document_vm.touched();
                 self.sync_geometry();
                 self.sync_mesh_layers();
+                self.sync_mask();
             }
             Err(e) => eprintln!("a operação foi recusada: {e}"),
         }
@@ -1462,6 +1503,7 @@ impl App {
             Action::Redo => Command::Redo,
             Action::FrameAll => Command::FrameAll,
             Action::NextMaterial => Command::NextMaterial,
+            Action::ToggleMaskPainting => Command::ToggleMaskPainting,
             Action::TogglePolyframe => Command::TogglePolyframe,
             Action::ViewPerspective => Command::SetViewPreset(ViewPresetKind::Perspective),
             Action::ViewFront => Command::SetViewPreset(ViewPresetKind::Front),
@@ -1772,6 +1814,7 @@ impl App {
             ]
         });
         self.sync_mesh_layers();
+        self.sync_mask();
         self.sync_symmetry_overlay();
         self.sync_armature_view();
         // After the frame's commands, so a camera move made in it is the one

@@ -20,6 +20,12 @@ use clayspace_model::{
 pub enum Command {
     // -- tools ------------------------------------------------------------
     SelectTool(ToolKind),
+    /// Starts painting a mask, or stops and returns to the tool in hand.
+    ///
+    /// A toggle rather than a plain selection because that is what the key is
+    /// for: freeze a region, then carry on with the brush you were using
+    /// without having to find it on the shelf again.
+    ToggleMaskPainting,
     /// An operation on the mask itself, not through it.
     ApplyMaskOp(MaskOp),
     /// Pulls the masked patch off as its own layer.
@@ -267,6 +273,7 @@ impl Command {
     pub fn label(&self) -> &'static str {
         match self {
             Self::SelectTool(_) => "select tool",
+            Self::ToggleMaskPainting => "máscara",
             Self::ApplyMaskOp(op) => op.label(),
             Self::ExtrudeMask(_) => "extrude mask",
             Self::SetBrushSize(_) => "brush size",

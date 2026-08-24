@@ -54,6 +54,7 @@ fn upload(harness: &mut Harness, document: &mut ClayDocument) {
             position,
             normal,
             color,
+            mask: 0.0,
         })
         .collect();
     let gpu = harness.gpu.clone();

@@ -29,7 +29,7 @@ All fifteen are bound and each is covered by a before-and-after capture in
 | Planar | `clay_item_volume_flatten_from`, cut-only | SDF | Planes without filling, which keeps a facet crisp |
 | Preencher | `clay_voxel_sculpt_fill_cavities` | voxel | Fills narrow pockets |
 | Camada | `clay_layer_apply_stroke`, clamped | both | A stroke that does not build up on itself |
-| Máscara | `clay_mask_apply_stroke` | both | Freezes a region against every verb. Invert, clear, expand, contract, smooth, bounded complement and extrude are in the Máscaras menu |
+| Máscara | `clay_mask_apply_stroke` | all three | Freezes a region against every verb. Invert, clear, expand, contract, smooth, bounded complement and extrude are in the Máscaras menu |
 | Puxar | swept-sphere chain | SDF | Pulls a tendril out, tapering to its tip |
 | Polir | `clay_item_volume_flatten_from`, cut-only | SDF | hPolish |
 | Relaxar | `clay_item_volume_relax` | SDF | Relax as a brush |
@@ -81,6 +81,33 @@ producing an error you cannot act on.
 
 Symmetry about X, Y and Z is applied through the layer's mirror, so both halves
 belong to one operation and undo together.
+
+## Masking
+
+**M** starts painting a mask and **M** again puts the tool you were using back
+in your hand — the key Blender's sculpt mode uses, and a toggle because
+freezing a region is a detour from what is being sculpted rather than a mode to
+live in. Choosing a tool from the shelf ends the detour, so a later **M** starts
+a fresh one rather than rewinding past the choice. The material cycle, which
+held `M`, is **Shift+M**.
+
+The frozen region is **drawn**: masked clay reads as a dark neutral over the
+shading, at roughly three quarters strength so the form underneath stays
+legible. This is the same as Blender and it is not decoration — masking
+protects the surface almost completely (measured, 1.0005 against 1.1400 for the
+same stroke unmasked), so a sculptor who cannot see the mask cannot tell a
+protected surface from a broken tool.
+
+A mask belongs to **no representation**. It is a world-addressed field the verbs
+consult, so it is painted the same way and honoured the same way on a field, a
+grid and a mesh. That was not true before: on a grid the tool fell through to
+the depositing arm and *added clay* where the sculptor asked to freeze a region,
+and on a mesh it was refused outright even though a mesh stroke had been handing
+the mask to the engine all along. `masking.rs` holds both.
+
+What the mask itself can then be put through — invert, clear, expand, contract,
+smooth, the bounded complement, and extrude into its own layer — is the
+**Máscaras** menu.
 
 ### Held keys
 

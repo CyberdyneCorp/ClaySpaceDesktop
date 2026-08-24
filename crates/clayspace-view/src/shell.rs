@@ -482,6 +482,15 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
             });
             ui.menu_button(s.menu_dynamics, |_| {});
             ui.menu_button(s.menu_masks, |ui| {
+                // First, because it is what the rest of the menu operates on:
+                // there is nothing to invert or extrude until a region has
+                // been frozen, and the key that does it is spelled out here so
+                // it can be learned from the menu rather than from the manual.
+                if item(ui, state, s.action_paint_mask, Action::ToggleMaskPainting).clicked() {
+                    queue.push(Command::ToggleMaskPainting);
+                    ui.close_menu();
+                }
+                ui.separator();
                 // Disabled rather than hidden: a menu whose entries come and
                 // go is harder to learn than one whose entries are sometimes
                 // grey, and the grey says *why* the tool is unavailable.
