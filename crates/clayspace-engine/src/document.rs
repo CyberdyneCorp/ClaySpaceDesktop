@@ -2737,10 +2737,32 @@ impl ClayDocument {
                             material,
                         )
                     }
+                    // A majority filter over the neighbourhood: spurs
+                    // dissolve, notches fill. It has no sign to turn — the
+                    // same reason smoothing has none on a field or a mesh.
                     ToolKind::Suavizar | ToolKind::Relaxar => grid.sculpt_smooth(cell, &params),
-                    ToolKind::Inflar => grid.sculpt_inflate(cell, &params, 1),
+                    // "amount > 0 dilates, < 0 erodes", says the engine, and
+                    // only the dilating half was ever asked for.
+                    ToolKind::Inflar => {
+                        grid.sculpt_inflate(cell, &params, if brush.invert { -1 } else { 1 })
+                    }
+                    // Magnify is pinch's inverse and the engine says so
+                    // outright — "sharing its walk so the two cannot drift
+                    // apart", the pair the SDF side spells as one signed
+                    // strength. Held, the key reaches the other half.
+                    ToolKind::Pincar if brush.invert => grid.sculpt_magnify(cell, &params),
                     ToolKind::Pincar => grid.sculpt_pinch(cell, &params),
-                    ToolKind::Raspar => grid.sculpt_scrape(cell, &params, [0.0, 1.0, 0.0], 0.0),
+                    // No opposite bound, deliberately. Turning the scrape's
+                    // normal over looks like one and is not: measured on a
+                    // slab, both directions remove material and differ by 12
+                    // indices of 2580. The normal here is a fixed up-vector
+                    // rather than the surface's own, so flipping it scrapes
+                    // some other face rather than reversing the verb — and a
+                    // guess dressed as a feature is worse than an honest
+                    // absence.
+                    ToolKind::Raspar => {
+                        grid.sculpt_scrape(cell, &params, mirror.vector([0.0, 1.0, 0.0]), 0.0)
+                    }
                     // At full strength, whatever Intensidade says.
                     //
                     // Every voxel verb dithers its writes against a hash of the
@@ -2770,6 +2792,9 @@ impl ClayDocument {
                     // colour attribute is twelve bytes a vertex and is refused
                     // rather than created.
                     ToolKind::Pintar => grid.paint_brush(cell, &params, material),
+                    // The one tool whose upright verb is the removal, so its
+                    // opposite is the deposit rather than the other way round.
+                    ToolKind::Apagar if brush.invert => grid.set_brush(cell, &params, material),
                     ToolKind::Apagar => grid.erase_brush(cell, &params),
                     // Anything else deposits material, which is what a default
                     // brush does on a voxel grid — or takes it away, where the
