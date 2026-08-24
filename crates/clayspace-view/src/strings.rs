@@ -42,6 +42,12 @@ pub struct Strings {
     pub menu_masks: &'static str,
     /// Starting and stopping mask painting.
     pub action_paint_mask: &'static str,
+    /// How a voxel layer is drawn.
+    pub label_voxel_display: &'static str,
+    /// How much the occupancy is filtered before the smooth surface is taken.
+    pub label_voxel_blur: &'static str,
+    /// What a blur above zero costs.
+    pub hint_voxel_blur: &'static str,
     /// The lattice section of the inspector.
     pub section_lattice: &'static str,
     /// Putting a cage up and taking it down.
@@ -247,6 +253,9 @@ const PT_BR: Strings = Strings {
     menu_dynamics: "Dinâmica",
     menu_masks: "Máscaras",
     action_paint_mask: "Pintar máscara",
+    label_voxel_display: "Exibir voxels como",
+    label_voxel_blur: "Suavização",
+    hint_voxel_blur: "Acima de zero apaga voxels isolados e detalhes finos",
     section_lattice: "GAIOLA",
     action_cage: "Gaiola de deformação",
     action_bend: "Deformar",
@@ -417,6 +426,9 @@ const EN_US: Strings = Strings {
     menu_dynamics: "Dynamics",
     menu_masks: "Masks",
     action_paint_mask: "Paint mask",
+    label_voxel_display: "Draw voxels as",
+    label_voxel_blur: "Blur",
+    hint_voxel_blur: "Above zero deletes isolated voxels and thin detail",
     section_lattice: "LATTICE",
     action_cage: "Deformation cage",
     action_bend: "Deform",
@@ -586,6 +598,9 @@ const ES_419: Strings = Strings {
     menu_dynamics: "Dinámica",
     menu_masks: "Máscaras",
     action_paint_mask: "Pintar máscara",
+    label_voxel_display: "Mostrar vóxeles como",
+    label_voxel_blur: "Suavizado",
+    hint_voxel_blur: "Por encima de cero borra vóxeles aislados y detalles finos",
     section_lattice: "GAIOLA",
     action_cage: "Gaiola de deformação",
     action_bend: "Deformar",
@@ -758,7 +773,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 115] {
+    pub fn all(&self) -> [&'static str; 118] {
         [
             self.menu_file,
             self.menu_edit,
@@ -768,6 +783,9 @@ impl Strings {
             self.menu_brushes,
             self.menu_dynamics,
             self.menu_masks,
+            self.label_voxel_display,
+            self.label_voxel_blur,
+            self.hint_voxel_blur,
             self.section_lattice,
             self.action_cage,
             self.action_bend,

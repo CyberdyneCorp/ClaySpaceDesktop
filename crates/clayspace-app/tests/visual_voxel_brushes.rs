@@ -279,3 +279,95 @@ fn each_brush_with_an_opposite_draws_a_different_picture_held() {
         );
     }
 }
+
+// -- the two pictures of a grid ----------------------------------------------
+
+#[test]
+fn a_grid_can_be_drawn_as_boxes_or_as_a_surface() {
+    // A grid is boxes; whether it should *look* like boxes is a separate
+    // question, and the engine ships a mesher for each answer. The boxy one is
+    // correct for hard-surface work and for export; the smooth one is the
+    // right picture of an organic sculpt.
+    //
+    // The smooth mesh carries no normals — colour blends across a smooth
+    // surface and a normal is the host's to work out — so a flat silhouette
+    // here would mean they were not computed, which is what the first attempt
+    // at this looked like.
+    use clayspace_model::{SmoothBlur, VoxelDisplay};
+
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let camera = head_on();
+    let mut mesh = clayspace_view::GpuMesh::new(&harness.gpu);
+
+    let shot = |harness: &Harness,
+                mesh: &mut clayspace_view::GpuMesh,
+                display: VoxelDisplay,
+                blur: i32,
+                name: &str|
+     -> (Image, usize) {
+        let mut document = packed().expect("a slab");
+        document
+            .set_voxel_display(display, SmoothBlur::new(blur))
+            .expect("the picture was refused");
+        let (vertices, indices) = viewport(&mut document);
+        mesh.upload(&harness.gpu, &vertices, &indices);
+        (harness.capture(mesh, &camera, false, name), vertices.len())
+    };
+
+    let (boxes, box_verts) = shot(
+        &harness,
+        &mut mesh,
+        VoxelDisplay::Boxes,
+        0,
+        "voxel-picture-boxes",
+    );
+    let (smooth, smooth_verts) = shot(
+        &harness,
+        &mut mesh,
+        VoxelDisplay::Smooth,
+        0,
+        "voxel-picture-smooth",
+    );
+    let (blurred, blur_verts) = shot(
+        &harness,
+        &mut mesh,
+        VoxelDisplay::Smooth,
+        1,
+        "voxel-picture-smooth-blurred",
+    );
+
+    println!("boxes {box_verts} smooth {smooth_verts} blurred {blur_verts}");
+    assert!(
+        how_many_differ(&boxes, &smooth) > 1000,
+        "the smooth picture drew the same frame as the boxes. See \
+         target/visual/voxel-picture-*.png"
+    );
+    assert!(
+        how_many_differ(&smooth, &blurred) > 200,
+        "blurring the occupancy changed nothing"
+    );
+    assert!(
+        blur_verts < smooth_verts,
+        "one pass of blur left {blur_verts} vertices against {smooth_verts}"
+    );
+
+    // Shaded, not flat. A surface whose vertices all carried the same normal
+    // renders as one tone, so the spread of tones is what says the normals
+    // were computed.
+    let ground = smooth.pixel(2, 2);
+    let mut tones = std::collections::BTreeSet::new();
+    for pixel in smooth.pixels.chunks_exact(4) {
+        if (0..3).any(|c| pixel[c].abs_diff(ground[c]) > 10) {
+            tones.insert(pixel[0]);
+        }
+    }
+    assert!(
+        tones.len() > 20,
+        "the smooth surface drew {} distinct tones, which is a flat \
+         silhouette — the mesh carries no normals of its own, so this is what \
+         a missing normals pass looks like",
+        tones.len()
+    );
+}

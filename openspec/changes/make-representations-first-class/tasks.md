@@ -936,3 +936,54 @@ is a change of its own.
     of the *cell coordinate*, which is not symmetric), the wobble in the slab
     (not an even function of x), and the camera (framing a slab's own bounds
     puts it off the mirror plane).
+
+## 22. Boxes or a surface
+
+- [x] 22.1 Draw a grid as the sculpt rather than as its cells
+  - Asked whether a voxel layer should be drawn as small cubes, with a comment
+    proposing marching cubes or dual contouring. Directionally right and wrong
+    on three specifics, and the check was worth making before writing anything:
+    - **The algorithm is not missing.** `clay_voxel_mesh_smooth` is surface
+      nets — the dual method — and has been there all along. Nothing needed
+      writing here or in ClayCore.
+    - **It is not a replacement.** The engine says the boxy picture is "correct
+      for hard-surface voxel work and for export, and the wrong picture of an
+      organic sculpt", and keeps the choice an argument so "one host can show
+      both pictures of one sculpt without mutating it". A display setting, then
+      — which is also what 3DCoat offers.
+    - **It is not dual contouring.** A vertex sits at the centroid of its
+      cell's edge crossings, so corners *round*. Dual contouring fits the
+      vertex by least squares to hermite data and keeps them sharp. The
+      comment's "preserves sharp features" is not what this gives, and getting
+      it would be an engine change.
+  - Measured on one grid: greedy 6828 verts / 3414 tris / 1.5 ms; smooth 2221 /
+    4980 / 16.8 ms; smooth with one blur pass 992 / 1992 / 19.0 ms.
+
+- [x] 22.2 The two facts that shaped the wiring
+  - **The smooth mesh carries no normals.** Colour blends across it — a vertex
+    sits between up to eight voxels and averages the occupied ones, there being
+    no facet to hold one palette entry — but a normal is the host's to work
+    out. Without them the surface renders as a flat silhouette, which is
+    exactly what an earlier attempt at this looked like and why it was dropped.
+    Computed area-weighted in the bridge, with a test that would have caught
+    it: the rendered surface must show more than twenty distinct tones.
+  - **It cannot be meshed a chunk at a time.** `clay_voxel_mesh_chunks` is the
+    greedy mesher alone, and the engine explains why: greedy quads are
+    axis-aligned and exact, so clamping their merge to a chunk boundary emits
+    more, smaller quads over the identical surface and never a crack, while
+    surface nets place a vertex from a cell's *neighbourhood* and would tear.
+    So the smooth picture is a **settle** — rebuilt when a gesture ends, beside
+    the brick surface's own settle — because the incremental boxy path is
+    3.3 ms a dab against 309 ms for a whole-grid re-mesh.
+  - The smooth mesh counts toward `mesh_revision`, or a settle that rebuilt it
+    without touching a cell would never reach the viewport.
+
+- [x] 22.3 Say what the filtering costs
+  - `blur` is the engine's, in passes of a 3×3×3 box over occupancy. At 0
+    nothing is filtered and nothing is lost, but the surface still terraces; at
+    1 it reads as clay and an isolated voxel sits under the isolevel and is
+    gone. Default 0, in the engine's own words: "a default that silently
+    deletes a sculptor's detail is the wrong default however good it looks."
+  - `SmoothBlur::can_lose_detail` is asked by the interface, which says so in
+    the accent colour where it is true — rather than leaving a sculptor to find
+    out from a missing finger.

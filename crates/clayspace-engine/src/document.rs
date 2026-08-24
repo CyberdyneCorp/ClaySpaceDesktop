@@ -15,7 +15,8 @@ use clayspace_model::{
     ExtrudeSettings, Format, GestureSample, GizmoDrag, GizmoHandle, GizmoMode, HistoryState,
     ImportAs, ImportSettings, LatticeModel, LatticeState, LayerKey, LayerSummary, MaskModel,
     MaskOp, MaskState, ModelError, NodeIndex, OpenError, Protection, Refusal, Representation,
-    Scene, SceneModel, SceneNode, SceneStats, SculptModel, SkinSettings, ToolKind,
+    Scene, SceneModel, SceneNode, SceneStats, SculptModel, SkinSettings, SmoothBlur, ToolKind,
+    VoxelDisplay,
 };
 
 use crate::backend::{BackendPolicy, Operation};
@@ -211,6 +212,20 @@ pub struct ClayDocument {
     /// engine's business — the interface drags a point in the world and this
     /// is what knows the box that point belongs to.
     lattice: Option<Cage>,
+    /// Which picture of a voxel layer the viewport draws, and how much the
+    /// occupancy is filtered before the smooth one is taken.
+    ///
+    /// Display only: nothing here changes a cell, and the engine keeps it an
+    /// argument rather than grid state for exactly that reason.
+    voxel_display: VoxelDisplay,
+    voxel_blur: SmoothBlur,
+    /// The smooth mesh of each voxel layer, while that is the picture being
+    /// drawn.
+    ///
+    /// Whole-grid and held apart from `voxel_chunks`, because it is not
+    /// chunked and cannot be: `clay_voxel_mesh_chunks` is the greedy mesher
+    /// alone. Rebuilt when a gesture settles rather than while it is made.
+    voxel_smooth: std::collections::BTreeMap<LayerKey, ChunkGeometry>,
     /// A mask the tools consult, when one has been painted.
     mask: Option<Mask>,
     /// Changes whenever the cage does — its points, its selection or its
@@ -368,6 +383,9 @@ impl ClayDocument {
             mesh_undo: Vec::new(),
             mesh_redo: Vec::new(),
             lattice: None,
+            voxel_display: VoxelDisplay::default(),
+            voxel_blur: SmoothBlur::default(),
+            voxel_smooth: std::collections::BTreeMap::new(),
             mask: None,
             cage_revision: 0,
             mask_revision: 0,
@@ -2286,6 +2304,16 @@ impl ClayDocument {
 
         for (index, representation, name) in drawn {
             if representation == Representation::Voxel {
+                // The smooth picture, where one has been built. Whole-grid and
+                // so a single splice, unlike the chunked boxes below.
+                if let Some(smooth) = self.voxel_smooth.get(&self.layers[index].key) {
+                    let base = positions.len() as u32;
+                    indices.extend(smooth.indices.iter().map(|i| i + base));
+                    positions.extend_from_slice(&smooth.positions);
+                    normals.extend_from_slice(&smooth.normals);
+                    colors.extend_from_slice(&smooth.colors);
+                    continue;
+                }
                 // Spliced from what was meshed per chunk. The ranges partition
                 // the mesh, so concatenating them is the whole of the join —
                 // there is no seam to weld, unlike the brick cache's.
@@ -2395,6 +2423,74 @@ impl ClayDocument {
         Ok(())
     }
 
+    /// Rebuilds the smooth mesh of every voxel layer.
+    ///
+    /// Whole-grid, because the smooth picture cannot be meshed a chunk at a
+    /// time: `clay_voxel_mesh_chunks` is the greedy mesher alone, and the
+    /// engine says why — greedy quads are axis-aligned and exact, so clamping
+    /// their merge to a chunk boundary emits more, smaller quads over the
+    /// identical surface and never a crack, while surface nets place a vertex
+    /// from a cell's *neighbourhood* and would tear.
+    ///
+    /// So this is a settle: called when a gesture ends rather than while it is
+    /// made. Measured on the reference grid, 16.8 ms against 1.5 ms for the
+    /// greedy whole-grid mesh — and the incremental greedy path a stroke
+    /// actually uses is 3.3 ms a dab.
+    pub fn resmooth_voxels(&mut self) -> Result<(), ModelError> {
+        if self.voxel_display != VoxelDisplay::Smooth {
+            self.voxel_smooth.clear();
+            return Ok(());
+        }
+        let grids: Vec<(LayerKey, String)> = self
+            .layers
+            .iter()
+            .filter(|layer| layer.representation == Representation::Voxel)
+            .map(|layer| (layer.key, layer.engine_name.clone()))
+            .collect();
+        let blur = self.voxel_blur.passes();
+        for (key, engine_name) in grids {
+            let mesh = {
+                let (_, grid) = self
+                    .document
+                    .voxel_layer(&engine_name)
+                    .map_err(ModelError::engine)?;
+                grid.mesh_smooth(blur).map_err(ModelError::engine)?
+            };
+            if mesh.vertex_count() == 0 {
+                self.voxel_smooth.remove(&key);
+                continue;
+            }
+            self.voxel_smooth.insert(key, smooth_geometry(&mesh));
+        }
+        Ok(())
+    }
+
+    /// Which picture of a voxel layer the viewport draws.
+    pub fn voxel_display(&self) -> VoxelDisplay {
+        self.voxel_display
+    }
+
+    pub fn voxel_blur(&self) -> SmoothBlur {
+        self.voxel_blur
+    }
+
+    /// Changes the picture, and rebuilds it.
+    ///
+    /// Rebuilt here rather than left for the next settle, because a sculptor
+    /// who asks for the other picture is asking to see it now.
+    pub fn set_voxel_display(
+        &mut self,
+        display: VoxelDisplay,
+        blur: SmoothBlur,
+    ) -> Result<(), ModelError> {
+        if self.voxel_display == display && self.voxel_blur == blur {
+            return Ok(());
+        }
+        self.voxel_display = display;
+        self.voxel_blur = blur;
+        self.resmooth_voxels()
+    }
+
     /// How many chunks the last assembly re-meshed.
     ///
     /// Zero on a frame where no grid changed, and a handful after a dab — the
@@ -2489,6 +2585,17 @@ impl ClayDocument {
             // painted on a mesh or a grid would be invisible on exactly the
             // layer it was painted on.
             .wrapping_add(self.mask_revision.wrapping_mul(2_000_003))
+            // And which picture of a grid is drawn. A settle rebuilds the
+            // smooth mesh without touching a cell, so nothing the grid reports
+            // would tell the viewport to look again.
+            .wrapping_add(
+                self.voxel_smooth
+                    .values()
+                    .fold(0u64, |sum, mesh| {
+                        sum.wrapping_add(mesh.positions.len() as u64)
+                    })
+                    .wrapping_mul(3_000_017),
+            )
     }
 
     /// How stretched the active mesh layer's triangles are.
@@ -3262,6 +3369,67 @@ impl Cage {
     }
 }
 
+/// The smooth mesh, in the layout the viewport holds — normals included.
+///
+/// `clay_voxel_mesh_smooth` carries positions, indices and per-vertex colours
+/// and **no normals**: colour blends across a smooth surface, which has no
+/// facet to hold one palette entry, but a normal is the host's to work out.
+/// Without them the surface renders as a flat silhouette, which is what the
+/// first attempt at this looked like.
+///
+/// Area-weighted, which is the ordinary thing and the right one here: the
+/// cross product of two edges is twice the triangle's area, so summing it
+/// unnormalised weights each face by how much surface it actually is.
+fn smooth_geometry(mesh: &claycore::Mesh) -> ChunkGeometry {
+    let positions = mesh.positions().to_vec();
+    let indices = mesh.indices().to_vec();
+    let colors = mesh
+        .colors()
+        .map(<[[f32; 3]]>::to_vec)
+        .unwrap_or_else(|| vec![[1.0; 3]; positions.len()]);
+
+    let mut normals = vec![[0.0f32; 3]; positions.len()];
+    for triangle in indices.chunks_exact(3) {
+        let [a, b, c] = [
+            positions[triangle[0] as usize],
+            positions[triangle[1] as usize],
+            positions[triangle[2] as usize],
+        ];
+        let u: [f32; 3] = std::array::from_fn(|i| b[i] - a[i]);
+        let v: [f32; 3] = std::array::from_fn(|i| c[i] - a[i]);
+        let face = [
+            u[1] * v[2] - u[2] * v[1],
+            u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0],
+        ];
+        for at in triangle {
+            for axis in 0..3 {
+                normals[*at as usize][axis] += face[axis];
+            }
+        }
+    }
+    for normal in normals.iter_mut() {
+        let length = normal.iter().map(|c| c * c).sum::<f32>().sqrt();
+        if length > 1e-9 {
+            for axis in normal.iter_mut() {
+                *axis /= length;
+            }
+        } else {
+            // A vertex every one of whose faces cancelled. Nothing points
+            // anywhere, and up is as good an answer as any — the alternative
+            // is a zero normal, which shades as a hole.
+            *normal = [0.0, 1.0, 0.0];
+        }
+    }
+
+    ChunkGeometry {
+        positions,
+        normals,
+        colors,
+        indices,
+    }
+}
+
 /// One reflection of a stroke, through the planes of some subset of the axes.
 ///
 /// A mesh has no layer mirror to lean on — `clay_set_layer_mirror` reflects a
@@ -3948,6 +4116,9 @@ impl ClayDocument {
             mesh_undo: Vec::new(),
             mesh_redo: Vec::new(),
             lattice: None,
+            voxel_display: VoxelDisplay::default(),
+            voxel_blur: SmoothBlur::default(),
+            voxel_smooth: std::collections::BTreeMap::new(),
             mask: None,
             cage_revision: 0,
             mask_revision: 0,

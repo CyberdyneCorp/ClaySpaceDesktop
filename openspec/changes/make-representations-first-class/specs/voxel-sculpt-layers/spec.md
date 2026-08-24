@@ -44,3 +44,30 @@ what each costs in memory.
 #### Scenario: Cost is reported
 - **WHEN** the sculpt layer stack is shown
 - **THEN** each layer's memory cost, and the total, are stated
+
+### Requirement: A voxel layer can be drawn as boxes or as a smooth surface
+The application SHALL let a sculptor choose whether a voxel layer is drawn as
+the boxes it is or as a smooth surface over the same cells, and SHALL treat
+that choice as a display setting: it changes no cell, records no history entry
+and does not mark the document modified.
+
+Where the smooth surface is drawn, the application SHALL supply the vertex
+normals the engine's mesher does not carry.
+
+The filtering that smooths further SHALL default to none, and the interface
+SHALL say where a setting can delete detail.
+
+#### Scenario: The two pictures are different surfaces over the same cells
+- **WHEN** the smooth picture is chosen
+- **THEN** the drawn surface differs from the boxes
+- **AND** the grid holds the same cells as before
+- **AND** the history is unchanged
+
+#### Scenario: The smooth surface is shaded
+- **WHEN** the smooth picture is drawn
+- **THEN** every vertex carries a normal
+- **AND** they do not all point the same way
+
+#### Scenario: Filtering says what it costs
+- **WHEN** the blur is raised above zero
+- **THEN** the interface says it deletes isolated voxels and thin detail

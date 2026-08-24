@@ -28,6 +28,7 @@ pub mod sculpt;
 pub mod session;
 pub mod tools;
 pub mod units;
+pub mod voxel_display;
 
 pub use alpha::{Alpha, AlphaRefusal, AlphaSupport};
 pub use armature::{Armature, ArmatureModel, NodeIndex, SkinSettings, Zsphere};
@@ -62,3 +63,4 @@ pub use tools::{
     Unavailable, Verbs, ViewPresetKind,
 };
 pub use units::{Unit, Units, UnitsModel};
+pub use voxel_display::{SmoothBlur, VoxelDisplay};

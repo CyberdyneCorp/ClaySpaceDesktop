@@ -1027,6 +1027,14 @@ impl App {
     }
 
     fn settle_geometry_now(&mut self) {
+        // The smooth picture of a grid, which cannot be meshed a chunk at a
+        // time and so waits for the gesture to end. `clay_voxel_mesh_chunks`
+        // is the greedy mesher alone: greedy quads clamp to a chunk boundary
+        // exactly, and surface nets place a vertex from a cell's neighbourhood
+        // and would tear.
+        if let Err(e) = self.document.with(ClayDocument::resmooth_voxels) {
+            eprintln!("a malha suave não pôde ser reconstruída: {e}");
+        }
         let Some(graphics) = self.graphics.as_mut() else {
             return;
         };
@@ -2088,6 +2096,8 @@ impl App {
             show_attribution: self.show_attribution,
             extrude: *self.mask.extrude_settings().get(),
             mask_steps: *self.mask.steps().get(),
+            voxel_display: self.document.with(|d| d.voxel_display()),
+            voxel_blur: self.document.with(|d| d.voxel_blur()),
             lattice: self.lattice.state().get().clone(),
             lattice_divisions: *self.lattice.divisions().get(),
             document_name: document_name.as_str(),
@@ -2335,6 +2345,19 @@ impl App {
                 self.request_redraw();
             }
             Command::RunExport => self.export_mesh(),
+            Command::SetVoxelDisplay(display, blur) => {
+                // Display only. Nothing in the document is touched, so this
+                // neither marks it modified nor enters the history — the same
+                // bargain the display unit makes.
+                if let Err(e) = self
+                    .document
+                    .with(|document| document.set_voxel_display(display, blur))
+                {
+                    eprintln!("a exibição de voxels não pôde ser alterada: {e}");
+                }
+                self.sync_mesh_layers();
+                self.request_redraw();
+            }
             Command::SetLocale(locale) => {
                 // Presentation only, like the display unit: nothing in the
                 // document is touched, so this neither marks it modified nor
