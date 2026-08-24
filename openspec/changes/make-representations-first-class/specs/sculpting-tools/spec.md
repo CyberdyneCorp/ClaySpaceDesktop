@@ -200,3 +200,23 @@ frames, and a scale SHALL never pass through zero.
 #### Scenario: A wandering drag lands where it ends
 - **WHEN** a drag passes through an intermediate point before settling
 - **THEN** the result is the same as a drag straight to where it settled
+
+### Requirement: A mesh cage shows the bend while it is dragged
+The application SHALL show what a lattice cage would do to a mesh layer while
+its control points are being dragged, without committing to it.
+
+The preview SHALL NOT compound across frames, SHALL leave the gesture one undo
+step, and SHALL be taken back when the cage is abandoned.
+
+#### Scenario: The form follows the cage
+- **WHEN** a control point is dragged
+- **THEN** the drawn surface has moved before anything is applied
+- **AND** nothing has been recorded in the history
+
+#### Scenario: A long drag lands where a short one does
+- **WHEN** a drag arrives over twenty frames rather than one
+- **THEN** the form ends in the same place
+
+#### Scenario: Abandoning a cage abandons its preview
+- **WHEN** a cage is dragged and then cancelled
+- **THEN** the form is exactly as it was

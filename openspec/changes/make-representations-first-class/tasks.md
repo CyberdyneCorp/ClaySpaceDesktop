@@ -644,3 +644,28 @@ gizmo is what makes a multi-point selection worth having.
 **Still open**: the manipulator acts on a lattice selection and nothing else.
 Transforming a whole layer with it — the other thing both references use a
 gizmo for — has no route here yet.
+
+- [x] 17.5 Show the bend while the cage is dragged
+  - A cage that showed nothing until Deformar made the sculptor aim blind: set
+    every corner, press, look, start again. On a mesh the form follows the
+    pointer now, through the same machinery a mesh stroke's preview uses —
+    `MeshDeltas` held rather than banked, taken back and laid down again from
+    the mesh as it was.
+  - Taking the previous preview back first is not optional. The lattice is
+    *absolute* — offsets from rest, evaluated against the original vertices —
+    so laying it over a surface an earlier frame already bent doubles the
+    deformation on every pointer move. Measured across twenty frames of one
+    drag against a single frame of the same drag, which is what the test
+    compares.
+  - **11.2 ms** a frame on 62,576 vertices, and the revision moves every frame
+    so the viewport actually re-uploads — a mesh layer is not in the brick
+    cache, so nothing else about the edit would say the surface had moved.
+  - **No preview on a field**, and that is a cost rather than an oversight: the
+    field route writes a lattice deformer into the document as an undoable edit
+    and refills the layer's whole brick region, **68.8 ms** for one apply on
+    the starting form. There the cage moves live and the surface follows when
+    it is applied.
+  - Applying takes the preview back and lays the cage down once more, banked,
+    rather than keeping what is on screen: a preview holds the deltas of one
+    pass, and turning that into the edit would leave the undo stack describing
+    a gesture rather than a deformation.
