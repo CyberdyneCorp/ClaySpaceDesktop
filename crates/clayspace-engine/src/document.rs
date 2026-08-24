@@ -12,10 +12,10 @@ use claycore::{
 use clayspace_model::{
     Alpha, Armature, ArmatureModel, BlendProfile, BrushSettings, Combine, CombineSettings, Cost,
     Direction, DocumentModel, EditOutcome, ExchangeModel, ExportMesher, ExportSettings,
-    ExtrudeSettings, Format, GestureSample, HistoryState, ImportAs, ImportSettings, LatticeModel,
-    LatticeState, LayerKey, LayerSummary, MaskModel, MaskOp, MaskState, ModelError, NodeIndex,
-    OpenError, Protection, Refusal, Representation, Scene, SceneModel, SceneNode, SceneStats,
-    SculptModel, SkinSettings, ToolKind,
+    ExtrudeSettings, Format, GestureSample, GizmoDrag, GizmoHandle, GizmoMode, HistoryState,
+    ImportAs, ImportSettings, LatticeModel, LatticeState, LayerKey, LayerSummary, MaskModel,
+    MaskOp, MaskState, ModelError, NodeIndex, OpenError, Protection, Refusal, Representation,
+    Scene, SceneModel, SceneNode, SceneStats, SculptModel, SkinSettings, ToolKind,
 };
 
 use crate::backend::{BackendPolicy, Operation};
@@ -3063,7 +3063,17 @@ struct Cage {
     /// One displacement per control point, x fastest — the engine's order on
     /// both routes.
     offsets: Vec<[f32; 3]>,
-    selected: Option<usize>,
+    /// The points under the sculptor's hand, ascending and deduped.
+    selection: Vec<usize>,
+    mode: GizmoMode,
+    /// The manipulator drag in progress, and where every selected point was
+    /// when it started.
+    ///
+    /// The starting positions are kept because a drag is resolved from its
+    /// anchor every frame rather than accumulated: transforming what the last
+    /// frame produced compounds a rotation into a spiral and a scale into a
+    /// runaway.
+    dragging: Option<(GizmoDrag, Vec<[f32; 3]>)>,
 }
 
 impl Cage {
@@ -4110,7 +4120,8 @@ impl LatticeModel for ClayDocument {
             points: (0..cage.point_count())
                 .map(|at| cage.position(at))
                 .collect(),
-            selected: cage.selected,
+            selection: cage.selection.clone(),
+            mode: cage.mode,
             touched: !cage.is_identity(),
         }
     }
@@ -4149,14 +4160,75 @@ impl LatticeModel for ClayDocument {
             max: std::array::from_fn(|axis| max[axis] + pad),
             divisions,
             offsets: vec![[0.0; 3]; count],
-            selected: None,
+            selection: Vec::new(),
+            mode: GizmoMode::default(),
+            dragging: None,
         });
         Ok(())
     }
 
     fn select_lattice_point(&mut self, index: Option<usize>) {
+        let Some(cage) = self.lattice.as_mut() else {
+            return;
+        };
+        let count = cage.point_count();
+        cage.selection = index.filter(|at| *at < count).into_iter().collect();
+    }
+
+    fn toggle_lattice_point(&mut self, index: usize) {
+        let Some(cage) = self.lattice.as_mut() else {
+            return;
+        };
+        if index >= cage.point_count() {
+            return;
+        }
+        // Kept sorted, so `is_selected` is a search rather than a scan and the
+        // pivot is the same wherever the points were clicked from.
+        match cage.selection.binary_search(&index) {
+            Ok(at) => {
+                cage.selection.remove(at);
+            }
+            Err(at) => cage.selection.insert(at, index),
+        }
+    }
+
+    fn set_gizmo_mode(&mut self, mode: GizmoMode) {
         if let Some(cage) = self.lattice.as_mut() {
-            cage.selected = index.filter(|at| *at < cage.point_count());
+            cage.mode = mode;
+        }
+    }
+
+    fn begin_gizmo_drag(&mut self, handle: GizmoHandle, anchor: [f32; 3]) {
+        let state = self.lattice();
+        let Some(drag) = state.drag_from(handle, anchor) else {
+            return;
+        };
+        let Some(cage) = self.lattice.as_mut() else {
+            return;
+        };
+        let held = cage.selection.iter().map(|at| cage.position(*at)).collect();
+        cage.dragging = Some((drag, held));
+    }
+
+    fn drag_gizmo(&mut self, to: [f32; 3]) -> Result<(), ModelError> {
+        let Some(cage) = self.lattice.as_mut() else {
+            return Ok(());
+        };
+        let Some((drag, held)) = cage.dragging.as_ref() else {
+            return Ok(());
+        };
+        let (drag, held) = (*drag, held.clone());
+        for (at, was) in cage.selection.clone().iter().zip(held) {
+            let now = drag.apply(was, to);
+            let rest = cage.rest(*at);
+            cage.offsets[*at] = std::array::from_fn(|axis| now[axis] - rest[axis]);
+        }
+        Ok(())
+    }
+
+    fn end_gizmo_drag(&mut self) {
+        if let Some(cage) = self.lattice.as_mut() {
+            cage.dragging = None;
         }
     }
 
@@ -4164,7 +4236,10 @@ impl LatticeModel for ClayDocument {
         let Some(cage) = self.lattice.as_mut() else {
             return Ok(());
         };
-        let Some(index) = cage.selected else {
+        // The one point in hand. A direct drag moves exactly what was grabbed
+        // — a selection of several is what the manipulator is for, and moving
+        // them all with one pointer would be a gizmo without the handles.
+        let &[index] = cage.selection.as_slice() else {
             return Ok(());
         };
         // The offset from rest rather than an accumulation, so a drag ends

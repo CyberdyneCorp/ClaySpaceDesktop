@@ -1907,6 +1907,33 @@ fn lattice_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
         queue.push(Command::SetLatticeDivisions([value.round() as i32; 3]));
     }
 
+    // The manipulator's three modes, where the cage is worked. One widget
+    // with three modes rather than three widgets is what ZBrush and Maya both
+    // settled on: the sculptor's hand stays in the same place and the mode is
+    // what changes.
+    ui.horizontal_wrapped(|ui| {
+        for mode in clayspace_model::GizmoMode::ALL {
+            let on = state.lattice.mode == mode;
+            let button = egui::Button::new(
+                egui::RichText::new(mode.label())
+                    .size(type_scale::LABEL)
+                    .color(if on {
+                        Tokens::text()
+                    } else {
+                        Tokens::text_dim()
+                    }),
+            )
+            .fill(if on {
+                Tokens::raised()
+            } else {
+                Tokens::panel()
+            });
+            if ui.add(button).clicked() {
+                queue.push(Command::SetGizmoMode(mode));
+            }
+        }
+    });
+
     if ui.button(s.action_bend).clicked() {
         queue.push(Command::ApplyLattice);
     }

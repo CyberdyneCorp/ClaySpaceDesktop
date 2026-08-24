@@ -446,8 +446,45 @@ point is interpolated, so dragging one moves that corner of the box exactly.
 The same pull forward on a 4×4×4 field cage takes its reach from 1.000 to
 1.5777.
 
-The gizmo — translate, rotate and scale on the selected points — is not built
-yet; see *Not built yet*.
+### The manipulator
+
+A click selects one control point; **Shift-click** adds or removes one without
+disturbing the rest. That is what the manipulator exists for — dragging points
+one at a time needs no widget, and turning a whole face of the cage cannot be
+done without one.
+
+It sits on the **middle of the selection**, not on the last point picked, so
+adding a point moves the widget to where the selection is. One widget with
+three modes — **Mover**, **Girar**, **Escalar**, chosen in the GAIOLA section —
+which is what ZBrush and Maya both settled on: the hand stays where it is and
+the mode is what changes.
+
+Shapes rather than colours alone carry the meaning: an arrow slides, a ring
+turns, a box scales. A person reaching for a handle is not reading a legend,
+and the three axis colours are the one part of this a colour-blind sculptor
+cannot use.
+
+- An **axis** drag is constrained to that axis. Pulling the green arrow means
+  "up", not "up and a little sideways because my hand drifted".
+- The **centre** moves freely in the view plane, and scales uniformly. Rotation
+  has no centre handle: turning about the axis facing the eye is what the outer
+  ring is for, and a second widget meaning the same thing is one more thing to
+  hit by accident.
+- A **scale never passes through zero**, either way. A drag that overshot the
+  pivot would turn the form inside out with no way back but undo.
+- A drag is resolved **from its anchor every frame** rather than accumulated.
+  Transforming what the last frame produced compounds a rotation into a spiral
+  and a scale into a runaway.
+
+An axis drag runs on the plane containing that axis and most nearly facing the
+eye — not on a plane facing the camera outright, which would make an axis
+pointing at the viewer unmovable: the pointer could travel a long way and its
+projection onto the axis would barely change.
+
+Press order in the viewport is **manipulator, then control points, then the
+surface**. The manipulator is drawn over the cage and sits on the selection, and
+the cage sits outside the form; without that order a press on the green arrow
+finds a control point behind it, and a press on a corner handle finds the clay.
 
 ## Crossing between representations
 
@@ -760,12 +797,10 @@ changes it, because that is where a person looks for it.
 Panels cannot be resized or collapsed and shortcuts are fixed. See
 [roadmap.md](roadmap.md).
 
-**The transform gizmo.** The deformation cage's control points are dragged one
-at a time, on the plane facing the camera through the handle that was grabbed.
-The gizmo both references put on the selection — translate arrows, rotate
-rings, scale handles and a screen-space square — is not built. Selecting more
-than one point at once goes with it: a gizmo is what makes a multi-point
-selection worth having.
+**A manipulator outside the cage.** The move/turn/scale widget acts on a
+lattice selection and on nothing else. Transforming a whole layer with it —
+which is the other thing both references use a gizmo for — has no route here
+yet.
 
 **A brush colour.** Nothing in the application chooses one. The voxel paint and
 erase verbs deposit a fixed clay tone, and the SDF combine list leaves `Pintar`

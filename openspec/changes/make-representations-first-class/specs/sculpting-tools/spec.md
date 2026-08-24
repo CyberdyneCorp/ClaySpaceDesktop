@@ -176,3 +176,27 @@ resolution that route accepts, and refused readably where it has none.
 #### Scenario: A layer with no lattice route says so
 - **WHEN** a cage is asked for on a voxel layer
 - **THEN** it is refused with a reason naming the crossing that would work
+
+### Requirement: A manipulator transforms a selection of control points
+The application SHALL let a sculptor select more than one lattice control point
+and move, turn or scale the selection with one manipulator.
+
+The manipulator SHALL sit on the middle of the selection, and an axis handle
+SHALL constrain its drag to that axis.
+
+A drag SHALL be resolved from where it started rather than accumulated across
+frames, and a scale SHALL never pass through zero.
+
+#### Scenario: A whole face is moved at once
+- **WHEN** the four control points of a cage's face are selected
+- **AND** the manipulator's vertical axis is dragged up
+- **THEN** all four move up together and none moves sideways
+
+#### Scenario: A turn is about the selection's own middle
+- **WHEN** a selection is turned a quarter about an axis
+- **THEN** each point ends a quarter turn about the selection's middle
+- **AND** nothing moves along the axis turned about
+
+#### Scenario: A wandering drag lands where it ends
+- **WHEN** a drag passes through an intermediate point before settling
+- **THEN** the result is the same as a drag straight to where it settled

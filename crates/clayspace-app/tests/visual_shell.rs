@@ -1471,7 +1471,8 @@ fn the_cage_is_raised_from_the_menu_and_worked_in_the_panel() {
         active: true,
         divisions: [3; 3],
         points: vec![[0.0; 3]; 27],
-        selected: Some(0),
+        selection: vec![0],
+        mode: clayspace_model::GizmoMode::Move,
         touched: true,
     };
     let worked = capture_shell(&harness, &up, "92-cage-panel");

@@ -15,10 +15,10 @@ use std::rc::Rc;
 use clayspace_engine::ClayDocument;
 use clayspace_model::{
     Armature, ArmatureModel, BrushSettings, CombineSettings, DocumentModel, EditOutcome,
-    ExchangeModel, ExportSettings, ExtrudeSettings, GestureSample, HistoryState, ImportSettings,
-    LatticeModel, LatticeState, LayerCost, LayerKey, MaskModel, MaskOp, MaskState, ModelError,
-    NodeIndex, OpenError, Protection, Representation, Scene, SceneModel, SceneStats, SculptModel,
-    SkinSettings, ToolKind,
+    ExchangeModel, ExportSettings, ExtrudeSettings, GestureSample, GizmoHandle, GizmoMode,
+    HistoryState, ImportSettings, LatticeModel, LatticeState, LayerCost, LayerKey, MaskModel,
+    MaskOp, MaskState, ModelError, NodeIndex, OpenError, Protection, Representation, Scene,
+    SceneModel, SceneStats, SculptModel, SkinSettings, ToolKind,
 };
 
 /// A handle to the one document.
@@ -224,6 +224,26 @@ impl LatticeModel for SharedDocument {
 
     fn select_lattice_point(&mut self, index: Option<usize>) {
         self.0.borrow_mut().select_lattice_point(index)
+    }
+
+    fn toggle_lattice_point(&mut self, index: usize) {
+        self.0.borrow_mut().toggle_lattice_point(index)
+    }
+
+    fn set_gizmo_mode(&mut self, mode: GizmoMode) {
+        self.0.borrow_mut().set_gizmo_mode(mode)
+    }
+
+    fn begin_gizmo_drag(&mut self, handle: GizmoHandle, anchor: [f32; 3]) {
+        self.0.borrow_mut().begin_gizmo_drag(handle, anchor)
+    }
+
+    fn drag_gizmo(&mut self, to: [f32; 3]) -> Result<(), ModelError> {
+        self.0.borrow_mut().drag_gizmo(to)
+    }
+
+    fn end_gizmo_drag(&mut self) {
+        self.0.borrow_mut().end_gizmo_drag()
     }
 
     fn drag_lattice_point(&mut self, to: [f32; 3]) -> Result<(), ModelError> {

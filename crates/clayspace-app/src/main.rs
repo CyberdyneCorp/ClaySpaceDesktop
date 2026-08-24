@@ -77,6 +77,22 @@ fn report(policy: &BackendPolicy) {
 const ATTRIBUTION: &str = include_str!("../../../ATTRIBUTION.md");
 
 /// What the pointer is doing.
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn length(v: [f32; 3]) -> f32 {
+    v.iter().map(|c| c * c).sum::<f32>().sqrt()
+}
+
+/// A manipulator drag: which handle, and the plane it runs on as an anchor
+/// and a normal.
+type GizmoGesture = (clayspace_model::GizmoHandle, ([f32; 3], [f32; 3]));
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Drag {
     None,
@@ -87,6 +103,8 @@ enum Drag {
     Rig,
     /// Dragging a lattice control point, on the plane held alongside.
     Cage,
+    /// Dragging the manipulator on the selection.
+    Gizmo,
 }
 
 struct App {
@@ -98,6 +116,8 @@ struct App {
     lattice: LatticeViewModel,
     /// The plane a lattice drag runs on: an anchor and a normal facing the eye.
     cage_plane: Option<([f32; 3], [f32; 3])>,
+    /// The manipulator handle in hand, and the plane its drag runs on.
+    gizmo_drag: Option<GizmoGesture>,
     armature: ArmatureViewModel,
     policy: BackendPolicy,
 
@@ -231,6 +251,13 @@ impl App {
     ///
     /// Small enough not to hide the form it wraps, big enough to be a handle.
     const CAGE_HANDLE: f32 = 0.022;
+    /// How far a manipulator axis reaches, as a multiple of a cage handle.
+    ///
+    /// Long enough to grab without covering the selection it sits on, which is
+    /// what a person is looking at while they aim it.
+    const GIZMO_REACH: f32 = 12.0;
+    /// How wide a manipulator handle's grab radius is, against its reach.
+    const GIZMO_GRAB: f32 = 0.16;
     /// How much wider than the handle the grab radius is.
     ///
     /// Larger than what is drawn on purpose: a handle a person can see and
@@ -266,6 +293,7 @@ impl App {
             mask,
             lattice,
             cage_plane: None,
+            gizmo_drag: None,
             armature,
             policy,
             camera: Camera::default(),
@@ -1018,7 +1046,7 @@ impl App {
     /// Returns whether it did. A press that misses every handle falls through
     /// to sculpting or orbiting, so a cage can be looked around without being
     /// taken down — the same bargain the rig makes.
-    fn begin_cage_drag(&mut self, point: egui::Pos2) -> bool {
+    fn begin_cage_drag(&mut self, point: egui::Pos2, add: bool) -> bool {
         let cage = self.lattice.state().get().clone();
         if !cage.active {
             return false;
@@ -1061,8 +1089,133 @@ impl App {
         // when they pull a corner sideways.
         let normal = [-direction[0], -direction[1], -direction[2]];
         self.cage_plane = Some((cage.points[index], normal));
+        // Held, the press adds to the selection rather than replacing it —
+        // which is the only way to build the several-point selection the
+        // manipulator exists to transform. No drag follows an adding press:
+        // the point that was just added is not necessarily the one in hand.
+        if add {
+            self.handle(Command::ToggleLatticePoint(index));
+            self.cage_plane = None;
+            return true;
+        }
         self.handle(Command::SelectLatticePoint(Some(index)));
         true
+    }
+
+    /// Begins a manipulator drag, if the press landed on one of its handles.
+    ///
+    /// Before the control points, because the manipulator is drawn over them
+    /// and sits on the selection: a press on the green arrow would otherwise
+    /// find whichever control point happens to be behind it.
+    fn begin_gizmo_drag(&mut self, point: egui::Pos2) -> bool {
+        let cage = self.lattice.state().get().clone();
+        let Some(pivot) = cage.pivot().filter(|_| cage.active) else {
+            return false;
+        };
+        let Some(ray) = self.ray_at(point) else {
+            return false;
+        };
+        let reach = Self::cage_handle(&cage) * Self::GIZMO_REACH;
+        let Some(handle) = Self::handle_under(&cage, pivot, reach, ray) else {
+            return false;
+        };
+        // The plane the drag runs on. An axis handle uses the plane containing
+        // that axis and most nearly facing the eye — a plane facing the camera
+        // outright would make an axis pointing at the viewer unmovable, since
+        // the pointer could travel a long way and the projection onto the axis
+        // would barely change.
+        let (_, direction) = ray;
+        let facing = [-direction[0], -direction[1], -direction[2]];
+        let normal = match handle.axis() {
+            Some(axis) => {
+                let side = cross(axis, facing);
+                let normal = cross(side, axis);
+                if length(normal) < 1e-4 {
+                    facing
+                } else {
+                    normal
+                }
+            }
+            None => facing,
+        };
+        let Some(anchor) = Self::on_plane(ray, pivot, normal) else {
+            return false;
+        };
+        self.gizmo_drag = Some((handle, (pivot, normal)));
+        self.handle(Command::BeginGizmoDrag(handle, anchor));
+        true
+    }
+
+    /// Which handle a ray passes through, if any.
+    ///
+    /// The nearest along the ray wins, so a handle in front takes a press over
+    /// one behind it — which is what a person aiming at what they can see
+    /// expects.
+    fn handle_under(
+        cage: &clayspace_model::LatticeState,
+        pivot: [f32; 3],
+        reach: f32,
+        ray: ([f32; 3], [f32; 3]),
+    ) -> Option<clayspace_model::GizmoHandle> {
+        use clayspace_model::GizmoHandle;
+        let slack = reach * Self::GIZMO_GRAB;
+        let mut best: Option<(GizmoHandle, f32)> = None;
+        let mut consider = |handle: GizmoHandle, at: [f32; 3], radius: f32| {
+            if let Some(along) = Self::ray_hits(ray, at, radius) {
+                if best.is_none_or(|(_, closest)| along < closest) {
+                    best = Some((handle, along));
+                }
+            }
+        };
+
+        for index in 0..3 {
+            let handle = GizmoHandle::Axis(index);
+            let Some(axis) = handle.axis() else { continue };
+            if cage.mode == clayspace_model::GizmoMode::Rotate {
+                // A ring is grabbed anywhere along it, so several points
+                // around it are tested rather than one — a ring tested only at
+                // its four cardinal points is a ring with four handles.
+                for step in 0..16 {
+                    let angle = step as f32 / 16.0 * std::f32::consts::TAU;
+                    let (u, v) = ((index + 1) % 3, (index + 2) % 3);
+                    let mut at = pivot;
+                    at[u] += angle.cos() * reach;
+                    at[v] += angle.sin() * reach;
+                    consider(handle, at, slack);
+                }
+                continue;
+            }
+            // The tip, which is where the arrowhead or the box is and where a
+            // person aims. Grabbing the shaft anywhere along it would take
+            // presses meant for the control points it passes over.
+            let tip = std::array::from_fn(|i| pivot[i] + axis[i] * reach);
+            consider(handle, tip, slack);
+        }
+        if cage.mode != clayspace_model::GizmoMode::Rotate {
+            consider(GizmoHandle::Centre, pivot, slack);
+        }
+        best.map(|(handle, _)| handle)
+    }
+
+    /// How far along a ray a sphere is hit, if it is.
+    fn ray_hits(ray: ([f32; 3], [f32; 3]), centre: [f32; 3], radius: f32) -> Option<f32> {
+        let (origin, direction) = ray;
+        let to: [f32; 3] = std::array::from_fn(|i| centre[i] - origin[i]);
+        let along: f32 = (0..3).map(|i| to[i] * direction[i]).sum();
+        if along <= 0.0 {
+            return None; // Behind the eye.
+        }
+        let miss: f32 = (0..3)
+            .map(|i| (to[i] - direction[i] * along).powi(2))
+            .sum::<f32>()
+            .sqrt();
+        (miss <= radius).then_some(along)
+    }
+
+    /// Where a pointer ray meets the plane the manipulator drag runs on.
+    fn on_gizmo_plane(&self, point: egui::Pos2) -> Option<[f32; 3]> {
+        let (_, (anchor, normal)) = self.gizmo_drag?;
+        Self::on_plane(self.ray_at(point)?, anchor, normal)
     }
 
     /// Where a pointer ray meets the plane a cage drag runs on.
@@ -1103,20 +1256,28 @@ impl App {
                 clayspace_view::LatticeView {
                     points: &[],
                     edges: &[],
-                    selected: None,
+                    selected: &[],
+                    gizmo: None,
                     handle: 0.0,
                 },
             );
             return;
         }
         let edges = cage.edges();
+        let handle = Self::cage_handle(&cage);
         graphics.renderer.set_lattice(
             &gpu,
             clayspace_view::LatticeView {
                 points: &cage.points,
                 edges: &edges,
-                selected: cage.selected.map(|at| at as u32),
-                handle: Self::cage_handle(&cage),
+                selected: &cage.selection,
+                gizmo: cage.pivot().map(|pivot| clayspace_view::GizmoView {
+                    pivot,
+                    mode: cage.mode,
+                    reach: handle * Self::GIZMO_REACH,
+                    hovered: self.gizmo_drag.map(|(handle, _)| handle),
+                }),
+                handle,
             },
         );
     }
@@ -1448,6 +1609,10 @@ impl App {
                     // seams — and once per gesture, with the pointer up.
                     self.settle_geometry();
                 }
+                Drag::Gizmo => {
+                    self.gizmo_drag = None;
+                    self.handle(Command::EndGizmoDrag);
+                }
                 Drag::Cage => {
                     // The cage keeps its selection with the pointer up, so the
                     // point just dragged stays the one in hand — a sculptor
@@ -1468,15 +1633,23 @@ impl App {
             let rigged = self.rigging
                 && button == egui::PointerButton::Primary
                 && self.begin_rig(point, input);
-            // Before the surface is asked about, because a control point sits
-            // *outside* the form: a press on a corner handle would otherwise
-            // find the clay behind it and start a stroke on the layer the cage
-            // is there to bend.
-            let caged =
-                !rigged && button == egui::PointerButton::Primary && self.begin_cage_drag(point);
-            let on_surface = !rigged && !caged && self.pick_at(point).is_some();
+            // The manipulator before the control points, because it is drawn
+            // over them and sits on the selection: a press on the green arrow
+            // would otherwise find whichever point happens to be behind it.
+            let manipulated =
+                !rigged && button == egui::PointerButton::Primary && self.begin_gizmo_drag(point);
+            // And both before the surface is asked about, because a control
+            // point sits *outside* the form: a press on a corner handle would
+            // otherwise find the clay behind it and start a stroke on the
+            // layer the cage is there to bend.
+            let caged = !rigged
+                && !manipulated
+                && button == egui::PointerButton::Primary
+                && self.begin_cage_drag(point, input.smooth_modifier);
+            let on_surface = !rigged && !manipulated && !caged && self.pick_at(point).is_some();
             let started = match button {
                 _ if rigged => Drag::Rig,
+                _ if manipulated => Drag::Gizmo,
                 _ if caged => Drag::Cage,
                 egui::PointerButton::Middle => Drag::Pan,
                 egui::PointerButton::Secondary => Drag::Orbit,
@@ -1508,6 +1681,11 @@ impl App {
                 Drag::Sculpt => {
                     if let Some(point) = input.pointer {
                         self.stroke_at(point, false, StrokeModifiers::default());
+                    }
+                }
+                Drag::Gizmo => {
+                    if let Some(at) = input.pointer.and_then(|point| self.on_gizmo_plane(point)) {
+                        self.handle(Command::DragGizmo(at));
                     }
                 }
                 Drag::Cage => {

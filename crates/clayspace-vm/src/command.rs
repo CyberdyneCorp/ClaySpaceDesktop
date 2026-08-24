@@ -11,8 +11,8 @@
 use std::path::PathBuf;
 
 use clayspace_model::{
-    ConversionSettings, ExportSettings, ExtrudeSettings, Falloff, ImportSettings, LayerKey, MaskOp,
-    StrokeModifiers, ToolKind, ViewPresetKind,
+    ConversionSettings, ExportSettings, ExtrudeSettings, Falloff, GizmoHandle, GizmoMode,
+    ImportSettings, LayerKey, MaskOp, StrokeModifiers, ToolKind, ViewPresetKind,
 };
 
 /// A change to the application or the document.
@@ -24,8 +24,18 @@ pub enum Command {
     ToggleLattice,
     /// How many control points the cage has per axis.
     SetLatticeDivisions([i32; 3]),
-    /// The control point under the pointer, or none.
+    /// The control point under the pointer, or none. Replaces the selection.
     SelectLatticePoint(Option<usize>),
+    /// Adds or removes one control point without disturbing the rest.
+    ToggleLatticePoint(usize),
+    /// Which of the manipulator's three modes is in force.
+    SetGizmoMode(GizmoMode),
+    /// Grabs a manipulator handle at a point on the drag plane.
+    BeginGizmoDrag(GizmoHandle, [f32; 3]),
+    /// Carries the selection to where the pointer is now.
+    DragGizmo([f32; 3]),
+    /// Lets the manipulator go.
+    EndGizmoDrag,
     /// Moves the selected control point to a world position.
     DragLatticePoint([f32; 3]),
     /// Bends the layer through the cage and takes the cage down.
@@ -254,6 +264,11 @@ impl Command {
                 | Self::ToggleLattice
                 | Self::SetLatticeDivisions(_)
                 | Self::SelectLatticePoint(_)
+                | Self::ToggleLatticePoint(_)
+                | Self::SetGizmoMode(_)
+                | Self::BeginGizmoDrag(..)
+                | Self::DragGizmo(_)
+                | Self::EndGizmoDrag
                 | Self::DragLatticePoint(_)
                 // Opening, typing into and abandoning the rename field change
                 // nothing in the document. Committing does, and it takes the
@@ -303,6 +318,9 @@ impl Command {
             Self::ToggleLattice => "gaiola",
             Self::SetLatticeDivisions(_) => "divisões da gaiola",
             Self::SelectLatticePoint(_) => "escolher ponto",
+            Self::ToggleLatticePoint(_) => "escolher ponto",
+            Self::SetGizmoMode(_) => "modo do manipulador",
+            Self::BeginGizmoDrag(..) | Self::DragGizmo(_) | Self::EndGizmoDrag => "manipular",
             Self::DragLatticePoint(_) => "arrastar ponto",
             Self::ApplyLattice => "deformar pela gaiola",
             Self::ToggleMaskPainting => "máscara",

@@ -604,3 +604,43 @@ nominal radius, which is a units question rather than a defect found.
 **Still open**: the transform gizmo — translate, rotate and scale on the
 selection — and with it selecting more than one control point at a time. A
 gizmo is what makes a multi-point selection worth having.
+
+- [x] 17.4 The manipulator, on a selection
+  - What makes selecting more than one control point worth having. A click
+    replaces the selection, Shift-click adds or removes one, and the widget
+    sits on the selection's *middle* — not on the last point picked, so adding
+    a point moves the widget to where the selection is.
+  - One widget with three modes rather than three widgets, which is what ZBrush
+    and Maya both settled on. Shapes rather than colours alone carry the
+    meaning — an arrow slides, a ring turns, a box scales — because a person
+    reaching for a handle is not reading a legend, and the three axis colours
+    are the one part of this a colour-blind sculptor cannot use.
+  - The arithmetic is a free function on `GizmoDrag` with no viewport in sight,
+    which is the part worth checking directly: a quarter turn is a quarter
+    turn, an axis drag stays on its axis, a scale about a pivot is about that
+    pivot, and every mode leaves a point alone when the drag has not moved.
+  - Three decisions the tests hold rather than the code merely implying:
+    - A **scale never passes through zero**, either way. A drag that overshot
+      the pivot would turn the form inside out with no way back but undo, and a
+      drag that started very near the pivot has a tiny denominator — without a
+      ceiling an ordinary pull produces a factor in the thousands.
+    - A drag is **resolved from its anchor every frame**. Transforming what the
+      last frame produced compounds a rotation into a spiral and a scale into a
+      runaway. The first version of the test asserted this wrongly — two
+      *separate* gestures should compound, and it claimed they should not — so
+      it now compares a drag that wandered on its way against one that went
+      straight to the same place.
+    - Grabbing a ring **on its own axis does not spin it**: "which way round"
+      has no answer there, and a manipulator that spun when grabbed at its
+      centre would be unusable.
+  - An axis drag runs on the plane containing that axis and most nearly facing
+    the eye. A plane facing the camera outright would make an axis pointing at
+    the viewer unmovable — the pointer could travel a long way and its
+    projection onto the axis would barely change.
+  - Press order in the viewport is manipulator, then control points, then the
+    surface, and each step is there for a reason: the manipulator is drawn over
+    the cage and sits on the selection, and the cage sits outside the form.
+
+**Still open**: the manipulator acts on a lattice selection and nothing else.
+Transforming a whole layer with it — the other thing both references use a
+gizmo for — has no route here yet.

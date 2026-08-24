@@ -10,6 +10,7 @@
 //! rather than another entry in [`crate::ToolKind`] — the same reason the mask
 //! is.
 
+use crate::gizmo::{GizmoDrag, GizmoHandle, GizmoMode};
 use crate::sculpt::ModelError;
 use crate::Representation;
 
@@ -61,8 +62,14 @@ pub struct LatticeState {
     /// and what the pointer is tested against. The offsets are the engine's
     /// business.
     pub points: Vec<[f32; 3]>,
-    /// The point under the sculptor's hand, if any.
-    pub selected: Option<usize>,
+    /// The points under the sculptor's hand, in ascending order.
+    ///
+    /// A set rather than one point, because that is what makes the manipulator
+    /// worth having: dragging points one at a time needs no gizmo, and turning
+    /// a face of the cage cannot be done without one.
+    pub selection: Vec<usize>,
+    /// Which of the manipulator's three modes is in force.
+    pub mode: GizmoMode,
     /// Whether any point has been dragged.
     ///
     /// An untouched cage is exactly the identity, and applying one would pay
@@ -71,6 +78,43 @@ pub struct LatticeState {
 }
 
 impl LatticeState {
+    pub fn is_selected(&self, index: usize) -> bool {
+        self.selection.binary_search(&index).is_ok()
+    }
+
+    /// The point the manipulator sits on and transforms about: the middle of
+    /// the selection.
+    ///
+    /// The middle rather than the last point picked, so adding a point to a
+    /// selection moves the widget to where the *selection* is rather than
+    /// leaving it on whichever corner happened to be clicked first.
+    pub fn pivot(&self) -> Option<[f32; 3]> {
+        if self.selection.is_empty() {
+            return None;
+        }
+        let mut sum = [0.0f32; 3];
+        for index in &self.selection {
+            let point = self.points.get(*index)?;
+            for axis in 0..3 {
+                sum[axis] += point[axis];
+            }
+        }
+        let count = self.selection.len() as f32;
+        Some(sum.map(|axis| axis / count))
+    }
+
+    /// A drag on the manipulator, ready to be applied to each selected point.
+    ///
+    /// `None` where there is nothing selected to transform.
+    pub fn drag_from(&self, handle: GizmoHandle, anchor: [f32; 3]) -> Option<GizmoDrag> {
+        Some(GizmoDrag {
+            mode: self.mode,
+            handle,
+            pivot: self.pivot()?,
+            anchor,
+        })
+    }
+
     /// The index of a control point, x fastest — the engine's own order.
     pub fn index(&self, at: [i32; 3]) -> Option<usize> {
         let [nx, ny, nz] = self.divisions;
@@ -134,9 +178,30 @@ pub trait LatticeModel {
     /// resolution would move points they never touched.
     fn begin_lattice(&mut self, divisions: [i32; 3]) -> Result<(), ModelError>;
 
-    /// Picks the control point nearest a ray, within a screen-independent
-    /// tolerance in world units. `None` clears the selection.
+    /// Selects one control point, replacing what was selected. `None` clears
+    /// the selection.
     fn select_lattice_point(&mut self, index: Option<usize>);
+
+    /// Adds or removes one point without disturbing the rest.
+    ///
+    /// What a modifier-click does, and the only way to build the selection a
+    /// manipulator exists to transform.
+    fn toggle_lattice_point(&mut self, index: usize);
+
+    /// Which of the manipulator's three modes is in force.
+    fn set_gizmo_mode(&mut self, mode: GizmoMode);
+
+    /// Starts a manipulator drag on a handle, from a point on the drag plane.
+    fn begin_gizmo_drag(&mut self, handle: GizmoHandle, anchor: [f32; 3]);
+
+    /// Carries the selection to where the pointer is now.
+    ///
+    /// Resolved from the anchor every time rather than accumulated, so a drag
+    /// ends where the pointer ends however many frames it took.
+    fn drag_gizmo(&mut self, to: [f32; 3]) -> Result<(), ModelError>;
+
+    /// Ends a manipulator drag, banking where the selection ended up.
+    fn end_gizmo_drag(&mut self);
 
     /// Moves the selected control point to a world position.
     ///
@@ -164,7 +229,8 @@ mod tests {
             active: true,
             divisions,
             points: vec![[0.0; 3]; count],
-            selected: None,
+            selection: Vec::new(),
+            mode: GizmoMode::default(),
             touched: false,
         }
     }
@@ -230,5 +296,68 @@ mod tests {
             "a field cage went past the four points per axis the engine \
              accepts, which it would refuse outright"
         );
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+
+    fn corners() -> LatticeState {
+        LatticeState {
+            active: true,
+            divisions: [2, 2, 2],
+            points: (0..8)
+                .map(|at| {
+                    [
+                        if at & 1 == 0 { -1.0 } else { 1.0 },
+                        if at & 2 == 0 { -1.0 } else { 1.0 },
+                        if at & 4 == 0 { -1.0 } else { 1.0 },
+                    ]
+                })
+                .collect(),
+            selection: Vec::new(),
+            mode: GizmoMode::Move,
+            touched: false,
+        }
+    }
+
+    #[test]
+    fn nothing_selected_has_no_pivot() {
+        // And so no manipulator: a widget floating over an empty selection
+        // would be a control with nothing to control.
+        assert_eq!(corners().pivot(), None);
+        assert_eq!(corners().drag_from(GizmoHandle::Centre, [0.0; 3]), None);
+    }
+
+    #[test]
+    fn the_pivot_is_the_middle_of_the_selection() {
+        // The middle rather than the last point picked, so adding a point
+        // moves the widget to where the selection is rather than leaving it on
+        // whichever corner was clicked first.
+        let mut cage = corners();
+        cage.selection = vec![0];
+        assert_eq!(cage.pivot(), Some([-1.0, -1.0, -1.0]));
+
+        // The whole top face: four corners, all at y = 1.
+        cage.selection = vec![2, 3, 6, 7];
+        let pivot = cage.pivot().expect("a selection has a middle");
+        assert!(
+            (pivot[0]).abs() < 1e-6 && (pivot[1] - 1.0).abs() < 1e-6 && pivot[2].abs() < 1e-6,
+            "the top face's middle is {pivot:?}"
+        );
+    }
+
+    #[test]
+    fn a_selection_reads_back_as_selected() {
+        let mut cage = corners();
+        cage.selection = vec![1, 4, 6];
+        for at in 0..8 {
+            assert_eq!(
+                cage.is_selected(at),
+                [1, 4, 6].contains(&at),
+                "point {at} disagreed about being selected"
+            );
+        }
     }
 }

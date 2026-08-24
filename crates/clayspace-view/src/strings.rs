@@ -254,7 +254,7 @@ const PT_BR: Strings = Strings {
     label_cage_divisions: "Pontos por eixo",
     status_cage_needs_a_field:
         "Uma camada de voxels não aceita uma gaiola. Converta-a para SDF ou malha primeiro.",
-    hint_cage: "Arraste um ponto para dobrar a forma · Deformar aplica",
+    hint_cage: "Arraste um ponto · Shift+clique soma à seleção · Deformar aplica",
     section_mask: "MÁSCARA",
     label_mask_steps: "Passos",
     label_mask_cells: "Células congeladas",
@@ -399,7 +399,7 @@ const EN_US: Strings = Strings {
     action_bend: "Deform",
     label_cage_divisions: "Points per axis",
     status_cage_needs_a_field: "A voxel layer takes no cage. Cross it to SDF or mesh first.",
-    hint_cage: "Drag a point to bend the form · Deform applies it",
+    hint_cage: "Drag a point · Shift-click adds to the selection · Deform applies",
     section_mask: "MASK",
     label_mask_steps: "Steps",
     label_mask_cells: "Frozen cells",
@@ -545,7 +545,7 @@ const ES_419: Strings = Strings {
     label_cage_divisions: "Pontos por eixo",
     status_cage_needs_a_field:
         "Uma camada de voxels não aceita uma gaiola. Converta-a para SDF ou malha primeiro.",
-    hint_cage: "Arraste um ponto para dobrar a forma · Deformar aplica",
+    hint_cage: "Arraste um ponto · Shift+clique soma à seleção · Deformar aplica",
     section_mask: "MÁSCARA",
     label_mask_steps: "Passos",
     label_mask_cells: "Células congeladas",

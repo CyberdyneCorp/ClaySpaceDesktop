@@ -91,6 +91,28 @@ impl LatticeViewModel {
                 self.model.select_lattice_point(*index);
                 self.refresh();
             }
+            Command::ToggleLatticePoint(index) => {
+                self.model.toggle_lattice_point(*index);
+                self.refresh();
+            }
+            Command::SetGizmoMode(mode) => {
+                self.model.set_gizmo_mode(*mode);
+                self.refresh();
+            }
+            Command::BeginGizmoDrag(handle, anchor) => {
+                self.model.begin_gizmo_drag(*handle, *anchor);
+                self.refresh();
+            }
+            Command::DragGizmo(to) => {
+                if let Err(e) = self.model.drag_gizmo(*to) {
+                    self.notice.set(Some(e.to_string()));
+                }
+                self.refresh();
+            }
+            Command::EndGizmoDrag => {
+                self.model.end_gizmo_drag();
+                self.refresh();
+            }
             Command::DragLatticePoint(to) => {
                 if let Err(e) = self.model.drag_lattice_point(*to) {
                     self.notice.set(Some(e.to_string()));
@@ -131,6 +153,7 @@ impl LatticeViewModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clayspace_model::{GizmoHandle, GizmoMode};
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -159,15 +182,38 @@ mod tests {
                 active: true,
                 divisions,
                 points: vec![[0.0; 3]; count],
-                selected: None,
+                selection: Vec::new(),
+                mode: GizmoMode::default(),
                 touched: false,
             };
             Ok(())
         }
 
         fn select_lattice_point(&mut self, index: Option<usize>) {
-            self.state.selected = index;
+            self.state.selection = index.into_iter().collect();
         }
+
+        fn toggle_lattice_point(&mut self, index: usize) {
+            match self.state.selection.binary_search(&index) {
+                Ok(at) => {
+                    self.state.selection.remove(at);
+                }
+                Err(at) => self.state.selection.insert(at, index),
+            }
+        }
+
+        fn set_gizmo_mode(&mut self, mode: GizmoMode) {
+            self.state.mode = mode;
+        }
+
+        fn begin_gizmo_drag(&mut self, _: GizmoHandle, _: [f32; 3]) {}
+
+        fn drag_gizmo(&mut self, _: [f32; 3]) -> Result<(), ModelError> {
+            self.state.touched = true;
+            Ok(())
+        }
+
+        fn end_gizmo_drag(&mut self) {}
 
         fn drag_lattice_point(&mut self, to: [f32; 3]) -> Result<(), ModelError> {
             self.recorded.borrow_mut().dragged.push(to);
@@ -278,6 +324,13 @@ mod tests {
                 Err(ModelError::engine("uma camada de voxels não aceita"))
             }
             fn select_lattice_point(&mut self, _: Option<usize>) {}
+            fn toggle_lattice_point(&mut self, _: usize) {}
+            fn set_gizmo_mode(&mut self, _: GizmoMode) {}
+            fn begin_gizmo_drag(&mut self, _: GizmoHandle, _: [f32; 3]) {}
+            fn drag_gizmo(&mut self, _: [f32; 3]) -> Result<(), ModelError> {
+                Ok(())
+            }
+            fn end_gizmo_drag(&mut self) {}
             fn drag_lattice_point(&mut self, _: [f32; 3]) -> Result<(), ModelError> {
                 Ok(())
             }

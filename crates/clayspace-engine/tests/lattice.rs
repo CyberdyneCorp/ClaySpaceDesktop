@@ -11,7 +11,9 @@
 //! caps that one at 4. A grid has neither.
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
-use clayspace_model::{Direction, LatticeModel, Representation, SculptModel};
+use clayspace_model::{
+    Direction, GizmoHandle, GizmoMode, LatticeModel, Representation, SculptModel,
+};
 
 fn sphere() -> Option<ClayDocument> {
     let policy = BackendPolicy::discover(None).ok()?;
@@ -247,4 +249,259 @@ fn the_cage_is_as_fine_as_the_representation_allows() {
          which it refuses outright rather than clamping"
     );
     assert_eq!(clayspace_model::division_limit(Representation::Voxel), None);
+}
+
+// -- the manipulator ---------------------------------------------------------
+//
+// What makes selecting more than one control point worth having. Dragging
+// points one at a time needs no manipulator; turning a whole face of the cage
+// cannot be done without one.
+
+/// Selects every control point above the middle on an axis.
+fn select_the_far_face(document: &mut ClayDocument, axis: usize) -> Vec<usize> {
+    let cage = document.lattice();
+    let face: Vec<usize> = cage
+        .points
+        .iter()
+        .enumerate()
+        .filter(|(_, point)| point[axis] > 0.0)
+        .map(|(index, _)| index)
+        .collect();
+    for index in &face {
+        document.toggle_lattice_point(*index);
+    }
+    face
+}
+
+#[test]
+fn a_selection_is_built_a_point_at_a_time() {
+    let Some(mut document) = meshed() else {
+        return;
+    };
+    document.begin_lattice([2, 2, 2]).expect("a cage");
+
+    // One click replaces the selection.
+    document.select_lattice_point(Some(3));
+    assert_eq!(document.lattice().selection, vec![3]);
+    document.select_lattice_point(Some(5));
+    assert_eq!(document.lattice().selection, vec![5]);
+
+    // A modifier-click adds without disturbing the rest, and takes back out.
+    document.toggle_lattice_point(1);
+    document.toggle_lattice_point(7);
+    assert_eq!(
+        document.lattice().selection,
+        vec![1, 5, 7],
+        "the selection is not kept in order, so the pivot would depend on \
+         which corner was clicked first"
+    );
+    document.toggle_lattice_point(5);
+    assert_eq!(document.lattice().selection, vec![1, 7]);
+
+    // And clearing means clearing.
+    document.select_lattice_point(None);
+    assert!(document.lattice().selection.is_empty());
+    assert_eq!(
+        document.lattice().pivot(),
+        None,
+        "an empty selection has a manipulator with nothing to manipulate"
+    );
+}
+
+#[test]
+fn the_manipulator_moves_a_whole_face() {
+    let Some(mut document) = meshed() else {
+        return;
+    };
+    let before = top(&mut document);
+    document.begin_lattice([2, 2, 2]).expect("a cage");
+    let face = select_the_far_face(&mut document, 1);
+    assert_eq!(face.len(), 4, "the top of a cube is four corners");
+
+    let pivot = document
+        .lattice()
+        .pivot()
+        .expect("a selection has a middle");
+    document.set_gizmo_mode(GizmoMode::Move);
+    document.begin_gizmo_drag(GizmoHandle::Axis(1), pivot);
+    document
+        .drag_gizmo([pivot[0], pivot[1] + 0.5, pivot[2]])
+        .expect("the drag was refused");
+    document.end_gizmo_drag();
+    document.apply_lattice().expect("the cage was refused");
+
+    let after = top(&mut document);
+    assert!(
+        (after - (before + 0.5)).abs() < 0.05,
+        "the top went from {before} to {after} after its whole face was moved \
+         up by 0.5 through the manipulator"
+    );
+}
+
+#[test]
+fn an_axis_drag_does_not_wander_off_its_axis() {
+    // The whole difference between an arrow and the centre handle: a person
+    // pulling the green arrow means "up", not "up and a little sideways
+    // because my hand drifted".
+    let Some(mut document) = meshed() else {
+        return;
+    };
+    document.begin_lattice([2, 2, 2]).expect("a cage");
+    let before = document.lattice().points.clone();
+    select_the_far_face(&mut document, 1);
+
+    let pivot = document.lattice().pivot().expect("a middle");
+    document.set_gizmo_mode(GizmoMode::Move);
+    document.begin_gizmo_drag(GizmoHandle::Axis(1), pivot);
+    // Deliberately crooked: the pointer wanders in x and z as well.
+    document
+        .drag_gizmo([pivot[0] + 0.4, pivot[1] + 0.5, pivot[2] - 0.3])
+        .expect("the drag was refused");
+
+    let after = document.lattice().points;
+    for (index, (was, now)) in before.iter().zip(&after).enumerate() {
+        if was[1] <= 0.0 {
+            assert_eq!(was, now, "point {index} moved and was not selected");
+            continue;
+        }
+        assert!(
+            (now[0] - was[0]).abs() < 1e-5 && (now[2] - was[2]).abs() < 1e-5,
+            "point {index} went from {was:?} to {now:?}, which is off the axis \
+             that was grabbed"
+        );
+        assert!((now[1] - was[1] - 0.5).abs() < 1e-5);
+    }
+}
+
+#[test]
+fn a_rotation_turns_the_selection_about_its_own_middle() {
+    let Some(mut document) = meshed() else {
+        return;
+    };
+    document.begin_lattice([2, 2, 2]).expect("a cage");
+    select_the_far_face(&mut document, 1);
+    let pivot = document.lattice().pivot().expect("a middle");
+    let before = document.lattice().points.clone();
+
+    document.set_gizmo_mode(GizmoMode::Rotate);
+    // A quarter turn about y: from +x to +z, in the plane the ring lies in.
+    document.begin_gizmo_drag(GizmoHandle::Axis(1), [pivot[0] + 1.0, pivot[1], pivot[2]]);
+    document
+        .drag_gizmo([pivot[0], pivot[1], pivot[2] + 1.0])
+        .expect("the drag was refused");
+
+    let after = document.lattice().points;
+    for (index, (was, now)) in before.iter().zip(&after).enumerate() {
+        if was[1] <= 0.0 {
+            continue;
+        }
+        // A quarter turn about y takes (x, z) to (z, -x), measured from the
+        // pivot. And y is untouched, which is what "about that axis" means.
+        let (x, z) = (was[0] - pivot[0], was[2] - pivot[2]);
+        assert!(
+            (now[0] - (pivot[0] - z)).abs() < 1e-4 && (now[2] - (pivot[2] + x)).abs() < 1e-4,
+            "point {index} went from {was:?} to {now:?} on a quarter turn \
+             about y through {pivot:?}"
+        );
+        assert!(
+            (now[1] - was[1]).abs() < 1e-5,
+            "a turn about y moved point {index} along y"
+        );
+    }
+}
+
+#[test]
+fn a_scale_spreads_the_selection_about_its_middle() {
+    let Some(mut document) = meshed() else {
+        return;
+    };
+    document.begin_lattice([2, 2, 2]).expect("a cage");
+    select_the_far_face(&mut document, 1);
+    let pivot = document.lattice().pivot().expect("a middle");
+    let before = document.lattice().points.clone();
+
+    document.set_gizmo_mode(GizmoMode::Scale);
+    document.begin_gizmo_drag(GizmoHandle::Centre, [pivot[0] + 1.0, pivot[1], pivot[2]]);
+    document
+        .drag_gizmo([pivot[0] + 2.0, pivot[1], pivot[2]])
+        .expect("the drag was refused");
+
+    let after = document.lattice().points;
+    for (was, now) in before.iter().zip(&after) {
+        if was[1] <= 0.0 {
+            continue;
+        }
+        for axis in 0..3 {
+            let want = pivot[axis] + (was[axis] - pivot[axis]) * 2.0;
+            assert!(
+                (now[axis] - want).abs() < 1e-4,
+                "a uniform scale of two put {was:?} at {now:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_manipulator_drag_is_resolved_from_its_anchor_every_time() {
+    // Rather than accumulated. Transforming what the last frame produced
+    // compounds a rotation into a spiral and a scale into a runaway, and a
+    // stutter in the pointer would show up as a jump in the form.
+    let Some(mut document) = meshed() else {
+        return;
+    };
+    document.begin_lattice([2, 2, 2]).expect("a cage");
+    select_the_far_face(&mut document, 1);
+    let pivot = document.lattice().pivot().expect("a middle");
+
+    document.set_gizmo_mode(GizmoMode::Move);
+    document.begin_gizmo_drag(GizmoHandle::Axis(1), pivot);
+    // A pointer wandering on its way: an intermediate destination, then the
+    // one it settles on, then the same one again as a held pointer that has
+    // stopped moving keeps sending.
+    for at in [0.2, 0.5, 0.5] {
+        document
+            .drag_gizmo([pivot[0], pivot[1] + at, pivot[2]])
+            .expect("the drag was refused");
+    }
+    let wandered = document.lattice().points.clone();
+    document.end_gizmo_drag();
+
+    // The same gesture, straight to where it ended.
+    let Some(mut direct) = meshed() else {
+        return;
+    };
+    direct.begin_lattice([2, 2, 2]).expect("a cage");
+    select_the_far_face(&mut direct, 1);
+    direct.set_gizmo_mode(GizmoMode::Move);
+    direct.begin_gizmo_drag(GizmoHandle::Axis(1), pivot);
+    direct
+        .drag_gizmo([pivot[0], pivot[1] + 0.5, pivot[2]])
+        .expect("the drag was refused");
+
+    assert_eq!(
+        wandered,
+        direct.lattice().points,
+        "a drag that wandered on its way did not land where one that went \
+         straight there did, so the transform is accumulating rather than \
+         being resolved from its anchor — which compounds a rotation into a \
+         spiral and a scale into a runaway"
+    );
+}
+
+#[test]
+fn the_manipulator_does_nothing_with_nothing_selected() {
+    // A press is not an edit, and a widget with no selection has nothing to
+    // act on — reaching for the offsets anyway would move point zero.
+    let Some(mut document) = meshed() else {
+        return;
+    };
+    document.begin_lattice([2, 2, 2]).expect("a cage");
+    let before = document.lattice().points.clone();
+
+    document.begin_gizmo_drag(GizmoHandle::Axis(1), [0.0; 3]);
+    document
+        .drag_gizmo([0.0, 5.0, 0.0])
+        .expect("the drag was refused");
+    assert_eq!(document.lattice().points, before);
+    assert!(!document.lattice().touched);
 }
