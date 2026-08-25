@@ -1,0 +1,326 @@
+//! Does the incremental surface still match a rebuild after a real session?
+//!
+//! `settle_needed.rs` asks the same question of six gentle dabs on a fresh
+//! sphere and answers yes. Reported artifacts — small holes, and torn-looking
+//! seams — came from a long session with a snake hook and a polish at four
+//! hundred thousand triangles, which is a different question: strokes that
+//! *move* the surface across brick boundaries, and dabs that leave a brick
+//! uniform where its neighbour still holds surface.
+//!
+//! That last case is the one worth probing. A dirty key that no longer holds a
+//! surface is not meshed, but it *is* replaced — so anything filed under it is
+//! dropped. If a triangle whose cell lives in a neighbour had been attributed
+//! to it by an earlier call, and that neighbour is not dirty this frame,
+//! nothing re-emits it.
+
+mod support;
+
+use std::collections::HashSet;
+
+use clayspace_app::SurfaceGeometry;
+use clayspace_engine::{BackendPolicy, ClayDocument};
+use clayspace_model::{BrushSettings, GestureSample, SculptModel, ToolKind};
+use support::Harness;
+
+fn triangles(geometry: &SurfaceGeometry) -> HashSet<[[i32; 3]; 3]> {
+    geometry
+        .stored_triangles()
+        .into_values()
+        .flatten()
+        .collect()
+}
+
+/// One gesture of `samples` along a path, synced as a stroke would be.
+fn stroke(
+    incremental: &mut SurfaceGeometry,
+    harness: &Harness,
+    document: &mut ClayDocument,
+    tool: ToolKind,
+    settings: BrushSettings,
+    path: &[[f32; 3]],
+) {
+    for (step, position) in path.iter().enumerate() {
+        document
+            .apply_stroke(
+                tool,
+                settings,
+                &[GestureSample {
+                    position: *position,
+                    pressure: 1.0,
+                    time: step as f32 * 0.01,
+                }],
+                [false; 3],
+            )
+            .expect("a dab");
+        incremental
+            .sync(&harness.gpu, document)
+            .expect("an incremental sync");
+    }
+}
+
+// Ignored, not deleted: this is a real, reproducible defect with no fix yet,
+// and a red suite teaches people to ignore the suite. `cargo test -- --ignored`
+// runs it, and it should be the first thing run by whoever picks the bug up.
+#[test]
+#[ignore = "known defect: the incremental surface loses triangles a rebuild has"]
+fn a_long_session_still_draws_what_a_rebuild_would() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let Ok(policy) = BackendPolicy::discover(None) else {
+        return;
+    };
+    let Ok(mut document) = ClayDocument::new(policy).and_then(ClayDocument::with_starting_form)
+    else {
+        return;
+    };
+
+    let mut incremental = SurfaceGeometry::new(&harness.gpu);
+    incremental
+        .rebuild(&harness.gpu, &mut document)
+        .expect("first mesh");
+
+    // Build up: strong additive dabs around the form, which is what pushes
+    // bricks in and out of holding a surface.
+    let strong = BrushSettings {
+        intensity: 0.9,
+        ..BrushSettings::default()
+    };
+    let ring: Vec<[f32; 3]> = (0..24)
+        .map(|step| {
+            let angle = step as f32 / 24.0 * std::f32::consts::TAU;
+            [angle.cos() * 0.9, angle.sin() * 0.9, 0.7]
+        })
+        .collect();
+    stroke(
+        &mut incremental,
+        &harness,
+        &mut document,
+        ToolKind::Padrao,
+        strong,
+        &ring,
+    );
+
+    // Pull tendrils out, which carries the surface across brick boundaries.
+    let pull: Vec<[f32; 3]> = (0..12)
+        .map(|step| {
+            let out = 1.0 + step as f32 * 0.06;
+            [0.0, 0.3, out]
+        })
+        .collect();
+    stroke(
+        &mut incremental,
+        &harness,
+        &mut document,
+        ToolKind::Puxar,
+        strong,
+        &pull,
+    );
+
+    // And take material away, which is what leaves a brick uniform beside a
+    // neighbour that still holds surface.
+    let carve = BrushSettings {
+        intensity: 0.9,
+        invert: true,
+        ..BrushSettings::default()
+    };
+    let cut: Vec<[f32; 3]> = (0..16)
+        .map(|step| {
+            let angle = step as f32 / 16.0 * std::f32::consts::TAU;
+            [angle.cos() * 0.5, angle.sin() * 0.5, 0.95]
+        })
+        .collect();
+    stroke(
+        &mut incremental,
+        &harness,
+        &mut document,
+        ToolKind::Padrao,
+        carve,
+        &cut,
+    );
+
+    let mut rebuilt = SurfaceGeometry::new(&harness.gpu);
+    rebuilt
+        .rebuild(&harness.gpu, &mut document)
+        .expect("rebuild");
+
+    let (mine, theirs) = (triangles(&incremental), triangles(&rebuilt));
+    let missing = theirs.difference(&mine).count();
+    let extra = mine.difference(&theirs).count();
+    println!(
+        "after 52 dabs across three strokes: sync {} triangles, rebuild {} — \
+         {missing} missing, {extra} spare",
+        mine.len(),
+        theirs.len()
+    );
+
+    // Holes are what a sculptor sees.
+    assert_eq!(
+        missing, 0,
+        "the incremental surface is missing {missing} triangles a rebuild has — \
+         these are the holes and torn seams a long session shows"
+    );
+    assert_eq!(
+        extra, 0,
+        "the incremental surface holds {extra} triangles a rebuild does not"
+    );
+}
+
+/// One stroke at a time, to say which kind of edit loses triangles.
+fn only(kind: &str) -> usize {
+    let Some(harness) = Harness::new() else {
+        return 0;
+    };
+    let Ok(policy) = BackendPolicy::discover(None) else {
+        return 0;
+    };
+    let Ok(mut document) = ClayDocument::new(policy).and_then(ClayDocument::with_starting_form)
+    else {
+        return 0;
+    };
+    let mut incremental = SurfaceGeometry::new(&harness.gpu);
+    incremental
+        .rebuild(&harness.gpu, &mut document)
+        .expect("first mesh");
+
+    let strong = BrushSettings {
+        intensity: 0.9,
+        ..BrushSettings::default()
+    };
+    match kind {
+        "ring" => {
+            let path: Vec<[f32; 3]> = (0..24)
+                .map(|s| {
+                    let a = s as f32 / 24.0 * std::f32::consts::TAU;
+                    [a.cos() * 0.9, a.sin() * 0.9, 0.7]
+                })
+                .collect();
+            stroke(
+                &mut incremental,
+                &harness,
+                &mut document,
+                ToolKind::Padrao,
+                strong,
+                &path,
+            );
+        }
+        "pull" => {
+            let path: Vec<[f32; 3]> = (0..12).map(|s| [0.0, 0.3, 1.0 + s as f32 * 0.06]).collect();
+            stroke(
+                &mut incremental,
+                &harness,
+                &mut document,
+                ToolKind::Puxar,
+                strong,
+                &path,
+            );
+        }
+        _ => {
+            let carve = BrushSettings {
+                intensity: 0.9,
+                invert: true,
+                ..BrushSettings::default()
+            };
+            let path: Vec<[f32; 3]> = (0..16)
+                .map(|s| {
+                    let a = s as f32 / 16.0 * std::f32::consts::TAU;
+                    [a.cos() * 0.5, a.sin() * 0.5, 0.95]
+                })
+                .collect();
+            stroke(
+                &mut incremental,
+                &harness,
+                &mut document,
+                ToolKind::Padrao,
+                carve,
+                &path,
+            );
+        }
+    }
+
+    let mut rebuilt = SurfaceGeometry::new(&harness.gpu);
+    rebuilt
+        .rebuild(&harness.gpu, &mut document)
+        .expect("rebuild");
+    let (mine, theirs) = (triangles(&incremental), triangles(&rebuilt));
+    let missing = theirs.difference(&mine).count();
+    println!(
+        "{kind}: {missing} missing, {} spare",
+        mine.difference(&theirs).count()
+    );
+    missing
+}
+
+#[test]
+#[ignore = "known defect: narrows the loss to the stroke that causes it"]
+fn which_stroke_loses_triangles() {
+    let ring = only("ring");
+    let pull = only("pull");
+    let carve = only("carve");
+    println!("ring {ring}, pull {pull}, carve {carve}");
+    assert_eq!((ring, pull, carve), (0, 0, 0), "a stroke lost triangles");
+}
+
+#[test]
+#[ignore = "diagnostic: prints where the losses fall"]
+fn where_do_the_missing_triangles_sit() {
+    // A diagnostic rather than a guarantee: it prints where the losses are so
+    // the mechanism can be identified from data instead of from reasoning.
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let Ok(policy) = BackendPolicy::discover(None) else {
+        return;
+    };
+    let Ok(mut document) = ClayDocument::new(policy).and_then(ClayDocument::with_starting_form)
+    else {
+        return;
+    };
+    let mut incremental = SurfaceGeometry::new(&harness.gpu);
+    incremental
+        .rebuild(&harness.gpu, &mut document)
+        .expect("first");
+
+    let carve = BrushSettings {
+        intensity: 0.9,
+        invert: true,
+        ..BrushSettings::default()
+    };
+    let path: Vec<[f32; 3]> = (0..16)
+        .map(|s| {
+            let a = s as f32 / 16.0 * std::f32::consts::TAU;
+            [a.cos() * 0.5, a.sin() * 0.5, 0.95]
+        })
+        .collect();
+    stroke(
+        &mut incremental,
+        &harness,
+        &mut document,
+        ToolKind::Padrao,
+        carve,
+        &path,
+    );
+
+    let mut rebuilt = SurfaceGeometry::new(&harness.gpu);
+    rebuilt
+        .rebuild(&harness.gpu, &mut document)
+        .expect("rebuild");
+
+    let mine = triangles(&incremental);
+    // Which key the rebuild filed each missing triangle under, and whether we
+    // hold that key at all.
+    let ours = incremental.stored_triangles();
+    let mut by_key: std::collections::BTreeMap<[i32; 3], usize> = Default::default();
+    for (key, tris) in rebuilt.stored_triangles() {
+        for t in tris {
+            if !mine.contains(&t) {
+                *by_key.entry(key).or_default() += 1;
+            }
+        }
+    }
+    println!("missing triangles by the key a rebuild files them under:");
+    for (key, count) in &by_key {
+        let held = ours.get(key).map(|t| t.len()).unwrap_or(0);
+        println!("  key {key:?}: {count} missing; we hold {held} triangles for it");
+    }
+}

@@ -1331,6 +1331,36 @@ cost with no benefit and a promise the interface could not keep. Both
 
 ## Known-degraded
 
+**The incremental surface loses a few triangles a rebuild has.** Reported as
+small holes and torn-looking seams while sculpting, and reproduced:
+`incremental_stress.rs` builds a form with three strokes and compares the
+incremental store against a full rebuild, which is missing 12 to 17 triangles —
+identically on every run, so it is a defect rather than a race. What is known:
+
+- The losses are **scattered singles** — one to three triangles missing from
+  keys where hundreds are held correctly — and there are **no stale triangles**
+  alongside them. The store is always a strict subset of the truth.
+- Nothing is dropped by the host's own splitting: instrumenting every discard
+  path in `SurfaceGeometry::remesh` counts zero.
+- It is not the shading level, and not the filter that meshes only the dirty
+  keys still holding a surface: requesting *every* dirty key leaves the same
+  losses and adds stale triangles.
+- A one-brick dilation of the request helps one stroke and harms another, which
+  is the signature of something in the interaction between a per-key store and
+  the engine's *request-relative* straddler attribution rather than a missing
+  ring of coverage.
+- `Puxar` loses nothing; the two strokes that lose are both `Padrao`, additive
+  and inverted.
+
+Not yet established: whether re-meshing the affected keys recovers them. Two
+attempts to answer that measured nothing — one re-marked a region that never
+reached the document's dirty set, the other ran a refinement pass that had
+nothing queued — so the question is open rather than answered.
+
+`settle_needed.rs` asks the same question of six gentle dabs on a fresh sphere
+and passes, which is why this went unnoticed: those dabs never push a brick in
+or out of holding a surface.
+
 Offered, and not doing what they should. Each has a test that fails when it is
 fixed, so this list shrinks by being noticed rather than by being remembered.
 
