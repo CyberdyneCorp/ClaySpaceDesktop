@@ -520,3 +520,71 @@ fn do_the_two_surface_queries_agree() {
         incremental.sync(&harness.gpu, &mut document).expect("sync");
     }
 }
+
+#[test]
+fn a_snake_hook_session_draws_what_a_rebuild_would() {
+    // The reported session: many snake-hook pulls on an SDF layer, up to half
+    // a million triangles. `Puxar` loses nothing over a dozen dabs on a small
+    // form, which is what the first reproducer measured — this asks the same
+    // question of the shape a sculptor actually makes with it.
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let Ok(policy) = BackendPolicy::discover(None) else {
+        return;
+    };
+    let Ok(mut document) = ClayDocument::new(policy).and_then(ClayDocument::with_starting_form)
+    else {
+        return;
+    };
+    let mut incremental = SurfaceGeometry::new(&harness.gpu);
+    incremental
+        .rebuild(&harness.gpu, &mut document)
+        .expect("first mesh");
+
+    let strong = BrushSettings {
+        intensity: 0.9,
+        ..BrushSettings::default()
+    };
+
+    // Eight tendrils pulled outward in different directions, each a drag of
+    // ten samples — the lobes in the report.
+    for tendril in 0..8 {
+        let angle = tendril as f32 / 8.0 * std::f32::consts::TAU;
+        let (sin, cos) = angle.sin_cos();
+        let path: Vec<[f32; 3]> = (0..10)
+            .map(|step| {
+                let out = 1.0 + step as f32 * 0.08;
+                [cos * out * 0.7, sin * out * 0.7, out * 0.5]
+            })
+            .collect();
+        stroke(
+            &mut incremental,
+            &harness,
+            &mut document,
+            ToolKind::Puxar,
+            strong,
+            &path,
+        );
+    }
+
+    let mut rebuilt = SurfaceGeometry::new(&harness.gpu);
+    rebuilt
+        .rebuild(&harness.gpu, &mut document)
+        .expect("rebuild");
+
+    let (mine, theirs) = (triangles(&incremental), triangles(&rebuilt));
+    let missing = theirs.difference(&mine).count();
+    let extra = mine.difference(&theirs).count();
+    println!(
+        "eight tendrils, 80 samples: sync {} triangles, rebuild {} — \
+         {missing} missing, {extra} spare",
+        mine.len(),
+        theirs.len()
+    );
+    assert_eq!(missing, 0, "a snake-hook session lost {missing} triangles");
+    assert_eq!(
+        extra, 0,
+        "a snake-hook session kept {extra} stale triangles"
+    );
+}
