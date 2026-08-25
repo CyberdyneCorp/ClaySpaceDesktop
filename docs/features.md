@@ -1361,13 +1361,23 @@ turning normals toward the eye, which would hide a badly shaded triangle, moves
 the count by one.
 
 A related but separate cost, worth fixing on our side: the incremental store
-holds **13,684 duplicate triangles** out of 597,597, against 351 in a rebuild.
+holds **11,333 duplicate triangles** out of 595,450, against 204 in a rebuild.
 The engine's header asks a host holding geometry per brick to dedupe by
 triangle, because a straddler "may move to another key's share when a later
 request names a different set". We do not, so a triangle can be filed under two
-keys across two syncs. It is 2.3% of the mesh in wasted upload and draw, and it
-is *not* the cause of the holes — a rebuild has a fortieth as many duplicates
+keys across two syncs. It is 1.9% of the mesh in wasted upload and draw, and it
+is *not* the cause of the holes — a rebuild has a fiftieth as many duplicates
 and the same number of holes.
+
+Deduping matches triangles to decide what to drop, and that match is bit-exact
+rather than rounded to a tolerance. The two errors are not equal: missing a
+duplicate leaves a coincident copy, costing only its own memory, while matching
+two triangles that are not the same one deletes geometry. Meshing runs on the
+backend, so a seam sliver can be finer than any tolerance worth naming and two
+backends do not place a vertex identically — a tolerance of 1/4096 drew a
+surface that differed from a rebuild under Metal while agreeing under Vulkan.
+The test that checks pruning lost nothing has to use the exact form too; asking
+with the same tolerance pruning matched on can only answer no.
 
 **Fixed: the incremental surface used to lose a few triangles a rebuild has.**
 Reported as small holes and torn-looking seams while sculpting. Kept here

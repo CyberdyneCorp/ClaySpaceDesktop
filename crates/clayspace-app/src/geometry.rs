@@ -653,8 +653,8 @@ impl SurfaceGeometry {
     /// another key's share when a later request names a different set — its
     /// content is identical wherever it lands, so keeping either copy is
     /// right". Keeping *both* is what a store filed per key does by default,
-    /// and a long session accumulates them — measured at 13,684 of 597,597
-    /// triangles, against 351 in a rebuild of the same document.
+    /// and a long session accumulates them — measured at 11,333 of 595,450
+    /// triangles, against 204 in a rebuild of the same document.
     ///
     /// They cost upload and draw rather than correctness: the copies are
     /// coincident, so nothing shimmers and no hole appears. Which is why this
@@ -676,7 +676,7 @@ impl SurfaceGeometry {
         // is what `visual_incremental` and `lod_switching` check.
         let mut keys: Vec<BrickKey> = self.keys.keys().copied().collect();
         keys.sort_unstable();
-        let mut seen: std::collections::HashSet<[[i32; 3]; 3]> = std::collections::HashSet::new();
+        let mut seen: std::collections::HashSet<[[u32; 3]; 3]> = std::collections::HashSet::new();
         for key in keys {
             let Some(geometry) = self.keys.get_mut(&key) else {
                 continue;
@@ -686,15 +686,31 @@ impl SurfaceGeometry {
             }
             let mut kept: Vec<u32> = Vec::with_capacity(geometry.indices.len());
             for triangle in geometry.indices.chunks_exact(3) {
-                // Quantised and sorted, so the same triangle reached from two
+                // Bit-exact, and sorted so the same triangle reached from two
                 // keys is the same value however each key numbered its own
                 // vertices.
+                //
+                // Exact rather than rounded to a tolerance, because the two
+                // errors here are not equal. Missing a duplicate leaves a
+                // coincident copy in the buffer, which is what this code
+                // existed to tidy and costs only its own memory. Matching two
+                // triangles that are *not* the same one deletes geometry --
+                // and the meshing runs on the backend, so a seam sliver can be
+                // finer than any tolerance worth naming and two backends do
+                // not place a vertex identically. A tolerance of 1/4096 did
+                // exactly that: it drew a surface that differed from a rebuild
+                // under Metal while agreeing under Vulkan.
+                //
+                // Two copies of one triangle come from two meshings of an
+                // unchanged field, so they agree bit for bit when they agree
+                // at all; where a backend makes them differ, both are kept and
+                // the buffer is merely as large as it was before.
                 let mut corners = [
                     geometry.vertices[triangle[0] as usize].position,
                     geometry.vertices[triangle[1] as usize].position,
                     geometry.vertices[triangle[2] as usize].position,
                 ]
-                .map(|p| p.map(|c| (c * 4096.0).round() as i32));
+                .map(|p| p.map(f32::to_bits));
                 corners.sort_unstable();
                 if seen.insert(corners) {
                     kept.extend_from_slice(triangle);
@@ -1030,6 +1046,31 @@ impl SurfaceGeometry {
         // same 240 ms for the mask tool, which re-meshes nothing at all.
         document.take_dirty_keys();
         Ok(())
+    }
+
+    /// Every triangle this store holds, bit-exact and with duplicates kept.
+    ///
+    /// Diagnostic, and deliberately *not* the quantised form below: rounding
+    /// is what a comparison between two independently meshed stores needs and
+    /// what a check on pruning must not use. Asking whether pruning dropped
+    /// anything with the same tolerance pruning matched on can only ever
+    /// answer no.
+    pub fn stored_triangles_exact(&self) -> Vec<[[u32; 3]; 3]> {
+        self.keys
+            .values()
+            .flat_map(|geometry| {
+                geometry.indices.chunks_exact(3).filter_map(|t| {
+                    let mut corners = [
+                        geometry.vertices.get(t[0] as usize)?.position,
+                        geometry.vertices.get(t[1] as usize)?.position,
+                        geometry.vertices.get(t[2] as usize)?.position,
+                    ]
+                    .map(|p| p.map(f32::to_bits));
+                    corners.sort_unstable();
+                    Some(corners)
+                })
+            })
+            .collect()
     }
 
     /// The triangles stored against each key, quantised to world positions.

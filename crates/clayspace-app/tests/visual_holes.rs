@@ -326,32 +326,44 @@ fn a_long_mixed_session_leaves_no_holes_or_specks() {
     // key's share when a later request names a different set" — so a host
     // keeping geometry per key can end up with two coincident copies, which
     // z-fight and speckle.
-    let stored = geometry.stored_triangles();
-    let total: usize = stored.values().map(|v| v.len()).sum();
-    let distinct: std::collections::HashSet<_> = stored.values().flatten().collect();
+    //
+    // Measured bit-exact rather than through `stored_triangles`, which rounds
+    // to 1/4096. Pruning matches triangles to decide what to drop, so checking
+    // it kept everything with the same tolerance it matched on is circular:
+    // the answer is yes however wrong the tolerance is. A first version of
+    // this did precisely that, and the rounding it was blind to drew a surface
+    // that differed from a rebuild under Metal.
+    let before: Vec<_> = geometry.stored_triangles_exact();
+    let distinct: std::collections::HashSet<_> = before.iter().copied().collect();
     println!(
         "  stored {} triangles, {} distinct — {} duplicates",
-        total,
+        before.len(),
         distinct.len(),
-        total - distinct.len()
+        before.len() - distinct.len()
     );
 
     // After a relayout, which is where duplicates are pruned.
     geometry.settle_layout(&harness.gpu);
-    let pruned = geometry.stored_triangles();
-    let pruned_total: usize = pruned.values().map(|v| v.len()).sum();
-    let pruned_distinct: std::collections::HashSet<_> = pruned.values().flatten().collect();
+    let after: Vec<_> = geometry.stored_triangles_exact();
+    let pruned_distinct: std::collections::HashSet<_> = after.iter().copied().collect();
     println!(
         "  after a relayout: {} triangles, {} distinct — {} duplicates",
-        pruned_total,
+        after.len(),
         pruned_distinct.len(),
-        pruned_total - pruned_distinct.len()
+        after.len() - pruned_distinct.len()
     );
+    // Not a count: the set itself. A pruned store must hold every triangle it
+    // held before and no others, so a drop and an unrelated gain cannot cancel.
     assert_eq!(
-        pruned_distinct.len(),
-        distinct.len(),
-        "pruning duplicates lost {} distinct triangles",
-        distinct.len() as i64 - pruned_distinct.len() as i64
+        pruned_distinct,
+        distinct,
+        "pruning changed which triangles the store holds: {} lost, {} appeared",
+        distinct.difference(&pruned_distinct).count(),
+        pruned_distinct.difference(&distinct).count()
+    );
+    assert!(
+        after.len() < before.len(),
+        "pruning dropped nothing, so it is no longer being measured"
     );
 
     // Where does it come from? A rebuild shares our splitting and our slots
