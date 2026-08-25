@@ -1331,32 +1331,43 @@ cost with no benefit and a promise the interface could not keep. Both
 
 ## Known-degraded
 
-**Dark specks on the surface after a long session.** Reported alongside the
-triangle loss above and *not* the same defect: that one is fixed and this one
-survives it, which is why the artifacts improved without going away.
+**Pinholes in the brick cache's mesh on a heavily worked surface.** Reported
+alongside the triangle loss above, and *not* the same defect — that one is
+fixed and this survives it, which is why the artifacts improved without going
+away. This one is the engine's.
 
-Reproduced by `visual_holes.rs`, which asks the question a sculptor does —
-render the form and look at it — rather than comparing two of our own
-structures. At around six hundred thousand triangles a mixed session leaves
-**eight specks too dark to be shading**, and they are still there when the same
-document is rebuilt from scratch:
+Reproduced by `visual_holes.rs`, which renders the form and looks at it rather
+than comparing two of our own structures. At around six hundred thousand
+triangles a mixed session leaves a handful of one-pixel holes, and the pixels
+are background: `[34, 37, 42]` against a background of `[35, 38, 43]`,
+surrounded by lit surface on every side.
 
-| | pinholes | dark specks |
-|---|---|---|
-| incremental | 6 | 8 |
-| rebuilt from scratch | 6 | 9 |
-| the engine's own document mesh | 6 | 0 |
+Where they are not is what identifies them:
 
-So it is not the incremental request, which the rebuild does not use. It is
-either the brick cache's marching mesh or what we do with it — the two share
-everything the rebuild and the incremental sync have in common. The engine's own
-document mesh is a different mesher at a different resolution, so its clean
-column is a hint rather than a verdict.
+| what was rendered | holes |
+|---|---|
+| the incremental store | 8 |
+| the same document rebuilt from scratch | 9 |
+| **the brick cache's own mesh, uploaded whole** | **9** |
+| `clay_document_mesh` of the same document | **0** |
 
-The six pinholes counted in all three, the engine's own mesh included, are most
-likely the detector rather than the surface: this form has radiating lobes, and
-a gap between two of them can be locally enclosed without being a hole. Worth
-tightening before it is trusted.
+The third row is the one that matters: it skips our splitting, our per-key
+store and our slots, and the holes are still there. So they are in
+`clay_brick_cache_mesh` rather than in anything this application does with it —
+consistent with the header's own distinction, where `clay_document_mesh` is
+"the watertight, 2-manifold export path" and the brick cache is the frame path.
+Nothing in shading can fill a hole, so there is no mitigation here worth having:
+turning normals toward the eye, which would hide a badly shaded triangle, moves
+the count by one.
+
+A related but separate cost, worth fixing on our side: the incremental store
+holds **13,684 duplicate triangles** out of 597,597, against 351 in a rebuild.
+The engine's header asks a host holding geometry per brick to dedupe by
+triangle, because a straddler "may move to another key's share when a later
+request names a different set". We do not, so a triangle can be filed under two
+keys across two syncs. It is 2.3% of the mesh in wasted upload and draw, and it
+is *not* the cause of the holes — a rebuild has a fortieth as many duplicates
+and the same number of holes.
 
 **Fixed: the incremental surface used to lose a few triangles a rebuild has.**
 Reported as small holes and torn-looking seams while sculpting. Kept here

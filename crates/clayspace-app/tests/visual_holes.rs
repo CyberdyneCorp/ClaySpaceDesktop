@@ -63,11 +63,15 @@ fn pinholes(image: &Image, background: [u8; 4]) -> Vec<(u32, u32)> {
     found
 }
 
-/// Surface pixels much darker than the lit surface around them.
+/// Pixels much darker than the lit surface all around them.
 ///
-/// The reported artifact is not always a hole. A triangle whose normal points
-/// away, or one stretched to nothing, shades near-black under a MatCap while
-/// still being geometry — so looking only for background misses it.
+/// This is the detector that actually finds the reported artifact, and
+/// [`pinholes`] is not: a one-pixel hole beside a crease has no surface within
+/// reach along one of its diagonals, so demanding it in all eight directions
+/// misses exactly the thing being looked for. Asking instead for "dark, with
+/// lit surface around it" catches the hole and the half-covered pixel at its
+/// rim, and does not care whether the darkness is background or a triangle
+/// shaded badly — both are the same complaint from the sculptor's side.
 fn dark_specks(image: &Image) -> Vec<(u32, u32)> {
     let luminance = |x: u32, y: u32| {
         let p = image.pixel(x, y);
@@ -317,6 +321,21 @@ fn a_long_mixed_session_leaves_no_holes_or_specks() {
     if !specks.is_empty() {
         println!("  specks at {:?}", &specks[..specks.len().min(8)]);
     }
+    // Are we holding the same triangle twice? The engine attributes a
+    // straddler to one requested key per call and says it "may move to another
+    // key's share when a later request names a different set" — so a host
+    // keeping geometry per key can end up with two coincident copies, which
+    // z-fight and speckle.
+    let stored = geometry.stored_triangles();
+    let total: usize = stored.values().map(|v| v.len()).sum();
+    let distinct: std::collections::HashSet<_> = stored.values().flatten().collect();
+    println!(
+        "  stored {} triangles, {} distinct — {} duplicates",
+        total,
+        distinct.len(),
+        total - distinct.len()
+    );
+
     // Where does it come from? A rebuild shares our splitting and our slots
     // but not the incremental request; the engine's own mesh shares neither.
     let mut rebuilt = SurfaceGeometry::new(&harness.gpu);
@@ -324,6 +343,44 @@ fn a_long_mixed_session_leaves_no_holes_or_specks() {
         .rebuild(&harness.gpu, &mut document)
         .expect("rebuild");
     let rebuilt_image = harness.capture(rebuilt.mesh(), &camera, false, "134-long-rebuilt");
+    let rebuilt_stored = rebuilt.stored_triangles();
+    let rebuilt_total: usize = rebuilt_stored.values().map(|v| v.len()).sum();
+    let rebuilt_distinct: std::collections::HashSet<_> =
+        rebuilt_stored.values().flatten().collect();
+    println!(
+        "  rebuilt stores {} triangles, {} distinct — {} duplicates",
+        rebuilt_total,
+        rebuilt_distinct.len(),
+        rebuilt_total - rebuilt_distinct.len()
+    );
+
+    // The brick cache's own mesh of every surface brick, in one call, uploaded
+    // whole — past our splitting, our per-key store and our slots. This is the
+    // measurement that says whether the specks are the engine's mesh or our
+    // handling of it, because everything else the incremental sync and the
+    // rebuild share is skipped here.
+    let keys = document.cache().surface_bricks().expect("surface bricks");
+    let (brick_mesh, _) = document
+        .cache()
+        .mesh_lod(
+            Some(document.document()),
+            clayspace_engine::claycore::BrickMeshParams {
+                gradient_normals: true,
+                colors: false,
+                gradient_eps: None,
+            },
+            0,
+            &keys,
+        )
+        .expect("the brick cache's own mesh");
+    let direct = harness.upload(&brick_mesh);
+    let direct_image = harness.capture(&direct, &camera, false, "136-long-brick-mesh-direct");
+    println!(
+        "  the brick mesh uploaded whole: {} pinholes, {} specks",
+        pinholes(&direct_image, background).len(),
+        dark_specks(&direct_image).len()
+    );
+
     let engine = support::mesh_document(document.document(), 160);
     let engine_image = harness.capture_mesh(&engine, &camera, "135-long-engine-mesh");
     println!(
