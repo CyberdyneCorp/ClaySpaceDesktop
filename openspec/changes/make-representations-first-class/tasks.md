@@ -1348,3 +1348,39 @@ Recorded under *Not built yet*.
     requires the drawn frame to change. The sphere comes out a capsule; the
     captures are 122 and 123.
 
+## 29. A wheel notch that is worth one notch
+
+- [x] 29.1 The unit that was never converted
+  - Reported: the zoom jumps are too big. They were, by about forty times.
+    egui reports scrolling in *points* and one wheel notch is forty of them —
+    `line_scroll_speed`, a number chosen for scrolling a document — and that
+    figure went straight into `zoom_toward`, whose `amount` was written as
+    notches. One notch inward computed a multiplier of **−3.0**: a negative
+    distance, saved only by a clamp. One notch outward was **five times**
+    further away.
+  - Converted at the boundary, where the unit changes, and divided by what egui
+    itself reports rather than by a hardcoded forty — so the wheel keeps
+    meaning one notch if that figure is ever revised or the user changes it.
+    A trackpad reports points directly and now arrives as the fraction of a
+    notch it actually moved, which is what makes a two-finger drag glide rather
+    than step.
+  - The unit is named in the signature and in the field's own documentation, so
+    the next person to touch either end can see what is being passed.
+
+- [x] 29.2 A factor per notch, not a fraction off one
+  - `distance * (1 - notches * 0.1)` has two faults that only show up away from
+    small numbers: it **crosses zero** past ten notches in a single frame, and
+    it is **not symmetric** — 0.9 then 1.1 is 0.99, so a wheel jiggled back and
+    forth walked the camera inward a little each time.
+  - `distance * rate^-notches` has neither. It cannot reach zero from above, so
+    the clamp is a safety net rather than load-bearing, and in-then-out is
+    exactly where it began — a test does twenty such pairs and requires the
+    distance back.
+  - The rate is 1.08, about seven per cent a notch: finer than the ten it was
+    nominally meant to be, which is what was asked for, and still compounding
+    to halve the distance in ten.
+  - The existing "twenty notches close most of the gap" test had its threshold
+    written as a literal derived from the old rate. It derives it from the
+    constant now, so a future change to the rate does not require re-guessing a
+    number in a test.
+

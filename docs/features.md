@@ -949,6 +949,21 @@ it, which is Blender's behaviour and two things rather than one:
   toward the middle and the next orbit turns around what you were looking at.
   Partial rather than complete: snapping the pivot onto the surface would swing
   the view on every notch.
+- **A notch is about seven per cent**, and it is a *factor* rather than a
+  fraction taken off one. Both matter. The rate is fine enough to creep up on a
+  detail and still compounds — ten notches halve the distance — and a factor
+  cannot cross zero, where the subtracted form asked for a negative distance
+  past ten notches in one frame and only a clamp caught it. A factor is also
+  symmetric: a notch in and a notch out land exactly where they started, where
+  the old form left the camera slightly nearer each time a wheel was jiggled.
+- **The wheel is measured in notches, not points.** egui reports scrolling in
+  points and one notch is forty of them — a number chosen for scrolling a
+  document. Handed to the camera raw, as it was, a single notch asked for forty
+  notches of movement: inward a negative distance, outward five times further
+  away in one click. That is what "the zoom jumps are too big" was. The
+  conversion divides by egui's own figure rather than a hardcoded forty, so a
+  trackpad's smaller deltas come through as the fraction of a notch they
+  actually are and a two-finger drag glides instead of stepping.
 
 Two things it does *not* do. Zooming **out** is never held back — the standoff
 limits coming in and nothing else. And with the pointer over empty space it is
