@@ -685,13 +685,58 @@ cannot use.
   "up", not "up and a little sideways because my hand drifted".
 - The **centre** moves freely in the view plane, and scales uniformly. Rotation
   has no centre handle: turning about the axis facing the eye is what the outer
-  ring is for, and a second widget meaning the same thing is one more thing to
+  ring is for, and a filled centre meaning the same thing is one more thing to
   hit by accident.
+- The **outer ring** turns the selection in the plane of the screen — ZBrush's
+  outermost ring, and the one a sculptor reaches for most. The three axis rings
+  turn it in the *world's* frame; this one turns it in the frame it is being
+  looked at from. It is the only handle whose axis is not a world axis, so a
+  drag carries the direction the camera faced **when the press landed**: an
+  axis re-read each frame would twist the selection under a hand that had not
+  moved. It sits outside the three at 1.28× their radius — among them it would
+  be a fourth thing to tell apart at the same distance from the pivot — and it
+  is tested last, so a press where it crosses an axis ring goes to the axis.
+  The outer one is the easy target everywhere else and should not steal the
+  hard ones.
+- **Turning and scaling need two points or more.** They act about the middle
+  of the selection, and one point's middle is itself — so on a selection of one
+  they are exactly no movement, however the drag is made. The two modes are
+  disabled with the reason on them rather than drawn live and inert, which is
+  how they were: the rings appeared, the drag ran, and nothing moved. Moving is
+  not affected; it needs no pivot.
+- **A ring can be grabbed anywhere along it.** It is hit-tested as a string of
+  spheres, and sixteen of them was a number picked rather than derived — at the
+  manipulator's own proportions they do not touch, so about a fifth of every
+  axis ring and a third of the outer one could be pressed with nothing under
+  the press. The count comes from the ring's circumference and the grab radius
+  now, and a test walks a thousand points around the ring rather than checking
+  at the samples.
+- **Ctrl snaps a turn to 15°.** Twenty-four increments to the circle, which
+  divides the angles a sculptor actually reaches for — 30, 45, 60, 90 — where a
+  rounder-looking 10 does not. Rounded to the *nearest* rather than downward, so
+  the handle stays under the pointer across a boundary instead of lagging half
+  an increment behind it, and read **per drag rather than per gesture**: the
+  modifier can be taken up part-way through a turn to land it on a round number,
+  which is how Blender's works and what a hand actually does. It is angle
+  snapping only — a move that snapped to a grid nobody asked for would be a
+  surprise.
 - A **scale never passes through zero**, either way. A drag that overshot the
   pivot would turn the form inside out with no way back but undo.
 - A drag is resolved **from its anchor every frame** rather than accumulated.
   Transforming what the last frame produced compounds a rotation into a spiral
   and a scale into a runaway.
+
+**A slide and a turn run on opposite planes**, which is the part that is easy
+to get wrong and was wrong here for as long as the manipulator existed. A ring
+lies in the plane *perpendicular* to what it turns about, and that is where the
+angle is measured — dragged on a plane containing the axis instead, the
+pointer's travel has no component in the plane being measured and the turn
+comes out at exactly zero however far the hand moves. Two of the three rings
+did nothing at all; only the one whose axis pointed at the camera worked. The
+same line put the axis *facing* the eye on a plane perpendicular to itself,
+which sets the anchor's component along it to zero — and since a scale divides
+by that, that handle went dead too. The plane is chosen by the mode now, and
+`drag_plane` is a pure function with the two rules stated separately.
 
 An axis drag runs on the plane containing that axis and most nearly facing the
 eye — not on a plane facing the camera outright, which would make an axis

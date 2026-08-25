@@ -49,10 +49,12 @@ pub enum Command {
     ToggleLatticePoint(usize),
     /// Which of the manipulator's three modes is in force.
     SetGizmoMode(GizmoMode),
-    /// Grabs a manipulator handle at a point on the drag plane.
-    BeginGizmoDrag(GizmoHandle, [f32; 3]),
-    /// Carries the selection to where the pointer is now.
-    DragGizmo([f32; 3]),
+    /// Grabs a manipulator handle at a point on the drag plane, carrying the
+    /// direction the camera faces — which is what the outer ring turns about.
+    BeginGizmoDrag(GizmoHandle, [f32; 3], [f32; 3]),
+    /// Carries the selection to where the pointer is now. The flag is whether
+    /// a rotation snaps to whole increments.
+    DragGizmo([f32; 3], bool),
     /// Lets the manipulator go.
     EndGizmoDrag,
     /// Moves the selected control point to a world position.
@@ -310,7 +312,7 @@ impl Command {
                 | Self::ToggleLatticePoint(_)
                 | Self::SetGizmoMode(_)
                 | Self::BeginGizmoDrag(..)
-                | Self::DragGizmo(_)
+                | Self::DragGizmo(..)
                 | Self::EndGizmoDrag
                 | Self::DragLatticePoint(_)
                 // Opening, typing into and abandoning the rename field change
@@ -379,7 +381,7 @@ impl Command {
             Self::SelectLatticePoint(_) => "escolher ponto",
             Self::ToggleLatticePoint(_) => "escolher ponto",
             Self::SetGizmoMode(_) => "modo do manipulador",
-            Self::BeginGizmoDrag(..) | Self::DragGizmo(_) | Self::EndGizmoDrag => "manipular",
+            Self::BeginGizmoDrag(..) | Self::DragGizmo(..) | Self::EndGizmoDrag => "manipular",
             Self::DragLatticePoint(_) => "arrastar ponto",
             Self::ApplyLattice => "deformar pela gaiola",
             Self::ToggleMaskPainting => "máscara",

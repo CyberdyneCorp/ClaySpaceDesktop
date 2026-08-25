@@ -12,10 +12,10 @@
 use clayspace_model::{
     AlphaSupport, BlendProfile, BrushSettings, Combine, CombineSettings, DeformSettings,
     DeformVerb, Diagnostics, Direction, ExportMesher, ExportSettings, ExportWarning,
-    ExtrudeSettings, ExtrudeSide, Falloff, ImportAs, ImportSettings, LayerKey, LayerSummary,
-    MaskOp, MaskState, RecentDocuments, RefPlane, ReferenceSettings, Representation, Scene,
-    SceneStats, SculptLayer, SculptLayerCost, SculptLayerOp, SurfaceOpacity, ToolKind, Units,
-    ViewPresetKind,
+    ExtrudeSettings, ExtrudeSide, Falloff, GizmoMode, ImportAs, ImportSettings, LayerKey,
+    LayerSummary, MaskOp, MaskState, RecentDocuments, RefPlane, ReferenceSettings, Representation,
+    Scene, SceneStats, SculptLayer, SculptLayerCost, SculptLayerOp, SurfaceOpacity, ToolKind,
+    Units, ViewPresetKind,
 };
 use clayspace_vm::{Axis, Command, CommandQueue};
 
@@ -2283,9 +2283,16 @@ fn lattice_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
     // with three modes rather than three widgets is what ZBrush and Maya both
     // settled on: the sculptor's hand stays in the same place and the mode is
     // what changes.
+    // Turning and scaling act about the middle of the selection, and one
+    // point's middle is itself — so on a selection of one they are exactly no
+    // movement. Disabled with the reason on them rather than drawn live and
+    // inert, which is how they were: the rings appeared, the drag ran, and
+    // nothing moved.
+    let can_transform = state.lattice.can_transform();
     ui.horizontal_wrapped(|ui| {
         for mode in clayspace_model::GizmoMode::ALL {
             let on = state.lattice.mode == mode;
+            let usable = can_transform || mode == GizmoMode::Move;
             let button = egui::Button::new(
                 egui::RichText::new(mode.label())
                     .size(type_scale::LABEL)
@@ -2300,11 +2307,21 @@ fn lattice_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
             } else {
                 Tokens::panel()
             });
-            if ui.add(button).clicked() {
+            let response = ui
+                .add_enabled(usable, button)
+                .on_disabled_hover_text(s.hint_gizmo_needs_two);
+            if response.clicked() {
                 queue.push(Command::SetGizmoMode(mode));
             }
         }
     });
+    if !can_transform {
+        ui.label(
+            egui::RichText::new(s.hint_gizmo_needs_two)
+                .size(type_scale::LABEL)
+                .color(Tokens::accent()),
+        );
+    }
 
     if ui.button(s.action_bend).clicked() {
         queue.push(Command::ApplyLattice);
@@ -2314,6 +2331,16 @@ fn lattice_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
             .size(type_scale::LABEL)
             .color(Tokens::text_dim()),
     );
+    // Only while turning. The outer ring and the snap modifier mean nothing in
+    // the other two modes, and a hint that is always there is a hint nobody
+    // reads by the third time they see it.
+    if state.lattice.mode == GizmoMode::Rotate && can_transform {
+        ui.label(
+            egui::RichText::new(s.hint_gizmo_rotate)
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+        );
+    }
 }
 
 /// What the mask operations act with.

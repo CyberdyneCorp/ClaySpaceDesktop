@@ -73,6 +73,10 @@ pub struct Strings {
     pub status_cage_needs_a_field: &'static str,
     /// How to use the cage, where a person is when they need it.
     pub hint_cage: &'static str,
+    /// Shown while the manipulator is set to turn.
+    pub hint_gizmo_rotate: &'static str,
+    /// Why turning and scaling are refused on a selection of one.
+    pub hint_gizmo_needs_two: &'static str,
     /// The mask section of the inspector.
     pub section_mask: &'static str,
     /// How far Expandir, Contrair and Suavizar máscara reach.
@@ -297,6 +301,9 @@ const PT_BR: Strings = Strings {
     status_cage_needs_a_field:
         "Uma camada de voxels não aceita uma gaiola. Converta-a para SDF ou malha primeiro.",
     hint_cage: "Arraste um ponto · Shift+clique soma à seleção · Deformar aplica",
+    hint_gizmo_rotate: "O anel externo gira no plano da tela · Ctrl trava em 15°",
+    hint_gizmo_needs_two:
+        "Girar e Escalar agem em torno do meio da seleção · escolha dois pontos ou mais",
     section_mask: "MÁSCARA",
     label_mask_steps: "Passos",
     label_mask_cells: "Células congeladas",
@@ -487,6 +494,9 @@ const EN_US: Strings = Strings {
     label_cage_divisions: "Points per axis",
     status_cage_needs_a_field: "A voxel layer takes no cage. Cross it to SDF or mesh first.",
     hint_cage: "Drag a point · Shift-click adds to the selection · Deform applies",
+    hint_gizmo_rotate: "The outer ring turns in the screen plane · Ctrl snaps to 15°",
+    hint_gizmo_needs_two:
+        "Turn and Scale act about the middle of the selection · pick two points or more",
     section_mask: "MASK",
     label_mask_steps: "Steps",
     label_mask_cells: "Frozen cells",
@@ -678,6 +688,9 @@ const ES_419: Strings = Strings {
     status_cage_needs_a_field:
         "Uma camada de voxels não aceita uma gaiola. Converta-a para SDF ou malha primeiro.",
     hint_cage: "Arraste um ponto · Shift+clique soma à seleção · Deformar aplica",
+    hint_gizmo_rotate: "El anillo exterior gira en el plano de la pantalla · Ctrl fija a 15°",
+    hint_gizmo_needs_two:
+        "Girar y Escalar actúan en torno al medio de la selección · elige dos puntos o más",
     section_mask: "MÁSCARA",
     label_mask_steps: "Passos",
     label_mask_cells: "Células congeladas",
@@ -854,7 +867,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 136] {
+    pub fn all(&self) -> [&'static str; 138] {
         [
             self.menu_file,
             self.menu_edit,
@@ -880,6 +893,8 @@ impl Strings {
             self.label_cage_divisions,
             self.status_cage_needs_a_field,
             self.hint_cage,
+            self.hint_gizmo_rotate,
+            self.hint_gizmo_needs_two,
             self.action_paint_mask,
             self.section_mask,
             self.label_mask_steps,

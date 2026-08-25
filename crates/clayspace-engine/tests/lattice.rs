@@ -11,6 +11,11 @@
 //! caps that one at 4. A grid has neither.
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
+/// A camera in front of the form, for the drags that do not use the outer
+/// ring — every handle carries the direction the camera faced, and only that
+/// one reads it.
+const LOOKING_DOWN_Z: [f32; 3] = [0.0, 0.0, 1.0];
+
 use clayspace_model::{
     Direction, GizmoHandle, GizmoMode, LatticeModel, Representation, SculptModel,
 };
@@ -323,9 +328,9 @@ fn the_manipulator_moves_a_whole_face() {
         .pivot()
         .expect("a selection has a middle");
     document.set_gizmo_mode(GizmoMode::Move);
-    document.begin_gizmo_drag(GizmoHandle::Axis(1), pivot);
+    document.begin_gizmo_drag(GizmoHandle::Axis(1), pivot, LOOKING_DOWN_Z);
     document
-        .drag_gizmo([pivot[0], pivot[1] + 0.5, pivot[2]])
+        .drag_gizmo([pivot[0], pivot[1] + 0.5, pivot[2]], false)
         .expect("the drag was refused");
     document.end_gizmo_drag();
     document.apply_lattice().expect("the cage was refused");
@@ -352,10 +357,10 @@ fn an_axis_drag_does_not_wander_off_its_axis() {
 
     let pivot = document.lattice().pivot().expect("a middle");
     document.set_gizmo_mode(GizmoMode::Move);
-    document.begin_gizmo_drag(GizmoHandle::Axis(1), pivot);
+    document.begin_gizmo_drag(GizmoHandle::Axis(1), pivot, LOOKING_DOWN_Z);
     // Deliberately crooked: the pointer wanders in x and z as well.
     document
-        .drag_gizmo([pivot[0] + 0.4, pivot[1] + 0.5, pivot[2] - 0.3])
+        .drag_gizmo([pivot[0] + 0.4, pivot[1] + 0.5, pivot[2] - 0.3], false)
         .expect("the drag was refused");
 
     let after = document.lattice().points;
@@ -385,9 +390,13 @@ fn a_rotation_turns_the_selection_about_its_own_middle() {
 
     document.set_gizmo_mode(GizmoMode::Rotate);
     // A quarter turn about y: from +x to +z, in the plane the ring lies in.
-    document.begin_gizmo_drag(GizmoHandle::Axis(1), [pivot[0] + 1.0, pivot[1], pivot[2]]);
+    document.begin_gizmo_drag(
+        GizmoHandle::Axis(1),
+        [pivot[0] + 1.0, pivot[1], pivot[2]],
+        LOOKING_DOWN_Z,
+    );
     document
-        .drag_gizmo([pivot[0], pivot[1], pivot[2] + 1.0])
+        .drag_gizmo([pivot[0], pivot[1], pivot[2] + 1.0], false)
         .expect("the drag was refused");
 
     let after = document.lattice().points;
@@ -421,9 +430,13 @@ fn a_scale_spreads_the_selection_about_its_middle() {
     let before = document.lattice().points.clone();
 
     document.set_gizmo_mode(GizmoMode::Scale);
-    document.begin_gizmo_drag(GizmoHandle::Centre, [pivot[0] + 1.0, pivot[1], pivot[2]]);
+    document.begin_gizmo_drag(
+        GizmoHandle::Centre,
+        [pivot[0] + 1.0, pivot[1], pivot[2]],
+        LOOKING_DOWN_Z,
+    );
     document
-        .drag_gizmo([pivot[0] + 2.0, pivot[1], pivot[2]])
+        .drag_gizmo([pivot[0] + 2.0, pivot[1], pivot[2]], false)
         .expect("the drag was refused");
 
     let after = document.lattice().points;
@@ -454,13 +467,13 @@ fn a_manipulator_drag_is_resolved_from_its_anchor_every_time() {
     let pivot = document.lattice().pivot().expect("a middle");
 
     document.set_gizmo_mode(GizmoMode::Move);
-    document.begin_gizmo_drag(GizmoHandle::Axis(1), pivot);
+    document.begin_gizmo_drag(GizmoHandle::Axis(1), pivot, LOOKING_DOWN_Z);
     // A pointer wandering on its way: an intermediate destination, then the
     // one it settles on, then the same one again as a held pointer that has
     // stopped moving keeps sending.
     for at in [0.2, 0.5, 0.5] {
         document
-            .drag_gizmo([pivot[0], pivot[1] + at, pivot[2]])
+            .drag_gizmo([pivot[0], pivot[1] + at, pivot[2]], false)
             .expect("the drag was refused");
     }
     let wandered = document.lattice().points.clone();
@@ -473,9 +486,9 @@ fn a_manipulator_drag_is_resolved_from_its_anchor_every_time() {
     direct.begin_lattice([2, 2, 2]).expect("a cage");
     select_the_far_face(&mut direct, 1);
     direct.set_gizmo_mode(GizmoMode::Move);
-    direct.begin_gizmo_drag(GizmoHandle::Axis(1), pivot);
+    direct.begin_gizmo_drag(GizmoHandle::Axis(1), pivot, LOOKING_DOWN_Z);
     direct
-        .drag_gizmo([pivot[0], pivot[1] + 0.5, pivot[2]])
+        .drag_gizmo([pivot[0], pivot[1] + 0.5, pivot[2]], false)
         .expect("the drag was refused");
 
     assert_eq!(
@@ -498,9 +511,9 @@ fn the_manipulator_does_nothing_with_nothing_selected() {
     document.begin_lattice([2, 2, 2]).expect("a cage");
     let before = document.lattice().points.clone();
 
-    document.begin_gizmo_drag(GizmoHandle::Axis(1), [0.0; 3]);
+    document.begin_gizmo_drag(GizmoHandle::Axis(1), [0.0; 3], LOOKING_DOWN_Z);
     document
-        .drag_gizmo([0.0, 5.0, 0.0])
+        .drag_gizmo([0.0, 5.0, 0.0], false)
         .expect("the drag was refused");
     assert_eq!(document.lattice().points, before);
     assert!(!document.lattice().touched);
@@ -524,9 +537,9 @@ fn the_bend_is_shown_while_the_cage_is_dragged() {
     let pivot = document.lattice().pivot().expect("a middle");
 
     document.set_gizmo_mode(GizmoMode::Move);
-    document.begin_gizmo_drag(GizmoHandle::Axis(1), pivot);
+    document.begin_gizmo_drag(GizmoHandle::Axis(1), pivot, LOOKING_DOWN_Z);
     document
-        .drag_gizmo([pivot[0], pivot[1] + 0.5, pivot[2]])
+        .drag_gizmo([pivot[0], pivot[1] + 0.5, pivot[2]], false)
         .expect("the drag was refused");
 
     // Mid-gesture, with nothing applied and nothing banked.
@@ -555,12 +568,12 @@ fn a_preview_does_not_compound_across_frames() {
     select_the_far_face(&mut stepped, 1);
     let pivot = stepped.lattice().pivot().expect("a middle");
     stepped.set_gizmo_mode(GizmoMode::Move);
-    stepped.begin_gizmo_drag(GizmoHandle::Axis(1), pivot);
+    stepped.begin_gizmo_drag(GizmoHandle::Axis(1), pivot, LOOKING_DOWN_Z);
     // Twenty frames, as a pointer crossing the viewport would send.
     for step in 1..=20 {
         let by = step as f32 / 20.0 * 0.5;
         stepped
-            .drag_gizmo([pivot[0], pivot[1] + by, pivot[2]])
+            .drag_gizmo([pivot[0], pivot[1] + by, pivot[2]], false)
             .expect("the drag was refused");
     }
     let after_many = top(&mut stepped);
@@ -571,8 +584,8 @@ fn a_preview_does_not_compound_across_frames() {
     once.begin_lattice([2, 2, 2]).expect("a cage");
     select_the_far_face(&mut once, 1);
     once.set_gizmo_mode(GizmoMode::Move);
-    once.begin_gizmo_drag(GizmoHandle::Axis(1), pivot);
-    once.drag_gizmo([pivot[0], pivot[1] + 0.5, pivot[2]])
+    once.begin_gizmo_drag(GizmoHandle::Axis(1), pivot, LOOKING_DOWN_Z);
+    once.drag_gizmo([pivot[0], pivot[1] + 0.5, pivot[2]], false)
         .expect("the drag was refused");
 
     assert!(
@@ -595,12 +608,12 @@ fn the_viewport_is_told_to_look_again_on_every_drag() {
     select_the_far_face(&mut document, 1);
     let pivot = document.lattice().pivot().expect("a middle");
     document.set_gizmo_mode(GizmoMode::Move);
-    document.begin_gizmo_drag(GizmoHandle::Axis(1), pivot);
+    document.begin_gizmo_drag(GizmoHandle::Axis(1), pivot, LOOKING_DOWN_Z);
 
     let mut seen = std::collections::BTreeSet::new();
     for step in 1..=5 {
         document
-            .drag_gizmo([pivot[0], pivot[1] + step as f32 * 0.1, pivot[2]])
+            .drag_gizmo([pivot[0], pivot[1] + step as f32 * 0.1, pivot[2]], false)
             .expect("the drag was refused");
         seen.insert(document.mesh_revision());
     }
@@ -626,10 +639,10 @@ fn a_previewed_cage_is_still_one_undo() {
     select_the_far_face(&mut document, 1);
     let pivot = document.lattice().pivot().expect("a middle");
     document.set_gizmo_mode(GizmoMode::Move);
-    document.begin_gizmo_drag(GizmoHandle::Axis(1), pivot);
+    document.begin_gizmo_drag(GizmoHandle::Axis(1), pivot, LOOKING_DOWN_Z);
     for step in 1..=10 {
         document
-            .drag_gizmo([pivot[0], pivot[1] + step as f32 * 0.05, pivot[2]])
+            .drag_gizmo([pivot[0], pivot[1] + step as f32 * 0.05, pivot[2]], false)
             .expect("the drag was refused");
     }
     document.end_gizmo_drag();
@@ -712,5 +725,152 @@ fn a_field_cage_moves_its_points_without_previewing_the_surface() {
     assert!(
         reach(&document) > rest + 0.3,
         "applying a field cage did not move the surface"
+    );
+}
+
+/// Where a pointer travelling in the drag plane actually lands, which is the
+/// step the application performs with a ray and the manipulator's own tests
+/// skip by handing world points straight in.
+fn swept_across(normal: [f32; 3], pivot: [f32; 3], quarter: bool) -> [f32; 3] {
+    let (across, other) = clayspace_model::perpendicular_frame(normal);
+    let at = if quarter { other } else { across };
+    std::array::from_fn(|i| pivot[i] + at[i])
+}
+
+#[test]
+fn every_ring_turns_the_cage_when_dragged_across_the_screen() {
+    // The regression. The drag plane was chosen to *contain* the axis, which
+    // is right for a slide and exactly wrong for a turn: a ring lies in the
+    // plane perpendicular to what it turns about. Two of the three rings moved
+    // the cage by nothing at all however far the pointer went, and only the
+    // one whose axis pointed at the camera worked.
+    //
+    // Driven through `drag_plane` here, which is the step that was wrong —
+    // the tests above hand world points straight to the document and could
+    // not see it.
+    let Some(mut document) = meshed() else {
+        return;
+    };
+    // A camera in front, looking down −z, so `facing` points back at it.
+    let facing = [0.0, 0.0, 1.0];
+
+    for index in 0..3 {
+        document.begin_lattice([2, 2, 2]).expect("a cage");
+        select_the_far_face(&mut document, 1);
+        let pivot = document.lattice().pivot().expect("a middle");
+        let before = document.lattice().points.clone();
+
+        let handle = GizmoHandle::Axis(index);
+        document.set_gizmo_mode(GizmoMode::Rotate);
+        let normal = clayspace_model::drag_plane(GizmoMode::Rotate, handle, facing, facing);
+        document.begin_gizmo_drag(handle, swept_across(normal, pivot, false), facing);
+        document
+            .drag_gizmo(swept_across(normal, pivot, true), false)
+            .expect("the drag was refused");
+
+        let after = document.lattice().points;
+        let moved = before
+            .iter()
+            .zip(&after)
+            .map(|(was, now)| {
+                (0..3)
+                    .map(|i| (now[i] - was[i]).powi(2))
+                    .sum::<f32>()
+                    .sqrt()
+            })
+            .fold(0.0f32, f32::max);
+        assert!(
+            moved > 0.1,
+            "the ring about axis {index} moved the cage by {moved} on a \
+             quarter turn across the screen"
+        );
+        document.cancel_lattice();
+    }
+}
+
+#[test]
+fn the_outer_ring_turns_the_cage_too() {
+    let Some(mut document) = meshed() else {
+        return;
+    };
+    // A camera off the world axes, so this cannot pass by accident on one.
+    let view = {
+        let raw = [0.4f32, 0.5, 0.77];
+        let length = raw.iter().map(|c| c * c).sum::<f32>().sqrt();
+        std::array::from_fn(|i| raw[i] / length)
+    };
+    document.begin_lattice([2, 2, 2]).expect("a cage");
+    select_the_far_face(&mut document, 1);
+    let pivot = document.lattice().pivot().expect("a middle");
+    let before = document.lattice().points.clone();
+
+    document.set_gizmo_mode(GizmoMode::Rotate);
+    let normal = clayspace_model::drag_plane(GizmoMode::Rotate, GizmoHandle::View, view, view);
+    document.begin_gizmo_drag(GizmoHandle::View, swept_across(normal, pivot, false), view);
+    document
+        .drag_gizmo(swept_across(normal, pivot, true), false)
+        .expect("the drag was refused");
+
+    let after = document.lattice().points;
+    let moved = before
+        .iter()
+        .zip(&after)
+        .map(|(was, now)| {
+            (0..3)
+                .map(|i| (now[i] - was[i]).powi(2))
+                .sum::<f32>()
+                .sqrt()
+        })
+        .fold(0.0f32, f32::max);
+    assert!(moved > 0.1, "the outer ring moved the cage by {moved}");
+}
+
+#[test]
+fn the_axis_pointing_at_the_camera_can_still_be_scaled() {
+    // The mirror of the ring bug, in the same line: when the axis pointed at
+    // the eye the plane degenerated to the one facing the camera, which puts
+    // the anchor's component along the axis at zero — and a scale divides by
+    // that, so the handle went dead.
+    let Some(mut document) = meshed() else {
+        return;
+    };
+    let facing = [0.0, 0.0, 1.0];
+    let handle = GizmoHandle::Axis(2);
+
+    document.begin_lattice([2, 2, 2]).expect("a cage");
+    select_the_far_face(&mut document, 1);
+    let pivot = document.lattice().pivot().expect("a middle");
+    let before = document.lattice().points.clone();
+
+    document.set_gizmo_mode(GizmoMode::Scale);
+    let normal = clayspace_model::drag_plane(GizmoMode::Scale, handle, facing, facing);
+    // Grabbed a unit out along the axis and pulled to twice that.
+    let anchor: [f32; 3] = std::array::from_fn(|i| pivot[i] + [0.0, 0.0, 1.0][i]);
+    let to: [f32; 3] = std::array::from_fn(|i| pivot[i] + [0.0, 0.0, 2.0][i]);
+    let along: f32 = (0..3).map(|i| normal[i] * [0.0, 0.0, 1.0][i]).sum();
+    assert!(
+        along.abs() < 1e-3,
+        "the drag plane no longer contains the axis facing the eye"
+    );
+
+    document.begin_gizmo_drag(handle, anchor, facing);
+    document
+        .drag_gizmo(to, false)
+        .expect("the drag was refused");
+
+    let after = document.lattice().points;
+    let moved = before
+        .iter()
+        .zip(&after)
+        .map(|(was, now)| {
+            (0..3)
+                .map(|i| (now[i] - was[i]).powi(2))
+                .sum::<f32>()
+                .sqrt()
+        })
+        .fold(0.0f32, f32::max);
+    assert!(
+        moved > 0.1,
+        "a scale along the axis facing the eye moved {moved}"
     );
 }

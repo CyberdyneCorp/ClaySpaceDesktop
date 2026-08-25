@@ -33,8 +33,8 @@ pub use layout::{Layout, Panel};
 pub use matcap::MatCap;
 pub use offscreen::{Image, OffscreenTarget};
 pub use renderer::{
-    mirrored_cursors, ArmatureView, BrushCursor, GizmoView, GpuMesh, LatticeView, Overlays,
-    Reference, Renderer, SymmetryAxis, Vertex,
+    frame_about, mirrored_cursors, ArmatureView, BrushCursor, GizmoView, GpuMesh, LatticeView,
+    Overlays, Reference, Renderer, SymmetryAxis, Vertex, VIEW_RING_REACH,
 };
 pub use shell::{apply_theme, ArmatureState, ShellState};
 pub use shortcuts::{Action, Chord, Conflict, Key, Shortcuts};

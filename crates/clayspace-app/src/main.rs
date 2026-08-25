@@ -95,19 +95,6 @@ fn system_language() -> String {
     String::new()
 }
 
-/// What the pointer is doing.
-fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
-
-fn length(v: [f32; 3]) -> f32 {
-    v.iter().map(|c| c * c).sum::<f32>().sqrt()
-}
-
 /// A manipulator drag: which handle, and the plane it runs on as an anchor
 /// and a normal.
 type GizmoGesture = (clayspace_model::GizmoHandle, ([f32; 3], [f32; 3]));
@@ -1346,34 +1333,45 @@ impl App {
             return false;
         };
         let reach = Self::cage_handle(&cage) * Self::GIZMO_REACH;
-        let Some(handle) = Self::handle_under(&cage, pivot, reach, ray) else {
+        let Some(handle) = Self::handle_under(&cage, pivot, reach, ray, &self.camera) else {
             return false;
         };
-        // The plane the drag runs on. An axis handle uses the plane containing
-        // that axis and most nearly facing the eye — a plane facing the camera
-        // outright would make an axis pointing at the viewer unmovable, since
-        // the pointer could travel a long way and the projection onto the axis
-        // would barely change.
+        // The plane the drag runs on, which the *mode* decides: a slide needs
+        // a plane containing its axis and a turn needs the ring's own plane,
+        // which is perpendicular to it. One answer for both is how two of the
+        // three rings came to return zero degrees however far the hand moved.
         let (_, direction) = ray;
         let facing = [-direction[0], -direction[1], -direction[2]];
-        let normal = match handle.axis() {
-            Some(axis) => {
-                let side = cross(axis, facing);
-                let normal = cross(side, axis);
-                if length(normal) < 1e-4 {
-                    facing
-                } else {
-                    normal
-                }
-            }
-            None => facing,
-        };
+        // What the outer ring turns about: the direction from the selection to
+        // the eye, which is the same vector the ring is drawn perpendicular to.
+        // Taken here and held for the gesture, so a camera that moves mid-drag
+        // does not twist the selection under a hand that has not moved.
+        let view_axis = Self::toward_eye(&self.camera, pivot);
+        let normal = clayspace_model::drag_plane(cage.mode, handle, view_axis, facing);
         let Some(anchor) = Self::on_plane(ray, pivot, normal) else {
             return false;
         };
         self.gizmo_drag = Some((handle, (pivot, normal)));
-        self.handle(Command::BeginGizmoDrag(handle, anchor));
+        self.handle(Command::BeginGizmoDrag(handle, anchor, view_axis));
         true
+    }
+
+    /// The unit vector from a point to the camera.
+    ///
+    /// Which is what "the axis facing the eye" means, and what both the outer
+    /// ring's drawing and its rotation are built on — one vector rather than
+    /// two that could disagree by a fraction of a degree.
+    fn toward_eye(camera: &Camera, from: [f32; 3]) -> [f32; 3] {
+        let eye: [f32; 3] = camera.eye().into();
+        let away: [f32; 3] = std::array::from_fn(|i| eye[i] - from[i]);
+        let length = (away.iter().map(|c| c * c).sum::<f32>()).sqrt();
+        if length < 1e-6 {
+            // The camera is on top of the selection, where there is no
+            // direction to have. Any unit vector will do and none is right;
+            // the ring is invisible at this distance anyway.
+            return [0.0, 0.0, 1.0];
+        }
+        std::array::from_fn(|i| away[i] / length)
     }
 
     /// Which handle a ray passes through, if any.
@@ -1386,6 +1384,7 @@ impl App {
         pivot: [f32; 3],
         reach: f32,
         ray: ([f32; 3], [f32; 3]),
+        camera: &Camera,
     ) -> Option<clayspace_model::GizmoHandle> {
         use clayspace_model::GizmoHandle;
         let slack = reach * Self::GIZMO_GRAB;
@@ -1405,8 +1404,9 @@ impl App {
                 // A ring is grabbed anywhere along it, so several points
                 // around it are tested rather than one — a ring tested only at
                 // its four cardinal points is a ring with four handles.
-                for step in 0..16 {
-                    let angle = step as f32 / 16.0 * std::f32::consts::TAU;
+                let steps = clayspace_model::ring_samples(reach, slack);
+                for step in 0..steps {
+                    let angle = step as f32 / steps as f32 * std::f32::consts::TAU;
                     let (u, v) = ((index + 1) % 3, (index + 2) % 3);
                     let mut at = pivot;
                     at[u] += angle.cos() * reach;
@@ -1423,6 +1423,22 @@ impl App {
         }
         if cage.mode != clayspace_model::GizmoMode::Rotate {
             consider(GizmoHandle::Centre, pivot, slack);
+        } else {
+            // The outer ring, tested the way the axis rings are and at the
+            // radius it is drawn at. Last, so a press where it crosses an axis
+            // ring goes to the axis: the outer one is the easy target
+            // everywhere else, and it should not steal the hard ones.
+            let axis = Self::toward_eye(camera, pivot);
+            let (across, other) = clayspace_view::frame_about(axis.into());
+            let reach = reach * clayspace_view::VIEW_RING_REACH;
+            let steps = clayspace_model::ring_samples(reach, slack);
+            for step in 0..steps {
+                let angle = step as f32 / steps as f32 * std::f32::consts::TAU;
+                let at = std::array::from_fn(|i| {
+                    pivot[i] + (across[i] * angle.cos() + other[i] * angle.sin()) * reach
+                });
+                consider(GizmoHandle::View, at, slack);
+            }
         }
         best.map(|(handle, _)| handle)
     }
@@ -1546,6 +1562,8 @@ impl App {
     fn sync_lattice_view(&mut self) {
         let cage = self.lattice.state().get().clone();
         let curve = self.curve.state().get().clone();
+        // Copied before the viewport is reached for, which borrows `self`.
+        let camera = self.camera;
         let Some(graphics) = self.graphics.as_mut() else {
             return;
         };
@@ -1600,6 +1618,7 @@ impl App {
                     mode: cage.mode,
                     reach: handle * Self::GIZMO_REACH,
                     hovered: self.gizmo_drag.map(|(handle, _)| handle),
+                    view_axis: Self::toward_eye(&camera, pivot),
                 }),
                 handle,
             },
@@ -2041,7 +2060,10 @@ impl App {
                 }
                 Drag::Gizmo => {
                     if let Some(at) = input.pointer.and_then(|point| self.on_gizmo_plane(point)) {
-                        self.handle(Command::DragGizmo(at));
+                        // Held rather than latched at the press, so the
+                        // modifier can be taken up part-way through a turn to
+                        // land it on a round number.
+                        self.handle(Command::DragGizmo(at, input.invert_modifier));
                     }
                 }
                 Drag::Cage => {

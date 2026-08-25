@@ -1262,3 +1262,89 @@ Recorded under *Not built yet*.
     bare reference of (20, 200, 60). A state test would pass on a renderer that
     held the number and drew solid anyway.
 
+## 28. Turning the cage by hand
+
+- [x] 28.1 The outer ring
+  - The comment on `all_for` had claimed since the manipulator was built that
+    "turning about the axis facing the eye is what the outer ring is for" —
+    describing a ring that did not exist. `GizmoHandle::View` is it.
+  - The only handle whose axis is not a world axis, so `GizmoDrag` carries the
+    direction the camera faced when the press landed. Read each frame instead,
+    a camera that moved mid-drag would twist the selection under a hand that
+    had not moved.
+  - One vector serves both the drawing and the dragging — `toward_eye(camera,
+    pivot)` — rather than two derived separately that could disagree by a
+    fraction of a degree.
+  - Drawn and hit-tested at 1.28× the axis rings' radius, and tested **last**,
+    so a press where it crosses an axis ring goes to the axis: the outer ring
+    is the easy target everywhere else and should not steal the hard ones.
+  - `frame_about` spans the ring's plane from whichever world axis the view
+    axis leans on least. Seeding with x unconditionally is the obvious version
+    and collapses to a point when the camera looks down x; a test turns the
+    axis through every world direction and requires the pair to stay
+    orthonormal, and it fails on that naive version.
+
+- [x] 28.2 Ctrl snaps to 15°
+  - Twenty-four to the turn, which divides 30, 45, 60 and 90 — the angles
+    actually reached for — where a rounder-looking 10 does not.
+  - To the *nearest* increment rather than downward, or the handle lags half an
+    increment behind the pointer as it crosses a boundary.
+  - Read **per drag rather than per gesture**, so the modifier can be taken up
+    and let go part-way through one turn. Blender's works this way and it is
+    what a hand reaching for a round number does; latching it at the press
+    would mean deciding before the turn started.
+  - Angle snapping only. A move that snapped to a grid nobody asked for would
+    be a surprise, and a test holds both other modes to producing the same
+    answer with the modifier down as without it.
+
+- [x] 28.3 The bug that was underneath both of them
+  - Reported: rotate and scale do nothing on a mesh or field cage. They did
+    not, and had not since the manipulator was built.
+  - The drag plane was chosen from the handle alone, never the *mode*. A slide
+    reads how far the pointer travelled *along* an axis, so its plane must
+    contain that axis; a ring lies in the plane *perpendicular* to what it
+    turns about, and that is where the angle is measured. One answer served
+    both, and it was the slide's — so for two of the three rings the pointer's
+    travel had no component in the plane being measured and the turn came out
+    at exactly **zero degrees however far the hand moved**. Only the ring whose
+    axis pointed at the camera worked, which is why it looked intermittent
+    rather than broken.
+  - The same line killed a scale along the axis *facing* the eye: the
+    degenerate branch fell back to the plane facing the camera, which is
+    perpendicular to that axis, so the anchor's component along it was zero —
+    and a scale divides by that. The comment above it had predicted this exact
+    failure and the fallback then caused it.
+  - Why no test caught it: every manipulator test hands world points straight
+    to the document, which is the step *after* the one that was wrong. The
+    projection from pointer to plane lived in the composition root, where an
+    integration test cannot reach it. `drag_plane` is a pure function in the
+    domain now, and the regressions drive the document through it — both fail
+    against the old behaviour, which was checked rather than assumed.
+  - `perpendicular_frame` moved to the domain with it, so the frame the ring is
+    *drawn* from and the plane it is *dragged* on are built from one
+    implementation rather than two that could disagree.
+
+- [x] 28.4 Two more reasons "nothing happens", found by using it
+  - Reported again after 28.3 was fixed, with a screenshot: the rings are
+    drawn, the drag runs, nothing moves. 28.3 was real and was not the whole
+    story — and the honest answer to "did you check visually" was no. The
+    layers below the pointer were tested and a still frame was captured; the
+    gesture itself never was.
+  - **The pivot.** Turning and scaling act about the middle of the selection,
+    and the middle of one point is that point. Turning a point about itself is
+    exactly no movement, and so is scaling it. The arithmetic was right and the
+    gesture was empty — the worst kind of broken, because everything looks
+    live. `can_transform` names it, the two modes are disabled with the reason
+    on them, and a test proves the no-op rather than asserting it.
+  - **The grab.** A ring is hit-tested as a string of spheres and sixteen was
+    picked rather than derived: at the manipulator's proportions they do not
+    touch, leaving about a fifth of each axis ring and a third of the outer one
+    with nothing under a press. `ring_samples` derives the count from the
+    circumference and the grab radius; the test walks a thousand points around
+    the ring rather than checking at the samples, which would have passed on
+    the broken version.
+  - **And it is checked in the pixels now.** `turning_a_face_visibly_turns_the_cage_on_screen`
+    drags a ring through the same plane choice the application uses and
+    requires the drawn frame to change. The sphere comes out a capsule; the
+    captures are 122 and 123.
+

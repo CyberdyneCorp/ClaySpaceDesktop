@@ -385,6 +385,12 @@ pub struct GizmoView {
     pub reach: f32,
     /// The handle under the pointer or being dragged, drawn brighter.
     pub hovered: Option<GizmoHandle>,
+    /// The direction from the pivot to the eye.
+    ///
+    /// What the outer ring lies perpendicular to, and what it turns about.
+    /// Handed in rather than derived from the camera here, so the ring drawn
+    /// and the ring dragged cannot disagree.
+    pub view_axis: [f32; 3],
 }
 
 /// Which plane the symmetry indicator sits on.
@@ -1968,6 +1974,47 @@ fn gizmo_geometry_for(view: GizmoView, segment: &mut impl FnMut(Vec3, Vec3, [f32
         let size = view.reach * 0.14;
         cube(pivot, size, colour, segment);
     }
+
+    if view.mode == GizmoMode::Rotate {
+        // The outer ring: ZBrush's, and the one a sculptor reaches for most.
+        // Outside the three axis rings rather than among them, at
+        // `VIEW_RING_REACH` — a ring the same size as the others would be a
+        // fourth thing to tell apart at the same radius, and the whole point of
+        // this one is that it is the easy target.
+        let Some(axis) = normalized(Vec3::from(view.view_axis)) else {
+            return;
+        };
+        let (across, other) = frame_about(axis);
+        let colour = lit(GizmoHandle::View, VIEW_RING_COLOUR);
+        let reach = view.reach * VIEW_RING_REACH;
+        for step in 0..RING_SEGMENTS {
+            let angle = |at: usize| at as f32 / RING_SEGMENTS as f32 * std::f32::consts::TAU;
+            let at = |a: f32| pivot + (across * a.cos() + other * a.sin()) * reach;
+            segment(at(angle(step)), at(angle(step + 1)), colour);
+        }
+    }
+}
+
+/// How far out the outer ring sits, against an axis ring's reach.
+pub const VIEW_RING_REACH: f32 = 1.28;
+
+/// Not one of the three axis colours: the outer ring belongs to no axis, and
+/// borrowing red, green or blue would say it did.
+const VIEW_RING_COLOUR: [f32; 3] = [0.82, 0.78, 0.42];
+
+/// A unit vector, or `None` where there is no direction to have.
+fn normalized(v: Vec3) -> Option<Vec3> {
+    (v.length() > 1e-6).then(|| v / v.length())
+}
+
+/// Two unit vectors spanning the plane perpendicular to an axis.
+///
+/// The domain's, in this crate's vector type. One implementation rather than
+/// two: the ring is *drawn* from this frame and *dragged* on a plane built
+/// from the same one, and two copies could disagree.
+pub fn frame_about(axis: Vec3) -> (Vec3, Vec3) {
+    let (across, other) = clayspace_model::perpendicular_frame(axis.into());
+    (across.into(), other.into())
 }
 
 /// The twelve edges of a cube, spelled as the four along each axis.
@@ -2438,5 +2485,47 @@ mod tests {
             both.len() > grid.len(),
             "adding the symmetry plane produced no extra geometry"
         );
+    }
+
+    #[test]
+    fn a_frame_about_any_axis_is_orthonormal() {
+        // The outer ring is drawn in the plane these two span, and the axis is
+        // wherever the camera happens to be — including straight down a world
+        // axis, where a seed vector chosen carelessly collapses the cross
+        // product to nothing and the ring degenerates to a point.
+        let axes = [
+            Vec3::X,
+            Vec3::Y,
+            Vec3::Z,
+            -Vec3::X,
+            -Vec3::Y,
+            -Vec3::Z,
+            Vec3::new(1.0, 1.0, 1.0).normalize(),
+            Vec3::new(-0.3, 0.9, 0.31).normalize(),
+            Vec3::new(1.0, 1e-7, -1e-7).normalize(),
+        ];
+        for axis in axes {
+            let (across, other) = frame_about(axis);
+            assert!(
+                (across.length() - 1.0).abs() < 1e-4 && (other.length() - 1.0).abs() < 1e-4,
+                "frame about {axis:?} was not unit: {across:?}, {other:?}"
+            );
+            assert!(
+                across.dot(axis).abs() < 1e-4 && other.dot(axis).abs() < 1e-4,
+                "frame about {axis:?} did not lie in its plane"
+            );
+            assert!(
+                across.dot(other).abs() < 1e-4,
+                "frame about {axis:?} was not square: {across:?}, {other:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_outer_ring_sits_outside_the_axis_rings() {
+        // The whole point of it is that it is the easy target. Drawn among the
+        // three axis rings it would be a fourth thing to tell apart at the same
+        // radius.
+        const { assert!(VIEW_RING_REACH > 1.0) };
     }
 }

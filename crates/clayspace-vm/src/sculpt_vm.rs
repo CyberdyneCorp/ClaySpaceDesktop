@@ -324,7 +324,7 @@ impl SculptViewModel {
             | Command::ToggleLatticePoint(_)
             | Command::SetGizmoMode(_)
             | Command::BeginGizmoDrag(..)
-            | Command::DragGizmo(_)
+            | Command::DragGizmo(..)
             | Command::EndGizmoDrag
             | Command::DragLatticePoint(_)
             | Command::ApplyLattice
