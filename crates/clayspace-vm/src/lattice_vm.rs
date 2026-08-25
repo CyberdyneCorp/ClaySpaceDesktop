@@ -99,12 +99,12 @@ impl LatticeViewModel {
                 self.model.set_gizmo_mode(*mode);
                 self.refresh();
             }
-            Command::BeginGizmoDrag(handle, anchor) => {
-                self.model.begin_gizmo_drag(*handle, *anchor);
+            Command::BeginGizmoDrag(handle, anchor, view_axis) => {
+                self.model.begin_gizmo_drag(*handle, *anchor, *view_axis);
                 self.refresh();
             }
-            Command::DragGizmo(to) => {
-                if let Err(e) = self.model.drag_gizmo(*to) {
+            Command::DragGizmo(to, snap) => {
+                if let Err(e) = self.model.drag_gizmo(*to, *snap) {
                     self.notice.set(Some(e.to_string()));
                 }
                 self.refresh();
@@ -207,9 +207,9 @@ mod tests {
             self.state.mode = mode;
         }
 
-        fn begin_gizmo_drag(&mut self, _: GizmoHandle, _: [f32; 3]) {}
+        fn begin_gizmo_drag(&mut self, _: GizmoHandle, _: [f32; 3], _: [f32; 3]) {}
 
-        fn drag_gizmo(&mut self, _: [f32; 3]) -> Result<(), ModelError> {
+        fn drag_gizmo(&mut self, _: [f32; 3], _: bool) -> Result<(), ModelError> {
             self.state.touched = true;
             Ok(())
         }
@@ -327,8 +327,8 @@ mod tests {
             fn select_lattice_point(&mut self, _: Option<usize>) {}
             fn toggle_lattice_point(&mut self, _: usize) {}
             fn set_gizmo_mode(&mut self, _: GizmoMode) {}
-            fn begin_gizmo_drag(&mut self, _: GizmoHandle, _: [f32; 3]) {}
-            fn drag_gizmo(&mut self, _: [f32; 3]) -> Result<(), ModelError> {
+            fn begin_gizmo_drag(&mut self, _: GizmoHandle, _: [f32; 3], _: [f32; 3]) {}
+            fn drag_gizmo(&mut self, _: [f32; 3], _: bool) -> Result<(), ModelError> {
                 Ok(())
             }
             fn end_gizmo_drag(&mut self) {}

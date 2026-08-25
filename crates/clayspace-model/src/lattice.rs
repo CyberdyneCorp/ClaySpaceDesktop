@@ -113,12 +113,23 @@ impl LatticeState {
     /// A drag on the manipulator, ready to be applied to each selected point.
     ///
     /// `None` where there is nothing selected to transform.
-    pub fn drag_from(&self, handle: GizmoHandle, anchor: [f32; 3]) -> Option<GizmoDrag> {
+    /// The gesture a press on the manipulator starts.
+    ///
+    /// `view_axis` is where the camera is looking, which only the outer ring
+    /// uses — but it is taken for every drag rather than only that one, so
+    /// there is no handle whose gesture is built a different way.
+    pub fn drag_from(
+        &self,
+        handle: GizmoHandle,
+        anchor: [f32; 3],
+        view_axis: [f32; 3],
+    ) -> Option<GizmoDrag> {
         Some(GizmoDrag {
             mode: self.mode,
             handle,
             pivot: self.pivot()?,
             anchor,
+            view_axis,
         })
     }
 
@@ -199,13 +210,19 @@ pub trait LatticeModel {
     fn set_gizmo_mode(&mut self, mode: GizmoMode);
 
     /// Starts a manipulator drag on a handle, from a point on the drag plane.
-    fn begin_gizmo_drag(&mut self, handle: GizmoHandle, anchor: [f32; 3]);
+    /// `view_axis` is where the camera is looking, which the outer ring turns
+    /// about. Taken at the press and held, so a camera that moves mid-drag
+    /// does not twist the selection under a hand that has not moved.
+    fn begin_gizmo_drag(&mut self, handle: GizmoHandle, anchor: [f32; 3], view_axis: [f32; 3]);
 
     /// Carries the selection to where the pointer is now.
     ///
     /// Resolved from the anchor every time rather than accumulated, so a drag
     /// ends where the pointer ends however many frames it took.
-    fn drag_gizmo(&mut self, to: [f32; 3]) -> Result<(), ModelError>;
+    /// `snap` rounds a rotation to whole increments. Read per drag rather
+    /// than per gesture, so the modifier can be taken up and let go part-way
+    /// through one.
+    fn drag_gizmo(&mut self, to: [f32; 3], snap: bool) -> Result<(), ModelError>;
 
     /// Ends a manipulator drag, banking where the selection ended up.
     fn end_gizmo_drag(&mut self);
@@ -336,7 +353,10 @@ mod selection_tests {
         // And so no manipulator: a widget floating over an empty selection
         // would be a control with nothing to control.
         assert_eq!(corners().pivot(), None);
-        assert_eq!(corners().drag_from(GizmoHandle::Centre, [0.0; 3]), None);
+        assert_eq!(
+            corners().drag_from(GizmoHandle::Centre, [0.0; 3], [0.0, 0.0, 1.0]),
+            None
+        );
     }
 
     #[test]

@@ -1262,3 +1262,38 @@ Recorded under *Not built yet*.
     bare reference of (20, 200, 60). A state test would pass on a renderer that
     held the number and drew solid anyway.
 
+## 28. Turning the cage by hand
+
+- [x] 28.1 The outer ring
+  - The comment on `all_for` had claimed since the manipulator was built that
+    "turning about the axis facing the eye is what the outer ring is for" —
+    describing a ring that did not exist. `GizmoHandle::View` is it.
+  - The only handle whose axis is not a world axis, so `GizmoDrag` carries the
+    direction the camera faced when the press landed. Read each frame instead,
+    a camera that moved mid-drag would twist the selection under a hand that
+    had not moved.
+  - One vector serves both the drawing and the dragging — `toward_eye(camera,
+    pivot)` — rather than two derived separately that could disagree by a
+    fraction of a degree.
+  - Drawn and hit-tested at 1.28× the axis rings' radius, and tested **last**,
+    so a press where it crosses an axis ring goes to the axis: the outer ring
+    is the easy target everywhere else and should not steal the hard ones.
+  - `frame_about` spans the ring's plane from whichever world axis the view
+    axis leans on least. Seeding with x unconditionally is the obvious version
+    and collapses to a point when the camera looks down x; a test turns the
+    axis through every world direction and requires the pair to stay
+    orthonormal, and it fails on that naive version.
+
+- [x] 28.2 Ctrl snaps to 15°
+  - Twenty-four to the turn, which divides 30, 45, 60 and 90 — the angles
+    actually reached for — where a rounder-looking 10 does not.
+  - To the *nearest* increment rather than downward, or the handle lags half an
+    increment behind the pointer as it crosses a boundary.
+  - Read **per drag rather than per gesture**, so the modifier can be taken up
+    and let go part-way through one turn. Blender's works this way and it is
+    what a hand reaching for a round number does; latching it at the press
+    would mean deciding before the turn started.
+  - Angle snapping only. A move that snapped to a grid nobody asked for would
+    be a surprise, and a test holds both other modes to producing the same
+    answer with the modifier down as without it.
+

@@ -685,8 +685,28 @@ cannot use.
   "up", not "up and a little sideways because my hand drifted".
 - The **centre** moves freely in the view plane, and scales uniformly. Rotation
   has no centre handle: turning about the axis facing the eye is what the outer
-  ring is for, and a second widget meaning the same thing is one more thing to
+  ring is for, and a filled centre meaning the same thing is one more thing to
   hit by accident.
+- The **outer ring** turns the selection in the plane of the screen — ZBrush's
+  outermost ring, and the one a sculptor reaches for most. The three axis rings
+  turn it in the *world's* frame; this one turns it in the frame it is being
+  looked at from. It is the only handle whose axis is not a world axis, so a
+  drag carries the direction the camera faced **when the press landed**: an
+  axis re-read each frame would twist the selection under a hand that had not
+  moved. It sits outside the three at 1.28× their radius — among them it would
+  be a fourth thing to tell apart at the same distance from the pivot — and it
+  is tested last, so a press where it crosses an axis ring goes to the axis.
+  The outer one is the easy target everywhere else and should not steal the
+  hard ones.
+- **Ctrl snaps a turn to 15°.** Twenty-four increments to the circle, which
+  divides the angles a sculptor actually reaches for — 30, 45, 60, 90 — where a
+  rounder-looking 10 does not. Rounded to the *nearest* rather than downward, so
+  the handle stays under the pointer across a boundary instead of lagging half
+  an increment behind it, and read **per drag rather than per gesture**: the
+  modifier can be taken up part-way through a turn to land it on a round number,
+  which is how Blender's works and what a hand actually does. It is angle
+  snapping only — a move that snapped to a grid nobody asked for would be a
+  surprise.
 - A **scale never passes through zero**, either way. A drag that overshot the
   pivot would turn the form inside out with no way back but undo.
 - A drag is resolved **from its anchor every frame** rather than accumulated.

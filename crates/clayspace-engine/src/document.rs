@@ -5012,9 +5012,9 @@ impl LatticeModel for ClayDocument {
         self.cage_revision = self.cage_revision.wrapping_add(1);
     }
 
-    fn begin_gizmo_drag(&mut self, handle: GizmoHandle, anchor: [f32; 3]) {
+    fn begin_gizmo_drag(&mut self, handle: GizmoHandle, anchor: [f32; 3], view_axis: [f32; 3]) {
         let state = self.lattice();
-        let Some(drag) = state.drag_from(handle, anchor) else {
+        let Some(drag) = state.drag_from(handle, anchor, view_axis) else {
             return;
         };
         let Some(cage) = self.lattice.as_mut() else {
@@ -5024,7 +5024,7 @@ impl LatticeModel for ClayDocument {
         cage.dragging = Some((drag, held));
     }
 
-    fn drag_gizmo(&mut self, to: [f32; 3]) -> Result<(), ModelError> {
+    fn drag_gizmo(&mut self, to: [f32; 3], snap: bool) -> Result<(), ModelError> {
         let Some(cage) = self.lattice.as_mut() else {
             return Ok(());
         };
@@ -5033,7 +5033,7 @@ impl LatticeModel for ClayDocument {
         };
         let (drag, held) = (*drag, held.clone());
         for (at, was) in cage.selection.clone().iter().zip(held) {
-            let now = drag.apply(was, to);
+            let now = drag.apply(was, to, snap);
             let rest = cage.rest(*at);
             cage.offsets[*at] = std::array::from_fn(|axis| now[axis] - rest[axis]);
         }

@@ -274,12 +274,14 @@ impl LatticeModel for SharedDocument {
         self.0.borrow_mut().set_gizmo_mode(mode)
     }
 
-    fn begin_gizmo_drag(&mut self, handle: GizmoHandle, anchor: [f32; 3]) {
-        self.0.borrow_mut().begin_gizmo_drag(handle, anchor)
+    fn begin_gizmo_drag(&mut self, handle: GizmoHandle, anchor: [f32; 3], view_axis: [f32; 3]) {
+        self.0
+            .borrow_mut()
+            .begin_gizmo_drag(handle, anchor, view_axis)
     }
 
-    fn drag_gizmo(&mut self, to: [f32; 3]) -> Result<(), ModelError> {
-        self.0.borrow_mut().drag_gizmo(to)
+    fn drag_gizmo(&mut self, to: [f32; 3], snap: bool) -> Result<(), ModelError> {
+        self.0.borrow_mut().drag_gizmo(to, snap)
     }
 
     fn end_gizmo_drag(&mut self) {

@@ -12,10 +12,10 @@
 use clayspace_model::{
     AlphaSupport, BlendProfile, BrushSettings, Combine, CombineSettings, DeformSettings,
     DeformVerb, Diagnostics, Direction, ExportMesher, ExportSettings, ExportWarning,
-    ExtrudeSettings, ExtrudeSide, Falloff, ImportAs, ImportSettings, LayerKey, LayerSummary,
-    MaskOp, MaskState, RecentDocuments, RefPlane, ReferenceSettings, Representation, Scene,
-    SceneStats, SculptLayer, SculptLayerCost, SculptLayerOp, SurfaceOpacity, ToolKind, Units,
-    ViewPresetKind,
+    ExtrudeSettings, ExtrudeSide, Falloff, GizmoMode, ImportAs, ImportSettings, LayerKey,
+    LayerSummary, MaskOp, MaskState, RecentDocuments, RefPlane, ReferenceSettings, Representation,
+    Scene, SceneStats, SculptLayer, SculptLayerCost, SculptLayerOp, SurfaceOpacity, ToolKind,
+    Units, ViewPresetKind,
 };
 use clayspace_vm::{Axis, Command, CommandQueue};
 
@@ -2314,6 +2314,16 @@ fn lattice_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
             .size(type_scale::LABEL)
             .color(Tokens::text_dim()),
     );
+    // Only while turning. The outer ring and the snap modifier mean nothing in
+    // the other two modes, and a hint that is always there is a hint nobody
+    // reads by the third time they see it.
+    if state.lattice.mode == GizmoMode::Rotate {
+        ui.label(
+            egui::RichText::new(s.hint_gizmo_rotate)
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+        );
+    }
 }
 
 /// What the mask operations act with.

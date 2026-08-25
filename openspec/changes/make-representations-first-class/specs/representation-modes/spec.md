@@ -69,3 +69,37 @@ had there.
 - **WHEN** the user sets a size on a tool on a voxel layer, works on an SDF
   layer, and returns to the voxel layer
 - **THEN** the tool has the size it had on the voxel layer
+
+### Requirement: The manipulator turns a selection in the screen's frame as well as the world's
+The application SHALL offer, while the manipulator is set to rotate, a ring that
+turns the selection about the axis facing the camera, in addition to the three
+world-axis rings. The axis SHALL be fixed when the drag begins, so that moving
+the camera during a drag does not alter the rotation.
+
+#### Scenario: The outer ring turns in the screen plane
+- **WHEN** the user drags the outer ring
+- **THEN** the selection turns about the direction from it to the camera, and
+  points along that direction do not move
+
+#### Scenario: Moving the camera mid-drag does not twist the selection
+- **WHEN** the camera moves while an outer-ring drag is in progress
+- **THEN** the rotation continues about the axis the drag began with
+
+### Requirement: A rotation can be snapped to whole increments
+The application SHALL round a rotation to increments of 15 degrees while a
+modifier is held, and SHALL read that modifier for as long as the drag lasts
+rather than only when it begins. Snapping SHALL apply to rotation alone.
+
+#### Scenario: A snapped turn lands on an increment
+- **WHEN** the user turns the manipulator by an angle that is not a multiple of
+  15 degrees, with the modifier held
+- **THEN** the selection is turned by the nearest multiple of 15 degrees
+
+#### Scenario: The modifier can be taken up part-way through a turn
+- **WHEN** the user begins a turn without the modifier and presses it before
+  releasing
+- **THEN** the turn snaps from that point on
+
+#### Scenario: Moving and scaling are unaffected
+- **WHEN** the modifier is held during a move or a scale
+- **THEN** the result is the same as without it

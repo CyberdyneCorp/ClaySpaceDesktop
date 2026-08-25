@@ -15,6 +15,9 @@
 
 mod support;
 
+/// A camera in front of the form. Only the outer ring reads it.
+const LOOKING_DOWN_Z: [f32; 3] = [0.0, 0.0, 1.0];
+
 use clayspace_app::SurfaceGeometry;
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{Direction, GizmoHandle, GizmoMode, LatticeModel, LatticeState, SculptModel};
@@ -255,6 +258,7 @@ fn each_manipulator_mode_draws_its_own_handles() {
                 edges: &edges,
                 selected: &selected,
                 gizmo: mode.map(|mode| GizmoView {
+                    view_axis: LOOKING_DOWN_Z,
                     pivot,
                     mode,
                     reach: handle(&cage) * 12.0,
@@ -357,9 +361,9 @@ fn the_bend_reaches_the_screen_while_the_cage_is_being_dragged() {
     }
     let pivot = document.lattice().pivot().expect("a middle");
     document.set_gizmo_mode(GizmoMode::Move);
-    document.begin_gizmo_drag(GizmoHandle::Axis(1), pivot);
+    document.begin_gizmo_drag(GizmoHandle::Axis(1), pivot, LOOKING_DOWN_Z);
     document
-        .drag_gizmo([pivot[0], pivot[1] + 0.5, pivot[2]])
+        .drag_gizmo([pivot[0], pivot[1] + 0.5, pivot[2]], false)
         .expect("the drag was refused");
 
     // Still mid-gesture: nothing applied, nothing banked, the cage still up.
@@ -610,4 +614,76 @@ fn a_handle_keeps_its_size_when_another_point_is_dragged() {
         "a corner hauled three units out took the handle size from {before} to \
          {after}"
     );
+}
+
+#[test]
+fn the_outer_ring_is_drawn_and_faces_the_camera() {
+    // ZBrush's outermost ring. It turns the selection in the frame the sculptor
+    // is looking at it from, so it must be a circle seen square on from the
+    // camera — whichever way the camera is turned — and it must sit outside the
+    // three axis rings rather than among them.
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let Some(mut document) = meshed() else {
+        return;
+    };
+    let (vertices, indices) = surface(&mut document);
+    let mut mesh = clayspace_view::GpuMesh::new(&harness.gpu);
+    mesh.upload(&harness.gpu, &vertices, &indices);
+
+    document.begin_lattice([2, 2, 2]).expect("a cage");
+    let cage = document.lattice();
+    let edges = cage.edges();
+    let selected = [7usize];
+    let pivot = cage.points[7];
+
+    // Two cameras a long way apart, so "faces the eye" is a claim with teeth.
+    for (name, azimuth) in [("front", 0.0f32), ("corner", 0.9f32)] {
+        let mut camera = framed(&document);
+        camera.orbit(azimuth, 0.4);
+        let eye: [f32; 3] = camera.eye().into();
+        let away: [f32; 3] = std::array::from_fn(|i| eye[i] - pivot[i]);
+        let length = away.iter().map(|c| c * c).sum::<f32>().sqrt();
+        let view_axis: [f32; 3] = std::array::from_fn(|i| away[i] / length);
+
+        let with = |harness: &mut Harness, mode: GizmoMode, capture: &str| {
+            harness.renderer.set_lattice(
+                &harness.gpu,
+                LatticeView {
+                    points: &cage.points,
+                    edges: &edges,
+                    selected: &selected,
+                    gizmo: Some(GizmoView {
+                        view_axis,
+                        pivot,
+                        mode,
+                        reach: handle(&cage) * 12.0,
+                        hovered: None,
+                    }),
+                    handle: handle(&cage),
+                },
+            );
+            harness.capture(&mesh, &camera, false, capture)
+        };
+
+        // A rotate manipulator draws more than a move one: three rings and the
+        // outer one against three shafts and a centre.
+        let moving = with(
+            &mut harness,
+            GizmoMode::Move,
+            &format!("120-outer-move-{name}"),
+        );
+        let turning = with(
+            &mut harness,
+            GizmoMode::Rotate,
+            &format!("121-outer-rotate-{name}"),
+        );
+        let changed = how_many_differ(&moving, &turning);
+        assert!(
+            changed > 500,
+            "the two modes drew nearly the same thing from {name} ({changed} \
+             pixels). See target/visual/121-outer-rotate-{name}.png"
+        );
+    }
 }
