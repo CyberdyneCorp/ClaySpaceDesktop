@@ -25,7 +25,7 @@ linked statically. Its licence is reproduced in full at
 
 - **ClayCore** — MIT License
 
-## Rust dependencies (382)
+## Rust dependencies (383)
 
 | Package | Version | Licence |
 |---|---|---|
@@ -171,6 +171,7 @@ linked statically. Its licence is reproduced in full at
 | jni-sys | 0.4.1 | MIT OR Apache-2.0 |
 | jni-sys-macros | 0.4.1 | MIT OR Apache-2.0 |
 | jobserver | 0.1.35 | MIT OR Apache-2.0 |
+| jpeg-encoder | 0.6.1 | (MIT OR Apache-2.0) AND IJG |
 | js-sys | 0.3.104 | MIT OR Apache-2.0 |
 | khronos-egl | 6.0.0 | MIT/Apache-2.0 |
 | khronos_api | 3.1.0 | Apache-2.0 |
