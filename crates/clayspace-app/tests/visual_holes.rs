@@ -336,6 +336,24 @@ fn a_long_mixed_session_leaves_no_holes_or_specks() {
         total - distinct.len()
     );
 
+    // After a relayout, which is where duplicates are pruned.
+    geometry.settle_layout(&harness.gpu);
+    let pruned = geometry.stored_triangles();
+    let pruned_total: usize = pruned.values().map(|v| v.len()).sum();
+    let pruned_distinct: std::collections::HashSet<_> = pruned.values().flatten().collect();
+    println!(
+        "  after a relayout: {} triangles, {} distinct — {} duplicates",
+        pruned_total,
+        pruned_distinct.len(),
+        pruned_total - pruned_distinct.len()
+    );
+    assert_eq!(
+        pruned_distinct.len(),
+        distinct.len(),
+        "pruning duplicates lost {} distinct triangles",
+        distinct.len() as i64 - pruned_distinct.len() as i64
+    );
+
     // Where does it come from? A rebuild shares our splitting and our slots
     // but not the incremental request; the engine's own mesh shares neither.
     let mut rebuilt = SurfaceGeometry::new(&harness.gpu);

@@ -631,6 +631,7 @@ impl SurfaceGeometry {
         );
         self.bounds = None;
         self.touched.clear();
+        self.prune_duplicates();
 
         let keys: Vec<BrickKey> = self.keys.keys().copied().collect();
         for key in keys {
@@ -643,6 +644,70 @@ impl SurfaceGeometry {
         self.mesh.set_bounds(self.bounds);
         self.relayout = false;
         self.dirty = false;
+    }
+
+    /// Drops triangles this store holds under more than one key.
+    ///
+    /// The engine attributes a triangle straddling two bricks to the *lowest
+    /// requested* key owning a corner, and says as much: it "may move to
+    /// another key's share when a later request names a different set — its
+    /// content is identical wherever it lands, so keeping either copy is
+    /// right". Keeping *both* is what a store filed per key does by default,
+    /// and a long session accumulates them — measured at 13,684 of 597,597
+    /// triangles, against 351 in a rebuild of the same document.
+    ///
+    /// They cost upload and draw rather than correctness: the copies are
+    /// coincident, so nothing shimmers and no hole appears. Which is why this
+    /// runs *here* rather than on the interaction path. Preventing a duplicate
+    /// at the moment it is filed means knowing which other bricks hold a
+    /// corner of the triangle and reaching into them, on every triangle of
+    /// every dab, to save two per cent of a buffer — the cost lands on the
+    /// gesture and the saving does not. A relayout already walks and rewrites
+    /// everything, so one pass over it is proportionate, and the duplicates go
+    /// no further than the next one.
+    fn prune_duplicates(&mut self) {
+        // In key order, so the copy that survives is the one under the
+        // lexicographically lowest key. Two things follow, and both matter.
+        // The result does not depend on how a `HashMap` happens to iterate, so
+        // the drawn buffer is the same from one run to the next. And it is the
+        // same copy the engine would have chosen for a whole-surface request —
+        // it attributes to the lowest requested key owning a corner — so a
+        // store pruned this way still agrees with a rebuild key for key, which
+        // is what `visual_incremental` and `lod_switching` check.
+        let mut keys: Vec<BrickKey> = self.keys.keys().copied().collect();
+        keys.sort_unstable();
+        let mut seen: std::collections::HashSet<[[i32; 3]; 3]> = std::collections::HashSet::new();
+        for key in keys {
+            let Some(geometry) = self.keys.get_mut(&key) else {
+                continue;
+            };
+            if geometry.indices.is_empty() {
+                continue;
+            }
+            let mut kept: Vec<u32> = Vec::with_capacity(geometry.indices.len());
+            for triangle in geometry.indices.chunks_exact(3) {
+                // Quantised and sorted, so the same triangle reached from two
+                // keys is the same value however each key numbered its own
+                // vertices.
+                let mut corners = [
+                    geometry.vertices[triangle[0] as usize].position,
+                    geometry.vertices[triangle[1] as usize].position,
+                    geometry.vertices[triangle[2] as usize].position,
+                ]
+                .map(|p| p.map(|c| (c * 4096.0).round() as i32));
+                corners.sort_unstable();
+                if seen.insert(corners) {
+                    kept.extend_from_slice(triangle);
+                }
+            }
+            if kept.len() != geometry.indices.len() {
+                geometry.indices = kept;
+                // The vertices a dropped triangle used may still be referenced
+                // by the ones kept, so the table is left alone: it is bounded
+                // by what this key's triangles ever used, and the next re-mesh
+                // of the key rebuilds it exactly.
+            }
+        }
     }
 
     /// Re-shades what sculpting shaded fast, for as long as `budget` allows.
@@ -1000,6 +1065,14 @@ impl SurfaceGeometry {
                 (*key, triangles)
             })
             .collect()
+    }
+
+    /// Lays the buffer out again, which is where duplicates are pruned.
+    ///
+    /// Exposed for the test that measures them; the application reaches this
+    /// through `upload` when the drawn range has gone too far to holes.
+    pub fn settle_layout(&mut self, gpu: &Gpu) {
+        self.lay_out(gpu);
     }
 
     /// How much of the stored geometry is empty slots.
