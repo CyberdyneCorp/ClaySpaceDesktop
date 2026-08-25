@@ -144,6 +144,7 @@ fn state<'a>(
         repair: None,
         show_references: false,
         references: Default::default(),
+        surface_opacity: clayspace_model::SurfaceOpacity::default(),
         show_convert: false,
         conversion: clayspace_model::ConversionSettings::default(),
         conversion_cost: None,
@@ -1789,4 +1790,80 @@ fn an_empty_plane_offers_a_file_and_no_placement() {
             plane.label()
         );
     }
+}
+
+#[test]
+fn the_model_opacity_slider_reaches_the_renderer() {
+    // It lives in the reference panel because that is the panel a sculptor
+    // opens when what they want is "let me see the drawing through the model".
+    // A slider that draws and is wired to nothing looks exactly like one that
+    // works.
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let mut set = state(strings, &scene, &materials, &report);
+    set.show_references = true;
+    let handle = slider_centre(&set, strings.label_surface_opacity);
+
+    capture_shell_after(
+        &harness,
+        &set,
+        "92-model-opacity",
+        &drag(handle, handle - egui::vec2(60.0, 0.0)),
+        |queue| {
+            let asked: Vec<clayspace_model::SurfaceOpacity> = queue
+                .commands()
+                .iter()
+                .filter_map(|command| match command {
+                    Command::SetSurfaceOpacity(opacity) => Some(*opacity),
+                    _ => None,
+                })
+                .collect();
+            let last = asked.last().unwrap_or_else(|| {
+                panic!(
+                    "dragging the model opacity emitted {:?} and no opacity. See \
+                     target/visual/92-model-opacity.png",
+                    queue.commands()
+                )
+            });
+            assert!(
+                !last.is_solid(),
+                "dragging left left the model solid at {}",
+                last.get()
+            );
+            assert!(
+                last.get() >= clayspace_model::SurfaceOpacity::FAINTEST,
+                "the slider reached {}, below the floor",
+                last.get()
+            );
+        },
+    );
+}
+
+#[test]
+fn the_model_opacity_is_offered_even_with_no_reference_loaded() {
+    // It is not a property of any reference — it is the clay's. A panel that
+    // hid it until a picture was loaded would file it under the wrong thing.
+    let Some(_harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let mut set = state(strings, &scene, &materials, &report);
+    set.show_references = true;
+
+    let ctx = probe_shell(&set);
+    assert!(
+        ctx.memory(|m| m
+            .data
+            .get_temp::<egui::Rect>(shell::slider_id(strings.label_surface_opacity)))
+            .is_some(),
+        "the model opacity was hidden behind having a reference"
+    );
 }

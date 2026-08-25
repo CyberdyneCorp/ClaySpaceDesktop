@@ -138,6 +138,9 @@ pub struct Strings {
     pub action_clear_reference: &'static str,
     /// Shown on a plane with nothing on it.
     pub reference_none: &'static str,
+    /// How much of the clay itself is drawn, so a reference shows through.
+    pub label_surface_opacity: &'static str,
+    pub hint_surface_opacity: &'static str,
     /// The recorded passes on a voxel layer.
     pub sculpt_begin: &'static str,
     pub sculpt_end: &'static str,
@@ -341,6 +344,8 @@ const PT_BR: Strings = Strings {
     action_load_reference: "Carregar imagem…",
     action_clear_reference: "Remover imagem",
     reference_none: "nenhuma imagem neste plano",
+    label_surface_opacity: "Opacidade do modelo",
+    hint_surface_opacity: "o modelo fica translúcido para a referência aparecer através dele",
     sculpt_begin: "Gravar passe",
     sculpt_end: "Encerrar passe",
     sculpt_recording: "gravando",
@@ -529,6 +534,8 @@ const EN_US: Strings = Strings {
     action_load_reference: "Load image…",
     action_clear_reference: "Remove image",
     reference_none: "no image on this plane",
+    label_surface_opacity: "Model opacity",
+    hint_surface_opacity: "the model turns translucent so the reference shows through it",
     sculpt_begin: "Record pass",
     sculpt_end: "End pass",
     sculpt_recording: "recording",
@@ -721,6 +728,8 @@ const ES_419: Strings = Strings {
     action_load_reference: "Cargar imagen…",
     action_clear_reference: "Quitar imagen",
     reference_none: "ninguna imagen en este plano",
+    label_surface_opacity: "Opacidad del modelo",
+    hint_surface_opacity: "el modelo se vuelve translúcido para que la referencia se vea a través",
     sculpt_begin: "Grabar pase",
     sculpt_end: "Terminar pase",
     sculpt_recording: "grabando",
@@ -845,7 +854,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 134] {
+    pub fn all(&self) -> [&'static str; 136] {
         [
             self.menu_file,
             self.menu_edit,
@@ -916,6 +925,8 @@ impl Strings {
             self.action_load_reference,
             self.action_clear_reference,
             self.reference_none,
+            self.label_surface_opacity,
+            self.hint_surface_opacity,
             self.sculpt_begin,
             self.sculpt_end,
             self.sculpt_recording,

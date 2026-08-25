@@ -14,7 +14,8 @@ use clayspace_model::{
     DeformVerb, Diagnostics, Direction, ExportMesher, ExportSettings, ExportWarning,
     ExtrudeSettings, ExtrudeSide, Falloff, ImportAs, ImportSettings, LayerKey, LayerSummary,
     MaskOp, MaskState, RecentDocuments, RefPlane, ReferenceSettings, Representation, Scene,
-    SceneStats, SculptLayer, SculptLayerCost, SculptLayerOp, ToolKind, Units, ViewPresetKind,
+    SceneStats, SculptLayer, SculptLayerCost, SculptLayerOp, SurfaceOpacity, ToolKind, Units,
+    ViewPresetKind,
 };
 use clayspace_vm::{Axis, Command, CommandQueue};
 
@@ -127,6 +128,8 @@ pub struct ShellState<'a> {
     /// The reference panel: whether it is open, and what is on each plane.
     pub show_references: bool,
     pub references: [ReferenceSlot<'a>; RefPlane::ALL.len()],
+    /// How opaque the sculpted surface is drawn.
+    pub surface_opacity: SurfaceOpacity,
     /// The deform panel: whether it is open and what it would do.
     pub show_deform: bool,
     pub deform: DeformSettings,
@@ -923,6 +926,30 @@ pub fn reference_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut
         .collapsible(false)
         .show(ctx, |ui| {
             ui.set_min_width(320.0);
+            // The clay's own opacity, above the three planes rather than
+            // inside one: it is not a property of any reference. It lives here
+            // because this is the panel a sculptor opens when the answer they
+            // want is "let me see the drawing through the model", and a
+            // control filed by what it belongs to rather than by what it is
+            // for is a control nobody finds.
+            if let Some(opacity) = slider(
+                ui,
+                s.label_surface_opacity,
+                state.surface_opacity.get(),
+                SurfaceOpacity::FAINTEST..=1.0,
+                2,
+            ) {
+                queue.push(Command::SetSurfaceOpacity(SurfaceOpacity::new(opacity)));
+            }
+            if !state.surface_opacity.is_solid() {
+                ui.label(
+                    egui::RichText::new(s.hint_surface_opacity)
+                        .size(type_scale::LABEL)
+                        .color(Tokens::text_dim()),
+                );
+            }
+            ui.separator();
+
             for plane in RefPlane::ALL {
                 reference_plane(ui, s, plane, state.references[plane as usize], queue);
             }

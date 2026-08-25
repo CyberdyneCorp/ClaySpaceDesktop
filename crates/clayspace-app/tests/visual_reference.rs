@@ -6,7 +6,7 @@
 
 mod support;
 
-use clayspace_model::{RefPlane, ReferenceSettings};
+use clayspace_model::{RefPlane, ReferenceSettings, SurfaceOpacity};
 use clayspace_view::{Camera, GpuMesh, Image, Reference};
 use support::Harness;
 
@@ -253,5 +253,190 @@ fn each_plane_is_drawn_where_it_belongs() {
     assert!(
         covered(&cleared, background) < covers[2],
         "clearing a plane left it on screen"
+    );
+}
+
+#[test]
+fn dialling_the_model_back_lets_the_reference_show_through_it() {
+    // The point of the whole pair of features: a photograph behind the form,
+    // and enough of the form taken away to trace against it. A state test
+    // would pass on a renderer that held the number and drew solid anyway.
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let document = support::sphere_document(0.9);
+    let mesh = support::mesh_document(&document, 48);
+    let form = harness.upload(&mesh);
+    let camera = front_camera();
+
+    // A green sheet directly behind the sphere, big enough that the sphere
+    // sits well inside it.
+    place(
+        &mut harness,
+        RefPlane::Front,
+        ReferenceSettings {
+            opacity: 1.0,
+            height: 4.0,
+            ..ReferenceSettings::default()
+        },
+        16,
+    );
+
+    let solid = harness.capture(&form, &camera, false, "reference-model-solid");
+    let solid_centre = solid.pixel(solid.width / 2, solid.height / 2);
+
+    harness
+        .renderer
+        .set_surface_opacity(SurfaceOpacity::new(0.25));
+    let faded = harness.capture(&form, &camera, false, "reference-model-faded");
+    let faded_centre = faded.pixel(faded.width / 2, faded.height / 2);
+
+    // The middle of the frame is the sphere over the sheet. Solid, it is lit
+    // clay; faded, the green behind it comes through.
+    assert!(
+        i32::from(faded_centre[1]) - i32::from(faded_centre[0])
+            > i32::from(solid_centre[1]) - i32::from(solid_centre[0]) + 20,
+        "the reference did not come through the clay: solid {solid_centre:?}, \
+         faded {faded_centre:?}"
+    );
+
+    // And the form is still a form: dialled back is not turned off, so the
+    // frame still differs from one with no clay in it at all.
+    let empty = GpuMesh::new(&harness.gpu);
+    let without = harness.capture(&empty, &camera, false, "reference-model-absent");
+    let differing = faded
+        .pixels
+        .chunks_exact(4)
+        .zip(without.pixels.chunks_exact(4))
+        .filter(|(a, b)| {
+            a.iter()
+                .zip(b.iter())
+                .any(|(x, y)| (i32::from(*x) - i32::from(*y)).abs() > 8)
+        })
+        .count();
+    assert!(
+        differing > 1000,
+        "a faded surface was indistinguishable from no surface at all \
+         ({differing} pixels differ)"
+    );
+}
+
+#[test]
+fn a_solid_model_hides_what_is_behind_it() {
+    // The control for the test above: with the dial left alone, the reference
+    // is behind the clay and stays there.
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let document = support::sphere_document(0.9);
+    let mesh = support::mesh_document(&document, 48);
+    let form = harness.upload(&mesh);
+    let camera = front_camera();
+    place(
+        &mut harness,
+        RefPlane::Front,
+        ReferenceSettings {
+            opacity: 1.0,
+            height: 4.0,
+            ..ReferenceSettings::default()
+        },
+        16,
+    );
+
+    harness.renderer.set_surface_opacity(SurfaceOpacity::SOLID);
+    let image = harness.capture(&form, &camera, false, "reference-model-opaque");
+    let centre = image.pixel(image.width / 2, image.height / 2);
+    assert!(
+        greens(&image) > 1000,
+        "the reference was not on screen, so this proves nothing"
+    );
+    assert!(
+        i32::from(centre[1]) - i32::from(centre[0]) < 20,
+        "a solid model let the reference through: {centre:?}"
+    );
+}
+
+#[test]
+fn a_cage_draws_the_surface_through_whatever_the_dial_says() {
+    // Regression. The renderer chose the ghost pipeline from the *effective*
+    // opacity and then wrote the *dial* into the uniform, so raising a cage
+    // over a solid surface selected the see-through pipeline and drew it at
+    // alpha 1.0 — ghosting that looked exactly like no ghosting.
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let document = support::sphere_document(0.9);
+    let mesh = support::mesh_document(&document, 48);
+    let form = harness.upload(&mesh);
+    let camera = front_camera();
+    place(
+        &mut harness,
+        RefPlane::Front,
+        ReferenceSettings {
+            opacity: 1.0,
+            height: 4.0,
+            ..ReferenceSettings::default()
+        },
+        16,
+    );
+
+    harness.renderer.set_surface_opacity(SurfaceOpacity::SOLID);
+    let solid = harness.capture(&form, &camera, false, "reference-cage-solid");
+    harness.renderer.set_ghosted(true);
+    let caged = harness.capture(&form, &camera, false, "reference-cage-ghosted");
+    harness.renderer.set_ghosted(false);
+
+    let centre = |image: &Image| image.pixel(image.width / 2, image.height / 2);
+    let (solid_centre, caged_centre) = (centre(&solid), centre(&caged));
+    assert!(
+        i32::from(caged_centre[1]) - i32::from(caged_centre[0])
+            > i32::from(solid_centre[1]) - i32::from(solid_centre[0]) + 20,
+        "a cage over a solid surface drew it solid anyway: solid \
+         {solid_centre:?}, caged {caged_centre:?}"
+    );
+}
+
+#[test]
+fn a_cage_does_not_make_a_faint_surface_more_solid() {
+    // The other half of the same rule: the cage is a ceiling, not a setting.
+    // A sculptor who dialled the clay back further than the cage would has
+    // said what they want, and raising a cage is not an argument with it.
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let document = support::sphere_document(0.9);
+    let mesh = support::mesh_document(&document, 48);
+    let form = harness.upload(&mesh);
+    let camera = front_camera();
+    place(
+        &mut harness,
+        RefPlane::Front,
+        ReferenceSettings {
+            opacity: 1.0,
+            height: 4.0,
+            ..ReferenceSettings::default()
+        },
+        16,
+    );
+
+    // Fainter than the cage's own 0.42.
+    harness
+        .renderer
+        .set_surface_opacity(SurfaceOpacity::new(0.15));
+    let alone = harness.capture(&form, &camera, false, "reference-faint-alone");
+    harness.renderer.set_ghosted(true);
+    let caged = harness.capture(&form, &camera, false, "reference-faint-caged");
+    harness.renderer.set_ghosted(false);
+
+    let centre = |image: &Image| image.pixel(image.width / 2, image.height / 2);
+    let (a, c) = (centre(&alone), centre(&caged));
+    let difference: i32 = a
+        .iter()
+        .zip(c)
+        .map(|(x, y)| (i32::from(*x) - i32::from(y)).abs())
+        .sum();
+    assert!(
+        difference < 12,
+        "raising a cage changed a deliberately faint surface: {a:?} became {c:?}"
     );
 }

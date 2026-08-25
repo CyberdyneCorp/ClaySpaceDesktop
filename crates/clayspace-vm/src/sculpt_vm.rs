@@ -449,6 +449,7 @@ impl SculptViewModel {
             | Command::LoadReference(_)
             | Command::ClearReference(_)
             | Command::SetReferenceSettings(..)
+            | Command::SetSurfaceOpacity(_)
             | Command::FrameAll
             | Command::NextMaterial
             | Command::NextDisplayUnit

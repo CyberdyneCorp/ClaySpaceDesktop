@@ -1196,3 +1196,69 @@ Recorded under *Not built yet*.
   - A line that does not parse is dropped rather than defaulted: a reference
     placed somewhere the sculptor did not put it is worse than one that is
     gone, because the second is obvious and the first is not.
+
+## 27. Photographs, and seeing through the clay
+
+- [x] 27.1 JPEG, which is what a photograph arrives as
+  - `RefFormat` names what opens — PNG for drawings and cut-outs, JPEG for
+    photographs — in the domain, so the file dialog's filter, the refusal
+    message and the decoder cannot come to three different answers about what
+    is accepted. The dialog's filter is built from that list rather than from
+    a literal beside it.
+  - `zune-jpeg` rather than the whole image stack: a decoder and nothing else,
+    which is the same trade the engine's note about PNG already argues for.
+  - The reader is three files now — a shared front door that checks the size
+    from the *header* before anything allocates, and one module a format.
+
+- [x] 27.2 A sideways reference is not a reference
+  - A phone stores the sensor's own orientation and an EXIF tag saying how to
+    turn it. Decoders leave that to the caller, so this is the caller doing it:
+    all eight orientations, applied once to the pixels.
+  - Written as a *pull* — every output pixel reads from somewhere — rather than
+    a push, which leaves holes the moment the arithmetic is off by one, and
+    holes in a photograph are hard to see and easy to ship. A test turns a
+    numbered image every way and requires every pixel to survive exactly once,
+    and another turns it four times and requires it back where it started.
+  - Only tag 0x0112 is read. The rest of an EXIF block is someone's camera
+    model, their lens and often where they were standing, none of which this
+    application has any business holding.
+  - Both byte orders, because Canon writes big-endian and most phones write
+    little, and a reader that handles one shows half the world's photographs
+    sideways. A block that does not parse reads as upright rather than as a
+    refusal: a corrupt orientation is a reason to show the picture as stored,
+    not a reason to refuse the picture.
+
+- [x] 27.3 A refusal that answers the question asked
+  - References borrowed `AlphaRefusal` when there was one format between them.
+    With two there is not: a sculptor loading a photograph was being told that
+    "alphas are read only in PNG", which answers a question nobody asked.
+    `ReferenceRefusal` has its own wording.
+
+- [x] 27.4 The clay, dialled back
+  - `SurfaceOpacity`. Blender spells this X-ray and ZBrush spells it Ghost;
+    both are a switch. A dial instead, because the useful amount depends on
+    what is behind the form — tracing a silhouette against a photograph wants
+    a different number from reaching a cage's control points.
+  - Not reducible to zero. A surface faded to nothing loses the form, the brush
+    cursor's footprint on it and any way of telling that a stroke landed;
+    turning the layer off is what turning the layer off is for.
+  - The ghost shader's hard-coded 0.42 becomes a uniform. The cage still
+    imposes that as a *ceiling* — `SurfaceOpacity::and` takes the stricter of
+    the two — so raising a cage does not forget the dial and lowering one does
+    not silently make a deliberately faint surface solid again.
+  - The slider sits at the top of the reference panel, above the three planes.
+    It is not a property of any reference, but that is the panel a sculptor
+    opens when what they want is "let me see the drawing through the model",
+    and a control filed by what it belongs to rather than by what it is for is
+    a control nobody finds.
+  - One bug, caught by the cage's own test: the pipeline was chosen from the
+    *effective* opacity and the *dial* was written into the uniform, so raising
+    a cage over a solid surface picked the see-through pipeline and then drew
+    it at alpha 1.0 — ghosting that looked exactly like no ghosting. Two
+    regression tests now hold both halves of the rule: a cage draws a solid
+    surface through, and a cage leaves a deliberately fainter one alone.
+  - Measured on the pixels: the middle of the frame goes from lit clay
+    (203, 202, 199) to the reference pulling through (141, 201, 143) against a
+    bare reference of (20, 200, 60). A state test would pass on a renderer that
+    held the number and drew solid anyway.
+

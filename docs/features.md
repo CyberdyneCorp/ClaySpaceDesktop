@@ -958,12 +958,31 @@ hangs behind the origin on that plane, to sculpt from.
   origin, but that alone stops holding once the camera swings past its plane,
   so references are drawn first and write no depth. A guide that occludes the
   form it is guiding has stopped being a guide.
+- **PNG and JPEG** — drawings and cut-outs in one, photographs in the other,
+  which between them is what a reference folder actually holds. Anything else
+  is refused by name rather than by a decoder message about chunk headers.
 - The file's own alpha is kept and multiplied by the opacity, so a cut-out
   placed at half opacity is still a cut-out. Colour is kept — unlike an alpha
-  stamp, which is flattened to one scalar a pixel — and palette PNGs are
-  expanded, since an index read as a colour is not a picture of anything.
-- PNG only, refused by name rather than by a decoder message, with the same
-  reasons an alpha stamp is refused for.
+  stamp, which is flattened to one scalar a pixel — palette PNGs are expanded,
+  since an index read as a colour is not a picture of anything, and a greyscale
+  photograph is spread across three channels rather than sampled as red.
+- **A photograph taken sideways is turned the right way up.** A phone stores
+  the sensor's own orientation and an EXIF tag saying how to turn it; ignored,
+  the reference arrives sideways, and a sideways reference is not a reference
+  but a puzzle. All eight orientations are applied, once, to the pixels — so
+  the placement a sculptor sets is about the reference and not about how the
+  camera was held. Only that one tag is read: the rest of an EXIF block is
+  someone's camera model, their lens and often where they were standing.
+- **The model's own opacity** is a slider at the top of the same panel. The
+  clay turns translucent so the reference shows through it — Blender spells
+  this X-ray and ZBrush spells it Ghost, and both are a switch; this is a dial,
+  because tracing a silhouette against a photograph wants a different amount
+  from reaching a deformation cage's control points. It cannot be taken to
+  zero: a surface faded to nothing loses the form, the brush cursor's footprint
+  on it and any way of telling a stroke landed — turning the layer off is what
+  turning the layer off is for. Raising a cage still imposes its own ceiling,
+  and lowering the cage does not silently make a deliberately faint surface
+  solid again. It opens solid each run and is not remembered.
 - **Not part of the document.** A reference is what the sculptor is working
   *from*, not what they are making, and a document carrying someone else's
   photograph is a document that cannot be shared. Loading, moving, fading or
