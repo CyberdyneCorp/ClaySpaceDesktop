@@ -16,6 +16,9 @@ struct Camera {
 struct Material {
     // rgb tint, a = 1 when the mesh carries vertex colours.
     tint: vec4<f32>,
+    // x is how opaque the surface is drawn; the rest is padding, since a
+    // uniform's fields are aligned to sixteen bytes either way.
+    ghost: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> camera: Camera;
@@ -116,10 +119,11 @@ fn membrane_fs(input: OverlayOutput) -> @location(0) vec4<f32> {
 // surface hides exactly the handles that need reaching. Blender's X-ray and
 // ZBrush's Ghost do the same thing for the same reason.
 //
-// The alpha is high enough that the form is still readable as a form: this is
-// a surface seen through, not a surface turned off.
-const GHOST_ALPHA: f32 = 0.42;
-
+// The alpha comes from the uniform rather than a constant here, because the
+// useful amount is the sculptor's to choose — a cage's control points and a
+// photograph behind the silhouette want different numbers. What the host will
+// not pass is zero: a surface faded to nothing is a surface turned off, and
+// turning the layer off is what turning the layer off is for.
 @fragment
 fn fs_ghost(input: VertexOutput) -> @location(0) vec4<f32> {
     let n = normalize(input.view_normal);
@@ -128,7 +132,7 @@ fn fs_ghost(input: VertexOutput) -> @location(0) vec4<f32> {
     let modulation = mix(vec3<f32>(1.0), input.color, material.tint.a);
     let shaded = lit * material.tint.rgb * modulation;
     let frozen = clamp(input.mask, 0.0, 1.0) * MASK_STRENGTH;
-    return vec4<f32>(mix(shaded, MASK_COLOR, frozen), GHOST_ALPHA);
+    return vec4<f32>(mix(shaded, MASK_COLOR, frozen), material.ghost.x);
 }
 
 // The polyframe: the mesh's own edges, drawn over it.

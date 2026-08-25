@@ -17,7 +17,8 @@ use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
     AutosavePolicy, Detail, DetailPolicy, Diagnostics, ExchangeModel, ExportSettings,
     ExportWarning, Format, FrameLog, ImportSettings, LayerOperation, RecentDocuments, Recovery,
-    RefPlane, SceneModel, SculptModel, SkinSettings, StrokeModifiers, Units, ViewPresetKind, FRAME,
+    RefFormat, RefPlane, SceneModel, SculptModel, SkinSettings, StrokeModifiers, Units,
+    ViewPresetKind, FRAME,
 };
 use clayspace_view::shell::{self, region, ArmatureState, ShellState};
 use clayspace_view::{
@@ -239,6 +240,8 @@ struct App {
     /// The reference images, and whether their panel is open.
     references: ReferenceViewModel,
     show_references: bool,
+    /// How opaque the sculpted surface is drawn, as the sculptor set it.
+    surface_opacity: clayspace_model::SurfaceOpacity,
     /// What the viewport was last given, so the pictures are re-uploaded when
     /// they change and not once a frame.
     references_drawn: Option<u64>,
@@ -400,6 +403,7 @@ impl App {
             show_deform: false,
             references,
             show_references: false,
+            surface_opacity: clayspace_model::SurfaceOpacity::default(),
             references_drawn: None,
             deform: clayspace_model::DeformSettings::default(),
             show_convert: false,
@@ -436,6 +440,10 @@ impl App {
         let mut renderer = Renderer::new(&gpu, surface.format());
         renderer.set_overlays(&gpu, Overlays::default(), 3.0);
         renderer.show_gizmo = true;
+        // A fresh renderer opens solid. This is also the path device-loss
+        // recovery takes, so a surface the sculptor had dialled back would
+        // otherwise come back solid after a driver reset.
+        renderer.set_surface_opacity(self.surface_opacity);
 
         let context = egui::Context::default();
         shell::apply_theme(&context);
@@ -727,14 +735,16 @@ impl App {
         self.request_redraw();
     }
 
-    /// Asks for a PNG and places it on one plane, behind the sculpt.
+    /// Asks for a picture and places it on one plane, behind the sculpt.
     ///
-    /// PNG alone in the filter, for the reason the alpha dialog gives: a
-    /// dialog offering what leads to a refusal is a dialog that lies.
+    /// The filter comes from the domain's own list of what opens, for the
+    /// reason the alpha dialog gives: a dialog offering what leads to a
+    /// refusal is a dialog that lies — and one that hides what would have
+    /// worked is worse.
     fn load_reference(&mut self, plane: RefPlane) {
         let Some(path) = rfd::FileDialog::new()
             .set_title(self.strings.action_load_reference)
-            .add_filter("PNG", &["png"])
+            .add_filter("PNG, JPEG", &RefFormat::EXTENSIONS)
             .pick_file()
         else {
             return;
@@ -2246,6 +2256,12 @@ impl App {
                 self.references.dispatch(&command);
                 self.save_references();
             }
+            Command::SetSurfaceOpacity(opacity) => {
+                self.surface_opacity = *opacity;
+                if let Some(graphics) = self.graphics.as_mut() {
+                    graphics.renderer.set_surface_opacity(*opacity);
+                }
+            }
             Command::SetDeform(settings) => self.deform = settings.sanitized(),
             // One undo step, which the engine's own path already makes: the
             // deformer records its vertex deltas exactly as a mesh stroke
@@ -2369,6 +2385,7 @@ impl App {
             show_repair: self.show_repair,
             show_deform: self.show_deform,
             show_references: self.show_references,
+            surface_opacity: self.surface_opacity,
             references: RefPlane::ALL.map(|plane| shell::ReferenceSlot {
                 name: self
                     .references

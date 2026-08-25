@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use clayspace_model::{
     ConversionSettings, CurveJoin, CurveProfile, ExportSettings, ExtrudeSettings, Falloff,
     GizmoHandle, GizmoMode, ImportSettings, LayerKey, Locale, MaskOp, RefPlane, ReferenceSettings,
-    SmoothBlur, StrokeModifiers, ToolKind, ViewPresetKind, VoxelDisplay,
+    SmoothBlur, StrokeModifiers, SurfaceOpacity, ToolKind, ViewPresetKind, VoxelDisplay,
 };
 
 /// A change to the application or the document.
@@ -95,6 +95,9 @@ pub enum Command {
     ClearReference(RefPlane),
     /// How one plane's reference sits: shown, how large, where, how far back.
     SetReferenceSettings(RefPlane, ReferenceSettings),
+    /// How opaque the sculpted surface is drawn, so a reference behind it can
+    /// be seen through the clay.
+    SetSurfaceOpacity(SurfaceOpacity),
     SetBrushSmoothing(f32),
     ToggleSymmetry(Axis),
 
@@ -345,6 +348,7 @@ impl Command {
                 | Self::LoadReference(_)
                 | Self::ClearReference(_)
                 | Self::SetReferenceSettings(..)
+                | Self::SetSurfaceOpacity(_)
                 | Self::SetBrushSmoothing(_)
                 | Self::ToggleSymmetry(_)
                 // Choosing which layer to work on changes nothing in the
@@ -396,6 +400,7 @@ impl Command {
             Self::LoadReference(_) => "load reference",
             Self::ClearReference(_) => "clear reference",
             Self::SetReferenceSettings(..) => "reference placement",
+            Self::SetSurfaceOpacity(_) => "surface opacity",
             Self::SetBrushSmoothing(_) => "brush smoothing",
             Self::SelectLayer(_) => "select layer",
             Self::SetLayerVisible(..) => "layer visibility",

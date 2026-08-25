@@ -12,7 +12,7 @@ use crate::camera::Camera;
 use crate::gpu::{Framebuffer, Gpu};
 use crate::matcap::MatCap;
 use crate::palette;
-use clayspace_model::{GizmoHandle, GizmoMode};
+use clayspace_model::{GizmoHandle, GizmoMode, SurfaceOpacity};
 
 /// One vertex, in the layout the shader and the engine's copy both use.
 ///
@@ -84,6 +84,10 @@ struct CameraUniform {
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct MaterialUniform {
     tint: [f32; 4],
+    /// How opaque the surface is drawn, in x. The other three pad the struct
+    /// out to the sixteen bytes a uniform is aligned to, which is why the
+    /// opacity is not a bare f32.
+    ghost: [f32; 4],
 }
 
 /// Geometry living on the GPU.
@@ -460,6 +464,12 @@ pub struct Renderer {
     /// The surface drawn through, while a deformation cage is up.
     ghost_pipeline: wgpu::RenderPipeline,
     ghosted: bool,
+    /// How opaque the surface is drawn, as the sculptor set it.
+    ///
+    /// Held apart from `ghosted`, which is the cage imposing its own ceiling:
+    /// putting a cage up must not forget the dial, and taking it down must not
+    /// silently make a deliberately faint surface solid again.
+    surface_opacity: SurfaceOpacity,
     /// The rectangle of the frame the scene is drawn into, in physical pixels.
     scene_viewport: Option<[f32; 4]>,
     gizmo_mesh: GpuMesh,
@@ -740,6 +750,7 @@ impl Renderer {
             ),
             references: std::collections::BTreeMap::new(),
             ghosted: false,
+            surface_opacity: SurfaceOpacity::SOLID,
             pipeline,
             overlay_pipeline,
             wire_pipeline,
@@ -930,6 +941,24 @@ impl Renderer {
     ///
     /// On while a deformation cage is up: the sculptor is aiming at control
     /// points, and half of them are behind the form.
+    /// How opaque the surface is drawn.
+    ///
+    /// A dial and not a switch, because the useful amount depends on what is
+    /// behind the form: tracing a silhouette against a photograph wants a
+    /// different number from reaching a cage's control points.
+    pub fn set_surface_opacity(&mut self, opacity: SurfaceOpacity) {
+        self.surface_opacity = opacity;
+    }
+
+    /// What the surface is actually drawn at, dial and cage together.
+    fn drawn_opacity(&self) -> SurfaceOpacity {
+        if self.ghosted {
+            self.surface_opacity.and(SurfaceOpacity::CAGED)
+        } else {
+            self.surface_opacity
+        }
+    }
+
     pub fn set_ghosted(&mut self, on: bool) {
         self.ghosted = on;
     }
@@ -1023,6 +1052,10 @@ impl Renderer {
             0,
             bytemuck::bytes_of(&MaterialUniform {
                 tint: [1.0, 1.0, 1.0, if has_vertex_colors { 1.0 } else { 0.0 }],
+                // The effective opacity and not the dial: the cage imposes its
+                // own ceiling, and writing the dial here would select the ghost
+                // pipeline and then draw it solid.
+                ghost: [self.drawn_opacity().get(), 0.0, 0.0, 0.0],
             }),
         );
 
@@ -1103,10 +1136,11 @@ impl Renderer {
             // Back to the scene's own bindings, which the loop above replaced.
             pass.set_bind_group(0, &self.bind_group, &[]);
 
-            // Through, while a cage is up. One choice for both the surface and
-            // the mesh layers: a document with one of each half solid and half
-            // ghosted would read as two objects.
-            let surface = if self.ghosted {
+            // Through, while a cage is up or the sculptor has dialled the
+            // surface back. One choice for both the surface and the mesh
+            // layers: a document with one of each half solid and half ghosted
+            // would read as two objects.
+            let surface = if !self.drawn_opacity().is_solid() {
                 &self.ghost_pipeline
             } else {
                 &self.pipeline

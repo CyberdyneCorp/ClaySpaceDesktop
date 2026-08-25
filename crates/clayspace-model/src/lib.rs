@@ -28,6 +28,7 @@ pub mod reference;
 pub mod scene;
 pub mod sculpt;
 pub mod session;
+pub mod surface;
 pub mod tools;
 pub mod units;
 pub mod voxel_display;
@@ -53,8 +54,8 @@ pub use lattice::{
 pub use locale::Locale;
 pub use mask::{can_extrude, ExtrudeSettings, ExtrudeSide, MaskModel, MaskOp, MaskState};
 pub use reference::{
-    read_references, write_references, RefPlane, ReferenceImage, ReferenceSettings,
-    RememberedReference,
+    read_references, write_references, RefFormat, RefPlane, ReferenceImage, ReferenceRefusal,
+    ReferenceSettings, RememberedReference,
 };
 pub use scene::{
     LayerCost, LayerKey, LayerSummary, Protection, Scene, SceneModel, SceneNode, SculptLayer,
@@ -65,6 +66,7 @@ pub use sculpt::{
     SculptModel,
 };
 pub use session::{AutosavePolicy, RecentDocuments, Recovery};
+pub use surface::SurfaceOpacity;
 pub use tools::{
     BrushSettings, Falloff, LayerOperation, LayerState, Representation, Shaping, ToolKind,
     Unavailable, Verbs, ViewPresetKind,

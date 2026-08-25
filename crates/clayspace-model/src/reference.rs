@@ -157,6 +157,95 @@ impl ReferenceSettings {
     }
 }
 
+/// Which picture formats a reference can be loaded from.
+///
+/// PNG for drawings and cut-outs, JPEG for photographs — between them that is
+/// what a sculptor's reference folder actually holds. Named here rather than
+/// in the reader so the file dialog, the refusal message and the decoder
+/// cannot come to three different answers about what is accepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefFormat {
+    Png,
+    Jpeg,
+}
+
+impl RefFormat {
+    /// Every extension that opens, lower case and without the dot.
+    pub const EXTENSIONS: [&'static str; 3] = ["png", "jpg", "jpeg"];
+
+    /// What a file's extension says it is, or `None` for anything else.
+    pub fn from_extension(extension: &str) -> Option<Self> {
+        match extension.to_ascii_lowercase().as_str() {
+            "png" => Some(Self::Png),
+            "jpg" | "jpeg" => Some(Self::Jpeg),
+            _ => None,
+        }
+    }
+}
+
+/// Why a file could not become a reference.
+///
+/// Its own type rather than the alpha reader's, which it borrowed at first:
+/// the two now accept different formats, and a refusal that tells a sculptor
+/// loading a photograph that "alphas are read only in PNG" is answering a
+/// question nobody asked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReferenceRefusal {
+    /// Not a format that opens. Stated by name rather than left to a decoder
+    /// error naming a library the sculptor has never heard of.
+    UnsupportedFormat {
+        extension: String,
+    },
+    /// The file could not be read or decoded.
+    Unreadable(String),
+    TooSmall {
+        width: u32,
+        height: u32,
+    },
+    TooLarge {
+        width: u32,
+        height: u32,
+    },
+    /// The pixels do not fill the dimensions the header claims.
+    Truncated {
+        expected: usize,
+        found: usize,
+    },
+}
+
+impl std::fmt::Display for ReferenceRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnsupportedFormat { extension } if extension.is_empty() => {
+                f.write_str("as referências são lidas em PNG e JPEG; este arquivo não tem extensão")
+            }
+            Self::UnsupportedFormat { extension } => write!(
+                f,
+                "as referências são lidas em PNG e JPEG; este é um {}",
+                extension.to_uppercase()
+            ),
+            Self::Unreadable(why) => write!(f, "a imagem não pôde ser lida: {why}"),
+            Self::TooSmall { width, height } => write!(
+                f,
+                "uma referência de {width}×{height} não dá o que ver; \
+                 o mínimo é {min}×{min}",
+                min = ReferenceImage::MIN_SIDE
+            ),
+            Self::TooLarge { width, height } => write!(
+                f,
+                "uma referência de {width}×{height} passa do limite de {max}×{max}",
+                max = ReferenceImage::MAX_SIDE
+            ),
+            Self::Truncated { expected, found } => write!(
+                f,
+                "a imagem terminou antes do fim: {found} de {expected} bytes"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ReferenceRefusal {}
+
 /// A loaded reference image.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReferenceImage {

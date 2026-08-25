@@ -8,9 +8,9 @@ what is being made.
 ## ADDED Requirements
 
 ### Requirement: A reference image can be placed on each plane
-The application SHALL let the user load a PNG onto each of the front, side and
-top planes independently, and SHALL keep each plane's picture and placement
-separate from the others.
+The application SHALL let the user load a PNG or a JPEG onto each of the front,
+side and top planes independently, and SHALL keep each plane's picture and
+placement separate from the others.
 
 #### Scenario: One plane at a time
 - **WHEN** the user loads an image onto the front plane
@@ -18,9 +18,14 @@ separate from the others.
   unchanged
 
 #### Scenario: A file that cannot be read is refused by name
-- **WHEN** the user chooses a file that is not a PNG, or a PNG too small or too
-  large to be used
+- **WHEN** the user chooses a file that is neither a PNG nor a JPEG, or a
+  picture too small or too large to be used
 - **THEN** the application states which of those it is and places nothing
+
+#### Scenario: A photograph taken sideways is turned the right way up
+- **WHEN** a JPEG carries an EXIF orientation tag
+- **THEN** the reference is drawn the right way up, with its sides swapped
+  where the tag is a quarter turn
 
 ### Requirement: A reference is placed, sized and faded by the sculptor
 The application SHALL offer, for each plane holding a picture, its visibility,
@@ -68,3 +73,26 @@ remembered file that can no longer be read SHALL be dropped quietly.
 #### Scenario: A file that has moved is dropped
 - **WHEN** a remembered reference's file no longer exists at its path
 - **THEN** the plane opens empty rather than showing an error at startup
+
+### Requirement: The sculpted surface can be made translucent
+The application SHALL offer a control over how opaque the sculpted surface is
+drawn, so that a reference behind it can be seen through the clay. The surface
+SHALL NOT be reducible to fully transparent.
+
+#### Scenario: The reference shows through the clay
+- **WHEN** the user lowers the model opacity with a reference behind the form
+- **THEN** the reference is visible through the form, and the form is still
+  distinguishable from no form at all
+
+#### Scenario: A solid model hides what is behind it
+- **WHEN** the model opacity is left at solid
+- **THEN** the reference is not visible through the form
+
+#### Scenario: A deformation cage still imposes its own ceiling
+- **WHEN** a deformation cage is raised while the model opacity is solid
+- **THEN** the surface is drawn through, as it is without the control
+
+#### Scenario: A cage does not overrule a fainter choice
+- **WHEN** a deformation cage is raised while the model opacity is already
+  fainter than the cage's own ceiling
+- **THEN** the surface stays at the fainter setting

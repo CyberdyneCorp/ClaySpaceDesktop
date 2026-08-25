@@ -1,12 +1,13 @@
 //! Reading a reference image, and refusing what is not one.
 //!
-//! Every PNG here is written by the test that reads it, for the reason the
+//! Every picture here is written by the test that reads it, for the reason the
 //! alpha reader's tests give: a fixture checked in beside the code drifts from
 //! what the decoder is asked to handle, and the interesting cases — palette,
-//! sixteen-bit, greyscale — are the ones nobody remembers to add a fixture for.
+//! sixteen-bit, greyscale, a photograph with an orientation tag — are the ones
+//! nobody remembers to add a fixture for.
 
 use clayspace_engine::read_reference;
-use clayspace_model::{AlphaRefusal, ReferenceImage};
+use clayspace_model::{ReferenceImage, ReferenceRefusal};
 
 fn temp(name: &str) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!("clayspace-ref-{name}"));
@@ -142,14 +143,14 @@ fn a_sixteen_bit_png_keeps_its_high_byte() {
 }
 
 #[test]
-fn something_that_is_not_a_png_is_refused_by_name() {
-    // By name and not by handing it to a decoder: "esperava um .png" says what
+fn something_that_is_not_a_picture_is_refused_by_name() {
+    // By name and not by handing it to a decoder: naming the format says what
     // to do about it, and "invalid chunk header" does not.
-    let path = temp("photo.jpg");
-    std::fs::write(&path, b"not a png").expect("write");
+    let path = temp("modelo.obj");
+    std::fs::write(&path, b"not a picture").expect("write");
     assert!(matches!(
         read_reference(&path),
-        Err(AlphaRefusal::NotPng { .. })
+        Err(ReferenceRefusal::UnsupportedFormat { .. })
     ));
     let _ = std::fs::remove_file(&path);
 }
@@ -167,7 +168,7 @@ fn an_image_too_small_to_be_one_is_refused() {
     );
     assert!(matches!(
         read_reference(&path),
-        Err(AlphaRefusal::TooSmall { .. })
+        Err(ReferenceRefusal::TooSmall { .. })
     ));
     // The floor is what makes a one-pixel file a refusal rather than a
     // reference nobody can see.
@@ -180,6 +181,133 @@ fn a_file_that_is_not_there_is_a_refusal_and_not_a_panic() {
     let path = temp("ausente.png");
     assert!(matches!(
         read_reference(&path),
-        Err(AlphaRefusal::Unreadable(_))
+        Err(ReferenceRefusal::Unreadable(_))
     ));
+}
+
+// -- JPEG, which is what a photograph arrives as ----------------------------
+
+/// Writes a JPEG, optionally with an EXIF block in front of the pixels.
+fn write_jpeg(path: &std::path::Path, width: u16, height: u16, rgb: &[u8], exif: Option<&[u8]>) {
+    let mut encoder = jpeg_encoder::Encoder::new_file(path, 100).expect("create");
+    if let Some(exif) = exif {
+        // APP1 is where EXIF lives, which is what a camera writes.
+        encoder.add_app_segment(1, exif).expect("app segment");
+    }
+    encoder
+        .encode(rgb, width, height, jpeg_encoder::ColorType::Rgb)
+        .expect("encode");
+}
+
+/// An EXIF block whose only entry is the orientation tag.
+fn exif_orientation(tag: u16) -> Vec<u8> {
+    let mut out = Vec::from(*b"Exif\0\0");
+    out.extend_from_slice(b"II");
+    out.extend_from_slice(&42u16.to_le_bytes());
+    out.extend_from_slice(&8u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&0x0112u16.to_le_bytes());
+    out.extend_from_slice(&3u16.to_le_bytes());
+    out.extend_from_slice(&1u32.to_le_bytes());
+    out.extend_from_slice(&tag.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out
+}
+
+#[test]
+fn a_jpeg_photograph_is_read() {
+    // The format a reference folder is mostly full of. It was refused by name
+    // before, which is the correct refusal for a format that is not read and
+    // the wrong answer for the one photographs come in.
+    let path = temp("foto.jpg");
+    let pixels: Vec<u8> = (0..16 * 16).flat_map(|_| [180u8, 90, 40]).collect();
+    write_jpeg(&path, 16, 16, &pixels, None);
+
+    let image = read_reference(&path).expect("a JPEG is a reference");
+    assert_eq!((image.width, image.height), (16, 16));
+    assert_eq!(image.pixels.len(), 16 * 16 * 4);
+    // JPEG is lossy, so the colour is near rather than exact — but it is that
+    // colour and not another, and it is not grey.
+    let first = &image.pixels[..4];
+    assert!(
+        (i32::from(first[0]) - 180).abs() < 12
+            && (i32::from(first[1]) - 90).abs() < 12
+            && (i32::from(first[2]) - 40).abs() < 12,
+        "a red-brown photograph came back {first:?}"
+    );
+    assert_eq!(first[3], 255, "JPEG has no alpha; it should be opaque");
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn the_other_spelling_of_the_extension_opens_too() {
+    // .jpeg and .jpg are the same format, and a sculptor whose file happens to
+    // carry the longer spelling should not have to rename it.
+    let path = temp("retrato.jpeg");
+    let pixels: Vec<u8> = (0..8 * 8).flat_map(|_| [10u8, 120, 200]).collect();
+    write_jpeg(&path, 8, 8, &pixels, None);
+    assert!(read_reference(&path).is_ok());
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_photograph_taken_sideways_is_turned_the_right_way_up() {
+    // A phone stores the sensor's own orientation and a tag saying how to turn
+    // it. Ignored, the reference arrives sideways — and a sideways reference
+    // is not a reference, it is a puzzle.
+    let path = temp("de-lado.jpg");
+    let (width, height) = (16u16, 8u16);
+    let pixels: Vec<u8> = (0..u32::from(width) * u32::from(height))
+        .flat_map(|_| [200u8, 200, 200])
+        .collect();
+    write_jpeg(&path, width, height, &pixels, Some(&exif_orientation(6)));
+
+    let image = read_reference(&path).expect("a rotated JPEG is still a JPEG");
+    assert_eq!(
+        (image.width, image.height),
+        (u32::from(height), u32::from(width)),
+        "a quarter turn did not swap the sides"
+    );
+    assert_eq!(image.pixels.len(), 16 * 8 * 4);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_photograph_with_no_orientation_tag_is_left_as_it_is() {
+    let path = temp("sem-tag.jpg");
+    let (width, height) = (16u16, 8u16);
+    let pixels: Vec<u8> = (0..u32::from(width) * u32::from(height))
+        .flat_map(|_| [30u8, 30, 30])
+        .collect();
+    write_jpeg(&path, width, height, &pixels, None);
+
+    let image = read_reference(&path).expect("a plain JPEG");
+    assert_eq!((image.width, image.height), (16, 8));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_jpeg_that_is_not_one_is_a_refusal_and_not_a_panic() {
+    // The extension opens the door; the decoder still has to agree.
+    let path = temp("mentira.jpg");
+    std::fs::write(&path, b"this is not a JPEG at all").expect("write");
+    assert!(matches!(
+        read_reference(&path),
+        Err(ReferenceRefusal::Unreadable(_))
+    ));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_jpeg_too_small_to_be_a_reference_is_refused_from_its_header() {
+    // Refused before the decode allocates for it, which is the same order the
+    // PNG side checks in.
+    let path = temp("minusculo.jpg");
+    write_jpeg(&path, 1, 1, &[128, 128, 128], None);
+    assert!(matches!(
+        read_reference(&path),
+        Err(ReferenceRefusal::TooSmall { .. })
+    ));
+    let _ = std::fs::remove_file(&path);
 }
