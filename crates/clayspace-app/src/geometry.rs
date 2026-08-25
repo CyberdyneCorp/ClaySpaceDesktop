@@ -653,18 +653,25 @@ impl SurfaceGeometry {
     /// another key's share when a later request names a different set — its
     /// content is identical wherever it lands, so keeping either copy is
     /// right". Keeping *both* is what a store filed per key does by default,
-    /// and a long session accumulates them — measured at 11,333 of 595,450
-    /// triangles, against 204 in a rebuild of the same document.
+    /// and a long session accumulates them — measured at 55 of 597,521
+    /// triangles.
     ///
-    /// They cost upload and draw rather than correctness: the copies are
-    /// coincident, so nothing shimmers and no hole appears. Which is why this
-    /// runs *here* rather than on the interaction path. Preventing a duplicate
-    /// at the moment it is filed means knowing which other bricks hold a
-    /// corner of the triangle and reaching into them, on every triangle of
-    /// every dab, to save two per cent of a buffer — the cost lands on the
-    /// gesture and the saving does not. A relayout already walks and rewrites
-    /// everything, so one pass over it is proportionate, and the duplicates go
-    /// no further than the next one.
+    /// 55, not the 11,333 an earlier version of this counted. That version
+    /// keyed on the three positions and so counted every pair of triangles
+    /// sitting at the same three points, most of which are not one triangle
+    /// twice: they are two meshings of one patch of surface with different
+    /// brick neighbourhoods, carrying different normals. Dropping one of those
+    /// is not tidying, it is choosing a shading, and it made a settled surface
+    /// differ from a full re-mesh.
+    ///
+    /// A true duplicate costs upload and draw rather than correctness: the
+    /// copies agree in every attribute, so whichever one the depth test keeps
+    /// draws the same pixels. Which is why this runs *here* rather than on the
+    /// interaction path, and why it is worth so little: 55 triangles is nine
+    /// thousandths of a per cent of the buffer. It is kept because a relayout
+    /// already walks and rewrites everything, so one pass over it is free, and
+    /// because the engine's header asks a host holding geometry per brick to
+    /// dedupe by triangle. It would not be worth a pass of its own.
     fn prune_duplicates(&mut self) {
         // In key order, so the copy that survives is the one under the
         // lexicographically lowest key. Two things follow, and both matter.
@@ -676,7 +683,7 @@ impl SurfaceGeometry {
         // is what `visual_incremental` and `lod_switching` check.
         let mut keys: Vec<BrickKey> = self.keys.keys().copied().collect();
         keys.sort_unstable();
-        let mut seen: std::collections::HashSet<[[u32; 3]; 3]> = std::collections::HashSet::new();
+        let mut seen: std::collections::HashSet<[[u32; 10]; 3]> = std::collections::HashSet::new();
         for key in keys {
             let Some(geometry) = self.keys.get_mut(&key) else {
                 continue;
@@ -686,31 +693,34 @@ impl SurfaceGeometry {
             }
             let mut kept: Vec<u32> = Vec::with_capacity(geometry.indices.len());
             for triangle in geometry.indices.chunks_exact(3) {
-                // Bit-exact, and sorted so the same triangle reached from two
-                // keys is the same value however each key numbered its own
-                // vertices.
+                // The whole vertex, bit-exact, sorted so the same triangle
+                // reached from two keys is the same value however each key
+                // numbered its own vertices.
                 //
-                // Exact rather than rounded to a tolerance, because the two
-                // errors here are not equal. Missing a duplicate leaves a
-                // coincident copy in the buffer, which is what this code
-                // existed to tidy and costs only its own memory. Matching two
-                // triangles that are *not* the same one deletes geometry --
-                // and the meshing runs on the backend, so a seam sliver can be
-                // finer than any tolerance worth naming and two backends do
-                // not place a vertex identically. A tolerance of 1/4096 did
-                // exactly that: it drew a surface that differed from a rebuild
-                // under Metal while agreeing under Vulkan.
+                // Every attribute, not the position alone. Dropping a copy is
+                // only safe if the copy that stays draws the same pixels, and
+                // the shader reads the normal, the colour and the mask too.
+                // Vertices are welded across a seam, so the normal at a welded
+                // vertex depends on which bricks the meshing call covered:
+                // two copies of a straddler can sit at exactly the same three
+                // points and be shaded differently. Keyed on position alone
+                // they looked identical, and pruning picked one -- which is
+                // what made a settled surface differ from a full re-mesh by
+                // twelve levels over a thin trace of the seams.
                 //
-                // Two copies of one triangle come from two meshings of an
+                // Exact rather than rounded, for the same reason at a smaller
+                // scale: a near-match is not a match. Missing a duplicate
+                // leaves a coincident copy costing its own memory, while a
+                // false match removes surface or changes its shading. Two
+                // copies of one triangle come from two meshings of an
                 // unchanged field, so they agree bit for bit when they agree
-                // at all; where a backend makes them differ, both are kept and
-                // the buffer is merely as large as it was before.
+                // at all.
                 let mut corners = [
-                    geometry.vertices[triangle[0] as usize].position,
-                    geometry.vertices[triangle[1] as usize].position,
-                    geometry.vertices[triangle[2] as usize].position,
+                    &geometry.vertices[triangle[0] as usize],
+                    &geometry.vertices[triangle[1] as usize],
+                    &geometry.vertices[triangle[2] as usize],
                 ]
-                .map(|p| p.map(f32::to_bits));
+                .map(vertex_key);
                 corners.sort_unstable();
                 if seen.insert(corners) {
                     kept.extend_from_slice(triangle);
@@ -1048,24 +1058,26 @@ impl SurfaceGeometry {
         Ok(())
     }
 
-    /// Every triangle this store holds, bit-exact and with duplicates kept.
+    /// Every triangle this store holds, as whole vertices, duplicates kept.
     ///
-    /// Diagnostic, and deliberately *not* the quantised form below: rounding
-    /// is what a comparison between two independently meshed stores needs and
-    /// what a check on pruning must not use. Asking whether pruning dropped
-    /// anything with the same tolerance pruning matched on can only ever
-    /// answer no.
-    pub fn stored_triangles_exact(&self) -> Vec<[[u32; 3]; 3]> {
+    /// Diagnostic, and deliberately not the quantised positions below:
+    /// rounding is what a comparison between two independently meshed stores
+    /// needs and what a check on pruning must not use. Asking whether pruning
+    /// dropped anything in a form coarser than the one it matched on can only
+    /// answer no -- first with a tolerance it did not have, and then with the
+    /// positions alone, which is how a prune that changed the shading of a
+    /// seam went on reporting that it had lost nothing.
+    pub fn stored_triangles_exact(&self) -> Vec<[[u32; 10]; 3]> {
         self.keys
             .values()
             .flat_map(|geometry| {
                 geometry.indices.chunks_exact(3).filter_map(|t| {
                     let mut corners = [
-                        geometry.vertices.get(t[0] as usize)?.position,
-                        geometry.vertices.get(t[1] as usize)?.position,
-                        geometry.vertices.get(t[2] as usize)?.position,
+                        geometry.vertices.get(t[0] as usize)?,
+                        geometry.vertices.get(t[1] as usize)?,
+                        geometry.vertices.get(t[2] as usize)?,
                     ]
-                    .map(|p| p.map(f32::to_bits));
+                    .map(vertex_key);
                     corners.sort_unstable();
                     Some(corners)
                 })
@@ -1235,4 +1247,17 @@ fn union(
 /// and a hole in the middle of it has to be covered by something.
 fn blank(mesh: &mut GpuMesh, gpu: &Gpu, (first, last): (u32, u32)) {
     mesh.patch_indices(gpu, first, &vec![0; (last - first) as usize]);
+}
+
+/// A vertex as an exact value, for deciding whether two triangles are the
+/// same one.
+///
+/// Every attribute the shader reads, in bits: two vertices that differ
+/// anywhere here draw differently, and a dedupe that treats them as one
+/// changes the picture.
+fn vertex_key(vertex: &Vertex) -> [u32; 10] {
+    let [px, py, pz] = vertex.position;
+    let [nx, ny, nz] = vertex.normal;
+    let [r, g, b] = vertex.color;
+    [px, py, pz, nx, ny, nz, r, g, b, vertex.mask].map(f32::to_bits)
 }
