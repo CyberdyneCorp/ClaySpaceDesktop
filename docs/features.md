@@ -1352,10 +1352,20 @@ identically on every run, so it is a defect rather than a race. What is known:
 - `Puxar` loses nothing; the two strokes that lose are both `Padrao`, additive
   and inverted.
 
-Not yet established: whether re-meshing the affected keys recovers them. Two
-attempts to answer that measured nothing — one re-marked a region that never
-reached the document's dirty set, the other ran a refinement pass that had
-nothing queued — so the question is open rather than answered.
+**The smallest failing case is four dabs**, losing one triangle, which is what
+makes this tractable. Traced: that triangle lies in brick `[3, 3, 4]`, one brick
+beyond the edge of the fourth dab's request, and **none of its corners lie in
+any requested brick** — so the engine cannot return it, and that brick is never
+re-meshed. The dab changed samples on the boundary plane of the dirty region,
+and marching cells just outside it produce different triangles even though their
+own brick's lattice did not change.
+
+That explains the case it explains, and is **not** the whole story: dilating the
+request by a brick fixes the four-dab case and pushes the smallest failure out
+to six, but it does not converge. Two bricks of dilation takes one stroke from
+12 losses to 6 and another from 17 to 15 — coverage alone does not close it, so
+something in the interaction between replacing a key's stored slice and what the
+current request is able to re-emit is still unaccounted for.
 
 `settle_needed.rs` asks the same question of six gentle dabs on a fresh sphere
 and passes, which is why this went unnoticed: those dabs never push a brick in

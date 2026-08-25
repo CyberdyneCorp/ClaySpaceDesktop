@@ -324,3 +324,132 @@ fn where_do_the_missing_triangles_sit() {
         println!("  key {key:?}: {count} missing; we hold {held} triangles for it");
     }
 }
+
+/// The carve, truncated to `dabs`, and how many triangles that loses.
+fn carve_of(dabs: usize) -> Option<usize> {
+    let harness = Harness::new()?;
+    let policy = BackendPolicy::discover(None).ok()?;
+    let mut document = ClayDocument::new(policy)
+        .and_then(ClayDocument::with_starting_form)
+        .ok()?;
+    let mut incremental = SurfaceGeometry::new(&harness.gpu);
+    incremental.rebuild(&harness.gpu, &mut document).ok()?;
+
+    let carve = BrushSettings {
+        intensity: 0.9,
+        invert: true,
+        ..BrushSettings::default()
+    };
+    let path: Vec<[f32; 3]> = (0..dabs)
+        .map(|s| {
+            let a = s as f32 / 16.0 * std::f32::consts::TAU;
+            [a.cos() * 0.5, a.sin() * 0.5, 0.95]
+        })
+        .collect();
+    stroke(
+        &mut incremental,
+        &harness,
+        &mut document,
+        ToolKind::Padrao,
+        carve,
+        &path,
+    );
+
+    let mut rebuilt = SurfaceGeometry::new(&harness.gpu);
+    rebuilt.rebuild(&harness.gpu, &mut document).ok()?;
+    Some(
+        triangles(&rebuilt)
+            .difference(&triangles(&incremental))
+            .count(),
+    )
+}
+
+#[test]
+#[ignore = "diagnostic: the fewest dabs that lose a triangle"]
+fn how_few_dabs_lose_a_triangle() {
+    // A 52-dab reproduction is not something anybody can reason about. This
+    // finds the smallest one that still fails, which is what makes the defect
+    // tractable.
+    for dabs in 1..=16 {
+        let Some(missing) = carve_of(dabs) else {
+            return;
+        };
+        println!("{dabs} dab(s): {missing} missing");
+        if missing > 0 {
+            println!("--> the smallest losing case is {dabs} dab(s)");
+            return;
+        }
+    }
+    println!("no dab count up to 16 lost anything");
+}
+
+#[test]
+#[ignore = "diagnostic: the four-dab case, triangle by triangle"]
+fn the_four_dab_case() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let Ok(policy) = BackendPolicy::discover(None) else {
+        return;
+    };
+    let Ok(mut document) = ClayDocument::new(policy).and_then(ClayDocument::with_starting_form)
+    else {
+        return;
+    };
+    let mut incremental = SurfaceGeometry::new(&harness.gpu);
+    incremental
+        .rebuild(&harness.gpu, &mut document)
+        .expect("first");
+
+    let carve = BrushSettings {
+        intensity: 0.9,
+        invert: true,
+        ..BrushSettings::default()
+    };
+    let path: Vec<[f32; 3]> = (0..6)
+        .map(|s| {
+            let a = s as f32 / 16.0 * std::f32::consts::TAU;
+            [a.cos() * 0.5, a.sin() * 0.5, 0.95]
+        })
+        .collect();
+    stroke(
+        &mut incremental,
+        &harness,
+        &mut document,
+        ToolKind::Padrao,
+        carve,
+        &path,
+    );
+
+    let mut rebuilt = SurfaceGeometry::new(&harness.gpu);
+    rebuilt
+        .rebuild(&harness.gpu, &mut document)
+        .expect("rebuild");
+
+    let mine = triangles(&incremental);
+    let ours = incremental.stored_triangles();
+    for (key, tris) in rebuilt.stored_triangles() {
+        for t in tris {
+            if !mine.contains(&t) {
+                println!("MISSING triangle filed by the rebuild under key {key:?}");
+                println!("  corners (1/4096 units): {t:?}");
+                println!(
+                    "  we hold {} triangles for that key",
+                    ours.get(&key).map(|v| v.len()).unwrap_or(0)
+                );
+                println!("  do we hold that key at all? {}", ours.contains_key(&key));
+                let config = document.cache().config();
+                let span = config.voxel_size * config.dim as f32;
+                println!(
+                    "  brick span {span} world units (dim {}, voxel {})",
+                    config.dim, config.voxel_size
+                );
+                for corner in t {
+                    let world = corner.map(|c| c as f32 / 4096.0);
+                    let key: [i32; 3] = std::array::from_fn(|i| (world[i] / span).floor() as i32);
+                    println!("    corner {world:?} -> brick {key:?}");
+                }
+            }
+        }
+    }
+}
