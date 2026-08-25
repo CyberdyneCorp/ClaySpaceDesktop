@@ -949,6 +949,21 @@ it, which is Blender's behaviour and two things rather than one:
   toward the middle and the next orbit turns around what you were looking at.
   Partial rather than complete: snapping the pivot onto the surface would swing
   the view on every notch.
+- **A notch is about seven per cent**, and it is a *factor* rather than a
+  fraction taken off one. Both matter. The rate is fine enough to creep up on a
+  detail and still compounds — ten notches halve the distance — and a factor
+  cannot cross zero, where the subtracted form asked for a negative distance
+  past ten notches in one frame and only a clamp caught it. A factor is also
+  symmetric: a notch in and a notch out land exactly where they started, where
+  the old form left the camera slightly nearer each time a wheel was jiggled.
+- **The wheel is measured in notches, not points.** egui reports scrolling in
+  points and one notch is forty of them — a number chosen for scrolling a
+  document. Handed to the camera raw, as it was, a single notch asked for forty
+  notches of movement: inward a negative distance, outward five times further
+  away in one click. That is what "the zoom jumps are too big" was. The
+  conversion divides by egui's own figure rather than a hardcoded forty, so a
+  trackpad's smaller deltas come through as the fraction of a notch they
+  actually are and a two-finger drag glides instead of stepping.
 
 Two things it does *not* do. Zooming **out** is never held back — the standoff
 limits coming in and nothing else. And with the pointer over empty space it is
@@ -1315,6 +1330,35 @@ cost with no benefit and a promise the interface could not keep. Both
 
 
 ## Known-degraded
+
+**Fixed: the incremental surface used to lose a few triangles a rebuild has.**
+Reported as small holes and torn-looking seams while sculpting. Kept here
+because the shape of it is worth remembering.
+
+A triangle was filed under whichever key's *vertex* range held its first
+corner. The engine welds vertices across brick seams — "a triangle in one key's
+index range may reference a vertex in an EARLIER key's vertex range" — so a
+triangle could be filed under a key holding **none of its corners**. Nothing
+looked wrong that frame. The damage came later, when that key was replaced by a
+request whose bricks the triangle did not touch: it was cleared, and nothing
+re-emitted it, because the engine only returns triangles with a corner in a
+requested brick. Hence a hole appearing minutes after the stroke that caused it.
+
+A triangle is filed under the key whose *index* range the engine listed it in.
+That is the engine's own attribution, which by contract holds a corner of the
+triangle, so any later request naming that key re-emits it before replacing it.
+The ranges partition the mesh, so this files each triangle exactly once — and it
+needs no binary search, which the old rule did per triangle.
+
+Two things made this hard to see, and both are worth avoiding again. The losses
+depend on the **order keys are requested in**, because the order changes which
+key a triangle is filed under and therefore which later request can clear it —
+so an early measurement taken over a `HashSet` varied between runs and sent the
+investigation after a difference between two engine queries that do not in fact
+disagree. And `settle_needed.rs` asks exactly the right question of six gentle
+dabs on a fresh sphere, where no triangle is ever filed across a seam that a
+later request will clear. `incremental_stress.rs` is the harder version: three
+strokes, 52 dabs, and a bisect that finds the smallest losing case.
 
 Offered, and not doing what they should. Each has a test that fails when it is
 fixed, so this list shrinks by being noticed rather than by being remembered.

@@ -179,6 +179,14 @@ impl Camera {
     /// A fraction of what it can already see rather than a fixed length, so
     /// the standoff is the same *on screen* whatever scale the sculpt is at: a
     /// fixed one would be a mile on a thumbnail and nothing on a bust.
+    /// How much nearer one notch of the wheel brings the camera.
+    ///
+    /// A notch in divides the distance by this and a notch out multiplies by
+    /// it, so about seven per cent a click. Fine enough to creep up on a detail
+    /// without the wheel becoming a chore, and it compounds: ten notches still
+    /// halve the distance.
+    const ZOOM_PER_NOTCH: f32 = 1.08;
+
     const STANDOFF: f32 = 0.06;
 
     /// How much of the way toward the focus the pivot follows.
@@ -200,6 +208,20 @@ impl Camera {
         self.zoom_toward(amount, None);
     }
 
+    /// What one notch does to the distance.
+    ///
+    /// A *factor* per notch rather than a fraction subtracted from one, which
+    /// is what this was. The subtracted form has two faults that only show up
+    /// away from small numbers: it crosses zero — at more than ten notches in
+    /// one frame it asks for a negative distance, which only the clamp caught —
+    /// and it is not symmetric, so a notch in followed by a notch out lands
+    /// somewhere slightly nearer than it started and a wheel jiggled back and
+    /// forth walks the camera in. A factor has neither: it cannot reach zero
+    /// from above, and in-then-out is exactly where it began.
+    fn zoomed(&self, notches: f32) -> f32 {
+        (self.distance * Self::ZOOM_PER_NOTCH.powf(-notches)).clamp(0.01, 10_000.0)
+    }
+
     /// Zooms toward a point in front of the camera, stopping short of it.
     ///
     /// `focus` is where the pointer's ray met the surface, in world space.
@@ -210,8 +232,10 @@ impl Camera {
     /// Without one — the pointer over empty space — it is the plain
     /// multiplicative zoom, because there is nothing there to stop at and
     /// refusing to move would read as a broken wheel.
+    /// `amount` is in wheel notches: one whole one for a click of the wheel,
+    /// a fraction of one for a trackpad.
     pub fn zoom_toward(&mut self, amount: f32, focus: Option<[f32; 3]>) {
-        let wanted = (self.distance * (1.0 - amount * 0.1)).clamp(0.01, 10_000.0);
+        let wanted = self.zoomed(amount);
         let Some(focus) = focus.map(Vec3::from) else {
             self.distance = wanted;
             return;
@@ -489,6 +513,86 @@ mod tests {
     }
 
     #[test]
+    fn one_notch_moves_the_distance_by_the_stated_fraction() {
+        // Reported as "the zoom jumps are too big". It was: egui reports
+        // scrolling in *points* and one wheel notch is forty of them, and that
+        // number went straight into a formula written for notches. A notch in
+        // asked for a distance of −3× the current one, which only the clamp
+        // caught; a notch out was five times further away. The unit is named
+        // in the signature now, and this is what one of them is worth.
+        let mut camera = Camera::default();
+        let was = camera.distance;
+        camera.zoom(1.0);
+        let ratio = camera.distance / was;
+        assert!(
+            (ratio - 1.0 / Camera::ZOOM_PER_NOTCH).abs() < 1e-4,
+            "one notch in moved the distance by {ratio}"
+        );
+        assert!(
+            (0.9..0.96).contains(&ratio),
+            "a notch of {ratio} is not the fine step this is meant to be"
+        );
+    }
+
+    #[test]
+    fn a_notch_in_and_a_notch_out_land_where_they_started() {
+        // The subtracted form was not symmetric: 0.9 then 1.1 is 0.99, so a
+        // wheel jiggled back and forth walked the camera in a little each time.
+        let mut camera = Camera::default();
+        let was = camera.distance;
+        for _ in 0..20 {
+            camera.zoom(1.0);
+            camera.zoom(-1.0);
+        }
+        assert!(
+            (camera.distance - was).abs() < 1e-3,
+            "twenty in-and-out pairs left the camera at {} rather than {was}",
+            camera.distance
+        );
+    }
+
+    #[test]
+    fn a_hard_flick_of_the_wheel_does_not_invert_the_camera() {
+        // The subtracted form crosses zero past ten notches in one frame — a
+        // trackpad fling, or the raw point delta this used to be handed. A
+        // factor cannot reach zero from above.
+        let mut camera = Camera::default();
+        for amount in [10.0, 40.0, 400.0, 4000.0] {
+            let mut camera = camera;
+            camera.zoom(amount);
+            assert!(
+                camera.distance > 0.0 && camera.distance.is_finite(),
+                "{amount} notches in one frame put the camera at {}",
+                camera.distance
+            );
+        }
+        camera.zoom(-4000.0);
+        assert!(camera.distance.is_finite());
+    }
+
+    #[test]
+    fn a_trackpad_moves_by_a_fraction_of_a_notch() {
+        // A wheel steps; a trackpad glides. Both arrive as notches, so a tenth
+        // of one has to be a tenth of the step rather than nothing.
+        let mut camera = Camera::default();
+        let was = camera.distance;
+        for _ in 0..10 {
+            camera.zoom(0.1);
+        }
+        let stepped = {
+            let mut camera = Camera::default();
+            camera.zoom(1.0);
+            camera.distance
+        };
+        assert!(
+            (camera.distance - stepped).abs() < 1e-3,
+            "ten tenths of a notch reached {} where one notch reaches {stepped}",
+            camera.distance
+        );
+        assert!(camera.distance < was);
+    }
+
+    #[test]
     fn zoom_is_multiplicative_and_bounded() {
         let mut camera = Camera::default();
         for _ in 0..500 {
@@ -555,12 +659,17 @@ mod zoom_tests {
             assert!(now < gap, "a notch of zoom brought nothing closer");
             gap = now;
         }
-        // Most of the way. The rate is the multiplicative one — a notch is a
-        // tenth of what is left — so twenty of them close about six sevenths
-        // of the gap, and the standoff is nowhere near binding yet.
+        // Most of the way, and the threshold is derived from the rate rather
+        // than written as a number — the rate is a decision that can change,
+        // and a literal here would have to be re-guessed each time it does.
+        // Twenty notches leave `(1/rate)^20` of the distance; the allowance is
+        // for the pivot following part of the way, which keeps the camera a
+        // little further from the surface than the distance alone suggests.
+        let predicted = start * Camera::ZOOM_PER_NOTCH.powi(-20);
         assert!(
-            gap < start * 0.2,
-            "twenty notches went from {start} to {gap} from the clay"
+            gap < predicted * 1.5,
+            "twenty notches went from {start} to {gap} from the clay, where \
+             the rate predicts about {predicted}"
         );
     }
 

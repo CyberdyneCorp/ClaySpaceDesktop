@@ -545,6 +545,14 @@ impl ClayDocument {
     ///
     /// The viewport meshes exactly these and patches their ranges, which is
     /// what keeps a dab's cost proportional to what it touched.
+    /// The bricks waiting to be re-meshed, without draining them.
+    ///
+    /// For asking questions about the set the viewport is about to be handed —
+    /// `take_dirty_keys` empties it, which a diagnostic must not do.
+    pub fn dirty_keys(&self) -> &[BrickKey] {
+        &self.dirty
+    }
+
     pub fn take_dirty_keys(&mut self) -> Vec<BrickKey> {
         std::mem::take(&mut self.dirty)
     }

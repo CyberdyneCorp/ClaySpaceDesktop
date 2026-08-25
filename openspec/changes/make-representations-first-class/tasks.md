@@ -1348,3 +1348,79 @@ Recorded under *Not built yet*.
     requires the drawn frame to change. The sphere comes out a capsule; the
     captures are 122 and 123.
 
+## 29. A wheel notch that is worth one notch
+
+- [x] 29.1 The unit that was never converted
+  - Reported: the zoom jumps are too big. They were, by about forty times.
+    egui reports scrolling in *points* and one wheel notch is forty of them —
+    `line_scroll_speed`, a number chosen for scrolling a document — and that
+    figure went straight into `zoom_toward`, whose `amount` was written as
+    notches. One notch inward computed a multiplier of **−3.0**: a negative
+    distance, saved only by a clamp. One notch outward was **five times**
+    further away.
+  - Converted at the boundary, where the unit changes, and divided by what egui
+    itself reports rather than by a hardcoded forty — so the wheel keeps
+    meaning one notch if that figure is ever revised or the user changes it.
+    A trackpad reports points directly and now arrives as the fraction of a
+    notch it actually moved, which is what makes a two-finger drag glide rather
+    than step.
+  - The unit is named in the signature and in the field's own documentation, so
+    the next person to touch either end can see what is being passed.
+
+- [x] 29.2 A factor per notch, not a fraction off one
+  - `distance * (1 - notches * 0.1)` has two faults that only show up away from
+    small numbers: it **crosses zero** past ten notches in a single frame, and
+    it is **not symmetric** — 0.9 then 1.1 is 0.99, so a wheel jiggled back and
+    forth walked the camera inward a little each time.
+  - `distance * rate^-notches` has neither. It cannot reach zero from above, so
+    the clamp is a safety net rather than load-bearing, and in-then-out is
+    exactly where it began — a test does twenty such pairs and requires the
+    distance back.
+  - The rate is 1.08, about seven per cent a notch: finer than the ten it was
+    nominally meant to be, which is what was asked for, and still compounding
+    to halve the distance in ten.
+  - The existing "twenty notches close most of the gap" test had its threshold
+    written as a literal derived from the old rate. It derives it from the
+    constant now, so a future change to the rate does not require re-guessing a
+    number in a test.
+
+## 30. The holes a sculptor sees
+
+- [x] 30.1 Filed under a key that held none of its corners
+  - Reported with two screenshots: small holes and torn seams on an SDF layer
+    after a long session. Reproduced by `incremental_stress.rs` — three
+    strokes, 52 dabs, the incremental store against a rebuild — which was
+    missing twenty triangles, and by a bisect that found the smallest losing
+    case at **four dabs losing one**.
+  - The cause: a triangle was filed under whichever key's *vertex* range held
+    its first corner. The engine welds vertices across brick seams, so that key
+    could hold **none of the triangle's corners**. Nothing looked wrong that
+    frame; the damage came later, when that key was replaced by a request whose
+    bricks the triangle did not touch. It was cleared, and nothing re-emitted
+    it — the engine returns only triangles with a corner in a requested brick.
+    A hole appearing minutes after the stroke that caused it.
+  - Filed under the key whose *index* range the engine listed it in instead.
+    That is the engine's own attribution, which by contract holds a corner, so
+    any later request naming that key re-emits the triangle before replacing
+    it. It also drops a binary search per triangle.
+  - Checked by mutation rather than assumed: restoring the old rule loses
+    twenty triangles again.
+
+- [x] 30.2 What made it hard to see, twice over
+  - **The losses depend on the order keys are requested in** — the order
+    decides which key a triangle is filed under, and so which later request can
+    clear it. An early measurement iterated a `HashSet`, varied between runs,
+    and sent the investigation after a difference between `states()` and
+    `surface_bricks()` that does not exist: asked the same keys at the same
+    moment they agree exactly, over six dabs, every time. Recorded because the
+    wrong conclusion was published before it was checked.
+  - **The guarantee test was too gentle.** `settle_needed.rs` asks exactly the
+    right question — is the incremental surface what a rebuild would draw — of
+    six light dabs on a fresh sphere, where no triangle is ever filed across a
+    seam that a later request goes on to clear. It passed throughout.
+  - Several plausible explanations were measured and discarded before the real
+    one: emptied bricks being cleared without being re-meshed, the surface-state
+    filter, the shading level, and dilating the request by one and two bricks.
+    None of them converged; the store itself was never at fault, which was
+    settled by requesting every surface brick and seeing the losses go to zero.
+
