@@ -15,26 +15,33 @@ implementation. A tool with no engine counterpart is not offered.
 
 ## Sculpting tools
 
-All fifteen are bound and each is covered by a before-and-after capture in
-`target/visual/`.
+All twenty are bound and each is covered by a before-and-after capture in
+`target/visual/`. Which of the three representations each one reaches is in the
+Layers column: eleven have an SDF verb, eleven a voxel one, and seventeen a mesh
+one.
 
 | Tool | Engine verb | Layers | What it does |
 |---|---|---|---|
-| Padrão | `clay_layer_apply_stroke` with relief | both | Displaces the surface along its normal |
-| Inflar | `clay_voxel_sculpt_inflate` / relief | both | Dilates; a negative amount erodes |
-| Suavizar | `clay_item_volume_relax` / `clay_voxel_sculpt_smooth` | both | Relaxes the surface. Bakes on the field side |
-| Mover | `clay_layer_move_surface` | SDF | Drags the assembled surface. Buds rather than stretches |
-| Pinçar | `clay_voxel_sculpt_pinch` | voxel | Moves surface cells toward the brush centre |
-| Raspar | `clay_voxel_sculpt_scrape` | voxel | Flattens and smooths from one snapshot |
-| Planar | `clay_item_volume_flatten_from`, cut-only | SDF | Planes without filling, which keeps a facet crisp |
+| Padrão | `clay_layer_apply_stroke` with relief | all three | Displaces the surface along its normal |
+| Inflar | `clay_voxel_sculpt_inflate` / relief | all three | Dilates; a negative amount erodes |
+| Suavizar | `clay_item_volume_relax` / `clay_voxel_sculpt_smooth` | all three | Relaxes the surface. Bakes on the field side |
+| Mover | `clay_layer_move_surface` | SDF, mesh | Drags the assembled surface. Buds rather than stretches |
+| Pinçar | `clay_voxel_sculpt_pinch` | voxel, mesh | Moves surface cells toward the brush centre |
+| Raspar | `clay_voxel_sculpt_scrape` | voxel, mesh | Flattens and smooths from one snapshot |
+| Planar | `clay_item_volume_flatten_from`, cut-only | SDF, mesh | Planes without filling, which keeps a facet crisp |
 | Preencher | `clay_voxel_sculpt_fill_cavities` | voxel | Fills narrow pockets |
-| Camada | `clay_layer_apply_stroke`, clamped | both | A stroke that does not build up on itself |
+| Camada | `clay_layer_apply_stroke`, clamped | all three | A stroke that does not build up on itself |
 | Máscara | `clay_mask_apply_stroke` | all three | Freezes a region against every verb. Invert, clear, expand, contract, smooth, bounded complement and extrude are in the Máscaras menu |
-| Puxar | swept-sphere chain on a Catmull-Rom curve | SDF | Pulls a tendril out, tapering to its tip |
-| Polir | `clay_item_volume_flatten_from`, cut-only | SDF | hPolish |
-| Relaxar | `clay_item_volume_relax` | SDF | Relax as a brush |
-| Nudge | `clay_voxel_sculpt_smudge` | voxel | Drags the surface skin, leaving the interior |
+| Puxar | swept-sphere chain on a Catmull-Rom curve | SDF, mesh | Pulls a tendril out, tapering to its tip |
+| Polir | `clay_item_volume_flatten_from`, cut-only | SDF, mesh | hPolish |
+| Relaxar | `clay_item_volume_relax` | SDF, mesh | Relax as a brush |
+| Nudge | `clay_voxel_sculpt_smudge` | voxel, mesh | Drags the surface skin, leaving the interior |
 | Trim | `clay_cut_create` | SDF | A shape drawn on the frame, cutting through |
+| Argila | `clay_mesh_sculptor_stamp` (CLAY) | mesh | Builds up in flat-ish planes, the way clay is added by hand |
+| Vinco | `clay_mesh_sculptor_stamp` (CREASE) | mesh | Pinches a sharp ridge or trough along the stroke |
+| Pintar | `clay_voxel_paint_brush` / `clay_mesh_sculptor_stamp` (PAINT) | voxel, mesh | Writes colour rather than moving the surface — see *Not built yet* for what it currently has to paint with |
+| Borrar | `clay_mesh_sculptor_stamp` (SMEAR) | mesh | Drags the surface sideways without carrying it away |
+| Apagar | `clay_voxel_erase_brush` | voxel | Removes cells |
 
 **Trim is not a stroke tool.** Its gesture is a shape drawn on the view frame,
 not a drag across the surface, and the interface refuses a stroke for it rather
@@ -43,8 +50,7 @@ than doing something adjacent to what the label says.
 **The shelf holds what the active layer's representation has.** Which tool
 reaches which representation is a declared table rather than a rule written per
 tool, and the shelf, the availability check and the tests all read it — so the
-list you see and the list that works cannot drift apart. Eleven of the fifteen
-have an SDF verb and nine a voxel one; a tool with no verb on the active
+list you see and the list that works cannot drift apart. A tool with no verb on the active
 representation is *absent* rather than shown and greyed, because with three
 vocabularies a single list would be mostly disabled rows all saying the same
 sentence.
@@ -59,9 +65,12 @@ rather than resetting silently. Brush settings are held per tool *and* per
 representation: a size that suits a grid's cells is not the size that suits a
 field, so returning to a tool on a layer returns the settings it had there.
 
-Mesh layers currently offer no tools. That is a statement about this
-application and not about the engine — see *Deliberately absent* — and the
-table's own test fails the day it stops being true.
+Mesh layers carry the largest vocabulary of the three: the engine's sixteen
+fixed-topology brushes, plus Máscara, which writes no vertices and paints the
+world-addressed field the sixteen consult. Some of the sixteen arrive as modes
+of a tool already on the shelf rather than as rows of their own — one tool
+carrying three bindings beats the shelf carrying three tools — which is why the
+brush count and the tool count differ. *Sculpting a mesh layer* has the detail.
 
 ## Brush controls
 
@@ -473,10 +482,10 @@ angle between adjacent vertex normals before and after:
 
 | verb | accumulating | clamped | Blender |
 |---|---|---|---|
-| Inflar | 5.04x | 1.18x | 1.00x |
-| Pinçar | 9.41x | 1.83x | 1.00x |
+| Inflar | 5.04x | all three | 1.00x |
+| Pinçar | 9.41x | voxel, mesh | 1.00x |
 | Vinco | 3.71x | 1.34x | 1.00x |
-| Padrão | 1.11x | 1.08x | 1.00x |
+| Padrão | 1.11x | all three | 1.00x |
 
 Padrão is the control and barely moves either way: it uses the *region's*
 averaged normal, so there is nothing to feed back.
@@ -1188,9 +1197,8 @@ Panels cannot be resized or collapsed and shortcuts are fixed. See
 names go through the string tables now. The other 62 label arms across 14 enums
 — `Combine`, `BlendProfile`, `ViewPresetKind`, `RefPlane`, `MaskOp`,
 `GizmoMode`, `ExtrudeSide`, `Falloff` and the rest — are still Portuguese
-literals returned
-from `clayspace-model`, so the option bar and the viewport bar stay Portuguese
-whatever the menu says. `Strings::tool` is the shape the rest should follow.
+literals returned from `clayspace-model`, so the option bar and the viewport bar
+stay Portuguese whatever the menu says. `Strings::tool` is the shape the rest should follow.
 
 **Bezier handles on a curve.** The curve tool offers three of the engine's four
 joins. The fourth is a cubic shaped by handles, which needs two more draggable

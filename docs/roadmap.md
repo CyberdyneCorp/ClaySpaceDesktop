@@ -1,10 +1,13 @@
 # Roadmap
 
 Where the project stands, what is left, and what is still undecided. Task
-counts come from `openspec/changes/add-clayspace-desktop/tasks.md`, which is
-the authority.
+counts come from the tasks files under `openspec/changes/`, which are the
+authority.
 
-**107 of 109 tasks. Milestones 1 to 4 delivered; milestone 5 all but closed.**
+**Two changes.** `add-clayspace-desktop` stands at **107 of 109 tasks** —
+milestones 1 to 4 delivered, milestone 5 all but closed.
+`make-representations-first-class` is **complete**, and is what took the
+application from one vocabulary to three; its own summary is below.
 
 Engine pinned at ClayCore **0.39.0**, at the tag rather than at `main` — the
 tag is a release, `main` is where they are still working. On the reference
@@ -37,6 +40,44 @@ document is 15.1 ms, both recorded against 0.29.1 on macOS aarch64; neither
 | 9. Interface shell and design system | M4 | 16/16 |
 | 10. Performance and packaging | M5 | 13/13 |
 | 11. Close-out | M5 | 1/3 |
+
+## The second change: three representations, first-class
+
+`make-representations-first-class` is complete and ready to archive. It began
+as a shell that followed the active layer and grew into most of what the
+application now offers beyond the first change's sculpt loop.
+
+| Group | What it delivered |
+|---|---|
+| 1–2 | A capability table per representation, and a shell that follows the active layer rather than showing one list mostly greyed out |
+| 3–4 | Conversions between SDF, voxel and mesh, each stating what it costs first |
+| 5 | Mesh sculpting: the engine's sixteen fixed-topology brushes |
+| 6–7 | The voxel vocabulary, repair, and recorded sculpt passes |
+| 8 | The SDF vocabulary, blend profiles and the combine list |
+| 9–10 | Close-out, and what checking the work turned up |
+| 11 | Crossing into a mesh |
+| 12–13 | The polyframe, and what Move actually does — measured against Blender |
+| 14–15 | The keys a sculptor holds, and masking on the key and on the screen |
+| 16 | The mask menu, entry by entry |
+| 17 | The deformation cage and its manipulator |
+| 18 | Symmetry on the two representations that had none |
+| 19 | Three languages, and a way to choose between them |
+| 20–21 | Every SDF and voxel brush: it works, it takes a sign, it mirrors |
+| 22 | A voxel layer drawn as its form rather than as boxes |
+| 23–24 | The tendril a snakehook pulls, and a tube along a curve |
+| 25 | Zooming at the clay rather than through it |
+| 26–27 | Reference images behind the form, in PNG and JPEG, and the clay's own opacity |
+
+A recurring shape across those groups is worth recording, because it will
+recur: **the engine already had both halves of a pair and only one was ever
+bound.** `FlattenMode::FillOnly`, `sculpt_inflate(-1)`, `sculpt_magnify`,
+`clay_voxel_mask_extrude`, `clay_mesh_lattice_displacement`,
+`clay_item_set_curve_points`, `clay_layer_set_stroke_points` and
+`clay_layer_lattice_gizmo` were all present in ClayCore and unreachable from
+here. The second recurring lesson is about measurement: **choose an instrument
+that can see the thing being asked about** — silhouette rather than colour,
+form rather than vertex counts, cells rather than pixels, displacement rather
+than silhouette.
 
 ## What is blocked, and what is not
 
