@@ -16,6 +16,7 @@ mod lattice_vm;
 mod mask_vm;
 pub mod notice;
 pub mod observable;
+mod reference_vm;
 pub mod scene_vm;
 pub mod sculpt_vm;
 
@@ -32,3 +33,4 @@ pub use curve_vm::CurveViewModel;
 pub use document_vm::{DocumentViewModel, Guard};
 pub use lattice_vm::LatticeViewModel;
 pub use mask_vm::MaskViewModel;
+pub use reference_vm::ReferenceViewModel;

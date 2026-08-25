@@ -145,3 +145,34 @@ fn fs_ghost(input: VertexOutput) -> @location(0) vec4<f32> {
 fn wire_fs(input: OverlayOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(0.10, 0.11, 0.13, 0.55);
 }
+
+
+// A reference image, on the plane behind the sculpt.
+//
+// Its own vertex entry rather than the surface's, because it carries texture
+// coordinates and nothing else does. The uv rides in the vertex `color`'s
+// first two channels and the opacity in the third: a reference is the only
+// thing drawn with this pipeline, so a whole extra attribute on every vertex
+// of every mesh in the scene would be paid by the surface to serve a quad.
+struct ReferenceOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) opacity: f32,
+};
+
+@vertex
+fn reference_vs(input: VertexInput) -> ReferenceOutput {
+    var out: ReferenceOutput;
+    out.clip_position = camera.view_projection * vec4<f32>(input.position, 1.0);
+    out.uv = input.color.xy;
+    out.opacity = input.color.z;
+    return out;
+}
+
+@fragment
+fn reference_fs(input: ReferenceOutput) -> @location(0) vec4<f32> {
+    let texel = textureSample(matcap_texture, matcap_sampler, input.uv);
+    // The file's own alpha times the sculptor's opacity, so a cut-out stays a
+    // cut-out and a photograph fades evenly.
+    return vec4<f32>(texel.rgb, texel.a * input.opacity);
+}

@@ -17,7 +17,7 @@ use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
     AutosavePolicy, Detail, DetailPolicy, Diagnostics, ExchangeModel, ExportSettings,
     ExportWarning, Format, FrameLog, ImportSettings, LayerOperation, RecentDocuments, Recovery,
-    SceneModel, SculptModel, SkinSettings, StrokeModifiers, Units, ViewPresetKind, FRAME,
+    RefPlane, SceneModel, SculptModel, SkinSettings, StrokeModifiers, Units, ViewPresetKind, FRAME,
 };
 use clayspace_view::shell::{self, region, ArmatureState, ShellState};
 use clayspace_view::{
@@ -26,7 +26,7 @@ use clayspace_view::{
 };
 use clayspace_vm::{
     ArmatureViewModel, Axis, Command, CommandQueue, CurveViewModel, DocumentViewModel, Grab, Guard,
-    LatticeViewModel, MaskViewModel, SceneViewModel, SculptViewModel,
+    LatticeViewModel, MaskViewModel, ReferenceViewModel, SceneViewModel, SculptViewModel,
 };
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -127,6 +127,19 @@ enum Drag {
     Curve,
 }
 
+/// One reference lifted out of the ViewModel, owned.
+///
+/// Owned rather than borrowed because the pictures are read from `self` and
+/// then handed to the viewport, which is also `self`: the copy is what ends
+/// the first borrow. It happens once a change and not once a frame.
+struct PlacedReference {
+    pixels: Vec<u8>,
+    width: u32,
+    height: u32,
+    corners: [[f32; 3]; 4],
+    opacity: f32,
+}
+
 struct App {
     document: SharedDocument,
     sculpt: SculptViewModel,
@@ -223,6 +236,12 @@ struct App {
     /// The conversion panel, and what it is set to.
     show_repair: bool,
     show_deform: bool,
+    /// The reference images, and whether their panel is open.
+    references: ReferenceViewModel,
+    show_references: bool,
+    /// What the viewport was last given, so the pictures are re-uploaded when
+    /// they change and not once a frame.
+    references_drawn: Option<u64>,
     deform: clayspace_model::DeformSettings,
     show_convert: bool,
     conversion: clayspace_model::ConversionSettings,
@@ -311,6 +330,22 @@ impl App {
             None => (RecentDocuments::default(), Recovery::Nothing),
         };
 
+        // The references the last session had placed, read back with their
+        // pictures. A file that has since gone is dropped by the store; one
+        // that will not read now is dropped here, quietly — a sculptor who
+        // moved a drawing does not need to be told about it at startup.
+        let mut references = ReferenceViewModel::new();
+        for entry in store
+            .as_ref()
+            .map(SessionStore::load_references)
+            .unwrap_or_default()
+        {
+            if let Ok(image) = clayspace_engine::read_reference(&entry.path) {
+                references.place(entry.plane, Some((image, entry.path)));
+                references.restore(entry.plane, entry.settings);
+            }
+        }
+
         // What the interface opens in. A choice already made wins; failing
         // that the system's own language, which `Locale::from_tag` was written
         // for and which nothing had ever called; failing that English.
@@ -363,6 +398,9 @@ impl App {
             show_export: false,
             show_repair: false,
             show_deform: false,
+            references,
+            show_references: false,
+            references_drawn: None,
             deform: clayspace_model::DeformSettings::default(),
             show_convert: false,
             conversion: clayspace_model::ConversionSettings::default(),
@@ -686,6 +724,26 @@ impl App {
             // built in the domain so that the same reason reaches a test.
             Err(refusal) => eprintln!("não foi possível carregar o alfa: {refusal}"),
         }
+        self.request_redraw();
+    }
+
+    /// Asks for a PNG and places it on one plane, behind the sculpt.
+    ///
+    /// PNG alone in the filter, for the reason the alpha dialog gives: a
+    /// dialog offering what leads to a refusal is a dialog that lies.
+    fn load_reference(&mut self, plane: RefPlane) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title(self.strings.action_load_reference)
+            .add_filter("PNG", &["png"])
+            .pick_file()
+        else {
+            return;
+        };
+        match clayspace_engine::read_reference(&path) {
+            Ok(image) => self.references.place(plane, Some((image, path))),
+            Err(refusal) => self.references.refuse(refusal.to_string()),
+        }
+        self.save_references();
         self.request_redraw();
     }
 
@@ -1403,6 +1461,78 @@ impl App {
     /// One overlay for both. A cage and a curve are the same picture — points
     /// with lines between them, one of them in hand — so they share the
     /// renderer's, and only one can be up at a time in any case.
+    /// Puts the placed references on the viewport's planes.
+    ///
+    /// Guarded on the ViewModel's revision rather than run every frame: the
+    /// pictures are megabytes and re-uploading one a frame would cost more
+    /// than the sculpting.
+    fn sync_references(&mut self) {
+        let revision = self.references.revision();
+        if self.references_drawn == Some(revision) {
+            return;
+        }
+        self.references_drawn = Some(revision);
+        let placed: Vec<(usize, Option<PlacedReference>)> = RefPlane::ALL
+            .iter()
+            .map(|&plane| {
+                let settings = self.references.settings_for(plane);
+                let shown = settings
+                    .visible
+                    .then(|| self.references.corners(plane))
+                    .flatten();
+                let placed = shown.and_then(|corners| {
+                    let image = self.references.image(plane)?;
+                    Some(PlacedReference {
+                        pixels: image.pixels.clone(),
+                        width: image.width,
+                        height: image.height,
+                        corners,
+                        opacity: settings.opacity,
+                    })
+                });
+                (plane as usize, placed)
+            })
+            .collect();
+        let Some(graphics) = self.graphics.as_mut() else {
+            // No viewport yet; the revision is left unrecorded so this runs
+            // again once there is one.
+            self.references_drawn = None;
+            return;
+        };
+        let gpu = graphics.gpu.clone();
+        for (plane, placed) in &placed {
+            graphics.renderer.set_reference(
+                &gpu,
+                *plane,
+                placed.as_ref().map(|placed| clayspace_view::Reference {
+                    pixels: &placed.pixels,
+                    width: placed.width,
+                    height: placed.height,
+                    corners: placed.corners,
+                    opacity: placed.opacity,
+                }),
+            );
+        }
+    }
+
+    /// Writes the placed references down, so they are there on the next run.
+    fn save_references(&self) {
+        let Some(store) = self.store.as_ref() else {
+            return;
+        };
+        let entries: Vec<clayspace_model::RememberedReference> = RefPlane::ALL
+            .iter()
+            .filter_map(|&plane| {
+                Some(clayspace_model::RememberedReference {
+                    plane,
+                    path: self.references.path(plane)?.to_path_buf(),
+                    settings: self.references.settings_for(plane),
+                })
+            })
+            .collect();
+        store.save_references(&entries);
+    }
+
     fn sync_lattice_view(&mut self) {
         let cage = self.lattice.state().get().clone();
         let curve = self.curve.state().get().clone();
@@ -2110,6 +2240,12 @@ impl App {
             Command::ToggleRepair => self.show_repair = !self.show_repair,
             Command::SculptLayer(op) => self.run_sculpt_layer_op(op.clone()),
             Command::ToggleDeform => self.show_deform = !self.show_deform,
+            Command::ToggleReferences => self.show_references = !self.show_references,
+            Command::LoadReference(plane) => self.load_reference(*plane),
+            Command::ClearReference(_) | Command::SetReferenceSettings(..) => {
+                self.references.dispatch(&command);
+                self.save_references();
+            }
             Command::SetDeform(settings) => self.deform = settings.sanitized(),
             // One undo step, which the engine's own path already makes: the
             // deformer records its vertex deltas exactly as a mesh stroke
@@ -2232,6 +2368,14 @@ impl App {
             recent: self.recent.paths(),
             show_repair: self.show_repair,
             show_deform: self.show_deform,
+            show_references: self.show_references,
+            references: RefPlane::ALL.map(|plane| shell::ReferenceSlot {
+                name: self
+                    .references
+                    .image(plane)
+                    .map(|image| image.name.as_str()),
+                settings: self.references.settings_for(plane),
+            }),
             deform: self.deform,
             sculpt_cost: self.document.with(|document| document.sculpt_layer_cost()),
             // Asked of the document each frame the panel is open, so a repair
@@ -2279,11 +2423,16 @@ impl App {
             // did nothing at all and said nothing at all. The mask's notice
             // comes first because it is raised by an explicit action, where a
             // tool status is a standing condition.
-            tool_status: self.mask.notice().get().as_deref().or(self
-                .sculpt
-                .tool_status()
+            // A refused reference joins them, and ahead of both: it is the
+            // most recent explicit action, and a PNG that will not load is a
+            // sentence naming what is wrong with *that* file.
+            tool_status: self
+                .references
+                .notice()
                 .get()
-                .as_deref()),
+                .as_deref()
+                .or(self.mask.notice().get().as_deref())
+                .or(self.sculpt.tool_status().get().as_deref()),
             symmetry: *self.sculpt.symmetry().get(),
             scene: &scene,
             renaming: self
@@ -2345,6 +2494,7 @@ impl App {
             shell::convert_window(ctx, &state, &mut queue);
             shell::repair_window(ctx, &state, &mut queue);
             shell::deform_window(ctx, &state, &mut queue);
+            shell::reference_window(ctx, &state, &mut queue);
             shell::import_window(ctx, &state, &mut queue);
             shell::export_window(ctx, &state, &mut queue);
             egui::CentralPanel::default()
@@ -2402,6 +2552,7 @@ impl App {
         self.sync_cage();
         self.sync_mask();
         self.sync_lattice_view();
+        self.sync_references();
         self.sync_symmetry_overlay();
         self.sync_armature_view();
         // After the frame's commands, so a camera move made in it is the one

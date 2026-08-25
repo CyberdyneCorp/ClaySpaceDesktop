@@ -12,8 +12,8 @@ use std::path::PathBuf;
 
 use clayspace_model::{
     ConversionSettings, CurveJoin, CurveProfile, ExportSettings, ExtrudeSettings, Falloff,
-    GizmoHandle, GizmoMode, ImportSettings, LayerKey, Locale, MaskOp, SmoothBlur, StrokeModifiers,
-    ToolKind, ViewPresetKind, VoxelDisplay,
+    GizmoHandle, GizmoMode, ImportSettings, LayerKey, Locale, MaskOp, RefPlane, ReferenceSettings,
+    SmoothBlur, StrokeModifiers, ToolKind, ViewPresetKind, VoxelDisplay,
 };
 
 /// A change to the application or the document.
@@ -85,6 +85,16 @@ pub enum Command {
     LoadAlpha,
     /// Drops the loaded stamp, so no brush is modulated.
     ClearAlpha,
+
+    // -- reference images -------------------------------------------------
+    /// Opens or closes the reference panel.
+    ToggleReferences,
+    /// Asks for a PNG and places it on one plane, behind the sculpt.
+    LoadReference(RefPlane),
+    /// Takes one plane's reference away.
+    ClearReference(RefPlane),
+    /// How one plane's reference sits: shown, how large, where, how far back.
+    SetReferenceSettings(RefPlane, ReferenceSettings),
     SetBrushSmoothing(f32),
     ToggleSymmetry(Axis),
 
@@ -329,6 +339,12 @@ impl Command {
                 // reason import does — it opens a dialog.
                 | Self::LoadAlpha
                 | Self::ClearAlpha
+                // A reference is what the sculptor works *from*. None of it is
+                // in the document, so none of it can mark one as modified.
+                | Self::ToggleReferences
+                | Self::LoadReference(_)
+                | Self::ClearReference(_)
+                | Self::SetReferenceSettings(..)
                 | Self::SetBrushSmoothing(_)
                 | Self::ToggleSymmetry(_)
                 // Choosing which layer to work on changes nothing in the
@@ -376,6 +392,10 @@ impl Command {
             Self::SetBrushAlpha(_) => "brush stamp",
             Self::LoadAlpha => "load stamp",
             Self::ClearAlpha => "clear stamp",
+            Self::ToggleReferences => "reference panel",
+            Self::LoadReference(_) => "load reference",
+            Self::ClearReference(_) => "clear reference",
+            Self::SetReferenceSettings(..) => "reference placement",
             Self::SetBrushSmoothing(_) => "brush smoothing",
             Self::SelectLayer(_) => "select layer",
             Self::SetLayerVisible(..) => "layer visibility",

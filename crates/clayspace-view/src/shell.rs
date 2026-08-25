@@ -13,8 +13,8 @@ use clayspace_model::{
     AlphaSupport, BlendProfile, BrushSettings, Combine, CombineSettings, DeformSettings,
     DeformVerb, Diagnostics, Direction, ExportMesher, ExportSettings, ExportWarning,
     ExtrudeSettings, ExtrudeSide, Falloff, ImportAs, ImportSettings, LayerKey, LayerSummary,
-    MaskOp, MaskState, RecentDocuments, Representation, Scene, SceneStats, SculptLayer,
-    SculptLayerCost, SculptLayerOp, ToolKind, Units, ViewPresetKind,
+    MaskOp, MaskState, RecentDocuments, RefPlane, ReferenceSettings, Representation, Scene,
+    SceneStats, SculptLayer, SculptLayerCost, SculptLayerOp, ToolKind, Units, ViewPresetKind,
 };
 use clayspace_vm::{Axis, Command, CommandQueue};
 
@@ -124,6 +124,9 @@ pub struct ShellState<'a> {
     /// The name and not the samples: the interface says which stamp is in use
     /// and has no business holding megabytes to do it.
     pub alpha: Option<&'a str>,
+    /// The reference panel: whether it is open, and what is on each plane.
+    pub show_references: bool,
+    pub references: [ReferenceSlot<'a>; RefPlane::ALL.len()],
     /// The deform panel: whether it is open and what it would do.
     pub show_deform: bool,
     pub deform: DeformSettings,
@@ -278,6 +281,23 @@ fn slider(
     range: std::ops::RangeInclusive<f32>,
     decimals: usize,
 ) -> Option<f32> {
+    slider_named(ui, label, label, value, range, decimals)
+}
+
+/// The same, recorded under a name that is not the label it shows.
+///
+/// The reference panel draws the same four controls three times, once a plane.
+/// They cannot share an id — egui would have them fight — and they should not
+/// share a *name* either, or a test asking where the opacity slider is would be
+/// asking which of three.
+fn slider_named(
+    ui: &mut egui::Ui,
+    name: &str,
+    label: &str,
+    value: f32,
+    range: std::ops::RangeInclusive<f32>,
+    decimals: usize,
+) -> Option<f32> {
     let mut edited = value;
     let mut changed = None;
     ui.horizontal(|ui| {
@@ -290,11 +310,11 @@ fn slider(
             numeric(ui, format!("{edited:.decimals$}"));
         });
     });
-    // Identified by its label, which is what a person would point at. Two
-    // sliders sharing a label in one panel would share an id, and egui would
-    // say so rather than let them fight silently.
+    // Identified by its name, which for most sliders is the label — what a
+    // person would point at. Two sliders sharing a name in one panel would
+    // share an id, and egui would say so rather than let them fight silently.
     let response = ui
-        .push_id(slider_id(label), |ui| {
+        .push_id(slider_id(name), |ui| {
             ui.add(egui::Slider::new(&mut edited, range).show_value(false))
         })
         .inner;
@@ -305,7 +325,7 @@ fn slider(
     // from the layout and a test cannot guess it. `push_id` scopes it so two
     // sliders sharing a label in different sections stay apart.
     ui.ctx()
-        .memory_mut(|memory| memory.data.insert_temp(slider_id(label), response.rect));
+        .memory_mut(|memory| memory.data.insert_temp(slider_id(name), response.rect));
     changed
 }
 
@@ -450,6 +470,15 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                     .clicked()
                 {
                     queue.push(Command::TogglePolyframe);
+                    ui.close_menu();
+                }
+                // Beside the three view presets, because a reference is
+                // placed on the plane one of them looks down.
+                if ui
+                    .selectable_label(state.show_references, s.action_references)
+                    .clicked()
+                {
+                    queue.push(Command::ToggleReferences);
                     ui.close_menu();
                 }
                 ui.separator();
@@ -865,6 +894,153 @@ fn alpha_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQ
         });
     });
 }
+
+/// One plane's reference, as the panel needs it.
+///
+/// The file's name and not its pixels: the interface says which drawing is on
+/// which plane and has no business holding megabytes to do it.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ReferenceSlot<'a> {
+    pub name: Option<&'a str>,
+    pub settings: ReferenceSettings,
+}
+
+/// The reference images: one drawing a plane, sat behind the sculpt.
+///
+/// A panel rather than an inspector section, because it is not about the
+/// active layer — a reference outlives every layer in the document and is not
+/// in the document at all.
+pub fn reference_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    if !state.show_references {
+        return;
+    }
+    let s = state.strings;
+    let mut open = true;
+
+    egui::Window::new(s.action_references)
+        .open(&mut open)
+        .resizable(false)
+        .collapsible(false)
+        .show(ctx, |ui| {
+            ui.set_min_width(320.0);
+            for plane in RefPlane::ALL {
+                reference_plane(ui, s, plane, state.references[plane as usize], queue);
+            }
+        });
+    if !open {
+        queue.push(Command::ToggleReferences);
+    }
+}
+
+/// What a reference panel's slider is recorded under.
+///
+/// The same four controls are drawn once a plane, so the plane is part of the
+/// name — the label a sculptor reads stays short, under its own heading.
+pub fn reference_slider_name(plane: RefPlane, label: &str) -> String {
+    format!("{} {label}", plane.tag())
+}
+
+/// One plane's row: the file, and the four numbers that place it.
+fn reference_plane(
+    ui: &mut egui::Ui,
+    s: &Strings,
+    plane: RefPlane,
+    slot: ReferenceSlot<'_>,
+    queue: &mut CommandQueue,
+) {
+    let settings = slot.settings;
+    heading(ui, plane.label());
+    ui.horizontal(|ui| match slot.name {
+        Some(name) => {
+            // Shown, and only then, because there is nothing to hide.
+            let mut visible = settings.visible;
+            if ui.checkbox(&mut visible, name).changed() {
+                queue.push(Command::SetReferenceSettings(
+                    plane,
+                    ReferenceSettings {
+                        visible,
+                        ..settings
+                    },
+                ));
+            }
+            if ui.button(s.action_clear_reference).clicked() {
+                queue.push(Command::ClearReference(plane));
+            }
+        }
+        None => {
+            ui.label(
+                egui::RichText::new(s.reference_none)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+            if ui.button(s.action_load_reference).clicked() {
+                queue.push(Command::LoadReference(plane));
+            }
+        }
+    });
+
+    // Nothing to place while the plane is empty, and a row of dead sliders
+    // reads as a broken panel rather than an empty one.
+    if slot.name.is_none() {
+        return;
+    }
+
+    let mut place = |label: &str, value: f32, range, decimals| {
+        slider_named(
+            ui,
+            &reference_slider_name(plane, label),
+            label,
+            value,
+            range,
+            decimals,
+        )
+    };
+
+    if let Some(opacity) = place(s.label_reference_opacity, settings.opacity, 0.0..=1.0, 2) {
+        queue.push(Command::SetReferenceSettings(
+            plane,
+            ReferenceSettings {
+                opacity,
+                ..settings
+            },
+        ));
+    }
+    // Reachable ranges rather than the domain's own clamps, which run to a
+    // hundred: a slider spanning that moves a reference by a whole extent per
+    // pixel and cannot be used to line one up.
+    if let Some(height) = place(s.label_reference_size, settings.height, 0.05..=REACH, 2) {
+        queue.push(Command::SetReferenceSettings(
+            plane,
+            ReferenceSettings { height, ..settings },
+        ));
+    }
+    for (label, axis) in [
+        (s.label_reference_across, 0usize),
+        (s.label_reference_up, 1usize),
+    ] {
+        if let Some(value) = place(label, settings.offset[axis], -REACH..=REACH, 2) {
+            let mut offset = settings.offset;
+            offset[axis] = value;
+            queue.push(Command::SetReferenceSettings(
+                plane,
+                ReferenceSettings { offset, ..settings },
+            ));
+        }
+    }
+    if let Some(depth) = place(s.label_reference_depth, settings.depth, -REACH..=REACH, 2) {
+        queue.push(Command::SetReferenceSettings(
+            plane,
+            ReferenceSettings { depth, ..settings },
+        ));
+    }
+}
+
+/// How far a reference's sliders reach, in document units.
+///
+/// Enough to place one around a form a few units across, and no more. A value
+/// outside it can still be held — the domain clamps at a hundred — but a
+/// sculptor lining a drawing up wants a slider they can aim.
+const REACH: f32 = 10.0;
 
 /// The whole-form deformers, and what each one is set to.
 ///

@@ -1142,3 +1142,57 @@ Recorded under *Not built yet*.
   - `the_old_behaviour_would_have_failed_this` holds the plain zoom to still
     driving the distance inside a unit sphere, because a test that passes on
     both the fix and the fault is not a test.
+
+## 26. Something to sculpt from
+
+- [x] 26.1 A picture on each plane, behind the clay
+  - `RefPlane` names the three planes the view presets look down; perspective
+    has none, because a reference is a flat thing seen square on and one
+    hanging in a perspective view is a billboard rather than a guide.
+  - `ReferenceSettings` carries visibility, opacity, height, an offset within
+    the plane and a depth, and answers `corners()` — so the quad is placed by
+    the domain, which knows where each plane's axes are, and not by the
+    viewport. Width follows the image's own proportions: a reference squashed
+    to a square is a reference that lies about what it is a picture of.
+  - Read by `clayspace_engine::read_reference`, the sibling of the alpha
+    reader: PNG refused by name, dimensions checked *before* the buffer is
+    allocated, and the same `AlphaRefusal` reasons — they are the same reasons
+    whichever thing the PNG was going to be, and one of them already reads
+    well in three languages.
+
+- [x] 26.2 What a reference keeps that a stamp does not
+  - Colour. A stamp is flattened to one scalar a pixel; a photograph in grey is
+    a different reference from the one the sculptor chose. Grey is spread
+    across the three channels rather than left in one, or a texture sampled
+    for colour reads a grey photograph as red.
+  - The file's own alpha, multiplied by the sculptor's opacity — so a cut-out
+    placed at half opacity is still a cut-out.
+  - Palette entries are expanded to colour, which the alpha reader does not
+    bother with: it can afford to read an index as a grey level, and a palette
+    index read as a *colour* is not a picture of anything.
+
+- [x] 26.3 Always behind, and why that is not the depth test
+  - The quad sits behind the origin, so ordinarily the depth test alone would
+    put the form in front. It does not, once the camera swings past the plane
+    — and a guide that occludes the form it is guiding has stopped being a
+    guide. So references are drawn first and write no depth: the clay is in
+    front from every angle. Unculled, because the top plane's quad is seen
+    from below as often as from above. Measured in `visual_reference`, from
+    both sides.
+  - The uv rides in the vertex colour's first two channels and the opacity in
+    the third, read by a vertex entry of its own. The alternative is a whole
+    attribute on every vertex of every mesh in the scene, paid by the surface
+    to serve three quads.
+
+- [x] 26.4 Not part of the document
+  - A reference is what the sculptor is working *from*, not what they are
+    making: a document carrying someone else's photograph is a document that
+    cannot be shared. None of the three commands marks the document modified.
+  - The paths and placements are remembered with the session instead, beside
+    the recent files and the locale — the path and not the pixels, since a
+    cache of the images would be a second copy of someone else's photograph
+    kept without being asked. A file that has since moved is dropped on the
+    way in, like a recent entry whose document is gone.
+  - A line that does not parse is dropped rather than defaulted: a reference
+    placed somewhere the sculptor did not put it is worse than one that is
+    gone, because the second is obvious and the first is not.

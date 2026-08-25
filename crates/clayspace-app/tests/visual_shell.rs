@@ -142,6 +142,8 @@ fn state<'a>(
         representation: clayspace_model::Representation::Sdf,
         show_repair: false,
         repair: None,
+        show_references: false,
+        references: Default::default(),
         show_convert: false,
         conversion: clayspace_model::ConversionSettings::default(),
         conversion_cost: None,
@@ -267,6 +269,7 @@ fn build_shell(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQ
     shell::repair_window(ctx, state, queue);
     shell::import_window(ctx, state, queue);
     shell::export_window(ctx, state, queue);
+    shell::reference_window(ctx, state, queue);
 }
 
 /// Runs the shell without capturing it, so a test can ask where a widget went.
@@ -1525,7 +1528,13 @@ fn the_cage_is_raised_from_the_menu_and_worked_in_the_panel() {
 /// other menu tests here already use — the entry is the same entry in every
 /// language.
 const VIEW_MENU: egui::Pos2 = egui::Pos2::new(131.0, 13.0);
-const LANGUAGE_ENTRY: egui::Vec2 = egui::Vec2::new(5.0, 196.0);
+/// Where the Idioma submenu falls once the Vista menu is open.
+///
+/// A pixel offset, and it moves every time an entry lands above it — which is
+/// what a menu-entry equivalent of `slider_id` would fix. Until then, a test
+/// that starts failing here after a menu entry is added is measuring the
+/// addition rather than a fault.
+const LANGUAGE_ENTRY: egui::Vec2 = egui::Vec2::new(5.0, 218.0);
 
 #[test]
 fn the_language_can_be_chosen_from_the_menu() {
@@ -1659,4 +1668,125 @@ fn the_brush_shelf_is_in_the_interfaces_language() {
         band(&shots[2]) > 300,
         "the Spanish shelf draws the same pixels as the Portuguese one"
     );
+}
+
+/// A panel with one drawing on the front plane and nothing on the other two.
+fn with_a_reference<'a>(state: &mut ShellState<'a>, name: &'a str) {
+    state.show_references = true;
+    state.references[clayspace_model::RefPlane::Front as usize] = shell::ReferenceSlot {
+        name: Some(name),
+        settings: clayspace_model::ReferenceSettings::default(),
+    };
+}
+
+#[test]
+fn the_reference_panel_offers_a_file_only_where_there_is_none() {
+    // A row of dead sliders under an empty plane reads as a broken panel
+    // rather than an empty one.
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let mut set = state(strings, &scene, &materials, &report);
+    with_a_reference(&mut set, "rosto-frente");
+
+    let ctx = probe_shell(&set);
+    // The front plane has a drawing, so its placement controls are drawn — and
+    // the side plane, which has none, does not. The two are told apart by
+    // name, which is why the name carries the plane.
+    let drawn = |plane: clayspace_model::RefPlane| {
+        let name = shell::reference_slider_name(plane, strings.label_reference_opacity);
+        ctx.memory(|m| m.data.get_temp::<egui::Rect>(shell::slider_id(&name)))
+            .is_some()
+    };
+    assert!(
+        drawn(clayspace_model::RefPlane::Front),
+        "a placed reference had no opacity control"
+    );
+    assert!(
+        !drawn(clayspace_model::RefPlane::Side),
+        "an empty plane drew the front plane's controls"
+    );
+
+    capture_shell(&harness, &set, "90-references");
+}
+
+#[test]
+fn the_opacity_slider_reaches_the_placement() {
+    // A slider that draws and is wired to nothing looks exactly like one that
+    // works, and the opacity is the control this feature is mostly about.
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let mut set = state(strings, &scene, &materials, &report);
+    with_a_reference(&mut set, "rosto-frente");
+    let handle = slider_centre(
+        &set,
+        &shell::reference_slider_name(
+            clayspace_model::RefPlane::Front,
+            strings.label_reference_opacity,
+        ),
+    );
+
+    capture_shell_after(
+        &harness,
+        &set,
+        "91-reference-opacity",
+        &drag(handle, handle - egui::vec2(40.0, 0.0)),
+        |queue| {
+            let placements: Vec<clayspace_model::ReferenceSettings> = queue
+                .commands()
+                .iter()
+                .filter_map(|command| match command {
+                    Command::SetReferenceSettings(clayspace_model::RefPlane::Front, settings) => {
+                        Some(*settings)
+                    }
+                    _ => None,
+                })
+                .collect();
+            let last = placements.last().unwrap_or_else(|| {
+                panic!(
+                    "dragging the opacity slider emitted {:?} and no placement. See \
+                     target/visual/91-reference-opacity.png",
+                    queue.commands()
+                )
+            });
+            assert!(
+                last.opacity < 0.5,
+                "dragging left set {} opacity, up from the default 0.5",
+                last.opacity
+            );
+        },
+    );
+}
+
+#[test]
+fn an_empty_plane_offers_a_file_and_no_placement() {
+    let Some(_harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let mut set = state(strings, &scene, &materials, &report);
+    set.show_references = true;
+
+    let ctx = probe_shell(&set);
+    for plane in clayspace_model::RefPlane::ALL {
+        let name = shell::reference_slider_name(plane, strings.label_reference_opacity);
+        assert!(
+            ctx.memory(|m| m.data.get_temp::<egui::Rect>(shell::slider_id(&name)))
+                .is_none(),
+            "the {} plane drew placement controls with nothing to place",
+            plane.label()
+        );
+    }
 }
