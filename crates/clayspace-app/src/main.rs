@@ -1404,8 +1404,9 @@ impl App {
                 // A ring is grabbed anywhere along it, so several points
                 // around it are tested rather than one — a ring tested only at
                 // its four cardinal points is a ring with four handles.
-                for step in 0..16 {
-                    let angle = step as f32 / 16.0 * std::f32::consts::TAU;
+                let steps = clayspace_model::ring_samples(reach, slack);
+                for step in 0..steps {
+                    let angle = step as f32 / steps as f32 * std::f32::consts::TAU;
                     let (u, v) = ((index + 1) % 3, (index + 2) % 3);
                     let mut at = pivot;
                     at[u] += angle.cos() * reach;
@@ -1430,8 +1431,9 @@ impl App {
             let axis = Self::toward_eye(camera, pivot);
             let (across, other) = clayspace_view::frame_about(axis.into());
             let reach = reach * clayspace_view::VIEW_RING_REACH;
-            for step in 0..16 {
-                let angle = step as f32 / 16.0 * std::f32::consts::TAU;
+            let steps = clayspace_model::ring_samples(reach, slack);
+            for step in 0..steps {
+                let angle = step as f32 / steps as f32 * std::f32::consts::TAU;
                 let at = std::array::from_fn(|i| {
                     pivot[i] + (across[i] * angle.cos() + other[i] * angle.sin()) * reach
                 });

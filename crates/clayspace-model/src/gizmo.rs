@@ -297,6 +297,25 @@ fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     ]
 }
 
+/// How many points to test around a ring so the whole of it can be grabbed.
+///
+/// A ring is hit-tested as a string of spheres along it, and sixteen of them
+/// was a number picked rather than derived: at the manipulator's proportions
+/// the spheres do not touch, so roughly a fifth of every drawn ring — and a
+/// third of the outer one — was not grabbable at all. A press there falls
+/// through to whatever is behind, and the ring reads as broken.
+///
+/// Derived instead: enough that neighbouring spheres overlap, so anywhere on
+/// the ring is within `grab` of a sample.
+pub fn ring_samples(radius: f32, grab: f32) -> usize {
+    if grab <= 0.0 {
+        return 1;
+    }
+    let circumference = std::f32::consts::TAU * radius.max(0.0);
+    // Spacing of one grab radius leaves neighbours overlapping by half.
+    ((circumference / grab).ceil() as usize).clamp(8, 512)
+}
+
 /// The increment a snapped rotation lands on.
 ///
 /// Fifteen degrees: twenty-four to the turn, and it divides the angles a
@@ -771,5 +790,65 @@ mod tests {
                 assert!((length(v) - 1.0).abs() < 1e-3, "{v:?} is not a unit vector");
             }
         }
+    }
+
+    #[test]
+    fn a_ring_can_be_grabbed_anywhere_along_it() {
+        // Reported as "I drag the ring and nothing happens". One cause was the
+        // pivot; this was the other. A ring is hit-tested as a string of
+        // spheres, and sixteen of them was picked rather than derived — at the
+        // manipulator's own proportions they do not touch, so a fifth of every
+        // ring and a third of the outer one could be pressed with nothing
+        // under the press.
+        //
+        // The property, checked all the way round rather than at the samples:
+        // every point on the ring is within one grab radius of some sample.
+        let grab = 0.16f32;
+        for radius in [1.0f32, 1.28, 0.4, 12.0] {
+            let samples = ring_samples(radius, grab);
+            let at = |k: f32| {
+                let angle = k * std::f32::consts::TAU;
+                [radius * angle.cos(), radius * angle.sin()]
+            };
+            // A thousand points around the ring, none of them a sample.
+            let mut worst = 0.0f32;
+            for step in 0..1000 {
+                let on_ring = at(step as f32 / 1000.0 + 0.0004);
+                let nearest = (0..samples)
+                    .map(|s| {
+                        let sample = at(s as f32 / samples as f32);
+                        ((on_ring[0] - sample[0]).powi(2) + (on_ring[1] - sample[1]).powi(2)).sqrt()
+                    })
+                    .fold(f32::INFINITY, f32::min);
+                worst = worst.max(nearest);
+            }
+            assert!(
+                worst < grab,
+                "on a ring of radius {radius} sampled {samples} times, a point \
+                 {worst} away from the nearest sample cannot be grabbed"
+            );
+        }
+    }
+
+    #[test]
+    fn sixteen_samples_would_not_have_covered_it() {
+        // The number that was there, held up against the rule above, so this
+        // records why it changed rather than merely that it did.
+        let (radius, grab) = (1.28f32, 0.16f32);
+        let spacing = std::f32::consts::TAU * radius / 16.0;
+        assert!(
+            spacing > 2.0 * grab,
+            "sixteen samples would have touched after all"
+        );
+        assert!(ring_samples(radius, grab) > 16);
+    }
+
+    #[test]
+    fn a_ring_is_never_sampled_absurdly() {
+        // A grab radius of nothing, or a ring of nothing, must not ask for an
+        // unbounded number of tests in the middle of a press.
+        assert_eq!(ring_samples(1.0, 0.0), 1);
+        assert!(ring_samples(1e9, 1e-9) <= 512);
+        assert!(ring_samples(0.0, 0.16) >= 8);
     }
 }

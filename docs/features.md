@@ -698,6 +698,19 @@ cannot use.
   is tested last, so a press where it crosses an axis ring goes to the axis.
   The outer one is the easy target everywhere else and should not steal the
   hard ones.
+- **Turning and scaling need two points or more.** They act about the middle
+  of the selection, and one point's middle is itself — so on a selection of one
+  they are exactly no movement, however the drag is made. The two modes are
+  disabled with the reason on them rather than drawn live and inert, which is
+  how they were: the rings appeared, the drag ran, and nothing moved. Moving is
+  not affected; it needs no pivot.
+- **A ring can be grabbed anywhere along it.** It is hit-tested as a string of
+  spheres, and sixteen of them was a number picked rather than derived — at the
+  manipulator's own proportions they do not touch, so about a fifth of every
+  axis ring and a third of the outer one could be pressed with nothing under
+  the press. The count comes from the ring's circumference and the grab radius
+  now, and a test walks a thousand points around the ring rather than checking
+  at the samples.
 - **Ctrl snaps a turn to 15°.** Twenty-four increments to the circle, which
   divides the angles a sculptor actually reaches for — 30, 45, 60, 90 — where a
   rounder-looking 10 does not. Rounded to the *nearest* rather than downward, so

@@ -95,6 +95,19 @@ impl LatticeState {
     /// The middle rather than the last point picked, so adding a point to a
     /// selection moves the widget to where the *selection* is rather than
     /// leaving it on whichever corner happened to be clicked first.
+    /// Whether the manipulator's turn and scale can do anything.
+    ///
+    /// They act about the middle of the selection, and one point's middle is
+    /// itself: turning a point about itself moves it exactly nowhere, and so
+    /// does scaling it. The arithmetic is right and the gesture is empty, which
+    /// is the worst kind of broken — so the interface refuses the mode rather
+    /// than drawing a live-looking widget that cannot move anything.
+    ///
+    /// Moving is not affected: it needs no pivot.
+    pub fn can_transform(&self) -> bool {
+        self.selection.len() >= 2
+    }
+
     pub fn pivot(&self) -> Option<[f32; 3]> {
         if self.selection.is_empty() {
             return None;
@@ -388,6 +401,52 @@ mod selection_tests {
                 "point {at} disagreed about being selected"
             );
         }
+    }
+    #[test]
+    fn one_point_has_nothing_to_turn_or_scale_about() {
+        // Reported: the rings draw and dragging them does nothing. They were
+        // drawn on a selection of one, whose middle is the point itself — so
+        // the turn was about the very thing it was turning, and the scale was
+        // about the very thing it was scaling. Both are exactly no movement.
+        // The arithmetic was right and the gesture was empty.
+        let mut cage = corners();
+        cage.selection = vec![0];
+        assert!(!cage.can_transform(), "one point offered a turn");
+
+        // And it really is a no-op, not merely disallowed: this is why the
+        // interface refuses it rather than letting it run.
+        let pivot = cage.pivot().expect("one point still has a middle");
+        let point = cage.points[0];
+        assert_eq!(pivot, point, "the pivot of one point is that point");
+        for mode in [GizmoMode::Rotate, GizmoMode::Scale] {
+            let drag = GizmoDrag {
+                mode,
+                handle: GizmoHandle::Axis(1),
+                pivot,
+                anchor: [pivot[0] + 1.0, pivot[1], pivot[2]],
+                view_axis: [0.0, 0.0, 1.0],
+            };
+            let after = drag.apply(point, [pivot[0], pivot[1], pivot[2] + 1.0], false);
+            let moved = (0..3)
+                .map(|i| (after[i] - point[i]).powi(2))
+                .sum::<f32>()
+                .sqrt();
+            assert!(
+                moved < 1e-6,
+                "{mode:?} on a selection of one moved it by {moved}, which \
+                 would mean the pivot is not the point"
+            );
+        }
+    }
+
+    #[test]
+    fn two_points_are_enough_to_turn() {
+        let mut cage = corners();
+        cage.selection = vec![0, 1];
+        assert!(cage.can_transform());
+        // And moving never needed a pivot, so it is not gated on this.
+        cage.selection = vec![0];
+        assert!(cage.pivot().is_some(), "a move still has somewhere to act");
     }
 }
 

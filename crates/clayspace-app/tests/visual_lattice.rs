@@ -687,3 +687,94 @@ fn the_outer_ring_is_drawn_and_faces_the_camera() {
         );
     }
 }
+
+/// Every control point on the far side of one axis — a whole face, which is
+/// what the manipulator exists for.
+fn select_the_far_face(document: &mut ClayDocument, axis: usize) {
+    let face: Vec<usize> = document
+        .lattice()
+        .points
+        .iter()
+        .enumerate()
+        .filter(|(_, point)| point[axis] > 0.0)
+        .map(|(index, _)| index)
+        .collect();
+    for index in face {
+        document.toggle_lattice_point(index);
+    }
+}
+
+#[test]
+fn turning_a_face_visibly_turns_the_cage_on_screen() {
+    // What I should have checked before saying rotation worked: not that the
+    // arithmetic turns a point, but that dragging a ring the way a hand does
+    // moves what is drawn. Reported twice as "nothing happens", and both
+    // causes are visible here or not at all.
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let Some(mut document) = meshed() else {
+        return;
+    };
+    let camera = framed(&document);
+    let facing = [0.0, 0.0, 1.0];
+
+    document.begin_lattice([2, 2, 2]).expect("a cage");
+    // A whole face, not one point: one point's middle is itself, and turning
+    // it about itself is exactly no movement.
+    select_the_far_face(&mut document, 1);
+    assert!(
+        document.lattice().can_transform(),
+        "a face should be enough to turn"
+    );
+    let pivot = document.lattice().pivot().expect("a middle");
+
+    let shot = |harness: &mut Harness, document: &mut ClayDocument, name: &str| {
+        let cage = document.lattice();
+        let edges = cage.edges();
+        harness.renderer.set_lattice(
+            &harness.gpu,
+            LatticeView {
+                points: &cage.points,
+                edges: &edges,
+                selected: &cage.selection,
+                gizmo: cage.pivot().map(|pivot| GizmoView {
+                    view_axis: facing,
+                    pivot,
+                    mode: cage.mode,
+                    reach: handle(&cage) * 12.0,
+                    hovered: None,
+                }),
+                handle: handle(&cage),
+            },
+        );
+        let (vertices, indices) = surface(document);
+        let mut mesh = clayspace_view::GpuMesh::new(&harness.gpu);
+        mesh.upload(&harness.gpu, &vertices, &indices);
+        harness.capture(&mesh, &camera, false, name)
+    };
+
+    document.set_gizmo_mode(GizmoMode::Rotate);
+    let before = shot(&mut harness, &mut document, "122-turn-before");
+
+    // The drag, routed through the same plane choice the application uses.
+    let handle_grabbed = GizmoHandle::Axis(1);
+    let normal = clayspace_model::drag_plane(GizmoMode::Rotate, handle_grabbed, facing, facing);
+    let (across, other) = clayspace_model::perpendicular_frame(normal);
+    let anchor: [f32; 3] = std::array::from_fn(|i| pivot[i] + across[i]);
+    let to: [f32; 3] = std::array::from_fn(|i| pivot[i] + other[i]);
+    document.begin_gizmo_drag(handle_grabbed, anchor, facing);
+    document
+        .drag_gizmo(to, false)
+        .expect("the drag was refused");
+
+    let after = shot(&mut harness, &mut document, "123-turn-after");
+
+    let changed = how_many_differ(&before, &after);
+    assert!(
+        changed > 2000,
+        "a quarter turn of a whole face changed {changed} pixels, which is not \
+         a turn anybody would see. Compare target/visual/122-turn-before.png \
+         and 123-turn-after.png"
+    );
+}

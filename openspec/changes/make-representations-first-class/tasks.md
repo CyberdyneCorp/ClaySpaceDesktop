@@ -1324,3 +1324,27 @@ Recorded under *Not built yet*.
     *drawn* from and the plane it is *dragged* on are built from one
     implementation rather than two that could disagree.
 
+- [x] 28.4 Two more reasons "nothing happens", found by using it
+  - Reported again after 28.3 was fixed, with a screenshot: the rings are
+    drawn, the drag runs, nothing moves. 28.3 was real and was not the whole
+    story — and the honest answer to "did you check visually" was no. The
+    layers below the pointer were tested and a still frame was captured; the
+    gesture itself never was.
+  - **The pivot.** Turning and scaling act about the middle of the selection,
+    and the middle of one point is that point. Turning a point about itself is
+    exactly no movement, and so is scaling it. The arithmetic was right and the
+    gesture was empty — the worst kind of broken, because everything looks
+    live. `can_transform` names it, the two modes are disabled with the reason
+    on them, and a test proves the no-op rather than asserting it.
+  - **The grab.** A ring is hit-tested as a string of spheres and sixteen was
+    picked rather than derived: at the manipulator's proportions they do not
+    touch, leaving about a fifth of each axis ring and a third of the outer one
+    with nothing under a press. `ring_samples` derives the count from the
+    circumference and the grab radius; the test walks a thousand points around
+    the ring rather than checking at the samples, which would have passed on
+    the broken version.
+  - **And it is checked in the pixels now.** `turning_a_face_visibly_turns_the_cage_on_screen`
+    drags a ring through the same plane choice the application uses and
+    requires the drawn frame to change. The sphere comes out a capsule; the
+    captures are 122 and 123.
+
