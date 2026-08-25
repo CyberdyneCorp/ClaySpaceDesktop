@@ -46,7 +46,9 @@ pub use document::{DocumentModel, OpenError};
 pub use exchange::{
     ExchangeModel, ExportMesher, ExportSettings, ExportWarning, Format, ImportAs, ImportSettings,
 };
-pub use gizmo::{GizmoDrag, GizmoHandle, GizmoMode};
+pub use gizmo::{
+    drag_plane, perpendicular_frame, snapped, GizmoDrag, GizmoHandle, GizmoMode, SNAP_DEGREES,
+};
 pub use instrument::{FrameLog, Stall, FRAME};
 pub use lattice::{
     can_be_caged, clamp_divisions, division_limit, LatticeModel, LatticeState, MIN_DIVISIONS,

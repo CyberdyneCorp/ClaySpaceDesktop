@@ -2009,16 +2009,12 @@ fn normalized(v: Vec3) -> Option<Vec3> {
 
 /// Two unit vectors spanning the plane perpendicular to an axis.
 ///
-/// The first is taken from whichever world axis the given one leans on least,
-/// so the pair never degenerates however the camera is turned.
+/// The domain's, in this crate's vector type. One implementation rather than
+/// two: the ring is *drawn* from this frame and *dragged* on a plane built
+/// from the same one, and two copies could disagree.
 pub fn frame_about(axis: Vec3) -> (Vec3, Vec3) {
-    let least = (0..3)
-        .min_by(|a, b| axis[*a].abs().total_cmp(&axis[*b].abs()))
-        .unwrap_or(0);
-    let mut seed = Vec3::ZERO;
-    seed[least] = 1.0;
-    let across = axis.cross(seed).normalize();
-    (across, axis.cross(across))
+    let (across, other) = clayspace_model::perpendicular_frame(axis.into());
+    (across.into(), other.into())
 }
 
 /// The twelve edges of a cube, spelled as the four along each axis.

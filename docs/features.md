@@ -713,6 +713,18 @@ cannot use.
   Transforming what the last frame produced compounds a rotation into a spiral
   and a scale into a runaway.
 
+**A slide and a turn run on opposite planes**, which is the part that is easy
+to get wrong and was wrong here for as long as the manipulator existed. A ring
+lies in the plane *perpendicular* to what it turns about, and that is where the
+angle is measured — dragged on a plane containing the axis instead, the
+pointer's travel has no component in the plane being measured and the turn
+comes out at exactly zero however far the hand moves. Two of the three rings
+did nothing at all; only the one whose axis pointed at the camera worked. The
+same line put the axis *facing* the eye on a plane perpendicular to itself,
+which sets the anchor's component along it to zero — and since a scale divides
+by that, that handle went dead too. The plane is chosen by the mode now, and
+`drag_plane` is a pure function with the two rules stated separately.
+
 An axis drag runs on the plane containing that axis and most nearly facing the
 eye — not on a plane facing the camera outright, which would make an axis
 pointing at the viewer unmovable: the pointer could travel a long way and its

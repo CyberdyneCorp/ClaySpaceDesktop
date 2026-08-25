@@ -1297,3 +1297,30 @@ Recorded under *Not built yet*.
     be a surprise, and a test holds both other modes to producing the same
     answer with the modifier down as without it.
 
+- [x] 28.3 The bug that was underneath both of them
+  - Reported: rotate and scale do nothing on a mesh or field cage. They did
+    not, and had not since the manipulator was built.
+  - The drag plane was chosen from the handle alone, never the *mode*. A slide
+    reads how far the pointer travelled *along* an axis, so its plane must
+    contain that axis; a ring lies in the plane *perpendicular* to what it
+    turns about, and that is where the angle is measured. One answer served
+    both, and it was the slide's — so for two of the three rings the pointer's
+    travel had no component in the plane being measured and the turn came out
+    at exactly **zero degrees however far the hand moved**. Only the ring whose
+    axis pointed at the camera worked, which is why it looked intermittent
+    rather than broken.
+  - The same line killed a scale along the axis *facing* the eye: the
+    degenerate branch fell back to the plane facing the camera, which is
+    perpendicular to that axis, so the anchor's component along it was zero —
+    and a scale divides by that. The comment above it had predicted this exact
+    failure and the fallback then caused it.
+  - Why no test caught it: every manipulator test hands world points straight
+    to the document, which is the step *after* the one that was wrong. The
+    projection from pointer to plane lived in the composition root, where an
+    integration test cannot reach it. `drag_plane` is a pure function in the
+    domain now, and the regressions drive the document through it — both fail
+    against the old behaviour, which was checked rather than assumed.
+  - `perpendicular_frame` moved to the domain with it, so the frame the ring is
+    *drawn* from and the plane it is *dragged* on are built from one
+    implementation rather than two that could disagree.
+

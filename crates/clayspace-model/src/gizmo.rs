@@ -226,6 +226,77 @@ impl GizmoDrag {
     }
 }
 
+/// The plane a drag on this handle runs on, given where the camera is.
+///
+/// The mode decides it, which is the part that is easy to get wrong: a slide
+/// and a turn want *opposite* planes. `facing` points from the surface back at
+/// the eye; `view_axis` is what the outer ring turns about.
+///
+/// Returned as a normal, not normalised — the caller intersects a ray with it,
+/// and length does not matter for that.
+pub fn drag_plane(
+    mode: GizmoMode,
+    handle: GizmoHandle,
+    view_axis: [f32; 3],
+    facing: [f32; 3],
+) -> [f32; 3] {
+    match (mode, handle) {
+        // A ring lies in the plane *perpendicular* to what it turns about, and
+        // that is where the angle is measured — so the drag has to run there
+        // too. Run it on a plane containing the axis instead and the pointer's
+        // travel has no component in the plane being measured: the angle comes
+        // out at exactly zero however far the hand moves.
+        (GizmoMode::Rotate, GizmoHandle::View) => normalize(view_axis).unwrap_or(facing),
+        (GizmoMode::Rotate, handle) => handle.axis().unwrap_or(facing),
+        // A slide or a stretch reads how far the pointer travelled *along* the
+        // axis, so here the plane must contain it — and of the planes that do,
+        // the one most nearly facing the eye.
+        (_, GizmoHandle::Axis(index)) => {
+            let Some(axis) = GizmoHandle::Axis(index).axis() else {
+                return facing;
+            };
+            let normal = cross(cross(axis, facing), axis);
+            if length(normal) >= 1e-4 {
+                return normal;
+            }
+            // The axis points at the eye. Every plane containing it is edge-on
+            // to the screen, so there is no comfortable answer — but one that
+            // still contains the axis keeps the gesture *possible*. Falling
+            // back to the plane facing the camera, as this once did, puts the
+            // anchor's component along the axis at exactly zero and the handle
+            // stops responding altogether.
+            let (across, _) = perpendicular_frame(axis);
+            cross(across, axis)
+        }
+        _ => facing,
+    }
+}
+
+/// Two unit vectors spanning the plane perpendicular to an axis.
+///
+/// The first is taken from whichever world axis the given one leans on least,
+/// so the pair never degenerates however the axis is pointed. Seeding with x
+/// unconditionally is the obvious version and collapses to nothing the moment
+/// the axis *is* x.
+pub fn perpendicular_frame(axis: [f32; 3]) -> ([f32; 3], [f32; 3]) {
+    let least = (0..3)
+        .min_by(|a, b| axis[*a].abs().total_cmp(&axis[*b].abs()))
+        .unwrap_or(0);
+    let mut seed = [0.0f32; 3];
+    seed[least] = 1.0;
+    let across = cross(axis, seed);
+    let across = normalize(across).unwrap_or([1.0, 0.0, 0.0]);
+    (across, cross(axis, across))
+}
+
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
 /// The increment a snapped rotation lands on.
 ///
 /// Fifteen degrees: twenty-four to the turn, and it divides the angles a
@@ -559,5 +630,146 @@ mod tests {
             scale_drag.apply([3.0, 5.0, 7.0], [2.3, 0.0, 0.0], true),
             scale_drag.apply([3.0, 5.0, 7.0], [2.3, 0.0, 0.0], false)
         );
+    }
+
+    /// Where a drag actually lands: the pointer moves in the drag plane, so
+    /// both ends of the gesture lie on it. This is what the application does
+    /// with a ray, reduced to the part that decides whether it works.
+    fn swept(mode: GizmoMode, handle: GizmoHandle, facing: [f32; 3]) -> GizmoDrag {
+        let normal = drag_plane(mode, handle, facing, facing);
+        let (across, _) = perpendicular_frame(normal);
+        GizmoDrag {
+            mode,
+            handle,
+            pivot: [0.0; 3],
+            anchor: across,
+            view_axis: facing,
+        }
+    }
+
+    #[test]
+    fn every_ring_turns_when_it_is_dragged_across_the_screen() {
+        // The bug this test exists for: the drag plane was chosen to *contain*
+        // the axis, which is right for a slide and exactly wrong for a turn —
+        // a ring lies in the plane perpendicular to what it turns about. Two
+        // of the three rings came out at 0 degrees however far the hand moved,
+        // and only the one whose axis pointed at the camera worked.
+        //
+        // The manipulator's own tests could not see it: they hand world points
+        // straight to the document, which is the step after the one that was
+        // wrong.
+        let facing = [0.0, 0.0, 1.0];
+        for handle in GizmoHandle::all_for(GizmoMode::Rotate) {
+            let drag = swept(GizmoMode::Rotate, handle, facing);
+            let normal = drag_plane(GizmoMode::Rotate, handle, facing, facing);
+            let (_, other) = perpendicular_frame(normal);
+            // A quarter of the way round the ring, in the ring's own plane.
+            let turned = drag.apply([1.0, 1.0, 1.0], other, false);
+            let moved = (0..3)
+                .map(|i| (turned[i] - [1.0, 1.0, 1.0][i]).powi(2))
+                .sum::<f32>()
+                .sqrt();
+            assert!(
+                moved > 0.5,
+                "{handle:?} moved a point by {moved} on a quarter turn — the \
+                 drag plane and the ring's plane disagree"
+            );
+        }
+    }
+
+    #[test]
+    fn a_turn_is_measured_in_the_ring_s_own_plane() {
+        // The rule underneath the test above, stated directly: for a ring, the
+        // plane the drag runs on *is* the plane the ring lies in.
+        let facing = [0.0, 0.0, 1.0];
+        for index in 0..3 {
+            let handle = GizmoHandle::Axis(index);
+            let normal = drag_plane(GizmoMode::Rotate, handle, facing, facing);
+            let axis = handle.axis().expect("an axis handle has an axis");
+            let along: f32 = (0..3).map(|i| normal[i] * axis[i]).sum();
+            assert!(
+                (along.abs() - 1.0).abs() < 1e-4,
+                "the ring about {axis:?} is dragged on a plane whose normal is \
+                 {normal:?}, which is not the ring's own plane"
+            );
+        }
+        // And the outer ring runs on the plane facing the eye.
+        let view = [0.3, -0.6, 0.74];
+        let normal = drag_plane(GizmoMode::Rotate, GizmoHandle::View, view, facing);
+        let along: f32 = (0..3).map(|i| normal[i] * view[i]).sum::<f32>()
+            / (view.iter().map(|c| c * c).sum::<f32>()).sqrt();
+        assert!(
+            (along.abs() - 1.0).abs() < 1e-3,
+            "the outer ring's plane is {normal:?}"
+        );
+    }
+
+    #[test]
+    fn a_slide_runs_on_a_plane_that_contains_its_axis() {
+        // The opposite rule, and the reason the two cannot share one answer.
+        let facing = [0.0, 0.0, 1.0];
+        for mode in [GizmoMode::Move, GizmoMode::Scale] {
+            for index in 0..3 {
+                let handle = GizmoHandle::Axis(index);
+                let normal = drag_plane(mode, handle, facing, facing);
+                let axis = handle.axis().expect("an axis");
+                let along: f32 = (0..3).map(|i| normal[i] * axis[i]).sum();
+                let scale = (normal.iter().map(|c| c * c).sum::<f32>()).sqrt().max(1e-6);
+                assert!(
+                    (along / scale).abs() < 1e-3,
+                    "{mode:?} along {axis:?} runs on a plane that does not \
+                     contain it: normal {normal:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_axis_pointing_at_the_camera_can_still_be_scaled() {
+        // The mirror of the ring bug, in the same line of code: when the axis
+        // points at the eye the plane degenerated to the one facing the
+        // camera, which puts the anchor's component along the axis at exactly
+        // zero — and a scale divides by that, so the handle went dead.
+        let facing = [0.0, 0.0, 1.0];
+        let handle = GizmoHandle::Axis(2);
+        let normal = drag_plane(GizmoMode::Scale, handle, facing, facing);
+        let axis = handle.axis().expect("an axis");
+        let along: f32 = (0..3).map(|i| normal[i] * axis[i]).sum();
+        assert!(
+            along.abs() < 1e-3,
+            "the plane no longer contains the axis pointing at the eye"
+        );
+
+        // And a drag on it produces a real factor rather than a forced 1.0.
+        let drag = GizmoDrag {
+            mode: GizmoMode::Scale,
+            handle,
+            pivot: [0.0; 3],
+            anchor: [0.0, 0.0, 1.0],
+            view_axis: facing,
+        };
+        let scaled = drag.apply([0.0, 0.0, 2.0], [0.0, 0.0, 2.0], false);
+        assert!(
+            (scaled[2] - 4.0).abs() < 1e-3,
+            "a scale along the axis facing the eye gave {scaled:?}"
+        );
+    }
+
+    #[test]
+    fn a_frame_is_perpendicular_to_every_axis_it_is_asked_about() {
+        for axis in [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [-1.0, 0.0, 0.0],
+            [0.577, 0.577, 0.577],
+        ] {
+            let (across, other) = perpendicular_frame(axis);
+            for v in [across, other] {
+                let along: f32 = (0..3).map(|i| v[i] * axis[i]).sum();
+                assert!(along.abs() < 1e-3, "{v:?} is not perpendicular to {axis:?}");
+                assert!((length(v) - 1.0).abs() < 1e-3, "{v:?} is not a unit vector");
+            }
+        }
     }
 }

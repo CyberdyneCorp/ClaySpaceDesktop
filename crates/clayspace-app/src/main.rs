@@ -95,19 +95,6 @@ fn system_language() -> String {
     String::new()
 }
 
-/// What the pointer is doing.
-fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
-
-fn length(v: [f32; 3]) -> f32 {
-    v.iter().map(|c| c * c).sum::<f32>().sqrt()
-}
-
 /// A manipulator drag: which handle, and the plane it runs on as an anchor
 /// and a normal.
 type GizmoGesture = (clayspace_model::GizmoHandle, ([f32; 3], [f32; 3]));
@@ -1349,11 +1336,10 @@ impl App {
         let Some(handle) = Self::handle_under(&cage, pivot, reach, ray, &self.camera) else {
             return false;
         };
-        // The plane the drag runs on. An axis handle uses the plane containing
-        // that axis and most nearly facing the eye — a plane facing the camera
-        // outright would make an axis pointing at the viewer unmovable, since
-        // the pointer could travel a long way and the projection onto the axis
-        // would barely change.
+        // The plane the drag runs on, which the *mode* decides: a slide needs
+        // a plane containing its axis and a turn needs the ring's own plane,
+        // which is perpendicular to it. One answer for both is how two of the
+        // three rings came to return zero degrees however far the hand moved.
         let (_, direction) = ray;
         let facing = [-direction[0], -direction[1], -direction[2]];
         // What the outer ring turns about: the direction from the selection to
@@ -1361,18 +1347,7 @@ impl App {
         // Taken here and held for the gesture, so a camera that moves mid-drag
         // does not twist the selection under a hand that has not moved.
         let view_axis = Self::toward_eye(&self.camera, pivot);
-        let normal = match handle.axis() {
-            Some(axis) => {
-                let side = cross(axis, facing);
-                let normal = cross(side, axis);
-                if length(normal) < 1e-4 {
-                    facing
-                } else {
-                    normal
-                }
-            }
-            None => facing,
-        };
+        let normal = clayspace_model::drag_plane(cage.mode, handle, view_axis, facing);
         let Some(anchor) = Self::on_plane(ray, pivot, normal) else {
             return false;
         };
