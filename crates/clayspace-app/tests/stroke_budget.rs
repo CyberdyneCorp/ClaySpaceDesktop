@@ -15,6 +15,12 @@
 //! | 0.30.0 | 1.00 ms | 12.49 ms | 13.66 ms |
 //! | 0.39.0 | 0.52 ms |  6.26 ms |  9.46 ms |
 //!
+//! The table above is history rather than the record. Since the performance
+//! gate grew to cover every operation, the figures live in
+//! `benchmarks/baseline-<platform>.json` and `just bench-compare` is what reads
+//! them across an engine pin. What this file is for is the *breakdown* — which
+//! of the four terms a total is made of — which no single figure can say.
+//!
 //! Two upstream fixes, both to the same term: #73 culled the tape per brick,
 //! and #83 batched the attribute taps through the CPU pool. The gradient has
 //! gone from eleven times the cost of face normals to half again as much.

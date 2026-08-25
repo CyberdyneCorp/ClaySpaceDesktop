@@ -6,8 +6,13 @@
 //! machine — and every figure the benchmark reports carries the platform, the
 //! backend, the engine version and the resolution it was taken at.
 
+use std::collections::BTreeMap;
+
 use clayspace_engine::{BackendPolicy, ClayDocument};
-use clayspace_model::{BrushSettings, GestureSample, ModelError, SculptModel, ToolKind};
+use clayspace_model::{
+    BrushSettings, Direction, GestureSample, ModelError, Representation, SceneModel, SculptModel,
+    ToolKind,
+};
 
 /// What a set of figures was measured on.
 ///
@@ -17,8 +22,15 @@ use clayspace_model::{BrushSettings, GestureSample, ModelError, SculptModel, Too
 /// how a performance gate starts lying.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Conditions {
-    /// Which reference document, by name and revision.
-    pub scene: String,
+    /// Which reference documents, by member and revision.
+    ///
+    /// A map rather than one name, because the suite is one scene per
+    /// representation and a voxel verb has nowhere to land on an SDF
+    /// document. Per member rather than one revision for the whole suite: a
+    /// suite-wide revision has to be bumped by hand whenever any member
+    /// changes, and forgetting to bump it is the exact mistake this field
+    /// exists to prevent.
+    pub scenes: BTreeMap<&'static str, &'static str>,
     /// `macos` or `linux`, as the build target reports it.
     pub platform: &'static str,
     /// `aarch64`, `x86_64`.
@@ -35,7 +47,7 @@ impl Conditions {
     pub fn describe(&self) -> String {
         format!(
             "{} on {}/{}, backend {}, engine {}, {}x{}",
-            self.scene,
+            self.scenes_described(),
             self.platform,
             self.architecture,
             self.backend,
@@ -44,9 +56,22 @@ impl Conditions {
             self.viewport.1
         )
     }
+
+    /// The suite, as one line: `reference-r1, reference-10x-r1`.
+    pub fn scenes_described(&self) -> String {
+        self.scenes
+            .iter()
+            .map(|(member, revision)| format!("{member}-{revision}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
 /// Which reference document to build.
+///
+/// One per representation, because a verb has nowhere to land otherwise: a
+/// voxel brush cannot be measured on a field, and a mesh brush cannot be
+/// measured on either.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scene {
     /// The one the budgets are stated against.
@@ -54,19 +79,72 @@ pub enum Scene {
     /// The same shape with roughly ten times the surface area, for checking
     /// that an edit's cost follows the edit rather than the document.
     TenTimesLarger,
+    /// A worked grid, at the cell size a first crossing lands at.
+    VoxelReference,
+    /// The reference form marched into triangles, which is the route a mesh
+    /// layer takes into a document without a file.
+    MeshReference,
+    /// A rasterized ball with a pocket sealed inside it and a channel bored
+    /// through its shell.
+    ///
+    /// The pre-bake repairs have nothing to do on a solid grid, and a figure
+    /// for closing no holes measures the check rather than the repair. This is
+    /// the member with something wrong with it.
+    VoxelPocked,
 }
 
 impl Scene {
-    /// A name that goes into the report, and changes when the scene does.
-    ///
-    /// The revision is part of it on purpose: comparing today's figures
-    /// against a baseline taken on a different scene is worse than having no
-    /// baseline, and this is what makes that visible instead of silent.
-    pub fn name(self) -> &'static str {
+    /// Every member of the suite.
+    pub const ALL: [Scene; 5] = [
+        Self::Reference,
+        Self::TenTimesLarger,
+        Self::VoxelReference,
+        Self::MeshReference,
+        Self::VoxelPocked,
+    ];
+
+    /// What this member is called, stably, across revisions.
+    pub fn member(self) -> &'static str {
         match self {
-            // Bump the revision whenever `build` changes shape.
-            Self::Reference => "reference-r1",
-            Self::TenTimesLarger => "reference-10x-r1",
+            Self::Reference => "reference",
+            Self::TenTimesLarger => "reference-10x",
+            Self::VoxelReference => "voxel-reference",
+            Self::MeshReference => "mesh-reference",
+            Self::VoxelPocked => "voxel-pocked",
+        }
+    }
+
+    /// What a figure measured on this member is measuring.
+    pub fn representation(self) -> Representation {
+        match self {
+            Self::Reference | Self::TenTimesLarger => Representation::Sdf,
+            Self::VoxelReference | Self::VoxelPocked => Representation::Voxel,
+            Self::MeshReference => Representation::Mesh,
+        }
+    }
+
+    /// The member to measure a given representation on.
+    pub fn for_representation(representation: Representation) -> Scene {
+        match representation {
+            Representation::Sdf => Self::Reference,
+            Representation::Voxel => Self::VoxelReference,
+            Representation::Mesh => Self::MeshReference,
+        }
+    }
+
+    /// Which revision of it this is.
+    ///
+    /// Part of the conditions on purpose: comparing today's figures against a
+    /// baseline taken on a different scene is worse than having no baseline,
+    /// and this is what makes that visible instead of silent. Bump it whenever
+    /// `build` changes shape.
+    pub fn revision(self) -> &'static str {
+        match self {
+            Self::Reference => "r1",
+            Self::TenTimesLarger => "r1",
+            Self::VoxelReference => "r1",
+            Self::MeshReference => "r1",
+            Self::VoxelPocked => "r1",
         }
     }
 
@@ -76,7 +154,7 @@ impl Scene {
     /// is the square root of ten times the radius.
     fn radius(self) -> f32 {
         match self {
-            Self::Reference => 1.0,
+            Self::Reference | Self::VoxelReference | Self::MeshReference | Self::VoxelPocked => 1.0,
             Self::TenTimesLarger => 10.0f32.sqrt(),
         }
     }
@@ -87,9 +165,29 @@ impl Scene {
     /// at the same edit density, not more editing.
     const STROKES: usize = 8;
     const SAMPLES_PER_STROKE: usize = 12;
+    /// How many dabs the grid is packed with.
+    const VOXEL_STROKES: usize = 17;
+    /// The cell the damaged grid is rasterized at.
+    const POCKED_CELL: f32 = 0.05;
+
+    /// The cell a voxel reference is built at.
+    ///
+    /// The default a first crossing lands at, so a figure taken here describes
+    /// the resolution a sculptor actually meets.
+    pub const VOXEL_CELL: f32 = 0.02;
 
     /// Builds the document. Deterministic: no clock, no randomness, no file.
     pub fn build(self, policy: BackendPolicy) -> Result<ClayDocument, ModelError> {
+        match self {
+            Self::Reference | Self::TenTimesLarger => self.build_sdf(policy),
+            Self::VoxelReference => Self::build_voxel(policy),
+            Self::MeshReference => Self::build_mesh(policy),
+            Self::VoxelPocked => Self::build_pocked(policy),
+        }
+    }
+
+    /// A field, worked.
+    fn build_sdf(self, policy: BackendPolicy) -> Result<ClayDocument, ModelError> {
         let radius = self.radius();
         let mut document = ClayDocument::new(policy)?;
         document.add_starting_sphere(radius)?;
@@ -129,14 +227,119 @@ impl Scene {
         Ok(document)
     }
 
+    /// A grid, worked.
+    ///
+    /// A slab across x rather than a ball: a voxel verb wants material with a
+    /// wobble in it — a curvature-seeking brush has nothing to bite on a
+    /// primitive — and a slab gives every verb the same amount of it wherever
+    /// along the stroke it lands.
+    fn build_voxel(policy: BackendPolicy) -> Result<ClayDocument, ModelError> {
+        let mut document = ClayDocument::new(policy)?;
+        document.add_voxel_layer("Voxels", Self::VOXEL_CELL)?;
+        let brush = BrushSettings {
+            size: 0.25,
+            intensity: 1.0,
+            ..BrushSettings::default()
+        };
+        for step in 0..Self::VOXEL_STROKES {
+            let t = step as f32 / (Self::VOXEL_STROKES - 1) as f32;
+            document.apply_stroke(
+                ToolKind::Padrao,
+                brush,
+                &[GestureSample {
+                    position: [(t - 0.5) * 1.6, (t * 9.0).sin() * 0.08, 0.0],
+                    pressure: 1.0,
+                    time: t,
+                }],
+                [false; 3],
+            )?;
+        }
+        document.take_dirty_keys();
+        Ok(document)
+    }
+
+    /// A grid with something wrong with it.
+    ///
+    /// The starting form rasterized solid, then two removals: a pocket at the
+    /// centre, which nothing outside can reach and which is what a fill-voids
+    /// has to find, and a channel bored in from the surface, which is what a
+    /// close-holes has to seal. Rasterized at a coarser cell than the other
+    /// grid on purpose — a repair walks the whole lattice, and the figure
+    /// wanted here is of a repair rather than of a resolution.
+    fn build_pocked(policy: BackendPolicy) -> Result<ClayDocument, ModelError> {
+        let mut document = ClayDocument::new(policy).and_then(ClayDocument::with_starting_form)?;
+        document.convert_layer(Direction::SdfToVoxel, Self::POCKED_CELL, 1)?;
+        let erase = BrushSettings {
+            size: 0.2,
+            intensity: 1.0,
+            ..BrushSettings::default()
+        };
+        // The pocket: wholly inside, so the outside cannot reach it.
+        document.apply_stroke(
+            ToolKind::Apagar,
+            erase,
+            &[GestureSample {
+                position: [0.0, 0.0, 0.0],
+                pressure: 1.0,
+                time: 0.0,
+            }],
+            [false; 3],
+        )?;
+        // The channel: from clear of the shell to just under it.
+        let bore: Vec<GestureSample> = (0..6)
+            .map(|i| {
+                let t = i as f32 / 5.0;
+                GestureSample {
+                    position: [0.0, 1.2 - t * 0.8, 0.0],
+                    pressure: 1.0,
+                    time: t,
+                }
+            })
+            .collect();
+        document.apply_stroke(
+            ToolKind::Apagar,
+            BrushSettings {
+                size: 0.08,
+                ..erase
+            },
+            &bore,
+            [false; 3],
+        )?;
+        document.take_dirty_keys();
+        Ok(document)
+    }
+
+    /// Triangles, at a count the mesh brushes are actually used at.
+    ///
+    /// Marched from the reference field rather than imported from a file: the
+    /// suite has to build the same shape on every machine, and a fixture on
+    /// disk is a thing that drifts. The field it comes from is the reference
+    /// scene, so the two are the same subject in two representations.
+    fn build_mesh(policy: BackendPolicy) -> Result<ClayDocument, ModelError> {
+        let mut document = Self::Reference.build_sdf(policy)?;
+        let key = document.convert_layer(Direction::SdfToMesh, Self::VOXEL_CELL, 1)?;
+        document.set_active_layer(key)?;
+        document.take_dirty_keys();
+        Ok(document)
+    }
+
     /// The brush the dab measurements use, scaled to the scene.
     ///
     /// Proportional to the form, because a brush that is a tenth of a small
     /// model and a hundredth of a large one is not the same tool.
     pub fn brush(self) -> BrushSettings {
-        BrushSettings {
-            size: 0.18 * self.radius(),
-            ..BrushSettings::default()
+        match self {
+            // The grid is a slab a quarter-unit thick; a brush much smaller
+            // than that scrapes its surface rather than reshaping it.
+            Self::VoxelReference => BrushSettings {
+                size: 0.25,
+                intensity: 1.0,
+                ..BrushSettings::default()
+            },
+            _ => BrushSettings {
+                size: 0.18 * self.radius(),
+                ..BrushSettings::default()
+            },
         }
     }
 
@@ -202,22 +405,78 @@ impl Scene {
         (0..samples)
             .map(|i| {
                 let t = i as f32 / (samples.max(2) - 1) as f32;
-                let angle = (t - 0.5) * 1.2;
-                let (s, c) = angle.sin_cos();
                 GestureSample {
-                    position: [s * radius * 1.01, 0.1 * radius, c * radius * 1.01],
+                    position: self.along(t, radius),
                     pressure: 1.0,
                     time: t,
                 }
             })
             .collect()
     }
+
+    /// Where the stroke is at `t`, on the subject this member builds.
+    ///
+    /// Around the form for the two field scenes and the mesh marched from one;
+    /// along the slab for the grid, which has no far side to travel round.
+    fn along(self, t: f32, radius: f32) -> [f32; 3] {
+        if self == Self::VoxelReference {
+            return [(t - 0.5) * 1.2, 0.08, 0.0];
+        }
+        let angle = (t - 0.5) * 1.2;
+        let (s, c) = angle.sin_cos();
+        [s * radius * 1.01, 0.1 * radius, c * radius * 1.01]
+    }
+
+    /// Where to land a probe edit on this member.
+    ///
+    /// The field scenes ask the cache, because their own coordinates are not
+    /// where the surface ended up — see [`Scene::probe_point`]. A grid and a
+    /// mesh are built here from a path this module wrote, so the path is the
+    /// answer and there is nothing to ask.
+    pub fn probe(self, document: &ClayDocument) -> Option<[f32; 3]> {
+        let midpoint = self.along(0.5, self.radius());
+        match self.representation() {
+            Representation::Sdf => Self::probe_point(document, midpoint),
+            _ => Some(midpoint),
+        }
+    }
+
+    /// How big the subject this member built came out.
+    ///
+    /// Measured in the unit each representation is actually made of, so that a
+    /// member which silently stopped building the same thing is caught rather
+    /// than measured. `None` where the document cannot say.
+    pub fn size(self, document: &mut ClayDocument) -> Option<usize> {
+        match self.representation() {
+            Representation::Sdf => Some(document.surface_brick_count()),
+            Representation::Voxel => document.occupied_cells(),
+            Representation::Mesh => Some(document.visible_mesh_geometry().3.len() / 3),
+        }
+    }
+
+    /// What [`Scene::size`] should come out at, and what that is counted in.
+    ///
+    /// Recorded rather than derived: the point is to notice the shape
+    /// changing, which a formula that changes with it cannot do. Bump these
+    /// with the member's revision.
+    pub fn expected_size(self) -> (usize, &'static str) {
+        match self {
+            Self::Reference => (1049, "surface bricks"),
+            Self::TenTimesLarger => (9466, "surface bricks"),
+            Self::VoxelReference => (3070, "occupied cells"),
+            Self::MeshReference => (296_216, "triangles"),
+            Self::VoxelPocked => (33_543, "occupied cells"),
+        }
+    }
 }
 
 /// The conditions of the machine this is running on.
-pub fn conditions(scene: Scene, policy: &BackendPolicy, viewport: (u32, u32)) -> Conditions {
+pub fn conditions(policy: &BackendPolicy, viewport: (u32, u32)) -> Conditions {
     Conditions {
-        scene: scene.name().to_string(),
+        scenes: Scene::ALL
+            .into_iter()
+            .map(|scene| (scene.member(), scene.revision()))
+            .collect(),
         platform: std::env::consts::OS,
         architecture: std::env::consts::ARCH,
         backend: policy.active().to_string(),

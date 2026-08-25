@@ -125,6 +125,47 @@ pub enum LayerOperation {
 }
 
 impl LayerOperation {
+    /// One of each, with the arguments the application itself would send.
+    ///
+    /// For anything that has to exercise all of them — the performance gate
+    /// measures one figure per entry, so an operation missing from here is an
+    /// operation nobody is timing. `every_operation_is_in_all` is what keeps
+    /// it complete: its `match` is exhaustive, so a variant added to this enum
+    /// stops that test compiling until it is given arguments to be measured
+    /// with.
+    ///
+    /// The deform panel's two verbs come through
+    /// [`crate::DeformSettings::operation`] rather than being written out
+    /// again here, so the figures describe what the panel actually sends.
+    pub fn all() -> [Self; 6] {
+        let deform = |verb| {
+            crate::DeformSettings {
+                verb,
+                ..crate::DeformSettings::default()
+            }
+            .operation()
+        };
+        [
+            deform(crate::DeformVerb::Taper),
+            deform(crate::DeformVerb::Twist),
+            // A corner of the smallest cage the panel offers, pulled by a
+            // tenth of a unit.
+            Self::LatticeDrag {
+                divisions: [crate::lattice::MIN_DIVISIONS; 3],
+                at: [0, 0, 0],
+                offset: [0.1, 0.0, 0.0],
+            },
+            // One pass, which is what the menu item sends.
+            Self::CloseHoles { passes: 1 },
+            Self::FillVoids,
+            // A region around the origin, well inside any reference subject.
+            Self::RefineRegion {
+                min: [-0.3, -0.3, -0.3],
+                max: [0.3, 0.3, 0.3],
+            },
+        ]
+    }
+
     /// What the history calls it.
     pub fn label(self) -> &'static str {
         match self {
@@ -812,6 +853,46 @@ mod tests {
             for b in Falloff::ALL.iter().skip(i + 1) {
                 assert_ne!(a.label(), b.label());
             }
+        }
+    }
+
+    /// The `match` is the point: adding a variant to [`LayerOperation`] makes
+    /// it non-exhaustive, and the compiler names the operation that has no
+    /// arguments to be measured with. A list without this is a list that goes
+    /// stale silently, which for the performance gate means an operation
+    /// nobody is timing.
+    #[test]
+    fn every_operation_is_in_all() {
+        let all = LayerOperation::all();
+        for operation in all {
+            match operation {
+                LayerOperation::Taper { .. }
+                | LayerOperation::Twist { .. }
+                | LayerOperation::LatticeDrag { .. }
+                | LayerOperation::CloseHoles { .. }
+                | LayerOperation::FillVoids
+                | LayerOperation::RefineRegion { .. } => {}
+            }
+        }
+        let labels: std::collections::BTreeSet<&str> =
+            all.iter().map(|operation| operation.label()).collect();
+        assert_eq!(
+            labels.len(),
+            all.len(),
+            "two entries in LayerOperation::all are the same operation"
+        );
+    }
+
+    #[test]
+    fn every_operation_in_all_applies_somewhere() {
+        for operation in LayerOperation::all() {
+            assert!(
+                Representation::ALL
+                    .into_iter()
+                    .any(|representation| operation.applies_to(representation)),
+                "{} applies to no representation, so nothing can measure it",
+                operation.label()
+            );
         }
     }
 
