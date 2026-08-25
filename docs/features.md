@@ -1360,12 +1360,31 @@ re-meshed. The dab changed samples on the boundary plane of the dirty region,
 and marching cells just outside it produce different triangles even though their
 own brick's lattice did not change.
 
-That explains the case it explains, and is **not** the whole story: dilating the
-request by a brick fixes the four-dab case and pushes the smallest failure out
-to six, but it does not converge. Two bricks of dilation takes one stroke from
-12 losses to 6 and another from 17 to 15 — coverage alone does not close it, so
-something in the interaction between replacing a key's stored slice and what the
-current request is able to re-emit is still unaccounted for.
+**The store is not at fault; the request set is.** Requesting every surface
+brick on every sync — through the ordinary incremental store, its slots, its
+splitting and its replacement, changing only *which keys are asked for* — loses
+**nothing** on all three strokes. So the per-key slots, the ownership rule and
+the seam handling are all sound, and what remains is finding the smallest
+request set that is still correct.
+
+The measurements, as missing triangles on two strokes that lose them:
+
+| request rule | ring | carve |
+|---|---|---|
+| the dirty keys that hold a surface (today) | 17 | 12 |
+| every dirty key | 17 | 12, plus 15 stale |
+| dilate by one brick, filtered by `states()` | 17 | 8 |
+| dilate by one brick, filtered by `surface_bricks()` | **2** | **1** |
+| dilate by two bricks, filtered by `surface_bricks()` | 4 | 2 |
+| every surface brick | **0** | **0** |
+
+Two things in that table are worth carrying into the fix. Filtering the same
+dilated set through `surface_bricks()` rather than through `states()` accounts
+for most of the difference — the two disagree about which bricks hold a surface,
+and that disagreement is worth understanding on its own. And a *wider* dilation
+is worse than a narrower one, which cannot happen if coverage were the only
+variable, so the size of the replaced set interacts with what the request is
+able to re-emit.
 
 `settle_needed.rs` asks the same question of six gentle dabs on a fresh sphere
 and passes, which is why this went unnoticed: those dabs never push a brick in
