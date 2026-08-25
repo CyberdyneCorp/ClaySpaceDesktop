@@ -61,6 +61,12 @@ pub struct ViewportInput {
 impl ViewportInput {
     /// Reads the frame's input for an allocated viewport region.
     pub fn read(ui: &egui::Ui, response: &egui::Response) -> Self {
+        // Read *before* the input closure. `Context::input` takes the write
+        // lock and `Context::options` takes the read lock, both on the same
+        // `RwLock` — so asking egui for its options from inside `input()`
+        // deadlocks outright, and the application freezes on the first frame
+        // that reads the pointer. Hoisting it is not a tidy-up; it is the fix.
+        let points_per_notch = ui.ctx().options(|options| options.line_scroll_speed);
         ui.input(|i| Self {
             pointer: i.pointer.latest_pos(),
             over_viewport: response.contains_pointer(),
@@ -79,7 +85,7 @@ impl ViewportInput {
             .into_iter()
             .any(|button| i.pointer.button_released(button)),
             delta: i.pointer.delta(),
-            scroll: notches(ui, i.smooth_scroll_delta.y),
+            scroll: notches(points_per_notch, i.smooth_scroll_delta.y),
             // Option on a Mac, Alt elsewhere: the trackpad has no second
             // button worth reaching for.
             orbit_modifier: i.modifiers.alt,
@@ -100,12 +106,16 @@ impl ViewportInput {
 /// the number or the user changes it. A trackpad reports points directly and
 /// comes through as the fraction of a notch it actually moved, which is what
 /// makes a two-finger drag continuous rather than stepped.
-fn notches(ui: &egui::Ui, points: f32) -> f32 {
-    let per_line = ui.ctx().options(|options| options.line_scroll_speed);
-    if per_line <= f32::EPSILON {
+///
+/// Takes the figure rather than the context on purpose: a version of this that
+/// reached for `ui.ctx().options(..)` itself could be called from inside
+/// `ui.input(..)`, which deadlocks — and it was, and it did. Passing the number
+/// in makes that impossible to write.
+fn notches(points_per_notch: f32, points: f32) -> f32 {
+    if points_per_notch <= f32::EPSILON {
         return 0.0;
     }
-    points / per_line
+    points / points_per_notch
 }
 
 /// Whether a press should start a stroke, or turn the camera instead.
@@ -332,24 +342,43 @@ mod press_tests {
         // is five times further away in one click. "The zoom jumps are too
         // big" was the report; this is the conversion that was missing.
         let ctx = egui::Context::default();
-        let per_line = ctx.options(|options| options.line_scroll_speed);
+        let per_notch = ctx.options(|options| options.line_scroll_speed);
         assert!(
-            per_line > 1.0,
+            per_notch > 1.0,
             "egui measures a line in points, not notches"
         );
 
+        assert!(
+            (notches(per_notch, per_notch) - 1.0).abs() < 1e-4,
+            "a notch of scroll did not come through as one notch"
+        );
+        assert!((notches(per_notch, -per_notch) + 1.0).abs() < 1e-4);
+        // A trackpad's fraction stays a fraction rather than rounding to a step.
+        assert!((notches(per_notch, per_notch / 4.0) - 0.25).abs() < 1e-4);
+        assert_eq!(notches(per_notch, 0.0), 0.0);
+        // And a nonsense figure is no scroll rather than an infinity.
+        assert_eq!(notches(0.0, 100.0), 0.0);
+    }
+
+    #[test]
+    fn reading_the_frame_does_not_deadlock() {
+        // It did. `Context::input` takes the write lock and `Context::options`
+        // takes the read lock on the same `RwLock`, and the first version of
+        // the conversion asked egui for its options from inside the input
+        // closure — so the application froze on the first frame that read the
+        // pointer. The test above passed anyway, because it called the
+        // conversion on its own rather than through `read`.
+        //
+        // This drives the whole of `read` inside a real frame. It hangs rather
+        // than fails if the lock is taken twice, which is the failure being
+        // guarded against.
+        let ctx = egui::Context::default();
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                // One notch up, as egui would deliver it.
-                assert!(
-                    (notches(ui, per_line) - 1.0).abs() < 1e-4,
-                    "a notch of scroll did not come through as one notch"
-                );
-                assert!((notches(ui, -per_line) + 1.0).abs() < 1e-4);
-                // A trackpad's fraction stays a fraction rather than rounding
-                // to a step.
-                assert!((notches(ui, per_line / 4.0) - 0.25).abs() < 1e-4);
-                assert_eq!(notches(ui, 0.0), 0.0);
+                let (_, response) =
+                    ui.allocate_exact_size(egui::vec2(64.0, 64.0), egui::Sense::click_and_drag());
+                let input = super::ViewportInput::read(ui, &response);
+                assert_eq!(input.scroll, 0.0, "no scroll was delivered this frame");
             });
         });
     }
