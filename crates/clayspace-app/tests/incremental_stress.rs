@@ -7,11 +7,12 @@
 //! *move* the surface across brick boundaries, and dabs that leave a brick
 //! uniform where its neighbour still holds surface.
 //!
-//! That last case is the one worth probing. A dirty key that no longer holds a
-//! surface is not meshed, but it *is* replaced — so anything filed under it is
-//! dropped. If a triangle whose cell lives in a neighbour had been attributed
-//! to it by an earlier call, and that neighbour is not dirty this frame,
-//! nothing re-emits it.
+//! It found one. A triangle was filed under whichever key's *vertex* range held
+//! its first corner, and welding spans brick seams — so a triangle could be
+//! filed under a key holding none of its corners. It survived until that key
+//! was replaced by a request whose bricks the triangle did not touch, and then
+//! nothing re-emitted it. These tests are what caught it and what holds it
+//! fixed.
 
 mod support;
 
@@ -58,11 +59,7 @@ fn stroke(
     }
 }
 
-// Ignored, not deleted: this is a real, reproducible defect with no fix yet,
-// and a red suite teaches people to ignore the suite. `cargo test -- --ignored`
-// runs it, and it should be the first thing run by whoever picks the bug up.
 #[test]
-#[ignore = "known defect: the incremental surface loses triangles a rebuild has"]
 fn a_long_session_still_draws_what_a_rebuild_would() {
     let Some(harness) = Harness::new() else {
         return;
@@ -252,7 +249,6 @@ fn only(kind: &str) -> usize {
 }
 
 #[test]
-#[ignore = "known defect: narrows the loss to the stroke that causes it"]
 fn which_stroke_loses_triangles() {
     let ring = only("ring");
     let pull = only("pull");
@@ -262,7 +258,6 @@ fn which_stroke_loses_triangles() {
 }
 
 #[test]
-#[ignore = "diagnostic: prints where the losses fall"]
 fn where_do_the_missing_triangles_sit() {
     // A diagnostic rather than a guarantee: it prints where the losses are so
     // the mechanism can be identified from data instead of from reasoning.
@@ -365,7 +360,6 @@ fn carve_of(dabs: usize) -> Option<usize> {
 }
 
 #[test]
-#[ignore = "diagnostic: the fewest dabs that lose a triangle"]
 fn how_few_dabs_lose_a_triangle() {
     // A 52-dab reproduction is not something anybody can reason about. This
     // finds the smallest one that still fails, which is what makes the defect
@@ -384,7 +378,6 @@ fn how_few_dabs_lose_a_triangle() {
 }
 
 #[test]
-#[ignore = "diagnostic: the four-dab case, triangle by triangle"]
 fn the_four_dab_case() {
     let Some(harness) = Harness::new() else {
         return;
@@ -451,5 +444,79 @@ fn the_four_dab_case() {
                 }
             }
         }
+    }
+}
+
+#[test]
+fn do_the_two_surface_queries_agree() {
+    // Filtering the same dilated request through `surface_bricks()` rather
+    // than through `states()` took the losses from 17 and 12 to 2 and 1, so
+    // the two disagree somewhere. This asks them the same question directly.
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let Ok(policy) = BackendPolicy::discover(None) else {
+        return;
+    };
+    let Ok(mut document) = ClayDocument::new(policy).and_then(ClayDocument::with_starting_form)
+    else {
+        return;
+    };
+    let mut incremental = SurfaceGeometry::new(&harness.gpu);
+    incremental
+        .rebuild(&harness.gpu, &mut document)
+        .expect("first");
+
+    let carve = BrushSettings {
+        intensity: 0.9,
+        invert: true,
+        ..BrushSettings::default()
+    };
+    for step in 0..6 {
+        let a = step as f32 / 16.0 * std::f32::consts::TAU;
+        document
+            .apply_stroke(
+                ToolKind::Padrao,
+                carve,
+                &[GestureSample {
+                    position: [a.cos() * 0.5, a.sin() * 0.5, 0.95],
+                    pressure: 1.0,
+                    time: step as f32 * 0.01,
+                }],
+                [false; 3],
+            )
+            .expect("a dab");
+
+        // Ask both, about the same keys, at the same moment — before `sync`
+        // drains the dirty set.
+        let surface: std::collections::HashSet<[i32; 3]> = document
+            .cache()
+            .surface_bricks()
+            .expect("surface bricks")
+            .into_iter()
+            .collect();
+        let dirty = document.dirty_keys().to_vec();
+        let states = document.cache().states(&dirty).expect("states");
+        let mut disagree = 0;
+        for (key, state) in dirty.iter().zip(&states) {
+            let says_surface = *state == clayspace_engine::claycore::BrickState::Surface;
+            let listed = surface.contains(key);
+            if says_surface != listed {
+                if disagree < 6 {
+                    println!(
+                        "  dab {step}: key {key:?} — states() says {state:?}, \
+                         surface_bricks() {} it",
+                        if listed { "lists" } else { "does not list" }
+                    );
+                }
+                disagree += 1;
+            }
+        }
+        println!(
+            "dab {step}: {} dirty keys, {disagree} disagreements",
+            dirty.len()
+        );
+
+        incremental.sync(&harness.gpu, &mut document).expect("sync");
     }
 }

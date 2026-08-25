@@ -1384,3 +1384,43 @@ Recorded under *Not built yet*.
     constant now, so a future change to the rate does not require re-guessing a
     number in a test.
 
+## 30. The holes a sculptor sees
+
+- [x] 30.1 Filed under a key that held none of its corners
+  - Reported with two screenshots: small holes and torn seams on an SDF layer
+    after a long session. Reproduced by `incremental_stress.rs` — three
+    strokes, 52 dabs, the incremental store against a rebuild — which was
+    missing twenty triangles, and by a bisect that found the smallest losing
+    case at **four dabs losing one**.
+  - The cause: a triangle was filed under whichever key's *vertex* range held
+    its first corner. The engine welds vertices across brick seams, so that key
+    could hold **none of the triangle's corners**. Nothing looked wrong that
+    frame; the damage came later, when that key was replaced by a request whose
+    bricks the triangle did not touch. It was cleared, and nothing re-emitted
+    it — the engine returns only triangles with a corner in a requested brick.
+    A hole appearing minutes after the stroke that caused it.
+  - Filed under the key whose *index* range the engine listed it in instead.
+    That is the engine's own attribution, which by contract holds a corner, so
+    any later request naming that key re-emits the triangle before replacing
+    it. It also drops a binary search per triangle.
+  - Checked by mutation rather than assumed: restoring the old rule loses
+    twenty triangles again.
+
+- [x] 30.2 What made it hard to see, twice over
+  - **The losses depend on the order keys are requested in** — the order
+    decides which key a triangle is filed under, and so which later request can
+    clear it. An early measurement iterated a `HashSet`, varied between runs,
+    and sent the investigation after a difference between `states()` and
+    `surface_bricks()` that does not exist: asked the same keys at the same
+    moment they agree exactly, over six dabs, every time. Recorded because the
+    wrong conclusion was published before it was checked.
+  - **The guarantee test was too gentle.** `settle_needed.rs` asks exactly the
+    right question — is the incremental surface what a rebuild would draw — of
+    six light dabs on a fresh sphere, where no triangle is ever filed across a
+    seam that a later request goes on to clear. It passed throughout.
+  - Several plausible explanations were measured and discarded before the real
+    one: emptied bricks being cleared without being re-meshed, the surface-state
+    filter, the shading level, and dilating the request by one and two bricks.
+    None of them converged; the store itself was never at fault, which was
+    settled by requesting every surface brick and seeing the losses go to zero.
+

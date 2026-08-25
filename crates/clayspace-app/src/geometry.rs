@@ -408,56 +408,51 @@ impl SurfaceGeometry {
         self.last_read = read_started.elapsed();
         let split_started = std::time::Instant::now();
 
-        // Each triangle is owned by exactly one key — the one whose vertex
-        // range contains its first index — so the union of keys carries every
-        // triangle once. A key then stores the vertices its own triangles
-        // reference, which for a boundary triangle includes vertices from a
-        // neighbour.
+        // Each triangle is filed under exactly one key, and a key stores the
+        // vertices its own triangles reference — which for a boundary triangle
+        // includes vertices welded to a neighbour's.
+        //
+        // Which key is the whole question, and it has been wrong twice.
         //
         // The first version stored only a key's own vertex range and dropped
         // any triangle reaching outside it. That opened a crack along every
         // brick boundary: the engine welds vertices across seams, so a great
         // many triangles reach outside. The capture showed a grid of holes
         // across the whole surface, which no count or timing would have named.
-        // Binary search, not a scan. Finding the owner is done once per
-        // triangle and the scan was linear in the number of keys, so the cost
-        // of a re-mesh grew with the *square* of the region: 24 segments of a
-        // stroke took 600 ms each with a few hundred keys in play.
-        let mut by_first: Vec<(u32, u32, usize)> = ranges
-            .iter()
-            .enumerate()
-            .map(|(slot, range)| (range.vertex_first, range.vertex_count, slot))
-            .collect();
-        by_first.sort_unstable();
-        let owner_of = |index: u32| -> Option<usize> {
-            // The last range starting at or before `index`, then a bounds
-            // check: ranges do not overlap, so at most one can contain it.
-            let at = by_first.partition_point(|(first, _, _)| *first <= index);
-            let (first, count, slot) = *by_first.get(at.checked_sub(1)?)?;
-            (index < first + count).then_some(slot)
-        };
-
-        // Only triangles belonging to a key that is actually being replaced
-        // are collected. The scan still has to visit every triangle — a
-        // triangle listed under one key's index range can be owned by another
-        // — but a key that is being kept needs nothing built for it, and
-        // building it anyway was most of the cost of meshing the whole
+        //
+        // The second version filed a triangle under whichever key's *vertex*
+        // range held its first corner. That is not where the engine put it.
+        // Welding spans seams — "a triangle in one key's index range may
+        // reference a vertex in an EARLIER key's vertex range" — so a triangle
+        // could be filed under a key holding none of its corners. Nothing is
+        // wrong with the surface that frame; the damage comes later, when that
+        // key is replaced by a request whose bricks the triangle does not
+        // touch. Then it is cleared and nothing re-emits it, because the
+        // engine only returns triangles with a corner in a requested brick.
+        // That is the hole a sculptor sees, appearing minutes after the stroke
+        // that caused it.
+        //
+        // A triangle is filed under the key whose *index* range the engine
+        // listed it in. That is the engine's own attribution — "the
+        // lexicographically lowest requested key whose closed box contains one
+        // of its corners" — so the key always holds a corner, and any later
+        // request naming that key re-emits the triangle before replacing it.
+        // The ranges partition the mesh, so this files each triangle exactly
+        // once and needs no search.
+        // Only keys actually being replaced need anything built for them;
+        // building the rest anyway was most of the cost of meshing the whole
         // surface.
         let wanted =
             |slot: usize| replace.is_none_or(|replace| replace.contains(&ranges[slot].key));
         let mut owned: Vec<Vec<[u32; 3]>> = vec![Vec::new(); ranges.len()];
-        for range in &ranges {
+        for (slot, range) in ranges.iter().enumerate() {
+            if !wanted(slot) {
+                continue;
+            }
             let first = range.index_first as usize;
             let last = (first + range.index_count as usize).min(indices.len());
             for triangle in indices[first..last].chunks_exact(3) {
-                let triangle = [triangle[0], triangle[1], triangle[2]];
-                // Ownership follows the first vertex, so a triangle listed
-                // under two keys' index ranges is still stored once.
-                if let Some(owner) = owner_of(triangle[0]) {
-                    if wanted(owner) {
-                        owned[owner].push(triangle);
-                    }
-                }
+                owned[slot].push([triangle[0], triangle[1], triangle[2]]);
             }
         }
 

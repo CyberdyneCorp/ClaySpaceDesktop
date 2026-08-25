@@ -1331,64 +1331,34 @@ cost with no benefit and a promise the interface could not keep. Both
 
 ## Known-degraded
 
-**The incremental surface loses a few triangles a rebuild has.** Reported as
-small holes and torn-looking seams while sculpting, and reproduced:
-`incremental_stress.rs` builds a form with three strokes and compares the
-incremental store against a full rebuild, which is missing 12 to 17 triangles —
-identically on every run, so it is a defect rather than a race. What is known:
+**Fixed: the incremental surface used to lose a few triangles a rebuild has.**
+Reported as small holes and torn-looking seams while sculpting. Kept here
+because the shape of it is worth remembering.
 
-- The losses are **scattered singles** — one to three triangles missing from
-  keys where hundreds are held correctly — and there are **no stale triangles**
-  alongside them. The store is always a strict subset of the truth.
-- Nothing is dropped by the host's own splitting: instrumenting every discard
-  path in `SurfaceGeometry::remesh` counts zero.
-- It is not the shading level, and not the filter that meshes only the dirty
-  keys still holding a surface: requesting *every* dirty key leaves the same
-  losses and adds stale triangles.
-- A one-brick dilation of the request helps one stroke and harms another, which
-  is the signature of something in the interaction between a per-key store and
-  the engine's *request-relative* straddler attribution rather than a missing
-  ring of coverage.
-- `Puxar` loses nothing; the two strokes that lose are both `Padrao`, additive
-  and inverted.
+A triangle was filed under whichever key's *vertex* range held its first
+corner. The engine welds vertices across brick seams — "a triangle in one key's
+index range may reference a vertex in an EARLIER key's vertex range" — so a
+triangle could be filed under a key holding **none of its corners**. Nothing
+looked wrong that frame. The damage came later, when that key was replaced by a
+request whose bricks the triangle did not touch: it was cleared, and nothing
+re-emitted it, because the engine only returns triangles with a corner in a
+requested brick. Hence a hole appearing minutes after the stroke that caused it.
 
-**The smallest failing case is four dabs**, losing one triangle, which is what
-makes this tractable. Traced: that triangle lies in brick `[3, 3, 4]`, one brick
-beyond the edge of the fourth dab's request, and **none of its corners lie in
-any requested brick** — so the engine cannot return it, and that brick is never
-re-meshed. The dab changed samples on the boundary plane of the dirty region,
-and marching cells just outside it produce different triangles even though their
-own brick's lattice did not change.
+A triangle is filed under the key whose *index* range the engine listed it in.
+That is the engine's own attribution, which by contract holds a corner of the
+triangle, so any later request naming that key re-emits it before replacing it.
+The ranges partition the mesh, so this files each triangle exactly once — and it
+needs no binary search, which the old rule did per triangle.
 
-**The store is not at fault; the request set is.** Requesting every surface
-brick on every sync — through the ordinary incremental store, its slots, its
-splitting and its replacement, changing only *which keys are asked for* — loses
-**nothing** on all three strokes. So the per-key slots, the ownership rule and
-the seam handling are all sound, and what remains is finding the smallest
-request set that is still correct.
-
-The measurements, as missing triangles on two strokes that lose them:
-
-| request rule | ring | carve |
-|---|---|---|
-| the dirty keys that hold a surface (today) | 17 | 12 |
-| every dirty key | 17 | 12, plus 15 stale |
-| dilate by one brick, filtered by `states()` | 17 | 8 |
-| dilate by one brick, filtered by `surface_bricks()` | **2** | **1** |
-| dilate by two bricks, filtered by `surface_bricks()` | 4 | 2 |
-| every surface brick | **0** | **0** |
-
-Two things in that table are worth carrying into the fix. Filtering the same
-dilated set through `surface_bricks()` rather than through `states()` accounts
-for most of the difference — the two disagree about which bricks hold a surface,
-and that disagreement is worth understanding on its own. And a *wider* dilation
-is worse than a narrower one, which cannot happen if coverage were the only
-variable, so the size of the replaced set interacts with what the request is
-able to re-emit.
-
-`settle_needed.rs` asks the same question of six gentle dabs on a fresh sphere
-and passes, which is why this went unnoticed: those dabs never push a brick in
-or out of holding a surface.
+Two things made this hard to see, and both are worth avoiding again. The losses
+depend on the **order keys are requested in**, because the order changes which
+key a triangle is filed under and therefore which later request can clear it —
+so an early measurement taken over a `HashSet` varied between runs and sent the
+investigation after a difference between two engine queries that do not in fact
+disagree. And `settle_needed.rs` asks exactly the right question of six gentle
+dabs on a fresh sphere, where no triangle is ever filed across a seam that a
+later request will clear. `incremental_stress.rs` is the harder version: three
+strokes, 52 dabs, and a bisect that finds the smallest losing case.
 
 Offered, and not doing what they should. Each has a test that fails when it is
 fixed, so this list shrinks by being noticed rather than by being remembered.
