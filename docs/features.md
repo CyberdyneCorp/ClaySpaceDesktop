@@ -1331,6 +1331,68 @@ cost with no benefit and a promise the interface could not keep. Both
 
 ## Known-degraded
 
+**Pinholes in the brick cache's mesh on a heavily worked surface.** Reported
+alongside the triangle loss above, and *not* the same defect — that one is
+fixed and this survives it, which is why the artifacts improved without going
+away. This one is the engine's.
+
+Reproduced by `visual_holes.rs`, which renders the form and looks at it rather
+than comparing two of our own structures. At around six hundred thousand
+triangles a mixed session leaves a handful of one-pixel holes, and the pixels
+are background: `[34, 37, 42]` against a background of `[35, 38, 43]`,
+surrounded by lit surface on every side.
+
+Where they are not is what identifies them:
+
+| what was rendered | holes |
+|---|---|
+| the incremental store | 8 |
+| the same document rebuilt from scratch | 9 |
+| **the brick cache's own mesh, uploaded whole** | **9** |
+| `clay_document_mesh` of the same document | **0** |
+
+The third row is the one that matters: it skips our splitting, our per-key
+store and our slots, and the holes are still there. So they are in
+`clay_brick_cache_mesh` rather than in anything this application does with it —
+consistent with the header's own distinction, where `clay_document_mesh` is
+"the watertight, 2-manifold export path" and the brick cache is the frame path.
+Nothing in shading can fill a hole, so there is no mitigation here worth having:
+turning normals toward the eye, which would hide a badly shaded triangle, moves
+the count by one.
+
+A related but separate cost, worth fixing on our side: the incremental store
+holds **55 duplicate triangles** out of 597,521. The engine's header asks a host
+holding geometry per brick to dedupe by triangle, because a straddler "may move
+to another key's share when a later request names a different set". We now do,
+at relayout. It is nine thousandths of a per cent of the buffer — kept because a
+relayout already rewrites everything so the pass is free, not because it pays.
+
+**55, and not the 11,333 first reported here.** That figure came from a dedupe
+keyed on the three vertex positions, which counts every pair of triangles at the
+same three points. Most of those are not one triangle twice. They are two
+meshings of one patch of surface with different brick neighbourhoods, and
+because vertices are welded across a seam, the normal at a welded vertex depends
+on which bricks the call covered — so the two copies sit at identical points and
+are shaded differently. Dropping one is not tidying, it is picking a shading,
+and it made a settled surface differ from a full re-mesh by twelve levels along
+a thin trace of the seams. The key is the whole vertex now: position, normal,
+colour and mask, every attribute the shader reads, so a dropped copy provably
+cannot change a pixel.
+
+Two lessons, both about instruments rather than about the bug. The check that
+pruning lost nothing was written in the same terms pruning matched on, first a
+1/4096 tolerance and then positions alone — asked that way it can only answer
+no, however wrong the terms are. And the whole thing was invisible on Linux and
+CPU: it took the macOS runners to show it, because which copy a store ends up
+holding depends on meshing order. A test that passes everywhere it is run is not
+the same as a test that passes.
+
+**The 11,278 that are left is the more interesting number.** Coincident
+triangles carrying different normals are two per cent of the drawn surface,
+shaded two ways, with the depth test picking between them by draw order — and
+draw order moves when slots move. That is a candidate for the specks below, and
+it is not yet investigated.
+
 **Fixed: the incremental surface used to lose a few triangles a rebuild has.**
 Reported as small holes and torn-looking seams while sculpting. Kept here
 because the shape of it is worth remembering.
