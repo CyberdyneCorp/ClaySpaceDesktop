@@ -146,37 +146,60 @@ fn neither_end_of_a_gesture_leaves_the_frame() {
         geometry.awaiting_refinement(),
     );
 
-    // The regression the drag has to hold. Shading fully mid-drag put 15 to
-    // 19 ms segments in this gesture's tail, which is a dropped frame with the
-    // pointer moving — the one moment the ring is being watched.
-    assert!(
-        Duration::from_secs_f64(worst / 1000.0) < FRAME,
-        "the worst mid-drag segment took {worst:.1} ms, over a {:.1} ms frame. \
-         The drag is meshing more, or shading more, than it can afford — the \
-         ring is drawn in this same frame, so this is the pointer lag.",
-        FRAME.as_secs_f64() * 1000.0
-    );
+    // The budgets are a property of the binary that ships. Measured on one
+    // machine, this gesture's worst segment runs 9.90 ms unoptimised against
+    // 2.57 ms optimised — near enough four times — so a 16.7 ms bound in a
+    // debug build measures the profile rather than the code. On a shared macOS
+    // runner the same debug segment reads 21.0 ms, and this test failed every
+    // CI run on that platform for weeks while the release step it was meant
+    // for never got to run.
+    //
+    // The same guard `sculpt_latency` and `visual_brushes` already carry, and
+    // the one the workflow assumes every timing test has: "The budgets are a
+    // property of an optimised build. Measuring them in a debug build measures
+    // the profile, so the timing assertions only run here." This was the test
+    // that did not.
+    //
+    // Debug still does all the work above and prints the numbers; only the
+    // verdict waits for a build that means something.
+    if cfg!(debug_assertions) {
+        println!(
+            "  (debug build: timings reported, not asserted — \
+             run with --release for the verdict)"
+        );
+    } else {
+        // The regression the drag has to hold. Shading fully mid-drag put 15 to
+        // 19 ms segments in this gesture's tail, which is a dropped frame with the
+        // pointer moving — the one moment the ring is being watched.
+        assert!(
+            Duration::from_secs_f64(worst / 1000.0) < FRAME,
+            "the worst mid-drag segment took {worst:.1} ms, over a {:.1} ms frame. \
+             The drag is meshing more, or shading more, than it can afford — the \
+             ring is drawn in this same frame, so this is the pointer lag.",
+            FRAME.as_secs_f64() * 1000.0
+        );
 
-    // The regression the end of a gesture has to hold.
-    assert!(
-        pointer_up < FRAME,
-        "the end of a gesture took {:.1} ms, over a {:.1} ms frame — which is \
-         the hitch the shading pass used to cause. Something has been added \
-         back onto pointer-up.",
-        pointer_up.as_secs_f64() * 1000.0,
-        FRAME.as_secs_f64() * 1000.0
-    );
+        // The regression the end of a gesture has to hold.
+        assert!(
+            pointer_up < FRAME,
+            "the end of a gesture took {:.1} ms, over a {:.1} ms frame — which is \
+             the hitch the shading pass used to cause. Something has been added \
+             back onto pointer-up.",
+            pointer_up.as_secs_f64() * 1000.0,
+            FRAME.as_secs_f64() * 1000.0
+        );
 
-    // And the refinement itself, which is only allowed to overrun by the one
-    // set it is guaranteed to finish.
-    assert!(
-        refinement < FRAME,
-        "a refinement slice took {:.1} ms against a {:.1} ms budget. It is \
-         meant to stop at the first set that runs the budget out, so a single \
-         set has grown past a frame.",
-        refinement.as_secs_f64() * 1000.0,
-        slice.as_secs_f64() * 1000.0
-    );
+        // And the refinement itself, which is only allowed to overrun by the one
+        // set it is guaranteed to finish.
+        assert!(
+            refinement < FRAME,
+            "a refinement slice took {:.1} ms against a {:.1} ms budget. It is \
+             meant to stop at the first set that runs the budget out, so a single \
+             set has grown past a frame.",
+            refinement.as_secs_f64() * 1000.0,
+            slice.as_secs_f64() * 1000.0
+        );
+    }
 
     // The debt has to be finite and it has to be paid: a drag that queues
     // faster than the idle frames can clear would never catch up.

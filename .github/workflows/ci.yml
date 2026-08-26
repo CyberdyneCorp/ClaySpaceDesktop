@@ -31,17 +31,21 @@ jobs:
       matrix:
         include:
           - name: macOS, CPU only
+            slug: macos-cpu
             os: macos-14
             features: ""
             cpu_only: true
           - name: macOS, Metal
+            slug: macos-metal
             os: macos-14
             features: "--features clayspace-engine/metal"
           - name: Linux, CPU only
+            slug: linux-cpu
             os: ubuntu-24.04
             features: ""
             cpu_only: true
           - name: Linux, Vulkan
+            slug: linux-vulkan
             os: ubuntu-24.04
             features: "--features clayspace-engine/vulkan"
             vulkan: true
@@ -94,14 +98,32 @@ jobs:
       # window smoke asks for a display and skips likewise. Both report the
       # skip rather than passing quietly, so a runner that *should* have a
       # device shows up as a skip in the log rather than a false green.
+      #
+      # `--no-fail-fast` because cargo otherwise stops at the first test binary
+      # that fails, and one red test then hides every other. It hid a real one:
+      # `gesture_end` failed on macOS for weeks and `visual_incremental` never
+      # ran behind it, so the run reported one problem where there were two.
       - name: Test
-        run: cargo test --workspace ${{ matrix.features }}
+        run: cargo test --workspace --no-fail-fast ${{ matrix.features }}
 
       # The budgets are a property of an optimised build. Measuring them in a
       # debug build measures the profile, so the timing assertions only run
       # here.
       - name: Test (release)
-        run: cargo test --workspace --release ${{ matrix.features }}
+        run: cargo test --workspace --no-fail-fast --release ${{ matrix.features }}
+
+      # A visual test that fails says "see target/visual/…", and until now that
+      # file went into the bin with the runner. The whole reason those tests
+      # exist is that "several real defects were invisible to the assertions and
+      # obvious in the picture" — so when one fails, the picture has to survive
+      # the run.
+      - name: Keep the captures
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-${{ matrix.slug }}-${{ github.sha }}
+          path: target/visual
+          if-no-files-found: ignore
 
   # Figures, not assertions. The gate is a *regression* against a recorded
   # baseline — the specification asks for performance to be measured in CI
