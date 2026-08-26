@@ -85,6 +85,24 @@ impl GizmoHandle {
         }
     }
 
+    /// Every handle a mode offers for something carrying a [`Transform`].
+    ///
+    /// The same as [`GizmoHandle::all_for`] except in scale mode, where the
+    /// three axis boxes are not offered: the engine's transforms take one
+    /// scale factor and not three, so an axis box would measure a stretch it
+    /// could not apply. A control that silently does nothing is the failure
+    /// this application keeps refusing — the combine operations' distance
+    /// slider refuses zero for the same reason.
+    ///
+    /// A cage still gets all three, because a cage scales its own control
+    /// points and carries no engine transform.
+    pub fn all_for_transform(mode: GizmoMode) -> Vec<GizmoHandle> {
+        match mode {
+            GizmoMode::Scale => vec![Self::Centre],
+            other => Self::all_for(other),
+        }
+    }
+
     /// Whether this is a ring rather than a shaft or a box.
     pub fn is_ring(self, mode: GizmoMode) -> bool {
         mode == GizmoMode::Rotate && matches!(self, Self::Axis(_) | Self::View)
@@ -224,6 +242,152 @@ impl GizmoDrag {
             None => std::array::from_fn(|i| self.pivot[i] + offset[i] * factor),
         }
     }
+}
+
+/// Where a whole thing stands: what the engine's transforms take, and what a
+/// manipulator on one produces.
+///
+/// The same four values every transform in the engine's interface takes —
+/// a position, an axis, an angle and *one* scale factor. Not a matrix: the
+/// boundary takes these, and composing a matrix here only to decompose it
+/// there would invent a rotation representation that would then have to be
+/// reconciled with the one the engine actually reads.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Transform {
+    pub position: [f32; 3],
+    /// Never zero, even for no rotation: the engine requires a real axis and
+    /// says why — "a second convention for 'no rotation' would be one more
+    /// thing to get wrong."
+    pub rotation_axis: [f32; 3],
+    pub rotation_angle: f32,
+    /// Uniform. There is no per-axis scale anywhere in the engine's interface,
+    /// which is why scale mode offers a centre handle and no axis boxes for
+    /// anything that carries one of these.
+    pub scale: f32,
+}
+
+impl Default for Transform {
+    fn default() -> Self {
+        Self {
+            position: [0.0; 3],
+            rotation_axis: [0.0, 1.0, 0.0],
+            rotation_angle: 0.0,
+            scale: 1.0,
+        }
+    }
+}
+
+impl Transform {
+    pub fn at(position: [f32; 3]) -> Self {
+        Self {
+            position,
+            ..Self::default()
+        }
+    }
+}
+
+impl GizmoDrag {
+    /// What this drag makes of a transform.
+    ///
+    /// The other half of [`GizmoDrag::apply`], which maps a point to a point
+    /// and is the whole of what a cage of control points needs. A placed
+    /// object is not a set of points the application can move: it is a node
+    /// the engine holds, and what the engine takes is this.
+    ///
+    /// Rotation *composes*, which is the part that needs saying. The engine
+    /// stores one axis and one angle, so turning a form that is already turned
+    /// cannot simply overwrite them — the two rotations have to be combined
+    /// into the single one that means both, which is what quaternions are for
+    /// and why they appear in a domain crate that otherwise has no need of
+    /// them.
+    pub fn resolve(self, current: Transform, to: [f32; 3], snap: bool) -> Transform {
+        match self.mode {
+            GizmoMode::Move => Transform {
+                position: self.moved(current.position, to),
+                ..current
+            },
+            GizmoMode::Rotate => {
+                let Some(axis) = self.axis() else {
+                    return current;
+                };
+                let angle = self.angle(axis, to);
+                let angle = if snap { snapped(angle) } else { angle };
+                let (rotation_axis, rotation_angle) = compose(
+                    (current.rotation_axis, current.rotation_angle),
+                    (axis, angle),
+                );
+                Transform {
+                    // About the pivot, so an object turned by a manipulator
+                    // sitting on something else orbits it rather than
+                    // spinning where it stands.
+                    position: rotate_about(current.position, self.pivot, axis, angle),
+                    rotation_axis,
+                    rotation_angle,
+                    ..current
+                }
+            }
+            GizmoMode::Scale => {
+                let factor = self.factor(to);
+                let offset = sub(current.position, self.pivot);
+                Transform {
+                    position: std::array::from_fn(|i| self.pivot[i] + offset[i] * factor),
+                    scale: (current.scale * factor).clamp(MIN_SCALE, MAX_SCALE),
+                    ..current
+                }
+            }
+        }
+    }
+
+    /// How much bigger this drag is asking for.
+    ///
+    /// Uniform whatever handle was grabbed. A per-axis factor has nowhere to
+    /// go — the engine's transforms take one number — so an axis handle in
+    /// scale mode would measure something it could not then apply.
+    /// [`GizmoHandle::all_for_transform`] is what stops one being offered.
+    fn factor(self, to: [f32; 3]) -> f32 {
+        let was = length(sub(self.anchor, self.pivot));
+        if was < 1e-6 {
+            return 1.0;
+        }
+        (length(sub(to, self.pivot)) / was).clamp(MIN_SCALE, MAX_SCALE)
+    }
+}
+
+/// One rotation that means both, as an axis and an angle.
+///
+/// Through quaternions because there is no other honest way: two axis-angle
+/// rotations about different axes do not add, and the engine has room for
+/// exactly one of them.
+fn compose(first: ([f32; 3], f32), second: ([f32; 3], f32)) -> ([f32; 3], f32) {
+    let quaternion = |(axis, angle): ([f32; 3], f32)| -> [f32; 4] {
+        let Some(axis) = normalize(axis) else {
+            return [0.0, 0.0, 0.0, 1.0];
+        };
+        let half = angle / 2.0;
+        let (sin, cos) = half.sin_cos();
+        [axis[0] * sin, axis[1] * sin, axis[2] * sin, cos]
+    };
+    let a = quaternion(second);
+    let b = quaternion(first);
+    // Second applied after first, which is the order a hand expects: the drag
+    // just made turns the thing as it stands.
+    let product = [
+        a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+        a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+        a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+        a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+    ];
+    let sine = (product[0] * product[0] + product[1] * product[1] + product[2] * product[2]).sqrt();
+    if sine < 1e-6 {
+        // No rotation at all. The axis still has to be real — see
+        // [`Transform::rotation_axis`].
+        return ([0.0, 1.0, 0.0], 0.0);
+    }
+    let angle = 2.0 * sine.atan2(product[3].clamp(-1.0, 1.0));
+    (
+        [product[0] / sine, product[1] / sine, product[2] / sine],
+        angle,
+    )
 }
 
 /// The plane a drag on this handle runs on, given where the camera is.
@@ -850,5 +1014,114 @@ mod tests {
         assert_eq!(ring_samples(1.0, 0.0), 1);
         assert!(ring_samples(1e9, 1e-9) <= 512);
         assert!(ring_samples(0.0, 0.16) >= 8);
+    }
+}
+
+#[cfg(test)]
+mod transform_tests {
+    use super::*;
+
+    fn drag(mode: GizmoMode, handle: GizmoHandle, anchor: [f32; 3]) -> GizmoDrag {
+        GizmoDrag {
+            mode,
+            handle,
+            pivot: [0.0; 3],
+            anchor,
+            view_axis: [0.0, 0.0, 1.0],
+        }
+    }
+
+    #[test]
+    fn a_move_along_an_axis_moves_only_along_it() {
+        let drag = drag(GizmoMode::Move, GizmoHandle::Axis(1), [0.0, 1.0, 0.0]);
+        let moved = drag.resolve(Transform::at([0.0, 1.0, 0.0]), [0.4, 2.0, 0.3], false);
+        assert_eq!(moved.position, [0.0, 2.0, 0.0]);
+    }
+
+    /// Two turns about different axes cannot be added, and the engine has room
+    /// for one of them. This is the case that says the composition is real:
+    /// a quarter turn about Y then a quarter about X is a single rotation
+    /// about neither.
+    #[test]
+    fn two_turns_compose_into_one() {
+        let quarter = std::f32::consts::FRAC_PI_2;
+        let about_y = drag(GizmoMode::Rotate, GizmoHandle::Axis(1), [1.0, 0.0, 0.0]);
+        let turned = about_y.resolve(Transform::default(), [0.0, 0.0, -1.0], false);
+        assert!((turned.rotation_angle - quarter).abs() < 1e-3);
+
+        let about_x = drag(GizmoMode::Rotate, GizmoHandle::Axis(0), [0.0, 1.0, 0.0]);
+        let again = about_x.resolve(turned, [0.0, 0.0, 1.0], false);
+
+        // A single axis-angle that is about neither of the two axes turned
+        // about, which is exactly what a composition of the two is.
+        let axis = again.rotation_axis;
+        assert!(
+            axis[0].abs() > 0.1 && axis[1].abs() > 0.1,
+            "the composed axis should lie between them, got {axis:?}"
+        );
+        assert!(again.rotation_angle.abs() > quarter);
+    }
+
+    #[test]
+    fn turning_back_returns_to_no_rotation() {
+        let about_y = drag(GizmoMode::Rotate, GizmoHandle::Axis(1), [1.0, 0.0, 0.0]);
+        let turned = about_y.resolve(Transform::default(), [0.0, 0.0, -1.0], false);
+        let back = about_y.resolve(turned, [0.0, 0.0, 1.0], false);
+        assert!(
+            back.rotation_angle.abs() < 1e-3,
+            "turning back should undo the turn, got {}",
+            back.rotation_angle
+        );
+        // And the axis is still a real one, whatever the angle.
+        assert!(length(back.rotation_axis) > 0.9);
+    }
+
+    #[test]
+    fn a_scale_multiplies_what_is_already_there() {
+        let out = drag(GizmoMode::Scale, GizmoHandle::Centre, [1.0, 0.0, 0.0]);
+        let bigger = out.resolve(Transform::at([0.0; 3]), [2.0, 0.0, 0.0], false);
+        assert!((bigger.scale - 2.0).abs() < 1e-4);
+        let bigger_again = out.resolve(bigger, [2.0, 0.0, 0.0], false);
+        assert!((bigger_again.scale - 4.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_scale_never_passes_through_zero() {
+        let out = drag(GizmoMode::Scale, GizmoHandle::Centre, [1.0, 0.0, 0.0]);
+        let tiny = out.resolve(Transform::at([0.0; 3]), [0.0, 0.0, 0.0], false);
+        assert!(tiny.scale > 0.0, "scale reached {}", tiny.scale);
+    }
+
+    /// A drag is resolved from where it began, so a wandering hand lands where
+    /// it settles — the rule the cage already holds, checked for a transform.
+    #[test]
+    fn a_wandering_drag_lands_where_it_ends() {
+        let drag = drag(GizmoMode::Move, GizmoHandle::Centre, [0.0; 3]);
+        let start = Transform::at([0.0, 1.0, 0.0]);
+        let wandered = drag.resolve(drag.resolve(start, [5.0, 5.0, 5.0], false), [0.0; 3], false);
+        let straight = drag.resolve(start, [1.0, 0.0, 0.0], false);
+        // Resolved from the anchor each time, so applying it twice is not the
+        // same as accumulating — what matters is that one resolve from the
+        // start lands where the pointer is.
+        assert_eq!(straight.position, [1.0, 1.0, 0.0]);
+        assert_ne!(wandered.position, straight.position);
+    }
+
+    #[test]
+    fn scale_mode_offers_no_axis_handles_for_a_transform() {
+        let handles = GizmoHandle::all_for_transform(GizmoMode::Scale);
+        assert_eq!(handles, vec![GizmoHandle::Centre]);
+        // And a cage keeps all four, because it scales its own points.
+        assert_eq!(GizmoHandle::all_for(GizmoMode::Scale).len(), 4);
+    }
+
+    #[test]
+    fn move_and_rotate_offer_what_they_always_did() {
+        for mode in [GizmoMode::Move, GizmoMode::Rotate] {
+            assert_eq!(
+                GizmoHandle::all_for_transform(mode),
+                GizmoHandle::all_for(mode)
+            );
+        }
     }
 }

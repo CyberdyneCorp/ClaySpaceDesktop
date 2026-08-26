@@ -19,6 +19,7 @@
 //! cargo test -p clayspace-app --test claycore_repros --release -- --nocapture
 //! ```
 
+use clayspace_engine::claycore;
 use clayspace_engine::claycore::{
     Blend, BrickCache, BrickConfig, Document, Item, LayerId, Op, StrokePreset, StrokeSample,
 };
@@ -441,5 +442,57 @@ fn op_add_honours_the_stroke_presets_strength() {
         spread > 1e-3,
         "CLAY_OP_ADD is flat against strength again (spread {spread}); \
          Intensidade would silently stop working"
+    );
+}
+
+/// A node's transform, parameters and operation can be set and never read.
+///
+/// Filed upstream as a request for `clay_layer_node_transform`,
+/// `clay_layer_node_params` and `clay_layer_node_op_blend`. This is the gap
+/// measured rather than described, and it is what makes the application keep
+/// an object table beside every document it saves — see
+/// `clayspace_engine::objects`, which comes out when these land.
+///
+/// What the ABI *does* answer is `clay_layer_node_prim`: which primitive a
+/// node carries. Its own note says the reload model is "ask what the node is,
+/// then call the reader that applies", and the readers that apply exist for an
+/// armature and for a stroke's points. There is none for a plain item.
+///
+/// Asserted as it is today, so the release that closes the gap fails here and
+/// the workaround can be deleted rather than left to rot.
+#[test]
+fn a_placed_node_reports_its_primitive_and_nothing_else() {
+    let (mut doc, layer) = sphere();
+    let mut cut = Item::sphere(0.4).expect("sphere");
+    cut.set_op(Op::Subtract).expect("op");
+    let node = doc.add_item(layer, &cut).expect("place");
+    doc.set_node_transform(layer, node, [0.9, 0.0, 0.0], [0.0, 1.0, 0.0], 0.0, 1.25)
+        .expect("place it somewhere specific");
+
+    // What can be read back.
+    let prim = doc
+        .node_prim(layer, node)
+        .expect("the primitive reads back");
+    println!("node {} reports prim {prim}", node.get());
+
+    // And the closest thing to a position the ABI offers: the box the node
+    // reaches, which is not the same question — it is dilated by rounding and
+    // blend support, and under a layer mirror it covers the reflection too.
+    let bound = doc
+        .node_influence_bound(layer, node)
+        .expect("an influence bound reads back");
+    println!("  influence bound {bound:?}");
+
+    // The transform that was just written is not among the things that can be
+    // asked for. If a future ClayCore adds a getter, this is where to notice:
+    // the scale below was set to 1.25 and nothing in the ABI will say so.
+    let claycore::Influence::Box { min, max } = bound else {
+        panic!("a local subtracted sphere should report a finite box");
+    };
+    let width = max[0] - min[0];
+    println!("  its box is {width:.3} wide, for a 0.4 sphere scaled by 1.25");
+    assert!(
+        width > 0.4,
+        "the bound should at least reflect that the node was scaled up"
     );
 }

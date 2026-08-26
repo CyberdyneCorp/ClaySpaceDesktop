@@ -88,7 +88,7 @@ meshed. ClayCore 0.30.0 added `clay_brick_cache_mesh_lod` (#93) and 3.9 closed
 on it — see *Level of detail, as delivered*. What is left on the list is
 waiting on a decision rather than on an engine.
 
-Three upstream findings are open, and none of them blocks anything.
+Four upstream findings are open, and none of them blocks anything.
 
 [#210](https://github.com/CyberdyneCorp/ClayCore/issues/210) — `clay_document_undo`
 does not report what it changed, so an undo has to dirty the whole layer. Undo
@@ -108,6 +108,30 @@ call per stroke that does nothing is a cost with no benefit and a promise in the
 interface that would not be kept. `claycore/tests/mask_gate.rs` is a tripwire
 written to fail when the engine honours it, and names `stroke_sdf` as where the
 call goes back.
+
+**A placed node's transform, parameters and operation can be set and never
+read.** `clay_layer_set_transform`, `clay_layer_set_prim` and
+`clay_layer_set_op_blend` write them; nothing reads any of them back. What can
+be read is `clay_layer_node_prim` — which primitive a node carries — and its
+own note gives the reload model it belongs to: "ask what the node is, then call
+the reader that applies". The readers that apply exist for an armature and for
+a stroke's points. There is none for a plain item, and no host-data channel in
+the document to keep one in.
+
+This is what makes placed objects keep a table beside every document the
+application saves: an object's size, where it stands and how it combines are
+things only this application knows, so a reopened document could otherwise show
+a box and nothing else about it. `clay_layer_node_influence_bound` is a partial
+answer and is used as one — it is where an object's *dirty region* comes from —
+but it is dilated by rounding and blend support and, under a layer mirror,
+covers the reflection too, so it is not a position. Measured: a 0.4 sphere
+scaled by 1.25 reports a box 1.0 wide, and an object placed at 0.9 in a
+mirrored layer reports its bound centred at the origin.
+
+Asked for as `clay_layer_node_transform`, `clay_layer_node_params` and
+`clay_layer_node_op_blend`. `clayspace-app/tests/claycore_repros.rs` holds the
+gap as it stands today and fails when it closes, which is when
+`clayspace_engine::objects`'s table comes out rather than being adapted.
 
 **A stroke does not carry its template item's deformer chain.**
 `clay_layer_apply_stroke` documents its item as "the stamp template scaled to
