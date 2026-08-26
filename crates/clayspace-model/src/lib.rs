@@ -71,8 +71,8 @@ pub use sculpt::{
 };
 pub use session::{AutosavePolicy, RecentDocuments, Recovery};
 pub use shape::{
-    GizmoTarget, ItemKind, ObjectId, ObjectModel, SceneObject, Shape, ShapeParameter, OBJECT_VERBS,
-    PARAMETER_KEYS,
+    GizmoTarget, ItemKind, ObjectId, ObjectModel, ObjectSource, SceneObject, Shape, ShapeParameter,
+    OBJECT_VERBS, PARAMETER_KEYS,
 };
 pub use surface::SurfaceOpacity;
 pub use tools::{

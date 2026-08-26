@@ -26,14 +26,14 @@
 //! The bound answers what to dirty. The table answers where things are.
 
 use claycore::{NodeId, Primitive};
-use clayspace_model::{CombineSettings, ItemKind, ObjectId, SceneObject, Shape};
+use clayspace_model::{CombineSettings, ItemKind, ObjectId, ObjectSource, SceneObject, Shape};
 
 /// A placed object's state, as only the application knows it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlacedObject {
     pub layer: clayspace_model::LayerKey,
     pub node: NodeId,
-    pub shape: Shape,
+    pub source: ObjectSource,
     pub parameters: Vec<f32>,
     pub combine: CombineSettings,
     pub position: [f32; 3],
@@ -48,7 +48,7 @@ impl PlacedObject {
     pub fn new(
         layer: clayspace_model::LayerKey,
         node: NodeId,
-        shape: Shape,
+        source: ObjectSource,
         parameters: Vec<f32>,
         combine: CombineSettings,
         position: [f32; 3],
@@ -56,7 +56,7 @@ impl PlacedObject {
         Self {
             layer,
             node,
-            shape,
+            source,
             parameters,
             combine,
             position,
@@ -91,7 +91,7 @@ impl PlacedObject {
     pub fn presented(&self) -> SceneObject {
         SceneObject {
             id: self.id(),
-            shape: self.shape,
+            source: self.source.clone(),
             parameters: self.parameters.clone(),
             combine: self.combine,
             position: self.position,
@@ -241,11 +241,19 @@ pub fn write_table(path: &std::path::Path, objects: &[PlacedObject]) -> std::io:
     let mut out = String::from(HEADER);
     out.push('\n');
     for object in objects {
+        // The source, as one field: a shape's key, or `mesh` and the layer it
+        // came from. A mesh operand is a *copy* — the item in this layer is
+        // the sampled volume, and the source layer is only recorded so a row
+        // can say what it was made from.
+        let source = match &object.source {
+            ObjectSource::Shape(shape) => shape.key().to_string(),
+            ObjectSource::Mesh { from, .. } => format!("mesh:{}", from.0),
+        };
         out.push_str(&format!(
             "{} {} {} {} {} {}",
             object.layer.0,
             object.node.get(),
-            object.shape.key(),
+            source,
             object.combine.op.key(),
             object.combine.blend.key(),
             object.combine.radius,
@@ -288,11 +296,27 @@ pub fn read_table(path: &std::path::Path) -> Vec<PlacedObject> {
     lines.filter_map(read_row).collect()
 }
 
+/// A source field, as `write_table` wrote it.
+///
+/// A mesh operand's *name* is not written: it is the source layer's, and a
+/// layer that has been renamed since should read as it is called now rather
+/// than as it was called then. A layer that has been removed leaves the name
+/// empty, which a row shows as the crossing it was.
+fn read_source(field: &str) -> Option<ObjectSource> {
+    if let Some(key) = field.strip_prefix("mesh:") {
+        return Some(ObjectSource::Mesh {
+            from: clayspace_model::LayerKey(key.parse().ok()?),
+            name: String::new(),
+        });
+    }
+    clayspace_model::Shape::from_key(field).map(ObjectSource::Shape)
+}
+
 fn read_row(line: &str) -> Option<PlacedObject> {
     let mut fields = line.split_whitespace();
     let layer = clayspace_model::LayerKey(fields.next()?.parse().ok()?);
     let node = NodeId::restored(fields.next()?.parse().ok()?);
-    let shape = clayspace_model::Shape::from_key(fields.next()?)?;
+    let source = read_source(fields.next()?)?;
     let op = clayspace_model::Combine::from_key(fields.next()?)?;
     let blend = clayspace_model::BlendProfile::from_key(fields.next()?)?;
     let radius = fields.next()?.parse().ok()?;
@@ -321,14 +345,19 @@ fn read_row(line: &str) -> Option<PlacedObject> {
         parameters.push(number(&mut fields)?);
     }
 
+    // Brought into range on the way in: a file written by another version may
+    // carry a size this one does not allow, and clamping it is better than
+    // dropping the object over it. A mesh is measured by itself and carries
+    // none.
+    let parameters = match source.shape() {
+        Some(shape) => shape.sanitised(&parameters),
+        None => Vec::new(),
+    };
     Some(PlacedObject {
         layer,
         node,
-        shape,
-        // Brought into range on the way in: a file written by another version
-        // may carry a size this one does not allow, and clamping it is better
-        // than dropping the object over it.
-        parameters: shape.sanitised(&parameters),
+        source,
+        parameters,
         combine: CombineSettings { op, blend, radius },
         position,
         rotation_axis,
@@ -351,6 +380,38 @@ mod tests {
     /// And why the table has to record objecthood rather than derive it: a
     /// stamping stroke deposits spheres, and a placed sphere is the same
     /// primitive. Nothing in the document tells them apart.
+    #[test]
+    fn a_source_round_trips_through_the_side_car() {
+        for source in [
+            ObjectSource::Shape(Shape::Cylinder),
+            ObjectSource::Mesh {
+                from: clayspace_model::LayerKey(7),
+                name: "Parafuso".into(),
+            },
+        ] {
+            let written = match &source {
+                ObjectSource::Shape(shape) => shape.key().to_string(),
+                ObjectSource::Mesh { from, .. } => format!("mesh:{}", from.0),
+            };
+            let read = read_source(&written).expect("a source");
+            // The name is not written — a renamed layer should read as it is
+            // called now — so the comparison is on what is.
+            match (&source, &read) {
+                (ObjectSource::Shape(a), ObjectSource::Shape(b)) => assert_eq!(a, b),
+                (ObjectSource::Mesh { from: a, .. }, ObjectSource::Mesh { from: b, .. }) => {
+                    assert_eq!(a, b)
+                }
+                _ => panic!("{source:?} read back as {read:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn an_unknown_source_is_dropped_rather_than_guessed_at() {
+        assert!(read_source("dodecahedron").is_none());
+        assert!(read_source("mesh:not-a-number").is_none());
+    }
+
     #[test]
     fn a_stroke_stamp_is_indistinguishable_from_a_placed_sphere() {
         let placed = primitive_of(Shape::Sphere, &[0.3]);

@@ -17,6 +17,7 @@ use clayspace_vm::{Command, ObjectViewModel, Watcher};
 #[derive(Debug, Default)]
 struct Calls {
     placed: Vec<(Shape, Vec<f32>)>,
+    mesh_placed: Vec<LayerKey>,
     transforms: Vec<Transform>,
     removed: Vec<ObjectId>,
     combines: Vec<CombineSettings>,
@@ -27,6 +28,11 @@ struct Calls {
 struct FakeObjects {
     calls: Rc<RefCell<Calls>>,
     objects: Vec<SceneObject>,
+    /// The mesh layers this document offers as operands.
+    ///
+    /// Shared so a test can take one away from under the ViewModel, which is
+    /// the case worth checking: a price quoted for a layer nobody can see.
+    meshes: Rc<RefCell<Vec<(LayerKey, String)>>>,
     selected: Option<ObjectId>,
     /// Set to refuse the next edit, as a locked layer would.
     refuse: Option<&'static str>,
@@ -37,6 +43,7 @@ impl FakeObjects {
         Self {
             calls,
             objects: Vec::new(),
+            meshes: Rc::new(RefCell::new(Vec::new())),
             selected: None,
             refuse: None,
         }
@@ -53,7 +60,7 @@ fn an_object(node: u32, shape: Shape, at: [f32; 3]) -> SceneObject {
             layer: LayerKey(1),
             node,
         },
-        shape,
+        source: clayspace_model::ObjectSource::Shape(shape),
         parameters: shape.defaults(),
         combine: CombineSettings::default(),
         position: at,
@@ -99,6 +106,47 @@ impl ObjectModel for FakeObjects {
         Ok(object.id)
     }
 
+    fn mesh_operands(&mut self) -> Vec<(LayerKey, String)> {
+        self.meshes.borrow().clone()
+    }
+
+    fn mesh_operand_cost(
+        &mut self,
+        from: LayerKey,
+        cell_size: f32,
+    ) -> Option<clayspace_model::Cost> {
+        self.meshes.borrow().iter().find(|(key, _)| *key == from)?;
+        Some(clayspace_model::Cost::of(
+            clayspace_model::Direction::MeshToSdf,
+            cell_size,
+            [1.0; 3],
+        ))
+    }
+
+    fn place_mesh_object(
+        &mut self,
+        from: LayerKey,
+        _cell_size: f32,
+        at: [f32; 3],
+        combine: CombineSettings,
+    ) -> Result<ObjectId, ModelError> {
+        if self.refuse.is_some() {
+            return Err(self.refusal());
+        }
+        self.calls.borrow_mut().mesh_placed.push(from);
+        let node = self.objects.len() as u32 + 1;
+        let mut object = an_object(node, Shape::Box, at);
+        object.source = clayspace_model::ObjectSource::Mesh {
+            from,
+            name: "Parafuso".into(),
+        };
+        object.parameters = Vec::new();
+        object.combine = combine;
+        self.objects.push(object.clone());
+        self.selected = Some(object.id);
+        Ok(object.id)
+    }
+
     fn set_object_transform(
         &mut self,
         id: ObjectId,
@@ -132,7 +180,7 @@ impl ObjectModel for FakeObjects {
         let Some(object) = self.objects.iter_mut().find(|object| object.id == id) else {
             return Err(self.refusal());
         };
-        object.shape = shape;
+        object.source = clayspace_model::ObjectSource::Shape(shape);
         object.parameters = parameters.to_vec();
         Ok(())
     }
@@ -391,7 +439,7 @@ fn exchanging_a_shape_keeps_the_object() {
     );
     let object = vm.selected_object().expect("still selected");
     assert_eq!(object.id, id, "it is the same object");
-    assert_eq!(object.shape, Shape::Cylinder);
+    assert_eq!(object.source.shape(), Some(Shape::Cylinder));
 }
 
 // -- the manipulator --------------------------------------------------------
@@ -527,4 +575,89 @@ fn a_placement_with_nowhere_stated_lands_at_the_origin() {
     send(&mut vm, Command::PlaceShape);
     let object = vm.selected_object().expect("placed");
     assert_eq!(object.position, [0.0; 3]);
+}
+
+// -- a custom object as an operand ------------------------------------------
+
+/// Choosing a mesh states what the crossing costs and changes nothing yet.
+/// Asking for consent to something unstated is not asking.
+#[test]
+fn choosing_a_mesh_states_its_cost_before_anything_happens() {
+    let calls = Rc::new(RefCell::new(Calls::default()));
+    let mut model = FakeObjects::new(calls.clone());
+    model.meshes = Rc::new(RefCell::new(vec![(LayerKey(4), "Parafuso".into())]));
+    let mut vm = ObjectViewModel::new(Box::new(model));
+    vm.refresh_operands();
+
+    assert_eq!(vm.mesh_operands().get().len(), 1);
+    assert!(
+        vm.mesh_cost().get().is_none(),
+        "nothing chosen, nothing quoted"
+    );
+
+    send(&mut vm, Command::SetMeshOperand(Some(LayerKey(4))));
+    assert!(
+        vm.mesh_cost().get().is_some(),
+        "choosing a mesh should state what the crossing costs"
+    );
+    assert!(
+        calls.borrow().placed.is_empty() && calls.borrow().mesh_placed.is_empty(),
+        "choosing states the cost; it does not run the crossing"
+    );
+}
+
+#[test]
+fn placing_with_a_mesh_chosen_places_the_mesh() {
+    let calls = Rc::new(RefCell::new(Calls::default()));
+    let mut model = FakeObjects::new(calls.clone());
+    model.meshes = Rc::new(RefCell::new(vec![(LayerKey(4), "Parafuso".into())]));
+    let mut vm = ObjectViewModel::new(Box::new(model));
+    vm.refresh_operands();
+
+    send(&mut vm, Command::SetMeshOperand(Some(LayerKey(4))));
+    send(&mut vm, Command::PlaceShape);
+
+    assert_eq!(calls.borrow().mesh_placed, vec![LayerKey(4)]);
+    assert!(
+        calls.borrow().placed.is_empty(),
+        "the picked shape should not have been placed as well"
+    );
+}
+
+/// Declining leaves no layer, no boolean and no change.
+#[test]
+fn declining_leaves_everything_alone() {
+    let calls = Rc::new(RefCell::new(Calls::default()));
+    let mut model = FakeObjects::new(calls.clone());
+    model.meshes = Rc::new(RefCell::new(vec![(LayerKey(4), "Parafuso".into())]));
+    let mut vm = ObjectViewModel::new(Box::new(model));
+    vm.refresh_operands();
+
+    send(&mut vm, Command::SetMeshOperand(Some(LayerKey(4))));
+    send(&mut vm, Command::SetMeshOperand(None));
+
+    assert!(vm.mesh_cost().get().is_none(), "the quote goes with it");
+    assert!(calls.borrow().mesh_placed.is_empty());
+    assert!(vm.objects().get().is_empty(), "and nothing was placed");
+}
+
+/// A chosen operand whose layer has gone takes its price with it, rather than
+/// leaving one quoted for a layer nobody can see.
+#[test]
+fn an_operand_that_disappears_stops_being_quoted() {
+    let calls = Rc::new(RefCell::new(Calls::default()));
+    let mut model = FakeObjects::new(calls.clone());
+    let meshes = Rc::new(RefCell::new(vec![(LayerKey(4), "Parafuso".into())]));
+    model.meshes = meshes.clone();
+    let mut vm = ObjectViewModel::new(Box::new(model));
+    vm.refresh_operands();
+    send(&mut vm, Command::SetMeshOperand(Some(LayerKey(4))));
+    assert!(vm.mesh_cost().get().is_some(), "quoted while it exists");
+
+    // Removed from under the ViewModel, as deleting the layer would.
+    meshes.borrow_mut().clear();
+    vm.refresh_operands();
+
+    assert_eq!(*vm.mesh_operand().get(), None, "the choice went with it");
+    assert!(vm.mesh_cost().get().is_none(), "and so did the price");
 }

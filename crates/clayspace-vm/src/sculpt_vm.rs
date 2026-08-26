@@ -296,6 +296,7 @@ impl SculptViewModel {
             | Command::SetShape(_)
             | Command::SetShapeParameters(_)
             | Command::PlaceShape
+            | Command::SetMeshOperand(_)
             | Command::SelectObject(_)
             | Command::SetObjectShape(..)
             | Command::SetObjectCombine(_)

@@ -288,6 +288,45 @@ pub struct ObjectId {
     pub node: u32,
 }
 
+/// What a placed object was made from.
+///
+/// Two kinds, because there are two: one of the shapes the picker offers, and
+/// a model somebody imported. The engine treats them alike once they are
+/// placed — both are items in a layer's ordered list, both carry a transform
+/// and an operation, and the manipulator does not care which it is on — but
+/// they are made differently and named differently, and a list row has to say
+/// which.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ObjectSource {
+    /// One of the offered shapes, with the numbers it is measured by.
+    Shape(Shape),
+    /// A mesh layer sampled into a volume.
+    ///
+    /// The layer it came from is kept so a row can say so, and because the
+    /// same mesh can be placed more than once — a bolt hole is rarely one
+    /// hole.
+    Mesh { from: crate::LayerKey, name: String },
+}
+
+impl ObjectSource {
+    /// The shape this is, where it is one.
+    pub fn shape(&self) -> Option<Shape> {
+        match self {
+            Self::Shape(shape) => Some(*shape),
+            Self::Mesh { .. } => None,
+        }
+    }
+
+    /// Whether the measurements a shape carries mean anything here.
+    ///
+    /// They do not for a mesh: what it is measured by is the model itself, and
+    /// a panel offering a radius for one would be offering a control that does
+    /// nothing.
+    pub fn takes_measurements(&self) -> bool {
+        matches!(self, Self::Shape(_))
+    }
+}
+
 /// A placed object, as the interface needs to present one.
 ///
 /// Read from the document rather than cached: the engine holds the truth about
@@ -297,7 +336,9 @@ pub struct ObjectId {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SceneObject {
     pub id: ObjectId,
-    pub shape: Shape,
+    pub source: ObjectSource,
+    /// What the shape is measured by. Empty for a mesh, which is measured by
+    /// itself.
     pub parameters: Vec<f32>,
     /// How it meets what is under it.
     pub combine: crate::CombineSettings,
@@ -311,10 +352,15 @@ pub struct SceneObject {
 }
 
 impl SceneObject {
-    /// What the interface calls it: the shape's name, which is all a placed
-    /// primitive has until somebody gives it another.
-    pub fn label(&self) -> &'static str {
-        self.shape.label()
+    /// What the interface calls it.
+    ///
+    /// A shape's own name, or the mesh layer's — which is the name a sculptor
+    /// gave the thing they imported, and the only name it has.
+    pub fn label(&self) -> String {
+        match &self.source {
+            ObjectSource::Shape(shape) => shape.label().to_string(),
+            ObjectSource::Mesh { name, .. } => name.clone(),
+        }
     }
 }
 
@@ -379,6 +425,50 @@ pub trait ObjectModel {
     /// Selects one, or clears the selection.
     fn select_object(&mut self, id: Option<ObjectId>) {
         let _ = id;
+    }
+
+    /// Places an imported mesh in the active layer as an operand, and selects
+    /// it.
+    ///
+    /// A mesh cannot compose: it is not an operand of a boolean belonging to
+    /// another layer until it is sampled onto a lattice, and paying that
+    /// quantises the vertices and drops the edge loops that made it worth
+    /// keeping as a mesh. So this is a *crossing*, and it costs what the
+    /// conversion panel says a crossing costs — which is why
+    /// [`ObjectModel::mesh_operand_cost`] exists and is asked first.
+    ///
+    /// The source layer is left exactly as it was. What is placed is a copy.
+    fn place_mesh_object(
+        &mut self,
+        from: crate::LayerKey,
+        cell_size: f32,
+        at: [f32; 3],
+        combine: crate::CombineSettings,
+    ) -> Result<ObjectId, crate::ModelError> {
+        let _ = (from, cell_size, at, combine);
+        Err(self.no_objects_here())
+    }
+
+    /// What placing that mesh as an operand would cost.
+    ///
+    /// The same figures the conversion panel computes for the same crossing at
+    /// the same resolution — surface movement of about half a cell, features
+    /// thinner than a cell, sharp edges to a staircase — because it is the
+    /// same crossing. `None` where the layer is not a mesh, or has nothing in
+    /// it to sample.
+    fn mesh_operand_cost(&mut self, from: crate::LayerKey, cell_size: f32) -> Option<crate::Cost> {
+        let _ = (from, cell_size);
+        None
+    }
+
+    /// The mesh layers that could be placed as an operand.
+    ///
+    /// Asked of the model rather than filtered from the layer stack by the
+    /// interface, because "could be placed" is more than "is a mesh": a
+    /// protected layer and one with no triangles both answer no, and the
+    /// panel has no business knowing that.
+    fn mesh_operands(&mut self) -> Vec<(crate::LayerKey, String)> {
+        Vec::new()
     }
 
     /// Places a shape in the active layer and selects it.

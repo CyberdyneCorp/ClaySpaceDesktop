@@ -70,10 +70,10 @@ that mirror and would not exist if the engine had three getters.
 
 ## 6. Custom objects as operands
 
-- [ ] 6.1 Offer the conversion where a mesh layer is chosen as an operand, reusing the conversion panel's own cost computation
-- [ ] 6.2 Leave the source mesh layer untouched and add the converted layer to the stack, as a conversion already does
-- [ ] 6.3 Refuse nothing silently: declining leaves no layer, no boolean and no change
-- [ ] 6.4 Test that the costs stated on use are the same figures the panel computes for that crossing at that resolution
+- [x] 6.1 Offer the conversion where a mesh layer is chosen as an operand, reusing the conversion panel's own cost computation
+- [x] 6.2 Leave the source mesh layer untouched and ~~add the converted layer to the stack~~ — **changed in implementation**: layers carry no combine operation, so a converted *layer* cannot be a boolean's operand. `clay_item_volume_from_mesh` samples the model into an *item*, which is exactly what a placed object is, so the operand is an object in the target layer and no layer is added at all
+- [x] 6.3 Refuse nothing silently: declining leaves no layer, no boolean and no change
+- [x] 6.4 Test that the costs stated on use are the same figures the panel computes for that crossing at that resolution
 
 ## 7. Performance
 

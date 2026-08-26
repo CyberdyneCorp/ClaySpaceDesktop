@@ -205,7 +205,7 @@ fn a_shape_is_exchangeable_without_losing_where_it_is() {
     );
     let listed = document.objects();
     let object = listed.iter().find(|o| o.id == id).expect("still listed");
-    assert_eq!(object.shape, Shape::Cylinder);
+    assert_eq!(object.source.shape(), Some(Shape::Cylinder));
 }
 
 #[test]
@@ -413,7 +413,7 @@ fn a_placed_object_survives_a_reopen() {
         .find(|object| object.id == id)
         .expect("the object should come back");
 
-    assert_eq!(object.shape, Shape::Cylinder);
+    assert_eq!(object.source.shape(), Some(Shape::Cylinder));
     assert_eq!(object.combine.op, Combine::Subtract);
     assert!((object.scale - 1.5).abs() < 1e-4, "scale {}", object.scale);
     assert!(
@@ -982,4 +982,151 @@ fn a_moved_object_is_still_mirrored() {
         !inside(&document, [-0.7, 0.3, 0.0]),
         "and the mirror made its reflection"
     );
+}
+
+// -- a custom object as an operand ------------------------------------------
+
+/// A document with a mesh layer, by the route a mesh layer actually takes into
+/// one: marched off the field it came from.
+fn with_a_mesh() -> Option<(ClayDocument, clayspace_model::LayerKey)> {
+    let mut document = document()?;
+    let sdf = document.scene().active?;
+    let mesh = document
+        .convert_layer(clayspace_model::Direction::SdfToMesh, 0.05, 1)
+        .ok()?;
+    // Back to the field, which is where an object can be placed.
+    document.set_active_layer(sdf).ok()?;
+    Some((document, mesh))
+}
+
+#[test]
+fn a_mesh_can_be_placed_as_an_operand() {
+    let Some((mut document, mesh)) = with_a_mesh() else {
+        return;
+    };
+    let before = document.objects().len();
+
+    let id = document
+        .place_mesh_object(mesh, 0.05, [0.0, 1.4, 0.0], subtracting())
+        .expect("place the mesh as an operand");
+
+    let listed = document.objects();
+    assert_eq!(listed.len(), before + 1);
+    let object = listed.iter().find(|o| o.id == id).expect("listed");
+    assert!(
+        object.source.shape().is_none(),
+        "a mesh operand is not one of the offered shapes"
+    );
+    assert!(
+        !object.label().is_empty(),
+        "and it is named after the layer it came from"
+    );
+}
+
+/// The mesh layer stays exactly as it was: what is placed is a copy, sampled
+/// onto a lattice. The mesh is still a mesh and still sculptable.
+#[test]
+fn placing_a_mesh_operand_leaves_the_mesh_alone() {
+    let Some((mut document, mesh)) = with_a_mesh() else {
+        return;
+    };
+    let layers_before = document.scene().layers.len();
+
+    document
+        .place_mesh_object(mesh, 0.05, [0.0, 1.4, 0.0], subtracting())
+        .expect("place");
+
+    assert_eq!(
+        document.scene().layers.len(),
+        layers_before,
+        "placing an operand should add no layer"
+    );
+    let still_there = document
+        .scene()
+        .layers
+        .iter()
+        .any(|layer| layer.key == mesh && layer.representation == Representation::Mesh);
+    assert!(still_there, "the mesh layer went missing");
+}
+
+/// The costs stated on use are the panel's own, for the same crossing at the
+/// same resolution — because it is the same crossing.
+#[test]
+fn the_stated_cost_is_the_conversions_own() {
+    let Some((mut document, mesh)) = with_a_mesh() else {
+        return;
+    };
+    let cost = document
+        .mesh_operand_cost(mesh, 0.05)
+        .expect("a mesh has a crossing cost");
+
+    assert!(
+        cost.surface_movement > 0.0,
+        "a crossing moves the surface and should say so"
+    );
+    assert!(
+        (cost.vanishing_feature - 0.05).abs() < 1e-6,
+        "a feature thinner than a cell is lost, so it is the cell: {}",
+        cost.vanishing_feature
+    );
+    assert!(!cost.keeps_sharp_edges, "sharp edges go to a staircase");
+
+    // A finer cell moves the surface less, which is the whole reason the
+    // resolution is a choice.
+    let finer = document.mesh_operand_cost(mesh, 0.01).expect("a cost");
+    assert!(finer.surface_movement < cost.surface_movement);
+}
+
+#[test]
+fn a_layer_that_is_not_a_mesh_is_not_offered_and_is_refused() {
+    let Some(mut document) = document() else {
+        return;
+    };
+    let sdf = document.scene().active.expect("a layer");
+
+    assert!(
+        !document.mesh_operands().iter().any(|(key, _)| *key == sdf),
+        "a field is not a mesh operand"
+    );
+    assert!(document.mesh_operand_cost(sdf, 0.05).is_none());
+    assert!(document
+        .place_mesh_object(sdf, 0.05, [0.0; 3], subtracting())
+        .is_err());
+}
+
+#[test]
+fn the_mesh_operands_are_the_mesh_layers() {
+    let Some((mut document, mesh)) = with_a_mesh() else {
+        return;
+    };
+    let offered = document.mesh_operands();
+    assert!(offered.iter().any(|(key, _)| *key == mesh));
+    assert!(
+        offered.iter().all(|(_, name)| !name.is_empty()),
+        "an operand with no name is a row a sculptor cannot read"
+    );
+}
+
+#[test]
+fn a_mesh_operand_survives_a_reopen() {
+    let Some((mut document, mesh)) = with_a_mesh() else {
+        return;
+    };
+    let path = std::env::temp_dir().join("clayspace-mesh-operand.clay");
+    let _ = std::fs::remove_file(&path);
+    let id = document
+        .place_mesh_object(mesh, 0.05, [0.0, 1.4, 0.0], subtracting())
+        .expect("place");
+    document.save(&path).expect("save");
+
+    let mut reopened = document_at(&path).expect("reopen");
+    let listed = reopened.objects();
+    let object = listed
+        .iter()
+        .find(|object| object.id == id)
+        .expect("the operand came back");
+    assert!(object.source.shape().is_none(), "still a mesh operand");
+    assert_eq!(object.combine.op, Combine::Subtract);
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(clayspace_engine::objects::sidecar_for(&path));
 }

@@ -141,6 +141,9 @@ fn state<'a>(
         shortcuts: shortcuts(),
         representation: clayspace_model::Representation::Sdf,
         show_shapes: false,
+        mesh_operands: &[],
+        mesh_operand: None,
+        mesh_operand_cost: None,
         shape: clayspace_model::Shape::default(),
         shape_parameters: &[],
         object_combine: clayspace_model::CombineSettings::default(),
@@ -1893,7 +1896,7 @@ fn the_shapes_panel_offers_a_shape_and_what_it_is_measured_by() {
             layer: clayspace_model::LayerKey(1),
             node: 2,
         },
-        shape: clayspace_model::Shape::Cylinder,
+        source: clayspace_model::ObjectSource::Shape(clayspace_model::Shape::Cylinder),
         parameters: clayspace_model::Shape::Cylinder.defaults(),
         combine: clayspace_model::CombineSettings {
             op: clayspace_model::Combine::Subtract,
@@ -1954,7 +1957,7 @@ fn the_placed_objects_are_listed_where_the_layers_are() {
             layer: clayspace_model::LayerKey(1),
             node: 2,
         },
-        shape: clayspace_model::Shape::Box,
+        source: clayspace_model::ObjectSource::Shape(clayspace_model::Shape::Box),
         parameters: clayspace_model::Shape::Box.defaults(),
         combine: clayspace_model::CombineSettings::default(),
         position: [0.0; 3],
@@ -1978,5 +1981,43 @@ fn the_placed_objects_are_listed_where_the_layers_are() {
     assert!(
         !queue.commands().is_empty() || queue.commands().is_empty(),
         "the panel ran"
+    );
+}
+
+#[test]
+fn choosing_a_mesh_operand_states_what_the_crossing_costs() {
+    // A mesh cannot compose: it is not an operand of a boolean until it is
+    // sampled onto a lattice, and paying that quantises the vertices and drops
+    // the edge loops that made it worth keeping. The panel says so before the
+    // button is pressed — asking for consent to something unstated is not
+    // asking.
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let operands = [(clayspace_model::LayerKey(4), "Parafuso".to_string())];
+
+    let mut set = state(strings, &scene, &materials, &report);
+    set.show_shapes = true;
+    set.mesh_operands = &operands;
+    set.mesh_operand = Some(clayspace_model::LayerKey(4));
+    set.mesh_operand_cost = Some(clayspace_model::Cost::of(
+        clayspace_model::Direction::MeshToSdf,
+        0.02,
+        [1.0; 3],
+    ));
+
+    let image = capture_shell(&harness, &set, "shell-shapes-mesh");
+
+    let mut without = state(strings, &scene, &materials, &report);
+    without.show_shapes = true;
+    let plain = capture_shell(&harness, &without, "shell-shapes-plain");
+    assert!(
+        image.mean_difference(&plain) > 0.001,
+        "choosing a mesh operand changed nothing on screen, so the costs are \
+         not being stated"
     );
 }

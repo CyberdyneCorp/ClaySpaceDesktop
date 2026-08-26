@@ -101,6 +101,12 @@ pub struct ShellState<'a> {
     /// The shapes panel: whether it is open, what it is set to, and what has
     /// been placed.
     pub show_shapes: bool,
+    /// The mesh layers that could be placed as a boolean operand, and which
+    /// one the picker is set to.
+    pub mesh_operands: &'a [(LayerKey, String)],
+    pub mesh_operand: Option<LayerKey>,
+    /// What placing that mesh would cost — the conversion's own figures.
+    pub mesh_operand_cost: Option<clayspace_model::Cost>,
     pub shape: clayspace_model::Shape,
     pub shape_parameters: &'a [f32],
     /// How a placed shape combines. Its own value rather than the stroke's:
@@ -1987,12 +1993,26 @@ fn cost_lines(
     state: &ShellState<'_>,
     settings: clayspace_model::ConversionSettings,
 ) -> Vec<String> {
-    let s = state.strings;
     let Some(cost) = state.conversion_cost else {
         return Vec::new();
     };
+    crossing_cost_lines(state, settings.direction, cost)
+}
+
+/// What a crossing costs, as lines a panel can print.
+///
+/// Shared by the conversion panel and the shapes panel, because they state the
+/// same thing about the same crossing: placing a mesh as a boolean operand
+/// pays exactly the crossing the conversion panel would run, and two panels
+/// with two opinions about it would be two prices for one thing.
+fn crossing_cost_lines(
+    state: &ShellState<'_>,
+    direction: clayspace_model::Direction,
+    cost: clayspace_model::Cost,
+) -> Vec<String> {
+    let s = state.strings;
     let mut lines = Vec::new();
-    if settings.direction.chooses_resolution() {
+    if direction.chooses_resolution() {
         lines.push(format!(
             "· {} {}",
             s.convert_surface_moves,
@@ -2825,8 +2845,15 @@ pub fn shapes_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut Co
             }
 
             shape_picker(ui, state, queue);
-            ui.add_space(space::SNUG);
-            shape_measurements(ui, state, queue);
+            // A shape's measurements only where a shape is what would be
+            // placed: a model is measured by itself, and offering a radius for
+            // one would be offering a control that does nothing.
+            if state.mesh_operand.is_none() {
+                ui.add_space(space::SNUG);
+                shape_measurements(ui, state, queue);
+            } else {
+                mesh_operand_cost(ui, state);
+            }
 
             ui.add_space(space::SNUG);
             if ui.button(s.action_place_shape).clicked() {
@@ -2862,20 +2889,64 @@ fn shape_picker(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
             .size(type_scale::LABEL)
             .color(Tokens::text_dim()),
     );
+    // The chosen mesh's name where one is chosen, since that is what would be
+    // placed.
+    let chosen = match state.mesh_operand.and_then(|key| {
+        state
+            .mesh_operands
+            .iter()
+            .find(|(candidate, _)| *candidate == key)
+    }) {
+        Some((_, name)) => name.as_str(),
+        None => s.shape(state.shape),
+    };
     egui::ComboBox::from_id_salt("shape-picker")
-        .selected_text(s.shape(state.shape))
+        .selected_text(chosen)
         .width(280.0)
         .show_ui(ui, |ui| {
             for shape in clayspace_model::Shape::ALL {
-                if ui
-                    .selectable_label(shape == state.shape, s.shape(shape))
-                    .clicked()
-                    && shape != state.shape
-                {
+                let picked = state.mesh_operand.is_none() && shape == state.shape;
+                if ui.selectable_label(picked, s.shape(shape)).clicked() {
+                    // Choosing a shape clears any mesh: one thing is placed,
+                    // and a picker showing a cylinder that would place a model
+                    // is a picker lying about what the button does.
+                    queue.push(Command::SetMeshOperand(None));
                     queue.push(Command::SetShape(shape));
                 }
             }
+            // The imported models, under the shapes and separated from them,
+            // because placing one is a *crossing* and costs something the
+            // shapes above do not.
+            if !state.mesh_operands.is_empty() {
+                ui.separator();
+                for (key, name) in state.mesh_operands {
+                    let picked = state.mesh_operand == Some(*key);
+                    if ui.selectable_label(picked, name).clicked() && !picked {
+                        queue.push(Command::SetMeshOperand(Some(*key)));
+                    }
+                }
+            }
         });
+}
+
+/// What crossing a mesh into an operand would cost, before it is run.
+///
+/// Stated rather than discovered: the crossing quantises the vertices and
+/// drops the edge loops that made the model worth keeping as a mesh, and
+/// asking for consent to something unstated is not asking. The figures are the
+/// conversion panel's own, for the same crossing at the same resolution.
+fn mesh_operand_cost(ui: &mut egui::Ui, state: &ShellState<'_>) {
+    let Some(cost) = state.mesh_operand_cost else {
+        return;
+    };
+    ui.add_space(space::SNUG);
+    for line in crossing_cost_lines(state, clayspace_model::Direction::MeshToSdf, cost) {
+        ui.label(
+            egui::RichText::new(line)
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+        );
+    }
 }
 
 /// A slider per number the shape is measured by.
@@ -2912,7 +2983,7 @@ fn selected_object_controls(
 ) {
     let s = state.strings;
     ui.label(
-        egui::RichText::new(s.shape(object.shape))
+        egui::RichText::new(object_name(state, object))
             .size(type_scale::LABEL)
             .color(Tokens::text()),
     );
@@ -2992,6 +3063,18 @@ fn selected_object_controls(
     }
 }
 
+/// What a placed object is called.
+///
+/// A shape's own name in this language, or — for a model somebody imported —
+/// the name of the layer it came from, which is the only name it has and is
+/// not ours to translate.
+fn object_name(state: &ShellState<'_>, object: &clayspace_model::SceneObject) -> String {
+    match object.source.shape() {
+        Some(shape) => state.strings.shape(shape).to_string(),
+        None => object.label(),
+    }
+}
+
 /// The placed objects, as rows that can be picked.
 ///
 /// Only the objects. A worked layer holds hundreds of stroke items and showing
@@ -3018,7 +3101,11 @@ pub fn object_rows(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
         let chosen = state.selected_object == Some(object.id);
         // Named by its shape and its operation, which is what tells two
         // cylinders apart when one adds and the other cuts.
-        let label = format!("{} · {}", s.shape(object.shape), object.combine.op.label());
+        let label = format!(
+            "{} · {}",
+            object_name(state, object),
+            object.combine.op.label()
+        );
         if ui.selectable_label(chosen, label).clicked() {
             // Clicking the selected row clears it, so the manipulator can be
             // put away without reaching for the viewport.

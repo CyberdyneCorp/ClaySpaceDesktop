@@ -792,6 +792,10 @@ impl App {
         self.scene.refresh();
         self.mask.refresh();
         self.armature.refresh();
+        // The placed objects and the meshes that could become them both belong
+        // to the document that was just replaced.
+        self.objects.refresh();
+        self.objects.refresh_operands();
         // Rigging is a mode over a rig that no longer exists. Leaving it on
         // would hand the next click to a tree that was thrown away.
         self.rigging = self.rigging && self.armature.is_rigging();
@@ -2406,6 +2410,12 @@ impl App {
         // cage takes the selection away when it goes up.
         self.objects
             .dispatch(&command, self.sculpt.active_representation());
+        // The layer stack can change under a command — a conversion adds one,
+        // a removal takes one away — and the operand list is drawn from it.
+        if command.touches_document() {
+            self.objects.refresh();
+            self.objects.refresh_operands();
+        }
         self.curve.dispatch(&command);
         // A rig belongs to a layer, so choosing another layer changes which
         // one — or whether there is one at all.
@@ -2551,6 +2561,9 @@ impl App {
             show_repair: self.show_repair,
             show_deform: self.show_deform,
             show_shapes: *self.objects.picking().get(),
+            mesh_operands: self.objects.mesh_operands().get(),
+            mesh_operand: *self.objects.mesh_operand().get(),
+            mesh_operand_cost: *self.objects.mesh_cost().get(),
             shape: *self.objects.shape().get(),
             shape_parameters: self.objects.parameters().get(),
             object_combine: *self.objects.combine().get(),

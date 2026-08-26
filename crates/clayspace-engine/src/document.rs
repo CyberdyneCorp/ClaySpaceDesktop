@@ -482,7 +482,7 @@ impl ClayDocument {
         self.objects.push(PlacedObject::new(
             key,
             node,
-            Shape::Sphere,
+            clayspace_model::ObjectSource::Shape(Shape::Sphere),
             Shape::Sphere.sanitised(&[radius]),
             CombineSettings::default(),
             [0.0; 3],
@@ -787,7 +787,7 @@ impl ClayDocument {
             Direction::SdfToVoxel => self.rasterize_to_voxels(&name, cell_size),
             Direction::VoxelToSdf => self.voxels_to_sdf(&name, blur),
             Direction::MeshToVoxel => self.mesh_to_voxels(&name, cell_size),
-            Direction::MeshToSdf => self.mesh_to_sdf(&name),
+            Direction::MeshToSdf => self.mesh_to_sdf(&name, cell_size),
             Direction::SdfToMesh => self.sdf_to_mesh(&name, cell_size),
             Direction::VoxelToMesh => self.voxels_to_mesh(&name),
         };
@@ -851,11 +851,16 @@ impl ClayDocument {
         self.after_conversion(key)
     }
 
-    fn mesh_to_sdf(&mut self, name: &str) -> Result<LayerKey, ModelError> {
+    fn mesh_to_sdf(&mut self, name: &str, cell_size: f32) -> Result<LayerKey, ModelError> {
         let engine_name = self.active_layer().engine_name.clone();
+        // The chosen cell rather than `VolumeParams::default()`, whose `None`
+        // "picks from the source's own size". The crossing samples onto a
+        // lattice either way — see `Direction::chooses_resolution` — so the
+        // resolution the panel states its costs for has to be the resolution
+        // it is done at, or the figures describe a different crossing.
         let layer = self
             .document
-            .mesh_layer_to_sdf_layer(&engine_name, name, VolumeParams::default())
+            .mesh_layer_to_sdf_layer(&engine_name, name, Self::bake_volume(cell_size))
             .map_err(ModelError::engine)?;
         let key = self.adopt_engine_layer(layer, name, Representation::Sdf)?;
         self.after_conversion(key)
@@ -6265,7 +6270,125 @@ impl ObjectModel for ClayDocument {
         let closed = self.document.end_undo_group().map_err(ModelError::engine);
         let node = placed?;
         closed?;
-        let object = PlacedObject::new(key, node, shape, parameters, combine, at);
+        let object = PlacedObject::new(
+            key,
+            node,
+            clayspace_model::ObjectSource::Shape(shape),
+            parameters,
+            combine,
+            at,
+        );
+        let id = object.id();
+        self.objects.push(object);
+        self.selected_object = Some(id);
+        self.remember_objects_after();
+
+        let bound = self.node_bound(layer, node);
+        self.refill_bound(layer, bound)?;
+        Ok(id)
+    }
+
+    fn mesh_operands(&mut self) -> Vec<(LayerKey, String)> {
+        self.layers
+            .iter()
+            .filter(|layer| {
+                layer.representation == Representation::Mesh
+                    && layer.carries_geometry
+                    // A protected layer refuses every edit naming it, and a
+                    // crossing reads rather than writes — but offering one
+                    // whose source a sculptor has locked reads as ignoring
+                    // the lock. Left out, as the tool shelf leaves out a verb
+                    // the layer has no route for.
+                    && !layer.protection.locked
+            })
+            .map(|layer| (layer.key, layer.name.clone()))
+            .collect()
+    }
+
+    fn mesh_operand_cost(&mut self, from: LayerKey, cell_size: f32) -> Option<Cost> {
+        let index = self.index_of(from).ok()?;
+        if self.layers[index].representation != Representation::Mesh {
+            return None;
+        }
+        let engine_name = self.layers[index].engine_name.clone();
+        // The mesh's own bounds, which is what a crossing of it covers — not
+        // `bounds()`, which answers for the *active* layer and would price the
+        // wrong model.
+        let (positions, ..) = self.document.read_mesh_layer(&engine_name).ok()?;
+        if positions.is_empty() {
+            return None;
+        }
+        let mut min = positions[0];
+        let mut max = positions[0];
+        for point in &positions {
+            for axis in 0..3 {
+                min[axis] = min[axis].min(point[axis]);
+                max[axis] = max[axis].max(point[axis]);
+            }
+        }
+        let extent: [f32; 3] = std::array::from_fn(|i| (max[i] - min[i]).max(0.0));
+        // The conversion panel's own computation, for the same crossing at the
+        // same resolution — because it is the same crossing.
+        Some(Cost::of(Direction::MeshToSdf, cell_size, extent))
+    }
+
+    fn place_mesh_object(
+        &mut self,
+        from: LayerKey,
+        cell_size: f32,
+        at: [f32; 3],
+        combine: CombineSettings,
+    ) -> Result<ObjectId, ModelError> {
+        let (key, layer) = self.layer_for_objects()?;
+        let source_index = self.index_of(from)?;
+        if self.layers[source_index].representation != Representation::Mesh {
+            return Err(ModelError::Conversion(Refusal::WrongSource {
+                needs: Representation::Mesh,
+                active: self.layers[source_index].representation,
+            }));
+        }
+        let engine_name = self.layers[source_index].engine_name.clone();
+        let name = self.layers[source_index].name.clone();
+
+        self.remember_objects_before();
+        // Bracketed, as a placement is: sampling the mesh and standing it
+        // somewhere are two edits and one thing a sculptor asked for.
+        self.document
+            .begin_undo_group()
+            .map_err(ModelError::engine)?;
+        let placed = (|| -> Result<NodeId, ModelError> {
+            let mut item = self
+                .document
+                .mesh_layer_as_volume(&engine_name, Self::bake_volume(cell_size))
+                .map_err(ModelError::engine)?;
+            item.set_op(engine_op(combine.op))
+                .map_err(ModelError::engine)?;
+            item.set_blend(engine_blend(combine.blend), combine.radius)
+                .map_err(ModelError::engine)?;
+            let node = self
+                .document
+                .add_item(layer, &item)
+                .map_err(ModelError::engine)?;
+            self.document
+                .set_node_transform(layer, node, at, [0.0, 1.0, 0.0], 0.0, 1.0)
+                .map_err(ModelError::engine)?;
+            Ok(node)
+        })();
+        let closed = self.document.end_undo_group().map_err(ModelError::engine);
+        let node = placed?;
+        closed?;
+
+        // The source layer is untouched: what stands in this layer is a copy,
+        // sampled onto a lattice. The mesh is still a mesh and still sculptable
+        // with the sixteen fixed-topology brushes.
+        let object = PlacedObject::new(
+            key,
+            node,
+            clayspace_model::ObjectSource::Mesh { from, name },
+            Vec::new(),
+            combine,
+            at,
+        );
         let id = object.id();
         self.objects.push(object);
         self.selected_object = Some(id);
@@ -6339,7 +6462,7 @@ impl ObjectModel for ClayDocument {
             .map_err(ModelError::engine)?;
 
         let object = &mut self.objects[at];
-        object.shape = shape;
+        object.source = clayspace_model::ObjectSource::Shape(shape);
         object.parameters = parameters;
         self.remember_objects_after();
 

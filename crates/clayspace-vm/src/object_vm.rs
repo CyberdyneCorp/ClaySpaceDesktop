@@ -43,6 +43,14 @@ pub struct ObjectViewModel {
     /// What the manipulator is acting on.
     target: Observable<Option<GizmoTarget>>,
     mode: Observable<GizmoMode>,
+    /// The mesh layer a placement would sample, when the picker is set to one
+    /// rather than to a shape.
+    mesh_operand: Observable<Option<clayspace_model::LayerKey>>,
+    /// The mesh layers that could be placed, and what they are called.
+    mesh_operands: Observable<Vec<(clayspace_model::LayerKey, String)>>,
+    /// What the chosen crossing would cost — the conversion panel's own
+    /// figures, for the same crossing at the same resolution.
+    mesh_cost: Observable<Option<clayspace_model::Cost>>,
     /// Where a placement would land.
     ///
     /// Supplied by the composition root rather than decided here: it is where
@@ -73,6 +81,9 @@ impl ObjectViewModel {
             combine: Observable::new(CombineSettings::default()),
             target: Observable::new(None),
             mode: Observable::new(GizmoMode::default()),
+            mesh_operand: Observable::new(None),
+            mesh_operands: Observable::new(Vec::new()),
+            mesh_cost: Observable::new(None),
             drag: None,
             placement: None,
             notice: Observable::new(None),
@@ -114,6 +125,31 @@ impl ObjectViewModel {
     pub fn notice(&self) -> &Observable<Option<String>> {
         &self.notice
     }
+
+    pub fn mesh_operand(&self) -> &Observable<Option<clayspace_model::LayerKey>> {
+        &self.mesh_operand
+    }
+
+    pub fn mesh_operands(&self) -> &Observable<Vec<(clayspace_model::LayerKey, String)>> {
+        &self.mesh_operands
+    }
+
+    /// What placing the chosen mesh would cost, where one is chosen.
+    ///
+    /// Stated *before* it runs, on the same terms a conversion is: a crossing
+    /// quantises the vertices and drops the edge loops that made the mesh
+    /// worth keeping, and asking for consent to something unstated is not
+    /// asking.
+    pub fn mesh_cost(&self) -> &Observable<Option<clayspace_model::Cost>> {
+        &self.mesh_cost
+    }
+
+    /// The cell a mesh operand is sampled at.
+    ///
+    /// The brick cache's own, so a first crossing lands at the resolution the
+    /// rest of the application already works at — the same default the
+    /// conversion panel starts from.
+    pub const OPERAND_CELL: f32 = 0.02;
 
     /// Says where a placement would land.
     ///
@@ -187,6 +223,15 @@ impl ObjectViewModel {
                 self.parameters.set_if_changed(shape.sanitised(values));
             }
             Command::PlaceShape => self.place(representation),
+            Command::SetMeshOperand(from) => {
+                self.mesh_operand.set(*from);
+                // The costs, computed now rather than when the button is
+                // pressed: a sculptor deciding whether to cross should be
+                // reading them while they decide.
+                let cost =
+                    from.and_then(|from| self.model.mesh_operand_cost(from, Self::OPERAND_CELL));
+                self.mesh_cost.set(cost);
+            }
             Command::SelectObject(id) => {
                 self.model.select_object(*id);
                 // The manipulator follows the selection, which is what makes
@@ -235,6 +280,23 @@ impl ObjectViewModel {
         }
     }
 
+    /// Refreshes the mesh layers that could be placed.
+    ///
+    /// Asked of the model rather than filtered from the layer stack here,
+    /// because "could be placed" is more than "is a mesh".
+    pub fn refresh_operands(&mut self) {
+        let operands = self.model.mesh_operands();
+        // A chosen operand that has gone takes its cost with it, rather than
+        // leaving a price quoted for a layer nobody can see.
+        if let Some(chosen) = *self.mesh_operand.get() {
+            if !operands.iter().any(|(key, _)| *key == chosen) {
+                self.mesh_operand.set(None);
+                self.mesh_cost.set(None);
+            }
+        }
+        self.mesh_operands.set_if_changed(operands);
+    }
+
     fn place(&mut self, representation: Representation) {
         if representation != Representation::Sdf {
             // Said here as well as refused by the model, so the picker can
@@ -249,7 +311,16 @@ impl ObjectViewModel {
             *self.combine.get(),
         );
         let at = self.placement.unwrap_or([0.0; 3]);
-        match self.model.place_object(shape, &parameters, at, combine) {
+        // A mesh operand where one is chosen, and the picked shape otherwise.
+        // The crossing's costs were stated when it was chosen; this is the
+        // consent.
+        let placed = match *self.mesh_operand.get() {
+            Some(from) => self
+                .model
+                .place_mesh_object(from, Self::OPERAND_CELL, at, combine),
+            None => self.model.place_object(shape, &parameters, at, combine),
+        };
+        match placed {
             Ok(id) => {
                 self.notice.set_if_changed(None);
                 self.target.set(Some(GizmoTarget::Object(id)));

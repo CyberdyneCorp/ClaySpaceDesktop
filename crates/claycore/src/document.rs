@@ -983,6 +983,52 @@ impl Document {
     /// Copied rather than borrowed, because the caller is going to upload it
     /// and because a layer's mesh must not be wrapped in an owning [`Mesh`]:
     /// that destroys what it holds on drop. The handle stays inside this call.
+    /// Samples a mesh layer's own geometry into a volume item.
+    ///
+    /// What turns an imported model into something that can be combined and
+    /// cut — the engine's own words for `clay_item_volume_from_mesh`. The
+    /// layer's mesh is *borrowed* rather than copied out and rebuilt, which
+    /// is why this lives here rather than being assembled by a caller from
+    /// `read_mesh_layer`: that call hands back vertex arrays and destroys the
+    /// handle, and there is no route from arrays back to a `clay_mesh`.
+    ///
+    /// The sign comes from the generalized winding number rather than a ray
+    /// cast, "because real assets are not watertight: one hole flips a parity
+    /// test for a whole half-space, while a winding number degrades
+    /// continuously across an opening". A mesh with no triangles is refused.
+    ///
+    /// The item is owned by the caller until it is added to a layer, and the
+    /// source layer is untouched.
+    pub fn mesh_layer_as_volume(
+        &mut self,
+        layer_name: &str,
+        params: crate::VolumeParams,
+    ) -> Result<crate::Item> {
+        let c_name = crate::cstring(layer_name, "clay_document_mesh_layer")?;
+        let mut layer: sys::clay_layer_id = Default::default();
+        let mut mesh = std::ptr::null_mut();
+        // SAFETY: a valid document and a NUL-terminated name; both outputs are
+        // written only on success. The mesh handle is borrowed from the layer,
+        // so it is not destroyed here.
+        check(
+            unsafe {
+                sys::clay_document_mesh_layer(self.as_ptr(), c_name.as_ptr(), &mut layer, &mut mesh)
+            },
+            "clay_document_mesh_layer",
+        )?;
+        let borrowed = NonNull::new(mesh)
+            .ok_or_else(|| raw_failure("clay_document_mesh_layer", ErrorKind::NotFound))?;
+        let raw = params.into_raw();
+        let mut item = std::ptr::null_mut();
+        // SAFETY: a mesh the document owns, parameters by reference, and an
+        // out-parameter the engine fills on success.
+        check(
+            unsafe { sys::clay_item_volume_from_mesh(borrowed.as_ptr(), &raw, &mut item) },
+            "clay_item_volume_from_mesh",
+        )?;
+        crate::Item::from_raw(item, "clay_item_volume_from_mesh")
+    }
+
     #[allow(clippy::type_complexity)]
     pub fn read_mesh_layer(
         &mut self,

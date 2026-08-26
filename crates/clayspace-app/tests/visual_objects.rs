@@ -15,9 +15,7 @@ mod support;
 
 use clayspace_app::SurfaceGeometry;
 use clayspace_engine::{BackendPolicy, ClayDocument};
-use clayspace_model::{
-    Combine, CombineSettings, GizmoMode, GizmoTarget, ObjectModel, Shape,
-};
+use clayspace_model::{Combine, CombineSettings, GizmoMode, GizmoTarget, ObjectModel, Shape};
 use clayspace_view::{Camera, GizmoView, LatticeView};
 use support::Harness;
 

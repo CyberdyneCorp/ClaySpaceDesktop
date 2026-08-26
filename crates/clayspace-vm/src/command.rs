@@ -49,6 +49,12 @@ pub enum Command {
     /// Puts the picked shape in the active layer, selected, combining the way
     /// the options bar is set.
     PlaceShape,
+    /// Which mesh layer the picker would place as an operand, or none for one
+    /// of the offered shapes.
+    ///
+    /// Choosing one states what the crossing costs; it does not run it.
+    /// Nothing reaches the document until `PlaceShape`.
+    SetMeshOperand(Option<clayspace_model::LayerKey>),
     /// Selects a placed object, or clears the selection. The manipulator
     /// follows it.
     SelectObject(Option<clayspace_model::ObjectId>),
@@ -338,6 +344,7 @@ impl Command {
                 | Self::SelectObject(_)
                 | Self::SetShape(_)
                 | Self::SetShapeParameters(_)
+                | Self::SetMeshOperand(_)
                 | Self::SetGizmoTarget(_)
                 | Self::ToggleLattice
                 | Self::SetLatticeDivisions(_)
@@ -413,6 +420,7 @@ impl Command {
             Self::SetShape(_) => "forma",
             Self::SetShapeParameters(_) => "medidas da forma",
             Self::PlaceShape => "colocar forma",
+            Self::SetMeshOperand(_) => "operando de malha",
             Self::SelectObject(_) => "selecionar objeto",
             Self::SetObjectShape(..) => "trocar forma",
             Self::SetObjectCombine(_) => "combinação do objeto",
