@@ -363,6 +363,18 @@ pub struct LatticeView<'a> {
     pub selected: &'a [usize],
     /// The manipulator on that selection, when there is one.
     pub gizmo: Option<GizmoView>,
+    /// The box a selected placed object occupies, when one is selected.
+    ///
+    /// Drawn because a subtracting object is *inside* the form: what a
+    /// sculptor sees of a cylinder bored through a head is the hole, and the
+    /// cylinder itself is behind the surface where nothing shows it. Without
+    /// an outline, aiming one means dragging a manipulator and inferring the
+    /// shape from the cavity that appears.
+    ///
+    /// A box rather than the shape's own silhouette, which would mean marching
+    /// a primitive on the interface thread every frame — this is a frame of
+    /// reference, not a preview.
+    pub outline: Option<([f32; 3], [f32; 3])>,
     /// How big a control point handle is, in world units.
     ///
     /// Handed in rather than fixed, because a cage around a thumbnail and one
@@ -391,6 +403,17 @@ pub struct GizmoView {
     /// Handed in rather than derived from the camera here, so the ring drawn
     /// and the ring dragged cannot disagree.
     pub view_axis: [f32; 3],
+    /// Whether scale mode offers a box per axis.
+    ///
+    /// A cage does: it scales its own control points, and pulling the red box
+    /// stretches in x alone. A placed object, a layer and a mesh do not —
+    /// every transform in the engine's interface takes one scale factor and
+    /// not three, so three boxes would be three handles for one number.
+    ///
+    /// Handed in rather than decided here for the same reason `view_axis` is:
+    /// what is drawn and what can be dragged have to be the same set, and the
+    /// caller is what knows which kind of thing is selected.
+    pub per_axis_scale: bool,
 }
 
 /// Which plane the symmetry indicator sits on.
@@ -1918,7 +1941,15 @@ fn gizmo_geometry_for(view: GizmoView, segment: &mut impl FnMut(Vec3, Vec3, [f32
         }
     };
 
-    for index in 0..3 {
+    // Nothing per axis in scale mode where the target has one factor: an
+    // axis box that could be grabbed and would do the same thing as the centre
+    // is worse than no box at all.
+    let axes = if view.mode == GizmoMode::Scale && !view.per_axis_scale {
+        0
+    } else {
+        3
+    };
+    for index in 0..axes {
         let handle = GizmoHandle::Axis(index);
         let colour = lit(handle, AXIS_COLOURS[index]);
         let mut unit = Vec3::ZERO;
@@ -2050,6 +2081,29 @@ fn lattice_geometry(view: LatticeView<'_>) -> (Vec<Vertex>, Vec<u32>) {
         indices.push(base);
         indices.push(base + 1);
     };
+
+    // A selected object's box, quieter still than the cage: it says where a
+    // shape is, and a bright one would read as the shape itself.
+    if let Some((min, max)) = view.outline {
+        const OUTLINE: [f32; 3] = [0.52, 0.62, 0.72];
+        let corner = |i: usize| {
+            Vec3::new(
+                if i & 1 == 0 { min[0] } else { max[0] },
+                if i & 2 == 0 { min[1] } else { max[1] },
+                if i & 4 == 0 { min[2] } else { max[2] },
+            )
+        };
+        // The twelve edges of a box: every pair of corners differing in one
+        // bit, which is every pair one axis apart.
+        for a in 0..8usize {
+            for bit in [1usize, 2, 4] {
+                let b = a | bit;
+                if b != a {
+                    segment(corner(a), corner(b), OUTLINE);
+                }
+            }
+        }
+    }
 
     // The cage itself, quiet: it is a frame of reference, and a bright one
     // would compete with the form it is wrapped around.

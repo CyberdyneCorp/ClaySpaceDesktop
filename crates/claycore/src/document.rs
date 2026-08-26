@@ -57,6 +57,21 @@ impl NodeId {
     /// therefore where enumerating a reloaded layer starts.
     pub const ROOT: Self = Self(0);
 
+    /// A node id a host recorded earlier and is reading back.
+    ///
+    /// Not the removed `from_raw`, which existed so a host could *probe* for
+    /// ids it had never been handed — unsound, because ids are not dense and a
+    /// scan lost everything past the longest gap it tolerated. This is for the
+    /// opposite case: an id the engine issued, written down, and restored
+    /// beside the document it belongs to.
+    ///
+    /// It is still a claim rather than a fact, so a caller validates it
+    /// against `Document::layer_nodes` before acting on it. An id whose node
+    /// is gone answers as gone rather than as somebody else's.
+    pub fn restored(raw: u32) -> Self {
+        Self(raw)
+    }
+
     /// The raw id, for a host that has to log or compare one.
     pub fn get(self) -> u32 {
         self.0
@@ -77,6 +92,161 @@ pub mod prim {
 
     pub const ARMATURE: i32 = sys::clay_prim::CLAY_PRIM_ARMATURE as i32;
     pub const STROKE: i32 = sys::clay_prim::CLAY_PRIM_STROKE as i32;
+    pub const SWEPT: i32 = sys::clay_prim::CLAY_PRIM_SWEPT as i32;
+}
+
+/// A shape with a finite extent, built from its own parameters.
+///
+/// The engine takes a primitive as an integer and a float block whose length
+/// and meaning depend on which primitive it is, and rejects a wrong count.
+/// That is the right shape for an ABI and the wrong one for a caller: it puts
+/// "a torus takes a major radius then a minor one" in a comment rather than in
+/// the type, and a caller who transposes them gets a torus rather than an
+/// error.
+///
+/// Only bounded primitives are here. The engine names two that are not — a
+/// plane and an infinite cylinder — and both report no influence bound, which
+/// means every edit involving one dirties the whole layer and no manipulator
+/// has an extent to sit on. They are reachable through [`Item::new`] for a
+/// caller who means it.
+///
+/// Sizes are half-extents and angles are resolved to a sine and cosine pair
+/// before they reach the engine, both as the ABI states.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Primitive {
+    /// `r`.
+    Sphere { radius: f32 },
+    /// Half-extents.
+    Box { half: [f32; 3] },
+    /// Half-extents, and the radius the edges are rounded by.
+    RoundBox { half: [f32; 3], radius: f32 },
+    /// Half-extents, and the thickness of the frame's bars.
+    BoxFrame { half: [f32; 3], thickness: f32 },
+    /// The ring's radius, then the tube's.
+    Torus { major: f32, minor: f32 },
+    /// A radius swept between two points.
+    Capsule {
+        from: [f32; 3],
+        to: [f32; 3],
+        radius: f32,
+    },
+    /// A radius and a half-height, standing on Y.
+    Cylinder { radius: f32, half_height: f32 },
+    /// The same with its rim rounded: the body's radius, the rim's, the
+    /// half-height.
+    RoundedCylinder {
+        radius: f32,
+        rim: f32,
+        half_height: f32,
+    },
+    /// A half-height and a radius at each end. Equal radii give a cylinder.
+    Cone {
+        half_height: f32,
+        bottom: f32,
+        top: f32,
+    },
+    /// Three radii.
+    Ellipsoid { radii: [f32; 3] },
+    /// One size.
+    Octahedron { size: f32 },
+    /// A radius across the flats and a half-depth.
+    HexPrism { radius: f32, half_depth: f32 },
+    /// A radius across the flats and a half-depth.
+    TriPrism { radius: f32, half_depth: f32 },
+    /// One height, on a unit square base.
+    Pyramid { height: f32 },
+    /// One radius.
+    Tetrahedron { radius: f32 },
+    /// One radius.
+    Dodecahedron { radius: f32 },
+    /// One radius.
+    Icosahedron { radius: f32 },
+    /// A sphere with a cap taken off at height `at`.
+    CutSphere { radius: f32, at: f32 },
+    /// A cone with a half-angle, given here in radians and resolved to the
+    /// sine and cosine pair the engine takes.
+    ExactCone { half_angle: f32, height: f32 },
+    /// A wedge of a sphere: the half-angle of the wedge and the radius.
+    SolidAngle { half_angle: f32, radius: f32 },
+}
+
+impl Primitive {
+    /// The engine's own value for this shape.
+    pub fn prim(self) -> i32 {
+        use sys::clay_prim::*;
+        (match self {
+            Self::Sphere { .. } => CLAY_PRIM_SPHERE,
+            Self::Box { .. } => CLAY_PRIM_BOX,
+            Self::RoundBox { .. } => CLAY_PRIM_ROUND_BOX,
+            Self::BoxFrame { .. } => CLAY_PRIM_BOX_FRAME,
+            Self::Torus { .. } => CLAY_PRIM_TORUS,
+            Self::Capsule { .. } => CLAY_PRIM_CAPSULE,
+            Self::Cylinder { .. } => CLAY_PRIM_CAPPED_CYLINDER,
+            Self::RoundedCylinder { .. } => CLAY_PRIM_ROUNDED_CYLINDER,
+            Self::Cone { .. } => CLAY_PRIM_CAPPED_CONE,
+            Self::Ellipsoid { .. } => CLAY_PRIM_ELLIPSOID,
+            Self::Octahedron { .. } => CLAY_PRIM_OCTAHEDRON,
+            Self::HexPrism { .. } => CLAY_PRIM_HEX_PRISM,
+            Self::TriPrism { .. } => CLAY_PRIM_TRI_PRISM,
+            Self::Pyramid { .. } => CLAY_PRIM_PYRAMID,
+            Self::Tetrahedron { .. } => CLAY_PRIM_TETRAHEDRON,
+            Self::Dodecahedron { .. } => CLAY_PRIM_DODECAHEDRON,
+            Self::Icosahedron { .. } => CLAY_PRIM_ICOSAHEDRON,
+            Self::CutSphere { .. } => CLAY_PRIM_CUT_SPHERE,
+            Self::ExactCone { .. } => CLAY_PRIM_CONE,
+            Self::SolidAngle { .. } => CLAY_PRIM_SOLID_ANGLE,
+        }) as i32
+    }
+
+    /// The parameter block, in the order the engine reads it.
+    pub fn params(self) -> Vec<f32> {
+        match self {
+            Self::Sphere { radius } => vec![radius],
+            Self::Box { half } => half.to_vec(),
+            Self::RoundBox { half, radius } => vec![half[0], half[1], half[2], radius],
+            Self::BoxFrame { half, thickness } => vec![half[0], half[1], half[2], thickness],
+            Self::Torus { major, minor } => vec![major, minor],
+            Self::Capsule { from, to, radius } => {
+                vec![from[0], from[1], from[2], to[0], to[1], to[2], radius]
+            }
+            Self::Cylinder {
+                radius,
+                half_height,
+            } => vec![radius, half_height],
+            Self::RoundedCylinder {
+                radius,
+                rim,
+                half_height,
+            } => vec![radius, rim, half_height],
+            Self::Cone {
+                half_height,
+                bottom,
+                top,
+            } => vec![half_height, bottom, top],
+            Self::Ellipsoid { radii } => radii.to_vec(),
+            Self::Octahedron { size } => vec![size],
+            Self::HexPrism { radius, half_depth } | Self::TriPrism { radius, half_depth } => {
+                vec![radius, half_depth]
+            }
+            Self::Pyramid { height } => vec![height],
+            Self::Tetrahedron { radius }
+            | Self::Dodecahedron { radius }
+            | Self::Icosahedron { radius } => vec![radius],
+            Self::CutSphere { radius, at } => vec![radius, at],
+            // The engine takes an angle already resolved to a sine and cosine,
+            // "a pair the library checks is one" — so it is resolved here
+            // rather than asked for that way, which would put the same two
+            // calls at every call site.
+            Self::ExactCone { half_angle, height } => {
+                let (sin, cos) = half_angle.sin_cos();
+                vec![sin, cos, height]
+            }
+            Self::SolidAngle { half_angle, radius } => {
+                let (sin, cos) = half_angle.sin_cos();
+                vec![sin, cos, radius]
+            }
+        }
+    }
 }
 
 /// An item under construction, owned by the caller until it is added to a
@@ -88,7 +258,16 @@ pub struct Item {
 impl Item {
     /// Builds a sphere of the given radius.
     pub fn sphere(radius: f32) -> Result<Self> {
-        Self::new(sys::clay_prim::CLAY_PRIM_SPHERE as i32, &[radius])
+        Self::of(Primitive::Sphere { radius })
+    }
+
+    /// Builds any bounded shape from its own parameters.
+    ///
+    /// The checked route: [`Primitive`] knows which integer and which float
+    /// block each shape takes, so a caller cannot transpose a torus's two
+    /// radii into a shape the engine accepts and nobody meant.
+    pub fn of(primitive: Primitive) -> Result<Self> {
+        Self::new(primitive.prim(), &primitive.params())
     }
 
     /// Builds a swept-sphere chain — the primitive a snakehook resolves into.
@@ -804,6 +983,52 @@ impl Document {
     /// Copied rather than borrowed, because the caller is going to upload it
     /// and because a layer's mesh must not be wrapped in an owning [`Mesh`]:
     /// that destroys what it holds on drop. The handle stays inside this call.
+    /// Samples a mesh layer's own geometry into a volume item.
+    ///
+    /// What turns an imported model into something that can be combined and
+    /// cut — the engine's own words for `clay_item_volume_from_mesh`. The
+    /// layer's mesh is *borrowed* rather than copied out and rebuilt, which
+    /// is why this lives here rather than being assembled by a caller from
+    /// `read_mesh_layer`: that call hands back vertex arrays and destroys the
+    /// handle, and there is no route from arrays back to a `clay_mesh`.
+    ///
+    /// The sign comes from the generalized winding number rather than a ray
+    /// cast, "because real assets are not watertight: one hole flips a parity
+    /// test for a whole half-space, while a winding number degrades
+    /// continuously across an opening". A mesh with no triangles is refused.
+    ///
+    /// The item is owned by the caller until it is added to a layer, and the
+    /// source layer is untouched.
+    pub fn mesh_layer_as_volume(
+        &mut self,
+        layer_name: &str,
+        params: crate::VolumeParams,
+    ) -> Result<crate::Item> {
+        let c_name = crate::cstring(layer_name, "clay_document_mesh_layer")?;
+        let mut layer: sys::clay_layer_id = Default::default();
+        let mut mesh = std::ptr::null_mut();
+        // SAFETY: a valid document and a NUL-terminated name; both outputs are
+        // written only on success. The mesh handle is borrowed from the layer,
+        // so it is not destroyed here.
+        check(
+            unsafe {
+                sys::clay_document_mesh_layer(self.as_ptr(), c_name.as_ptr(), &mut layer, &mut mesh)
+            },
+            "clay_document_mesh_layer",
+        )?;
+        let borrowed = NonNull::new(mesh)
+            .ok_or_else(|| raw_failure("clay_document_mesh_layer", ErrorKind::NotFound))?;
+        let raw = params.into_raw();
+        let mut item = std::ptr::null_mut();
+        // SAFETY: a mesh the document owns, parameters by reference, and an
+        // out-parameter the engine fills on success.
+        check(
+            unsafe { sys::clay_item_volume_from_mesh(borrowed.as_ptr(), &raw, &mut item) },
+            "clay_item_volume_from_mesh",
+        )?;
+        crate::Item::from_raw(item, "clay_item_volume_from_mesh")
+    }
+
     #[allow(clippy::type_complexity)]
     pub fn read_mesh_layer(
         &mut self,

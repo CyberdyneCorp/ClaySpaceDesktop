@@ -1054,6 +1054,102 @@ impl Document {
         )
     }
 
+    /// Replaces an existing node's shape.
+    ///
+    /// The engine is explicit that this keeps what belongs to the node rather
+    /// than to the primitive — "its deformers, repetition, profile and stroke
+    /// belong to the node, not to the primitive, and survive the edit" — and
+    /// so do its transform, its operation and its place in the order. That is
+    /// the whole reason to have this rather than a remove and an add.
+    pub fn set_node_prim(
+        &mut self,
+        layer: LayerId,
+        node: NodeId,
+        primitive: crate::Primitive,
+    ) -> Result<()> {
+        let params = primitive.params();
+        // SAFETY: valid handle, and a slice whose length is passed beside it.
+        check(
+            unsafe {
+                sys::clay_layer_set_prim(
+                    self.as_ptr(),
+                    layer.0,
+                    node.0,
+                    primitive.prim(),
+                    params.as_ptr(),
+                    params.len(),
+                )
+            },
+            "clay_layer_set_prim",
+        )
+    }
+
+    /// Changes how an existing node combines with what is under it.
+    ///
+    /// `rounding` must not be negative. A group takes `CLAY_OP_INLINE` and an
+    /// item does not; [`Op`] has no inline variant, so that refusal is not
+    /// reachable from here.
+    pub fn set_node_op_blend(
+        &mut self,
+        layer: LayerId,
+        node: NodeId,
+        op: Op,
+        blend: Blend,
+        blend_k: f32,
+        rounding: f32,
+    ) -> Result<()> {
+        // SAFETY: valid handle and four scalars the entry point range-checks.
+        check(
+            unsafe {
+                sys::clay_layer_set_op_blend(
+                    self.as_ptr(),
+                    layer.0,
+                    node.0,
+                    op.raw(),
+                    blend.raw(),
+                    blend_k,
+                    rounding,
+                )
+            },
+            "clay_layer_set_op_blend",
+        )
+    }
+
+    /// The box an edit to this node has to dirty.
+    ///
+    /// Not the geometry bound: this is dilated by rounding and blend support,
+    /// because a node blended into its siblings reaches past its own shape.
+    ///
+    /// Three answers, kept three. Collapsing them into an `Option` was tried
+    /// and is wrong in the worst available way: [`Influence::Nothing`] and
+    /// [`Influence::Everything`] are opposite instructions, and a caller given
+    /// one `None` for both either leaves a stale surface behind a moved
+    /// intersect or refills the document every time a hidden node is touched.
+    pub fn node_influence_bound(&self, layer: LayerId, node: NodeId) -> Result<Influence> {
+        let (mut min, mut max) = ([0.0f32; 3], [0.0f32; 3]);
+        let (mut has, mut infinite) = (0i32, 0i32);
+        // SAFETY: valid handle, two three-float out-parameters and two flags.
+        check(
+            unsafe {
+                sys::clay_layer_node_influence_bound(
+                    self.as_ptr(),
+                    layer.0,
+                    node.0,
+                    min.as_mut_ptr(),
+                    max.as_mut_ptr(),
+                    &mut has,
+                    &mut infinite,
+                )
+            },
+            "clay_layer_node_influence_bound",
+        )?;
+        Ok(match (has != 0, infinite != 0) {
+            (false, _) => Influence::Nothing,
+            (true, true) => Influence::Everything,
+            (true, false) => Influence::Box { min, max },
+        })
+    }
+
     /// Recolours an existing node.
     pub fn set_node_color(&mut self, layer: LayerId, node: NodeId, rgb: [f32; 3]) -> Result<()> {
         // SAFETY: valid handle and a three-float colour.
@@ -1062,6 +1158,27 @@ impl Document {
             "clay_layer_set_color",
         )
     }
+}
+
+/// What an edit to a node reaches.
+///
+/// The engine's three states, as three: "*out_has_bounds 0 — nothing to dirty;
+/// 1, *out_infinite 0 — the finite box; 1, *out_infinite 1 — unbounded, and
+/// the honest response is to dirty everything".
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Influence {
+    /// Nothing to dirty. A node the layer does not hold, or a hidden one —
+    /// "a selection outlives the nodes in it", so this is an answer rather
+    /// than a failure.
+    Nothing,
+    /// This box, already dilated by rounding and blend support.
+    Box { min: [f32; 3], max: [f32; 3] },
+    /// No finite box exists, so everything is dirty. Reached by "a non-local
+    /// op (intersect, the spatial morphs) anywhere in the subtree, an infinite
+    /// grid repeat, or an unbounded primitive (a plane, an infinite
+    /// cylinder)" — so an ordinary cube placed with [`Op::Intersect`] answers
+    /// this way, and it is a normal path rather than an edge case.
+    Everything,
 }
 
 /// Whether undo is recording, and how much there is to undo or redo.

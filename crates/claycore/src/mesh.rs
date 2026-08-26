@@ -268,6 +268,46 @@ impl Mesh {
         Ok((min, max))
     }
 
+    /// A copy of this mesh, moved.
+    ///
+    /// The engine rotates normals but does not translate or scale them —
+    /// "a uniform scale leaves a direction unchanged, and adding the position
+    /// would turn a direction into a point" — and rewrites no index, so the
+    /// quad list and the quad report still describe the result. It is the same
+    /// mesh, moved.
+    ///
+    /// `scale` is uniform and must be greater than zero, as every transform in
+    /// this interface is, and the axis must be non-zero even for no rotation:
+    /// "a second convention for 'no rotation' would be one more thing to get
+    /// wrong."
+    pub fn transformed(
+        &self,
+        position: [f32; 3],
+        rotation_axis: [f32; 3],
+        rotation_angle: f32,
+        scale: f32,
+    ) -> Result<Self> {
+        let mut out = std::ptr::null_mut();
+        // SAFETY: a valid mesh, two three-float inputs and an out-parameter
+        // the engine fills with a mesh this takes ownership of below.
+        check(
+            unsafe {
+                sys::clay_mesh_transform(
+                    self.raw.as_ptr(),
+                    position.as_ptr(),
+                    rotation_axis.as_ptr(),
+                    rotation_angle,
+                    scale,
+                    &mut out,
+                )
+            },
+            "clay_mesh_transform",
+        )?;
+        NonNull::new(out)
+            .map(|raw| Self { raw })
+            .ok_or_else(|| raw_failure("clay_mesh_transform", ErrorKind::InvalidArgument))
+    }
+
     /// Whether the mesh is watertight and 2-manifold.
     pub fn validate(&self) -> Result<MeshValidity> {
         let (mut watertight, mut manifold) = (0i32, 0i32);

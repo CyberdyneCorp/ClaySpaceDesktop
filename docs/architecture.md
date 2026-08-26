@@ -176,9 +176,9 @@ number means at a normal framing.
 
 `just bench` measures one figure group per operation a sculptor can invoke —
 every brush on every representation it has a verb for, the layer operations,
-rigging and curves, the six conversions, consolidation, export, pre-bake
-repair, mask gating, undo and redo — beside the five the specification puts a
-budget on. The coverage is derived rather than listed: the brush loop is
+rigging and curves, placing and dragging an object, the six conversions,
+consolidation, export, pre-bake repair, mask gating, undo and redo — beside the
+five the specification puts a budget on. The coverage is derived rather than listed: the brush loop is
 `Representation::ALL` against `ToolKind::for_representation`, which is the
 table the shelf itself presents from, so a tool added to the shelf is a tool
 measured.
