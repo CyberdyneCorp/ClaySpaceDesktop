@@ -505,3 +505,26 @@ fn a_refused_drag_is_stated_rather_than_silent() {
     send(&mut vm, Command::SelectObject(Some(id)));
     assert!(vm.notice().get().is_none(), "nothing has gone wrong yet");
 }
+
+/// A shape lands where the sculptor was looking, not at the origin.
+///
+/// Placing at the origin puts a subtracting shape *inside* the form, where it
+/// cuts something nobody can see — which reads as the tool having done
+/// nothing.
+#[test]
+fn a_shape_lands_where_the_pointer_is() {
+    let (mut vm, _) = viewmodel();
+    vm.set_placement_point(Some([0.4, 1.2, -0.3]));
+    send(&mut vm, Command::PlaceShape);
+
+    let object = vm.selected_object().expect("placed");
+    assert_eq!(object.position, [0.4, 1.2, -0.3]);
+}
+
+#[test]
+fn a_placement_with_nowhere_stated_lands_at_the_origin() {
+    let (mut vm, _) = viewmodel();
+    send(&mut vm, Command::PlaceShape);
+    let object = vm.selected_object().expect("placed");
+    assert_eq!(object.position, [0.0; 3]);
+}

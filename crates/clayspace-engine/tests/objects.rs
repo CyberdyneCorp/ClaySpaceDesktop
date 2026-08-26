@@ -954,3 +954,32 @@ fn a_whole_drag_is_one_undo_step() {
         "and the cavity is where the drag started"
     );
 }
+
+/// The mirror is a property of the layer that evaluation reads, not an edit
+/// baked into the items — so it has to follow an object that moves, not just
+/// one that is placed.
+#[test]
+fn a_moved_object_is_still_mirrored() {
+    let Some(mut document) = document() else {
+        return;
+    };
+    let id = document
+        .place_object(Shape::Sphere, &[0.35], [0.0, 0.9, 0.0], subtracting())
+        .expect("place");
+    // On the mirror plane to begin with, so there is one cavity.
+    assert!(!inside(&document, [0.0, 0.9, 0.0]));
+
+    // Moved off the plane, where the mirror should make a second.
+    document
+        .set_object_transform(id, [0.7, 0.3, 0.0], [0.0, 1.0, 0.0], 0.0, 1.0)
+        .expect("move");
+
+    assert!(
+        !inside(&document, [0.7, 0.3, 0.0]),
+        "the cavity is where it was moved to"
+    );
+    assert!(
+        !inside(&document, [-0.7, 0.3, 0.0]),
+        "and the mirror made its reflection"
+    );
+}

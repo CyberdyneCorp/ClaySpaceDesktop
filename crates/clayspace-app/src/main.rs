@@ -1600,6 +1600,9 @@ impl App {
         let curve = self.curve.state().get().clone();
         // Copied before the viewport is reached for, which borrows `self`.
         let camera = self.camera;
+        let object_pivot = self.objects.pivot();
+        let outline = self.selected_outline();
+        let object_mode = *self.objects.mode().get();
         let Some(graphics) = self.graphics.as_mut() else {
             return;
         };
@@ -1624,6 +1627,7 @@ impl App {
                         edges: &edges,
                         selected: &curve.selection,
                         gizmo: None,
+                        outline: None,
                         handle: Self::curve_handle(&curve),
                     },
                 );
@@ -1633,9 +1637,9 @@ impl App {
             // object is selected, if any. Its pivot comes from the model
             // rather than from the list, so it is where the engine has the
             // object rather than where the interface last drew it.
-            let object_gizmo = self.objects.pivot().map(|pivot| clayspace_view::GizmoView {
+            let object_gizmo = object_pivot.map(|pivot| clayspace_view::GizmoView {
                 pivot,
-                mode: *self.objects.mode().get(),
+                mode: object_mode,
                 reach: Self::OBJECT_GIZMO_REACH,
                 hovered: self.gizmo_drag.map(|(handle, _)| handle),
                 view_axis: Self::toward_eye(&camera, pivot),
@@ -1649,6 +1653,7 @@ impl App {
                     edges: &[],
                     selected: &[],
                     gizmo: object_gizmo,
+                    outline,
                     handle: 0.0,
                 },
             );
@@ -1671,9 +1676,38 @@ impl App {
                     // A cage scales its own control points.
                     per_axis_scale: true,
                 }),
+                outline: None,
                 handle,
             },
         );
+    }
+
+    /// The box a selected object occupies, for the viewport to outline.
+    ///
+    /// Computed from the shape's own measurements and its scale rather than
+    /// asked of the engine: the engine's influence bound is dilated by
+    /// rounding and blend support and, under the layer mirror, covers the
+    /// reflection too — a box twice the width of the object and centred
+    /// between the two copies. This one says where *this* shape is.
+    fn selected_outline(&self) -> Option<([f32; 3], [f32; 3])> {
+        let id = (*self.objects.selected().get())?;
+        let objects = self.objects.objects().get();
+        let object = objects.iter().find(|object| object.id == id)?;
+        // The largest measurement the shape carries, which bounds every one of
+        // them: a box's half-extent, a cylinder's radius or half-height, a
+        // torus's major radius. Approximate on purpose — this frames the
+        // object, it does not describe it.
+        let reach = object
+            .parameters
+            .iter()
+            .copied()
+            .fold(0.0f32, f32::max)
+            .max(1e-3)
+            * object.scale;
+        Some((
+            std::array::from_fn(|i| object.position[i] - reach),
+            std::array::from_fn(|i| object.position[i] + reach),
+        ))
     }
 
     /// How long the manipulator's arms are on a placed object, in world units.
@@ -2696,6 +2730,17 @@ impl App {
         // The rings are rebuilt every frame from the live brush and symmetry,
         // so `[` and `]` and the mirror toggles show up without the pointer
         // having to move to prompt them.
+        // Where a placement would land: under the pointer on the surface,
+        // and where the camera is looking when the pointer is off it. Set
+        // before the frame's commands, so a `PlaceShape` in this frame places
+        // where the sculptor was looking when they asked — placing at the
+        // origin puts a subtracting shape *inside* the form, cutting something
+        // nobody can see.
+        let placement = self
+            .hover
+            .map(|(position, _)| position)
+            .unwrap_or_else(|| self.camera.target.into());
+        self.objects.set_placement_point(Some(placement));
         let cursors = self.cursors();
         let scene_viewport = self.viewport.map(|rect| {
             [

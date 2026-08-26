@@ -363,6 +363,18 @@ pub struct LatticeView<'a> {
     pub selected: &'a [usize],
     /// The manipulator on that selection, when there is one.
     pub gizmo: Option<GizmoView>,
+    /// The box a selected placed object occupies, when one is selected.
+    ///
+    /// Drawn because a subtracting object is *inside* the form: what a
+    /// sculptor sees of a cylinder bored through a head is the hole, and the
+    /// cylinder itself is behind the surface where nothing shows it. Without
+    /// an outline, aiming one means dragging a manipulator and inferring the
+    /// shape from the cavity that appears.
+    ///
+    /// A box rather than the shape's own silhouette, which would mean marching
+    /// a primitive on the interface thread every frame — this is a frame of
+    /// reference, not a preview.
+    pub outline: Option<([f32; 3], [f32; 3])>,
     /// How big a control point handle is, in world units.
     ///
     /// Handed in rather than fixed, because a cage around a thumbnail and one
@@ -2069,6 +2081,29 @@ fn lattice_geometry(view: LatticeView<'_>) -> (Vec<Vertex>, Vec<u32>) {
         indices.push(base);
         indices.push(base + 1);
     };
+
+    // A selected object's box, quieter still than the cage: it says where a
+    // shape is, and a bright one would read as the shape itself.
+    if let Some((min, max)) = view.outline {
+        const OUTLINE: [f32; 3] = [0.52, 0.62, 0.72];
+        let corner = |i: usize| {
+            Vec3::new(
+                if i & 1 == 0 { min[0] } else { max[0] },
+                if i & 2 == 0 { min[1] } else { max[1] },
+                if i & 4 == 0 { min[2] } else { max[2] },
+            )
+        };
+        // The twelve edges of a box: every pair of corners differing in one
+        // bit, which is every pair one axis apart.
+        for a in 0..8usize {
+            for bit in [1usize, 2, 4] {
+                let b = a | bit;
+                if b != a {
+                    segment(corner(a), corner(b), OUTLINE);
+                }
+            }
+        }
+    }
 
     // The cage itself, quiet: it is a frame of reference, and a bright one
     // would compete with the form it is wrapped around.

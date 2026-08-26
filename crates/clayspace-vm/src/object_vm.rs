@@ -43,6 +43,13 @@ pub struct ObjectViewModel {
     /// What the manipulator is acting on.
     target: Observable<Option<GizmoTarget>>,
     mode: Observable<GizmoMode>,
+    /// Where a placement would land.
+    ///
+    /// Supplied by the composition root rather than decided here: it is where
+    /// the pointer meets the surface, and failing that where the camera is
+    /// looking, and a ViewModel can see neither. `None` before anything has
+    /// told it, which places at the origin — a document with no camera yet.
+    placement: Option<[f32; 3]>,
     /// The gesture in flight, and where the target stood when it began.
     ///
     /// The transform is captured at the press so every frame resolves from it,
@@ -67,6 +74,7 @@ impl ObjectViewModel {
             target: Observable::new(None),
             mode: Observable::new(GizmoMode::default()),
             drag: None,
+            placement: None,
             notice: Observable::new(None),
         }
     }
@@ -105,6 +113,15 @@ impl ObjectViewModel {
 
     pub fn notice(&self) -> &Observable<Option<String>> {
         &self.notice
+    }
+
+    /// Says where a placement would land.
+    ///
+    /// Called as the pointer moves, so the shape arrives where the sculptor
+    /// was looking rather than at the origin — which for a subtracting shape
+    /// means inside the form, where it cuts something invisible.
+    pub fn set_placement_point(&mut self, at: Option<[f32; 3]>) {
+        self.placement = at;
     }
 
     /// The handles the manipulator offers right now.
@@ -231,12 +248,8 @@ impl ObjectViewModel {
             self.parameters.get().clone(),
             *self.combine.get(),
         );
-        // Placed at the origin by default; the composition root places it
-        // under the pointer where the pointer is on the surface.
-        match self
-            .model
-            .place_object(shape, &parameters, [0.0; 3], combine)
-        {
+        let at = self.placement.unwrap_or([0.0; 3]);
+        match self.model.place_object(shape, &parameters, at, combine) {
             Ok(id) => {
                 self.notice.set_if_changed(None);
                 self.target.set(Some(GizmoTarget::Object(id)));
