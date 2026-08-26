@@ -172,6 +172,40 @@ measure that maps through the zoom; taken as world units that is a brush
 covering a third of a unit-sized model. A detail brush at `0.08` is what the
 number means at a normal framing.
 
+### What the gate measures
+
+`just bench` measures one figure group per operation a sculptor can invoke —
+every brush on every representation it has a verb for, the layer operations,
+rigging and curves, the six conversions, consolidation, export, pre-bake
+repair, mask gating, undo and redo — beside the five the specification puts a
+budget on. The coverage is derived rather than listed: the brush loop is
+`Representation::ALL` against `ToolKind::for_representation`, which is the
+table the shelf itself presents from, so a tool added to the shelf is a tool
+measured.
+
+Three things make the record trustworthy rather than merely present:
+
+- **A reference suite, revisioned per member.** One scene per representation,
+  plus the ten-times variant for locality and a deliberately damaged grid for
+  the repairs. Each names its own revision in the baseline's `conditions`, and
+  a comparison against a baseline recorded on a different revision is refused
+  and says which member changed. `reference_suite.rs` checks each member still
+  builds the size its revision claims.
+- **A figure that stops being measured fails the gate.** A measurement that
+  quietly returns early looks exactly like one that did not regress, which is
+  the thing a performance gate exists to catch. So a measurement says *why* it
+  could not run — no headless GPU, a tool with no gesture this harness can
+  synthesise — and a baseline figure that is neither measured nor accounted for
+  is reported as missing and fails.
+- **Figures are reported, not asserted.** Only the specification's five carry
+  budgets. Everything else is a tracked quantity compared against the recorded
+  baseline; a new figure is not a new promise.
+
+The whole suite is long enough to be worth filtering: `just bench-only brush`
+measures one group. A filtered run cannot record a baseline, since a baseline
+recorded from a subset reports every omitted figure as missing on the next
+comparison.
+
 16-cell bricks were also tried, and are worse: a third as many keys but eight
 times the cells each, so a dilated set meshes more overall — 64 ms against 39.
 
@@ -264,6 +298,7 @@ prevent.
 | ViewModel | `clayspace-vm/tests` | The interface rules, against a double, with no engine |
 | Session | `clayspace-engine/tests` | The same rules against a real document |
 | Latency | `clayspace-app/tests` | Dab cost against the budget |
+| Performance | `clayspace-app/src/bin/bench` | Every operation a sculptor can invoke, against a recorded baseline |
 | Visual | `clayspace-app/tests` | Real frames, written as PNGs |
 
 The visual tests are the unusual ones. They render a real frame on a real

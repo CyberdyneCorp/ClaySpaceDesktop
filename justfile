@@ -130,9 +130,22 @@ budget:
 
 # -- measuring ---------------------------------------------------------------
 
+# The whole table takes several minutes: it measures every brush on every
+# representation, every layer operation, the six conversions, consolidation,
+# export, repair, masking and undo, and several of those rebuild a reference
+# scene between samples. `just bench-only <prefix>` is there for when a
+# question is about one group.
+
 # Run the benchmark and print the table.
 bench:
     cargo run -q -p {{app}} --release --bin bench
+
+# One group of it, e.g. `just bench-only brush.voxel` or `just bench-only convert`.
+#
+# A filtered run refuses to record a baseline: a baseline recorded from a
+# subset reports every omitted figure as missing on the next comparison.
+bench-only prefix:
+    cargo run -q -p {{app}} --release --bin bench -- --only {{prefix}}
 
 # Compare against the recorded baseline. This is the CI gate.
 #

@@ -18,6 +18,11 @@
 //!
 //! Undo's sync went 284 ms to 141 ms and a dab's 4.3 ms to 3.6 ms.
 //!
+//! The milliseconds are now also recorded, as `history.undo`, `history.edit`
+//! and `history.undo_ratio` in the performance baseline — so a change of engine
+//! moves a figure `just bench-compare` reports rather than a number in a
+//! comment. What stays here is the explanation and the key counts.
+//!
 //! The assertions below are about *keys*, not milliseconds, wherever they can
 //! be: a key count is the same on every machine, and it is the thing that was
 //! actually wrong. The one timing assertion compares two measurements taken
