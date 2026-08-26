@@ -58,6 +58,22 @@ pub struct ObjectViewModel {
     /// looking, and a ViewModel can see neither. `None` before anything has
     /// told it, which places at the origin — a document with no camera yet.
     placement: Option<[f32; 3]>,
+    /// Where the target would be if the surface had kept up.
+    ///
+    /// A live boolean is re-evaluated on every frame of a drag, and measured
+    /// on the reference scene one frame costs about 21 ms against a 16.7 ms
+    /// budget — affordable on that form and not on every form. When a frame
+    /// overruns, the drag carries on against the surface as it last stood and
+    /// the document is left until the pointer comes up: the object moves at
+    /// the speed of the hand, and the clay catches up once.
+    ///
+    /// The same answer the region-based brushes already give — "they land when
+    /// it comes up" — so it is a behaviour this application has rather than a
+    /// new kind of lag.
+    pending: Option<Transform>,
+    /// Whether the last frame overran, so the rest of this gesture is drawn
+    /// rather than evaluated.
+    settling: bool,
     /// The gesture in flight, and where the target stood when it began.
     ///
     /// The transform is captured at the press so every frame resolves from it,
@@ -85,6 +101,8 @@ impl ObjectViewModel {
             mesh_operands: Observable::new(Vec::new()),
             mesh_cost: Observable::new(None),
             drag: None,
+            pending: None,
+            settling: false,
             placement: None,
             notice: Observable::new(None),
         }
@@ -173,10 +191,30 @@ impl ObjectViewModel {
     }
 
     /// Where the manipulator sits, if it is drawn at all.
+    ///
+    /// The pending transform while a drag is settling, so the widget follows
+    /// the hand even when the surface underneath it has not caught up. The
+    /// model's own answer otherwise.
     pub fn pivot(&mut self) -> Option<[f32; 3]> {
+        if let Some(pending) = self.pending {
+            return Some(pending.position);
+        }
         let target = (*self.target.get())?;
         self.model.target_transform(target).map(|at| at.position)
     }
+
+    /// Whether the surface is behind the hand, so the viewport can say so.
+    pub fn settling(&self) -> bool {
+        self.settling
+    }
+
+    /// How long a drag frame may take before the rest of the gesture is drawn
+    /// rather than evaluated.
+    ///
+    /// One frame at sixty hertz. Not a budget the specification states for
+    /// this — it states one for a *stroke* — but it is the number that decides
+    /// whether a hand feels a drag stick, and there is no better one to use.
+    const FRAME_BUDGET: std::time::Duration = std::time::Duration::from_millis(16);
 
     /// The object the options bar is describing, if one is selected.
     pub fn selected_object(&self) -> Option<SceneObject> {
@@ -338,6 +376,8 @@ impl ObjectViewModel {
             return;
         };
         self.model.begin_target_drag(target);
+        self.pending = None;
+        self.settling = false;
         self.drag = Some((
             GizmoDrag {
                 mode: *self.mode.get(),
@@ -355,11 +395,34 @@ impl ObjectViewModel {
             return;
         };
         let moved = gesture.resolve(started, to, snap);
+        self.pending = Some(moved);
+        if self.settling {
+            // The surface is already behind the hand. Moving the object again
+            // would only put it further behind, so the widget moves and the
+            // clay waits.
+            return;
+        }
+
+        let began = std::time::Instant::now();
         self.report(|model| model.set_target_transform(target, moved));
+        // Measured rather than assumed: whether a live boolean keeps up
+        // depends on the form, and a fixed answer would be wrong on half of
+        // them.
+        if began.elapsed() > Self::FRAME_BUDGET {
+            self.settling = true;
+        } else {
+            self.pending = None;
+        }
         self.refresh();
     }
 
     fn end(&mut self) {
+        let target = *self.target.get();
+        // What the hand asked for, applied once now that it has stopped.
+        if let (Some(target), Some(pending)) = (target, self.pending.take()) {
+            self.report(|model| model.set_target_transform(target, pending));
+        }
+        self.settling = false;
         if self.drag.take().is_some() {
             self.model.end_target_drag();
         }

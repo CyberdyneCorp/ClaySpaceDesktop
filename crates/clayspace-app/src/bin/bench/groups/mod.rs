@@ -14,6 +14,7 @@ pub mod history;
 pub mod locality;
 pub mod mask;
 pub mod memory;
+pub mod objects;
 pub mod operations;
 pub mod render;
 pub mod startup;

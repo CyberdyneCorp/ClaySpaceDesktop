@@ -36,6 +36,8 @@ struct FakeObjects {
     selected: Option<ObjectId>,
     /// Set to refuse the next edit, as a locked layer would.
     refuse: Option<&'static str>,
+    /// Set to make every transform overrun the frame, as a heavy form does.
+    slow: bool,
 }
 
 impl FakeObjects {
@@ -46,6 +48,7 @@ impl FakeObjects {
             meshes: Rc::new(RefCell::new(Vec::new())),
             selected: None,
             refuse: None,
+            slow: false,
         }
     }
 
@@ -235,6 +238,10 @@ impl ObjectModel for FakeObjects {
     ) -> Result<(), ModelError> {
         if self.refuse.is_some() {
             return Err(self.refusal());
+        }
+        if self.slow {
+            // Longer than a frame, which is what the ViewModel measures.
+            std::thread::sleep(std::time::Duration::from_millis(20));
         }
         self.calls.borrow_mut().transforms.push(transform);
         match target {
@@ -660,4 +667,81 @@ fn an_operand_that_disappears_stops_being_quoted() {
 
     assert_eq!(*vm.mesh_operand().get(), None, "the choice went with it");
     assert!(vm.mesh_cost().get().is_none(), "and so did the price");
+}
+
+// -- when the surface cannot keep up ----------------------------------------
+
+/// A live boolean is re-evaluated on every frame of a drag. Where that
+/// overruns the frame, the object goes on moving at the speed of the hand and
+/// the clay catches up once, when the pointer comes up — the same answer the
+/// region-based brushes already give.
+#[test]
+fn a_drag_that_overruns_settles_when_the_pointer_comes_up() {
+    let calls = Rc::new(RefCell::new(Calls::default()));
+    let mut model = FakeObjects::new(calls.clone());
+    model.objects.push(an_object(1, Shape::Box, [0.0; 3]));
+    let id = model.objects[0].id;
+    model.selected = Some(id);
+    // Every frame overruns.
+    model.slow = true;
+    let mut vm = ObjectViewModel::new(Box::new(model));
+
+    send(&mut vm, Command::SelectObject(Some(id)));
+    send(
+        &mut vm,
+        Command::BeginGizmoDrag(GizmoHandle::Centre, [0.0; 3], [0.0, 0.0, 1.0]),
+    );
+    for step in 1..=6 {
+        send(
+            &mut vm,
+            Command::DragGizmo([step as f32 * 0.2, 0.0, 0.0], false),
+        );
+    }
+
+    assert!(vm.settling(), "the surface should be behind the hand");
+    // The widget follows the hand even so, which is what makes the drag usable
+    // rather than sticky.
+    assert_eq!(vm.pivot(), Some([1.2, 0.0, 0.0]));
+    // One frame reached the document, not six.
+    assert_eq!(
+        calls.borrow().transforms.len(),
+        1,
+        "the drag kept re-evaluating a surface that could not keep up"
+    );
+
+    send(&mut vm, Command::EndGizmoDrag);
+    assert!(!vm.settling(), "and it catches up when the hand stops");
+    let last = *calls.borrow().transforms.last().expect("a frame");
+    assert_eq!(
+        last.position,
+        [1.2, 0.0, 0.0],
+        "the clay should end where the hand ended"
+    );
+    assert_eq!(calls.borrow().transforms.len(), 2, "once, not six times");
+}
+
+/// And a drag the surface keeps up with is not throttled: every frame reaches
+/// the document, because that is what makes a live boolean live.
+#[test]
+fn a_drag_that_keeps_up_is_not_throttled() {
+    let (mut vm, calls) = viewmodel();
+    send(&mut vm, Command::PlaceShape);
+    send(
+        &mut vm,
+        Command::BeginGizmoDrag(GizmoHandle::Centre, [0.0; 3], [0.0, 0.0, 1.0]),
+    );
+    for step in 1..=4 {
+        send(
+            &mut vm,
+            Command::DragGizmo([step as f32 * 0.2, 0.0, 0.0], false),
+        );
+    }
+    send(&mut vm, Command::EndGizmoDrag);
+
+    assert!(!vm.settling());
+    assert_eq!(
+        calls.borrow().transforms.len(),
+        4,
+        "a surface that keeps up should be evaluated every frame"
+    );
 }

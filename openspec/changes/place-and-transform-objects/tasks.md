@@ -77,15 +77,15 @@ that mirror and would not exist if the engine had three getters.
 
 ## 7. Performance
 
-- [ ] 7.1 Add an `object` group to the benchmark: place, retransform, re-op, remove and pick
-- [ ] 7.2 Add `object.drag_frame` — one frame of a live boolean drag, which is the figure that decides whether this is usable — and `object.drag_frame_intersect` beside it, since a non-local op has no finite influence bound and dirties the whole layer
-- [ ] 7.3 Implement the settle-on-release fallback where a drag frame exceeds the interactive budget, and check the drag stays responsive on the ten-times scene
-- [ ] 7.4 Re-record the Linux baseline with the new figures, in its own commit
+- [x] 7.1 Add an `object` group to the benchmark: place, retransform, re-op, remove and pick
+- [x] 7.2 Add `object.drag_frame` — one frame of a live boolean drag, which is the figure that decides whether this is usable — and `object.drag_frame_intersect` beside it, since a non-local op has no finite influence bound and dirties the whole layer
+- [x] 7.3 Implement the settle-on-release fallback where a drag frame exceeds the interactive budget, and check the drag stays responsive on the ten-times scene
+- [x] 7.4 Re-record the Linux baseline with the new figures, in its own commit
 
 ## 8. Documentation
 
-- [ ] 8.1 Answer `docs/features.md`'s *Not built yet* entry for the manipulator outside the cage, and narrow its *Deliberately absent* entry for mesh-surface booleans to what remains true
-- [ ] 8.2 Document the object workflow in `docs/features.md`: placing, the operations an object can carry, and what the manipulator does to each kind of target
-- [ ] 8.3 State plainly that scale is uniform and why, and point at the cage for the other thing
-- [ ] 8.4 Update `README.md`'s input table for the new gestures
-- [ ] 8.5 Run `just check`
+- [x] 8.1 Answer `docs/features.md`'s *Not built yet* entry for the manipulator outside the cage, and narrow its *Deliberately absent* entry for mesh-surface booleans to what remains true
+- [x] 8.2 Document the object workflow in `docs/features.md`: placing, the operations an object can carry, and what the manipulator does to each kind of target
+- [x] 8.3 State plainly that scale is uniform and why, and point at the cage for the other thing
+- [x] 8.4 Update `README.md`'s input table for the new gestures
+- [x] 8.5 Run `just check`
