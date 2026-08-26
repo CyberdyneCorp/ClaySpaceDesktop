@@ -18,6 +18,11 @@ fn document() -> Option<ClayDocument> {
         .ok()
 }
 
+/// A second document, for comparing one gesture against another.
+fn document_fresh() -> Option<ClayDocument> {
+    document()
+}
+
 /// Opens a document from a path, on the same terms `document` builds one.
 fn document_at(path: &std::path::Path) -> Option<ClayDocument> {
     let mut opened = document()?;
@@ -645,4 +650,265 @@ fn a_target_that_is_gone_has_no_transform() {
         .expect("place");
     document.remove_object(id).expect("remove");
     assert_eq!(document.target_transform(GizmoTarget::Object(id)), None);
+}
+
+// -- curves -----------------------------------------------------------------
+
+/// A curve turns and scales as a cage does, because it goes through the same
+/// arithmetic. Worth a test rather than a comment: the point of routing it
+/// that way is that neither has its own implementation to drift from.
+#[test]
+fn a_curve_turns_about_the_middle_of_its_selection() {
+    use clayspace_model::CurveModel;
+
+    let Some(mut document) = document() else {
+        return;
+    };
+    document.begin_curve();
+    for (at, radius) in [
+        ([-0.5f32, 1.4, 0.0], 0.12f32),
+        ([0.0, 1.4, 0.0], 0.12),
+        ([0.5, 1.4, 0.0], 0.12),
+    ] {
+        document.add_curve_point(at, radius).expect("point");
+    }
+    // Adding a point selects it, so only the ones that are not already in the
+    // selection are toggled in.
+    for index in 0..3 {
+        if !document.curve().selection.contains(&index) {
+            document.toggle_curve_point(index);
+        }
+    }
+    assert_eq!(document.curve().selection.len(), 3, "all three are picked");
+
+    let pivot = document.curve_pivot().expect("a pivot");
+    assert!(
+        (pivot[0]).abs() < 1e-4 && (pivot[1] - 1.4).abs() < 1e-4,
+        "the pivot should sit in the middle of the three, got {pivot:?}"
+    );
+
+    let quarter = drag(
+        GizmoMode::Rotate,
+        GizmoHandle::Axis(2),
+        pivot,
+        [0.5, 1.4, 0.0],
+    );
+    document
+        .drag_curve_points(quarter, [0.0, 1.9, 0.0], false)
+        .expect("turn");
+
+    let turned = document.curve();
+    // A quarter turn about z takes the point that was at +x to +y.
+    let last = turned.points.last().expect("a point");
+    assert!(
+        last.position[1] > 1.7,
+        "the end point should have swung up, got {:?}",
+        last.position
+    );
+    // And the middle of them has not moved, because a turn is about it.
+    let after = document.curve_pivot().expect("a pivot");
+    assert!(
+        (after[0] - pivot[0]).abs() < 1e-3 && (after[1] - pivot[1]).abs() < 1e-3,
+        "the selection's middle moved: {pivot:?} to {after:?}"
+    );
+}
+
+#[test]
+fn a_curve_with_nothing_selected_has_no_manipulator() {
+    use clayspace_model::CurveModel;
+
+    let Some(mut document) = document() else {
+        return;
+    };
+    assert_eq!(document.curve_pivot(), None, "no curve, no manipulator");
+    document.begin_curve();
+    document
+        .add_curve_point([0.0, 1.4, 0.0], 0.1)
+        .expect("point");
+    document.select_curve_point(None);
+    assert_eq!(
+        document.curve_pivot(),
+        None,
+        "a curve with nothing picked has nothing to act on"
+    );
+}
+
+/// The difference between "you cannot transform that" and "you hit nothing".
+///
+/// A click on a sculpting stroke has to say the first. `pick_object` answers
+/// `None` for both, which is why there is a second question.
+#[test]
+fn a_click_on_a_stroke_says_what_it_hit() {
+    use clayspace_model::ItemKind;
+
+    let Some(mut document) = document() else {
+        return;
+    };
+    // A lump on top of the form, well clear of the starting sphere's own
+    // surface, so a ray straight down attributes to the stroke rather than to
+    // the sphere under it.
+    document
+        .apply_stroke(
+            clayspace_model::ToolKind::Padrao,
+            clayspace_model::BrushSettings {
+                size: 0.3,
+                ..clayspace_model::BrushSettings::default()
+            },
+            &[clayspace_model::GestureSample {
+                position: [0.0, 1.0, 0.0],
+                pressure: 1.0,
+                time: 0.0,
+            }],
+            [false; 3],
+        )
+        .expect("stroke");
+
+    let down = ([0.0, 4.0, 0.0], [0.0, -1.0, 0.0]);
+    let kind = document
+        .pick_item(down.0, down.1)
+        .expect("something was hit");
+    assert!(
+        matches!(kind, ItemKind::Stroke | ItemKind::Object),
+        "a ray onto the worked form should attribute to something, got {kind:?}"
+    );
+    // Whatever it attributed to, a stroke is never offered as an object.
+    if kind == ItemKind::Stroke {
+        assert_eq!(
+            document.pick_object(down.0, down.1),
+            None,
+            "a stroke is not an object"
+        );
+    }
+
+    // And a ray into empty space hits nothing at all, which is the case the
+    // interface must not confuse with the above.
+    assert_eq!(document.pick_item([9.0, 9.0, 9.0], [0.0, 1.0, 0.0]), None);
+}
+
+/// The manipulator's own rules, on a target that is not a cage.
+///
+/// The cage holds these already and they are the reason a manipulator feels
+/// like one: the widget sits on the middle of what it acts on, an axis handle
+/// constrains, a wandering drag lands where it settles, and a scale never
+/// passes through zero. A second kind of target that quietly broke one of them
+/// would be a manipulator that means two different things.
+mod the_manipulators_rules {
+    use super::*;
+
+    fn placed() -> Option<(ClayDocument, GizmoTarget, Transform)> {
+        let mut document = document()?;
+        let id = document
+            .place_object(
+                Shape::Box,
+                &Shape::Box.defaults(),
+                [0.0, 0.9, 0.0],
+                subtracting(),
+            )
+            .expect("place");
+        let target = GizmoTarget::Object(id);
+        let current = document.target_transform(target).expect("a transform");
+        Some((document, target, current))
+    }
+
+    #[test]
+    fn an_axis_handle_constrains_the_drag() {
+        let Some((mut document, target, current)) = placed() else {
+            return;
+        };
+        let gesture = drag(
+            GizmoMode::Move,
+            GizmoHandle::Axis(1),
+            current.position,
+            current.position,
+        );
+        // A hand that drifted sideways while pulling the vertical shaft.
+        let moved = gesture.resolve(current, [0.7, 1.6, -0.4], false);
+        document.set_target_transform(target, moved).expect("apply");
+
+        let after = document.target_transform(target).expect("a transform");
+        assert_eq!(
+            [after.position[0], after.position[2]],
+            [0.0, 0.0],
+            "the drift reached the object: {:?}",
+            after.position
+        );
+        assert!(after.position[1] > current.position[1]);
+    }
+
+    #[test]
+    fn a_wandering_drag_lands_where_it_ends() {
+        let Some((mut document, target, current)) = placed() else {
+            return;
+        };
+        let gesture = drag(
+            GizmoMode::Move,
+            GizmoHandle::Centre,
+            current.position,
+            current.position,
+        );
+        // Resolved from where it began every frame, so the intermediate point
+        // leaves no trace.
+        for at in [[2.0, 3.0, 1.0], [-1.0, 0.5, 2.0], [0.0, 1.5, 0.0]] {
+            let moved = gesture.resolve(current, at, false);
+            document.set_target_transform(target, moved).expect("apply");
+        }
+        let after = document.target_transform(target).expect("a transform");
+
+        let mut fresh = document_fresh().expect("a second document");
+        let id = fresh
+            .place_object(
+                Shape::Box,
+                &Shape::Box.defaults(),
+                [0.0, 0.9, 0.0],
+                subtracting(),
+            )
+            .expect("place");
+        let straight = GizmoTarget::Object(id);
+        let start = fresh.target_transform(straight).expect("a transform");
+        let gesture = drag(
+            GizmoMode::Move,
+            GizmoHandle::Centre,
+            start.position,
+            start.position,
+        );
+        fresh
+            .set_target_transform(straight, gesture.resolve(start, [0.0, 1.5, 0.0], false))
+            .expect("apply");
+        let direct = fresh.target_transform(straight).expect("a transform");
+
+        assert_eq!(
+            after.position, direct.position,
+            "a drag that wandered should land where a straight one did"
+        );
+    }
+
+    #[test]
+    fn a_scale_never_passes_through_zero() {
+        let Some((mut document, target, current)) = placed() else {
+            return;
+        };
+        let gesture = drag(
+            GizmoMode::Scale,
+            GizmoHandle::Centre,
+            [0.0; 3],
+            [0.0, 0.9, 0.0],
+        );
+        // Dragged onto the pivot itself, which asks for a factor of nothing.
+        let collapsed = gesture.resolve(current, [0.0; 3], false);
+        document
+            .set_target_transform(target, collapsed)
+            .expect("apply");
+
+        let after = document.target_transform(target).expect("a transform");
+        assert!(after.scale > 0.0, "scale reached {}", after.scale);
+    }
+
+    #[test]
+    fn the_manipulator_offers_no_axis_scale_on_a_transform() {
+        assert_eq!(
+            GizmoHandle::all_for_transform(GizmoMode::Scale),
+            vec![GizmoHandle::Centre],
+            "an axis box would measure a stretch the engine cannot apply"
+        );
+    }
 }

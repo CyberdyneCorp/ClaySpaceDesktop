@@ -441,6 +441,17 @@ pub trait ObjectModel {
         None
     }
 
+    /// What a ray meets, whether or not it can be transformed.
+    ///
+    /// The difference from [`ObjectModel::pick_object`] is the whole of task
+    /// 4.7: a click on a sculpting stroke has to *say* that a stroke cannot be
+    /// transformed, and a `None` from `pick_object` cannot tell that apart
+    /// from a click on nothing at all.
+    fn pick_item(&mut self, origin: [f32; 3], direction: [f32; 3]) -> Option<ItemKind> {
+        let _ = (origin, direction);
+        None
+    }
+
     /// The refusal every provided method gives, in one place.
     fn no_objects_here(&self) -> crate::ModelError {
         crate::ModelError::Unavailable(crate::Unavailable::NoVerbHere {

@@ -14,10 +14,10 @@ use clayspace_model::{
     CurveJoin, CurveModel, CurvePoint, CurveProfile, CurveState, Direction, DocumentModel,
     EditOutcome, ExchangeModel, ExportMesher, ExportSettings, ExtrudeSettings, Format,
     GestureSample, GizmoDrag, GizmoHandle, GizmoMode, GizmoTarget, HistoryState, ImportAs,
-    ImportSettings, LatticeModel, LatticeState, LayerKey, LayerSummary, MaskModel, MaskOp,
-    MaskState, ModelError, NodeIndex, ObjectId, ObjectModel, OpenError, Protection, Refusal,
-    Representation, Scene, SceneModel, SceneNode, SceneStats, SculptModel, Shape, SkinSettings,
-    SmoothBlur, ToolKind, VoxelDisplay, OBJECT_VERBS,
+    ImportSettings, ItemKind, LatticeModel, LatticeState, LayerKey, LayerSummary, MaskModel,
+    MaskOp, MaskState, ModelError, NodeIndex, ObjectId, ObjectModel, OpenError, Protection,
+    Refusal, Representation, Scene, SceneModel, SceneNode, SceneStats, SculptModel, Shape,
+    SkinSettings, SmoothBlur, ToolKind, VoxelDisplay, OBJECT_VERBS,
 };
 
 use crate::backend::{BackendPolicy, Operation};
@@ -4807,6 +4807,28 @@ impl CurveModel for ClayDocument {
         self.reshape_curve()
     }
 
+    fn drag_curve_points(
+        &mut self,
+        drag: clayspace_model::GizmoDrag,
+        to: [f32; 3],
+        snap: bool,
+    ) -> Result<(), ModelError> {
+        let Some(curve) = self.curve.as_mut() else {
+            return Ok(());
+        };
+        // Each point mapped through the same arithmetic the cage uses, which
+        // is what makes a turn about the selection's middle mean the same
+        // thing on a curve as on a cage — and what gets a curve turn and scale
+        // without a second implementation of either.
+        for index in curve.selection.clone() {
+            let Some(point) = curve.points.get_mut(index) else {
+                continue;
+            };
+            point.position = drag.apply(point.position, to, snap);
+        }
+        self.reshape_curve()
+    }
+
     fn set_curve_radius(&mut self, radius: f32) -> Result<(), ModelError> {
         let Some(curve) = self.curve.as_mut() else {
             return Ok(());
@@ -6414,6 +6436,40 @@ impl ObjectModel for ClayDocument {
         }
     }
 
+    fn pick_item(&mut self, origin: [f32; 3], direction: [f32; 3]) -> Option<ItemKind> {
+        let hit = self
+            .document
+            .raycast_attributed(origin, direction)
+            .ok()
+            .flatten()?;
+        let (layer, node) = (hit.layer?, hit.node?);
+        let prim = self.document.node_prim(layer, node).ok()?;
+        // The table first, then the primitive. A stamping stroke deposits
+        // spheres, so the primitive alone would call every stamp an object;
+        // the table knows which nodes were placed, and `kind_of` answers for
+        // the rest — which is what tells a rig from a curve from a stroke, and
+        // so what lets the interface say *why* a click cannot be transformed
+        // rather than doing nothing.
+        let key = self
+            .layers
+            .iter()
+            .find(|candidate| candidate.id == layer)
+            .map(|candidate| candidate.key)?;
+        let placed = self.object_index(ObjectId {
+            layer: key,
+            node: node.get(),
+        });
+        Some(match placed {
+            Some(_) => ItemKind::Object,
+            None => match kind_of(prim) {
+                // An item nobody placed and whose primitive says "object" is a
+                // stroke's stamp: there is nothing else it can be.
+                ItemKind::Object => ItemKind::Stroke,
+                other => other,
+            },
+        })
+    }
+
     fn pick_object(&mut self, origin: [f32; 3], direction: [f32; 3]) -> Option<ObjectId> {
         // The attributing raycast, which is not the cheap path — it compiles
         // the document and a tape per candidate item. On a click and never on
@@ -6427,18 +6483,18 @@ impl ObjectModel for ClayDocument {
         // A hit is attributed to "the item whose field is closest at the hit
         // point, so a subtract item is attributed the surface it carved" —
         // which is why clicking the wall of a hole selects the shape that cut
-        // it. A stroke or a rig attributes too, and is not an object.
-        if !kind_of(self.document.node_prim(layer, node).ok()?).is_object() {
-            return None;
-        }
+        // it. A stroke or a rig attributes too, and neither is an object: the
+        // table is what says which, since a stamp and a placed sphere are the
+        // same primitive.
         let key = self
             .layers
             .iter()
             .find(|candidate| candidate.id == layer)
             .map(|candidate| candidate.key)?;
-        Some(ObjectId {
+        let id = ObjectId {
             layer: key,
             node: node.get(),
-        })
+        };
+        self.object_index(id).map(|_| id)
     }
 }

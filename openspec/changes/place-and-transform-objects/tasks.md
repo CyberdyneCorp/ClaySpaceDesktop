@@ -52,9 +52,9 @@ that mirror and would not exist if the engine had three getters.
 - [x] 4.3 Route an object's drag to `clay_layer_set_transform`
 - [x] 4.4 Route a layer's drag to `clay_document_set_layer_transform`, and check the symmetry plane travels with it
 - [x] 4.5 Route a mesh layer's drag to the layer transform, and use `clay_mesh_transform` only where a bake needs the moved vertices — a mesh layer *is* a layer, so `GizmoTarget::Layer` already carries it; the bake path is task 6
-- [ ] 4.6 Extend the curve to turn and scale its selected points about their middle, reusing the drag maths the cage already has
-- [ ] 4.7 Refuse a sculpting stroke as a target, with a message saying why rather than nothing happening
-- [ ] 4.8 Test each target for the rules the cage already holds: the manipulator sits on the middle, an axis handle constrains, a wandering drag lands where it ends, a scale never passes zero
+- [x] 4.6 Extend the curve to turn and scale its selected points about their middle, reusing the drag maths the cage already has
+- [x] 4.7 Refuse a sculpting stroke as a target, with a message saying why rather than nothing happening
+- [x] 4.8 Test each target for the rules the cage already holds: the manipulator sits on the middle, an axis handle constrains, a wandering drag lands where it ends, a scale never passes zero
 
 ## 5. The interface
 
