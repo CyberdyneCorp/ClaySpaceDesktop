@@ -102,6 +102,34 @@ const THICKNESS: ShapeParameter = ShapeParameter::new("thickness", 0.04, SMALLES
 const RIM_RADIUS: ShapeParameter = ShapeParameter::new("rim_radius", 0.06, SMALLEST, LARGEST);
 const SIZE: ShapeParameter = ShapeParameter::new("size", 0.4, SMALLEST, LARGEST);
 
+/// Every key a shape parameter can carry, in a fixed order.
+///
+/// The interface's names are held against this order, the way a brush's are
+/// held against `ToolKind::ALL` — a key is a stable identifier written into
+/// saved documents, and showing one to a sculptor is showing them the inside
+/// of the file. `every_parameter_key_can_be_named` is what keeps the two in
+/// step.
+pub const PARAMETER_KEYS: [&str; 18] = [
+    "half_x",
+    "half_y",
+    "half_z",
+    "radius",
+    "half_height",
+    "half_depth",
+    "bottom_radius",
+    "top_radius",
+    "major_radius",
+    "minor_radius",
+    "radius_x",
+    "radius_y",
+    "radius_z",
+    "height",
+    "corner_radius",
+    "thickness",
+    "rim_radius",
+    "size",
+];
+
 impl Shape {
     /// Every shape, in the order the picker presents them: the four a sculptor
     /// reaches for first, then the rest.
@@ -509,6 +537,27 @@ mod tests {
         assert!(OBJECT_VERBS.on(crate::Representation::Sdf).is_some());
         assert!(OBJECT_VERBS.on(crate::Representation::Voxel).is_none());
         assert!(OBJECT_VERBS.on(crate::Representation::Mesh).is_none());
+    }
+
+    /// A parameter whose key is not in the list is a slider the interface can
+    /// only label with the key itself, which is the inside of the save file.
+    #[test]
+    fn every_parameter_key_can_be_named() {
+        for shape in Shape::ALL {
+            for parameter in shape.parameters() {
+                assert!(
+                    PARAMETER_KEYS.contains(&parameter.key),
+                    "{shape:?}'s {} is not in PARAMETER_KEYS",
+                    parameter.key
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_parameter_key_is_listed_twice() {
+        let unique: std::collections::BTreeSet<&str> = PARAMETER_KEYS.into_iter().collect();
+        assert_eq!(unique.len(), PARAMETER_KEYS.len());
     }
 
     #[test]

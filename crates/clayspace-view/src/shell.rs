@@ -98,6 +98,18 @@ pub struct ShellState<'a> {
     /// would be given.
     pub curve: clayspace_model::CurveState,
     pub curve_radius: f32,
+    /// The shapes panel: whether it is open, what it is set to, and what has
+    /// been placed.
+    pub show_shapes: bool,
+    pub shape: clayspace_model::Shape,
+    pub shape_parameters: &'a [f32],
+    /// How a placed shape combines. Its own value rather than the stroke's:
+    /// placing a shape means Add, and a stroke starts at Relief.
+    pub object_combine: CombineSettings,
+    pub objects: &'a [clayspace_model::SceneObject],
+    pub selected_object: Option<clayspace_model::ObjectId>,
+    /// Which of the manipulator's three modes is in force.
+    pub gizmo_mode: clayspace_model::GizmoMode,
     /// The cage around the form, while one is up.
     pub lattice: clayspace_model::LatticeState,
     /// What a fresh cage would be built with.
@@ -423,6 +435,10 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                 }
                 if ui.button(s.action_deform).clicked() {
                     queue.push(Command::ToggleDeform);
+                    ui.close_menu();
+                }
+                if ui.button(s.action_shapes).clicked() {
+                    queue.push(Command::ToggleShapes);
                     ui.close_menu();
                 }
                 if ui.button(s.action_import).clicked() {
@@ -1234,6 +1250,14 @@ pub fn left_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Command
     heading(ui, s.section_layers);
     for layer in state.scene.layers.iter().rev() {
         layer_row(ui, state, layer, queue);
+    }
+
+    // The shapes standing in the active layer, under the layer they stand in.
+    // Only on a field, because that is the only place an object can live, and
+    // a heading that could only ever say "none" is worse than no heading.
+    if state.representation == Representation::Sdf {
+        ui.add_space(space::SNUG);
+        object_rows(ui, state, queue);
     }
     // Recording a pass, and what the stack costs. Under the layer list because
     // that is where the passes themselves are, and only for a grid — a field
@@ -2768,6 +2792,240 @@ fn thousands(value: usize) -> String {
 /// Bytes as gigabytes, to two places.
 fn gigabytes(bytes: u64) -> String {
     format!("{:.2} GB", bytes as f64 / 1024.0 / 1024.0 / 1024.0)
+}
+
+/// The shapes a sculptor can put in the scene, and what the selected one is.
+///
+/// One panel for both because they are one workflow: pick a shape, place it,
+/// aim it, and change how it meets what is under it. Splitting the picker from
+/// the properties would mean two windows open at once for a single operation.
+pub fn shapes_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    if !state.show_shapes {
+        return;
+    }
+    let s = state.strings;
+    let mut open = true;
+
+    egui::Window::new(s.action_shapes)
+        .open(&mut open)
+        .resizable(false)
+        .collapsible(false)
+        .show(ctx, |ui| {
+            ui.set_min_width(300.0);
+            // An object is an item in an SDF layer's ordered list, and a grid
+            // and a mesh have no such list. Said here rather than left to a
+            // refusal after the click.
+            if state.representation != Representation::Sdf {
+                ui.label(
+                    egui::RichText::new(s.label_shapes_sdf_only)
+                        .size(type_scale::LABEL)
+                        .color(Tokens::text_dim()),
+                );
+                return;
+            }
+
+            shape_picker(ui, state, queue);
+            ui.add_space(space::SNUG);
+            shape_measurements(ui, state, queue);
+
+            ui.add_space(space::SNUG);
+            if ui.button(s.action_place_shape).clicked() {
+                queue.push(Command::PlaceShape);
+            }
+
+            if let Some(object) = state
+                .selected_object
+                .and_then(|id| state.objects.iter().find(|object| object.id == id))
+            {
+                ui.separator();
+                selected_object_controls(ui, state, object, queue);
+            }
+
+            ui.add_space(space::SNUG);
+            ui.label(
+                egui::RichText::new(s.hint_shapes)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+        });
+
+    if !open {
+        queue.push(Command::ToggleShapes);
+    }
+}
+
+/// Which shape a placement would use.
+fn shape_picker(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    ui.label(
+        egui::RichText::new(s.label_shape)
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    );
+    egui::ComboBox::from_id_salt("shape-picker")
+        .selected_text(s.shape(state.shape))
+        .width(280.0)
+        .show_ui(ui, |ui| {
+            for shape in clayspace_model::Shape::ALL {
+                if ui
+                    .selectable_label(shape == state.shape, s.shape(shape))
+                    .clicked()
+                    && shape != state.shape
+                {
+                    queue.push(Command::SetShape(shape));
+                }
+            }
+        });
+}
+
+/// A slider per number the shape is measured by.
+///
+/// Built from the shape's own description rather than from a case per shape:
+/// a panel that knew a torus takes a major radius and then a minor one would
+/// be a panel with fourteen special cases in it, and a fifteenth shape would
+/// need a fifteenth.
+fn shape_measurements(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    let parameters = state.shape.parameters();
+    let mut values = state.shape.sanitised(state.shape_parameters);
+    for (at, parameter) in parameters.iter().enumerate() {
+        if let Some(value) = slider(
+            ui,
+            s.shape_parameter(parameter.key),
+            values[at],
+            parameter.min..=parameter.max,
+            2,
+        ) {
+            values[at] = value;
+            queue.push(Command::SetShapeParameters(values.clone()));
+            return;
+        }
+    }
+}
+
+/// What the selected object is, and how it meets what is under it.
+fn selected_object_controls(
+    ui: &mut egui::Ui,
+    state: &ShellState<'_>,
+    object: &clayspace_model::SceneObject,
+    queue: &mut CommandQueue,
+) {
+    let s = state.strings;
+    ui.label(
+        egui::RichText::new(s.shape(object.shape))
+            .size(type_scale::LABEL)
+            .color(Tokens::text()),
+    );
+
+    // The same three controls a stroke's combine has, addressing the object
+    // rather than the next gesture. An operation is a property of the object
+    // and stays editable for as long as it does.
+    let settings = object.combine;
+    egui::ComboBox::from_id_salt("object-combine-op")
+        .selected_text(settings.op.label())
+        .width(280.0)
+        .show_ui(ui, |ui| {
+            for op in Combine::offered_for_strokes() {
+                if ui.selectable_label(op == settings.op, op.label()).clicked() && op != settings.op
+                {
+                    queue.push(Command::SetObjectCombine(CombineSettings {
+                        op,
+                        ..settings
+                    }));
+                }
+            }
+        });
+
+    if settings.op.takes_a_blend() {
+        egui::ComboBox::from_id_salt("object-combine-blend")
+            .selected_text(settings.blend.label())
+            .width(280.0)
+            .show_ui(ui, |ui| {
+                for blend in BlendProfile::ALL {
+                    if ui
+                        .selectable_label(blend == settings.blend, blend.label())
+                        .clicked()
+                        && blend != settings.blend
+                    {
+                        queue.push(Command::SetObjectCombine(CombineSettings {
+                            blend,
+                            ..settings
+                        }));
+                    }
+                }
+            });
+
+        // `radius_range` is what keeps the seven operations that do nothing
+        // at zero away from it: that is not a hard join, it is no operation,
+        // and a sculptor who lands there sees a tool that appears broken with
+        // nothing to say why. The same call the stroke's own slider makes, so
+        // the two cannot come to disagree about what is reachable.
+        if let Some(radius) = slider(
+            ui,
+            settings.radius_label(),
+            settings.radius,
+            settings.radius_range(),
+            3,
+        ) {
+            queue.push(Command::SetObjectCombine(CombineSettings {
+                radius,
+                ..settings
+            }));
+        }
+    }
+
+    ui.add_space(space::SNUG);
+    ui.label(
+        egui::RichText::new(format!("{}: {:.2}×", s.label_object_scale, object.scale))
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    );
+    ui.label(
+        egui::RichText::new(s.hint_uniform_scale)
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    );
+
+    ui.add_space(space::SNUG);
+    if ui.button(s.action_remove_object).clicked() {
+        queue.push(Command::RemoveObject);
+    }
+}
+
+/// The placed objects, as rows that can be picked.
+///
+/// Only the objects. A worked layer holds hundreds of stroke items and showing
+/// them as rows would be a worse scene panel than none — which is why
+/// objecthood is recorded rather than inferred from what a layer contains.
+pub fn object_rows(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    ui.label(
+        egui::RichText::new(s.label_placed_objects)
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    );
+
+    if state.objects.is_empty() {
+        ui.label(
+            egui::RichText::new(s.label_no_placed_objects)
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+        );
+        return;
+    }
+
+    for object in state.objects {
+        let chosen = state.selected_object == Some(object.id);
+        // Named by its shape and its operation, which is what tells two
+        // cylinders apart when one adds and the other cuts.
+        let label = format!("{} · {}", s.shape(object.shape), object.combine.op.label());
+        if ui.selectable_label(chosen, label).clicked() {
+            // Clicking the selected row clears it, so the manipulator can be
+            // put away without reaching for the viewport.
+            let next = (!chosen).then_some(object.id);
+            queue.push(Command::SelectObject(next));
+        }
+    }
 }
 
 #[cfg(test)]

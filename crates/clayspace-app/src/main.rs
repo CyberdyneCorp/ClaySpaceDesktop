@@ -2516,6 +2516,13 @@ impl App {
             recent: self.recent.paths(),
             show_repair: self.show_repair,
             show_deform: self.show_deform,
+            show_shapes: *self.objects.picking().get(),
+            shape: *self.objects.shape().get(),
+            shape_parameters: self.objects.parameters().get(),
+            object_combine: *self.objects.combine().get(),
+            objects: self.objects.objects().get(),
+            selected_object: *self.objects.selected().get(),
+            gizmo_mode: *self.objects.mode().get(),
             show_references: self.show_references,
             surface_opacity: self.surface_opacity,
             references: RefPlane::ALL.map(|plane| shell::ReferenceSlot {
@@ -2643,6 +2650,7 @@ impl App {
             shell::convert_window(ctx, &state, &mut queue);
             shell::repair_window(ctx, &state, &mut queue);
             shell::deform_window(ctx, &state, &mut queue);
+            shell::shapes_window(ctx, &state, &mut queue);
             shell::reference_window(ctx, &state, &mut queue);
             shell::import_window(ctx, &state, &mut queue);
             shell::export_window(ctx, &state, &mut queue);
