@@ -416,6 +416,23 @@ pub trait ObjectModel {
         None
     }
 
+    /// Opens a gesture on a target, so everything until it closes is one
+    /// undo step.
+    ///
+    /// A drag sets a transform every frame, and thirty frames of dragging a
+    /// cylinder across a form is one thing a sculptor did. Without this it is
+    /// thirty entries in the history, and taking it back means thirty undos.
+    ///
+    /// Idempotent and forgiving: a gesture that is never closed is closed by
+    /// the next one that opens, because a group left open swallows every edit
+    /// after it.
+    fn begin_target_drag(&mut self, target: GizmoTarget) {
+        let _ = target;
+    }
+
+    /// Closes it.
+    fn end_target_drag(&mut self) {}
+
     /// Puts it there.
     ///
     /// One call for all of them, because a drag means the same thing whatever

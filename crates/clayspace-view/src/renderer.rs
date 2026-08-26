@@ -391,6 +391,17 @@ pub struct GizmoView {
     /// Handed in rather than derived from the camera here, so the ring drawn
     /// and the ring dragged cannot disagree.
     pub view_axis: [f32; 3],
+    /// Whether scale mode offers a box per axis.
+    ///
+    /// A cage does: it scales its own control points, and pulling the red box
+    /// stretches in x alone. A placed object, a layer and a mesh do not —
+    /// every transform in the engine's interface takes one scale factor and
+    /// not three, so three boxes would be three handles for one number.
+    ///
+    /// Handed in rather than decided here for the same reason `view_axis` is:
+    /// what is drawn and what can be dragged have to be the same set, and the
+    /// caller is what knows which kind of thing is selected.
+    pub per_axis_scale: bool,
 }
 
 /// Which plane the symmetry indicator sits on.
@@ -1918,7 +1929,15 @@ fn gizmo_geometry_for(view: GizmoView, segment: &mut impl FnMut(Vec3, Vec3, [f32
         }
     };
 
-    for index in 0..3 {
+    // Nothing per axis in scale mode where the target has one factor: an
+    // axis box that could be grabbed and would do the same thing as the centre
+    // is worse than no box at all.
+    let axes = if view.mode == GizmoMode::Scale && !view.per_axis_scale {
+        0
+    } else {
+        3
+    };
+    for index in 0..axes {
         let handle = GizmoHandle::Axis(index);
         let colour = lit(handle, AXIS_COLOURS[index]);
         let mut unit = Vec3::ZERO;

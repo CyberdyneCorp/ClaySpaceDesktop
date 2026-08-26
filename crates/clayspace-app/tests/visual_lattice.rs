@@ -259,6 +259,7 @@ fn each_manipulator_mode_draws_its_own_handles() {
                 selected: &selected,
                 gizmo: mode.map(|mode| GizmoView {
                     view_axis: LOOKING_DOWN_Z,
+                    per_axis_scale: true,
                     pivot,
                     mode,
                     reach: handle(&cage) * 12.0,
@@ -660,6 +661,7 @@ fn the_outer_ring_is_drawn_and_faces_the_camera() {
                         mode,
                         reach: handle(&cage) * 12.0,
                         hovered: None,
+                        per_axis_scale: true,
                     }),
                     handle: handle(&cage),
                 },
@@ -740,6 +742,7 @@ fn turning_a_face_visibly_turns_the_cage_on_screen() {
                 selected: &cage.selection,
                 gizmo: cage.pivot().map(|pivot| GizmoView {
                     view_axis: facing,
+                    per_axis_scale: true,
                     pivot,
                     mode: cage.mode,
                     reach: handle(&cage) * 12.0,

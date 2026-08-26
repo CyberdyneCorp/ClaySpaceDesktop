@@ -339,6 +339,11 @@ pub struct ClayDocument {
     objects: Vec<PlacedObject>,
     /// Which one the manipulator and the options bar are addressing.
     selected_object: Option<ObjectId>,
+    /// Whether a manipulator gesture is open, and on what.
+    ///
+    /// While one is, every transform written goes into a single undo group, so
+    /// a drag is one entry however many frames it took.
+    dragging: Option<GizmoTarget>,
     /// The table as it stood at each of the engine's undo depths.
     ///
     /// The engine reverts an object's transform and has no way to tell the
@@ -440,6 +445,7 @@ impl ClayDocument {
             skin: SkinSettings::default(),
             objects: Vec::new(),
             selected_object: None,
+            dragging: None,
             object_states: std::collections::BTreeMap::new(),
         };
         model.refresh_stats();
@@ -4379,6 +4385,7 @@ impl ClayDocument {
             skin: SkinSettings::default(),
             objects: Vec::new(),
             selected_object: None,
+            dragging: None,
             object_states: std::collections::BTreeMap::new(),
         };
 
@@ -6286,7 +6293,13 @@ impl ObjectModel for ClayDocument {
         // Where it was, before it stops being there. Refilling only the
         // destination leaves the surface it used to cut still cut.
         let before = self.node_bound(layer, node);
-        self.remember_objects_before();
+        // Inside a gesture the group is already open and the table was already
+        // recorded at its start; snapshotting per frame would key thirty
+        // states to one undo depth and keep only the last.
+        let gesturing = self.dragging.is_some();
+        if !gesturing {
+            self.remember_objects_before();
+        }
         self.document
             .set_node_transform(layer, node, position, rotation_axis, rotation_angle, scale)
             .map_err(ModelError::engine)?;
@@ -6296,7 +6309,9 @@ impl ObjectModel for ClayDocument {
         object.rotation_axis = rotation_axis;
         object.rotation_angle = rotation_angle;
         object.scale = scale;
-        self.remember_objects_after();
+        if !gesturing {
+            self.remember_objects_after();
+        }
 
         let after = self.node_bound(layer, node);
         self.refill_bound(layer, union(before, after))
@@ -6408,6 +6423,29 @@ impl ObjectModel for ClayDocument {
             // cage already uses rather than through an engine transform.
             GizmoTarget::Curve => None,
         }
+    }
+
+    fn begin_target_drag(&mut self, target: GizmoTarget) {
+        // A gesture already open is closed first: one left open would swallow
+        // every edit after it into a single undo step, which is a worse bug
+        // than the one this exists to fix.
+        if self.dragging.is_some() {
+            self.end_target_drag();
+        }
+        // The table before the gesture, so an undo of the whole drag finds the
+        // state it started from rather than the state one frame in.
+        self.remember_objects_before();
+        if self.document.begin_undo_group().is_ok() {
+            self.dragging = Some(target);
+        }
+    }
+
+    fn end_target_drag(&mut self) {
+        if self.dragging.take().is_none() {
+            return;
+        }
+        let _ = self.document.end_undo_group();
+        self.remember_objects_after();
     }
 
     fn set_target_transform(

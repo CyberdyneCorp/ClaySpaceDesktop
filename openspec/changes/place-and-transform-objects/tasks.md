@@ -61,9 +61,9 @@ that mirror and would not exist if the engine had three getters.
 - [ ] 5.1 Add the insert command and a primitive picker, presenting the bounded shapes with their parameters
 - [ ] 5.2 Place at a stated position — under the pointer on the surface where there is one, at the view's focus where there is not
 - [ ] 5.3 Add the object list to the scene panel, showing placed objects and not showing a row per stroke
-- [ ] 5.4 Make selection agree in both directions between the list and the viewport
+- [ ] 5.4 Make selection agree in both directions between the list and the viewport — the viewport half is done (`pick_object_at`, behind the picking guard); the list half waits on 5.3
 - [ ] 5.5 Present the selected object's operation and blend in the options bar, editable, with the distance control refusing zero for the operations that need one
-- [ ] 5.6 Draw the manipulator on the selection, with the mode on the keys the cage already uses
+- [x] 5.6 Draw the manipulator on the selection, with the mode on the keys the cage already uses — drawn and grabbable on a selected object; a cage that is up still owns the widget
 - [ ] 5.7 Draw a placed object legibly against the surface it combines with, so a subtracted object inside the form can still be seen and grabbed
 - [ ] 5.8 Localise every new string in all three locales
 - [ ] 5.9 Capture the manipulator on each target kind and the picker, and look at them

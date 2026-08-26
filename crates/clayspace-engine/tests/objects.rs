@@ -912,3 +912,45 @@ mod the_manipulators_rules {
         );
     }
 }
+
+/// Thirty frames of dragging is one thing a sculptor did.
+#[test]
+fn a_whole_drag_is_one_undo_step() {
+    let Some(mut document) = document() else {
+        return;
+    };
+    let id = document
+        .place_object(Shape::Sphere, &[0.4], [0.0, 0.9, 0.0], subtracting())
+        .expect("place");
+    let target = GizmoTarget::Object(id);
+    let start = document.target_transform(target).expect("a transform");
+    let gesture = drag(
+        GizmoMode::Move,
+        GizmoHandle::Axis(1),
+        start.position,
+        start.position,
+    );
+
+    document.begin_target_drag(target);
+    for step in 1..=20 {
+        let to = [0.0, 0.9 - step as f32 * 0.09, 0.0];
+        let moved = gesture.resolve(start, to, false);
+        document.set_target_transform(target, moved).expect("frame");
+    }
+    document.end_target_drag();
+
+    let after = document.target_transform(target).expect("a transform");
+    assert!(after.position[1] < 0.0, "it ended up down there");
+
+    document.undo().expect("undo once");
+    let back = document.target_transform(target).expect("still there");
+    assert!(
+        (back.position[1] - 0.9).abs() < 0.2,
+        "one undo should take the whole drag back, got {:?}",
+        back.position
+    );
+    assert!(
+        !inside(&document, [0.0, 0.9, 0.0]),
+        "and the cavity is where the drag started"
+    );
+}

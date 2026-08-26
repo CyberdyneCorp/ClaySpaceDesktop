@@ -27,7 +27,8 @@ use clayspace_view::{
 };
 use clayspace_vm::{
     ArmatureViewModel, Axis, Command, CommandQueue, CurveViewModel, DocumentViewModel, Grab, Guard,
-    LatticeViewModel, MaskViewModel, ReferenceViewModel, SceneViewModel, SculptViewModel,
+    LatticeViewModel, MaskViewModel, ObjectViewModel, ReferenceViewModel, SceneViewModel,
+    SculptViewModel,
 };
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -135,6 +136,8 @@ struct App {
     document_vm: DocumentViewModel,
     mask: MaskViewModel,
     lattice: LatticeViewModel,
+    /// The shapes a sculptor has placed, and the manipulator on one.
+    objects: ObjectViewModel,
     curve: CurveViewModel,
     /// The plane a curve drag runs on, and where it started.
     curve_drag: Option<([f32; 3], [f32; 3], [f32; 3])>,
@@ -305,6 +308,7 @@ impl App {
         let document_vm = DocumentViewModel::new(Box::new(document.clone()), "Sem título");
         let mask = MaskViewModel::new(Box::new(document.clone()));
         let lattice = LatticeViewModel::new(Box::new(document.clone()));
+        let objects = ObjectViewModel::new(Box::new(document.clone()));
         let curve = CurveViewModel::new(Box::new(document.clone()));
         let armature = ArmatureViewModel::new(Box::new(document.clone()));
 
@@ -351,6 +355,7 @@ impl App {
             document_vm,
             mask,
             lattice,
+            objects,
             curve,
             curve_drag: None,
             cage_plane: None,
@@ -1325,15 +1330,37 @@ impl App {
     /// and sits on the selection: a press on the green arrow would otherwise
     /// find whichever control point happens to be behind it.
     fn begin_gizmo_drag(&mut self, point: egui::Pos2) -> bool {
+        // A cage that is up owns the widget; a selected object owns it
+        // otherwise. They cannot both, because putting a cage up is what takes
+        // an object selection's manipulator away.
         let cage = self.lattice.state().get().clone();
-        let Some(pivot) = cage.pivot().filter(|_| cage.active) else {
-            return false;
+        let (pivot, mode, reach, per_axis_scale) = if cage.active {
+            match cage.pivot() {
+                Some(pivot) => (
+                    pivot,
+                    cage.mode,
+                    Self::cage_handle(&cage) * Self::GIZMO_REACH,
+                    true,
+                ),
+                None => return false,
+            }
+        } else {
+            match self.objects.pivot() {
+                Some(pivot) => (
+                    pivot,
+                    *self.objects.mode().get(),
+                    Self::OBJECT_GIZMO_REACH,
+                    false,
+                ),
+                None => return false,
+            }
         };
         let Some(ray) = self.ray_at(point) else {
             return false;
         };
-        let reach = Self::cage_handle(&cage) * Self::GIZMO_REACH;
-        let Some(handle) = Self::handle_under(&cage, pivot, reach, ray, &self.camera) else {
+        let Some(handle) =
+            Self::handle_under(mode, per_axis_scale, pivot, reach, ray, &self.camera)
+        else {
             return false;
         };
         // The plane the drag runs on, which the *mode* decides: a slide needs
@@ -1347,7 +1374,7 @@ impl App {
         // Taken here and held for the gesture, so a camera that moves mid-drag
         // does not twist the selection under a hand that has not moved.
         let view_axis = Self::toward_eye(&self.camera, pivot);
-        let normal = clayspace_model::drag_plane(cage.mode, handle, view_axis, facing);
+        let normal = clayspace_model::drag_plane(mode, handle, view_axis, facing);
         let Some(anchor) = Self::on_plane(ray, pivot, normal) else {
             return false;
         };
@@ -1380,7 +1407,8 @@ impl App {
     /// one behind it — which is what a person aiming at what they can see
     /// expects.
     fn handle_under(
-        cage: &clayspace_model::LatticeState,
+        mode: clayspace_model::GizmoMode,
+        per_axis_scale: bool,
         pivot: [f32; 3],
         reach: f32,
         ray: ([f32; 3], [f32; 3]),
@@ -1397,10 +1425,18 @@ impl App {
             }
         };
 
-        for index in 0..3 {
+        // What is drawn and what can be grabbed have to be the same set: on a
+        // target the engine scales by one factor there are no axis boxes on
+        // screen, so there must be none to press either.
+        let axes = if mode == clayspace_model::GizmoMode::Scale && !per_axis_scale {
+            0
+        } else {
+            3
+        };
+        for index in 0..axes {
             let handle = GizmoHandle::Axis(index);
             let Some(axis) = handle.axis() else { continue };
-            if cage.mode == clayspace_model::GizmoMode::Rotate {
+            if mode == clayspace_model::GizmoMode::Rotate {
                 // A ring is grabbed anywhere along it, so several points
                 // around it are tested rather than one — a ring tested only at
                 // its four cardinal points is a ring with four handles.
@@ -1421,7 +1457,7 @@ impl App {
             let tip = std::array::from_fn(|i| pivot[i] + axis[i] * reach);
             consider(handle, tip, slack);
         }
-        if cage.mode != clayspace_model::GizmoMode::Rotate {
+        if mode != clayspace_model::GizmoMode::Rotate {
             consider(GizmoHandle::Centre, pivot, slack);
         } else {
             // The outer ring, tested the way the axis rings are and at the
@@ -1593,13 +1629,26 @@ impl App {
                 );
                 return;
             }
+            // No cage and no curve: the manipulator belongs to whatever
+            // object is selected, if any. Its pivot comes from the model
+            // rather than from the list, so it is where the engine has the
+            // object rather than where the interface last drew it.
+            let object_gizmo = self.objects.pivot().map(|pivot| clayspace_view::GizmoView {
+                pivot,
+                mode: *self.objects.mode().get(),
+                reach: Self::OBJECT_GIZMO_REACH,
+                hovered: self.gizmo_drag.map(|(handle, _)| handle),
+                view_axis: Self::toward_eye(&camera, pivot),
+                // One scale factor, so one handle for it.
+                per_axis_scale: false,
+            });
             graphics.renderer.set_lattice(
                 &gpu,
                 clayspace_view::LatticeView {
                     points: &[],
                     edges: &[],
                     selected: &[],
-                    gizmo: None,
+                    gizmo: object_gizmo,
                     handle: 0.0,
                 },
             );
@@ -1619,10 +1668,50 @@ impl App {
                     reach: handle * Self::GIZMO_REACH,
                     hovered: self.gizmo_drag.map(|(handle, _)| handle),
                     view_axis: Self::toward_eye(&camera, pivot),
+                    // A cage scales its own control points.
+                    per_axis_scale: true,
                 }),
                 handle,
             },
         );
+    }
+
+    /// How long the manipulator's arms are on a placed object, in world units.
+    ///
+    /// Fixed rather than taken from the object's own size, unlike the cage's,
+    /// which scales with the box it was built around. An object may be a
+    /// hundredth of the form or twice it, and a manipulator that shrank with a
+    /// small one would be unusable exactly when precision matters most.
+    const OBJECT_GIZMO_REACH: f32 = 0.45;
+
+    /// Whether a press on the clay should look for an object rather than
+    /// starting a stroke.
+    ///
+    /// Only while the shapes panel is open or something is already selected.
+    /// A sculptor mid-stroke must not have one turn into a selection because a
+    /// placed cylinder happens to be under the brush — the same reason rigging
+    /// is a mode and the cage takes the press before the clay.
+    fn picking_objects(&self) -> bool {
+        *self.objects.picking().get() || self.objects.selected().get().is_some()
+    }
+
+    /// Selects the object under the pointer, if a placed one is there.
+    ///
+    /// Returns whether the press was taken. A press that meets a stroke or
+    /// empty space is left to fall through to orbiting, so a form can be
+    /// turned to look at without losing what is selected.
+    fn pick_object_at(&mut self, point: egui::Pos2) -> bool {
+        use clayspace_model::ObjectModel;
+
+        let Some((origin, direction)) = self.ray_at(point) else {
+            return false;
+        };
+        let mut document = self.document.clone();
+        let Some(id) = document.pick_object(origin, direction) else {
+            return false;
+        };
+        self.apply_now(Command::SelectObject(Some(id)));
+        true
     }
 
     /// Begins a rig gesture, if the press landed on a sphere.
@@ -1998,8 +2087,23 @@ impl App {
                 && !manipulated
                 && button == egui::PointerButton::Primary
                 && self.begin_cage_drag(point, input.smooth_modifier);
-            let on_surface =
-                !rigged && !on_curve && !manipulated && !caged && self.pick_at(point).is_some();
+            // Last of the four, and only while a shape is being placed or one
+            // is already selected: a press on the clay is a stroke, and a
+            // sculptor who is sculpting must not have one turn into a
+            // selection because a cylinder happens to be under the brush.
+            let picked_object = !rigged
+                && !on_curve
+                && !manipulated
+                && !caged
+                && button == egui::PointerButton::Primary
+                && self.picking_objects()
+                && self.pick_object_at(point);
+            let on_surface = !rigged
+                && !on_curve
+                && !manipulated
+                && !caged
+                && !picked_object
+                && self.pick_at(point).is_some();
             let started = match button {
                 _ if rigged => Drag::Rig,
                 _ if on_curve => Drag::Curve,
@@ -2261,6 +2365,12 @@ impl App {
         // resolution ceiling is the layer's, and the ViewModel may not reach
         // past its own interface to ask.
         self.lattice
+            .dispatch(&command, self.sculpt.active_representation());
+        // The manipulator's commands reach both, and which of them acts is
+        // decided by what has a target: a cage that is up owns the widget, and
+        // a selected object owns it otherwise. They cannot both, because a
+        // cage takes the selection away when it goes up.
+        self.objects
             .dispatch(&command, self.sculpt.active_representation());
         self.curve.dispatch(&command);
         // A rig belongs to a layer, so choosing another layer changes which
