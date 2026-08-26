@@ -441,16 +441,12 @@ fn the_gizmo_reports_the_camera_orientation() {
     // The gizmo is deliberately small, so a mean over the whole frame is the
     // wrong measure — it is a few hundred pixels in 172,800. Count the pixels
     // in the corner it occupies instead.
+    // Past the driver's own noise rather than bit-identical — see
+    // `support::RENDER_NOISE`. Written as `!=`, this counted 90 pixels on a
+    // macOS runner whose largest difference was four levels out of 255, and
+    // called it the gizmo drawing over the sculpt.
     let changed_in = |a: &clayspace_view::Image, b: &clayspace_view::Image, x0, y0, x1, y1| {
-        let mut count = 0usize;
-        for y in y0..y1 {
-            for x in x0..x1 {
-                if a.pixel(x, y) != b.pixel(x, y) {
-                    count += 1;
-                }
-            }
-        }
-        count
+        support::differing_pixels_within(a, b, x0, y0, x1, y1)
     };
 
     let corner = (with.width * 3 / 4, 0, with.width, with.height / 4);
@@ -545,8 +541,14 @@ fn the_brush_cursor_follows_the_surface_and_clears_off_it() {
     // Off the surface, it must clear rather than hang at some depth.
     harness.renderer.set_cursors(&harness.gpu, &[]);
     let cleared = harness.capture(&gpu_mesh, &camera, false, "12-cursor-cleared");
-    assert!(
-        cleared.mean_difference(&without) < 0.001,
+    // By pixels past the noise rather than by a mean: the cursor is a thin
+    // ring, so its whole signal is a mean of 0.059 levels and the residue of
+    // *not* drawing it measured 0.0058 on a macOS runner — a sixth of the
+    // signal, and six times the bound this used to carry. Counted in pixels
+    // the two are 273 against nothing at all.
+    assert_eq!(
+        support::differing_pixels(&cleared, &without),
+        0,
         "clearing the cursor left it on screen"
     );
 

@@ -1136,6 +1136,18 @@ fn row_centre(state: &ShellState<'_>, key: LayerKey) -> egui::Pos2 {
 }
 
 /// How many pixels differ between two captures.
+/// Every pixel that is not identical.
+///
+/// Deliberately exact, and it stays exact: every caller asks whether two
+/// frames *differ* — a menu opened, a panel gained a section — and for that
+/// question the driver's own noise only helps. It is the assertions that two
+/// frames are the SAME that cannot be written this way; there is one, and it
+/// counts past `support::RENDER_NOISE` instead.
+///
+/// Raising this to the noise floor was tried and blinds the difference half:
+/// a context menu is dark chrome over dark chrome, so most of its pixels
+/// differ by less than a level and counting only the loud ones took the menu
+/// from over 400 pixels to 359.
 fn differing_pixels(a: &clayspace_view::Image, b: &clayspace_view::Image) -> usize {
     let mut n = 0;
     for y in 0..a.height.min(b.height) {
@@ -1248,10 +1260,11 @@ fn the_mask_section_appears_with_a_mask_and_not_without() {
     // And it is confined to the inspector: a section that pushed the shelf or
     // the viewport around would be a layout change rather than a section.
     let right_edge = SHELL_WIDTH - region::RIGHT as u32;
-    let outside = (0..masked.height)
-        .flat_map(|y| (0..right_edge).map(move |x| (x, y)))
-        .filter(|(x, y)| masked.pixel(*x, *y) != bare.pixel(*x, *y))
-        .count();
+    // Past the driver's noise: drawing an extra section re-bins a tile-based
+    // GPU's work, and a handful of pixels elsewhere shade a level differently
+    // without anything having moved. A section that pushed the shelf or the
+    // viewport around moves hundreds.
+    let outside = support::differing_pixels_within(&masked, &bare, 0, 0, right_edge, masked.height);
     assert_eq!(
         outside, 0,
         "{outside} pixels outside the inspector changed when the mask section \

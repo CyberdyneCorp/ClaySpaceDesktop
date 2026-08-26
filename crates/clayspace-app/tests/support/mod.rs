@@ -131,6 +131,62 @@ impl Harness {
 /// Uses `clay_mesh_copy_vertices` with the renderer's own layout, so this is
 /// the same one-pass copy the viewport performs rather than a test-only
 /// reimplementation that could diverge from it.
+/// Where a difference stops being the driver and starts being the picture.
+///
+/// Two renders of the same geometry are not bit-identical on every device. A
+/// tile-based GPU bins differently when the frame's contents change, so adding
+/// a small overlay in one corner shifts a handful of silhouette pixels by a
+/// level or two somewhere else — and an assertion written as "not one pixel
+/// differs" then fails for a reason that has nothing to do with what it is
+/// testing.
+///
+/// Measured on a macOS runner, over the six assertions that were written that
+/// way, in pixels differing by more than this many levels:
+///
+/// | comparison                       | > 8 | > 32 |
+/// |----------------------------------|-----|------|
+/// | gizmo, over the sculpt (noise)   |   0 |    0 |
+/// | mask cleared (noise)             |   0 |    0 |
+/// | polyframe off again (noise)      |  36 |    0 |
+/// | cursor cleared (noise)           |   8 |    0 |
+/// | incremental settled (noise)      |   4 |    0 |
+/// | mask painted (**the effect**)    |4611 | 2587 |
+/// | polyframe on (**the effect**)    |31077|10249 |
+/// | cursor drawn (**the effect**)    | 357 |  273 |
+///
+/// So 32 separates every one of them: nothing above it in any frame that was
+/// meant to be unchanged, and hundreds to thousands in every frame that was
+/// meant to change. A margin that wide is what makes this a threshold rather
+/// than a fudge — halving it or doubling it changes no verdict here.
+pub const RENDER_NOISE: u8 = 32;
+
+/// How many pixels differ by more than [`RENDER_NOISE`].
+///
+/// The measure the module's own note asks for: "a pixel-exact golden would
+/// fail on every driver and tell us nothing about whether the picture is
+/// right". This is the coarse version — it answers "is this the same picture"
+/// rather than "are these the same bytes".
+pub fn differing_pixels(a: &Image, b: &Image) -> usize {
+    differing_pixels_within(a, b, 0, 0, a.width.min(b.width), a.height.min(b.height))
+}
+
+/// The same, over one rectangle of the frame.
+///
+/// A small thing in a corner is drowned by a mean over the whole frame, so
+/// several of these tests ask about a region instead.
+pub fn differing_pixels_within(a: &Image, b: &Image, x0: u32, y0: u32, x1: u32, y1: u32) -> usize {
+    let mut count = 0;
+    for y in y0..y1.min(a.height).min(b.height) {
+        for x in x0..x1.min(a.width).min(b.width) {
+            let (pa, pb) = (a.pixel(x, y), b.pixel(x, y));
+            if (0..3).any(|c| pa[c].abs_diff(pb[c]) > RENDER_NOISE) {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
 pub fn to_vertices(mesh: &Mesh) -> (Vec<Vertex>, Vec<u32>) {
     let count = mesh.vertex_count();
     let mut bytes = vec![0u8; count * Vertex::STRIDE];
