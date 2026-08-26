@@ -64,11 +64,17 @@ fn handle(cage: &LatticeState) -> f32 {
     cage.rest_span * 0.022
 }
 
+/// How many pixels differ by more than the driver's own noise.
+///
+/// Twelve levels was below it: taking a cage down and comparing against the
+/// surface before it went up left *one* pixel over that on a macOS runner, and
+/// the assertion read it as "the drawn surface is still bent". The effect that
+/// assertion's own positive half looks for is more than two thousand pixels.
 fn how_many_differ(a: &Image, b: &Image) -> usize {
     a.pixels
         .chunks_exact(4)
         .zip(b.pixels.chunks_exact(4))
-        .filter(|(x, y)| (0..3).any(|c| x[c].abs_diff(y[c]) > 12))
+        .filter(|(x, y)| (0..3).any(|c| x[c].abs_diff(y[c]) > support::RENDER_NOISE))
         .count()
 }
 

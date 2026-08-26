@@ -113,11 +113,19 @@ fn the_folds_of_a_worked_form_darken() {
         .pixels
         .chunks_exact(4)
         .zip(without.pixels.chunks_exact(4))
+        // Past the driver's noise in either direction. Ordering alone counts
+        // a single level as "lighter", and two renders of the same geometry
+        // are not bit-identical on a tile-based GPU — so one silhouette pixel
+        // shading a level up would read as the occlusion term coming back
+        // above one, which is a claim about a sign flip.
         .fold((0usize, 0usize), |(dark, light), (a, b)| {
-            match a[0].cmp(&b[0]) {
-                std::cmp::Ordering::Less => (dark + 1, light),
-                std::cmp::Ordering::Greater => (dark, light + 1),
-                std::cmp::Ordering::Equal => (dark, light),
+            let gap = a[0].abs_diff(b[0]);
+            if gap <= support::RENDER_NOISE {
+                (dark, light)
+            } else if a[0] < b[0] {
+                (dark + 1, light)
+            } else {
+                (dark, light + 1)
             }
         });
     let before = surface_mean(&without, ground);
