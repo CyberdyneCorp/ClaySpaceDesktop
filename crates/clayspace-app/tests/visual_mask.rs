@@ -188,7 +188,11 @@ fn clearing_the_mask_gives_the_surface_back() {
     mesh.upload(&harness.gpu, &cleared, &indices);
     let after = harness.capture(&mesh, &camera, false, "73-mask-cleared");
 
-    let (changed, _) = difference(&before, &after);
+    // Past the driver's noise, not bit-identical: `difference` counts a
+    // luminance shift of twelve, which a macOS runner crosses on 69 pixels of
+    // an unchanged frame. The frozen tint this is looking for reaches 2,587
+    // pixels past `RENDER_NOISE`; unchanged frames reach none.
+    let changed = support::differing_pixels(&before, &after);
     assert_eq!(
         changed, 0,
         "clearing the mask left {changed} pixels changed, so the frozen shading \

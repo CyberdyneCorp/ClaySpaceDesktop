@@ -25,7 +25,16 @@ use clayspace_view::{Camera, Image};
 use support::Harness;
 
 /// A dab is local, so a whole-image mean would drown it. This is the share of
-/// pixels allowed to differ at all.
+/// pixels allowed to differ past the noise floor.
+///
+/// Zero, and it stays zero — what changed is the floor. `compare` counted a
+/// pixel as differing at eight levels out of 255, which a tile-based GPU
+/// crosses on the silhouette of an unchanged frame: measured on a macOS
+/// runner, four pixels of a settled surface and one after four strokes, in a
+/// speckled ring around the subject's edge and nothing else. Missing geometry
+/// does not look like that — it is a solid patch, hundreds of pixels at
+/// dozens of levels — so the threshold moved to `RENDER_NOISE` and the share
+/// allowed past it is still none at all.
 const TOLERATED: f64 = 0.0;
 
 fn document() -> Option<ClayDocument> {
@@ -79,7 +88,7 @@ fn compare(a: &Image, b: &Image) -> (f64, u8) {
         for x in 0..a.width.min(b.width) {
             let (pa, pb) = (a.pixel(x, y), b.pixel(x, y));
             let gap = (0..3).map(|c| pa[c].abs_diff(pb[c])).max().unwrap_or(0);
-            if gap > 8 {
+            if gap > support::RENDER_NOISE {
                 differing += 1;
                 worst = worst.max(gap);
             }

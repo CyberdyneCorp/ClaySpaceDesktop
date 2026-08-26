@@ -235,10 +235,12 @@ fn the_polyframe_draws_a_mesh_layers_edges() {
     // And off again is off: a toggle that only goes one way is not a toggle.
     harness.renderer.set_polyframe(false);
     let again = harness.capture(&surface, &camera, false, "72-polyframe-off-again");
-    let lingering = (0..plain.height)
-        .flat_map(|y| (0..plain.width).map(move |x| (x, y)))
-        .filter(|(x, y)| plain.pixel(*x, *y) != again.pixel(*x, *y))
-        .count();
+    // Past the noise floor. Measured on a macOS runner: turning the polyframe
+    // *on* moves 10,249 pixels past `RENDER_NOISE` and 33,399 by any amount at
+    // all; turning it off again leaves 1,294 differing by up to 17 levels and
+    // not one past the threshold. The wireframe went away; the rasteriser did
+    // not settle on the same handful of edge pixels twice.
+    let lingering = support::differing_pixels(&plain, &again);
     assert_eq!(
         lingering, 0,
         "the polyframe stayed on after being turned off"

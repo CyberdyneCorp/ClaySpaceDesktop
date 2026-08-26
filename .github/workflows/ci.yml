@@ -63,10 +63,15 @@ jobs:
         if: matrix.cpu_only
         run: echo "CLAYCORE_CPU_ONLY=1" >> "$GITHUB_ENV"
 
+      # The slug rather than the name: a cache key may not contain a comma,
+      # and "macOS, CPU only" does. Every run logged
+      # `ValidationError: Key Validation Error … cannot contain commas` and
+      # carried on without a cache, so every macOS job rebuilt the C++ engine
+      # from scratch.
       - name: Cache cargo and the engine build
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.name }}
+          key: ${{ matrix.slug }}
 
       # winit and wgpu need these to build on Linux even where no window is
       # ever opened; rfd needs GTK for its fallback dialog.
