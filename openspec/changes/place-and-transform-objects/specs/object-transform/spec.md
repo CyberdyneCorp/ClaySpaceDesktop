@@ -1,0 +1,100 @@
+## Purpose
+
+The move, turn and scale manipulator on the things a sculptor puts in a scene —
+placed objects, whole layers, imported meshes and curves — rather than only on
+a deformation cage's control points.
+
+## ADDED Requirements
+
+### Requirement: The manipulator acts on the current selection whatever kind it is
+The application SHALL present one manipulator with three modes — move, turn,
+scale — and SHALL apply it to whichever of these is selected: a placed object,
+a whole layer, an imported mesh layer, or a curve's control points.
+
+The manipulator SHALL sit on the middle of what it is transforming, an axis
+handle SHALL constrain the drag to that axis, and a drag SHALL be resolved from
+where it started rather than accumulated across frames — the same rules the
+cage's manipulator already holds.
+
+#### Scenario: A placed object is moved along one axis
+- **WHEN** the user drags a placed object's vertical axis handle
+- **THEN** the object moves only vertically, and the surface it combines with
+  follows it
+
+#### Scenario: A whole layer is turned
+- **WHEN** a layer is selected and turned a quarter about an axis
+- **THEN** everything the layer holds turns with it, about the layer's own
+  middle
+
+#### Scenario: An imported mesh is placed after import
+- **WHEN** an imported mesh layer is selected and moved
+- **THEN** the mesh is drawn in its new position and exports from there
+
+#### Scenario: A curve is moved as a whole
+- **WHEN** a curve's control points are all selected and the manipulator is
+  dragged
+- **THEN** every control point moves together and the swept form follows
+
+### Requirement: Scale is uniform, and the manipulator offers only that
+Scale mode SHALL offer uniform scaling and SHALL NOT present per-axis scale
+handles for a target the engine can only scale uniformly.
+
+Every transform in the engine's interface takes a single scale factor rather
+than one per axis. Three axis handles that quietly do the same thing as the
+centre — or nothing at all — would be worse than one honest control, which is
+the same reason a combine operation that cannot reach zero is not given a
+slider that can.
+
+#### Scenario: Scaling a placed object
+- **WHEN** an object is selected in scale mode
+- **THEN** the manipulator offers a uniform scale and no per-axis handle
+
+#### Scenario: Per-axis scale on a cage is unaffected
+- **WHEN** a lattice selection is scaled
+- **THEN** the per-axis handles are still offered, because a cage scales its
+  points and does not carry an engine transform
+
+### Requirement: A sculpting stroke is not transformable
+The manipulator SHALL NOT act on a sculpting stroke, and an attempt to select
+one for transformation SHALL say so rather than doing nothing.
+
+A stroke is a gesture that has finished. Picking one back up is a different
+feature with a different question behind it — which of a stroke's samples is
+being moved — and answering it by moving all of them silently would be a tool
+doing something adjacent to what a sculptor asked for.
+
+#### Scenario: A stroke offers no manipulator
+- **WHEN** the user picks a sculpting stroke in the viewport
+- **THEN** no manipulator appears, and the interface states that a stroke
+  cannot be transformed
+
+### Requirement: A transform is one undo step and survives a reopen
+A completed drag SHALL be a single entry in the undo history whatever the
+target, and the resulting transform SHALL be written to the document and read
+back from it.
+
+#### Scenario: Undoing a layer transform
+- **WHEN** a layer is moved and the user undoes once
+- **THEN** the layer returns to where it was in one step
+
+#### Scenario: A transform survives a reopen
+- **WHEN** a document with transformed objects and layers is saved and reopened
+- **THEN** everything is where it was left
+
+### Requirement: A live operand stays interactive while it is dragged
+While an object that participates in a boolean is being dragged, the viewport
+SHALL show the result of the boolean at the object's current position, and the
+interface SHALL remain responsive throughout.
+
+Where the re-evaluation cannot keep up, the application SHALL show the object
+moving against the last completed surface and settle when the drag ends, rather
+than blocking the drag.
+
+#### Scenario: The cavity follows the drag
+- **WHEN** a subtracted object is dragged across the form
+- **THEN** the cavity moves with it
+
+#### Scenario: A form too heavy to re-evaluate live
+- **WHEN** the surface cannot be re-evaluated within the frame budget
+- **THEN** the drag continues at interactive speed and the surface settles when
+  it ends

@@ -14,6 +14,7 @@
 pub mod alpha;
 pub mod backend;
 pub mod document;
+pub mod objects;
 mod reference;
 
 pub use alpha::read_alpha;

@@ -55,6 +55,8 @@ repository routinely does; see [Common tasks](#common-tasks).
 | `M` / `⇧M` | Mask painting on / off — Blender's key — and cycle materials, which `M` used to do |
 | `F` / `Esc` | Frame / quit |
 | `⌘S` `⇧⌘S` `⌘O` `⌘N` | Save, save as, open, new |
+| Click **a placed shape** | Select it — clicking the wall of a hole selects the shape that cut it |
+| Drag **the manipulator** | Move, turn or scale what is selected: an object, a layer, a mesh or a curve |
 | `A` / `⇧A` | Skin preview / enter rigging — see below |
 
 **The interface ships in English, Brazilian Portuguese and Spanish**, and opens

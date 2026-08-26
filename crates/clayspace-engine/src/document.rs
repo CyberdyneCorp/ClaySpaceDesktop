@@ -13,13 +13,15 @@ use clayspace_model::{
     Alpha, Armature, ArmatureModel, BlendProfile, BrushSettings, Combine, CombineSettings, Cost,
     CurveJoin, CurveModel, CurvePoint, CurveProfile, CurveState, Direction, DocumentModel,
     EditOutcome, ExchangeModel, ExportMesher, ExportSettings, ExtrudeSettings, Format,
-    GestureSample, GizmoDrag, GizmoHandle, GizmoMode, HistoryState, ImportAs, ImportSettings,
-    LatticeModel, LatticeState, LayerKey, LayerSummary, MaskModel, MaskOp, MaskState, ModelError,
-    NodeIndex, OpenError, Protection, Refusal, Representation, Scene, SceneModel, SceneNode,
-    SceneStats, SculptModel, SkinSettings, SmoothBlur, ToolKind, VoxelDisplay,
+    GestureSample, GizmoDrag, GizmoHandle, GizmoMode, GizmoTarget, HistoryState, ImportAs,
+    ImportSettings, ItemKind, LatticeModel, LatticeState, LayerKey, LayerSummary, MaskModel,
+    MaskOp, MaskState, ModelError, NodeIndex, ObjectId, ObjectModel, OpenError, Protection,
+    Refusal, Representation, Scene, SceneModel, SceneNode, SceneStats, SculptModel, Shape,
+    SkinSettings, SmoothBlur, ToolKind, VoxelDisplay, OBJECT_VERBS,
 };
 
 use crate::backend::{BackendPolicy, Operation};
+use crate::objects::{kind_of, primitive_of, union, PlacedObject};
 
 /// The engine's op for a combine operation.
 ///
@@ -85,6 +87,13 @@ struct ChunkGeometry {
 /// A layer the document holds, and what it is made of.
 struct Layer {
     id: LayerId,
+    /// Where the whole layer stands.
+    ///
+    /// Remembered here for the reason the object table exists: the ABI sets a
+    /// layer transform and does not read one back. Both routes that set it —
+    /// the narrow `set_layer_transform` and the manipulator's own — write
+    /// this, so the two cannot disagree about where a layer is.
+    transform: clayspace_model::Transform,
     /// A stable handle the interface uses. Engine ids are not guaranteed to
     /// survive an edit, so the interface is given one that is.
     key: LayerKey,
@@ -325,6 +334,27 @@ pub struct ClayDocument {
     /// arm left the arm on screen.
     armature_bounds: Option<([f32; 3], [f32; 3])>,
     skin: SkinSettings,
+    /// The placed objects, and everything about them the engine will not read
+    /// back. See `crate::objects` for why this exists at all.
+    objects: Vec<PlacedObject>,
+    /// Which one the manipulator and the options bar are addressing.
+    selected_object: Option<ObjectId>,
+    /// Whether a manipulator gesture is open, and on what.
+    ///
+    /// While one is, every transform written goes into a single undo group, so
+    /// a drag is one entry however many frames it took.
+    dragging: Option<GizmoTarget>,
+    /// The table as it stood at each of the engine's undo depths.
+    ///
+    /// The engine reverts an object's transform and has no way to tell the
+    /// table it did, so the table follows by depth — the same way `mesh_undo`
+    /// interleaves with the engine's history, and for the same reason. An
+    /// object edit records the table on both sides of itself, so undoing
+    /// across it finds the state before and redoing finds the state after.
+    /// A stroke raises the depth without touching objects and records
+    /// nothing, which leaves the table alone: correct, because it did not
+    /// change.
+    object_states: std::collections::BTreeMap<usize, Vec<PlacedObject>>,
 }
 
 impl ClayDocument {
@@ -368,6 +398,7 @@ impl ClayDocument {
             document,
             layers: vec![Layer {
                 id,
+                transform: clayspace_model::Transform::default(),
                 key: LayerKey(1),
                 name: "Forma".to_string(),
                 engine_name: "Forma".to_string(),
@@ -412,6 +443,10 @@ impl ClayDocument {
             armature: None,
             armature_bounds: None,
             skin: SkinSettings::default(),
+            objects: Vec::new(),
+            selected_object: None,
+            dragging: None,
+            object_states: std::collections::BTreeMap::new(),
         };
         model.refresh_stats();
         Ok(model)
@@ -425,21 +460,45 @@ impl ClayDocument {
     pub fn add_starting_sphere(&mut self, radius: f32) -> Result<(), ModelError> {
         let layer = self.layers[0].id;
         let body = Item::sphere(radius).map_err(ModelError::engine)?;
-        self.document
+        let node = self
+            .document
             .add_item(layer, &body)
             .map_err(ModelError::engine)?;
+        self.record_starting_form(node, radius);
         self.refill(layer, &[])?;
         self.refresh_stats();
         Ok(())
+    }
+
+    /// Records the opening sphere as the placed object it is.
+    ///
+    /// Deliberate rather than incidental. The starting form always *was* a
+    /// placed sphere; nothing but the absence of an object model made it
+    /// special, and a sculptor who wants to make the thing they are working on
+    /// bigger should be able to select it and say so. It can also be deleted,
+    /// which is what removing an object means and is undoable like any other.
+    fn record_starting_form(&mut self, node: NodeId, radius: f32) {
+        let key = self.layers[0].key;
+        self.objects.push(PlacedObject::new(
+            key,
+            node,
+            clayspace_model::ObjectSource::Shape(Shape::Sphere),
+            Shape::Sphere.sanitised(&[radius]),
+            CombineSettings::default(),
+            [0.0; 3],
+        ));
+        self.remember_objects_after();
     }
 
     /// Places a starting sphere so there is something to sculpt on.
     pub fn with_starting_form(mut self) -> Result<Self, ModelError> {
         let layer = self.layers[0].id;
         let body = Item::sphere(1.0).map_err(ModelError::engine)?;
-        self.document
+        let node = self
+            .document
             .add_item(layer, &body)
             .map_err(ModelError::engine)?;
+        self.record_starting_form(node, 1.0);
         self.refill(layer, &[])?;
         self.refresh_stats();
         Ok(self)
@@ -584,6 +643,7 @@ impl ClayDocument {
         let key = self.take_key();
         self.layers.push(Layer {
             id,
+            transform: clayspace_model::Transform::default(),
             key,
             name: name.to_string(),
             engine_name: name.to_string(),
@@ -727,7 +787,7 @@ impl ClayDocument {
             Direction::SdfToVoxel => self.rasterize_to_voxels(&name, cell_size),
             Direction::VoxelToSdf => self.voxels_to_sdf(&name, blur),
             Direction::MeshToVoxel => self.mesh_to_voxels(&name, cell_size),
-            Direction::MeshToSdf => self.mesh_to_sdf(&name),
+            Direction::MeshToSdf => self.mesh_to_sdf(&name, cell_size),
             Direction::SdfToMesh => self.sdf_to_mesh(&name, cell_size),
             Direction::VoxelToMesh => self.voxels_to_mesh(&name),
         };
@@ -791,11 +851,16 @@ impl ClayDocument {
         self.after_conversion(key)
     }
 
-    fn mesh_to_sdf(&mut self, name: &str) -> Result<LayerKey, ModelError> {
+    fn mesh_to_sdf(&mut self, name: &str, cell_size: f32) -> Result<LayerKey, ModelError> {
         let engine_name = self.active_layer().engine_name.clone();
+        // The chosen cell rather than `VolumeParams::default()`, whose `None`
+        // "picks from the source's own size". The crossing samples onto a
+        // lattice either way — see `Direction::chooses_resolution` — so the
+        // resolution the panel states its costs for has to be the resolution
+        // it is done at, or the figures describe a different crossing.
         let layer = self
             .document
-            .mesh_layer_to_sdf_layer(&engine_name, name, VolumeParams::default())
+            .mesh_layer_to_sdf_layer(&engine_name, name, Self::bake_volume(cell_size))
             .map_err(ModelError::engine)?;
         let key = self.adopt_engine_layer(layer, name, Representation::Sdf)?;
         self.after_conversion(key)
@@ -940,6 +1005,7 @@ impl ClayDocument {
         let key = self.take_key();
         self.layers.push(Layer {
             id,
+            transform: clayspace_model::Transform::default(),
             key,
             name: name.to_string(),
             engine_name: name.to_string(),
@@ -3289,6 +3355,9 @@ impl SculptModel for ClayDocument {
             // layer rather than a node set.
             self.refill(layer, &[])?;
             self.resync_armature();
+            // The engine reverted whatever it reverted and cannot tell the
+            // object table it did; the table follows by depth.
+            self.resync_objects();
         }
         Ok(moved)
     }
@@ -3309,6 +3378,9 @@ impl SculptModel for ClayDocument {
             let layer = self.active_layer().id;
             self.refill(layer, &[])?;
             self.resync_armature();
+            // The engine reverted whatever it reverted and cannot tell the
+            // object table it did; the table follows by depth.
+            self.resync_objects();
         }
         Ok(moved)
     }
@@ -3800,6 +3872,7 @@ impl SceneModel for ClayDocument {
         let key = self.take_key();
         self.layers.push(Layer {
             id,
+            transform: clayspace_model::Transform::default(),
             key,
             name: name.to_string(),
             engine_name: name.to_string(),
@@ -3983,13 +4056,20 @@ impl SceneModel for ClayDocument {
         position: [f32; 3],
         scale: f32,
     ) -> Result<(), ModelError> {
-        let id = self.layer_id(key)?;
-        // One call, so one undo step however many items the layer holds.
-        self.document
-            .set_layer_transform(id, position, [0.0, 1.0, 0.0], 0.0, scale.max(1e-4))
-            .map_err(ModelError::engine)?;
-        self.refill(id, &[])?;
-        Ok(())
+        // The narrow route: a position and a size, keeping whatever rotation
+        // the layer already has. It writes the same remembered transform the
+        // manipulator does, so a layer moved by dragging reads back as moved
+        // and the two cannot disagree about where it is.
+        let index = self.index_of(key)?;
+        let turned = self.layers[index].transform;
+        self.place_layer(
+            key,
+            clayspace_model::Transform {
+                position,
+                scale: scale.max(1e-4),
+                ..turned
+            },
+        )
     }
 
     fn layer_cost(&self, key: LayerKey) -> Result<clayspace_model::LayerCost, ModelError> {
@@ -4042,6 +4122,7 @@ impl SceneModel for ClayDocument {
         let key = self.take_key();
         self.layers.push(Layer {
             id,
+            transform: clayspace_model::Transform::default(),
             key,
             name: name.to_string(),
             engine_name: name.to_string(),
@@ -4142,7 +4223,17 @@ impl ClayDocument {
 
 impl DocumentModel for ClayDocument {
     fn save(&mut self, path: &std::path::Path) -> Result<(), ModelError> {
-        self.document.save(path).map_err(ModelError::engine)
+        self.document.save(path).map_err(ModelError::engine)?;
+        // The object table, beside it. A failure to write it is reported and
+        // does not fail the save: the sculpture is in the `.clay` and losing
+        // the bookkeeping is not losing the work. It would be a poor trade to
+        // tell a sculptor their document did not save because a side-car
+        // could not be written.
+        let sidecar = crate::objects::sidecar_for(path);
+        if let Err(e) = crate::objects::write_table(&sidecar, &self.objects) {
+            eprintln!("os objetos colocados não puderam ser registrados em {sidecar:?}: {e}");
+        }
+        Ok(())
     }
 
     fn open(&mut self, path: &std::path::Path) -> Result<(), OpenError> {
@@ -4150,7 +4241,14 @@ impl DocumentModel for ClayDocument {
         // leave the sculptor's work exactly as it was — losing it to a
         // mistyped filename would be the worst bug this application could
         // have.
-        let opened = Self::from_file(path, self.policy.clone())?;
+        let mut opened = Self::from_file(path, self.policy.clone())?;
+        // Objects the document itself cannot describe. Read after the document
+        // rather than during it, because a missing or unreadable side-car is
+        // not a failed open: the sculpture is all there, and what is lost is
+        // which of its shapes can be picked up again.
+        opened.objects = crate::objects::read_table(&crate::objects::sidecar_for(path));
+        opened.object_states.clear();
+        opened.remember_objects_after();
         *self = opened;
         Ok(())
     }
@@ -4218,6 +4316,7 @@ impl ClayDocument {
                 };
                 Layer {
                     id: *id,
+                    transform: clayspace_model::Transform::default(),
                     key: LayerKey(index as u64 + 1),
                     // A layer that was never named comes back empty rather
                     // than absent, and an unnamed row in the stack is worse to
@@ -4289,6 +4388,10 @@ impl ClayDocument {
             armature: None,
             armature_bounds: None,
             skin: SkinSettings::default(),
+            objects: Vec::new(),
+            selected_object: None,
+            dragging: None,
+            object_states: std::collections::BTreeMap::new(),
         };
 
         // Undo starts recording from here: opening is not something the user
@@ -4454,6 +4557,7 @@ impl ClayDocument {
         let key = self.take_key();
         self.layers.push(Layer {
             id,
+            transform: clayspace_model::Transform::default(),
             key,
             name: name.to_string(),
             engine_name: name.to_string(),
@@ -4711,6 +4815,28 @@ impl CurveModel for ClayDocument {
             for (at, step) in point.position.iter_mut().zip(by) {
                 *at += step;
             }
+        }
+        self.reshape_curve()
+    }
+
+    fn drag_curve_points(
+        &mut self,
+        drag: clayspace_model::GizmoDrag,
+        to: [f32; 3],
+        snap: bool,
+    ) -> Result<(), ModelError> {
+        let Some(curve) = self.curve.as_mut() else {
+            return Ok(());
+        };
+        // Each point mapped through the same arithmetic the cage uses, which
+        // is what makes a turn about the selection's middle mean the same
+        // thing on a curve as on a cage — and what gets a curve turn and scale
+        // without a second implementation of either.
+        for index in curve.selection.clone() {
+            let Some(point) = curve.points.get_mut(index) else {
+                continue;
+            };
+            point.position = drag.apply(point.position, to, snap);
         }
         self.reshape_curve()
     }
@@ -5728,6 +5854,7 @@ impl ClayDocument {
                 .unwrap_or_else(|| format!("Camada {}", rebuilt.len() + 1));
             rebuilt.push(Layer {
                 id: *id,
+                transform: clayspace_model::Transform::default(),
                 key: self.take_key(),
                 name: name.clone(),
                 engine_name: name,
@@ -5938,5 +6065,597 @@ impl ClayDocument {
             .iter()
             .position(|other| (0..3).all(|axis| (other.position[axis] - target[axis]).abs() < 1e-4))
             .map(|i| i as NodeIndex)
+    }
+}
+
+// -- placed objects ---------------------------------------------------------
+
+impl ClayDocument {
+    /// Where a node reaches, as the cache needs to know it.
+    ///
+    /// `None` means no finite box exists and the whole layer is what has to be
+    /// refilled — which an ordinary shape placed with `Intersect` reaches,
+    /// since the engine drops the bound for a non-local op anywhere in the
+    /// subtree.
+    fn node_bound(&self, layer: LayerId, node: NodeId) -> Option<([f32; 3], [f32; 3])> {
+        match self.document.node_influence_bound(layer, node) {
+            Ok(claycore::Influence::Box { min, max }) => Some((min, max)),
+            // A node with nothing to dirty contributes nothing to a union, so
+            // it answers as an empty box at the origin rather than as "the
+            // whole layer". This is the *dirtying* question only — see
+            // `node_centre`, which must not treat the origin as an answer.
+            Ok(claycore::Influence::Nothing) => Some(([0.0; 3], [0.0; 3])),
+            Ok(claycore::Influence::Everything) | Err(_) => None,
+        }
+    }
+
+    /// Refills what an object edit reached, or the layer where it reached too
+    /// far to say.
+    fn refill_bound(
+        &mut self,
+        layer: LayerId,
+        bound: Option<([f32; 3], [f32; 3])>,
+    ) -> Result<(), ModelError> {
+        match bound {
+            Some((min, max)) => self.refill_region(min, max),
+            None => self.refill(layer, &[]),
+        }
+    }
+
+    fn object_index(&self, id: ObjectId) -> Option<usize> {
+        self.objects.iter().position(|object| object.id() == id)
+    }
+
+    /// Records the table on both sides of an edit, so history can find it.
+    ///
+    /// Before and after, because undoing across an object edit lands on the
+    /// depth the edit started from and redoing lands on the one it ended at.
+    fn remember_objects_before(&mut self) {
+        let depth = self.engine_undo_depth();
+        self.object_states.insert(depth, self.objects.clone());
+    }
+
+    fn remember_objects_after(&mut self) {
+        let depth = self.engine_undo_depth();
+        self.object_states.insert(depth, self.objects.clone());
+    }
+
+    /// Brings the table back to what it was at the engine's current depth.
+    ///
+    /// Called after an undo or a redo has moved the engine. A depth nothing
+    /// recorded leaves the table alone, which is right: the entry that moved
+    /// was not an object edit.
+    fn resync_objects(&mut self) {
+        let depth = self.engine_undo_depth();
+        if let Some(table) = self.object_states.get(&depth) {
+            self.objects = table.clone();
+            // A selection outlives the nodes in it — but not the ones history
+            // has taken away.
+            if self
+                .selected_object
+                .is_some_and(|id| self.object_index(id).is_none())
+            {
+                self.selected_object = None;
+            }
+        }
+    }
+
+    /// Puts a whole layer somewhere, and remembers where.
+    ///
+    /// One engine call, so one undo step however many items the layer holds.
+    fn place_layer(
+        &mut self,
+        key: LayerKey,
+        transform: clayspace_model::Transform,
+    ) -> Result<(), ModelError> {
+        let index = self.index_of(key)?;
+        let id = self.layers[index].id;
+        self.document
+            .set_layer_transform(
+                id,
+                transform.position,
+                transform.rotation_axis,
+                transform.rotation_angle,
+                transform.scale.max(1e-4),
+            )
+            .map_err(ModelError::engine)?;
+        self.layers[index].transform = transform;
+        // The layer, because a layer transform moves everything it holds and
+        // there is no smaller bound to take.
+        self.refill(id, &[])
+    }
+
+    /// The engine half of a placement: the item, then where it goes.
+    ///
+    /// Split out so the undo group around it has one thing to bracket and one
+    /// place to fail.
+    fn place_item(
+        &mut self,
+        layer: LayerId,
+        shape: Shape,
+        parameters: &[f32],
+        at: [f32; 3],
+        combine: CombineSettings,
+    ) -> Result<NodeId, ModelError> {
+        let mut item =
+            claycore::Item::of(primitive_of(shape, parameters)).map_err(ModelError::engine)?;
+        item.set_op(engine_op(combine.op))
+            .map_err(ModelError::engine)?;
+        item.set_blend(engine_blend(combine.blend), combine.radius)
+            .map_err(ModelError::engine)?;
+        let node = self
+            .document
+            .add_item(layer, &item)
+            .map_err(ModelError::engine)?;
+        // Placed through the node transform rather than by building the item
+        // at `at`. They are the same slot — measured, setting the node
+        // transform to the origin does not restore an item built at 0.9 — so
+        // writing both gives one position two owners, and an undo of a move
+        // restores the node's transform to identity rather than to where the
+        // item was built. Everything about where an object is goes through one
+        // call, which is also the call the manipulator drives.
+        self.document
+            .set_node_transform(layer, node, at, [0.0, 1.0, 0.0], 0.0, 1.0)
+            .map_err(ModelError::engine)?;
+        Ok(node)
+    }
+
+    /// The active layer, when it is one an object can live in.
+    fn layer_for_objects(&self) -> Result<(LayerKey, LayerId), ModelError> {
+        let layer = self.active_layer();
+        if layer.representation != Representation::Sdf {
+            return Err(ModelError::Unavailable(
+                clayspace_model::Unavailable::NoVerbHere {
+                    active: layer.representation,
+                    verbs: OBJECT_VERBS,
+                },
+            ));
+        }
+        Ok((layer.key, layer.id))
+    }
+}
+
+impl ObjectModel for ClayDocument {
+    fn objects(&mut self) -> Vec<clayspace_model::SceneObject> {
+        let Ok((key, layer)) = self.layer_for_objects() else {
+            return Vec::new();
+        };
+        // Listed from the table and filtered by the layer, rather than walked
+        // from the layer and filtered by primitive. The primitive cannot tell
+        // them apart: a stamping stroke deposits `Item::sphere` per stamp, so
+        // walking a worked layer would offer a row per stamp — see
+        // `objects::kind_of` for the decision this reverses.
+        //
+        // Filtered by what the layer still holds, so a node history has taken
+        // away drops out of the list even before the table follows.
+        let Ok(nodes) = self.document.layer_nodes(layer) else {
+            return Vec::new();
+        };
+        self.objects
+            .iter()
+            .filter(|object| object.layer == key && nodes.contains(&object.node))
+            .map(PlacedObject::presented)
+            .collect()
+    }
+
+    fn selected_object(&self) -> Option<ObjectId> {
+        self.selected_object
+    }
+
+    fn select_object(&mut self, id: Option<ObjectId>) {
+        self.selected_object = id;
+    }
+
+    fn place_object(
+        &mut self,
+        shape: Shape,
+        parameters: &[f32],
+        at: [f32; 3],
+        combine: CombineSettings,
+    ) -> Result<ObjectId, ModelError> {
+        let (key, layer) = self.layer_for_objects()?;
+        let parameters = shape.sanitised(parameters);
+
+        self.remember_objects_before();
+        // Bracketed, because placing is two engine edits — the item, then
+        // where it goes — and a sculptor asked for one thing. Without the
+        // group, one undo took back the placement and left the item standing
+        // at the origin, which is the same shape `convert_layer` brackets for.
+        self.document
+            .begin_undo_group()
+            .map_err(ModelError::engine)?;
+        let placed = self.place_item(layer, shape, &parameters, at, combine);
+        // Closed on the failing path too: a group left open swallows every
+        // edit after it into one undo step.
+        let closed = self.document.end_undo_group().map_err(ModelError::engine);
+        let node = placed?;
+        closed?;
+        let object = PlacedObject::new(
+            key,
+            node,
+            clayspace_model::ObjectSource::Shape(shape),
+            parameters,
+            combine,
+            at,
+        );
+        let id = object.id();
+        self.objects.push(object);
+        self.selected_object = Some(id);
+        self.remember_objects_after();
+
+        let bound = self.node_bound(layer, node);
+        self.refill_bound(layer, bound)?;
+        Ok(id)
+    }
+
+    fn mesh_operands(&mut self) -> Vec<(LayerKey, String)> {
+        self.layers
+            .iter()
+            .filter(|layer| {
+                layer.representation == Representation::Mesh
+                    && layer.carries_geometry
+                    // A protected layer refuses every edit naming it, and a
+                    // crossing reads rather than writes — but offering one
+                    // whose source a sculptor has locked reads as ignoring
+                    // the lock. Left out, as the tool shelf leaves out a verb
+                    // the layer has no route for.
+                    && !layer.protection.locked
+            })
+            .map(|layer| (layer.key, layer.name.clone()))
+            .collect()
+    }
+
+    fn mesh_operand_cost(&mut self, from: LayerKey, cell_size: f32) -> Option<Cost> {
+        let index = self.index_of(from).ok()?;
+        if self.layers[index].representation != Representation::Mesh {
+            return None;
+        }
+        let engine_name = self.layers[index].engine_name.clone();
+        // The mesh's own bounds, which is what a crossing of it covers — not
+        // `bounds()`, which answers for the *active* layer and would price the
+        // wrong model.
+        let (positions, ..) = self.document.read_mesh_layer(&engine_name).ok()?;
+        if positions.is_empty() {
+            return None;
+        }
+        let mut min = positions[0];
+        let mut max = positions[0];
+        for point in &positions {
+            for axis in 0..3 {
+                min[axis] = min[axis].min(point[axis]);
+                max[axis] = max[axis].max(point[axis]);
+            }
+        }
+        let extent: [f32; 3] = std::array::from_fn(|i| (max[i] - min[i]).max(0.0));
+        // The conversion panel's own computation, for the same crossing at the
+        // same resolution — because it is the same crossing.
+        Some(Cost::of(Direction::MeshToSdf, cell_size, extent))
+    }
+
+    fn place_mesh_object(
+        &mut self,
+        from: LayerKey,
+        cell_size: f32,
+        at: [f32; 3],
+        combine: CombineSettings,
+    ) -> Result<ObjectId, ModelError> {
+        let (key, layer) = self.layer_for_objects()?;
+        let source_index = self.index_of(from)?;
+        if self.layers[source_index].representation != Representation::Mesh {
+            return Err(ModelError::Conversion(Refusal::WrongSource {
+                needs: Representation::Mesh,
+                active: self.layers[source_index].representation,
+            }));
+        }
+        let engine_name = self.layers[source_index].engine_name.clone();
+        let name = self.layers[source_index].name.clone();
+
+        self.remember_objects_before();
+        // Bracketed, as a placement is: sampling the mesh and standing it
+        // somewhere are two edits and one thing a sculptor asked for.
+        self.document
+            .begin_undo_group()
+            .map_err(ModelError::engine)?;
+        let placed = (|| -> Result<NodeId, ModelError> {
+            let mut item = self
+                .document
+                .mesh_layer_as_volume(&engine_name, Self::bake_volume(cell_size))
+                .map_err(ModelError::engine)?;
+            item.set_op(engine_op(combine.op))
+                .map_err(ModelError::engine)?;
+            item.set_blend(engine_blend(combine.blend), combine.radius)
+                .map_err(ModelError::engine)?;
+            let node = self
+                .document
+                .add_item(layer, &item)
+                .map_err(ModelError::engine)?;
+            self.document
+                .set_node_transform(layer, node, at, [0.0, 1.0, 0.0], 0.0, 1.0)
+                .map_err(ModelError::engine)?;
+            Ok(node)
+        })();
+        let closed = self.document.end_undo_group().map_err(ModelError::engine);
+        let node = placed?;
+        closed?;
+
+        // The source layer is untouched: what stands in this layer is a copy,
+        // sampled onto a lattice. The mesh is still a mesh and still sculptable
+        // with the sixteen fixed-topology brushes.
+        let object = PlacedObject::new(
+            key,
+            node,
+            clayspace_model::ObjectSource::Mesh { from, name },
+            Vec::new(),
+            combine,
+            at,
+        );
+        let id = object.id();
+        self.objects.push(object);
+        self.selected_object = Some(id);
+        self.remember_objects_after();
+
+        let bound = self.node_bound(layer, node);
+        self.refill_bound(layer, bound)?;
+        Ok(id)
+    }
+
+    fn set_object_transform(
+        &mut self,
+        id: ObjectId,
+        position: [f32; 3],
+        rotation_axis: [f32; 3],
+        rotation_angle: f32,
+        scale: f32,
+    ) -> Result<(), ModelError> {
+        let at = self
+            .object_index(id)
+            .ok_or_else(|| self.no_objects_here())?;
+        let layer = self.layer_id(id.layer)?;
+        let node = self.objects[at].node;
+
+        // Where it was, before it stops being there. Refilling only the
+        // destination leaves the surface it used to cut still cut.
+        let before = self.node_bound(layer, node);
+        // Inside a gesture the group is already open and the table was already
+        // recorded at its start; snapshotting per frame would key thirty
+        // states to one undo depth and keep only the last.
+        let gesturing = self.dragging.is_some();
+        if !gesturing {
+            self.remember_objects_before();
+        }
+        self.document
+            .set_node_transform(layer, node, position, rotation_axis, rotation_angle, scale)
+            .map_err(ModelError::engine)?;
+
+        let object = &mut self.objects[at];
+        object.position = position;
+        object.rotation_axis = rotation_axis;
+        object.rotation_angle = rotation_angle;
+        object.scale = scale;
+        if !gesturing {
+            self.remember_objects_after();
+        }
+
+        let after = self.node_bound(layer, node);
+        self.refill_bound(layer, union(before, after))
+    }
+
+    fn set_object_shape(
+        &mut self,
+        id: ObjectId,
+        shape: Shape,
+        parameters: &[f32],
+    ) -> Result<(), ModelError> {
+        let at = self
+            .object_index(id)
+            .ok_or_else(|| self.no_objects_here())?;
+        let layer = self.layer_id(id.layer)?;
+        let node = self.objects[at].node;
+        let parameters = shape.sanitised(parameters);
+
+        let before = self.node_bound(layer, node);
+        self.remember_objects_before();
+        // The engine keeps what belongs to the node rather than to the
+        // primitive, so the transform and the operation survive this.
+        self.document
+            .set_node_prim(layer, node, primitive_of(shape, &parameters))
+            .map_err(ModelError::engine)?;
+
+        let object = &mut self.objects[at];
+        object.source = clayspace_model::ObjectSource::Shape(shape);
+        object.parameters = parameters;
+        self.remember_objects_after();
+
+        let after = self.node_bound(layer, node);
+        self.refill_bound(layer, union(before, after))
+    }
+
+    fn set_object_combine(
+        &mut self,
+        id: ObjectId,
+        combine: CombineSettings,
+    ) -> Result<(), ModelError> {
+        let at = self
+            .object_index(id)
+            .ok_or_else(|| self.no_objects_here())?;
+        let layer = self.layer_id(id.layer)?;
+        let node = self.objects[at].node;
+
+        let before = self.node_bound(layer, node);
+        self.remember_objects_before();
+        self.document
+            .set_node_op_blend(
+                layer,
+                node,
+                engine_op(combine.op),
+                engine_blend(combine.blend),
+                combine.radius,
+                0.0,
+            )
+            .map_err(ModelError::engine)?;
+        self.objects[at].combine = combine;
+        self.remember_objects_after();
+
+        // An operation is the one edit that can take the bound away entirely:
+        // turning a subtraction into an intersection makes it non-local.
+        let after = self.node_bound(layer, node);
+        self.refill_bound(layer, union(before, after))
+    }
+
+    fn remove_object(&mut self, id: ObjectId) -> Result<(), ModelError> {
+        let at = self
+            .object_index(id)
+            .ok_or_else(|| self.no_objects_here())?;
+        let layer = self.layer_id(id.layer)?;
+        let node = self.objects[at].node;
+
+        // Taken before the node is: what it reached is what has to be refilled
+        // once it is gone, and afterwards there is nothing to ask.
+        let bound = self.node_bound(layer, node);
+        self.remember_objects_before();
+        self.document
+            .remove_node(layer, node)
+            .map_err(ModelError::engine)?;
+        self.objects.remove(at);
+        if self.selected_object == Some(id) {
+            self.selected_object = None;
+        }
+        self.remember_objects_after();
+
+        self.refill_bound(layer, bound)
+    }
+
+    fn target_transform(&mut self, target: GizmoTarget) -> Option<clayspace_model::Transform> {
+        match target {
+            GizmoTarget::Object(id) => {
+                let at = self.object_index(id)?;
+                let object = &self.objects[at];
+                Some(clayspace_model::Transform {
+                    position: object.position,
+                    rotation_axis: object.rotation_axis,
+                    rotation_angle: object.rotation_angle,
+                    scale: object.scale,
+                })
+            }
+            GizmoTarget::Layer(key) => {
+                let index = self.index_of(key).ok()?;
+                Some(self.layers[index].transform)
+            }
+            // A curve's points belong to the application while it is being
+            // authored, so a curve is transformed through the point path the
+            // cage already uses rather than through an engine transform.
+            GizmoTarget::Curve => None,
+        }
+    }
+
+    fn begin_target_drag(&mut self, target: GizmoTarget) {
+        // A gesture already open is closed first: one left open would swallow
+        // every edit after it into a single undo step, which is a worse bug
+        // than the one this exists to fix.
+        if self.dragging.is_some() {
+            self.end_target_drag();
+        }
+        // The table before the gesture, so an undo of the whole drag finds the
+        // state it started from rather than the state one frame in.
+        self.remember_objects_before();
+        if self.document.begin_undo_group().is_ok() {
+            self.dragging = Some(target);
+        }
+    }
+
+    fn end_target_drag(&mut self) {
+        if self.dragging.take().is_none() {
+            return;
+        }
+        let _ = self.document.end_undo_group();
+        self.remember_objects_after();
+    }
+
+    fn set_target_transform(
+        &mut self,
+        target: GizmoTarget,
+        transform: clayspace_model::Transform,
+    ) -> Result<(), ModelError> {
+        match target {
+            GizmoTarget::Object(id) => self.set_object_transform(
+                id,
+                transform.position,
+                transform.rotation_axis,
+                transform.rotation_angle,
+                transform.scale,
+            ),
+            // A mesh layer takes the same route: it is a layer, and the engine
+            // composes a layer transform for one exactly as for a field.
+            // `clay_mesh_transform` is for a bake that needs the moved
+            // vertices, not for standing a layer somewhere.
+            GizmoTarget::Layer(key) => self.place_layer(key, transform),
+            GizmoTarget::Curve => Err(ModelError::Unavailable(
+                clayspace_model::Unavailable::WrongGesture {
+                    needs: "os pontos da curva",
+                },
+            )),
+        }
+    }
+
+    fn pick_item(&mut self, origin: [f32; 3], direction: [f32; 3]) -> Option<ItemKind> {
+        let hit = self
+            .document
+            .raycast_attributed(origin, direction)
+            .ok()
+            .flatten()?;
+        let (layer, node) = (hit.layer?, hit.node?);
+        let prim = self.document.node_prim(layer, node).ok()?;
+        // The table first, then the primitive. A stamping stroke deposits
+        // spheres, so the primitive alone would call every stamp an object;
+        // the table knows which nodes were placed, and `kind_of` answers for
+        // the rest — which is what tells a rig from a curve from a stroke, and
+        // so what lets the interface say *why* a click cannot be transformed
+        // rather than doing nothing.
+        let key = self
+            .layers
+            .iter()
+            .find(|candidate| candidate.id == layer)
+            .map(|candidate| candidate.key)?;
+        let placed = self.object_index(ObjectId {
+            layer: key,
+            node: node.get(),
+        });
+        Some(match placed {
+            Some(_) => ItemKind::Object,
+            None => match kind_of(prim) {
+                // An item nobody placed and whose primitive says "object" is a
+                // stroke's stamp: there is nothing else it can be.
+                ItemKind::Object => ItemKind::Stroke,
+                other => other,
+            },
+        })
+    }
+
+    fn pick_object(&mut self, origin: [f32; 3], direction: [f32; 3]) -> Option<ObjectId> {
+        // The attributing raycast, which is not the cheap path — it compiles
+        // the document and a tape per candidate item. On a click and never on
+        // a hover.
+        let hit = self
+            .document
+            .raycast_attributed(origin, direction)
+            .ok()
+            .flatten()?;
+        let (layer, node) = (hit.layer?, hit.node?);
+        // A hit is attributed to "the item whose field is closest at the hit
+        // point, so a subtract item is attributed the surface it carved" —
+        // which is why clicking the wall of a hole selects the shape that cut
+        // it. A stroke or a rig attributes too, and neither is an object: the
+        // table is what says which, since a stamp and a placed sphere are the
+        // same primitive.
+        let key = self
+            .layers
+            .iter()
+            .find(|candidate| candidate.id == layer)
+            .map(|candidate| candidate.key)?;
+        let id = ObjectId {
+            layer: key,
+            node: node.get(),
+        };
+        self.object_index(id).map(|_| id)
     }
 }

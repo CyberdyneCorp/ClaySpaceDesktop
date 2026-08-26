@@ -380,3 +380,104 @@ impl ExchangeModel for SharedDocument {
         self.0.borrow().has_mesh_layers()
     }
 }
+
+use clayspace_model::ObjectModel;
+
+impl ObjectModel for SharedDocument {
+    fn objects(&mut self) -> Vec<clayspace_model::SceneObject> {
+        self.0.borrow_mut().objects()
+    }
+
+    fn selected_object(&self) -> Option<clayspace_model::ObjectId> {
+        self.0.borrow().selected_object()
+    }
+
+    fn select_object(&mut self, id: Option<clayspace_model::ObjectId>) {
+        self.0.borrow_mut().select_object(id)
+    }
+
+    fn place_object(
+        &mut self,
+        shape: clayspace_model::Shape,
+        parameters: &[f32],
+        at: [f32; 3],
+        combine: clayspace_model::CombineSettings,
+    ) -> Result<clayspace_model::ObjectId, ModelError> {
+        self.0
+            .borrow_mut()
+            .place_object(shape, parameters, at, combine)
+    }
+
+    fn set_object_transform(
+        &mut self,
+        id: clayspace_model::ObjectId,
+        position: [f32; 3],
+        rotation_axis: [f32; 3],
+        rotation_angle: f32,
+        scale: f32,
+    ) -> Result<(), ModelError> {
+        self.0
+            .borrow_mut()
+            .set_object_transform(id, position, rotation_axis, rotation_angle, scale)
+    }
+
+    fn set_object_shape(
+        &mut self,
+        id: clayspace_model::ObjectId,
+        shape: clayspace_model::Shape,
+        parameters: &[f32],
+    ) -> Result<(), ModelError> {
+        self.0.borrow_mut().set_object_shape(id, shape, parameters)
+    }
+
+    fn set_object_combine(
+        &mut self,
+        id: clayspace_model::ObjectId,
+        combine: clayspace_model::CombineSettings,
+    ) -> Result<(), ModelError> {
+        self.0.borrow_mut().set_object_combine(id, combine)
+    }
+
+    fn remove_object(&mut self, id: clayspace_model::ObjectId) -> Result<(), ModelError> {
+        self.0.borrow_mut().remove_object(id)
+    }
+
+    fn target_transform(
+        &mut self,
+        target: clayspace_model::GizmoTarget,
+    ) -> Option<clayspace_model::Transform> {
+        self.0.borrow_mut().target_transform(target)
+    }
+
+    fn set_target_transform(
+        &mut self,
+        target: clayspace_model::GizmoTarget,
+        transform: clayspace_model::Transform,
+    ) -> Result<(), ModelError> {
+        self.0.borrow_mut().set_target_transform(target, transform)
+    }
+
+    fn begin_target_drag(&mut self, target: clayspace_model::GizmoTarget) {
+        self.0.borrow_mut().begin_target_drag(target)
+    }
+
+    fn end_target_drag(&mut self) {
+        self.0.borrow_mut().end_target_drag()
+    }
+
+    fn pick_object(
+        &mut self,
+        origin: [f32; 3],
+        direction: [f32; 3],
+    ) -> Option<clayspace_model::ObjectId> {
+        self.0.borrow_mut().pick_object(origin, direction)
+    }
+
+    fn pick_item(
+        &mut self,
+        origin: [f32; 3],
+        direction: [f32; 3],
+    ) -> Option<clayspace_model::ItemKind> {
+        self.0.borrow_mut().pick_item(origin, direction)
+    }
+}

@@ -811,6 +811,91 @@ Dual contouring fits the vertex by least squares to hermite data and keeps a
 sharp corner sharp. Preserving them would be a change to the engine rather
 than to this application.
 
+## Placing shapes, and the booleans on them
+
+*Escultura → Formas* offers fourteen shapes — box, sphere, cylinder, cone,
+torus, capsule, ellipsoid, pyramid, rounded box, frame, rounded cylinder, hex
+and tri prisms, octahedron — each with the numbers it is actually measured by,
+which are different numbers for different shapes. **Colocar** puts one where
+the pointer is on the surface, or where the camera is looking when the pointer
+is off it. The two the engine calls unbounded — a plane and an infinite
+cylinder — are not offered: neither has an extent for a manipulator to sit on
+or a bound for the cache to work from.
+
+**A placed shape stays live.** It is an item in the layer's ordered list, so
+select it a week later, move it, and the boolean follows: the hole is where the
+cylinder now is. Its operation is a property of *it* rather than of the gesture
+that made it, so a subtraction can become a groove without replacing anything,
+and its shape can be exchanged without losing where it stands. The same
+fourteen combine operations a stroke has, on the same terms — including the
+seven whose slider cannot reach zero, because zero there is not a hard join but
+no operation at all.
+
+Clicking a placed object in the viewport selects it, and the engine attributes
+a hit to the item whose field carved the surface — so **clicking the wall of a
+hole selects the cylinder that cut it**, which is what clicking there means. A
+press only looks for an object while the panel is open or one is already
+selected: a sculptor mid-stroke must not have a press become a selection
+because a cylinder happens to sit under the brush.
+
+A selected object is **outlined** in the viewport. A subtracting object is
+behind the surface — what you see of a bore is the hole — and without the box
+there is nothing to aim but a manipulator over a cavity.
+
+The starting form is a placed sphere and is listed as one. It always was;
+nothing but the absence of a selection model made it special. It can be
+selected, resized and deleted like anything else.
+
+### The manipulator on an object
+
+The same widget the cage has, on a placed object, a whole layer, an imported
+mesh, or a curve's control points. All the rules are the cage's: it sits on the
+middle of what it acts on, an axis handle constrains the drag, a wandering hand
+lands where it settles, and a scale never passes through zero.
+
+**Scale is uniform, and the widget says so.** Every transform in the engine's
+interface takes one scale factor and not three, so scale mode offers the centre
+alone on an object, a layer or a mesh — there are no axis boxes, because three
+handles for one number is either two that do nothing or three that lie. A cage
+keeps all three: it scales its own control points and carries no engine
+transform. Use the cage when you mean to stretch along one axis.
+
+A whole drag is **one undo step**, however many frames it took.
+
+A sculpting stroke is not a target. A stroke is a gesture that has finished,
+and picking one back up is a different question — which of its samples is being
+moved — that moving all of them silently would answer wrongly. Clicking one
+says so rather than doing nothing.
+
+### When the clay is behind your hand
+
+A live boolean is re-evaluated on every frame of a drag. Measured on the
+reference scene, one frame costs about 21 ms against a 16.7 ms budget, and on a
+heavier form it costs more. Where a frame overruns, the object goes on moving
+at the speed of the hand and the surface catches up **once**, when the pointer
+comes up — the same answer the region-based brushes already give, and for the
+same reason.
+
+One of the fourteen operations is dearer than the rest to drag. The engine
+drops a node's finite influence bound for a non-local operation anywhere in the
+subtree, so an object set to **Interseção** dirties the whole layer on every
+frame while the same object subtracting dirties its own box. Measured, about
+40 % more per frame. It is not visible from the interface, which is why it is
+worth saying here.
+
+### A model as an operand
+
+An imported mesh appears in the shapes picker, under the shapes and separated
+from them, because placing one is a **crossing** and costs something the shapes
+above do not. Choosing one states what it costs before anything happens — the
+surface movement, the feature size that vanishes, the cell count, the sharp
+edges lost — which are the conversion panel's own figures for the same crossing
+at the same resolution.
+
+The mesh layer is left exactly as it was and stays sculptable with the sixteen
+fixed-topology brushes. What is placed is a sampled copy, and it behaves like
+any other placed object from then on.
+
 ## Crossing between representations
 
 ClayCore carries SDF, voxel and mesh side by side, and the intended workflow
@@ -1274,11 +1359,6 @@ guide back — "the exact arguments the call above takes, so what comes out goes
 straight back in" — so picking a placed tube and editing it again is reachable;
 nothing does it yet.
 
-**A manipulator outside the cage.** The move/turn/scale widget acts on a
-lattice selection and on nothing else. Transforming a whole layer with it —
-which is the other thing both references use a gizmo for — has no route here
-yet.
-
 **A brush colour.** Nothing in the application chooses one. The voxel paint and
 erase verbs deposit a fixed clay tone, and the SDF combine list leaves `Pintar`
 out for the same reason — it is a real engine operation that would colour
@@ -1297,11 +1377,17 @@ operationally, closer to ZBrush's Sculptris Pro than to a simulation. The
 physics controls are not shipped disabled; they are not shipped.
 
 **Mesh-surface booleans.** A mesh layer can be sculpted — see *Sculpting a
-mesh layer* — but it cannot *compose*: it is not an operand of a boolean, a
-blend or a deformer belonging to another layer until it is converted, and
-paying that conversion quantises the exact vertices and drops the edge loops,
-which is precisely what made it worth keeping as a mesh. Convert it if you mean
-to subtract from it; the panel says what that costs.
+mesh layer* — but it cannot *compose* as a mesh: it is not an operand of a
+boolean, a blend or a deformer belonging to another layer until it is sampled
+onto a lattice, and paying that quantises the exact vertices and drops the edge
+loops, which is precisely what made it worth keeping as a mesh.
+
+What has changed is where a sculptor meets that. Choosing an imported model in
+the shapes panel places it as a boolean operand and states the crossing's costs
+first — the same figures the conversion panel states, because it is the same
+crossing. The mesh layer stays where it is and stays sculptable; what is placed
+is a sampled copy. So the *surface* still does not compose, and the model can
+be used as though it did, at a price that is shown before it is paid.
 
 **An alpha stamp on an SDF stroke.** Alphas reach a voxel grid and a mesh, each
 by its own route, and both are measured moving the surface. A field takes one as

@@ -102,6 +102,33 @@ impl Combine {
         }
     }
 
+    /// A stable name, for anything that has to write an operation down.
+    ///
+    /// Not [`Combine::label`], which is interface text and translated.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Add => "add",
+            Self::Subtract => "subtract",
+            Self::Intersect => "intersect",
+            Self::Paint => "paint",
+            Self::Groove => "groove",
+            Self::Tongue => "tongue",
+            Self::Pipe => "pipe",
+            Self::Engrave => "engrave",
+            Self::Emboss => "emboss",
+            Self::Inset => "inset",
+            Self::Shell => "shell",
+            Self::Replace => "replace",
+            Self::Relief => "relief",
+            Self::Incise => "incise",
+        }
+    }
+
+    /// The operation a key names, if it names one.
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|op| op.key() == key)
+    }
+
     /// Whether the operation moves the surface at all.
     ///
     /// Paint does not, which is what makes it the one that can be applied to a
@@ -213,6 +240,21 @@ pub enum BlendProfile {
 }
 
 impl BlendProfile {
+    /// A stable name, on the same terms as [`Combine::key`].
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Hard => "hard",
+            Self::Quadratic => "quadratic",
+            Self::Cubic => "cubic",
+            Self::Circular => "circular",
+            Self::Chamfer => "chamfer",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|profile| profile.key() == key)
+    }
+
     pub const ALL: [BlendProfile; 5] = [
         Self::Hard,
         Self::Quadratic,

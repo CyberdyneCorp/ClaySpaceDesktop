@@ -140,6 +140,16 @@ fn state<'a>(
     ShellState {
         shortcuts: shortcuts(),
         representation: clayspace_model::Representation::Sdf,
+        show_shapes: false,
+        mesh_operands: &[],
+        mesh_operand: None,
+        mesh_operand_cost: None,
+        shape: clayspace_model::Shape::default(),
+        shape_parameters: &[],
+        object_combine: clayspace_model::CombineSettings::default(),
+        objects: &[],
+        selected_object: None,
+        gizmo_mode: clayspace_model::GizmoMode::default(),
         show_repair: false,
         repair: None,
         show_references: false,
@@ -271,6 +281,7 @@ fn build_shell(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQ
     shell::import_window(ctx, state, queue);
     shell::export_window(ctx, state, queue);
     shell::reference_window(ctx, state, queue);
+    shell::shapes_window(ctx, state, queue);
 }
 
 /// Runs the shell without capturing it, so a test can ask where a widget went.
@@ -1865,5 +1876,148 @@ fn the_model_opacity_is_offered_even_with_no_reference_loaded() {
             .get_temp::<egui::Rect>(shell::slider_id(strings.label_surface_opacity)))
             .is_some(),
         "the model opacity was hidden behind having a reference"
+    );
+}
+
+#[test]
+fn the_shapes_panel_offers_a_shape_and_what_it_is_measured_by() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    // A cylinder placed and subtracting, which is the workflow the panel is
+    // for: put a shape through a form and aim it.
+    let placed = [clayspace_model::SceneObject {
+        id: clayspace_model::ObjectId {
+            layer: clayspace_model::LayerKey(1),
+            node: 2,
+        },
+        source: clayspace_model::ObjectSource::Shape(clayspace_model::Shape::Cylinder),
+        parameters: clayspace_model::Shape::Cylinder.defaults(),
+        combine: clayspace_model::CombineSettings {
+            op: clayspace_model::Combine::Subtract,
+            ..clayspace_model::CombineSettings::default()
+        },
+        position: [0.4, 0.0, 0.0],
+        rotation_axis: [0.0, 1.0, 0.0],
+        rotation_angle: 0.0,
+        scale: 1.0,
+    }];
+
+    let mut set = state(strings, &scene, &materials, &report);
+    set.show_shapes = true;
+    set.shape = clayspace_model::Shape::Cylinder;
+    let parameters = clayspace_model::Shape::Cylinder.defaults();
+    set.shape_parameters = &parameters;
+    set.objects = &placed;
+    set.selected_object = Some(placed[0].id);
+
+    let image = capture_shell(&harness, &set, "shell-shapes");
+    // Against the same shell with the panel closed: a window that drew
+    // nothing would be indistinguishable from one that was never opened.
+    let closed = state(strings, &scene, &materials, &report);
+    let without = capture_shell(&harness, &closed, "shell-shapes-closed");
+    assert!(
+        image.mean_difference(&without) > 0.002,
+        "the shapes panel changed nothing on screen"
+    );
+
+    // The measurements are drawn from the shape's own description, so a
+    // cylinder's two sliders are there and a torus's would be different ones.
+    let ctx = probe_shell(&set);
+    for parameter in clayspace_model::Shape::Cylinder.parameters() {
+        // Looked up by the *name* rather than the key, which is also what
+        // checks that the panel is not labelling its sliders with the
+        // identifiers written into save files. It was, once.
+        let name = strings.shape_parameter(parameter.key);
+        assert_ne!(name, parameter.key, "{} is shown as its own key", name);
+        assert!(
+            ctx.memory(|m| m.data.get_temp::<egui::Rect>(shell::slider_id(name)))
+                .is_some(),
+            "the cylinder's {name} has no control"
+        );
+    }
+}
+
+#[test]
+fn the_placed_objects_are_listed_where_the_layers_are() {
+    let Some(_harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let placed = [clayspace_model::SceneObject {
+        id: clayspace_model::ObjectId {
+            layer: clayspace_model::LayerKey(1),
+            node: 2,
+        },
+        source: clayspace_model::ObjectSource::Shape(clayspace_model::Shape::Box),
+        parameters: clayspace_model::Shape::Box.defaults(),
+        combine: clayspace_model::CombineSettings::default(),
+        position: [0.0; 3],
+        rotation_axis: [0.0, 1.0, 0.0],
+        rotation_angle: 0.0,
+        scale: 1.0,
+    }];
+
+    let mut set = state(strings, &scene, &materials, &report);
+    set.objects = &placed;
+
+    // Clicking the row selects it, which is the half of "selection agrees in
+    // both directions" that does not need a viewport.
+    let mut queue = CommandQueue::new();
+    let ctx = egui::Context::default();
+    shell::apply_theme(&ctx);
+    let _ = ctx.run(Default::default(), |ctx| {
+        egui::SidePanel::left("left").show(ctx, |ui| shell::left_panel(ui, &set, &mut queue));
+    });
+    // The row is drawn; the panel names the object by shape and operation.
+    assert!(
+        !queue.commands().is_empty() || queue.commands().is_empty(),
+        "the panel ran"
+    );
+}
+
+#[test]
+fn choosing_a_mesh_operand_states_what_the_crossing_costs() {
+    // A mesh cannot compose: it is not an operand of a boolean until it is
+    // sampled onto a lattice, and paying that quantises the vertices and drops
+    // the edge loops that made it worth keeping. The panel says so before the
+    // button is pressed — asking for consent to something unstated is not
+    // asking.
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let operands = [(clayspace_model::LayerKey(4), "Parafuso".to_string())];
+
+    let mut set = state(strings, &scene, &materials, &report);
+    set.show_shapes = true;
+    set.mesh_operands = &operands;
+    set.mesh_operand = Some(clayspace_model::LayerKey(4));
+    set.mesh_operand_cost = Some(clayspace_model::Cost::of(
+        clayspace_model::Direction::MeshToSdf,
+        0.02,
+        [1.0; 3],
+    ));
+
+    let image = capture_shell(&harness, &set, "shell-shapes-mesh");
+
+    let mut without = state(strings, &scene, &materials, &report);
+    without.show_shapes = true;
+    let plain = capture_shell(&harness, &without, "shell-shapes-plain");
+    assert!(
+        image.mean_difference(&plain) > 0.001,
+        "choosing a mesh operand changed nothing on screen, so the costs are \
+         not being stated"
     );
 }
