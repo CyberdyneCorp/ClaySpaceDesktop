@@ -2040,8 +2040,22 @@ impl App {
     /// landed on a widget. Asking winit produced a version that dropped every
     /// press in the window.
     fn drive(&mut self, input: &ViewportInput) {
-        // Hover first, and unconditionally: the ring should follow the pointer
-        // during a stroke as well as before one.
+        // Five phases, in the order a gesture happens: where the pointer
+        // is, a release ending what was under way, a press choosing what
+        // begins, movement carried to it, and the wheel. Each was inline
+        // here, which put five levels of nesting and the whole
+        // press-arbitration chain in one function. The phases share no
+        // state beyond `self`, so naming them costs nothing and leaves the
+        // order they run in as the only thing this function says.
+        self.follow_the_pointer(input);
+        self.finish_any_drag(input);
+        self.begin_a_drag(input);
+        self.carry_the_drag(input);
+        self.zoom_the_view(input);
+    }
+
+    /// Where the cursor is, before anything acts on it.
+    fn follow_the_pointer(&mut self, input: &ViewportInput) {
         if let Some(point) = input.pointer {
             if self.rigging {
                 // The brush ring has no meaning while rigging; the highlighted
@@ -2054,7 +2068,10 @@ impl App {
                 self.hover = self.pick_at(point);
             }
         }
+    }
 
+    /// A release ends whatever was under way.
+    fn finish_any_drag(&mut self, input: &ViewportInput) {
         if input.released && self.drag != Drag::None {
             match self.drag {
                 Drag::Sculpt => {
@@ -2094,7 +2111,10 @@ impl App {
             }
             self.drag = Drag::None;
         }
+    }
 
+    /// A press, and which subsystem it belongs to.
+    fn begin_a_drag(&mut self, input: &ViewportInput) {
         if let (Some(point), Some(button), true) =
             (input.pointer, input.pressed, input.over_viewport)
         {
@@ -2175,53 +2195,17 @@ impl App {
                 self.stroke_at(point, true, modifiers);
             }
         }
+    }
 
+    /// Movement, delivered to whatever the press began.
+    fn carry_the_drag(&mut self, input: &ViewportInput) {
         if self.drag != Drag::None && input.delta != egui::Vec2::ZERO {
             match self.drag {
-                Drag::Sculpt => {
-                    if let Some(point) = input.pointer {
-                        self.stroke_at(point, false, StrokeModifiers::default());
-                    }
-                }
-                Drag::Curve => {
-                    if let Some(by) = input.pointer.and_then(|point| self.curve_drag_to(point)) {
-                        self.handle(Command::DragCurve(by));
-                        // Re-anchored, because the model moves the points by a
-                        // displacement: sending the whole travel every frame
-                        // would move them by it again each time.
-                        if let Some((anchor, normal, _)) = self.curve_drag {
-                            if let Some(now) = input
-                                .pointer
-                                .and_then(|point| self.ray_at(point))
-                                .and_then(|ray| Self::on_plane(ray, anchor, normal))
-                            {
-                                self.curve_drag = Some((anchor, normal, now));
-                            }
-                        }
-                    }
-                }
-                Drag::Gizmo => {
-                    if let Some(at) = input.pointer.and_then(|point| self.on_gizmo_plane(point)) {
-                        // Held rather than latched at the press, so the
-                        // modifier can be taken up part-way through a turn to
-                        // land it on a round number.
-                        self.handle(Command::DragGizmo(at, input.invert_modifier));
-                    }
-                }
-                Drag::Cage => {
-                    if let Some(at) = input.pointer.and_then(|point| self.on_cage_plane(point)) {
-                        self.handle(Command::DragLatticePoint(at));
-                    }
-                }
-                Drag::Rig => {
-                    if let Some(at) = input.pointer.and_then(|point| self.on_rig_plane(point)) {
-                        self.armature.drag(at);
-                        // Live, like a stroke: the surface follows the sphere
-                        // rather than appearing when the pointer comes up.
-                        self.sync_geometry();
-                        self.document_vm.touched();
-                    }
-                }
+                Drag::Sculpt => self.carry_sculpt(input),
+                Drag::Curve => self.carry_curve(input),
+                Drag::Gizmo => self.carry_gizmo(input),
+                Drag::Cage => self.carry_cage(input),
+                Drag::Rig => self.carry_rig(input),
                 Drag::Orbit => self
                     .camera
                     .orbit(input.delta.x * 0.008, input.delta.y * 0.008),
@@ -2229,7 +2213,64 @@ impl App {
                 Drag::None => {}
             }
         }
+    }
 
+    /// Movement, while a sculpt drag is under way.
+    fn carry_sculpt(&mut self, input: &ViewportInput) {
+        if let Some(point) = input.pointer {
+            self.stroke_at(point, false, StrokeModifiers::default());
+        }
+    }
+
+    /// Movement, while a curve drag is under way.
+    fn carry_curve(&mut self, input: &ViewportInput) {
+        if let Some(by) = input.pointer.and_then(|point| self.curve_drag_to(point)) {
+            self.handle(Command::DragCurve(by));
+            // Re-anchored, because the model moves the points by a
+            // displacement: sending the whole travel every frame
+            // would move them by it again each time.
+            if let Some((anchor, normal, _)) = self.curve_drag {
+                if let Some(now) = input
+                    .pointer
+                    .and_then(|point| self.ray_at(point))
+                    .and_then(|ray| Self::on_plane(ray, anchor, normal))
+                {
+                    self.curve_drag = Some((anchor, normal, now));
+                }
+            }
+        }
+    }
+
+    /// Movement, while a gizmo drag is under way.
+    fn carry_gizmo(&mut self, input: &ViewportInput) {
+        if let Some(at) = input.pointer.and_then(|point| self.on_gizmo_plane(point)) {
+            // Held rather than latched at the press, so the
+            // modifier can be taken up part-way through a turn to
+            // land it on a round number.
+            self.handle(Command::DragGizmo(at, input.invert_modifier));
+        }
+    }
+
+    /// Movement, while a cage drag is under way.
+    fn carry_cage(&mut self, input: &ViewportInput) {
+        if let Some(at) = input.pointer.and_then(|point| self.on_cage_plane(point)) {
+            self.handle(Command::DragLatticePoint(at));
+        }
+    }
+
+    /// Movement, while a rig drag is under way.
+    fn carry_rig(&mut self, input: &ViewportInput) {
+        if let Some(at) = input.pointer.and_then(|point| self.on_rig_plane(point)) {
+            self.armature.drag(at);
+            // Live, like a stroke: the surface follows the sphere
+            // rather than appearing when the pointer comes up.
+            self.sync_geometry();
+            self.document_vm.touched();
+        }
+    }
+
+    /// The wheel.
+    fn zoom_the_view(&mut self, input: &ViewportInput) {
         if input.over_viewport && input.scroll != 0.0 {
             // What is under the pointer, so the zoom is aimed at it and stops
             // against it. `None` where the ray meets nothing — over empty
