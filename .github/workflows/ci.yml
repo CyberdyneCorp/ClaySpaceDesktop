@@ -169,12 +169,34 @@ jobs:
         # brings `-o pipefail`. Without it the pipeline's status is `tee`'s,
         # and `tee` always succeeds — so the exit code the gate uses to fail a
         # regression was being thrown away before anyone could read it.
+        #
+        # The first thing that surfaced once it stopped being thrown away was
+        # not a regression: the benchmark segfaults on this runner, in the
+        # warm-up, and has been doing so unnoticed. So the two kinds of
+        # non-zero are told apart rather than lumped together. A verdict the
+        # gate reached — 1 for a regression, 2 for a refusal — fails the job,
+        # which is the whole point of the change. A signal is the crash, and
+        # it is reported loudly and tracked in #34 rather than failing every
+        # branch for something no branch caused.
+        #
+        # When #34 is closed, delete the `>= 128` arm. It is quarantine, not
+        # policy, and a quarantine with no expiry becomes the `tee` it replaced.
         shell: bash
         run: |
+          set -o pipefail
+          status=0
           cargo run --release --bin bench -- \
             --json "$RUNNER_TEMP/now.json" \
             --baseline benchmarks/baseline-macos-aarch64.json \
-            | tee "$RUNNER_TEMP/report.txt"
+            | tee "$RUNNER_TEMP/report.txt" || status=$?
+
+          if [ "$status" -ge 128 ]; then
+            signal=$((status - 128))
+            echo "::warning title=Benchmark crashed::the benchmark died on signal \
+              $signal (exit $status) before reaching a verdict. Tracked in #34."
+            exit 0
+          fi
+          exit "$status"
 
       # The figures outlive the run, so a regression can be looked at rather
       # than re-measured.
