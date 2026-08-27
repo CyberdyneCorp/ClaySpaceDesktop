@@ -12,22 +12,20 @@ use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{Direction, LayerOperation, Representation, SceneModel, SculptModel};
 
 /// A voxel layer, made by crossing the starting form over.
-fn with_voxel_layer() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
+fn with_voxel_layer() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
     let mut document = ClayDocument::new(policy)
         .and_then(ClayDocument::with_starting_form)
-        .ok()?;
+        .expect("a document with a starting form");
     document
         .convert_layer(Direction::SdfToVoxel, 0.05, 1)
-        .ok()?;
-    Some(document)
+        .expect("cross to a grid");
+    document
 }
 
 #[test]
 fn a_grid_reports_what_is_wrong_with_it() {
-    let Some(mut document) = with_voxel_layer() else {
-        return;
-    };
+    let mut document = with_voxel_layer();
     assert_eq!(document.active_representation(), Representation::Voxel);
     let report = document
         .repair_report()
@@ -47,9 +45,7 @@ fn a_grid_reports_what_is_wrong_with_it() {
 /// The report is not offered for something that cannot have one.
 #[test]
 fn a_field_has_no_repair_report() {
-    let Some(mut document) = with_voxel_layer() else {
-        return;
-    };
+    let mut document = with_voxel_layer();
     let sdf = document
         .scene()
         .layers
@@ -68,9 +64,7 @@ fn a_field_has_no_repair_report() {
 /// with itself.
 #[test]
 fn closing_holes_and_filling_voids_both_apply() {
-    let Some(mut document) = with_voxel_layer() else {
-        return;
-    };
+    let mut document = with_voxel_layer();
     let outcome = document
         .apply_operation(LayerOperation::CloseHoles { passes: 1 })
         .expect("close holes is a voxel operation");
@@ -98,9 +92,7 @@ fn closing_holes_and_filling_voids_both_apply() {
 /// The pre-bake verbs are refused where they mean nothing.
 #[test]
 fn a_repair_is_refused_on_a_field() {
-    let Some(mut document) = with_voxel_layer() else {
-        return;
-    };
+    let mut document = with_voxel_layer();
     let sdf = document
         .scene()
         .layers
@@ -121,17 +113,46 @@ fn a_repair_is_refused_on_a_field() {
 
 /// Refining a region is what the level stack is for: pay for detail where the
 /// detail goes, rather than everywhere.
+///
+/// Not measured in cells, because cells cannot see it: a chunk the new level
+/// does not cover reads its parent's value, so the solid is identical whether
+/// the level was pushed over a corner or over the whole grid, and the occupied
+/// count is the same number either way. What a region saves is storage that
+/// was never allocated, and that is the only place it shows.
 #[test]
 fn a_region_can_be_refined_without_refining_everything() {
-    let Some(mut document) = with_voxel_layer() else {
-        return;
-    };
-    document
+    let mut document = with_voxel_layer();
+    let coarse = document.level_storage().expect("a voxel layer has levels");
+    assert_eq!(coarse.len(), 1, "a fresh grid starts with one level");
+    let solid = document.occupied_cells().expect("a voxel layer has cells");
+
+    let outcome = document
         .apply_operation(LayerOperation::RefineRegion {
             min: [-0.3, -0.3, -0.3],
             max: [0.3, 0.3, 0.3],
         })
         .expect("regional refinement is a voxel operation");
+    assert!(outcome.changed, "refining reported that nothing happened");
+
+    let levels = document.level_storage().expect("a voxel layer has levels");
+    assert_eq!(levels.len(), 2, "no level was pushed");
+    let (chunks, whole) = levels[1];
+    assert!(!whole, "the finer level was paid for everywhere");
+    assert!(chunks > 0, "the finer level has storage nowhere");
+    // A whole finer level needs eight chunks for each of its parent's — one
+    // per octant — so anything at or above that was not a region either, even
+    // where the engine still calls it one.
+    assert!(
+        chunks < coarse[0].0 * 8,
+        "the region cost {chunks} chunks where refining everything costs {}",
+        coarse[0].0 * 8
+    );
+
+    assert_eq!(
+        document.occupied_cells().expect("cells"),
+        solid,
+        "refining changed the solid it was supposed to leave alone"
+    );
 }
 
 /// The paint and erase brushes, which are a different family from the ten
@@ -166,9 +187,7 @@ mod brushes {
 
     #[test]
     fn erasing_removes_cells_from_a_grid() {
-        let Some(mut document) = with_voxel_layer() else {
-            return;
-        };
+        let mut document = with_voxel_layer();
         assert!(
             ToolKind::Apagar.exists_on(Representation::Voxel),
             "erase is a voxel verb"
@@ -184,9 +203,7 @@ mod brushes {
     /// governs a mesh does not apply here.
     #[test]
     fn painting_a_grid_needs_no_colour_attribute() {
-        let Some(mut document) = with_voxel_layer() else {
-            return;
-        };
+        let mut document = with_voxel_layer();
         assert!(
             !ToolKind::Pintar.needs_colour_attribute(Representation::Voxel),
             "a grid's palette is not an attribute a layer might lack"

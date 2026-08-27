@@ -8,9 +8,9 @@
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{ArmatureModel, DocumentModel, SculptModel};
 
-fn document() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
-    ClayDocument::new(policy).ok()
+fn document() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
+    ClayDocument::new(policy).expect("a document")
 }
 
 fn solid_at(document: &ClayDocument, at: [f32; 3]) -> bool {
@@ -44,9 +44,7 @@ fn scratch(name: &str) -> std::path::PathBuf {
 fn the_skinned_surface_survives_a_round_trip() {
     // The part that matters to whoever opens the file: the model looks the
     // same. This is the engine's own node, saved and loaded by the engine.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let path = scratch("surface");
     saved(&mut document, &path);
     assert!(solid_at(&document, [1.0, 0.0, 0.0]), "the arm was there");
@@ -69,9 +67,7 @@ fn the_skinned_surface_survives_a_round_trip() {
 fn the_tree_comes_back_with_its_topology() {
     // Positions are the easy half. The parent array is what makes a reloaded
     // rig posable, and what no amount of nearest-sphere guessing recovers.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let path = scratch("tree");
     saved(&mut document, &path);
     let before = document.armature().expect("a tree");
@@ -106,9 +102,7 @@ fn the_tree_comes_back_with_its_topology() {
 fn a_reopened_rig_can_be_posed() {
     // The point of recovering the tree at all: moving a shoulder after a
     // reload has to carry the arm, exactly as it did before the save.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let path = scratch("reauthor");
     saved(&mut document, &path);
     let mut reopened = document;

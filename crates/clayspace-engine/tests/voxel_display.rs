@@ -24,10 +24,12 @@ use clayspace_model::{
     BrushSettings, GestureSample, SculptModel, SmoothBlur, ToolKind, VoxelDisplay,
 };
 
-fn sculpted() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
-    let mut document = ClayDocument::new(policy).ok()?;
-    document.add_voxel_layer("Voxels", 0.04).ok()?;
+fn sculpted() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
+    let mut document = ClayDocument::new(policy).expect("a document");
+    document
+        .add_voxel_layer("Voxels", 0.04)
+        .expect("add a grid");
     for step in 0..40 {
         let t = step as f32 / 39.0;
         let angle = t * 6.0;
@@ -46,9 +48,9 @@ fn sculpted() -> Option<ClayDocument> {
                 }],
                 [false; 3],
             )
-            .ok()?;
+            .expect("deposit");
     }
-    Some(document)
+    document
 }
 
 /// The geometry the viewport would upload.
@@ -63,9 +65,7 @@ fn a_grid_draws_its_form_until_it_is_asked_for_its_cells() {
     // are a fact about the storage — but the blur stays at zero, because a
     // default that silently deletes detail is the wrong one however good it
     // looks.
-    let Some(mut document) = sculpted() else {
-        return;
-    };
+    let mut document = sculpted();
     assert_eq!(document.voxel_display(), VoxelDisplay::Smooth);
     assert_eq!(document.voxel_blur().passes(), 0);
     let (_, _, smooth) = drawn(&mut document);
@@ -74,9 +74,7 @@ fn a_grid_draws_its_form_until_it_is_asked_for_its_cells() {
 
 #[test]
 fn the_two_pictures_are_different_surfaces_over_the_same_cells() {
-    let Some(mut document) = sculpted() else {
-        return;
-    };
+    let mut document = sculpted();
     let (_, _, smooth) = drawn(&mut document);
     let cells = document.stats().objects;
 
@@ -114,9 +112,7 @@ fn the_smooth_surface_carries_normals() {
     // normal is the host's to work out. Without them the surface renders as a
     // flat silhouette, which is what the first attempt at this looked like, so
     // this is the assertion that would have caught it.
-    let Some(mut document) = sculpted() else {
-        return;
-    };
+    let mut document = sculpted();
     document
         .set_voxel_display(VoxelDisplay::Smooth, SmoothBlur::default())
         .expect("the smooth mesh was refused");
@@ -143,9 +139,7 @@ fn blurring_smooths_further_and_says_it_may_cost_detail() {
     // The trade the engine states: at 0 nothing is filtered and nothing can be
     // lost, but the surface still terraces; at 1 it reads as clay, and an
     // isolated voxel sits under the isolevel and is gone.
-    let Some(mut document) = sculpted() else {
-        return;
-    };
+    let mut document = sculpted();
     document
         .set_voxel_display(VoxelDisplay::Smooth, SmoothBlur::new(0))
         .expect("refused");
@@ -173,9 +167,7 @@ fn a_stroke_while_smooth_is_still_drawn() {
     // The settle is what rebuilds the smooth mesh, and a stroke that left the
     // old one on screen would show a sculptor the shape they had before their
     // last dab.
-    let Some(mut document) = sculpted() else {
-        return;
-    };
+    let mut document = sculpted();
     document
         .set_voxel_display(VoxelDisplay::Smooth, SmoothBlur::default())
         .expect("refused");
@@ -210,9 +202,7 @@ fn a_stroke_while_smooth_is_still_drawn() {
 fn the_picture_is_a_setting_and_not_an_edit() {
     // Nothing here belongs in the history: two hosts sharing a document must
     // not disagree about it, which is why the engine keeps it an argument.
-    let Some(mut document) = sculpted() else {
-        return;
-    };
+    let mut document = sculpted();
     let before = document.history().depth;
     document
         .set_voxel_display(VoxelDisplay::Smooth, SmoothBlur::new(1))
@@ -234,9 +224,7 @@ fn the_smooth_surface_keeps_up_with_the_brush() {
     // It is rebuilt where the geometry is assembled now, guarded on the grid's
     // change count — a whole-grid mesh is 17 to 21 ms and a comparison is
     // nothing, so the cost is paid when something moved and not otherwise.
-    let Some(mut document) = sculpted() else {
-        return;
-    };
+    let mut document = sculpted();
     let before = drawn(&mut document).0.len();
 
     document
@@ -269,9 +257,7 @@ fn the_smooth_surface_keeps_up_with_the_brush() {
 fn an_unchanged_grid_is_not_meshed_again() {
     // The guard that lets the rebuild sit on the frame path. Without it every
     // frame would pay for a whole-grid mesh to redraw a form nobody touched.
-    let Some(mut document) = sculpted() else {
-        return;
-    };
+    let mut document = sculpted();
     let first = drawn(&mut document);
     let again = drawn(&mut document);
     assert_eq!(

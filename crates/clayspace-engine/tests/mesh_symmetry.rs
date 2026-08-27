@@ -31,13 +31,15 @@
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{BrushSettings, Direction, GestureSample, SculptModel, ToolKind};
 
-fn meshed() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
+fn meshed() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
     let mut document = ClayDocument::new(policy)
         .and_then(ClayDocument::with_starting_form)
-        .ok()?;
-    document.convert_layer(Direction::SdfToMesh, 0.04, 0).ok()?;
-    Some(document)
+        .expect("a document with a starting form");
+    document
+        .convert_layer(Direction::SdfToMesh, 0.04, 0)
+        .expect("cross to a mesh");
+    document
 }
 
 /// How far the surface stands from the centre along a direction.
@@ -79,9 +81,7 @@ fn dab(document: &mut ClayDocument, tool: ToolKind, symmetry: [bool; 3]) {
 fn symmetry_off_leaves_the_other_side_alone() {
     // The control. Without this the test below passes on a brush that reaches
     // the whole model.
-    let Some(mut document) = meshed() else {
-        return;
-    };
+    let mut document = meshed();
     let rest = reach(&document, [-AT[0], AT[1], AT[2]]);
     dab(&mut document, ToolKind::Padrao, [false; 3]);
 
@@ -100,9 +100,7 @@ fn x_symmetry_puts_the_same_form_on_the_other_side() {
     // The whole of what a sculptor means by symmetry: the other side comes out
     // the same. This was inert — the mesh arm of the dispatch dropped the axes
     // before `stroke_mesh` ever saw them.
-    let Some(mut document) = meshed() else {
-        return;
-    };
+    let mut document = meshed();
     dab(&mut document, ToolKind::Padrao, [true, false, false]);
 
     let here = reach(&document, AT);
@@ -128,9 +126,7 @@ fn two_axes_give_four_dabs_and_three_give_eight() {
     // means by "symmetric in x and y" — the four quadrants, not the two halves
     // twice. Measured in Blender: one dab moves 82 vertices, x symmetry moves
     // 82 on each side, and x with y moves 161 in each of four quadrants.
-    let Some(mut document) = meshed() else {
-        return;
-    };
+    let mut document = meshed();
     dab(&mut document, ToolKind::Padrao, [true, true, false]);
 
     let quadrants = [
@@ -152,9 +148,7 @@ fn two_axes_give_four_dabs_and_three_give_eight() {
     );
 
     // And with all three, the back of the model too.
-    let Some(mut all) = meshed() else {
-        return;
-    };
+    let mut all = meshed();
     dab(&mut all, ToolKind::Padrao, [true; 3]);
     let behind = reach(&all, [AT[0], AT[1], -AT[2]]);
     assert!(
@@ -169,9 +163,7 @@ fn a_mirrored_drag_pulls_the_other_side_the_mirrored_way() {
     // forgetting that is the bug that makes a mirrored Grab pull the wrong
     // way: both sides would travel the same way in world space instead of
     // moving as a pair.
-    let Some(mut document) = meshed() else {
-        return;
-    };
+    let mut document = meshed();
     let before = document.visible_mesh_geometry().0;
     let anchor =
         SculptModel::pick(&document, [0.3, 0.0, 4.0], [0.0, 0.0, -1.0]).expect("the near face");
@@ -251,9 +243,7 @@ fn a_mirrored_drag_pulls_the_other_side_the_mirrored_way() {
 fn a_symmetric_stroke_is_still_one_undo() {
     // Every reflection goes into the same set of deltas, because a sculptor
     // made one stroke — however many copies of it the axes called for.
-    let Some(mut document) = meshed() else {
-        return;
-    };
+    let mut document = meshed();
     let before = document.history().depth;
     let rest = reach(&document, AT);
     dab(&mut document, ToolKind::Padrao, [true, true, true]);
@@ -279,12 +269,8 @@ fn symmetry_reaches_a_voxel_layer_too() {
     // for the same reason they were on a mesh. A grid has no layer mirror
     // either — the mirror plane is the one its cell lattice already puts at
     // coordinate zero.
-    let Some(policy) = BackendPolicy::discover(None).ok() else {
-        return;
-    };
-    let Ok(mut document) = ClayDocument::new(policy) else {
-        return;
-    };
+    let policy = BackendPolicy::discover(None).expect("discover backends");
+    let mut document = ClayDocument::new(policy).expect("a document");
     document.add_voxel_layer("Voxels", 0.05).expect("a grid");
 
     let brush = BrushSettings {

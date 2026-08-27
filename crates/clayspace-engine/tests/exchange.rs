@@ -5,11 +5,11 @@ use clayspace_model::{
     ExchangeModel, ExportMesher, ExportSettings, Format, ImportAs, ImportSettings, SceneModel,
 };
 
-fn document() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
+fn document() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
     ClayDocument::new(policy)
         .and_then(ClayDocument::with_starting_form)
-        .ok()
+        .expect("a document with a starting form")
 }
 
 fn scratch(name: &str) -> std::path::PathBuf {
@@ -36,9 +36,7 @@ fn exported(
 
 #[test]
 fn a_document_exports_to_a_file_that_can_be_read_back() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let path =
         exported(&mut document, "roundtrip", "obj", ExportSettings::default()).expect("export");
     assert!(path.is_file(), "nothing was written");
@@ -62,9 +60,7 @@ fn a_document_exports_to_a_file_that_can_be_read_back() {
 
 #[test]
 fn every_writable_format_is_actually_written() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     for format in Format::ALL {
         let path = exported(
             &mut document,
@@ -82,9 +78,7 @@ fn every_writable_format_is_actually_written() {
 fn glb_is_written_and_refused_on_the_way_in() {
     // The engine's asymmetry, met at the boundary rather than inside a
     // decoder: `clay_mesh_save` takes .glb and `clay_mesh_load` does not.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let path = exported(&mut document, "glb", "glb", ExportSettings::default()).expect("export");
     let refusal = document
         .import_mesh(&path, ImportSettings::default())
@@ -98,9 +92,7 @@ fn glb_is_written_and_refused_on_the_way_in() {
 
 #[test]
 fn an_unknown_extension_is_refused_by_name() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let path = scratch("out.blend");
     assert!(document
         .export_mesh(&path, ExportSettings::default())
@@ -112,9 +104,7 @@ fn an_unknown_extension_is_refused_by_name() {
 
 #[test]
 fn a_reference_import_is_carried_and_a_clay_import_is_sculptable() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let path =
         exported(&mut document, "imports", "obj", ExportSettings::default()).expect("export");
     let layers_before = document.scene().layers.len();
@@ -159,9 +149,7 @@ fn a_reference_import_is_carried_and_a_clay_import_is_sculptable() {
 fn a_budget_smaller_than_the_file_refuses_before_allocating() {
     // The guardrail the engine documents: checked against the file's declared
     // counts, so a hostile file claiming a billion triangles never allocates.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let path = exported(&mut document, "budget", "obj", ExportSettings::default()).expect("export");
 
     let refusal = document.import_mesh(
@@ -179,9 +167,7 @@ fn a_budget_smaller_than_the_file_refuses_before_allocating() {
 #[test]
 fn a_coarser_export_is_a_smaller_file() {
     // Resolution reaches the engine rather than being carried and ignored.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let fine = exported(
         &mut document,
         "resolution",
@@ -216,9 +202,7 @@ fn a_coarser_export_is_a_smaller_file() {
 
 #[test]
 fn decimation_reaches_the_mesher() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let whole =
         exported(&mut document, "decimate", "obj", ExportSettings::default()).expect("whole");
     let whole_size = std::fs::metadata(&whole).expect("metadata").len();
@@ -245,9 +229,7 @@ fn decimation_reaches_the_mesher() {
 
 #[test]
 fn every_mesher_produces_a_file() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     for mesher in ExportMesher::ALL {
         let path = exported(
             &mut document,
@@ -271,9 +253,7 @@ fn every_mesher_produces_a_file() {
 fn a_reference_layer_reaches_the_exported_file() {
     // The whole reason export goes through `mesh_combined`: meshing the field
     // alone would silently leave every imported reference out of the file.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let source =
         exported(&mut document, "combined", "obj", ExportSettings::default()).expect("source");
     let field_only = std::fs::metadata(&source).expect("metadata").len();

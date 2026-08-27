@@ -371,15 +371,40 @@ fn a_move_under_the_resolution_changes_nothing() {
 #[test]
 fn brush_shaping_reaches_the_engine_without_error() {
     // Each control maps to a preset or footprint field; this checks the whole
-    // range is accepted rather than clamped into an engine refusal.
+    // range is accepted rather than clamped into an engine refusal, and that
+    // the setting the panel asked for is the one the brush is carrying when
+    // the stroke goes down — a falloff written into `accumulate` would still
+    // sculpt, and still sculpt with the wrong curve.
     for falloff in clayspace_model::Falloff::ALL {
         for accumulate in [true, false] {
             let mut vm = session();
             vm.dispatch(Command::SetBrushIntensity(0.9))
                 .expect("intensity");
             vm.dispatch(Command::SetBrushFlow(0.95)).expect("flow");
-            let _ = (falloff, accumulate);
+            vm.dispatch(Command::SetBrushFalloff(falloff))
+                .expect("falloff");
+            vm.dispatch(Command::SetBrushAccumulate(accumulate))
+                .expect("accumulate");
+
+            let brush = *vm.brush().get();
+            assert_eq!(
+                brush.shaping.falloff, falloff,
+                "the brush is shaped by something other than what was asked for"
+            );
+            assert_eq!(
+                brush.shaping.accumulate, accumulate,
+                "accumulation did not follow the control that names it"
+            );
+            assert!(
+                (brush.intensity - 0.9).abs() < 1e-6 && (brush.flow - 0.95).abs() < 1e-6,
+                "shaping the brush disturbed the two settings already on it: {brush:?}"
+            );
+
             stroke_across_the_form(&mut vm).expect("stroke with shaping applied");
+            assert!(
+                vm.last_action().get().changed,
+                "a stroke with {falloff:?}, accumulate {accumulate}, changed nothing"
+            );
         }
     }
 }

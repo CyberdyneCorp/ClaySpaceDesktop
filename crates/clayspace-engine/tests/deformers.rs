@@ -15,27 +15,28 @@ use clayspace_model::{
 
 /// A document whose active layer is a mesh, made by exporting the starting form
 /// and importing it back — the only route a mesh layer has into a document.
-fn with_mesh(who: &str) -> Option<(ClayDocument, std::path::PathBuf)> {
-    let policy = BackendPolicy::discover(None).ok()?;
+fn with_mesh(who: &str) -> (ClayDocument, std::path::PathBuf) {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
     let mut document = ClayDocument::new(policy)
         .and_then(ClayDocument::with_starting_form)
-        .ok()?;
+        .expect("a document with a starting form");
     let path = std::env::temp_dir().join(format!("clayspace-deform-{who}.obj"));
     let _ = std::fs::remove_file(&path);
     document
         .export_mesh(&path, ExportSettings::default())
-        .ok()?;
+        .expect("export a mesh");
     document
         .import_mesh(&path, ImportSettings::default())
-        .ok()?;
+        .expect("import it back");
     let key = document
         .scene()
         .layers
         .iter()
         .find(|layer| layer.representation == Representation::Mesh)
-        .map(|layer| layer.key)?;
-    document.set_active_layer(key).ok()?;
-    Some((document, path))
+        .map(|layer| layer.key)
+        .expect("the imported mesh is a layer");
+    document.set_active_layer(key).expect("activate the mesh");
+    (document, path)
 }
 
 /// Every vertex of the mesh layers, so a deformation can be compared exactly.
@@ -45,9 +46,7 @@ fn vertices(document: &mut ClayDocument) -> Vec<[f32; 3]> {
 
 #[test]
 fn a_taper_moves_the_form_and_one_undo_takes_it_back() {
-    let Some((mut document, path)) = with_mesh("taper") else {
-        return;
-    };
+    let (mut document, path) = with_mesh("taper");
     let before = vertices(&mut document);
     assert!(!before.is_empty(), "the fixture carries no vertices");
 
@@ -84,9 +83,7 @@ fn a_taper_moves_the_form_and_one_undo_takes_it_back() {
 
 #[test]
 fn a_twist_moves_the_form_and_one_undo_takes_it_back() {
-    let Some((mut document, path)) = with_mesh("twist") else {
-        return;
-    };
+    let (mut document, path) = with_mesh("twist");
     let before = vertices(&mut document);
 
     let settings = DeformSettings {
@@ -113,9 +110,7 @@ fn a_twist_moves_the_form_and_one_undo_takes_it_back() {
 fn a_taper_and_a_twist_are_different_deformations() {
     let mut forms = Vec::new();
     for verb in DeformVerb::ALL {
-        let Some((mut document, path)) = with_mesh(&format!("{verb:?}")) else {
-            return;
-        };
+        let (mut document, path) = with_mesh(&format!("{verb:?}"));
         let settings = DeformSettings {
             verb,
             axis: [0.0, 1.0, 0.0],
@@ -140,13 +135,10 @@ fn a_taper_and_a_twist_are_different_deformations() {
 /// deformer does apply rather than restating one representation's answer.
 #[test]
 fn a_deformer_on_a_field_is_refused_by_where_it_applies() {
-    let Ok(policy) = BackendPolicy::discover(None) else {
-        return;
-    };
-    let Ok(mut document) = ClayDocument::new(policy).and_then(ClayDocument::with_starting_form)
-    else {
-        return;
-    };
+    let policy = BackendPolicy::discover(None).expect("discover backends");
+    let mut document = ClayDocument::new(policy)
+        .and_then(ClayDocument::with_starting_form)
+        .expect("a document with a starting form");
     let error = document
         .apply_operation(LayerOperation::Twist {
             axis: [0.0, 1.0, 0.0],

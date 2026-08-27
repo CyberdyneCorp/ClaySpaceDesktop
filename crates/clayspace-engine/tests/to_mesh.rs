@@ -16,11 +16,11 @@ use clayspace_model::{
     SceneModel, SculptModel, ToolKind,
 };
 
-fn document() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
+fn document() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
     ClayDocument::new(policy)
         .and_then(ClayDocument::with_starting_form)
-        .ok()
+        .expect("a document with a starting form")
 }
 
 /// The layer the scene says is active, and what it holds.
@@ -33,9 +33,7 @@ fn active(document: &ClayDocument) -> (LayerKey, Representation, bool) {
 
 #[test]
 fn a_field_crosses_into_a_mesh_layer() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let (source, _, _) = active(&document);
 
     let made = document
@@ -75,9 +73,7 @@ fn the_mesh_is_the_source_layer_and_not_the_whole_document() {
     // SDF layers across the call, and this is what holds it to that: with a
     // second layer carrying a blob well outside the sphere, a whole-document
     // mesh reaches past x = 1.2 and the source's own does not.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let (sphere, _, _) = active(&document);
 
     let second = document
@@ -136,9 +132,7 @@ fn the_mesh_is_the_source_layer_and_not_the_whole_document() {
 
 #[test]
 fn a_grid_crosses_into_a_mesh_layer() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     document
         .convert_layer(Direction::SdfToVoxel, 0.05, 0)
         .expect("into voxels");
@@ -165,9 +159,7 @@ fn a_grid_crosses_into_a_mesh_layer() {
 fn what_a_crossing_makes_can_be_sculpted() {
     // The whole point. A mesh layer is sculpted by moving the vertices it has,
     // and until this crossing existed the only way to get one was a file.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     document
         .convert_layer(Direction::SdfToMesh, 0.05, 0)
         .expect("the crossing was refused");
@@ -210,9 +202,7 @@ fn what_a_crossing_makes_can_be_sculpted() {
 
 #[test]
 fn a_crossing_into_a_mesh_is_one_undo_step() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     document
         .convert_layer(Direction::SdfToMesh, 0.05, 0)
         .expect("the crossing was refused");
@@ -239,9 +229,7 @@ fn a_crossing_into_a_mesh_is_one_undo_step() {
 /// order the interface actually goes in: select, point, then stroke.
 #[test]
 fn a_mesh_layer_answers_the_pointer_before_its_first_stroke() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let (sphere, _, _) = active(&document);
     let mesh = document
         .convert_layer(Direction::SdfToMesh, 0.05, 0)
@@ -282,9 +270,7 @@ fn a_mesh_layer_answers_the_pointer_before_its_first_stroke() {
 /// stroke brought them back, which is exactly how it was reported.
 #[test]
 fn a_new_mesh_layer_changes_what_the_viewport_watches() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let empty = document.mesh_revision();
 
     let made = document

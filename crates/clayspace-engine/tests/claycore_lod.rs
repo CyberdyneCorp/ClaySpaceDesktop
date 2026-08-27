@@ -15,11 +15,11 @@ use clayspace_engine::claycore::BrickMeshParams;
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{BrushSettings, Detail, DetailPolicy, GestureSample, SculptModel, ToolKind};
 
-fn document() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
+fn document() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
     ClayDocument::new(policy)
         .and_then(ClayDocument::with_starting_form)
-        .ok()
+        .expect("a document with a starting form")
 }
 
 /// A dab at the given offset, so a test can settle a surface worth mipping.
@@ -39,14 +39,14 @@ fn dab(document: &mut ClayDocument, at: [f32; 3], time: f32) {
 }
 
 /// A settled document with mips built over it.
-fn settled() -> Option<ClayDocument> {
-    let mut document = document()?;
+fn settled() -> ClayDocument {
+    let mut document = document();
     for step in 0..6 {
         let t = step as f32 / 5.0;
         dab(&mut document, [(t - 0.5) * 0.5, 0.0, 1.0], t);
     }
     document.build_mips().expect("build the mips");
-    Some(document)
+    document
 }
 
 /// Face normals and no colours — the only shading level 1 accepts.
@@ -60,9 +60,7 @@ fn coarse_params() -> BrickMeshParams {
 
 #[test]
 fn the_cache_has_surface_bricks_to_build_mips_from() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     dab(&mut document, [0.0, 0.0, 0.55], 0.0);
 
     let bricks = document.cache().surface_bricks().expect("surface bricks");
@@ -71,15 +69,11 @@ fn the_cache_has_surface_bricks_to_build_mips_from() {
 
 #[test]
 fn a_mip_can_be_built_and_read() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     dab(&mut document, [0.0, 0.0, 0.55], 0.0);
 
     let bricks = document.cache().surface_bricks().expect("surface bricks");
-    let Some(first) = bricks.first().copied() else {
-        return;
-    };
+    let first = bricks.first().copied().expect("a surface brick");
     // The coarse key covering it: each coarse brick spans 2×2×2 fine ones.
     let coarse = [
         first[0].div_euclid(2),
@@ -98,9 +92,7 @@ fn a_mip_can_be_built_and_read() {
 
 #[test]
 fn the_surfaces_mips_can_be_built_and_are_ready_to_draw() {
-    let Some(mut document) = settled() else {
-        return;
-    };
+    let mut document = settled();
     let built = document.build_mips().expect("build the mips");
     assert!(
         built > 0,
@@ -124,9 +116,7 @@ fn the_surfaces_mips_can_be_built_and_are_ready_to_draw() {
 #[test]
 fn the_coarse_surface_meshes() {
     // What #93 blocked, now the whole point: triangles out of a mip.
-    let Some(document) = settled() else {
-        return;
-    };
+    let document = settled();
     let coarse = document
         .drawable_coarse_keys()
         .expect("the coarse keys with mips");
@@ -158,9 +148,7 @@ fn the_coarse_surface_meshes() {
 fn the_coarse_surface_is_coarser_than_the_full_one() {
     // The whole reason to draw it. Twice the spacing over the same surface, so
     // the triangle count should fall substantially rather than marginally.
-    let Some(document) = settled() else {
-        return;
-    };
+    let document = settled();
     let coarse = document
         .drawable_coarse_keys()
         .expect("the coarse keys with mips");
@@ -191,9 +179,7 @@ fn level_one_refuses_gradient_normals() {
     // face-shaded *because* of this, so a release that started downgrading
     // instead of refusing should show up here rather than as a shading
     // difference nobody traced back.
-    let Some(document) = settled() else {
-        return;
-    };
+    let document = settled();
     let coarse = document
         .drawable_coarse_keys()
         .expect("the coarse keys with mips");
@@ -221,15 +207,11 @@ fn a_coarse_key_with_no_mip_is_refused() {
     // Why `drawable_coarse_keys` filters rather than handing the whole coarse
     // set over: one unbuilt mip fails the entire call, so an unfiltered list
     // would lose the coarse surface whenever a stroke left a child dirty.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     dab(&mut document, [0.0, 0.0, 0.55], 0.0);
 
     let bricks = document.cache().surface_bricks().expect("surface bricks");
-    let Some(first) = bricks.first().copied() else {
-        return;
-    };
+    let first = bricks.first().copied().expect("a surface brick");
     // Deliberately far from anything the surface occupies, so no mip exists
     // for it however settled the document is.
     let absent = [first[0] + 4096, first[1] + 4096, first[2] + 4096];
@@ -248,9 +230,7 @@ fn a_coarse_key_with_no_mip_is_refused() {
 fn every_drawable_coarse_key_actually_meshes() {
     // The filter's contract, stated as the property the host relies on: what
     // it returns can be meshed in one call without a single refusal.
-    let Some(document) = settled() else {
-        return;
-    };
+    let document = settled();
     let coarse = document
         .drawable_coarse_keys()
         .expect("the coarse keys with mips");
@@ -279,9 +259,7 @@ fn the_policy_and_the_maintenance_now_meet() {
     // The gap, closed. The policy asks for `Reduced`, the mips exist for it,
     // and the call that takes the two together is `mesh_lod` — which is the
     // whole of #93.
-    let Some(document) = settled() else {
-        return;
-    };
+    let document = settled();
     let policy = DetailPolicy::default();
     assert_eq!(
         policy.decide(Detail::Full, 10.0, 10_000),

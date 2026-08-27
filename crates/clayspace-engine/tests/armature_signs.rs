@@ -16,9 +16,9 @@
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{ArmatureModel, DocumentModel, SculptModel};
 
-fn document() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
-    ClayDocument::new(policy).ok()
+fn document() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
+    ClayDocument::new(policy).expect("a document")
 }
 
 /// Whether the surface is solid at a point, probed straight down the z axis.
@@ -42,9 +42,7 @@ fn a_negative_sphere_may_carry_a_limb() {
     // The rule that went with #99. It was never ZBrush's — it was the old
     // ABI's, and it is why `set_negative` used to refuse anything with a
     // child.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     document.begin_armature([0.0, 0.0, 0.0], 0.3).expect("root");
     let socket = document
         .add_zsphere(0, [0.5, 0.0, 0.0], 0.2, false)
@@ -70,9 +68,7 @@ fn the_sign_survives_a_round_trip() {
     // The loss that made this the same shape of bug as a rename: a reopened
     // document reported every sphere positive, so the indentation was in the
     // surface and could never be undone.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     document.begin_armature([0.0, 0.0, 0.0], 0.3).expect("root");
     let shoulder = document
         .add_zsphere(0, [0.5, 0.0, 0.0], 0.2, false)
@@ -108,9 +104,7 @@ fn a_rig_saved_without_signs_reads_back_positive() {
     // The compatibility direction, which the engine pads rather than refuses:
     // a rig with no negatives stores a short sign array or none at all, and
     // has to come back all-positive rather than failing to load.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     document.begin_armature([0.0, 0.0, 0.0], 0.3).expect("root");
     document
         .add_zsphere(0, [0.5, 0.0, 0.0], 0.2, false)
@@ -137,9 +131,7 @@ fn the_membrane_along_a_negative_link_is_not_drawn() {
     // Probed rather than asserted about triangles: the midpoint of the link is
     // where the membrane would be, and it is far enough from both spheres that
     // neither one's own body reaches it.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     document.begin_armature([0.0, 0.0, 0.0], 0.4).expect("root");
     let tip = document
         .add_zsphere(0, [1.2, 0.0, 0.0], 0.12, false)
@@ -172,9 +164,7 @@ fn the_membrane_along_a_negative_link_is_not_drawn() {
 fn turning_a_sphere_back_positive_restores_its_membrane() {
     // The inverse, so the sign is a property being toggled rather than a
     // one-way demolition.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     document.begin_armature([0.0, 0.0, 0.0], 0.4).expect("root");
     let tip = document
         .add_zsphere(0, [1.2, 0.0, 0.0], 0.12, false)

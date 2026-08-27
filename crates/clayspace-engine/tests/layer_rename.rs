@@ -15,9 +15,9 @@ use clayspace_model::{
     BrushSettings, DocumentModel, GestureSample, Representation, SceneModel, SculptModel, ToolKind,
 };
 
-fn document() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
-    ClayDocument::new(policy).ok()
+fn document() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
+    ClayDocument::new(policy).expect("a document")
 }
 
 fn scratch(name: &str) -> std::path::PathBuf {
@@ -50,9 +50,7 @@ fn names(document: &ClayDocument) -> Vec<String> {
 #[test]
 fn a_rename_survives_a_round_trip() {
     // The whole of #92 from this side.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let key = document
         .add_layer("Camada", Representation::Sdf)
         .expect("a layer");
@@ -82,9 +80,7 @@ fn a_rename_survives_a_round_trip() {
 fn an_empty_name_is_refused() {
     // What a cleared text field submits. The document's name would be the only
     // one left to lose, so this is refused rather than accepted as a blank.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let key = document
         .add_layer("Camada", Representation::Sdf)
         .expect("a layer");
@@ -103,9 +99,7 @@ fn an_empty_name_is_refused() {
 
 #[test]
 fn a_name_is_trimmed_rather_than_stored_with_its_padding() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let key = document
         .add_layer("Camada", Representation::Sdf)
         .expect("a layer");
@@ -118,9 +112,7 @@ fn two_sdf_layers_may_share_a_name() {
     // Names are not unique upstream and are not made unique here: nothing
     // about an SDF layer is looked up by name, so refusing a duplicate would
     // buy a guarantee that costs the artist a natural thing to do.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let first = document
         .add_layer("A", Representation::Sdf)
         .expect("a layer");
@@ -142,9 +134,7 @@ fn a_voxel_layer_keeps_its_grid_across_a_rename() {
     // The reason `engine_name` exists. A grid is fetched by name — the ABI has
     // no id-addressed accessor — so a rename that did not write through would
     // leave the grid unreachable.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let key = document
         .add_layer("Volume", Representation::Voxel)
         .expect("a voxel layer");
@@ -183,9 +173,7 @@ fn a_voxel_layer_will_not_take_another_voxel_layers_name() {
     // Two voxel layers sharing a name shadow one another's grid, because the
     // lookup answers with the first in stack order — so a stroke would land on
     // the wrong layer's volume.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let first = document
         .add_layer("Volume A", Representation::Voxel)
         .expect("a voxel layer");

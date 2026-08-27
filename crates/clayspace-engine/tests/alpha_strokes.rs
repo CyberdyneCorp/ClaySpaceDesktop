@@ -13,11 +13,11 @@ use clayspace_model::{
     ImportSettings, Representation, SceneModel, SculptModel, ToolKind,
 };
 
-fn document() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
+fn document() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
     ClayDocument::new(policy)
         .and_then(ClayDocument::with_starting_form)
-        .ok()
+        .expect("a document with a starting form")
 }
 
 /// A stamp with structure in it — concentric rings, so a surface it modulates
@@ -99,9 +99,7 @@ fn profile(doc: &ClayDocument) -> Vec<Option<f32>> {
 /// left exactly as it would have been.
 #[test]
 fn a_field_stroke_is_unchanged_by_a_loaded_stamp() {
-    let (Some(mut plain), Some(mut stamped)) = (document(), document()) else {
-        return;
-    };
+    let (mut plain, mut stamped) = (document(), document());
     for doc in [&mut plain, &mut stamped] {
         doc.set_combine(CombineSettings::for_strokes());
     }
@@ -125,9 +123,7 @@ fn a_field_stroke_is_unchanged_by_a_loaded_stamp() {
 /// otherwise the flag is decorative and every brush is stamped.
 #[test]
 fn a_brush_not_set_to_use_a_stamp_ignores_the_loaded_one() {
-    let (Some(mut without), Some(mut with_loaded)) = (document(), document()) else {
-        return;
-    };
+    let (mut without, mut with_loaded) = (document(), document());
     with_loaded.set_alpha(Some(rings(64)));
 
     let _ = without.apply_stroke(ToolKind::Padrao, brush(false), &arc(), [false; 3]);
@@ -155,9 +151,7 @@ fn a_brush_not_set_to_use_a_stamp_ignores_the_loaded_one() {
 fn a_stamp_changes_what_a_grid_stroke_leaves() {
     let mut surfaces = Vec::new();
     for stamped in [false, true] {
-        let Some(mut doc) = document() else {
-            return;
-        };
+        let mut doc = document();
         let source = doc.scene().active.expect("the starting form");
         doc.convert_layer(Direction::SdfToVoxel, 0.04, 1)
             .expect("rasterize the starting form");
@@ -193,9 +187,7 @@ fn a_stamp_changes_what_a_mesh_stroke_leaves() {
     let path = std::env::temp_dir().join("clayspace-alpha-mesh.obj");
     let mut docs = Vec::new();
     for stamped in [false, true] {
-        let Some(mut doc) = document() else {
-            return;
-        };
+        let mut doc = document();
         if !stamped {
             let _ = std::fs::remove_file(&path);
             doc.export_mesh(&path, ExportSettings::default())

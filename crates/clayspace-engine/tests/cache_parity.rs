@@ -21,11 +21,11 @@ const DIRECTION: [f32; 3] = [0.0, 0.0, -1.0];
 /// A voxel is 0.02, so agreement closer than this is agreement.
 const VOXEL: f32 = 0.02;
 
-fn document() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
+fn document() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
     ClayDocument::new(policy)
         .and_then(ClayDocument::with_starting_form)
-        .ok()
+        .expect("a document with a starting form")
 }
 
 /// Where the document says the surface is, and where the cache says it is.
@@ -61,9 +61,7 @@ fn stroke(document: &mut ClayDocument, tool: ToolKind, brush: BrushSettings) {
 
 #[test]
 fn the_default_brush_leaves_the_cache_agreeing_with_the_document() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     stroke(&mut document, ToolKind::Padrao, BrushSettings::default());
 
     let (in_document, in_cache) = both(&document);
@@ -80,9 +78,7 @@ fn the_default_brush_leaves_the_cache_agreeing_with_the_document() {
 
 #[test]
 fn a_stroke_moves_the_cache_and_not_only_the_document() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let (_, before) = both(&document);
     stroke(&mut document, ToolKind::Padrao, BrushSettings::default());
     let (_, after) = both(&document);
@@ -109,9 +105,7 @@ fn every_brush_the_interface_can_produce_moves_the_cache() {
     // What the viewport needs is only this: a stroke a user can see must move
     // the cache by something a user can see. The shipped defect failed it
     // outright, moving the cache by nothing at all.
-    let Some(_) = document() else {
-        return;
-    };
+    let _ = document();
 
     let mut worst: Option<(String, f32)> = None;
     // Sizes and strengths whose dab is larger than a voxel. Below that the
@@ -135,7 +129,7 @@ fn every_brush_the_interface_can_produce_moves_the_cache() {
                     },
                     alpha: false,
                 };
-                let mut document = document().expect("a document");
+                let mut document = document();
                 let (_, before) = both(&document);
                 stroke(&mut document, ToolKind::Padrao, brush);
                 let (_, after) = both(&document);
@@ -166,12 +160,10 @@ fn the_jitter_ceiling_is_where_the_engine_actually_breaks() {
     // Guards the constant from both sides. If ClayCore fixes the brick
     // evaluation, `the_engine_still_disagrees_about_jitter` starts failing and
     // the ceiling can be raised; this one checks the ceiling itself is safe.
-    let Some(_) = document() else {
-        return;
-    };
+    let _ = document();
 
     let gap_at = |noise: f32| {
-        let mut document = document().expect("a document");
+        let mut document = document();
         let brush = BrushSettings {
             shaping: Shaping {
                 noise,
@@ -199,11 +191,9 @@ fn the_engine_still_disagrees_about_jitter() {
     // The reason `MAX_JITTER` exists, asserted rather than described. This is
     // the test that should fail first when ClayCore fixes the brick path —
     // and its failure is the signal to raise the ceiling and give Ruído back.
-    let Some(_) = document() else {
-        return;
-    };
+    let _ = document();
 
-    let _document = document().expect("a document");
+    let _document = document();
     let brush = BrushSettings {
         shaping: Shaping {
             noise: 0.15,
@@ -296,10 +286,8 @@ fn a_dab_smaller_than_a_voxel_is_invisible() {
     // If this ever starts failing the cache got finer, and
     // `every_brush_the_interface_can_produce_moves_the_cache` should widen to
     // cover the small brushes again.
-    let Some(_) = document() else {
-        return;
-    };
-    let mut document = document().expect("a document");
+    let _ = document();
+    let mut document = document();
     let (_, before) = both(&document);
     stroke(
         &mut document,

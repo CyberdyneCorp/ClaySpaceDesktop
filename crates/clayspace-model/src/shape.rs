@@ -68,6 +68,14 @@ impl ShapeParameter {
     }
 
     pub fn clamp(&self, value: f32) -> f32 {
+        // NaN separately, because `f32::clamp` answers NaN for a NaN input —
+        // it has no ordering to compare against the bounds with. Without this
+        // a hand-edited or corrupted side-car row reading `nan` parses as a
+        // valid f32, survives `sanitised`, and reaches the engine as the
+        // radius of a placed sphere.
+        if value.is_nan() {
+            return self.default;
+        }
         value.clamp(self.min, self.max)
     }
 }
@@ -723,5 +731,18 @@ mod tests {
     fn a_size_out_of_range_is_brought_back_in() {
         let clamped = Shape::Sphere.sanitised(&[-4.0]);
         assert_eq!(clamped, vec![RADIUS.min]);
+    }
+
+    /// A size that is not a number at all, which `f32::clamp` passes straight
+    /// through: it has nothing to order NaN against, so it answers NaN. The
+    /// route in is a side-car row — `"nan".parse::<f32>()` succeeds — and the
+    /// route out was the engine, which is not where a value like this should
+    /// be discovered.
+    #[test]
+    fn a_size_that_is_not_a_number_falls_back_to_the_default() {
+        assert_eq!(Shape::Sphere.sanitised(&[f32::NAN]), vec![RADIUS.default]);
+        for value in Shape::Box.sanitised(&[f32::NAN; 3]) {
+            assert!(value.is_finite(), "a NaN reached the parameter block");
+        }
     }
 }

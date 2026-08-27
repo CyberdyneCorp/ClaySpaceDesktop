@@ -21,12 +21,13 @@ use clayspace_model::{
 };
 
 /// A sphere with a patch of its near face frozen.
-fn masked() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
+fn masked() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
     let mut document = ClayDocument::new(policy)
         .and_then(ClayDocument::with_starting_form)
-        .ok()?;
-    let at = SculptModel::pick(&document, [0.0, 0.0, 4.0], [0.0, 0.0, -1.0])?;
+        .expect("a document with a starting form");
+    let at = SculptModel::pick(&document, [0.0, 0.0, 4.0], [0.0, 0.0, -1.0])
+        .expect("the starting form is under the ray");
     let samples: Vec<GestureSample> = (0..4)
         .map(|i| GestureSample {
             position: at,
@@ -45,8 +46,8 @@ fn masked() -> Option<ClayDocument> {
             &samples,
             [false; 3],
         )
-        .ok()?;
-    Some(document)
+        .expect("paint the mask");
+    document
 }
 
 /// The middle of the frozen patch, a point on its shoulder, and one clear of
@@ -70,9 +71,7 @@ fn cells(document: &ClayDocument) -> usize {
 
 #[test]
 fn inverter_frees_what_was_frozen_and_freezes_what_was_free() {
-    let Some(mut document) = masked() else {
-        return;
-    };
+    let mut document = masked();
     let [centre, _, outside] = weights(&document);
     assert!(centre > 0.9 && outside < 0.01, "the fixture is not a patch");
 
@@ -97,9 +96,7 @@ fn inverter_reaches_only_where_the_mask_has_been() {
     // the operation finite, and is why the bounded complement exists as a
     // separate entry for the "everything except this" a sculptor usually
     // means.
-    let Some(mut document) = masked() else {
-        return;
-    };
+    let mut document = masked();
     document.apply_mask_op(MaskOp::Invert).expect("invert");
     let far = document.mask_at(&[[0.0, 0.0, -1.0]]).expect("still masked")[0];
     assert!(
@@ -113,14 +110,12 @@ fn inverter_reaches_only_where_the_mask_has_been() {
 
 #[test]
 fn expandir_grows_the_patch_and_the_amount_reaches_it() {
-    let Some(base) = masked() else {
-        return;
-    };
+    let base = masked();
     let before = cells(&base);
 
-    let mut small = masked().expect("fixture");
+    let mut small = masked();
     small.apply_mask_op(MaskOp::Expand(1)).expect("expand");
-    let mut large = masked().expect("fixture");
+    let mut large = masked();
     large.apply_mask_op(MaskOp::Expand(4)).expect("expand");
 
     assert!(
@@ -145,14 +140,12 @@ fn expandir_grows_the_patch_and_the_amount_reaches_it() {
 
 #[test]
 fn contrair_shrinks_the_patch_and_the_amount_reaches_it() {
-    let Some(base) = masked() else {
-        return;
-    };
+    let base = masked();
     let before = cells(&base);
 
-    let mut small = masked().expect("fixture");
+    let mut small = masked();
     small.apply_mask_op(MaskOp::Contract(1)).expect("contract");
-    let mut large = masked().expect("fixture");
+    let mut large = masked();
     large.apply_mask_op(MaskOp::Contract(4)).expect("contract");
 
     assert!(
@@ -170,9 +163,7 @@ fn contrair_shrinks_the_patch_and_the_amount_reaches_it() {
 
 #[test]
 fn expanding_and_contracting_are_opposites() {
-    let Some(mut document) = masked() else {
-        return;
-    };
+    let mut document = masked();
     let before = cells(&document);
     document.apply_mask_op(MaskOp::Expand(3)).expect("expand");
     document
@@ -198,15 +189,13 @@ fn suavizar_softens_the_patch_and_the_amount_reaches_it() {
     // its neighbours, so the middle of a hard patch comes down and the
     // boundary spreads — and running it again does more of both, which is what
     // says the panel's number arrived.
-    let Some(base) = masked() else {
-        return;
-    };
+    let base = masked();
     let [centre_before, ..] = weights(&base);
     let before = cells(&base);
 
-    let mut once = masked().expect("fixture");
+    let mut once = masked();
     once.apply_mask_op(MaskOp::Smooth(1)).expect("smooth");
-    let mut lots = masked().expect("fixture");
+    let mut lots = masked();
     lots.apply_mask_op(MaskOp::Smooth(8)).expect("smooth");
 
     let [centre_once, ..] = weights(&once);
@@ -241,9 +230,7 @@ fn the_bounded_complement_inverts_inside_the_patch_and_leaves_the_rest() {
     // this one is bounded by what the mask already covers, so it is
     // "everything except this, *here*" rather than "everything the mask has
     // ever allocated".
-    let Some(mut document) = masked() else {
-        return;
-    };
+    let mut document = masked();
     document
         .apply_mask_op(MaskOp::InvertWithinBounds)
         .expect("bounded complement");
@@ -268,9 +255,7 @@ fn the_bounded_complement_inverts_inside_the_patch_and_leaves_the_rest() {
 fn the_bounded_complement_on_nothing_is_not_an_error() {
     // It has nothing to be the complement of, and refusing would be a dialogue
     // about an operation that would have done nothing anyway.
-    let Some(mut document) = masked() else {
-        return;
-    };
+    let mut document = masked();
     document.apply_mask_op(MaskOp::Clear).expect("clear");
     // A mask that exists and is empty, rather than no mask at all.
     document.apply_mask_op(MaskOp::Invert).unwrap_err();
@@ -280,9 +265,7 @@ fn the_bounded_complement_on_nothing_is_not_an_error() {
 
 #[test]
 fn limpar_leaves_nothing_frozen() {
-    let Some(mut document) = masked() else {
-        return;
-    };
+    let mut document = masked();
     assert!(document.mask_state().is_active());
     document.apply_mask_op(MaskOp::Clear).expect("clear");
     assert!(!document.mask_state().is_active());
@@ -302,8 +285,8 @@ fn reach(document: &ClayDocument) -> f32 {
         .expect("the near face")
 }
 
-fn extruded(side: ExtrudeSide, thickness: f32) -> Option<(ClayDocument, f32, f32)> {
-    let mut document = masked()?;
+fn extruded(side: ExtrudeSide, thickness: f32) -> (ClayDocument, f32, f32) {
+    let mut document = masked();
     let before = reach(&document);
     document
         .extrude_mask(ExtrudeSettings {
@@ -314,14 +297,12 @@ fn extruded(side: ExtrudeSide, thickness: f32) -> Option<(ClayDocument, f32, f32
         })
         .expect("the extrusion was refused");
     let after = reach(&document);
-    Some((document, before, after))
+    (document, before, after)
 }
 
 #[test]
 fn extrudar_puts_the_patch_in_a_layer_of_its_own() {
-    let Some(mut document) = masked() else {
-        return;
-    };
+    let mut document = masked();
     let before = document.scene().layers.len();
     document
         .extrude_mask(ExtrudeSettings::default())
@@ -343,11 +324,9 @@ fn extrudar_puts_the_patch_in_a_layer_of_its_own() {
 
 #[test]
 fn the_three_extrusion_sides_put_the_wall_in_three_places() {
-    let Some((_, base, out)) = extruded(ExtrudeSide::Outward, 0.2) else {
-        return;
-    };
-    let (_, _, inward) = extruded(ExtrudeSide::Inward, 0.2).expect("fixture");
-    let (_, _, centred) = extruded(ExtrudeSide::Centred, 0.2).expect("fixture");
+    let (_, base, out) = extruded(ExtrudeSide::Outward, 0.2);
+    let (_, _, inward) = extruded(ExtrudeSide::Inward, 0.2);
+    let (_, _, centred) = extruded(ExtrudeSide::Centred, 0.2);
 
     assert!(
         out > base + 0.1,
@@ -386,10 +365,8 @@ fn the_three_extrusion_sides_put_the_wall_in_three_places() {
 fn the_extrusion_thickness_reaches_the_wall() {
     // The setting existed and had no control anywhere in the interface, so
     // every extrusion the application could make was 0.08 thick.
-    let Some((_, base, thin)) = extruded(ExtrudeSide::Outward, 0.05) else {
-        return;
-    };
-    let (_, _, thick) = extruded(ExtrudeSide::Outward, 0.2).expect("fixture");
+    let (_, base, thin) = extruded(ExtrudeSide::Outward, 0.05);
+    let (_, _, thick) = extruded(ExtrudeSide::Outward, 0.2);
     assert!(
         thick > thin + 0.05,
         "a 0.2 wall reached {thick} and a 0.05 wall reached {thin} from {base}"
@@ -402,9 +379,7 @@ fn a_rounded_and_smoothed_rim_is_accepted_and_still_a_wall() {
     // raycast down the middle can see — they shape the *rim* — so this holds
     // the pair to being accepted and to not destroying the wall, which is what
     // a silently-ignored or silently-fatal parameter would look like.
-    let Some(mut document) = masked() else {
-        return;
-    };
+    let mut document = masked();
     let base = reach(&document);
     document
         .extrude_mask(ExtrudeSettings {
@@ -423,9 +398,7 @@ fn a_rounded_and_smoothed_rim_is_accepted_and_still_a_wall() {
 
 #[test]
 fn extruding_an_empty_mask_is_refused_rather_than_making_an_empty_layer() {
-    let Some(mut document) = masked() else {
-        return;
-    };
+    let mut document = masked();
     document.apply_mask_op(MaskOp::Clear).expect("clear");
     let layers = document.scene().layers.len();
     document
@@ -477,12 +450,8 @@ fn extrudar_pulls_a_wall_off_a_grid() {
     // bound: a grid already knows which of its cells are on its surface, so it
     // needs no sampled field. The document's verb was the only one wired, and
     // it refused a grid.
-    let Some(policy) = BackendPolicy::discover(None).ok() else {
-        return;
-    };
-    let Ok(mut document) = ClayDocument::new(policy) else {
-        return;
-    };
+    let policy = BackendPolicy::discover(None).expect("discover backends");
+    let mut document = ClayDocument::new(policy).expect("a document");
     document.add_voxel_layer("Voxels", 0.05).expect("a grid");
     document
         .apply_stroke(
@@ -542,9 +511,7 @@ fn extrudar_on_a_mesh_says_what_to_do_instead() {
     // which samples a field a mesh layer does not have, nor a mesh-sculptor
     // equivalent. The refusal has to name the way round rather than being a
     // click that does nothing.
-    let Some(mut document) = masked() else {
-        return;
-    };
+    let mut document = masked();
     document
         .convert_layer(Direction::SdfToMesh, 0.05, 0)
         .expect("into a mesh");

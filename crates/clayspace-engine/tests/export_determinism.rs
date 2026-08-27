@@ -18,11 +18,11 @@ use clayspace_model::{
     BrushSettings, ExchangeModel, ExportSettings, GestureSample, SculptModel, ToolKind,
 };
 
-fn sculpted() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
+fn sculpted() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
     let mut document = ClayDocument::new(policy)
         .and_then(ClayDocument::with_starting_form)
-        .ok()?;
+        .expect("a document with a starting form");
     for at in [[0.3f32, 0.1, 0.5], [-0.2, 0.4, 0.45]] {
         document
             .apply_stroke(
@@ -35,9 +35,9 @@ fn sculpted() -> Option<ClayDocument> {
                 }],
                 [false; 3],
             )
-            .ok()?;
+            .expect("sculpt");
     }
-    Some(document)
+    document
 }
 
 fn probes() -> Vec<[f32; 3]> {
@@ -65,9 +65,7 @@ fn counts(document: &ClayDocument) -> (usize, usize) {
 
 #[test]
 fn the_exported_geometry_is_the_same_every_time() {
-    let Some(document) = sculpted() else {
-        return;
-    };
+    let document = sculpted();
     let first = counts(&document);
     for run in 1..4 {
         assert_eq!(counts(&document), first, "run {run} meshed differently");
@@ -78,9 +76,7 @@ fn the_exported_geometry_is_the_same_every_time() {
 fn evaluating_on_any_backend_leaves_the_geometry_alone() {
     // The claim task 2.7 is really about: which backend evaluated does not
     // change what the document is or what comes out of it.
-    let Some(document) = sculpted() else {
-        return;
-    };
+    let document = sculpted();
     let Ok(available) = claycore::backends() else {
         return;
     };
@@ -103,9 +99,7 @@ fn the_written_file_is_not_byte_stable_and_that_is_recorded_rather_than_asserted
     // assertion would make an unrelated change to the mesher look like a
     // regression here, and turning it into `assert_eq!` would make it fail on
     // whatever machine rounds differently.
-    let Some(mut document) = sculpted() else {
-        return;
-    };
+    let mut document = sculpted();
     let write = |document: &mut ClayDocument, tag: &str| -> u64 {
         let path = std::env::temp_dir().join(format!("clayspace-determinism-{tag}.obj"));
         let _ = std::fs::remove_file(&path);

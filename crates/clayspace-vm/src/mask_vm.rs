@@ -151,6 +151,15 @@ mod tests {
     struct FakeMask {
         recorded: Rc<RefCell<Recorded>>,
         cells: usize,
+        /// Set to make the model refuse, as a mesh layer with no field to
+        /// extrude from does.
+        refuse: Option<&'static str>,
+    }
+
+    impl FakeMask {
+        fn refusal(&self) -> Option<ModelError> {
+            self.refuse.map(ModelError::engine)
+        }
     }
 
     impl MaskModel for FakeMask {
@@ -162,11 +171,17 @@ mod tests {
         }
 
         fn apply_mask_op(&mut self, op: MaskOp) -> Result<(), ModelError> {
+            if let Some(refusal) = self.refusal() {
+                return Err(refusal);
+            }
             self.recorded.borrow_mut().ops.push(op);
             Ok(())
         }
 
         fn extrude_mask(&mut self, settings: ExtrudeSettings) -> Result<(), ModelError> {
+            if let Some(refusal) = self.refusal() {
+                return Err(refusal);
+            }
             self.recorded.borrow_mut().extrusions.push(settings);
             Ok(())
         }
@@ -177,6 +192,7 @@ mod tests {
         let model = FakeMask {
             recorded: recorded.clone(),
             cells: 4096,
+            refuse: None,
         };
         (MaskViewModel::new(Box::new(model)), recorded)
     }
@@ -253,6 +269,7 @@ mod tests {
         let model = FakeMask {
             recorded: recorded.clone(),
             cells: 0,
+            refuse: None,
         };
         let mut vm = MaskViewModel::new(Box::new(model));
         vm.dispatch(&Command::ApplyMaskOp(MaskOp::Invert));
@@ -266,5 +283,48 @@ mod tests {
         // pressing it should do the obvious nothing.
         vm.dispatch(&Command::ApplyMaskOp(MaskOp::Clear));
         assert_eq!(recorded.borrow().ops, vec![MaskOp::Clear]);
+    }
+
+    /// The ViewModel's own guard is not the only refusal there is. A mask can
+    /// be present and painted and the model still say no — a mesh layer has
+    /// no field to extrude from — and that answer has to arrive in the sculptor's
+    /// own words rather than being replaced by silence.
+    #[test]
+    fn a_refusal_from_the_model_arrives_in_its_own_words() {
+        const NO_FIELD: &str = "uma camada de malha não tem campo para extrudar";
+
+        let recorded = Rc::new(RefCell::new(Recorded::default()));
+        let model = FakeMask {
+            recorded: recorded.clone(),
+            cells: 4096,
+            refuse: Some(NO_FIELD),
+        };
+        let mut vm = MaskViewModel::new(Box::new(model));
+
+        vm.dispatch(&Command::ExtrudeMask(ExtrudeSettings::default()));
+        assert_eq!(
+            vm.notice().get().as_deref(),
+            Some(NO_FIELD),
+            "the model's refusal was dropped on the way to the status area"
+        );
+
+        vm.dispatch(&Command::ApplyMaskOp(MaskOp::Expand(1)));
+        assert_eq!(vm.notice().get().as_deref(), Some(NO_FIELD));
+    }
+
+    /// And the other direction: a run that succeeds takes the last refusal
+    /// down, so the status area is not still explaining something that has
+    /// since been put right.
+    #[test]
+    fn a_run_that_works_clears_what_the_last_one_said() {
+        let (mut vm, _) = fixture();
+        vm.notice.set(Some("de antes".into()));
+
+        vm.dispatch(&Command::ApplyMaskOp(MaskOp::Invert));
+        assert!(vm.notice().get().is_none(), "a stale refusal was left up");
+
+        vm.notice.set(Some("de antes".into()));
+        vm.dispatch(&Command::ExtrudeMask(ExtrudeSettings::default()));
+        assert!(vm.notice().get().is_none());
     }
 }

@@ -19,11 +19,11 @@ fn scratch(name: &str) -> PathBuf {
     path
 }
 
-fn fresh_document() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
+fn fresh_document() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
     ClayDocument::new(policy)
         .and_then(ClayDocument::with_starting_form)
-        .ok()
+        .expect("a document with a starting form")
 }
 
 /// Where the surface sits along a direction — the fingerprint used throughout.
@@ -55,9 +55,7 @@ fn dab(document: &mut ClayDocument, at: [f32; 3]) {
 
 #[test]
 fn a_sculpt_survives_a_save_and_an_open() {
-    let Some(mut document) = fresh_document() else {
-        return;
-    };
+    let mut document = fresh_document();
     let at = [0.5f32, 0.3, 0.8124];
     dab(&mut document, at);
     let sculpted = radius_along(&document, at).expect("the dab is there");
@@ -66,7 +64,7 @@ fn a_sculpt_survives_a_save_and_an_open() {
     document.save(&path).expect("save");
     assert!(path.exists(), "save reported success and wrote nothing");
 
-    let mut reopened = fresh_document().expect("a second document");
+    let mut reopened = fresh_document();
     reopened.open(&path).expect("open");
 
     let restored = radius_along(&reopened, at).expect("the surface came back");
@@ -80,9 +78,7 @@ fn a_sculpt_survives_a_save_and_an_open() {
 fn a_failed_open_leaves_the_work_alone() {
     // The one that matters. Everything else here is recoverable by trying
     // again; this is not.
-    let Some(mut document) = fresh_document() else {
-        return;
-    };
+    let mut document = fresh_document();
     let at = [0.5f32, 0.3, 0.8124];
     dab(&mut document, at);
     let before = radius_along(&document, at).expect("the dab is there");
@@ -111,9 +107,7 @@ fn a_failed_open_leaves_the_work_alone() {
 
 #[test]
 fn a_file_that_is_not_a_document_is_refused_readably() {
-    let Some(mut document) = fresh_document() else {
-        return;
-    };
+    let mut document = fresh_document();
     let path = scratch("not-a-document.clayspace");
     std::fs::write(&path, b"this is not a ClaySpace document").expect("write");
 
@@ -131,9 +125,7 @@ fn a_file_that_is_not_a_document_is_refused_readably() {
 
 #[test]
 fn opening_replaces_everything_that_was_there() {
-    let Some(mut first) = fresh_document() else {
-        return;
-    };
+    let mut first = fresh_document();
     // Two layers in the saved document, one in the one that opens it.
     first
         .add_layer("Detalhe", clayspace_model::Representation::Sdf)
@@ -142,7 +134,7 @@ fn opening_replaces_everything_that_was_there() {
     let path = scratch("two-layers.clayspace");
     first.save(&path).expect("save");
 
-    let mut second = fresh_document().expect("a second document");
+    let mut second = fresh_document();
     assert_eq!(second.scene().layers.len(), 1);
     second.open(&path).expect("open");
     assert_eq!(
@@ -157,14 +149,12 @@ fn a_reopened_document_can_be_sculpted_and_undone() {
     // Opening has to leave a working document, not a read-only picture of one.
     // Undo in particular: it must not reach back past the open into a document
     // the user never saw.
-    let Some(mut document) = fresh_document() else {
-        return;
-    };
+    let mut document = fresh_document();
     dab(&mut document, [0.5, 0.3, 0.8124]);
     let path = scratch("then-sculpt.clayspace");
     document.save(&path).expect("save");
 
-    let mut reopened = fresh_document().expect("a second document");
+    let mut reopened = fresh_document();
     reopened.open(&path).expect("open");
     assert!(
         !reopened.history().can_undo,
@@ -191,9 +181,7 @@ fn a_reopened_document_can_be_sculpted_and_undone() {
 
 #[test]
 fn starting_over_gives_back_the_starting_form() {
-    let Some(mut document) = fresh_document() else {
-        return;
-    };
+    let mut document = fresh_document();
     let at = [0.5f32, 0.3, 0.8124];
     dab(&mut document, at);
     let sculpted = radius_along(&document, at).expect("surface");
@@ -215,7 +203,7 @@ fn starting_over_gives_back_the_starting_form() {
     // hold is that a reset leaves it looking exactly like a document that was
     // just made, so the two are compared rather than one being asserted empty.
     // What the *user* can undo is the ViewModel's stack, not this one.
-    let brand_new = fresh_document().expect("a fresh document");
+    let brand_new = fresh_document();
     assert_eq!(
         document.history().depth,
         brand_new.history().depth,
@@ -231,9 +219,7 @@ fn a_reopened_document_keeps_its_layers_as_they_were() {
     // — the half that is a correctness bug rather than a cosmetic one — lost
     // stack order, so a reopened document could evaluate differently from the
     // one saved.
-    let Some(mut document) = fresh_document() else {
-        return;
-    };
+    let mut document = fresh_document();
 
     let detail = document
         .add_layer("Detalhe_fino", clayspace_model::Representation::Sdf)
@@ -289,9 +275,7 @@ fn voxel_work_survives_a_save() {
     // what the layer was — and nothing voxel was ever written to the file.
     // Silent data loss: the sculptor saw their work, saved, reopened, and it
     // was gone.
-    let Some(mut document) = fresh_document() else {
-        return;
-    };
+    let mut document = fresh_document();
     document
         .add_voxel_layer("Voxels", 0.05)
         .expect("a voxel layer");

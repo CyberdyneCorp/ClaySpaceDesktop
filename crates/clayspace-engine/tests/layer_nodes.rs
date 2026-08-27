@@ -14,9 +14,9 @@ use clayspace_engine::claycore::{Document, Item, LayerId};
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{ArmatureModel, DocumentModel};
 
-fn document() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
-    ClayDocument::new(policy).ok()
+fn document() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
+    ClayDocument::new(policy).expect("a document")
 }
 
 fn scratch(name: &str) -> std::path::PathBuf {
@@ -28,12 +28,8 @@ fn scratch(name: &str) -> std::path::PathBuf {
 
 #[test]
 fn an_empty_layer_enumerates_to_nothing() {
-    let Ok(mut doc) = Document::new() else {
-        return;
-    };
-    let Ok(layer) = doc.add_sdf_layer("L") else {
-        return;
-    };
+    let mut doc = Document::new().expect("a document");
+    let layer = doc.add_sdf_layer("L").expect("an sdf layer");
     assert_eq!(doc.layer_node_count(layer).expect("a count"), 0);
     assert!(doc.layer_nodes(layer).expect("an enumeration").is_empty());
 }
@@ -43,12 +39,8 @@ fn nodes_come_back_in_evaluation_order() {
     // Index 0 is evaluated first, which is the order the stack is placed
     // against — so an enumeration that reordered them would be worse than
     // none.
-    let Ok(mut doc) = Document::new() else {
-        return;
-    };
-    let Ok(layer) = doc.add_sdf_layer("L") else {
-        return;
-    };
+    let mut doc = Document::new().expect("a document");
+    let layer = doc.add_sdf_layer("L").expect("an sdf layer");
     let mut placed = Vec::new();
     for offset in 0..4 {
         let mut item = Item::sphere(0.2).expect("a sphere");
@@ -68,12 +60,8 @@ fn nodes_come_back_in_evaluation_order() {
 #[test]
 fn an_index_past_the_end_is_refused_rather_than_wrapped() {
     // What lets a host walk to the end without a sentinel.
-    let Ok(mut doc) = Document::new() else {
-        return;
-    };
-    let Ok(layer) = doc.add_sdf_layer("L") else {
-        return;
-    };
+    let mut doc = Document::new().expect("a document");
+    let layer = doc.add_sdf_layer("L").expect("an sdf layer");
     let item = Item::sphere(0.2).expect("a sphere");
     doc.add_item(layer, &item).expect("place it");
 
@@ -86,12 +74,8 @@ fn an_index_past_the_end_is_refused_rather_than_wrapped() {
 fn a_layer_with_no_sdf_content_counts_zero() {
     // A voxel layer holds a grid rather than nodes. Zero is the honest answer
     // and the one the evaluation entry points give, so it is not an error.
-    let Ok(mut doc) = Document::new() else {
-        return;
-    };
-    let Ok((layer, _)) = doc.add_voxel_layer("V", 0.05) else {
-        return;
-    };
+    let mut doc = Document::new().expect("a document");
+    let (layer, _) = doc.add_voxel_layer("V", 0.05).expect("a voxel layer");
     assert_eq!(doc.layer_node_count(layer).expect("a count"), 0);
 }
 
@@ -108,12 +92,8 @@ fn a_rig_is_found_past_a_long_gap_in_the_ids() {
     // Built through the engine's own document because the host has no verb for
     // "remove one item": what matters is that a *file* shaped like this loads,
     // however it came to be shaped that way.
-    let Ok(mut doc) = Document::new() else {
-        return;
-    };
-    let Ok(layer) = doc.add_sdf_layer("Forma") else {
-        return;
-    };
+    let mut doc = Document::new().expect("a document");
+    let layer = doc.add_sdf_layer("Forma").expect("an sdf layer");
     let mut placed = Vec::new();
     for i in 0..40 {
         let mut item = Item::sphere(0.2).expect("a sphere");
@@ -149,9 +129,7 @@ fn a_rig_is_found_past_a_long_gap_in_the_ids() {
     let path = scratch("gap");
     doc.save(&path).expect("save");
 
-    let Some(mut host) = document() else {
-        return;
-    };
+    let mut host = document();
     host.open(&path).expect("open");
     let tree = host
         .armature()
@@ -163,9 +141,7 @@ fn a_rig_is_found_past_a_long_gap_in_the_ids() {
 #[test]
 fn enumeration_finds_the_same_rig_a_probe_would_on_a_clean_document() {
     // The ordinary case, so the replacement is not only better in the corner.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     document.begin_armature([0.0, 0.0, 0.0], 0.3).expect("root");
     document
         .add_zsphere(0, [0.5, 0.0, 0.0], 0.2, false)
