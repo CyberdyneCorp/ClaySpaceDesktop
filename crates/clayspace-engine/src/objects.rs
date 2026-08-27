@@ -434,12 +434,39 @@ mod tests {
     /// A short or wild list is brought into range rather than panicking on an
     /// index, because a document written by another version of this
     /// application is a thing that happens.
+    ///
+    /// Both halves, and the second is the one that matters: not panicking is
+    /// cheap, and a NaN that sails through the clamp and out to the engine
+    /// panics nothing here and ruins the layer there. `nan` parses as a
+    /// perfectly good f32, so a hand-edited `.objects` row is enough.
     #[test]
-    fn a_wrong_parameter_list_does_not_panic() {
+    fn a_wrong_parameter_list_is_brought_into_range_rather_than_panicking() {
+        let hostile: [&[f32]; 5] = [
+            &[],
+            &[f32::NAN; 8],
+            &[-100.0; 8],
+            &[f32::INFINITY; 8],
+            &[f32::NEG_INFINITY; 8],
+        ];
         for shape in Shape::ALL {
-            let _ = primitive_of(shape, &[]);
-            let _ = primitive_of(shape, &[f32::NAN; 8]);
-            let _ = primitive_of(shape, &[-100.0; 8]);
+            for given in hostile {
+                for (value, parameter) in shape.sanitised(given).iter().zip(shape.parameters()) {
+                    assert!(
+                        (parameter.min..=parameter.max).contains(value),
+                        "{shape:?}'s {} came out of {given:?} as {value}",
+                        parameter.key
+                    );
+                }
+                // And whatever the mapping derives from them — a capsule's two
+                // end points, a cone's resolved sine and cosine — is finite
+                // too, since that is the block the engine actually reads.
+                for value in primitive_of(shape, given).params() {
+                    assert!(
+                        value.is_finite(),
+                        "{shape:?} handed the engine {value} from {given:?}"
+                    );
+                }
+            }
         }
     }
 

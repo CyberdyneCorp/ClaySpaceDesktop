@@ -11,11 +11,11 @@
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{BrushSettings, Direction, GestureSample, SculptModel, ToolKind};
 
-fn sphere() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
+fn sphere() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
     ClayDocument::new(policy)
         .and_then(ClayDocument::with_starting_form)
-        .ok()
+        .expect("a document with a starting form")
 }
 
 /// A short sweep across the near face of the form, taken from where it
@@ -87,12 +87,8 @@ fn run(document: &mut ClayDocument, invert: bool) {
 
 #[test]
 fn an_inverted_stroke_digs_into_a_field() {
-    let Some(mut upright) = sphere() else {
-        return;
-    };
-    let Some(mut inverted) = sphere() else {
-        return;
-    };
+    let mut upright = sphere();
+    let mut inverted = sphere();
 
     run(&mut upright, false);
     run(&mut inverted, true);
@@ -113,12 +109,8 @@ fn an_inverted_stroke_digs_into_a_field() {
 
 #[test]
 fn an_inverted_stroke_digs_into_a_mesh() {
-    let Some(mut upright) = sphere() else {
-        return;
-    };
-    let Some(mut inverted) = sphere() else {
-        return;
-    };
+    let mut upright = sphere();
+    let mut inverted = sphere();
     for document in [&mut upright, &mut inverted] {
         document
             .convert_layer(Direction::SdfToMesh, 0.02, 0)
@@ -144,12 +136,8 @@ fn an_inverted_stroke_digs_into_a_mesh() {
 
 #[test]
 fn an_inverted_stroke_erases_a_grid() {
-    let Some(policy) = BackendPolicy::discover(None).ok() else {
-        return;
-    };
-    let Ok(mut document) = ClayDocument::new(policy) else {
-        return;
-    };
+    let policy = BackendPolicy::discover(None).expect("discover backends");
+    let mut document = ClayDocument::new(policy).expect("a document");
     document.add_voxel_layer("Voxels", 0.05).expect("a grid");
 
     let ridge: Vec<GestureSample> = (0..9)

@@ -324,6 +324,31 @@ fn placing_on_a_grid_says_why_it_cannot() {
     assert!(calls.borrow().placed.is_empty());
 }
 
+/// The other half of the same rule, and the one the ViewModel cannot decide
+/// for itself: a layer this build has no reason to think is closed, which the
+/// model refuses anyway.
+#[test]
+fn a_placement_the_model_refuses_says_what_it_said() {
+    const LOCKED: &str = "esta camada está bloqueada";
+
+    let calls = Rc::new(RefCell::new(Calls::default()));
+    let mut model = FakeObjects::new(calls.clone());
+    model.refuse = Some(LOCKED);
+    let mut vm = ObjectViewModel::new(Box::new(model));
+
+    send(&mut vm, Command::PlaceShape);
+    assert_eq!(
+        vm.notice().get().as_deref(),
+        Some(LOCKED),
+        "the model's own words were dropped"
+    );
+    assert!(calls.borrow().placed.is_empty());
+    assert!(
+        vm.target().get().is_none(),
+        "the manipulator went to an object that was never placed"
+    );
+}
+
 #[test]
 fn a_placed_shape_is_selected_and_the_manipulator_follows() {
     let (mut vm, _) = viewmodel();
@@ -539,13 +564,21 @@ fn move_and_rotate_offer_what_they_always_did() {
     }
 }
 
+/// A drag the model refuses has to reach the status area. Leaving the object
+/// where it was and saying nothing reads as the manipulator having broken,
+/// and the sculptor's next move is to drag it again.
 #[test]
 fn a_refused_drag_is_stated_rather_than_silent() {
+    const LOCKED: &str = "esta camada está bloqueada";
+
     let calls = Rc::new(RefCell::new(Calls::default()));
     let mut model = FakeObjects::new(calls.clone());
     model.objects.push(an_object(1, Shape::Box, [0.0; 3]));
     model.selected = Some(model.objects[0].id);
     let id = model.objects[0].id;
+    // The layer is locked from here on: every edit the drag asks for comes
+    // back refused.
+    model.refuse = Some(LOCKED);
     let mut vm = ObjectViewModel::new(Box::new(model));
 
     send(
@@ -556,9 +589,26 @@ fn a_refused_drag_is_stated_rather_than_silent() {
         &mut vm,
         Command::BeginGizmoDrag(GizmoHandle::Centre, [0.0; 3], [0.0, 0.0, 1.0]),
     );
-    // The layer is locked from here on.
-    send(&mut vm, Command::SelectObject(Some(id)));
+    // Taking hold of a handle asks the model for nothing, so there is nothing
+    // to refuse yet and nothing to say.
     assert!(vm.notice().get().is_none(), "nothing has gone wrong yet");
+
+    send(&mut vm, Command::DragGizmo([1.0, 0.0, 0.0], false));
+    assert_eq!(
+        vm.notice().get().as_deref(),
+        Some(LOCKED),
+        "the refusal was dropped instead of stated"
+    );
+
+    // And letting go does not quietly clear it: the object never moved, so
+    // what was last said about it is still true.
+    send(&mut vm, Command::EndGizmoDrag);
+    assert_eq!(vm.notice().get().as_deref(), Some(LOCKED));
+    assert_eq!(
+        vm.selected_object().expect("still there").position,
+        [0.0; 3],
+        "a refused drag moved the object anyway"
+    );
 }
 
 /// A shape lands where the sculptor was looking, not at the origin.

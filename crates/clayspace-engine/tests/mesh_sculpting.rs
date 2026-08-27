@@ -28,27 +28,28 @@ fn scratch(name: &str) -> std::path::PathBuf {
 /// Round-tripped through a file rather than attached directly, because that is
 /// the only route a mesh layer has into a document and a fixture that took
 /// another one would be testing a path no user reaches.
-fn with_imported_mesh(who: &str) -> Option<(ClayDocument, std::path::PathBuf)> {
-    let policy = BackendPolicy::discover(None).ok()?;
+fn with_imported_mesh(who: &str) -> (ClayDocument, std::path::PathBuf) {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
     let mut document = ClayDocument::new(policy)
         .and_then(ClayDocument::with_starting_form)
-        .ok()?;
+        .expect("a document with a starting form");
     let path = scratch(&format!("{who}.obj"));
     document
         .export_mesh(&path, ExportSettings::default())
-        .ok()?;
+        .expect("export a mesh");
     document
         .import_mesh(&path, ImportSettings::default())
-        .ok()?;
+        .expect("import it back");
 
     let key = document
         .scene()
         .layers
         .iter()
         .find(|layer| layer.representation == Representation::Mesh)
-        .map(|layer| layer.key)?;
-    document.set_active_layer(key).ok()?;
-    Some((document, path))
+        .map(|layer| layer.key)
+        .expect("the imported mesh is a layer");
+    document.set_active_layer(key).expect("activate the mesh");
+    (document, path)
 }
 
 fn dab(document: &mut ClayDocument, tool: ToolKind, at: [f32; 3]) -> Result<bool, String> {
@@ -76,9 +77,7 @@ fn dab(document: &mut ClayDocument, tool: ToolKind, at: [f32; 3]) -> Result<bool
 
 #[test]
 fn an_imported_mesh_layer_carries_geometry_and_accepts_a_verb() {
-    let Some((mut document, path)) = with_imported_mesh("accepts") else {
-        return;
-    };
+    let (mut document, path) = with_imported_mesh("accepts");
     // The row is real now, so the refusal `add_mesh_layer`'s placeholder earns
     // must be gone.
     ToolKind::Padrao
@@ -98,9 +97,7 @@ fn an_imported_mesh_layer_carries_geometry_and_accepts_a_verb() {
 /// The line every verb holds, at the level a user meets it.
 #[test]
 fn sculpting_a_mesh_layer_never_changes_its_topology() {
-    let Some((mut document, path)) = with_imported_mesh("topology") else {
-        return;
-    };
+    let (mut document, path) = with_imported_mesh("topology");
     let before = document.stats();
 
     for tool in ToolKind::for_representation(Representation::Mesh) {
@@ -137,9 +134,7 @@ fn sculpting_a_mesh_layer_never_changes_its_topology() {
 /// and `MissingAttribute` is what says it.
 #[test]
 fn the_colour_verbs_reach_a_coloured_mesh_without_moving_it() {
-    let Some((mut document, path)) = with_imported_mesh("colour") else {
-        return;
-    };
+    let (mut document, path) = with_imported_mesh("colour");
     let before = document.stats();
     for tool in [ToolKind::Pintar, ToolKind::Borrar] {
         assert!(
@@ -168,9 +163,7 @@ fn the_colour_verbs_reach_a_coloured_mesh_without_moving_it() {
 /// for "off the model" and the wrong one for a model that is right there.
 #[test]
 fn the_pointer_finds_an_imported_mesh() {
-    let Some((mut document, path)) = with_imported_mesh("pick") else {
-        return;
-    };
+    let (mut document, path) = with_imported_mesh("pick");
     // Before any stroke, which is the order that matters. This used to assert
     // the opposite — the sculptor was built by the first stroke, so a pick
     // before one found nothing, and that was written down as deliberate: a
@@ -212,9 +205,7 @@ fn the_pointer_finds_an_imported_mesh() {
 /// brush cannot reach.
 #[test]
 fn a_mesh_is_not_picked_from_under_another_layer() {
-    let Some((mut document, path)) = with_imported_mesh("pick-other") else {
-        return;
-    };
+    let (mut document, path) = with_imported_mesh("pick-other");
     dab(&mut document, ToolKind::Padrao, [0.0, 0.0, 1.0]).expect("a stroke");
 
     let sdf = document
@@ -251,9 +242,7 @@ mod undo {
 
     #[test]
     fn one_gesture_is_one_undo() {
-        let Some((mut document, path)) = with_imported_mesh("undo") else {
-            return;
-        };
+        let (mut document, path) = with_imported_mesh("undo");
         let before = document.history().depth;
         dab(&mut document, ToolKind::Padrao, [0.0, 0.0, 1.0]).expect("a stroke");
         assert_eq!(
@@ -274,9 +263,7 @@ mod undo {
     /// undo that appears to do nothing is worse than one that is not offered.
     #[test]
     fn a_gesture_that_moved_nothing_is_not_recorded() {
-        let Some((mut document, path)) = with_imported_mesh("undo-empty") else {
-            return;
-        };
+        let (mut document, path) = with_imported_mesh("undo-empty");
         // Build the sculptor first, so this measures the recording rule rather
         // than the first stroke's setup.
         dab(&mut document, ToolKind::Padrao, [0.0, 0.0, 1.0]).expect("a stroke");
@@ -296,9 +283,7 @@ mod undo {
     /// mean "the last thing I did" whichever kind of edit that was.
     #[test]
     fn an_engine_edit_after_a_mesh_gesture_is_undone_first() {
-        let Some((mut document, path)) = with_imported_mesh("undo-interleave") else {
-            return;
-        };
+        let (mut document, path) = with_imported_mesh("undo-interleave");
         dab(&mut document, ToolKind::Padrao, [0.0, 0.0, 1.0]).expect("a mesh stroke");
         let mesh_depth = document.history().depth;
 
@@ -334,9 +319,7 @@ mod undo {
 /// export.
 #[test]
 fn the_mesh_reports_what_its_queries_cost() {
-    let Some((mut document, path)) = with_imported_mesh("quality") else {
-        return;
-    };
+    let (mut document, path) = with_imported_mesh("quality");
     // Reported from the moment the layer is the one being worked on. This used
     // to assert there was no figure until the first stroke, because the
     // sculptor the figure comes from was built by that stroke — the same
@@ -381,9 +364,7 @@ mod operations {
 
     #[test]
     fn a_deformer_reaches_every_vertex_without_a_brush_position() {
-        let Some((mut document, path)) = with_imported_mesh("deform") else {
-            return;
-        };
+        let (mut document, path) = with_imported_mesh("deform");
         let before = document.stats();
         let outcome = document
             .apply_operation(taper())
@@ -400,9 +381,7 @@ mod operations {
 
     #[test]
     fn a_twist_and_a_lattice_drag_are_both_accepted() {
-        let Some((mut document, path)) = with_imported_mesh("twist") else {
-            return;
-        };
+        let (mut document, path) = with_imported_mesh("twist");
         document
             .apply_operation(LayerOperation::Twist {
                 axis: [0.0, 1.0, 0.0],
@@ -423,9 +402,7 @@ mod operations {
     /// One operation is one undo, on the same stack a stroke uses.
     #[test]
     fn an_operation_is_undoable_like_a_gesture() {
-        let Some((mut document, path)) = with_imported_mesh("deform-undo") else {
-            return;
-        };
+        let (mut document, path) = with_imported_mesh("deform-undo");
         let before = document.history().depth;
         document.apply_operation(taper()).expect("taper");
         assert_eq!(document.history().depth, before + 1);
@@ -438,9 +415,7 @@ mod operations {
     /// forward to vertices, which a mesh allows and an implicit field does not.
     #[test]
     fn an_operation_is_refused_on_a_field() {
-        let Some((mut document, path)) = with_imported_mesh("deform-sdf") else {
-            return;
-        };
+        let (mut document, path) = with_imported_mesh("deform-sdf");
         let sdf = document
             .scene()
             .layers
@@ -478,12 +453,8 @@ mod operations {
 /// drag by — which is why Move looked broken rather than merely coarse.
 #[test]
 fn the_brush_size_reaches_a_mesh_stroke() {
-    let Some((mut small, small_path)) = with_imported_mesh("size-small") else {
-        return;
-    };
-    let Some((mut large, large_path)) = with_imported_mesh("size-large") else {
-        return;
-    };
+    let (mut small, small_path) = with_imported_mesh("size-small");
+    let (mut large, large_path) = with_imported_mesh("size-large");
 
     let reached = |document: &mut ClayDocument, size: f32| -> usize {
         let before = document.visible_mesh_geometry().0;
@@ -544,13 +515,10 @@ fn the_brush_size_reaches_a_mesh_stroke() {
 ///   64                  1.0520      1.0187
 #[test]
 fn smoothing_a_mesh_takes_a_ridge_down() {
-    let Some(policy) = BackendPolicy::discover(None).ok() else {
-        return;
-    };
-    let Ok(mut document) = ClayDocument::new(policy).and_then(ClayDocument::with_starting_form)
-    else {
-        return;
-    };
+    let policy = BackendPolicy::discover(None).expect("discover backends");
+    let mut document = ClayDocument::new(policy)
+        .and_then(ClayDocument::with_starting_form)
+        .expect("a document with a starting form");
     document
         .convert_layer(clayspace_model::Direction::SdfToMesh, 0.02, 0)
         .expect("into a mesh");

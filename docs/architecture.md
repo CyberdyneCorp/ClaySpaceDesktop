@@ -316,6 +316,22 @@ prevent.
 | Performance | `clayspace-app/src/bin/bench` | Every operation a sculptor can invoke, against a recorded baseline |
 | Visual | `clayspace-app/tests` | Real frames, written as PNGs |
 
+### A fixture that cannot be built is a failure, not a skip
+
+The session tests used to open with `let Some(mut document) = document() else {
+return; };`, and the helper behind it swallowed every error with `.ok()?`. A
+regression in `ClayDocument::new` or `with_starting_form` therefore turned whole
+files green while asserting nothing — measured: breaking `with_starting_form`
+left `curve.rs` reporting 11 passed. They now build with `.expect`, so the same
+break fails all eleven and names the call that could not be made.
+
+The distinction is what the failure would mean. `BackendPolicy::discover` cannot
+fail for want of a candidate and a CPU document always builds, so a refusal
+there is a bug and must be loud. A machine with no accelerated backend, or no
+window server, is a fact about the machine: those tests still return early, and
+`window_smoke` turns its skip into a panic when `CLAYSPACE_REQUIRE_WINDOW` is
+set.
+
 The visual tests are the unusual ones. They render a real frame on a real
 device and write it to `target/visual/`, with assertions deliberately coarse —
 "something was drawn", "these two differ", "this is dimmer than that" — because

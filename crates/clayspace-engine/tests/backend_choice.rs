@@ -84,9 +84,7 @@ fn refill_runs_on_whichever_backend_is_actually_faster() {
     // an RTX 5060 the CPU wins at every batch size, and the constant sent a
     // dab to the GPU anyway. It is now measured, so what this asserts is that
     // the policy agrees with the measurement it was given.
-    let Ok(mut policy) = BackendPolicy::discover(None) else {
-        return;
-    };
+    let mut policy = BackendPolicy::discover(None).expect("discover backends");
     let accelerated = policy.active().clone();
     if accelerated == clayspace_engine::claycore::Backend::Cpu {
         // Nothing to compare against on this machine.
@@ -129,9 +127,7 @@ fn routing_follows_the_measurement_rather_than_the_constant() {
     // measurement each way settles it. Driven with synthetic timings so it
     // asserts the policy's own logic on every machine, including CPU-only
     // ones where there is nothing to race.
-    let Ok(mut policy) = BackendPolicy::discover(None) else {
-        return;
-    };
+    let mut policy = BackendPolicy::discover(None).expect("discover backends");
     let accelerated = policy.active().clone();
     if accelerated == clayspace_engine::claycore::Backend::Cpu {
         return;
@@ -155,9 +151,7 @@ fn routing_follows_the_measurement_rather_than_the_constant() {
     );
 
     // And the other way, which is the machine the constant was written for.
-    let Ok(mut policy) = BackendPolicy::discover(None) else {
-        return;
-    };
+    let mut policy = BackendPolicy::discover(None).expect("discover backends");
     policy.record_refill(None, DAB, Duration::from_micros(2000));
     policy.record_refill(Some(&accelerated), DAB, Duration::from_micros(500));
     assert!(
@@ -171,9 +165,7 @@ fn a_measured_policy_still_keeps_small_batches_on_the_cpu() {
     // The guard that is not about throughput: what a handful of residual
     // bricks avoids is the fixed cost of a device submission, which no
     // per-brick measurement of a large batch can see.
-    let Ok(mut policy) = BackendPolicy::discover(None) else {
-        return;
-    };
+    let mut policy = BackendPolicy::discover(None).expect("discover backends");
     let accelerated = policy.active().clone();
     if accelerated == clayspace_engine::claycore::Backend::Cpu {
         return;
@@ -199,9 +191,7 @@ fn a_handful_of_residual_bricks_stays_on_the_cpu() {
     // The other half of the threshold. A device submission costs about
     // 0.25 ms whatever it carries, and a stroke's last drain is often a few
     // bricks — which the CPU does in a hundredth of that.
-    let Ok(policy) = BackendPolicy::discover(None) else {
-        return;
-    };
+    let policy = BackendPolicy::discover(None).expect("discover backends");
     for bricks in [0, 1, 4, BackendPolicy::GPU_CROSSOVER_BRICKS - 1] {
         assert!(
             policy.refill_backend(bricks).is_none(),
@@ -225,9 +215,7 @@ fn the_active_backend_is_still_reported_honestly() {
     // Routing refill to the CPU must not turn the status bar into a lie in the
     // other direction: `active()` reports what the machine offers and what
     // other verbs use, and stays true whatever this one verb does.
-    let Ok(policy) = BackendPolicy::discover(None) else {
-        return;
-    };
+    let policy = BackendPolicy::discover(None).expect("discover backends");
     assert!(
         policy.available().contains(policy.active()),
         "the active backend is not one this machine offers"
@@ -243,17 +231,13 @@ fn a_real_document_calibrates_itself_on_its_first_big_refill() {
     // This is what took startup on a 24-thread Linux box with an RTX 5060 from
     // 179 ms to 63 ms: the constant sent the whole fill to a backend four times
     // slower than the CPU, and two 32-brick slices are enough to find that out.
-    let Ok(policy) = BackendPolicy::discover(None) else {
-        return;
-    };
+    let policy = BackendPolicy::discover(None).expect("discover backends");
     if policy.active() == &clayspace_engine::claycore::Backend::Cpu {
         return;
     }
-    let Ok(document) = clayspace_engine::ClayDocument::new(policy)
+    let document = clayspace_engine::ClayDocument::new(policy)
         .and_then(clayspace_engine::ClayDocument::with_starting_form)
-    else {
-        return;
-    };
+        .expect("a document with a starting form");
 
     let (cpu, accelerated) = document.policy().refill_cost_per_brick();
     assert!(

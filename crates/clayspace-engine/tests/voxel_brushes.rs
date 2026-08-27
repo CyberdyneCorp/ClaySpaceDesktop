@@ -30,10 +30,12 @@ use clayspace_model::{BrushSettings, GestureSample, Representation, SculptModel,
 /// gives the mirrored copy an empty grid to work on — and every reshaping
 /// brush then reads as "symmetry does nothing", which is the fixture's fault
 /// rather than the brush's.
-fn packed() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
-    let mut document = ClayDocument::new(policy).ok()?;
-    document.add_voxel_layer("Voxels", 0.05).ok()?;
+fn packed() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
+    let mut document = ClayDocument::new(policy).expect("a document");
+    document
+        .add_voxel_layer("Voxels", 0.05)
+        .expect("add a grid");
     let brush = BrushSettings {
         size: 0.25,
         intensity: 0.9,
@@ -54,9 +56,9 @@ fn packed() -> Option<ClayDocument> {
                 }],
                 [false; 3],
             )
-            .ok()?;
+            .expect("deposit");
     }
-    Some(document)
+    document
 }
 
 /// How many vertices the grid draws on each side of the mirror plane.
@@ -144,14 +146,10 @@ fn the_shaping_brushes_are_the_ones_the_shelf_offers() {
 
 #[test]
 fn every_shaping_brush_changes_the_grid() {
-    let Some(mut base) = packed() else {
-        return;
-    };
+    let mut base = packed();
     let rest = indices(&mut base);
     for tool in SHAPING.iter().chain([ToolKind::Apagar].iter()) {
-        let Some(mut document) = packed() else {
-            return;
-        };
+        let mut document = packed();
         let changed = stroke(&mut document, *tool, false, [false; 3]);
         let after = indices(&mut document);
         assert!(changed, "{tool:?} reported no change");
@@ -164,14 +162,10 @@ fn every_shaping_brush_changes_the_grid() {
 
 #[test]
 fn every_shaping_brush_mirrors_when_it_is_asked_to() {
-    let Some(mut base) = packed() else {
-        return;
-    };
+    let mut base = packed();
     let (_, rest) = sides(&mut base);
     for tool in SHAPING.iter().chain([ToolKind::Apagar].iter()) {
-        let Some(mut document) = packed() else {
-            return;
-        };
+        let mut document = packed();
         stroke(&mut document, *tool, false, [true, false, false]);
         let (_, there) = sides(&mut document);
         assert!(
@@ -186,14 +180,10 @@ fn every_shaping_brush_mirrors_when_it_is_asked_to() {
 fn no_brush_mirrors_when_it_is_not_asked_to() {
     // The control. Without it the test above passes on a brush that reaches
     // both halves whatever it was told.
-    let Some(mut base) = packed() else {
-        return;
-    };
+    let mut base = packed();
     let (_, rest) = sides(&mut base);
     for tool in ToolKind::for_representation(Representation::Voxel) {
-        let Some(mut document) = packed() else {
-            return;
-        };
+        let mut document = packed();
         stroke(&mut document, tool, false, [false; 3]);
         let (_, there) = sides(&mut document);
         assert_eq!(
@@ -207,17 +197,11 @@ fn no_brush_mirrors_when_it_is_not_asked_to() {
 
 #[test]
 fn the_depositing_brushes_take_material_away_when_inverted() {
-    let Some(mut base) = packed() else {
-        return;
-    };
+    let mut base = packed();
     let rest = indices(&mut base);
     for tool in [ToolKind::Padrao, ToolKind::Camada] {
-        let Some(mut up) = packed() else {
-            return;
-        };
-        let Some(mut down) = packed() else {
-            return;
-        };
+        let mut up = packed();
+        let mut down = packed();
         stroke(&mut up, tool, false, [false; 3]);
         stroke(&mut down, tool, true, [false; 3]);
         assert!(
@@ -238,16 +222,10 @@ fn the_depositing_brushes_take_material_away_when_inverted() {
 fn inflating_inverted_erodes() {
     // "amount > 0 dilates, < 0 erodes", says the engine. The binding passed a
     // hard 1, so only the dilating half was ever reachable.
-    let Some(mut base) = packed() else {
-        return;
-    };
+    let mut base = packed();
     let rest = indices(&mut base);
-    let Some(mut out) = packed() else {
-        return;
-    };
-    let Some(mut inward) = packed() else {
-        return;
-    };
+    let mut out = packed();
+    let mut inward = packed();
     stroke(&mut out, ToolKind::Inflar, false, [false; 3]);
     stroke(&mut inward, ToolKind::Inflar, true, [false; 3]);
     assert!(indices(&mut out) > rest, "Inflar did not dilate");
@@ -264,16 +242,10 @@ fn pinching_inverted_spreads() {
     // its walk so the two cannot drift apart", the pair the SDF side spells as
     // one signed strength. It was wrapped in `claycore` and reached by
     // nothing.
-    let Some(mut base) = packed() else {
-        return;
-    };
+    let mut base = packed();
     let rest = indices(&mut base);
-    let Some(mut inward) = packed() else {
-        return;
-    };
-    let Some(mut outward) = packed() else {
-        return;
-    };
+    let mut inward = packed();
+    let mut outward = packed();
     stroke(&mut inward, ToolKind::Pincar, false, [false; 3]);
     stroke(&mut outward, ToolKind::Pincar, true, [false; 3]);
     let (pinched, spread) = (indices(&mut inward), indices(&mut outward));
@@ -290,16 +262,10 @@ fn pinching_inverted_spreads() {
 fn erasing_inverted_deposits() {
     // The one tool whose upright verb is the removal, so its opposite runs the
     // other way round from every other brush's.
-    let Some(mut base) = packed() else {
-        return;
-    };
+    let mut base = packed();
     let rest = indices(&mut base);
-    let Some(mut gone) = packed() else {
-        return;
-    };
-    let Some(mut put) = packed() else {
-        return;
-    };
+    let mut gone = packed();
+    let mut put = packed();
     stroke(&mut gone, ToolKind::Apagar, false, [false; 3]);
     stroke(&mut put, ToolKind::Apagar, true, [false; 3]);
     assert!(indices(&mut gone) < rest, "Apagar did not erase");
@@ -323,12 +289,8 @@ fn the_brushes_with_no_opposite_are_left_alone_by_the_key() {
         if SIGNED.contains(&tool) {
             continue;
         }
-        let Some(mut up) = packed() else {
-            return;
-        };
-        let Some(mut held) = packed() else {
-            return;
-        };
+        let mut up = packed();
+        let mut held = packed();
         stroke(&mut up, tool, false, [false; 3]);
         stroke(&mut held, tool, true, [false; 3]);
         assert_eq!(
@@ -353,9 +315,7 @@ fn painting_a_grid_is_honest_about_having_no_colour_to_paint_with() {
     //
     // What matters is that it says so. A tool reporting success while doing
     // nothing is the kind that gets trusted.
-    let Some(mut document) = packed() else {
-        return;
-    };
+    let mut document = packed();
     let before: Vec<[f32; 3]> = document.visible_mesh_geometry().2;
     let changed = stroke(&mut document, ToolKind::Pintar, false, [false; 3]);
     let after: Vec<[f32; 3]> = document.visible_mesh_geometry().2;
@@ -376,9 +336,7 @@ fn painting_a_grid_is_honest_about_having_no_colour_to_paint_with() {
 fn masking_a_grid_moves_no_material() {
     // The mask freezes a region; a tool that moved clay while painting one
     // would be the defect.
-    let Some(mut document) = packed() else {
-        return;
-    };
+    let mut document = packed();
     let rest = indices(&mut document);
     stroke(&mut document, ToolKind::Mascara, false, [false; 3]);
     assert_eq!(

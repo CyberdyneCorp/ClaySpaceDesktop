@@ -7,9 +7,9 @@
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{Armature, ArmatureModel, SceneModel, SculptModel, SkinSettings};
 
-fn document() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
-    ClayDocument::new(policy).ok()
+fn document() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
+    ClayDocument::new(policy).expect("a document")
 }
 
 /// Is there surface at this point?
@@ -37,9 +37,7 @@ fn rig(document: &mut ClayDocument) -> Armature {
 
 #[test]
 fn an_armature_becomes_surface() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     assert!(document.armature().is_none(), "a fresh layer has no rig");
 
     document.begin_armature([0.0, 0.0, 0.0], 0.3).expect("root");
@@ -55,9 +53,7 @@ fn an_armature_becomes_surface() {
 fn a_child_is_skinned_to_its_parent() {
     // The link, not just the spheres: the point between two ZSpheres has to be
     // solid or they read as beads rather than a limb.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     document.begin_armature([0.0, 0.0, 0.0], 0.3).expect("root");
     document
         .add_zsphere(0, [0.8, 0.0, 0.0], 0.2, false)
@@ -71,9 +67,7 @@ fn a_child_is_skinned_to_its_parent() {
 
 #[test]
 fn moving_a_shoulder_moves_the_arm_in_the_geometry() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let tree = rig(&mut document);
     assert_eq!(tree.nodes.len(), 3);
     assert!(solid_at(&document, [1.0, 0.0, 0.0]), "the elbow is there");
@@ -98,9 +92,7 @@ fn moving_a_shoulder_moves_the_arm_in_the_geometry() {
 
 #[test]
 fn removing_a_shoulder_removes_the_arm() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     rig(&mut document);
     assert!(solid_at(&document, [1.0, 0.0, 0.0]));
 
@@ -118,9 +110,7 @@ fn removing_a_shoulder_removes_the_arm() {
 fn the_root_cannot_be_removed() {
     // Removing the root would leave a tree with no tree in it. Refusing beats
     // silently emptying the layer.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     rig(&mut document);
     assert!(document.remove_zsphere(0).is_err());
     assert_eq!(document.armature().expect("a tree").nodes.len(), 3);
@@ -128,9 +118,7 @@ fn the_root_cannot_be_removed() {
 
 #[test]
 fn resizing_a_sphere_changes_what_it_covers() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     document.begin_armature([0.0, 0.0, 0.0], 0.2).expect("root");
     let probe = [0.0f32, 0.5, 0.0];
     assert!(!solid_at(&document, probe), "0.2 should not reach 0.5");
@@ -144,9 +132,7 @@ fn resizing_a_sphere_changes_what_it_covers() {
 
 #[test]
 fn mirrored_authoring_puts_a_sphere_on_both_sides() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     document.begin_armature([0.0, 0.0, 0.0], 0.3).expect("root");
     document
         .add_zsphere(0, [0.6, 0.0, 0.0], 0.2, true)
@@ -164,9 +150,7 @@ fn mirrored_authoring_puts_a_sphere_on_both_sides() {
 fn a_sphere_on_the_mirror_plane_is_added_once() {
     // The engine's rule, and the one that stops a spine growing two of
     // everything.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     document.begin_armature([0.0, 0.0, 0.0], 0.3).expect("root");
     document
         .add_zsphere(0, [0.0, 0.5, 0.0], 0.2, true)
@@ -177,9 +161,7 @@ fn a_sphere_on_the_mirror_plane_is_added_once() {
 #[test]
 fn a_mirrored_child_hangs_off_the_mirrored_parent() {
     // Two arms off two shoulders, not both off one.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     document.begin_armature([0.0, 0.0, 0.0], 0.3).expect("root");
     let right_shoulder = document
         .add_zsphere(0, [0.5, 0.0, 0.0], 0.2, true)
@@ -210,9 +192,7 @@ fn a_mirrored_child_hangs_off_the_mirrored_parent() {
 
 #[test]
 fn reparenting_moves_a_limb_to_another_joint() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     document.begin_armature([0.0, 0.0, 0.0], 0.3).expect("root");
     document
         .add_zsphere(0, [0.6, 0.0, 0.0], 0.2, false)
@@ -231,9 +211,7 @@ fn reparenting_moves_a_limb_to_another_joint() {
 
 #[test]
 fn the_skin_setting_reaches_the_surface() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     document.begin_armature([0.0, 0.0, 0.0], 0.3).expect("root");
     document
         .add_zsphere(0, [0.8, 0.0, 0.0], 0.2, false)
@@ -261,21 +239,24 @@ fn the_skin_setting_reaches_the_surface() {
 
 #[test]
 fn an_armature_edit_without_an_armature_says_so() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let error = document
         .move_zsphere(0, [0.0, 1.0, 0.0])
         .expect_err("moving nothing succeeded");
-    assert!(format!("{error}").chars().any(|c| c.is_alphabetic()));
+    // On the word rather than on "is there a letter in it": a layer can be
+    // missing several different things, and the sculptor has to be able to
+    // tell which one this was.
+    let said = format!("{error}").to_lowercase();
+    assert!(
+        said.contains("armadura"),
+        "the refusal does not name what was missing: {said}"
+    );
 }
 
 #[test]
 fn an_armature_belongs_to_the_layer_it_was_authored_on() {
     // Switching layers must not hand the next click someone else's rig.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     rig(&mut document);
     assert!(document.armature().is_some());
 
@@ -294,9 +275,7 @@ fn a_rig_edit_undoes_as_one_action() {
     // A rewrite is a remove and a place, and a place is several items once
     // there are negatives — so without grouping, one drag would need four
     // undos to come back.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     document.begin_armature([0.0, 0.0, 0.0], 0.3).expect("root");
     let before = document.history().depth;
 
@@ -326,9 +305,7 @@ fn undoing_past_a_rigs_creation_leaves_no_ghost() {
     // The failure this prevents: the tree is host state and undo is the
     // engine's, so a rig undone out of existence could leave this holding a
     // tree whose indices the next drag would write against.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     document.begin_armature([0.0, 0.0, 0.0], 0.3).expect("root");
     document
         .add_zsphere(0, [0.6, 0.0, 0.0], 0.2, false)
@@ -350,9 +327,7 @@ fn undoing_past_a_rigs_creation_leaves_no_ghost() {
 
 #[test]
 fn redo_brings_the_rig_back_with_its_tree() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     document.begin_armature([0.0, 0.0, 0.0], 0.3).expect("root");
     document
         .add_zsphere(0, [0.6, 0.0, 0.0], 0.2, false)
@@ -372,9 +347,7 @@ fn editing_a_rig_does_not_accumulate_nodes() {
     // A rewrite removes what it placed. Tracking only the armature's own node
     // left the negatives' cutter spheres behind, so an edited rig grew a
     // subtraction per edit.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     document.begin_armature([0.0, 0.0, 0.0], 0.3).expect("root");
     let tip = document
         .add_zsphere(0, [0.8, 0.0, 0.0], 0.2, false)

@@ -11,11 +11,11 @@ use clayspace_model::{
     ToolKind,
 };
 
-fn document() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
+fn document() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
     ClayDocument::new(policy)
         .and_then(ClayDocument::with_starting_form)
-        .ok()
+        .expect("a document with a starting form")
 }
 
 /// Radius of the surface along a direction — the fingerprint used throughout.
@@ -65,18 +65,14 @@ fn sdf_tools() -> Vec<ToolKind> {
 
 #[test]
 fn a_frozen_region_resists_every_tool_that_can_reach_it() {
-    let Some(mut reference) = document() else {
-        return;
-    };
+    let mut reference = document();
     let at = [0.0f32, 0.0, 1.0];
 
     // What each tool does to an *unmasked* surface, so a tool that changes
     // nothing anyway cannot be mistaken for one the mask stopped.
     let mut moves = Vec::new();
     for tool in sdf_tools() {
-        let Some(mut document) = document() else {
-            return;
-        };
+        let mut document = document();
         let before = radius_along(&document, at).expect("surface");
         let samples: Vec<GestureSample> = (0..6)
             .map(|i| GestureSample {
@@ -98,9 +94,7 @@ fn a_frozen_region_resists_every_tool_that_can_reach_it() {
             // It does nothing here masked or not; it proves nothing either way.
             continue;
         }
-        let Some(mut document) = document() else {
-            return;
-        };
+        let mut document = document();
         freeze(&mut document, at);
         assert!(
             document.mask_state().is_active(),
@@ -136,9 +130,7 @@ fn a_frozen_region_resists_every_tool_that_can_reach_it() {
 
 #[test]
 fn painting_the_mask_does_not_move_the_surface() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let at = [0.0f32, 0.0, 1.0];
     let before = radius_along(&document, at).expect("surface");
     freeze(&mut document, at);
@@ -152,9 +144,7 @@ fn painting_the_mask_does_not_move_the_surface() {
 
 #[test]
 fn the_mask_operations_do_what_they_are_called() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     freeze(&mut document, [0.0, 0.0, 1.0]);
     let painted = document.mask_state().painted_cells;
     assert!(painted > 0);
@@ -190,28 +180,27 @@ fn the_mask_operations_do_what_they_are_called() {
 
 #[test]
 fn an_operation_on_a_mask_that_does_not_exist_says_so() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     // Clearing nothing is fine; the menu entry is always there.
     document.apply_mask_op(MaskOp::Clear).expect("clear");
 
     // The rest need something to act on, and refusing beats pretending.
     let refused = document.apply_mask_op(MaskOp::Invert);
     assert!(refused.is_err(), "inverting a mask that does not exist");
-    let said = format!("{}", refused.unwrap_err());
+    let said = format!("{}", refused.unwrap_err()).to_lowercase();
+    // On the word rather than on "is there a letter in it": the sculptor has
+    // to be able to tell which of the several things that can be missing was
+    // the one missing here.
     assert!(
-        said.chars().any(|c| c.is_alphabetic()),
-        "the refusal said nothing: {said}"
+        said.contains("máscara"),
+        "the refusal does not name what was missing: {said}"
     );
 }
 
 #[test]
 fn a_cleared_mask_stops_freezing_anything() {
     // The other half of the contract: unfreezing has to actually unfreeze.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let at = [0.0f32, 0.0, 1.0];
     freeze(&mut document, at);
 
@@ -241,9 +230,7 @@ fn a_cleared_mask_stops_freezing_anything() {
 
 #[test]
 fn extruding_a_mask_makes_a_layer_and_keeps_the_mask() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     freeze(&mut document, [0.0, 0.0, 1.0]);
     let painted = document.mask_state().painted_cells;
     let layers = document.scene().layers.len();
@@ -268,13 +255,62 @@ fn extruding_a_mask_makes_a_layer_and_keeps_the_mask() {
 
 #[test]
 fn extruding_without_a_mask_is_refused_readably() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let error = document
         .extrude_mask(ExtrudeSettings::default())
         .expect_err("extruding nothing succeeded");
-    assert!(format!("{error}").chars().any(|c| c.is_alphabetic()));
+    let said = format!("{error}").to_lowercase();
+    assert!(
+        said.contains("máscara"),
+        "the refusal does not name what was missing: {said}"
+    );
+}
+
+/// The other way an extrusion has nothing to work from, and a different
+/// answer: the mask is there, so "there is no mask" would send the sculptor
+/// looking for a mask they can already see the panel counting.
+#[test]
+fn extruding_a_mask_with_nothing_painted_in_it_says_which_of_the_two_it_is() {
+    let mut document = document();
+    freeze(&mut document, [0.0, 0.0, 1.0]);
+    // Eroded away rather than cleared: Clear takes the mask itself down, and
+    // what is wanted here is a mask that exists and holds nothing.
+    while document.mask_state().painted_cells > 0 {
+        document
+            .apply_mask_op(MaskOp::Contract(16))
+            .expect("contract");
+    }
+    assert!(
+        document.mask_state().present,
+        "the mask went away instead of emptying"
+    );
+
+    let empty = format!(
+        "{}",
+        document
+            .extrude_mask(ExtrudeSettings::default())
+            .expect_err("extruding an empty mask succeeded")
+    )
+    .to_lowercase();
+    assert!(
+        empty.contains("vazia"),
+        "an empty mask was not named as empty: {empty}"
+    );
+
+    // And the two refusals are distinguishable, which is the whole point of
+    // there being two of them.
+    document.apply_mask_op(MaskOp::Clear).expect("clear");
+    let missing = format!(
+        "{}",
+        document
+            .extrude_mask(ExtrudeSettings::default())
+            .expect_err("extruding nothing succeeded")
+    )
+    .to_lowercase();
+    assert_ne!(
+        empty, missing,
+        "an empty mask and no mask at all give the same answer"
+    );
 }
 
 #[test]
@@ -283,9 +319,7 @@ fn a_mask_survives_a_resolution_change() {
     // the voxel grid's. A layer added at a different resolution must not
     // disturb what is frozen — otherwise a sculptor loses a mask by doing
     // something unrelated to it.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let at = [0.0f32, 0.0, 1.0];
     freeze(&mut document, at);
     let painted = document.mask_state().painted_cells;
@@ -331,9 +365,7 @@ fn a_mask_is_as_fine_as_the_surface_it_freezes() {
     // Painted with a large brush, the mask must still resolve detail the
     // surface can express — a coarse mask cannot be extruded at a sensible
     // thickness, and cannot follow a boundary the sculptor can see.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     freeze(&mut document, [0.0, 0.0, 1.0]);
     document
         .extrude_mask(ExtrudeSettings {
@@ -353,9 +385,7 @@ fn a_mask_is_as_fine_as_the_surface_it_freezes() {
 
 #[test]
 fn a_mask_can_be_read_at_a_point() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let frozen = [1.0, 0.0, 0.0];
     let free = [-1.0, 0.0, 0.0];
 
@@ -384,9 +414,7 @@ fn a_mask_can_be_read_at_a_point() {
 
 #[test]
 fn the_mask_revision_moves_whenever_the_mask_does() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let start = document.mask_revision();
 
     freeze(&mut document, [1.0, 0.0, 0.0]);
@@ -424,9 +452,7 @@ fn the_mask_revision_moves_whenever_the_mask_does() {
 fn a_surface_stroke_leaves_the_mask_revision_alone() {
     // The other half: the counter drives a re-sample of every drawn vertex, so
     // a number that moved on every dab would pay that cost on every dab.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     freeze(&mut document, [1.0, 0.0, 0.0]);
     let after_painting = document.mask_revision();
 
@@ -460,12 +486,8 @@ fn the_mask_tool_paints_a_mask_on_a_grid_rather_than_depositing_clay() {
     // the depositing arm — so the tool that exists to protect clay was adding
     // it, and the mask the sculptor thought they had painted did not exist.
     // The same shape of defect the SDF path already had and already fixed.
-    let Some(policy) = BackendPolicy::discover(None).ok() else {
-        return;
-    };
-    let Ok(mut document) = ClayDocument::new(policy) else {
-        return;
-    };
+    let policy = BackendPolicy::discover(None).expect("discover backends");
+    let mut document = ClayDocument::new(policy).expect("a document");
     document.add_voxel_layer("Voxels", 0.05).expect("a grid");
 
     let outcome = document
@@ -505,9 +527,7 @@ fn the_mask_tool_reaches_a_mesh_layer() {
     // mesh could be *protected* by a mask and could not be used to paint one.
     // A mask belongs to no representation; it is a world-addressed field the
     // verbs consult.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     document
         .convert_layer(clayspace_model::Direction::SdfToMesh, 0.05, 0)
         .expect("into a mesh");

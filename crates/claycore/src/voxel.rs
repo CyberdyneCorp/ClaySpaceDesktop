@@ -237,6 +237,36 @@ impl VoxelField {
         Ok(value)
     }
 
+    /// How many chunks a level has storage for.
+    ///
+    /// The number a regional refinement is *about*, and the only one that
+    /// moves: a region the new level does not cover "has no storage and reads
+    /// its parent's value", so the solid is identical either way and the
+    /// occupied count says so. What a region buys is chunks not allocated.
+    pub fn level_chunk_count(&self, level: usize) -> Result<usize> {
+        let mut count = 0usize;
+        // SAFETY: valid handle and out-parameter.
+        check(
+            unsafe { sys::clay_voxel_level_chunk_count(self.as_ptr(), level, &mut count) },
+            "clay_voxel_level_chunk_count",
+        )?;
+        Ok(count)
+    }
+
+    /// Whether a level has storage everywhere its parent does.
+    ///
+    /// False for a level pushed over a region, which is how a caller tells a
+    /// refinement that was paid for everywhere from one that was not.
+    pub fn level_is_whole(&self, level: usize) -> Result<bool> {
+        let mut whole = 0i32;
+        // SAFETY: valid handle and out-parameter.
+        check(
+            unsafe { sys::clay_voxel_level_is_whole(self.as_ptr(), level, &mut whole) },
+            "clay_voxel_level_is_whole",
+        )?;
+        Ok(whole != 0)
+    }
+
     // -- direct cell edits --------------------------------------------------
 
     /// The palette index at a cell, or `None` where it is empty.

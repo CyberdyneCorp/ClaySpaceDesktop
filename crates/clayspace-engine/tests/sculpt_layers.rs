@@ -18,17 +18,17 @@ use clayspace_model::{
 /// A document whose active layer is a grid, made by crossing the starting form
 /// over and dropping the field it came from — so the surface measured below is
 /// the grid's and nothing else's.
-fn with_grid() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
+fn with_grid() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
     let mut document = ClayDocument::new(policy)
         .and_then(ClayDocument::with_starting_form)
-        .ok()?;
-    let source = document.scene().active?;
+        .expect("a document with a starting form");
+    let source = document.scene().active.expect("a starting layer");
     document
         .convert_layer(Direction::SdfToVoxel, 0.04, 1)
-        .ok()?;
-    document.remove_layer(source).ok()?;
-    Some(document)
+        .expect("cross to a grid");
+    document.remove_layer(source).expect("drop the field");
+    document
 }
 
 fn stroke(document: &mut ClayDocument) -> bool {
@@ -79,9 +79,7 @@ fn cells(document: &mut ClayDocument) -> usize {
 
 #[test]
 fn a_recorded_pass_appears_in_the_stack_with_what_it_changed() {
-    let Some(mut document) = with_grid() else {
-        return;
-    };
+    let mut document = with_grid();
     assert!(
         passes(&document).is_empty(),
         "a fresh grid carries no passes"
@@ -123,9 +121,7 @@ fn a_recorded_pass_appears_in_the_stack_with_what_it_changed() {
 /// finished, and dialling it to zero gives back the grid without the pass.
 #[test]
 fn dialling_a_pass_to_zero_gives_back_the_grid_without_it() {
-    let Some(mut document) = with_grid() else {
-        return;
-    };
+    let mut document = with_grid();
     let before = cells(&mut document);
 
     document
@@ -168,9 +164,7 @@ fn dialling_a_pass_to_zero_gives_back_the_grid_without_it() {
 /// and the strokes are still there at whatever it is set to.
 #[test]
 fn the_strength_is_read_back_from_the_stack() {
-    let Some(mut document) = with_grid() else {
-        return;
-    };
+    let mut document = with_grid();
     document
         .apply_sculpt_layer_op(SculptLayerOp::BeginRecording {
             name: String::new(),
@@ -196,9 +190,7 @@ fn the_strength_is_read_back_from_the_stack() {
 
 #[test]
 fn a_pass_can_be_hidden_and_shown() {
-    let Some(mut document) = with_grid() else {
-        return;
-    };
+    let mut document = with_grid();
     let before = cells(&mut document);
     document
         .apply_sculpt_layer_op(SculptLayerOp::BeginRecording {
@@ -226,9 +218,7 @@ fn a_pass_can_be_hidden_and_shown() {
 
 #[test]
 fn a_pass_can_be_removed() {
-    let Some(mut document) = with_grid() else {
-        return;
-    };
+    let mut document = with_grid();
     document
         .apply_sculpt_layer_op(SculptLayerOp::BeginRecording {
             name: String::new(),
@@ -248,12 +238,12 @@ fn a_pass_can_be_removed() {
 
 /// Two passes, recorded one after the other, so ordering and merging have
 /// something to act on.
-fn with_two_passes() -> Option<ClayDocument> {
-    let mut document = with_grid()?;
+fn with_two_passes() -> ClayDocument {
+    let mut document = with_grid();
     for (index, name) in ["Base", "Detalhe"].into_iter().enumerate() {
         document
             .apply_sculpt_layer_op(SculptLayerOp::BeginRecording { name: name.into() })
-            .ok()?;
+            .expect("begin recording");
         // Offset, so the two passes touch different cells and merging them
         // means something.
         let brush = BrushSettings {
@@ -273,21 +263,19 @@ fn with_two_passes() -> Option<ClayDocument> {
             .collect();
         document
             .apply_stroke(ToolKind::Padrao, brush, &samples, [false; 3])
-            .ok()?;
+            .expect("sculpt");
         document
             .apply_sculpt_layer_op(SculptLayerOp::EndRecording)
-            .ok()?;
+            .expect("end recording");
     }
-    Some(document)
+    document
 }
 
 /// Merging folds a pass into the one below and keeps the lower layer's name,
 /// which is the whole point of the verb: one entry per cell instead of two.
 #[test]
 fn merging_a_pass_down_leaves_one_pass_with_the_lower_name() {
-    let Some(mut document) = with_two_passes() else {
-        return;
-    };
+    let mut document = with_two_passes();
     assert_eq!(passes(&document).len(), 2, "the fixture recorded one pass");
     let before = cells(&mut document);
 
@@ -313,9 +301,7 @@ fn merging_a_pass_down_leaves_one_pass_with_the_lower_name() {
 /// The bottom pass has nothing below it, and the refusal is the engine's.
 #[test]
 fn the_bottom_pass_cannot_be_merged_down() {
-    let Some(mut document) = with_two_passes() else {
-        return;
-    };
+    let mut document = with_two_passes();
     assert!(document
         .apply_sculpt_layer_op(SculptLayerOp::MergeDown { index: 0 })
         .is_err());
@@ -326,9 +312,7 @@ fn the_bottom_pass_cannot_be_merged_down() {
 /// reorder rather than relabel.
 #[test]
 fn moving_a_pass_changes_the_order_of_the_stack() {
-    let Some(mut document) = with_two_passes() else {
-        return;
-    };
+    let mut document = with_two_passes();
     let names: Vec<String> = passes(&document).iter().map(|p| p.name.clone()).collect();
     assert_eq!(names, vec!["Base", "Detalhe"]);
 
@@ -344,13 +328,10 @@ fn moving_a_pass_changes_the_order_of_the_stack() {
 /// generically on a layer that has no stack to record into.
 #[test]
 fn a_pass_on_a_field_is_refused_by_where_it_applies() {
-    let Ok(policy) = BackendPolicy::discover(None) else {
-        return;
-    };
-    let Ok(mut document) = ClayDocument::new(policy).and_then(ClayDocument::with_starting_form)
-    else {
-        return;
-    };
+    let policy = BackendPolicy::discover(None).expect("discover backends");
+    let mut document = ClayDocument::new(policy)
+        .and_then(ClayDocument::with_starting_form)
+        .expect("a document with a starting form");
     assert_eq!(document.active_representation(), Representation::Sdf);
     let error = document
         .apply_sculpt_layer_op(SculptLayerOp::BeginRecording {

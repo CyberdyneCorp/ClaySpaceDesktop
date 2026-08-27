@@ -25,11 +25,11 @@
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{BrushSettings, GestureSample, Representation, SculptModel, ToolKind};
 
-fn sphere() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
+fn sphere() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
     ClayDocument::new(policy)
         .and_then(ClayDocument::with_starting_form)
-        .ok()
+        .expect("a document with a starting form")
 }
 
 /// How far the surface stands from the centre along a direction.
@@ -109,14 +109,10 @@ fn the_surface_brushes_are_the_ones_the_shelf_offers() {
 
 #[test]
 fn every_surface_brush_moves_the_surface() {
-    let Some(base) = sphere() else {
-        return;
-    };
+    let base = sphere();
     let rest = reach(&base, AT);
     for tool in SURFACE_BRUSHES {
-        let Some(mut document) = sphere() else {
-            return;
-        };
+        let mut document = sphere();
         let changed = stroke(&mut document, tool, false, [false; 3]);
         let after = reach(&document, AT);
         assert!(changed, "{tool:?} reported no change");
@@ -131,14 +127,10 @@ fn every_surface_brush_moves_the_surface() {
 #[test]
 fn every_surface_brush_mirrors_when_it_is_asked_to() {
     // The reported fault, and it was five brushes rather than one.
-    let Some(base) = sphere() else {
-        return;
-    };
+    let base = sphere();
     let rest = reach(&base, MIRRORED);
     for tool in SURFACE_BRUSHES {
-        let Some(mut document) = sphere() else {
-            return;
-        };
+        let mut document = sphere();
         stroke(&mut document, tool, false, [true, false, false]);
         let there = reach(&document, MIRRORED);
         assert!(
@@ -154,13 +146,9 @@ fn the_two_sides_come_out_the_same() {
     // Mirrored, not merely touched. The planes are given room for the bake's
     // own asymmetry — a flatten fits a plane to the region it finds, and the
     // two regions are reflections rather than copies.
-    let Some(_) = sphere() else {
-        return;
-    };
+    let _ = sphere();
     for tool in SURFACE_BRUSHES {
-        let Some(mut document) = sphere() else {
-            return;
-        };
+        let mut document = sphere();
         stroke(&mut document, tool, false, [true, false, false]);
         let (here, there) = (reach(&document, AT), reach(&document, MIRRORED));
         assert!(
@@ -178,14 +166,10 @@ fn a_brush_does_not_mirror_when_it_is_not_asked_to() {
     // mirror, so they inherited whatever was last asked for. The starting form
     // turns X on, so a snakehook with symmetry switched off came out on both
     // sides — measured, +x and -x both at 1.4625.
-    let Some(base) = sphere() else {
-        return;
-    };
+    let base = sphere();
     let rest = reach(&base, MIRRORED);
     for tool in SURFACE_BRUSHES {
-        let Some(mut document) = sphere() else {
-            return;
-        };
+        let mut document = sphere();
         stroke(&mut document, tool, false, [false; 3]);
         let there = reach(&document, MIRRORED);
         assert!(
@@ -214,17 +198,11 @@ const SIGNED: [ToolKind; 5] = [
 
 #[test]
 fn the_depositing_brushes_take_material_away_when_inverted() {
-    let Some(base) = sphere() else {
-        return;
-    };
+    let base = sphere();
     let rest = reach(&base, AT);
     for tool in [ToolKind::Padrao, ToolKind::Inflar, ToolKind::Camada] {
-        let Some(mut up) = sphere() else {
-            return;
-        };
-        let Some(mut down) = sphere() else {
-            return;
-        };
+        let mut up = sphere();
+        let mut down = sphere();
         stroke(&mut up, tool, false, [false; 3]);
         stroke(&mut down, tool, true, [false; 3]);
         let (raised, cut) = (reach(&up, AT), reach(&down, AT));
@@ -246,15 +224,14 @@ fn planing_inverted_fills_instead_of_cutting() {
     // can mean: cut-only shaves the high ground and must not fill the dents it
     // is meant to reveal; fill-only does exactly the opposite. The engine has
     // had a mode for each all along and only one was ever asked for.
-    let Some(policy) = BackendPolicy::discover(None).ok() else {
-        return;
-    };
+    let policy = BackendPolicy::discover(None).expect("discover backends");
     let bump = [0.6f32, 0.0, 0.8];
     let dent = [0.6f32, 0.35, 0.7];
-    let dented = || -> Option<ClayDocument> {
-        let mut document = ClayDocument::new(BackendPolicy::discover(None).ok()?)
-            .and_then(ClayDocument::with_starting_form)
-            .ok()?;
+    let dented = || -> ClayDocument {
+        let mut document =
+            ClayDocument::new(BackendPolicy::discover(None).expect("discover backends"))
+                .and_then(ClayDocument::with_starting_form)
+                .expect("a document with a starting form");
         // A bump, and beside it a dent, so a cut and a fill have different
         // work to do and can be told apart.
         for (at, invert) in [(bump, false), (dent, true)] {
@@ -274,21 +251,17 @@ fn planing_inverted_fills_instead_of_cutting() {
                     }],
                     [false; 3],
                 )
-                .ok()?;
+                .expect("sculpt");
         }
-        Some(document)
+        document
     };
     let _ = policy;
-    let Some(base) = dented() else {
-        return;
-    };
+    let base = dented();
     let (was_bump, was_dent) = (reach(&base, bump), reach(&base, dent));
 
     for tool in [ToolKind::Planar, ToolKind::Polir] {
         for invert in [false, true] {
-            let Some(mut document) = dented() else {
-                return;
-            };
+            let mut document = dented();
             let samples: Vec<GestureSample> = (0..=6)
                 .map(|step| {
                     let t = step as f32 / 6.0;
@@ -347,19 +320,13 @@ fn the_brushes_with_no_opposite_are_left_alone_by_the_key() {
     // either reference offers, and a drag's direction already *is* its sign —
     // so holding the key over one of these does nothing, on purpose, and the
     // same rule the mesh brushes follow.
-    let Some(_) = sphere() else {
-        return;
-    };
+    let _ = sphere();
     for tool in SURFACE_BRUSHES {
         if SIGNED.contains(&tool) {
             continue;
         }
-        let Some(mut up) = sphere() else {
-            return;
-        };
-        let Some(mut held) = sphere() else {
-            return;
-        };
+        let mut up = sphere();
+        let mut held = sphere();
         stroke(&mut up, tool, false, [false; 3]);
         stroke(&mut held, tool, true, [false; 3]);
         assert!(

@@ -15,11 +15,11 @@ use clayspace_model::{
     ToolKind,
 };
 
-fn document() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
+fn document() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
     ClayDocument::new(policy)
         .and_then(ClayDocument::with_starting_form)
-        .ok()
+        .expect("a document with a starting form")
 }
 
 /// The cell size the tests convert at. Coarse enough to be quick, fine enough
@@ -28,9 +28,7 @@ const CELL: f32 = 0.04;
 
 #[test]
 fn a_conversion_adds_a_layer_and_leaves_the_source_alone() {
-    let Some(mut doc) = document() else {
-        return;
-    };
+    let mut doc = document();
     let before = doc.scene().layers.len();
     let source = doc.scene().active.expect("an active layer");
 
@@ -83,9 +81,7 @@ fn a_conversion_adds_a_layer_and_leaves_the_source_alone() {
 /// one leans on.
 #[test]
 fn a_crossing_is_taken_back_by_undo() {
-    let Some(mut doc) = document() else {
-        return;
-    };
+    let mut doc = document();
     let before = doc.scene().layers.len();
     let depth_before = doc.history().depth;
 
@@ -167,9 +163,7 @@ fn a_crossing_is_taken_back_by_undo() {
 /// `clay_voxel_to_layer` does and what a single item could not.
 #[test]
 fn a_coloured_voxel_sculpt_keeps_its_colour_coming_back() {
-    let Some(mut doc) = document() else {
-        return;
-    };
+    let mut doc = document();
     doc.convert_layer(Direction::SdfToVoxel, CELL, 1)
         .expect("to voxels");
 
@@ -198,9 +192,7 @@ fn a_coloured_voxel_sculpt_keeps_its_colour_coming_back() {
 
 #[test]
 fn a_crossing_that_starts_somewhere_else_is_refused_by_name() {
-    let Some(mut doc) = document() else {
-        return;
-    };
+    let mut doc = document();
     // The starting form is SDF, so the voxel crossing does not start here.
     let error = doc
         .convert_layer(Direction::VoxelToSdf, CELL, 1)
@@ -215,9 +207,7 @@ fn a_crossing_that_starts_somewhere_else_is_refused_by_name() {
 /// a cell size small enough is always expressible and almost never affordable.
 #[test]
 fn a_resolution_past_the_budget_is_refused_before_anything_is_built() {
-    let Some(mut doc) = document() else {
-        return;
-    };
+    let mut doc = document();
     let before = doc.scene().layers.len();
 
     let error = doc
@@ -241,9 +231,7 @@ fn a_resolution_past_the_budget_is_refused_before_anything_is_built() {
 /// have to follow the choice rather than describe a default.
 #[test]
 fn the_stated_cost_follows_the_chosen_resolution() {
-    let Some(doc) = document() else {
-        return;
-    };
+    let doc = document();
     let coarse = doc
         .conversion_cost(Direction::SdfToVoxel, 0.1)
         .expect("the starting form has bounds");
@@ -273,13 +261,13 @@ mod mesh_strokes {
     /// A document carrying a mesh layer, made by crossing the starting form
     /// over rather than by reading a file: it needs no fixture on disk and it
     /// exercises the conversion the mesh brushes exist to complete.
-    fn with_mesh_layer() -> Option<ClayDocument> {
-        let mut doc = document()?;
+    fn with_mesh_layer() -> ClayDocument {
+        let mut doc = document();
         // Mesh layers are attached from an imported mesh; the starting form
         // becomes one by way of the exchange path in the application. Here the
         // engine's own attach is enough.
-        doc.add_mesh_layer("Retopo").ok()?;
-        Some(doc)
+        doc.add_mesh_layer("Retopo").expect("attach a mesh layer");
+        doc
     }
 
     /// A mesh row exists before its triangles do — `add_mesh_layer` records
@@ -289,9 +277,7 @@ mod mesh_strokes {
     /// is what this refusal prevents.
     #[test]
     fn a_mesh_row_with_no_triangles_refuses_the_verbs_by_name() {
-        let Some(mut doc) = with_mesh_layer() else {
-            return;
-        };
+        let mut doc = with_mesh_layer();
         let mesh = doc
             .scene()
             .layers
@@ -312,9 +298,7 @@ mod mesh_strokes {
 
     #[test]
     fn the_stroke_path_and_the_tool_status_refuse_alike() {
-        let Some(mut doc) = with_mesh_layer() else {
-            return;
-        };
+        let mut doc = with_mesh_layer();
         let mesh = doc
             .scene()
             .layers
@@ -357,9 +341,7 @@ mod mesh_strokes {
     /// The three that are absent from the shelf are absent from the model too.
     #[test]
     fn a_tool_with_no_mesh_verb_is_refused_on_a_mesh_layer() {
-        let Some(mut doc) = with_mesh_layer() else {
-            return;
-        };
+        let mut doc = with_mesh_layer();
         let mesh = doc
             .scene()
             .layers

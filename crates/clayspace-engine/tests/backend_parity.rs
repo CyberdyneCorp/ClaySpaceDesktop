@@ -26,11 +26,11 @@ use clayspace_model::{BrushSettings, DocumentModel, GestureSample, SculptModel, 
 /// stores, so a disagreement above this would be visible.
 const TOLERANCE: f32 = 1e-3;
 
-fn sculpted() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
+fn sculpted() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
     let mut document = ClayDocument::new(policy)
         .and_then(ClayDocument::with_starting_form)
-        .ok()?;
+        .expect("a document with a starting form");
     // Something asymmetric, so a backend that quietly mirrors or truncates
     // has somewhere to show it.
     for at in [[0.3f32, 0.1, 0.5], [-0.2, 0.4, 0.45]] {
@@ -45,9 +45,9 @@ fn sculpted() -> Option<ClayDocument> {
                 }],
                 [false; 3],
             )
-            .ok()?;
+            .expect("sculpt");
     }
-    Some(document)
+    document
 }
 
 /// A lattice of sample points across the document.
@@ -69,9 +69,7 @@ fn probes() -> Vec<[f32; 3]> {
 
 #[test]
 fn every_registered_backend_evaluates_the_same_field() {
-    let Some(document) = sculpted() else {
-        return;
-    };
+    let document = sculpted();
     let Ok(available) = claycore::backends() else {
         return;
     };
@@ -114,9 +112,7 @@ fn the_document_saves_byte_identically_whatever_ran() {
     // Saving takes no backend, so this asserts that stays true: the document
     // is an edit list, and a file that varied with the machine's acceleration
     // would make every other guarantee here untestable.
-    let Some(mut document) = sculpted() else {
-        return;
-    };
+    let mut document = sculpted();
     let Ok(available) = claycore::backends() else {
         return;
     };
@@ -160,9 +156,7 @@ fn an_export_is_the_same_geometry_whatever_ran() {
     // turned out to be float printing rather than different geometry, and is
     // recorded in `export_determinism.rs`. Vertex and index counts are the
     // claim actually being made here.
-    let Some(document) = sculpted() else {
-        return;
-    };
+    let document = sculpted();
     let Ok(available) = claycore::backends() else {
         return;
     };

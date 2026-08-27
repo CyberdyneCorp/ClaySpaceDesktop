@@ -12,11 +12,11 @@ use clayspace_model::{
     BlendProfile, BrushSettings, Combine, CombineSettings, GestureSample, SculptModel,
 };
 
-fn document() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
+fn document() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
     ClayDocument::new(policy)
         .and_then(ClayDocument::with_starting_form)
-        .ok()
+        .expect("a document with a starting form")
 }
 
 /// Where the surface is along +Z, measured by raycast from outside.
@@ -58,18 +58,14 @@ fn stroke(doc: &mut ClayDocument) {
 /// surface goes the other way.
 #[test]
 fn subtracting_takes_material_where_relief_adds_it() {
-    let Some(mut raised) = document() else {
-        return;
-    };
+    let mut raised = document();
     let start = surface_height(&raised).expect("the starting form is in the way of the ray");
 
     raised.set_combine(CombineSettings::for_strokes());
     stroke(&mut raised);
     let after_relief = surface_height(&raised).expect("still a surface after raising it");
 
-    let Some(mut cut) = document() else {
-        return;
-    };
+    let mut cut = document();
     cut.set_combine(CombineSettings {
         op: Combine::Subtract,
         blend: BlendProfile::Quadratic,
@@ -95,9 +91,7 @@ fn subtracting_takes_material_where_relief_adds_it() {
 fn the_blend_profile_reaches_the_field() {
     let mut heights = Vec::new();
     for blend in [BlendProfile::Hard, BlendProfile::Circular] {
-        let Some(mut doc) = document() else {
-            return;
-        };
+        let mut doc = document();
         doc.set_combine(CombineSettings {
             op: Combine::Subtract,
             blend,
@@ -119,9 +113,7 @@ fn the_blend_profile_reaches_the_field() {
 /// that offered it as a way to move the surface would be lying about it.
 #[test]
 fn painting_leaves_the_surface_where_it_was() {
-    let Some(mut doc) = document() else {
-        return;
-    };
+    let mut doc = document();
     let start = surface_height(&doc).expect("a surface");
     doc.set_combine(CombineSettings {
         op: Combine::Paint,
@@ -140,9 +132,7 @@ fn painting_leaves_the_surface_where_it_was() {
 /// would let the options bar disagree with what the next stroke does.
 #[test]
 fn the_setting_is_read_back_sanitized() {
-    let Some(mut doc) = document() else {
-        return;
-    };
+    let mut doc = document();
     doc.set_combine(CombineSettings {
         op: Combine::Replace,
         blend: BlendProfile::Circular,

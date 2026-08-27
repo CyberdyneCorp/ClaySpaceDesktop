@@ -20,22 +20,20 @@ const POINTS: [f32; 16] = [
 ];
 const PARENTS: [u32; 4] = [0, 0, 1, 1];
 
-fn authored() -> Option<(Document, LayerId, NodeId)> {
-    let mut document = Document::new().ok()?;
-    let layer = document.add_sdf_layer("Rig").ok()?;
-    let mut item = Item::armature().ok()?;
-    item.set_stroke_points(&POINTS).ok()?;
-    item.set_armature_parents(&PARENTS).ok()?;
-    item.set_op(Op::Add).ok()?;
-    let node = document.add_item(layer, &item).ok()?;
-    Some((document, layer, node))
+fn authored() -> (Document, LayerId, NodeId) {
+    let mut document = Document::new().expect("a document");
+    let layer = document.add_sdf_layer("Rig").expect("a layer");
+    let mut item = Item::armature().expect("an armature item");
+    item.set_stroke_points(&POINTS).expect("points");
+    item.set_armature_parents(&PARENTS).expect("parents");
+    item.set_op(Op::Add).expect("op");
+    let node = document.add_item(layer, &item).expect("place");
+    (document, layer, node)
 }
 
 #[test]
 fn a_placed_armature_reads_back_the_points_it_was_authored_with() {
-    let Some((document, layer, node)) = authored() else {
-        return;
-    };
+    let (document, layer, node) = authored();
     let points = document
         .stroke_points(layer, node)
         .expect("an armature's points are readable since 0.29.0");
@@ -57,9 +55,7 @@ fn a_stroke_on_the_same_call_answers_normally() {
     // The contrast that makes the gap a gap rather than a design: the same
     // call, on the primitive it was written for, round trips exactly as its
     // documentation promises.
-    let Some((mut document, layer, _)) = authored() else {
-        return;
-    };
+    let (mut document, layer, _) = authored();
     let mut stroke = Item::stroke().expect("a stroke item");
     let points = [0.0f32, 2.0, 0.0, 0.2, 0.4, 2.0, 0.0, 0.2];
     stroke.set_stroke_points(&points).expect("points");
@@ -85,9 +81,7 @@ fn the_topology_reads_back_too_including_a_branch() {
     // The half that made the difference. Positions alone cannot be turned back
     // into a rig: node 3 hangs off node 1, not node 2, and no amount of
     // nearest-sphere guessing recovers that.
-    let Some((document, layer, node)) = authored() else {
-        return;
-    };
+    let (document, layer, node) = authored();
     let parents = document
         .armature_parents(layer, node)
         .expect("the parent array is readable since 0.29.0");
@@ -101,9 +95,7 @@ fn the_topology_reads_back_too_including_a_branch() {
 fn a_reopened_document_can_tell_an_armature_from_a_stroke() {
     // The other half of finding a rig again: `clay_layer_node_prim` says what
     // a placed node carries, which nothing in the ABI answered before.
-    let Some((mut document, layer, armature)) = authored() else {
-        return;
-    };
+    let (mut document, layer, armature) = authored();
     let mut stroke = Item::stroke().expect("a stroke item");
     stroke
         .set_stroke_points(&[0.0, 2.0, 0.0, 0.2, 0.4, 2.0, 0.0, 0.2])

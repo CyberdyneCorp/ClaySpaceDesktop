@@ -199,6 +199,17 @@ impl Camera {
     /// notch.
     const FOLLOW: f32 = 0.25;
 
+    /// The nearest the wheel alone can bring the camera.
+    ///
+    /// A floor rather than a stop on the clay: with nothing under the pointer
+    /// there is nothing to stop at, and a multiplicative zoom would otherwise
+    /// creep toward the pivot forever, taking the near plane with it.
+    pub const MIN_DISTANCE: f32 = 0.01;
+
+    /// The furthest, which is what keeps a hard flick of the wheel from
+    /// compounding out to infinity and taking the view matrix with it.
+    pub const MAX_DISTANCE: f32 = 10_000.0;
+
     /// Zooms multiplicatively, so each notch feels the same at any distance.
     ///
     /// The plain form, with nothing in front of the camera to stop at. It
@@ -219,7 +230,8 @@ impl Camera {
     /// forth walks the camera in. A factor has neither: it cannot reach zero
     /// from above, and in-then-out is exactly where it began.
     fn zoomed(&self, notches: f32) -> f32 {
-        (self.distance * Self::ZOOM_PER_NOTCH.powf(-notches)).clamp(0.01, 10_000.0)
+        (self.distance * Self::ZOOM_PER_NOTCH.powf(-notches))
+            .clamp(Self::MIN_DISTANCE, Self::MAX_DISTANCE)
     }
 
     /// Zooms toward a point in front of the camera, stopping short of it.
@@ -592,21 +604,33 @@ mod tests {
         assert!(camera.distance < was);
     }
 
+    /// Both bounds, on the numbers rather than on the sign.
+    ///
+    /// A multiplicative factor cannot reach zero from above and 1.08^500 is
+    /// finite in f32, so `> 0.0` and `is_finite` are true whatever the clamp
+    /// says — they were satisfied by a floor of a ten-millionth and a ceiling
+    /// of 1e30. Five hundred notches is well past saturation in both
+    /// directions, so the answer is the bound itself.
     #[test]
     fn zoom_is_multiplicative_and_bounded() {
         let mut camera = Camera::default();
         for _ in 0..500 {
             camera.zoom(1.0);
         }
-        assert!(
-            camera.distance > 0.0,
-            "zooming in must not reach or pass the target"
+        assert_eq!(
+            camera.distance,
+            Camera::MIN_DISTANCE,
+            "zooming in did not stop at the floor"
         );
 
         for _ in 0..500 {
             camera.zoom(-1.0);
         }
-        assert!(camera.distance.is_finite(), "zooming out must stay finite");
+        assert_eq!(
+            camera.distance,
+            Camera::MAX_DISTANCE,
+            "zooming out did not stop at the ceiling"
+        );
     }
 }
 

@@ -17,17 +17,17 @@ use clayspace_model::{
     ToolKind,
 };
 
-fn with_grid() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
+fn with_grid() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
     let mut document = ClayDocument::new(policy)
         .and_then(ClayDocument::with_starting_form)
-        .ok()?;
-    let source = document.scene().active?;
+        .expect("a document with a starting form");
+    let source = document.scene().active.expect("a starting layer");
     document
         .convert_layer(Direction::SdfToVoxel, 0.04, 1)
-        .ok()?;
-    document.remove_layer(source).ok()?;
-    Some(document)
+        .expect("cross to a grid");
+    document.remove_layer(source).expect("drop the field");
+    document
 }
 
 fn stroke(document: &mut ClayDocument) -> bool {
@@ -63,45 +63,40 @@ fn passes(document: &ClayDocument) -> Vec<clayspace_model::SculptLayer> {
 
 /// A document with one recorded pass, dialled to a value neither 0 nor 1 —
 /// those two are exact by construction and would survive a flatten as well.
-fn with_a_dialled_pass(name: &str) -> Option<(ClayDocument, std::path::PathBuf, usize)> {
-    let mut document = with_grid()?;
+fn with_a_dialled_pass(name: &str) -> (ClayDocument, std::path::PathBuf, usize) {
+    let mut document = with_grid();
     document
         .apply_sculpt_layer_op(SculptLayerOp::BeginRecording {
             name: "Detalhe".into(),
         })
-        .ok()?;
-    if !stroke(&mut document) {
-        return None;
-    }
+        .expect("begin recording");
+    assert!(
+        stroke(&mut document),
+        "the fixture stroke changed nothing, so there is no pass to dial"
+    );
     document
         .apply_sculpt_layer_op(SculptLayerOp::EndRecording)
-        .ok()?;
+        .expect("end recording");
     document
         .apply_sculpt_layer_op(SculptLayerOp::SetStrength {
             index: 0,
             strength: 0.4,
         })
-        .ok()?;
-    let cells = document.occupied_cells()?;
+        .expect("dial the pass back");
+    let cells = document.occupied_cells().expect("a grid counts its cells");
 
     let path = std::env::temp_dir().join(format!("clayspace-passes-{name}.clayspace"));
     let _ = std::fs::remove_file(&path);
-    document.save(&path).ok()?;
-    Some((document, path, cells))
+    document.save(&path).expect("save");
+    (document, path, cells)
 }
 
 #[test]
 fn a_recorded_pass_and_its_strength_survive_a_reload() {
-    let Some((_saved, path, cells)) = with_a_dialled_pass("strength") else {
-        return;
-    };
+    let (_saved, path, cells) = with_a_dialled_pass("strength");
 
-    let Ok(policy) = BackendPolicy::discover(None) else {
-        return;
-    };
-    let Ok(mut reopened) = ClayDocument::new(policy) else {
-        return;
-    };
+    let policy = BackendPolicy::discover(None).expect("discover backends");
+    let mut reopened = ClayDocument::new(policy).expect("a document");
     reopened.open(&path).expect("reopen the document");
 
     // The grid has to be the active layer for the stack to be the one read.
@@ -142,15 +137,9 @@ fn a_recorded_pass_and_its_strength_survive_a_reload() {
 /// reads back correctly and cannot be changed is a number, not a slider.
 #[test]
 fn a_reloaded_pass_can_still_be_dialled() {
-    let Some((_saved, path, _)) = with_a_dialled_pass("dial") else {
-        return;
-    };
-    let Ok(policy) = BackendPolicy::discover(None) else {
-        return;
-    };
-    let Ok(mut reopened) = ClayDocument::new(policy) else {
-        return;
-    };
+    let (_saved, path, _) = with_a_dialled_pass("dial");
+    let policy = BackendPolicy::discover(None).expect("discover backends");
+    let mut reopened = ClayDocument::new(policy).expect("a document");
     reopened.open(&path).expect("reopen");
     let key = reopened
         .scene()

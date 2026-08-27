@@ -41,9 +41,9 @@ const FAR_TIP: [f32; 3] = [0.0, 0.0, 0.5];
 /// apart around the material. A drag at radius 1.0 reaches the far tip through
 /// space and cannot reach it along the surface, which is the whole difference
 /// between the two falloffs.
-fn horseshoe() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
-    let mut document = ClayDocument::new(policy).ok()?;
+fn horseshoe() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
+    let mut document = ClayDocument::new(policy).expect("a document");
     // The stroke default displaces a surface along its normal, and an empty
     // layer has none. Additive is what deposits into nothing.
     document.set_combine(CombineSettings {
@@ -69,10 +69,12 @@ fn horseshoe() -> Option<ClayDocument> {
                 }],
                 [false; 3],
             )
-            .ok()?;
+            .expect("sculpt");
     }
-    document.convert_layer(Direction::SdfToMesh, 0.02, 0).ok()?;
-    Some(document)
+    document
+        .convert_layer(Direction::SdfToMesh, 0.02, 0)
+        .expect("cross to a mesh");
+    document
 }
 
 /// The vertices within `reach` of a point, and where they are.
@@ -118,9 +120,7 @@ fn the_capability_table_binds_move_to_a_mesh_verb() {
 
 #[test]
 fn move_drags_a_mesh_layers_vertices() {
-    let Some(mut document) = horseshoe() else {
-        return;
-    };
+    let mut document = horseshoe();
     let before = document.visible_mesh_geometry().0;
     assert!(!before.is_empty(), "the horseshoe meshed to nothing");
 
@@ -173,9 +173,7 @@ fn move_drags_a_mesh_layers_vertices() {
 /// near one; a surface walk cannot get there.
 #[test]
 fn move_does_not_drag_what_is_near_in_space_and_far_along_the_surface() {
-    let Some(mut document) = horseshoe() else {
-        return;
-    };
+    let mut document = horseshoe();
     let before = document.visible_mesh_geometry().0;
 
     let near_tip = near(&before, NEAR_TIP, 0.25);
@@ -231,9 +229,7 @@ fn move_does_not_drag_what_is_near_in_space_and_far_along_the_surface() {
 
 #[test]
 fn a_move_on_a_mesh_can_be_taken_back() {
-    let Some(mut document) = horseshoe() else {
-        return;
-    };
+    let mut document = horseshoe();
     let before = document.visible_mesh_geometry().0;
 
     document
@@ -298,13 +294,10 @@ fn a_move_on_a_mesh_can_be_taken_back() {
 /// lobe comes out of it.
 #[test]
 fn a_move_pulls_a_lobe_out_rather_than_sliding_the_surface() {
-    let Some(policy) = BackendPolicy::discover(None).ok() else {
-        return;
-    };
-    let Ok(mut document) = ClayDocument::new(policy).and_then(ClayDocument::with_starting_form)
-    else {
-        return;
-    };
+    let policy = BackendPolicy::discover(None).expect("discover backends");
+    let mut document = ClayDocument::new(policy)
+        .and_then(ClayDocument::with_starting_form)
+        .expect("a document with a starting form");
     document
         .convert_layer(Direction::SdfToMesh, 0.03, 0)
         .expect("into a mesh");
@@ -380,9 +373,7 @@ fn a_move_pulls_a_lobe_out_rather_than_sliding_the_surface() {
 /// avoid; banking each segment would make one drag several undos.
 #[test]
 fn a_drag_is_seen_while_it_happens_and_undone_all_at_once() {
-    let Some(mut document) = horseshoe() else {
-        return;
-    };
+    let mut document = horseshoe();
     let start = document.visible_mesh_geometry().0;
     let depth = SculptModel::history(&document).depth;
 

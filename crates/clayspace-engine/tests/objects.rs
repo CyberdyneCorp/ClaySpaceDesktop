@@ -11,23 +11,23 @@ use clayspace_model::{
     Shape,
 };
 
-fn document() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
+fn document() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
     ClayDocument::new(policy)
         .and_then(ClayDocument::with_starting_form)
-        .ok()
+        .expect("a document with a starting form")
 }
 
 /// A second document, for comparing one gesture against another.
-fn document_fresh() -> Option<ClayDocument> {
+fn document_fresh() -> ClayDocument {
     document()
 }
 
 /// Opens a document from a path, on the same terms `document` builds one.
-fn document_at(path: &std::path::Path) -> Option<ClayDocument> {
-    let mut opened = document()?;
+fn document_at(path: &std::path::Path) -> ClayDocument {
+    let mut opened = document();
     opened.open(path).expect("open");
-    Some(opened)
+    opened
 }
 
 fn subtracting() -> CombineSettings {
@@ -47,9 +47,7 @@ fn inside(document: &ClayDocument, at: [f32; 3]) -> bool {
 
 #[test]
 fn a_placed_object_is_listed_and_selected() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let id = document
         .place_object(
             Shape::Cylinder,
@@ -72,9 +70,7 @@ fn a_placed_object_is_listed_and_selected() {
 /// absence of a selection model made it special.
 #[test]
 fn the_starting_form_is_an_object_too() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     assert_eq!(
         document.objects().len(),
         1,
@@ -85,9 +81,7 @@ fn the_starting_form_is_an_object_too() {
 /// What a stroke leaves behind is not a row in the object list.
 #[test]
 fn a_sculpting_stroke_is_not_an_object() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let before = document.objects().len();
     document
         .apply_stroke(
@@ -113,9 +107,7 @@ fn a_sculpting_stroke_is_not_an_object() {
 /// `a_placed_object_is_mirrored_like_everything_else` for why that matters.
 #[test]
 fn a_moved_object_moves_its_cavity() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let id = document
         .place_object(Shape::Sphere, &[0.4], [0.0, 0.9, 0.0], subtracting())
         .expect("place");
@@ -137,9 +129,7 @@ fn a_moved_object_moves_its_cavity() {
 /// both copies and centres between them.
 #[test]
 fn a_placed_object_is_mirrored_like_everything_else() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     document
         .place_object(Shape::Sphere, &[0.4], [0.9, 0.0, 0.0], subtracting())
         .expect("place");
@@ -153,9 +143,7 @@ fn a_placed_object_is_mirrored_like_everything_else() {
 
 #[test]
 fn an_operation_is_editable_after_placement() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let id = document
         .place_object(
             Shape::Sphere,
@@ -184,9 +172,7 @@ fn an_operation_is_editable_after_placement() {
 
 #[test]
 fn a_shape_is_exchangeable_without_losing_where_it_is() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let id = document
         .place_object(
             Shape::Box,
@@ -210,9 +196,7 @@ fn a_shape_is_exchangeable_without_losing_where_it_is() {
 
 #[test]
 fn removing_an_object_closes_what_it_cut() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let id = document
         .place_object(Shape::Sphere, &[0.5], [0.8, 0.0, 0.0], subtracting())
         .expect("place");
@@ -233,9 +217,7 @@ fn removing_an_object_closes_what_it_cut() {
 /// back and cannot tell the table it did, so the table follows by depth.
 #[test]
 fn undoing_a_move_takes_the_table_back_with_it() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let id = document
         .place_object(Shape::Sphere, &[0.4], [0.0, 0.9, 0.0], subtracting())
         .expect("place");
@@ -260,9 +242,7 @@ fn undoing_a_move_takes_the_table_back_with_it() {
 
 #[test]
 fn undoing_a_placement_takes_the_row_away() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let before = document.objects().len();
     let id = document
         .place_object(
@@ -285,9 +265,7 @@ fn undoing_a_placement_takes_the_row_away() {
 
 #[test]
 fn redoing_a_move_puts_the_table_back_where_it_was() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let id = document
         .place_object(Shape::Sphere, &[0.4], [0.0, 0.9, 0.0], subtracting())
         .expect("place");
@@ -310,9 +288,7 @@ fn redoing_a_move_puts_the_table_back_where_it_was() {
 /// to stay where it is across one.
 #[test]
 fn a_stroke_between_object_edits_does_not_disturb_the_table() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let id = document
         .place_object(Shape::Sphere, &[0.4], [0.0, 0.9, 0.0], subtracting())
         .expect("place");
@@ -342,9 +318,7 @@ fn a_stroke_between_object_edits_does_not_disturb_the_table() {
 
 #[test]
 fn a_grid_has_nowhere_to_put_an_object() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     document
         .add_voxel_layer("Voxels", 0.05)
         .expect("add a grid");
@@ -369,9 +343,7 @@ fn a_grid_has_nowhere_to_put_an_object() {
 
 #[test]
 fn an_object_that_is_gone_refuses_rather_than_panicking() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let id = document
         .place_object(Shape::Sphere, &[0.3], [0.9, 0.0, 0.0], subtracting())
         .expect("place");
@@ -387,9 +359,7 @@ fn an_object_that_is_gone_refuses_rather_than_panicking() {
 
 #[test]
 fn a_placed_object_survives_a_reopen() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let path = std::env::temp_dir().join("clayspace-objects-reopen.clay");
     let _ = std::fs::remove_file(&path);
 
@@ -406,7 +376,7 @@ fn a_placed_object_survives_a_reopen() {
         .expect("scale it up");
     document.save(&path).expect("save");
 
-    let mut reopened = document_at(&path).expect("reopen");
+    let mut reopened = document_at(&path);
     let listed = reopened.objects();
     let object = listed
         .iter()
@@ -430,9 +400,7 @@ fn a_placed_object_survives_a_reopen() {
 /// direction to fail in, and worth saying in a test rather than in a comment.
 #[test]
 fn a_document_without_its_sidecar_still_opens() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let path = std::env::temp_dir().join("clayspace-objects-no-sidecar.clay");
     let _ = std::fs::remove_file(&path);
 
@@ -447,7 +415,7 @@ fn a_document_without_its_sidecar_still_opens() {
     document.save(&path).expect("save");
     std::fs::remove_file(clayspace_engine::objects::sidecar_for(&path)).expect("drop the side-car");
 
-    let mut reopened = document_at(&path).expect("reopen");
+    let mut reopened = document_at(&path);
     assert!(
         reopened.objects().is_empty(),
         "without the side-car nothing is offered as an object"
@@ -462,9 +430,7 @@ fn a_document_without_its_sidecar_still_opens() {
 
 #[test]
 fn a_malformed_line_costs_one_object_rather_than_the_file() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let path = std::env::temp_dir().join("clayspace-objects-malformed.clay");
     let _ = std::fs::remove_file(&path);
     document
@@ -487,7 +453,7 @@ fn a_malformed_line_costs_one_object_rather_than_the_file() {
     lines[1] = "1 2 not-a-shape";
     std::fs::write(&sidecar, lines.join("\n")).expect("write");
 
-    let mut reopened = document_at(&path).expect("reopen");
+    let mut reopened = document_at(&path);
     assert_eq!(
         reopened.objects().len(),
         lines.len() - 2,
@@ -513,9 +479,7 @@ fn drag(mode: GizmoMode, handle: GizmoHandle, pivot: [f32; 3], anchor: [f32; 3])
 
 #[test]
 fn a_drag_moves_a_placed_object() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let id = document
         .place_object(Shape::Sphere, &[0.4], [0.0, 0.9, 0.0], subtracting())
         .expect("place");
@@ -541,9 +505,7 @@ fn a_drag_moves_a_placed_object() {
 
 #[test]
 fn a_drag_moves_a_whole_layer() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let key = document.scene().active.expect("an active layer");
     let target = GizmoTarget::Layer(key);
 
@@ -575,9 +537,7 @@ fn a_drag_moves_a_whole_layer() {
 /// the spec asks for: a layer moved by dragging reads back as moved.
 #[test]
 fn both_ways_of_moving_a_layer_agree() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let key = document.scene().active.expect("an active layer");
     let target = GizmoTarget::Layer(key);
 
@@ -604,9 +564,7 @@ fn both_ways_of_moving_a_layer_agree() {
 /// transforms take one factor.
 #[test]
 fn scaling_a_layer_scales_all_of_it() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let key = document.scene().active.expect("an active layer");
     let target = GizmoTarget::Layer(key);
     let current = document.target_transform(target).expect("a transform");
@@ -627,9 +585,7 @@ fn scaling_a_layer_scales_all_of_it() {
 
 #[test]
 fn a_curve_is_not_transformed_through_an_engine_transform() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     assert_eq!(
         document.target_transform(GizmoTarget::Curve),
         None,
@@ -642,9 +598,7 @@ fn a_curve_is_not_transformed_through_an_engine_transform() {
 
 #[test]
 fn a_target_that_is_gone_has_no_transform() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let id = document
         .place_object(Shape::Sphere, &[0.3], [0.0, 0.9, 0.0], subtracting())
         .expect("place");
@@ -661,9 +615,7 @@ fn a_target_that_is_gone_has_no_transform() {
 fn a_curve_turns_about_the_middle_of_its_selection() {
     use clayspace_model::CurveModel;
 
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     document.begin_curve();
     for (at, radius) in [
         ([-0.5f32, 1.4, 0.0], 0.12f32),
@@ -717,9 +669,7 @@ fn a_curve_turns_about_the_middle_of_its_selection() {
 fn a_curve_with_nothing_selected_has_no_manipulator() {
     use clayspace_model::CurveModel;
 
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     assert_eq!(document.curve_pivot(), None, "no curve, no manipulator");
     document.begin_curve();
     document
@@ -741,9 +691,7 @@ fn a_curve_with_nothing_selected_has_no_manipulator() {
 fn a_click_on_a_stroke_says_what_it_hit() {
     use clayspace_model::ItemKind;
 
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     // A lump on top of the form, well clear of the starting sphere's own
     // surface, so a ray straight down attributes to the stroke rather than to
     // the sphere under it.
@@ -795,8 +743,8 @@ fn a_click_on_a_stroke_says_what_it_hit() {
 mod the_manipulators_rules {
     use super::*;
 
-    fn placed() -> Option<(ClayDocument, GizmoTarget, Transform)> {
-        let mut document = document()?;
+    fn placed() -> (ClayDocument, GizmoTarget, Transform) {
+        let mut document = document();
         let id = document
             .place_object(
                 Shape::Box,
@@ -807,14 +755,12 @@ mod the_manipulators_rules {
             .expect("place");
         let target = GizmoTarget::Object(id);
         let current = document.target_transform(target).expect("a transform");
-        Some((document, target, current))
+        (document, target, current)
     }
 
     #[test]
     fn an_axis_handle_constrains_the_drag() {
-        let Some((mut document, target, current)) = placed() else {
-            return;
-        };
+        let (mut document, target, current) = placed();
         let gesture = drag(
             GizmoMode::Move,
             GizmoHandle::Axis(1),
@@ -837,9 +783,7 @@ mod the_manipulators_rules {
 
     #[test]
     fn a_wandering_drag_lands_where_it_ends() {
-        let Some((mut document, target, current)) = placed() else {
-            return;
-        };
+        let (mut document, target, current) = placed();
         let gesture = drag(
             GizmoMode::Move,
             GizmoHandle::Centre,
@@ -854,7 +798,7 @@ mod the_manipulators_rules {
         }
         let after = document.target_transform(target).expect("a transform");
 
-        let mut fresh = document_fresh().expect("a second document");
+        let mut fresh = document_fresh();
         let id = fresh
             .place_object(
                 Shape::Box,
@@ -884,9 +828,7 @@ mod the_manipulators_rules {
 
     #[test]
     fn a_scale_never_passes_through_zero() {
-        let Some((mut document, target, current)) = placed() else {
-            return;
-        };
+        let (mut document, target, current) = placed();
         let gesture = drag(
             GizmoMode::Scale,
             GizmoHandle::Centre,
@@ -916,9 +858,7 @@ mod the_manipulators_rules {
 /// Thirty frames of dragging is one thing a sculptor did.
 #[test]
 fn a_whole_drag_is_one_undo_step() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let id = document
         .place_object(Shape::Sphere, &[0.4], [0.0, 0.9, 0.0], subtracting())
         .expect("place");
@@ -960,9 +900,7 @@ fn a_whole_drag_is_one_undo_step() {
 /// one that is placed.
 #[test]
 fn a_moved_object_is_still_mirrored() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let id = document
         .place_object(Shape::Sphere, &[0.35], [0.0, 0.9, 0.0], subtracting())
         .expect("place");
@@ -988,22 +926,20 @@ fn a_moved_object_is_still_mirrored() {
 
 /// A document with a mesh layer, by the route a mesh layer actually takes into
 /// one: marched off the field it came from.
-fn with_a_mesh() -> Option<(ClayDocument, clayspace_model::LayerKey)> {
-    let mut document = document()?;
-    let sdf = document.scene().active?;
+fn with_a_mesh() -> (ClayDocument, clayspace_model::LayerKey) {
+    let mut document = document();
+    let sdf = document.scene().active.expect("a starting layer");
     let mesh = document
         .convert_layer(clayspace_model::Direction::SdfToMesh, 0.05, 1)
-        .ok()?;
+        .expect("cross to a mesh");
     // Back to the field, which is where an object can be placed.
-    document.set_active_layer(sdf).ok()?;
-    Some((document, mesh))
+    document.set_active_layer(sdf).expect("back to the field");
+    (document, mesh)
 }
 
 #[test]
 fn a_mesh_can_be_placed_as_an_operand() {
-    let Some((mut document, mesh)) = with_a_mesh() else {
-        return;
-    };
+    let (mut document, mesh) = with_a_mesh();
     let before = document.objects().len();
 
     let id = document
@@ -1027,9 +963,7 @@ fn a_mesh_can_be_placed_as_an_operand() {
 /// onto a lattice. The mesh is still a mesh and still sculptable.
 #[test]
 fn placing_a_mesh_operand_leaves_the_mesh_alone() {
-    let Some((mut document, mesh)) = with_a_mesh() else {
-        return;
-    };
+    let (mut document, mesh) = with_a_mesh();
     let layers_before = document.scene().layers.len();
 
     document
@@ -1053,9 +987,7 @@ fn placing_a_mesh_operand_leaves_the_mesh_alone() {
 /// same resolution — because it is the same crossing.
 #[test]
 fn the_stated_cost_is_the_conversions_own() {
-    let Some((mut document, mesh)) = with_a_mesh() else {
-        return;
-    };
+    let (mut document, mesh) = with_a_mesh();
     let cost = document
         .mesh_operand_cost(mesh, 0.05)
         .expect("a mesh has a crossing cost");
@@ -1079,9 +1011,7 @@ fn the_stated_cost_is_the_conversions_own() {
 
 #[test]
 fn a_layer_that_is_not_a_mesh_is_not_offered_and_is_refused() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let sdf = document.scene().active.expect("a layer");
 
     assert!(
@@ -1096,9 +1026,7 @@ fn a_layer_that_is_not_a_mesh_is_not_offered_and_is_refused() {
 
 #[test]
 fn the_mesh_operands_are_the_mesh_layers() {
-    let Some((mut document, mesh)) = with_a_mesh() else {
-        return;
-    };
+    let (mut document, mesh) = with_a_mesh();
     let offered = document.mesh_operands();
     assert!(offered.iter().any(|(key, _)| *key == mesh));
     assert!(
@@ -1109,9 +1037,7 @@ fn the_mesh_operands_are_the_mesh_layers() {
 
 #[test]
 fn a_mesh_operand_survives_a_reopen() {
-    let Some((mut document, mesh)) = with_a_mesh() else {
-        return;
-    };
+    let (mut document, mesh) = with_a_mesh();
     let path = std::env::temp_dir().join("clayspace-mesh-operand.clay");
     let _ = std::fs::remove_file(&path);
     let id = document
@@ -1119,7 +1045,7 @@ fn a_mesh_operand_survives_a_reopen() {
         .expect("place");
     document.save(&path).expect("save");
 
-    let mut reopened = document_at(&path).expect("reopen");
+    let mut reopened = document_at(&path);
     let listed = reopened.objects();
     let object = listed
         .iter()

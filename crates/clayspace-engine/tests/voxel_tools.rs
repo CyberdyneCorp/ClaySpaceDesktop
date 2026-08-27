@@ -14,10 +14,12 @@ use clayspace_model::{BrushSettings, GestureSample, SculptModel, ToolKind};
 /// gathers, fill closes cavities, smudge drags. On an empty grid each of them
 /// is entitled to do nothing, so depositing first is what makes the question
 /// meaningful.
-fn packed() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
-    let mut document = ClayDocument::new(policy).ok()?;
-    document.add_voxel_layer("Voxels", 0.05).ok()?;
+fn packed() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
+    let mut document = ClayDocument::new(policy).expect("a document");
+    document
+        .add_voxel_layer("Voxels", 0.05)
+        .expect("add a grid");
 
     // A ridge rather than one blob, so a tool that only acts where the surface
     // has curvature has something to bite on — and stamped at less than full
@@ -56,9 +58,9 @@ fn packed() -> Option<ClayDocument> {
                 }],
                 [false; 3],
             )
-            .ok()?;
+            .expect("deposit");
     }
-    Some(document)
+    document
 }
 
 /// Runs a tool across the ridge and says whether the engine reported a change.
@@ -85,9 +87,7 @@ fn exercise(document: &mut ClayDocument, tool: ToolKind) -> bool {
 
 #[test]
 fn every_voxel_only_tool_changes_a_voxel_layer() {
-    let Some(base) = packed() else {
-        return;
-    };
+    let base = packed();
     // Each tool gets the ridge as it was made, so one tool's effect cannot
     // explain away another's.
     let mut inert = Vec::new();
@@ -97,9 +97,7 @@ fn every_voxel_only_tool_changes_a_voxel_layer() {
         ToolKind::Preencher,
         ToolKind::Nudge,
     ] {
-        let Some(mut document) = packed() else {
-            return;
-        };
+        let mut document = packed();
         assert!(
             tool.availability(clayspace_model::LayerState::editable(
                 document.active_representation()
@@ -123,12 +121,10 @@ fn every_voxel_only_tool_changes_a_voxel_layer() {
 fn a_voxel_only_tool_still_refuses_an_sdf_layer_by_name() {
     // The other half. A tool that works somewhere must still say why it will
     // not work here, rather than accepting the gesture and doing nothing.
-    let Ok(policy) = BackendPolicy::discover(None) else {
-        return;
-    };
-    let Ok(document) = ClayDocument::new(policy).and_then(ClayDocument::with_starting_form) else {
-        return;
-    };
+    let policy = BackendPolicy::discover(None).expect("discover backends");
+    let document = ClayDocument::new(policy)
+        .and_then(ClayDocument::with_starting_form)
+        .expect("a document with a starting form");
     for tool in [
         ToolKind::Raspar,
         ToolKind::Pincar,

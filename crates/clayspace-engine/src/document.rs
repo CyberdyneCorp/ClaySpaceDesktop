@@ -4705,6 +4705,34 @@ impl ClayDocument {
         grid.occupied_count().ok()
     }
 
+    /// What the active grid's resolution levels have, coarsest first: the
+    /// chunks each has storage for, and whether it covers its parent whole.
+    ///
+    /// The companion to `occupied_cells`, and the read that makes
+    /// [`clayspace_model::LayerOperation::RefineRegion`] checkable at all: an
+    /// unrefined chunk reads its parent, so a level pushed over a region holds
+    /// the *same solid* as one pushed everywhere and both report the same
+    /// occupied count. Both numbers are needed — a whole level allocates its
+    /// chunks lazily, so a fresh one is as cheap as a region and only the flag
+    /// tells them apart, while the flag alone would not notice a "region" that
+    /// had been widened to cover the grid.
+    pub fn level_storage(&mut self) -> Option<Vec<(usize, bool)>> {
+        let layer = self.active_layer();
+        if layer.representation != Representation::Voxel {
+            return None;
+        }
+        let engine_name = layer.engine_name.clone();
+        let (_, grid) = self.document.voxel_layer(&engine_name).ok()?;
+        (0..grid.level_count().ok()?)
+            .map(|level| {
+                Some((
+                    grid.level_chunk_count(level).ok()?,
+                    grid.level_is_whole(level).ok()?,
+                ))
+            })
+            .collect()
+    }
+
     /// Re-reads the active grid's recorded passes into the layer's cache.
     ///
     /// Called after anything that could change the stack. Cached because

@@ -20,17 +20,19 @@ use clayspace_model::{
     Direction, GizmoHandle, GizmoMode, LatticeModel, Representation, SculptModel,
 };
 
-fn sphere() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
+fn sphere() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
     ClayDocument::new(policy)
         .and_then(ClayDocument::with_starting_form)
-        .ok()
+        .expect("a document with a starting form")
 }
 
-fn meshed() -> Option<ClayDocument> {
-    let mut document = sphere()?;
-    document.convert_layer(Direction::SdfToMesh, 0.03, 0).ok()?;
-    Some(document)
+fn meshed() -> ClayDocument {
+    let mut document = sphere();
+    document
+        .convert_layer(Direction::SdfToMesh, 0.03, 0)
+        .expect("cross to a mesh");
+    document
 }
 
 /// The highest point of the drawn mesh.
@@ -71,9 +73,7 @@ fn a_cage_wraps_the_form_rather_than_a_fixed_box() {
     // Sized to what the layer contains. A cage that does not enclose the form
     // has control points with nothing under them, and the corners a sculptor
     // reaches for first would be the ones that do least.
-    let Some(mut document) = meshed() else {
-        return;
-    };
+    let mut document = meshed();
     document.begin_lattice([2, 2, 2]).expect("a cage");
     let cage = document.lattice();
 
@@ -105,9 +105,7 @@ fn a_cage_wraps_the_form_rather_than_a_fixed_box() {
 
 #[test]
 fn dragging_the_cage_bends_a_mesh() {
-    let Some(mut document) = meshed() else {
-        return;
-    };
+    let mut document = meshed();
     let before = top(&mut document);
     document.begin_lattice([2, 2, 2]).expect("a cage");
     lift(&mut document, 1, 0.5);
@@ -134,9 +132,7 @@ fn dragging_the_cage_bends_a_mesh() {
 fn dragging_the_cage_bends_a_field() {
     // The other route: an inverse point map resolved into one deformer per
     // item, which is what lets a field be caged at all.
-    let Some(mut document) = sphere() else {
-        return;
-    };
+    let mut document = sphere();
     let before = reach(&document);
     document.begin_lattice([4, 4, 4]).expect("a cage");
     lift(&mut document, 2, 0.5);
@@ -153,9 +149,7 @@ fn dragging_the_cage_bends_a_field() {
 #[test]
 fn a_cage_is_one_undo_however_many_points_were_dragged() {
     // The unit a sculptor thinks in: they bent the form once.
-    let Some(mut document) = meshed() else {
-        return;
-    };
+    let mut document = meshed();
     let before = document.history().depth;
     let shape = top(&mut document);
     document.begin_lattice([3, 3, 3]).expect("a cage");
@@ -179,9 +173,7 @@ fn a_cage_is_one_undo_however_many_points_were_dragged() {
 fn an_untouched_cage_changes_nothing() {
     // An untouched cage is exactly the identity, and applying one pays for a
     // pass over every vertex to move them all by zero.
-    let Some(mut document) = meshed() else {
-        return;
-    };
+    let mut document = meshed();
     let before = document.history().depth;
     let shape = top(&mut document);
     document.begin_lattice([3, 3, 3]).expect("a cage");
@@ -196,9 +188,7 @@ fn an_untouched_cage_changes_nothing() {
 
 #[test]
 fn cancelling_a_cage_leaves_the_form_alone() {
-    let Some(mut document) = meshed() else {
-        return;
-    };
+    let mut document = meshed();
     let shape = top(&mut document);
     document.begin_lattice([2, 2, 2]).expect("a cage");
     lift(&mut document, 1, 0.5);
@@ -213,12 +203,8 @@ fn cancelling_a_cage_leaves_the_form_alone() {
 
 #[test]
 fn a_grid_takes_no_cage_and_says_so() {
-    let Some(policy) = BackendPolicy::discover(None).ok() else {
-        return;
-    };
-    let Ok(mut document) = ClayDocument::new(policy) else {
-        return;
-    };
+    let policy = BackendPolicy::discover(None).expect("discover backends");
+    let mut document = ClayDocument::new(policy).expect("a document");
     document.add_voxel_layer("Voxels", 0.05).expect("a grid");
 
     let refused = document
@@ -236,16 +222,12 @@ fn a_grid_takes_no_cage_and_says_so() {
 fn the_cage_is_as_fine_as_the_representation_allows() {
     // Not the same ceiling on both, and the difference is the mechanism: a
     // mesh is evaluated once per vertex, a field at every sample.
-    let Some(mut mesh) = meshed() else {
-        return;
-    };
+    let mut mesh = meshed();
     mesh.begin_lattice([32, 32, 32]).expect("a cage");
     assert_eq!(mesh.lattice().divisions, [32; 3]);
     assert_eq!(mesh.lattice().points.len(), 32 * 32 * 32);
 
-    let Some(mut field) = sphere() else {
-        return;
-    };
+    let mut field = sphere();
     field.begin_lattice([32, 32, 32]).expect("a cage");
     assert_eq!(
         field.lattice().divisions,
@@ -280,9 +262,7 @@ fn select_the_far_face(document: &mut ClayDocument, axis: usize) -> Vec<usize> {
 
 #[test]
 fn a_selection_is_built_a_point_at_a_time() {
-    let Some(mut document) = meshed() else {
-        return;
-    };
+    let mut document = meshed();
     document.begin_lattice([2, 2, 2]).expect("a cage");
 
     // One click replaces the selection.
@@ -315,9 +295,7 @@ fn a_selection_is_built_a_point_at_a_time() {
 
 #[test]
 fn the_manipulator_moves_a_whole_face() {
-    let Some(mut document) = meshed() else {
-        return;
-    };
+    let mut document = meshed();
     let before = top(&mut document);
     document.begin_lattice([2, 2, 2]).expect("a cage");
     let face = select_the_far_face(&mut document, 1);
@@ -348,9 +326,7 @@ fn an_axis_drag_does_not_wander_off_its_axis() {
     // The whole difference between an arrow and the centre handle: a person
     // pulling the green arrow means "up", not "up and a little sideways
     // because my hand drifted".
-    let Some(mut document) = meshed() else {
-        return;
-    };
+    let mut document = meshed();
     document.begin_lattice([2, 2, 2]).expect("a cage");
     let before = document.lattice().points.clone();
     select_the_far_face(&mut document, 1);
@@ -380,9 +356,7 @@ fn an_axis_drag_does_not_wander_off_its_axis() {
 
 #[test]
 fn a_rotation_turns_the_selection_about_its_own_middle() {
-    let Some(mut document) = meshed() else {
-        return;
-    };
+    let mut document = meshed();
     document.begin_lattice([2, 2, 2]).expect("a cage");
     select_the_far_face(&mut document, 1);
     let pivot = document.lattice().pivot().expect("a middle");
@@ -421,9 +395,7 @@ fn a_rotation_turns_the_selection_about_its_own_middle() {
 
 #[test]
 fn a_scale_spreads_the_selection_about_its_middle() {
-    let Some(mut document) = meshed() else {
-        return;
-    };
+    let mut document = meshed();
     document.begin_lattice([2, 2, 2]).expect("a cage");
     select_the_far_face(&mut document, 1);
     let pivot = document.lattice().pivot().expect("a middle");
@@ -459,9 +431,7 @@ fn a_manipulator_drag_is_resolved_from_its_anchor_every_time() {
     // Rather than accumulated. Transforming what the last frame produced
     // compounds a rotation into a spiral and a scale into a runaway, and a
     // stutter in the pointer would show up as a jump in the form.
-    let Some(mut document) = meshed() else {
-        return;
-    };
+    let mut document = meshed();
     document.begin_lattice([2, 2, 2]).expect("a cage");
     select_the_far_face(&mut document, 1);
     let pivot = document.lattice().pivot().expect("a middle");
@@ -480,9 +450,7 @@ fn a_manipulator_drag_is_resolved_from_its_anchor_every_time() {
     document.end_gizmo_drag();
 
     // The same gesture, straight to where it ended.
-    let Some(mut direct) = meshed() else {
-        return;
-    };
+    let mut direct = meshed();
     direct.begin_lattice([2, 2, 2]).expect("a cage");
     select_the_far_face(&mut direct, 1);
     direct.set_gizmo_mode(GizmoMode::Move);
@@ -505,9 +473,7 @@ fn a_manipulator_drag_is_resolved_from_its_anchor_every_time() {
 fn the_manipulator_does_nothing_with_nothing_selected() {
     // A press is not an edit, and a widget with no selection has nothing to
     // act on — reaching for the offsets anyway would move point zero.
-    let Some(mut document) = meshed() else {
-        return;
-    };
+    let mut document = meshed();
     document.begin_lattice([2, 2, 2]).expect("a cage");
     let before = document.lattice().points.clone();
 
@@ -528,9 +494,7 @@ fn the_manipulator_does_nothing_with_nothing_selected() {
 
 #[test]
 fn the_bend_is_shown_while_the_cage_is_dragged() {
-    let Some(mut document) = meshed() else {
-        return;
-    };
+    let mut document = meshed();
     let rest = top(&mut document);
     document.begin_lattice([2, 2, 2]).expect("a cage");
     select_the_far_face(&mut document, 1);
@@ -561,9 +525,7 @@ fn a_preview_does_not_compound_across_frames() {
     // original vertices — so laying it over a surface a previous frame already
     // bent doubles the deformation on every pointer move. What the last
     // preview did is taken back first.
-    let Some(mut stepped) = meshed() else {
-        return;
-    };
+    let mut stepped = meshed();
     stepped.begin_lattice([2, 2, 2]).expect("a cage");
     select_the_far_face(&mut stepped, 1);
     let pivot = stepped.lattice().pivot().expect("a middle");
@@ -578,9 +540,7 @@ fn a_preview_does_not_compound_across_frames() {
     }
     let after_many = top(&mut stepped);
 
-    let Some(mut once) = meshed() else {
-        return;
-    };
+    let mut once = meshed();
     once.begin_lattice([2, 2, 2]).expect("a cage");
     select_the_far_face(&mut once, 1);
     once.set_gizmo_mode(GizmoMode::Move);
@@ -601,9 +561,7 @@ fn the_viewport_is_told_to_look_again_on_every_drag() {
     // A mesh layer is not in the brick cache, so nothing else about this edit
     // would say the surface had moved — and the viewport uploads only when the
     // revision changes.
-    let Some(mut document) = meshed() else {
-        return;
-    };
+    let mut document = meshed();
     document.begin_lattice([2, 2, 2]).expect("a cage");
     select_the_far_face(&mut document, 1);
     let pivot = document.lattice().pivot().expect("a middle");
@@ -630,9 +588,7 @@ fn the_viewport_is_told_to_look_again_on_every_drag() {
 fn a_previewed_cage_is_still_one_undo() {
     // Every drag replaces the last rather than adding to it, so bending a form
     // is one undo however many times a corner was adjusted on the way.
-    let Some(mut document) = meshed() else {
-        return;
-    };
+    let mut document = meshed();
     let rest = top(&mut document);
     let before = document.history().depth;
     document.begin_lattice([2, 2, 2]).expect("a cage");
@@ -668,9 +624,7 @@ fn a_previewed_cage_is_still_one_undo() {
 
 #[test]
 fn cancelling_takes_the_preview_back() {
-    let Some(mut document) = meshed() else {
-        return;
-    };
+    let mut document = meshed();
     let rest = top(&mut document);
     // Not zero: the fixture crossed a sphere into a mesh, and both are edits.
     let before = document.history().depth;
@@ -705,9 +659,7 @@ fn a_field_cage_moves_its_points_without_previewing_the_surface() {
     // form, against 11.2 ms for a mesh preview on 62,576 vertices. That is not
     // a thing to do on every pointer move, so the cage moves live and the
     // surface follows when it is applied.
-    let Some(mut document) = sphere() else {
-        return;
-    };
+    let mut document = sphere();
     let rest = reach(&document);
     document.begin_lattice([4, 4, 4]).expect("a cage");
     lift(&mut document, 2, 0.5);
@@ -748,9 +700,7 @@ fn every_ring_turns_the_cage_when_dragged_across_the_screen() {
     // Driven through `drag_plane` here, which is the step that was wrong —
     // the tests above hand world points straight to the document and could
     // not see it.
-    let Some(mut document) = meshed() else {
-        return;
-    };
+    let mut document = meshed();
     // A camera in front, looking down −z, so `facing` points back at it.
     let facing = [0.0, 0.0, 1.0];
 
@@ -790,9 +740,7 @@ fn every_ring_turns_the_cage_when_dragged_across_the_screen() {
 
 #[test]
 fn the_outer_ring_turns_the_cage_too() {
-    let Some(mut document) = meshed() else {
-        return;
-    };
+    let mut document = meshed();
     // A camera off the world axes, so this cannot pass by accident on one.
     let view = {
         let raw = [0.4f32, 0.5, 0.77];
@@ -831,9 +779,7 @@ fn the_axis_pointing_at_the_camera_can_still_be_scaled() {
     // the eye the plane degenerated to the one facing the camera, which puts
     // the anchor's component along the axis at zero — and a scale divides by
     // that, so the handle went dead.
-    let Some(mut document) = meshed() else {
-        return;
-    };
+    let mut document = meshed();
     let facing = [0.0, 0.0, 1.0];
     let handle = GizmoHandle::Axis(2);
 

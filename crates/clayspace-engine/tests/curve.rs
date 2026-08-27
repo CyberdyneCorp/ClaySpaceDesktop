@@ -14,11 +14,11 @@
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{CurveJoin, CurveModel, CurveProfile, SculptModel};
 
-fn document() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
+fn document() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
     ClayDocument::new(policy)
         .and_then(ClayDocument::with_starting_form)
-        .ok()
+        .expect("a document with a starting form")
 }
 
 /// A curve laid across the front of the form, clear of it.
@@ -48,9 +48,7 @@ fn reach(document: &ClayDocument, direction: [f32; 3]) -> f32 {
 fn a_curve_sweeps_a_tube_once_it_has_two_points() {
     // One point is a point, and the engine refuses to sweep along it: cutting
     // a guide below two "would leave the sweep with nothing to follow".
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let bare = reach(&document, [0.0, 1.0, 0.0]);
 
     document.begin_curve();
@@ -76,9 +74,7 @@ fn a_curve_sweeps_a_tube_once_it_has_two_points() {
 #[test]
 fn dragging_a_control_point_moves_the_tube() {
     // The whole of what a curve is for: it can be gone back to.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     lay(&mut document);
     let before = reach(&document, [0.0, 1.0, 0.0]);
 
@@ -98,9 +94,7 @@ fn dragging_a_control_point_moves_the_tube() {
 fn editing_replaces_the_sweep_rather_than_adding_another() {
     // A curve dragged across the viewport would otherwise leave a sweep behind
     // on every move — the same fault the snakehook had, and the same fix.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     lay(&mut document);
     let placed = SculptModel::stats(&document).objects;
 
@@ -117,9 +111,7 @@ fn editing_replaces_the_sweep_rather_than_adding_another() {
 
 #[test]
 fn the_radius_is_per_point_so_a_tube_can_taper() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     lay(&mut document);
     let curve = document.curve();
     assert_eq!(curve.points.len(), 3);
@@ -150,9 +142,7 @@ fn the_radius_is_per_point_so_a_tube_can_taper() {
 
 #[test]
 fn the_join_and_the_profile_change_the_form() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     lay(&mut document);
     let through = reach(&document, [0.0, 1.0, 0.0]);
 
@@ -186,9 +176,7 @@ fn the_join_and_the_profile_change_the_form() {
 
 #[test]
 fn abandoning_a_curve_takes_its_tube_with_it() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let bare = reach(&document, [0.0, 1.0, 0.0]);
     lay(&mut document);
     assert!(reach(&document, [0.0, 1.0, 0.0]) > bare + 0.2);
@@ -203,9 +191,7 @@ fn abandoning_a_curve_takes_its_tube_with_it() {
 
 #[test]
 fn applying_a_curve_leaves_the_tube_and_takes_the_points_down() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     lay(&mut document);
     let swept = reach(&document, [0.0, 1.0, 0.0]);
 
@@ -222,9 +208,7 @@ fn removing_the_last_points_takes_the_tube_down() {
     // A guide below two points has nothing to sweep along, and the engine
     // refuses to cut one there rather than ignoring it. Taking the sweep down
     // is the honest answer while the curve is still being placed.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let bare = reach(&document, [0.0, 1.0, 0.0]);
     lay(&mut document);
 
@@ -247,12 +231,8 @@ fn a_round_tube_takes_its_thickness_from_every_point() {
     // same guide with radii of 0.05, 0.15 and 0.4 reached 2.901 every time —
     // the unit circle's size — because its thickness comes from the profile
     // parameters instead. That is why the two sections use two primitives.
-    let Some(mut thin) = document() else {
-        return;
-    };
-    let Some(mut thick) = document() else {
-        return;
-    };
+    let mut thin = document();
+    let mut thick = document();
     for (document, radius) in [(&mut thin, 0.06f32), (&mut thick, 0.24)] {
         document.begin_curve();
         for at in [[-0.9f32, 1.4, 0.0], [0.0, 1.7, 0.0], [0.9, 1.4, 0.0]] {
@@ -275,9 +255,7 @@ fn a_round_tube_takes_its_thickness_from_every_point() {
     // onto itself and comes out symmetric whatever its radii do. Measured that
     // way, both ends read 0.37354326 to the last digit, which is the mirror
     // rather than the taper.
-    let Some(mut tapered) = document() else {
-        return;
-    };
+    let mut tapered = document();
     tapered.begin_curve();
     for (at, radius) in [
         ([0.35f32, 1.5, 0.0], 0.24f32),
@@ -311,12 +289,8 @@ fn a_sectioned_tube_takes_its_thickness_from_its_ends() {
     // first point's at one end and the last point's at the other, interpolated
     // between. Stated rather than left as a surprise: it is a taper and not a
     // radius per point, and the interface offers the same control for both.
-    let Some(mut thin) = document() else {
-        return;
-    };
-    let Some(mut thick) = document() else {
-        return;
-    };
+    let mut thin = document();
+    let mut thick = document();
     for (document, radius) in [(&mut thin, 0.06f32), (&mut thick, 0.24)] {
         document.begin_curve();
         for at in [[-0.9f32, 1.4, 0.0], [0.0, 1.7, 0.0], [0.9, 1.4, 0.0]] {
@@ -346,9 +320,7 @@ fn a_curve_on_a_mirrored_layer_comes_out_mirrored() {
     // That is the mirror doing what a mirror does, and it is what a sculptor
     // asking for symmetry wants — but it means a tube laid *across* the plane
     // is folded onto itself, which is how a tapered one reads as symmetric.
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     let bare = reach(&document, [-1.0, 1.3, 0.0]);
     document.begin_curve();
     for at in [[0.35f32, 1.5, 0.0], [0.95, 1.7, 0.0], [1.55, 1.5, 0.0]] {

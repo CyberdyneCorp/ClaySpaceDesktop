@@ -25,81 +25,211 @@ fn inside(doc: &Document, at: [f32; 3]) -> bool {
 
 // -- the primitives ---------------------------------------------------------
 
+/// Every offered primitive, measured rather than merely built.
+///
+/// Building alone was not enough. The engine rejects a wrong parameter
+/// *count*, so a short or long block was already caught — but a same-arity
+/// transposition builds happily and comes out a different solid. A rounded
+/// cylinder with its rim and its half-height exchanged is 0.05 tall with a
+/// 0.5 rim, and nothing said so.
+///
+/// So each shape is built with the parameters its own variant names and then
+/// probed: a point only the right ordering explains is solid, and one only a
+/// wrong ordering would fill is empty. The numbers are deliberately unequal
+/// along each axis for the same reason — a cube 0.4 on every side survives
+/// any permutation of its own half-extents.
 #[test]
-fn every_offered_primitive_builds() {
-    // Not a list written twice: each is built with the parameters its own
-    // variant names, and the engine rejects a wrong count, so this fails if a
-    // parameter block is in the wrong order or the wrong length.
-    let shapes = [
-        Primitive::Sphere { radius: 0.5 },
-        Primitive::Box { half: [0.4; 3] },
-        Primitive::RoundBox {
-            half: [0.4; 3],
-            radius: 0.1,
-        },
-        Primitive::BoxFrame {
-            half: [0.4; 3],
-            thickness: 0.05,
-        },
-        Primitive::Torus {
-            major: 0.5,
-            minor: 0.15,
-        },
-        Primitive::Capsule {
-            from: [0.0, -0.3, 0.0],
-            to: [0.0, 0.3, 0.0],
-            radius: 0.2,
-        },
-        Primitive::Cylinder {
-            radius: 0.3,
-            half_height: 0.5,
-        },
-        Primitive::RoundedCylinder {
-            radius: 0.3,
-            rim: 0.05,
-            half_height: 0.5,
-        },
-        Primitive::Cone {
-            half_height: 0.5,
-            bottom: 0.4,
-            top: 0.1,
-        },
-        Primitive::Ellipsoid {
-            radii: [0.5, 0.3, 0.2],
-        },
-        Primitive::Octahedron { size: 0.5 },
-        Primitive::HexPrism {
-            radius: 0.4,
-            half_depth: 0.2,
-        },
-        Primitive::TriPrism {
-            radius: 0.4,
-            half_depth: 0.2,
-        },
-        Primitive::Pyramid { height: 0.6 },
-        Primitive::Tetrahedron { radius: 0.5 },
-        Primitive::Dodecahedron { radius: 0.5 },
-        Primitive::Icosahedron { radius: 0.5 },
-        Primitive::CutSphere {
-            radius: 0.5,
-            at: 0.2,
-        },
-        Primitive::ExactCone {
-            half_angle: 0.5,
-            height: 0.6,
-        },
-        Primitive::SolidAngle {
-            half_angle: 0.6,
-            radius: 0.5,
-        },
+fn every_offered_primitive_stands_where_its_own_parameters_put_it() {
+    /// One shape and the two answers it owes: where it must be solid, and
+    /// where it must not be.
+    type Probe = (Primitive, &'static [[f32; 3]], &'static [[f32; 3]]);
+
+    let probes: [Probe; 20] = [
+        (
+            Primitive::Sphere { radius: 0.5 },
+            &[[0.45, 0.0, 0.0], [0.0, 0.45, 0.0]],
+            &[[0.9, 0.0, 0.0]],
+        ),
+        (
+            Primitive::Box {
+                half: [0.5, 0.3, 0.1],
+            },
+            &[[0.45, 0.0, 0.0], [0.0, 0.25, 0.0]],
+            &[[0.0, 0.45, 0.0], [0.0, 0.0, 0.2]],
+        ),
+        (
+            // The corner is the only place the radius shows: a rounded box
+            // reaches as far as a sharp one, and what the radius does is take
+            // the corner off.
+            Primitive::RoundBox {
+                half: [0.5, 0.3, 0.1],
+                radius: 0.05,
+            },
+            &[[0.45, 0.0, 0.0], [0.0, 0.0, 0.09]],
+            &[[0.49, 0.29, 0.09], [0.0, 0.45, 0.0]],
+        ),
+        (
+            // A frame is its twelve bars and nothing else, so its own middle
+            // is empty and so is the middle of each face.
+            Primitive::BoxFrame {
+                half: [0.5, 0.3, 0.2],
+                thickness: 0.05,
+            },
+            &[[0.48, 0.28, 0.15], [0.0, 0.28, 0.18]],
+            &[[0.0, 0.0, 0.0], [0.25, 0.15, 0.1]],
+        ),
+        (
+            // The one where transposing still builds, which is exactly why the
+            // enum exists: major then minor, and a ring is empty at its centre.
+            Primitive::Torus {
+                major: 0.5,
+                minor: 0.1,
+            },
+            &[[0.5, 0.0, 0.0], [0.0, 0.0, 0.5]],
+            &[[0.0, 0.0, 0.0], [0.0, 0.5, 0.0]],
+        ),
+        (
+            Primitive::Capsule {
+                from: [0.0, -0.3, 0.0],
+                to: [0.0, 0.3, 0.0],
+                radius: 0.2,
+            },
+            &[[0.0, 0.4, 0.0], [0.0, -0.4, 0.0]],
+            &[[0.3, 0.0, 0.0], [0.0, 0.6, 0.0]],
+        ),
+        (
+            Primitive::Cylinder {
+                radius: 0.2,
+                half_height: 0.6,
+            },
+            &[[0.0, 0.45, 0.0], [0.15, 0.0, 0.0]],
+            &[[0.35, 0.0, 0.0], [0.0, 0.9, 0.0]],
+        ),
+        (
+            Primitive::RoundedCylinder {
+                radius: 0.4,
+                rim: 0.05,
+                half_height: 0.5,
+            },
+            &[[0.3, 0.0, 0.0], [0.0, 0.45, 0.0]],
+            &[[0.5, 0.0, 0.0], [0.0, 0.6, 0.0]],
+        ),
+        (
+            // Wide at the bottom and nearly a point at the top, so exchanging
+            // the two radii turns it upside down.
+            Primitive::Cone {
+                half_height: 0.5,
+                bottom: 0.4,
+                top: 0.05,
+            },
+            &[[0.3, -0.45, 0.0], [0.0, 0.45, 0.0]],
+            &[[0.3, 0.45, 0.0], [0.0, -0.6, 0.0]],
+        ),
+        (
+            Primitive::Ellipsoid {
+                radii: [0.6, 0.35, 0.15],
+            },
+            &[[0.5, 0.0, 0.0], [0.0, 0.3, 0.0]],
+            &[[0.0, 0.45, 0.0], [0.0, 0.0, 0.25]],
+        ),
+        (
+            // The octant plane is what tells an octahedron from a ball of the
+            // same reach.
+            Primitive::Octahedron { size: 0.5 },
+            &[[0.4, 0.0, 0.0], [0.0, 0.0, 0.4]],
+            &[[0.3, 0.3, 0.0], [0.25, 0.25, 0.25]],
+        ),
+        (
+            // Radius across the section, depth along Z.
+            Primitive::HexPrism {
+                radius: 0.4,
+                half_depth: 0.15,
+            },
+            &[[0.3, 0.0, 0.0], [0.0, 0.3, 0.0]],
+            &[[0.0, 0.0, 0.25]],
+        ),
+        (
+            Primitive::TriPrism {
+                radius: 0.4,
+                half_depth: 0.15,
+            },
+            &[[0.2, 0.0, 0.0], [0.0, 0.2, 0.0]],
+            &[[0.0, 0.0, 0.25]],
+        ),
+        (
+            // Its base sits on the origin plane and it rises along Y.
+            Primitive::Pyramid { height: 0.6 },
+            &[[0.0, 0.3, 0.0]],
+            &[[0.0, 0.8, 0.0], [0.4, 0.3, 0.0]],
+        ),
+        (
+            // A tetrahedron reaches into one octant where an octahedron of the
+            // same size does not, which is the only thing that tells the two
+            // apart away from the axes.
+            Primitive::Tetrahedron { radius: 0.5 },
+            &[[0.4, 0.0, 0.0], [0.25, 0.25, 0.25]],
+            &[[0.3, 0.3, 0.0], [0.9, 0.0, 0.0]],
+        ),
+        (
+            Primitive::Dodecahedron { radius: 0.5 },
+            &[[0.45, 0.0, 0.0], [0.3, 0.3, 0.0]],
+            &[[0.9, 0.0, 0.0]],
+        ),
+        (
+            Primitive::Icosahedron { radius: 0.5 },
+            &[[0.45, 0.0, 0.0], [0.3, 0.3, 0.0]],
+            &[[0.9, 0.0, 0.0]],
+        ),
+        (
+            // What is kept is the cap *above* the cut, so the middle of the
+            // sphere it came from is not in it.
+            Primitive::CutSphere {
+                radius: 0.5,
+                at: 0.2,
+            },
+            &[[0.0, 0.45, 0.0]],
+            &[[0.0, 0.0, 0.0], [0.0, -0.45, 0.0]],
+        ),
+        (
+            // Opens downward from an apex at the origin. Its half-angle
+            // reaches the engine as a sine and cosine rather than as itself,
+            // so one of the empty points is off the axis but inside the
+            // height: exchanging the pair widens 0.5 radians to 1.07 and only
+            // a point out on the flank notices.
+            Primitive::ExactCone {
+                half_angle: 0.5,
+                height: 0.6,
+            },
+            &[[0.0, -0.3, 0.0], [0.1, -0.3, 0.0]],
+            &[[0.0, 0.3, 0.0], [0.0, -0.7, 0.0], [0.25, -0.3, 0.0]],
+        ),
+        (
+            // A wedge about +Y, so the same distance the other way is outside
+            // it however large the radius is — and, for the sine and cosine,
+            // a point well inside the radius but out past the half-angle.
+            Primitive::SolidAngle {
+                half_angle: 0.6,
+                radius: 0.5,
+            },
+            &[[0.0, 0.4, 0.0], [0.2, 0.35, 0.0]],
+            &[[0.4, 0.0, 0.0], [0.0, -0.4, 0.0], [0.3, 0.3, 0.0]],
+        ),
     ];
 
-    let mut doc = Document::new().expect("document");
-    let layer = doc.add_sdf_layer("Shapes").expect("layer");
-    for shape in shapes {
+    // One document each, so a shape cannot be held up by its neighbour.
+    for (shape, solid, empty) in probes {
+        let mut doc = Document::new().expect("document");
+        let layer = doc.add_sdf_layer("Shapes").expect("layer");
         let item = Item::of(shape).unwrap_or_else(|e| panic!("{shape:?} was refused: {e}"));
         doc.add_item(layer, &item)
             .unwrap_or_else(|e| panic!("{shape:?} could not be placed: {e}"));
+
+        for at in solid {
+            assert!(inside(&doc, *at), "{shape:?} left {at:?} empty");
+        }
+        for at in empty {
+            assert!(!inside(&doc, *at), "{shape:?} reached {at:?}");
+        }
     }
 }
 

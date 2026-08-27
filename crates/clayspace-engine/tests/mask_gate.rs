@@ -17,11 +17,11 @@ use clayspace_model::{
     BrushSettings, Combine, CombineSettings, GestureSample, MaskModel, SculptModel, ToolKind,
 };
 
-fn document() -> Option<ClayDocument> {
-    let policy = BackendPolicy::discover(None).ok()?;
+fn document() -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
     ClayDocument::new(policy)
         .and_then(ClayDocument::with_starting_form)
-        .ok()
+        .expect("a document with a starting form")
 }
 
 fn brush() -> BrushSettings {
@@ -84,9 +84,7 @@ fn centre(document: &ClayDocument) -> Option<f32> {
 /// behaviour, and it fails the moment the behaviour improves.
 #[test]
 fn a_mask_does_not_yet_protect_a_region_from_a_subtracting_edit() {
-    let (Some(mut open), Some(mut protected)) = (document(), document()) else {
-        return;
-    };
+    let (mut open, mut protected) = (document(), document());
     let start = centre(&open).expect("the starting form is under the ray");
     assert!(
         mask_the_middle(&mut protected),
@@ -135,9 +133,7 @@ fn a_mask_does_not_yet_protect_a_region_from_a_subtracting_edit() {
 /// sphere that started at 1.0. The protection is close to total.
 #[test]
 fn a_mask_still_keeps_a_brush_from_depositing() {
-    let (Some(mut open), Some(mut protected)) = (document(), document()) else {
-        return;
-    };
+    let (mut open, mut protected) = (document(), document());
     assert!(mask_the_middle(&mut protected));
 
     let _ = open.apply_stroke(ToolKind::Padrao, brush(), &arc(), [false; 3]);
@@ -166,9 +162,7 @@ fn a_mask_still_keeps_a_brush_from_depositing() {
 /// And a stroke on an unmasked document is unaffected by any of this.
 #[test]
 fn an_unmasked_document_strokes_as_it_always_did() {
-    let Some(mut document) = document() else {
-        return;
-    };
+    let mut document = document();
     assert!(!document.mask_state().present);
     document.set_combine(CombineSettings {
         op: Combine::Subtract,
