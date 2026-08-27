@@ -174,6 +174,14 @@ struct MeshGesture {
     engine_depth: usize,
 }
 
+/// One crossing, and the layer whose presence in the scene follows it.
+struct Crossing {
+    /// The layer the crossing added, hidden while the crossing is undone.
+    layer: LayerId,
+    /// The engine's undo depth when this was recorded. See `mesh_undo`.
+    engine_depth: usize,
+}
+
 pub struct ClayDocument {
     document: Document,
     layers: Vec<Layer>,
@@ -296,6 +304,36 @@ pub struct ClayDocument {
     /// becomes the most recent again.
     mesh_undo: Vec<MeshGesture>,
     mesh_redo: Vec<MeshGesture>,
+    /// Crossings undo can take back whole, newest last.
+    ///
+    /// A crossing is a layer plus what fills it. Since
+    /// `unify-the-undo-history` the engine records the filling, but layer
+    /// creation is still not something it takes back — so an engine undo on
+    /// its own empties the new layer and leaves it standing, which is the
+    /// shape the undo group around `convert_layer` was added to prevent and
+    /// can no longer prevent by itself. Measured across the pin, one undo of
+    /// the same crossing: 0.39.0 left the layer's 3,952 vertices alone,
+    /// 0.52.2 left the layer in the list at zero.
+    ///
+    /// Interleaved by depth exactly as `mesh_undo` is, and for the same
+    /// reason: any engine edit since has raised the depth, which makes that
+    /// edit the more recent one.
+    crossing_undo: Vec<Crossing>,
+    crossing_redo: Vec<Crossing>,
+    /// Layers an undone crossing has taken off the scene.
+    ///
+    /// Hidden rather than removed, and the difference is forced by the
+    /// engine: "every editing entry point records its own inverse", removal
+    /// included, so removing the layer would itself be an undo step. That is
+    /// not a theoretical objection — it was tried and measured: a second undo
+    /// brought the emptied layer back, and a redo then built a third one
+    /// beside it.
+    ///
+    /// So the engine's history takes the filling back and puts it again,
+    /// which it does exactly and for free, and the only thing left to the
+    /// host is whether the layer is in the scene. `reconcile_layers` skips
+    /// these and `save` drops them, so nothing outside this type sees one.
+    suppressed: std::collections::HashSet<LayerId>,
     /// The mirror currently set on the active layer, so it is only rewritten
     /// when it actually changes.
     symmetry: [bool; 3],
@@ -428,6 +466,9 @@ impl ClayDocument {
             mesh_sculptor: std::cell::RefCell::new(None),
             mesh_undo: Vec::new(),
             mesh_redo: Vec::new(),
+            crossing_undo: Vec::new(),
+            crossing_redo: Vec::new(),
+            suppressed: std::collections::HashSet::new(),
             curve: None,
             live_hook: None,
             lattice: None,
@@ -797,7 +838,58 @@ impl ClayDocument {
         let closed = self.document.end_undo_group().map_err(ModelError::engine);
         let made = made?;
         closed?;
+        // Recorded so undo takes the whole crossing back rather than emptying
+        // the layer it just made. See `crossing_undo`.
+        if let Ok(at) = self.index_of(made) {
+            let layer = self.layers[at].id;
+            self.crossing_undo.push(Crossing {
+                layer,
+                engine_depth: self.engine_undo_depth(),
+            });
+            self.crossing_redo.clear();
+        }
         Ok(made)
+    }
+
+    /// Whether the newest crossing is more recent than the newest engine
+    /// entry, and so the thing an undo should take back.
+    fn crossing_is_newest(&self) -> bool {
+        self.crossing_undo
+            .last()
+            .is_some_and(|crossing| crossing.engine_depth == self.engine_undo_depth())
+    }
+
+    /// Takes one crossing back: the engine takes back the filling, and the
+    /// layer it filled leaves the scene.
+    fn undo_crossing(&mut self) -> Result<bool, ModelError> {
+        let Some(crossing) = self.crossing_undo.pop() else {
+            return Ok(false);
+        };
+        self.document.undo().map_err(ModelError::engine)?;
+        self.suppressed.insert(crossing.layer);
+        self.crossing_redo.push(crossing);
+        self.after_crossing_history()
+    }
+
+    /// Puts one crossing back, filling and all.
+    fn redo_crossing(&mut self) -> Result<bool, ModelError> {
+        let Some(crossing) = self.crossing_redo.pop() else {
+            return Ok(false);
+        };
+        self.document.redo().map_err(ModelError::engine)?;
+        self.suppressed.remove(&crossing.layer);
+        self.crossing_undo.push(crossing);
+        self.after_crossing_history()
+    }
+
+    /// The bookkeeping either direction needs: the scene changed shape, and
+    /// what the layer covered is stale either way.
+    fn after_crossing_history(&mut self) -> Result<bool, ModelError> {
+        self.reconcile_layers();
+        let layer = self.active_layer().id;
+        self.refill(layer, &[])?;
+        self.resync_armature();
+        Ok(true)
     }
 
     fn rasterize_to_voxels(&mut self, name: &str, cell_size: f32) -> Result<LayerKey, ModelError> {
@@ -3347,6 +3439,12 @@ impl SculptModel for ClayDocument {
         if self.mesh_gesture_is_newest() {
             return self.undo_mesh_gesture();
         }
+        // A crossing sits on its own engine entry, so it is tested the same
+        // way and before the plain path: undoing only the engine's half would
+        // leave the layer it made standing and empty.
+        if self.crossing_is_newest() {
+            return self.undo_crossing();
+        }
         let moved = self.document.undo().map_err(ModelError::engine)?;
         if moved {
             self.reconcile_layers();
@@ -3371,6 +3469,14 @@ impl SculptModel for ClayDocument {
             .is_some_and(|gesture| gesture.engine_depth == self.engine_undo_depth())
         {
             return self.redo_mesh_gesture();
+        }
+        // The mirror: an undone crossing's entry is the next one forward.
+        if self
+            .crossing_redo
+            .last()
+            .is_some_and(|crossing| crossing.engine_depth == self.engine_undo_depth() + 1)
+        {
+            return self.redo_crossing();
         }
         let moved = self.document.redo().map_err(ModelError::engine)?;
         if moved {
@@ -4223,6 +4329,16 @@ impl ClayDocument {
 
 impl DocumentModel for ClayDocument {
     fn save(&mut self, path: &std::path::Path) -> Result<(), ModelError> {
+        // An undone crossing leaves an emptied layer in the engine that the
+        // scene does not show, because the engine holds its filling on the
+        // redo stack and removing it would be an undo step of its own. A file
+        // has no redo stack, so what cannot be redone should not be written:
+        // these go before the write, and the history they cost is history the
+        // save is not preserving anyway.
+        for layer in std::mem::take(&mut self.suppressed) {
+            let _ = self.document.remove_layer(layer);
+        }
+        self.crossing_redo.clear();
         self.document.save(path).map_err(ModelError::engine)?;
         // The object table, beside it. A failure to write it is reported and
         // does not fail the save: the sculpture is in the `.clay` and losing
@@ -4370,6 +4486,9 @@ impl ClayDocument {
             mesh_sculptor: std::cell::RefCell::new(None),
             mesh_undo: Vec::new(),
             mesh_redo: Vec::new(),
+            crossing_undo: Vec::new(),
+            crossing_redo: Vec::new(),
+            suppressed: std::collections::HashSet::new(),
             curve: None,
             live_hook: None,
             lattice: None,
@@ -5841,6 +5960,13 @@ impl ClayDocument {
 
         let mut rebuilt = Vec::with_capacity(ids.len());
         for id in &ids {
+            // An undone crossing's layer is still in the engine — the engine
+            // holds its filling on the redo stack — but it is not in the
+            // scene until the crossing is put back.
+            if self.suppressed.contains(id) {
+                kept.remove(id);
+                continue;
+            }
             if let Some(known) = kept.remove(id) {
                 rebuilt.push(known);
                 continue;
