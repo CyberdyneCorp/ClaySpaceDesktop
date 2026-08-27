@@ -42,6 +42,23 @@ pub enum Skip {
 }
 
 impl Skip {
+    /// Whether this is the machine's inability rather than the code's.
+    ///
+    /// The split this module's opening paragraph describes, made usable. A
+    /// machine with no adapter cannot render whatever the code does, and says
+    /// so on every run, so a figure it drops is not evidence of anything and
+    /// never fails the gate — a developer without a GPU who sees red learns to
+    /// ignore red.
+    ///
+    /// Everything else is a property of the code: a tool with no gesture, an
+    /// operation off this representation, an edit the engine refused. Those
+    /// are excused only when the baseline gave the *same* reason, because a
+    /// reason that appeared since the baseline was recorded is something
+    /// breaking. See `compare::missing`.
+    pub const fn is_the_machine(self) -> bool {
+        matches!(self, Self::NoHeadlessGpu | Self::NoBackends)
+    }
+
     pub const fn reason(self) -> &'static str {
         match self {
             Self::NoHeadlessGpu => "no headless GPU",

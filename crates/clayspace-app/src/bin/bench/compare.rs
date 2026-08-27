@@ -11,6 +11,7 @@ use clayspace_app::Conditions;
 use crate::json::{self, Baseline};
 use crate::load::Load;
 use crate::run::Run;
+use crate::skip::Skip;
 
 /// Compares against a recorded baseline, refusing to compare unlike runs.
 pub fn compare(
@@ -149,10 +150,38 @@ fn missing(baseline: &Baseline, run: &Run) -> bool {
 
     let mut unaccounted = Vec::new();
     let mut accounted = Vec::new();
+    let mut changed = Vec::new();
     for name in absent {
-        match reason_for(run, name) {
-            Some(reason) => accounted.push(format!("  {name:<38} {reason}")),
-            None => unaccounted.push(format!("  {name}")),
+        // A stated reason is not on its own an excuse. `skip.rs` opens by
+        // drawing the distinction this turns on — "a measurement that could
+        // not run on this machine, which is fine, or a measurement that
+        // quietly stopped running, which is the thing a performance gate
+        // exists to catch" — and until now the code did not act on it: any
+        // reason at all moved a figure into the accounted column. So an engine
+        // that started refusing every edit recorded `EditRefused` against
+        // every brush, dropped every brush figure, and passed.
+        //
+        // What separates the two is not which reason it is but whether the
+        // baseline gave the same one. A machine without a GPU says so on every
+        // run; an engine that broke this week says something new.
+        match (reason_for(run, name), reason_recorded(baseline, name)) {
+            // The machine's inability is an excuse on its own: it is true
+            // whatever the code does, and a baseline recorded on a machine
+            // that *could* is the normal case, not a signal.
+            (Some(now), _) if now.is_the_machine() => {
+                accounted.push(format!("  {name:<38} {}", now.reason()))
+            }
+            (Some(now), Some(before)) if now.reason() == before => {
+                accounted.push(format!("  {name:<38} {}", now.reason()))
+            }
+            (Some(now), Some(before)) => changed.push(format!(
+                "  {name:<38} was {before:?}, now {:?}",
+                now.reason()
+            )),
+            (Some(now), None) => {
+                changed.push(format!("  {name:<38} newly skipped: {}", now.reason()))
+            }
+            (None, _) => unaccounted.push(format!("  {name}")),
         }
     }
 
@@ -162,8 +191,16 @@ fn missing(baseline: &Baseline, run: &Run) -> bool {
             println!("{line}");
         }
     }
+    if !changed.is_empty() {
+        println!("\nSTOPPED BEING MEASURED — skipped now, not skipped then");
+        for line in &changed {
+            println!("{line}");
+        }
+        println!("  the baseline measured these; a reason that appeared since is");
+        println!("  something breaking, not a machine that cannot.");
+    }
     if unaccounted.is_empty() {
-        return false;
+        return !changed.is_empty();
     }
     println!("\nMISSING — in the baseline, not measured, and no reason given");
     for line in &unaccounted {
@@ -173,12 +210,25 @@ fn missing(baseline: &Baseline, run: &Run) -> bool {
     true
 }
 
+/// The reason the baseline recorded for a figure, if it recorded one.
+///
+/// Prefix-matched exactly as `reason_for` matches this run's skips, so that
+/// the two sides of the comparison agree on what a group name covers.
+fn reason_recorded<'a>(baseline: &'a Baseline, figure: &str) -> Option<&'a str> {
+    baseline
+        .skipped
+        .iter()
+        .filter(|(prefix, _)| covers(prefix, figure))
+        .map(|(_, reason)| reason.as_str())
+        .next()
+}
+
 /// The stated reason a figure of this name is not here, if there is one.
-fn reason_for(run: &Run, name: &str) -> Option<&'static str> {
+fn reason_for(run: &Run, name: &str) -> Option<Skip> {
     run.skips()
         .iter()
         .find(|(prefix, _)| covers(prefix, name))
-        .map(|(_, why)| why.reason())
+        .map(|(_, why)| *why)
 }
 
 /// Whether a skip recorded under `prefix` accounts for a figure called `name`.
@@ -190,7 +240,6 @@ fn covers(prefix: &str, name: &str) -> bool {
 mod tests {
     use super::*;
     use crate::figures::Figure;
-    use crate::skip::Skip;
     use std::collections::BTreeMap;
 
     fn conditions() -> Conditions {
@@ -256,6 +305,53 @@ mod tests {
             cores: 24,
         };
         assert_eq!(noise(Some(&quiet), &recorded), None);
+    }
+
+    #[test]
+    fn an_engine_that_started_refusing_every_edit_fails_the_gate() {
+        // The failure this gate exists for, and the one it used to pass: a
+        // change makes `apply_stroke` refuse, every brush group records
+        // `EditRefused`, every brush figure vanishes, and a reason was given
+        // for each — so the old accounting called them all excused.
+        let mut baseline = baseline(&[("brush.sdf.padrao.mean", 10.0)]);
+        baseline.skipped = BTreeMap::new();
+        let mut run = Run::new(None);
+        run.skip("brush.sdf.padrao", Skip::EditRefused);
+        assert!(
+            missing(&baseline, &run),
+            "a figure the baseline measured, skipped now for a reason the \
+             baseline never gave, has to fail"
+        );
+    }
+
+    #[test]
+    fn a_machine_that_never_could_does_not_fail_the_gate() {
+        // The other half of the same distinction: a runner with no GPU said so
+        // when the baseline was recorded and says so now. Nothing broke.
+        let mut baseline = baseline(&[("render.frame.mean", 4.0)]);
+        baseline.skipped = [("render".to_string(), "no headless GPU".to_string())]
+            .into_iter()
+            .collect();
+        let mut run = Run::new(None);
+        run.skip("render", Skip::NoHeadlessGpu);
+        assert!(!missing(&baseline, &run));
+    }
+
+    #[test]
+    fn a_skip_whose_reason_changed_fails_the_gate() {
+        // Same figure, still absent, different story. "No GPU" becoming "the
+        // engine refused the edit" is the engine breaking on a machine that
+        // was always able to run it.
+        let mut baseline = baseline(&[("brush.sdf.padrao.mean", 10.0)]);
+        baseline.skipped = [(
+            "brush.sdf.padrao".to_string(),
+            "no headless GPU".to_string(),
+        )]
+        .into_iter()
+        .collect();
+        let mut run = Run::new(None);
+        run.skip("brush.sdf.padrao", Skip::EditRefused);
+        assert!(missing(&baseline, &run));
     }
 
     #[test]
