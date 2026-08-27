@@ -509,18 +509,20 @@ fn the_brush_cursor_follows_the_surface_and_clears_off_it() {
     );
     let with = harness.capture(&gpu_mesh, &camera, false, "12-cursor-on");
 
-    let drawn = {
-        let mut count = 0usize;
-        for y in 0..with.height {
-            for x in 0..with.width {
-                if with.pixel(x, y) != without.pixel(x, y) {
-                    count += 1;
-                }
-            }
-        }
-        count
-    };
-    assert!(drawn > 100, "the brush cursor drew only {drawn} pixels");
+    // Past `RENDER_NOISE`, not byte-exact.
+    //
+    // Byte inequality with a threshold of 100 was under this repo's own
+    // measured floor: `visual_to_mesh` records a macOS runner leaving 1,294
+    // pixels byte-differing on a frame that was meant to be unchanged, none of
+    // them past the threshold. So `drawn > 100` was satisfied there by a
+    // rasteriser that had not settled twice, whether or not a cursor was
+    // drawn. Measured with the right instrument: 288 pixels past the noise
+    // here, against 369 byte-differing.
+    let drawn = support::differing_pixels(&with, &without);
+    assert!(
+        drawn > 100,
+        "the brush cursor drew only {drawn} pixels past the noise floor"
+    );
 
     // A larger brush must read as a larger ring.
     harness.renderer.set_cursors(

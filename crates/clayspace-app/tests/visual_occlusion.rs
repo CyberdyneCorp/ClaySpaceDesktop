@@ -133,9 +133,23 @@ fn the_folds_of_a_worked_form_darken() {
     println!("surface mean {before:.1} -> {after:.1}; {dark} pixels darker, {light} lighter");
 
     // It has to do something, or the passes are running and producing white.
+    //
+    // On the count rather than on the mean. `after < before` is a bare
+    // inequality over a whole-surface average: one level on one pixel
+    // satisfies it, and the average is the least sensitive instrument here.
+    // `dark` was already being computed with the right one — pixels past
+    // `RENDER_NOISE`, so a driver's dithering cannot contribute — and was
+    // being printed and thrown away.
+    //
+    // Measured: 98 pixels on this worked form, against a bare sphere in the
+    // test below which has no fold to darken and produces none. The floor is
+    // set at 40 to leave room for a mesher that shifts the crease by a pixel
+    // without pretending 98 is a bound.
     assert!(
-        after < before,
-        "occlusion left the surface no darker ({before:.1} against {after:.1})"
+        dark > 40,
+        "occlusion darkened only {dark} pixels past the noise floor \
+         (surface mean {before:.1} against {after:.1}), which is not a fold \
+         being shaded — see target/visual/90-occlusion-on.png"
     );
 
     // And it may only darken. The composite multiplies, so a lighter pixel

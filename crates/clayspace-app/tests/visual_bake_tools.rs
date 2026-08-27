@@ -84,7 +84,7 @@ fn roughness(image: &Image, background: [u8; 4]) -> f64 {
 }
 
 /// Draws a stroke with one tool and reports the picture and the node count.
-fn stroke_with(harness: &mut Harness, tool: ToolKind, name: &str) -> Option<(Image, f64, usize)> {
+fn stroke_with(harness: &mut Harness, tool: ToolKind, name: &str) -> Option<Applied> {
     let mut document = document()?;
     let camera = framed(&document);
     let mut geometry = SurfaceGeometry::new(&harness.gpu);
@@ -147,6 +147,35 @@ fn stroke_with(harness: &mut Harness, tool: ToolKind, name: &str) -> Option<(Ima
         }
     }
 
+    // The stroke itself, which this had stopped delivering.
+    //
+    // #13 meant to add the symmetry loop above and replaced this with it, so
+    // from then on the function selected a tool, set the mirror and captured
+    // the frame it started from: all eight captures were one identical image
+    // and every figure below compared a surface to itself. Restored in the
+    // order the deletion implies — symmetry first, because the ViewModel reads
+    // it when the stroke begins.
+    for i in 0..8 {
+        let t = i as f32 / 7.0;
+        let angle = (t - 0.5) * 1.1;
+        let (s, c) = angle.sin_cos();
+        let position = [s * 1.01, 0.1, c * 1.01];
+        let command = if i == 0 {
+            Command::BeginStroke {
+                position,
+                pressure: 1.0,
+                modifiers: Default::default(),
+            }
+        } else {
+            Command::ContinueStroke {
+                position,
+                pressure: 1.0,
+            }
+        };
+        vm.dispatch(command).ok()?;
+    }
+    vm.dispatch(Command::EndStroke).ok()?;
+
     shared
         .with(|document| geometry.rebuild(&harness.gpu, document))
         .ok()?;
@@ -159,11 +188,26 @@ fn stroke_with(harness: &mut Harness, tool: ToolKind, name: &str) -> Option<(Ima
 
     let background = harness.background();
     let _ = nodes_before;
-    Some((
-        after.clone(),
-        roughness(&before, background),
-        roughness(&after, background) as usize,
-    ))
+    Some(Applied {
+        moved: support::differing_pixels(&before, &after),
+        rough_before: roughness(&before, background),
+        rough_after: roughness(&after, background),
+    })
+}
+
+/// What one tool did to the fixture.
+///
+/// `moved` is here because nothing used to notice when the answer was
+/// "nothing at all": with the stroke missing, `rough_before` and `rough_after`
+/// were read off the same image and every assertion below was satisfied by a
+/// tool that had never run. A roughness that did not change is not evidence
+/// the tool is gentle, and this is what tells the two apart.
+struct Applied {
+    /// Pixels the stroke moved past the render noise. The caller reads this
+    /// before it reads any roughness — see the assertion it feeds.
+    moved: usize,
+    rough_before: f64,
+    rough_after: f64,
 }
 
 #[test]
@@ -173,10 +217,10 @@ fn the_smoothing_tools_smooth_rather_than_crumble() {
     };
 
     println!(
-        "\n{:<10} {:>12} {:>12}",
-        "tool", "rough before", "rough after"
+        "\n{:<10} {:>12} {:>12} {:>10}",
+        "tool", "rough before", "rough after", "px moved"
     );
-    let mut worse = Vec::new();
+    let mut measured = Vec::new();
     for tool in [
         ToolKind::Suavizar,
         ToolKind::Relaxar,
@@ -184,19 +228,46 @@ fn the_smoothing_tools_smooth_rather_than_crumble() {
         ToolKind::Polir,
     ] {
         let name = format!("{tool:?}").to_lowercase();
-        let Some((_, before, after)) = stroke_with(&mut harness, tool, &name) else {
+        let Some(applied) = stroke_with(&mut harness, tool, &name) else {
             return;
         };
-        let after = after as f64;
-        println!("{:<10} {before:>12.2} {after:>12.2}", format!("{tool:?}"));
-        if after > before {
-            worse.push((tool, before, after));
-        }
+        println!(
+            "{:<10} {:>12.2} {:>12.2} {:>10}",
+            format!("{tool:?}"),
+            applied.rough_before,
+            applied.rough_after,
+            applied.moved
+        );
+        measured.push((tool, applied));
     }
     println!();
 
+    // Before anything is concluded from the roughness: the tool has to have
+    // done something. This is the assertion whose absence let #13 delete the
+    // stroke and leave the suite green for four releases — every figure below
+    // was read off two copies of one frame, and every one of them agreed.
+    let untouched: Vec<String> = measured
+        .iter()
+        .filter(|(_, applied)| applied.moved < 50)
+        .map(|(tool, applied)| format!("{tool:?} moved {} pixels", applied.moved))
+        .collect();
+    assert!(
+        untouched.is_empty(),
+        "a smoothing tool left the picture where it found it: {untouched:?}. \
+         Either the stroke is not reaching the document or the tool is doing \
+         nothing — see target/visual/bake-*.png"
+    );
+
     // These tools do not yet leave the surface smoother than they found it,
     // and this pins how far off that is rather than pretending otherwise.
+    //
+    // The figure below is 5.83, not the 5.00 this comment used to carry. Two
+    // faults were stacking to produce that number, and they cancelled into a
+    // reading that looked like success. #13 removed the stroke, so `before`
+    // and `after` were roughness read off *the same image* — and the helper
+    // returned the second one `as usize`, truncating 5.83 to 5. A surface
+    // compared with itself therefore reported smoothing by 0.40, on all four
+    // tools, for four releases.
     //
     // What is fixed: applying them per segment of a live stroke stacked one
     // baked volume per segment and the surface came back crumbling, at 13 and
@@ -216,17 +287,24 @@ fn the_smoothing_tools_smooth_rather_than_crumble() {
     // Measured on this machine, same stroke, only the feather changing:
     //
     //   hard replace (0.27 and before)   7.00
-    //   feathered (0.28)                 5.00   <- this
+    //   feathered (0.28)                 5.83   <- this, measured whole
     //   untouched baseline               4.88
     //
-    // The ceiling is set to catch a regression to the hard replace with room
-    // to spare, rather than to pin 5.00 exactly — the residue is a couple of
-    // percent over the baseline and not worth a brittle bound.
-    let ceiling = 5.5;
-    let over: Vec<String> = worse
+    // The middle row read 5.00 while the truncation was in place. It is 5.83
+    // against a 5.40 surface, so the honest statement is that the feather
+    // stopped the crumbling — 13 and 9 before it — and did not reach
+    // smoothing. The ceiling catches a regression towards the hard replace
+    // with room to spare rather than pinning 5.83 exactly.
+    let ceiling = 6.0;
+    // Over every tool, not only the ones that came out rougher than they went
+    // in. The ceiling used to be applied to a list already filtered by
+    // `after > before`, so a tool that smoothed a little and was still far
+    // past the ceiling passed — and once all four smoothed, the list was empty
+    // and the bound stopped being checked at all.
+    let over: Vec<String> = measured
         .iter()
-        .filter(|(_, _, after)| *after > ceiling)
-        .map(|(tool, before, after)| format!("{tool:?} {before:.1}->{after:.1}"))
+        .filter(|(_, applied)| applied.rough_after > ceiling)
+        .map(|(tool, a)| format!("{tool:?} {:.1}->{:.1}", a.rough_before, a.rough_after))
         .collect();
     assert!(
         over.is_empty(),
@@ -234,6 +312,11 @@ fn the_smoothing_tools_smooth_rather_than_crumble() {
          leave: {over:?}. Past that is the crumbling that came from applying \
          a region operation per stroke segment — see target/visual/bake-*.png"
     );
+
+    // No assertion that these smooth, because measured whole they do not. The
+    // name is "smooth rather than crumble" and the ceiling above is the
+    // crumbling half; the smoothing half is what the roughness table is for,
+    // and it is printed so that a change either way is visible in the log.
 }
 
 #[test]
