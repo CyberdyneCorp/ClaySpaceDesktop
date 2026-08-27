@@ -40,6 +40,9 @@ struct Outcome {
     segments: usize,
     /// Share of subject pixels that changed.
     changed: f64,
+    /// The same share between two renders of the *same* geometry, which is
+    /// the floor under which `changed` says nothing.
+    noise: f64,
     /// Longest single segment. Inherently the last one: the dirty region
     /// accumulates through a stroke, so cost rises from about 14 ms to about
     /// 36 ms across twenty-four samples.
@@ -140,6 +143,19 @@ fn exercise(harness: &mut Harness, tool: ToolKind) -> Option<Outcome> {
         false,
         &format!("brush-{name}-before"),
     );
+    // The same frame again, with nothing done to it in between: whatever
+    // `subject_change` reports for this pair is what two renders of identical
+    // geometry differ by on this machine, and no smaller change is evidence of
+    // anything. Measured rather than assumed, because it is not the same
+    // everywhere — it is zero on Linux and not on macOS, which is how a mask
+    // asserting it moves nothing came to fail there on 0.11% of the subject.
+    let again = harness.capture(
+        geometry.mesh(),
+        &camera,
+        false,
+        &format!("brush-{name}-again"),
+    );
+    let noise = subject_change(&before, &again, background);
 
     if let Err(refusal) = vm.dispatch(Command::SelectTool(tool)) {
         return Some(Outcome {
@@ -147,6 +163,7 @@ fn exercise(harness: &mut Harness, tool: ToolKind) -> Option<Outcome> {
             refused: Some(format!("{refusal}")),
             segments: 0,
             changed: 0.0,
+            noise: 0.0,
             worst_segment: Duration::ZERO,
             typical_segment: Duration::ZERO,
             triangles: geometry.triangle_count(),
@@ -250,6 +267,7 @@ fn exercise(harness: &mut Harness, tool: ToolKind) -> Option<Outcome> {
         refused,
         segments,
         changed: subject_change(&before, &after, background),
+        noise,
         worst_segment: worst,
         typical_segment: {
             applied.sort();
@@ -369,11 +387,16 @@ fn every_brush_in_the_shelf_draws_something_worth_looking_at() {
             "the mask painted nothing — it was mapped onto a deformation verb \
              once, and reporting no change is how that would look now"
         );
+        // Against this machine's own re-render floor, not a fixed share. The
+        // claim is that the mask moves nothing, and "nothing" is only
+        // measurable down to what two identical renders already differ by.
+        let allowed = 0.001f64.max(mask.noise * 2.0);
         assert!(
-            mask.changed < 0.001,
-            "the mask moved {:.2}% of the surface; freezing a region must not \
-             sculpt it",
-            mask.changed * 100.0
+            mask.changed < allowed,
+            "the mask moved {:.2}% of the surface against a {:.2}% floor for \
+             re-rendering the same geometry; freezing a region must not sculpt it",
+            mask.changed * 100.0,
+            allowed * 100.0
         );
     }
 
