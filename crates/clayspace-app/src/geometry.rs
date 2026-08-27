@@ -601,7 +601,7 @@ impl SurfaceGeometry {
         indices.extend(geometry.indices.iter().map(|i| i + slot.vertex_base));
         indices.resize(slot.index_capacity as usize, slot.vertex_base);
 
-        self.bounds = union(self.bounds, bounds_of(&geometry.vertices));
+        self.bounds = union(self.bounds, Vertex::bounds(&geometry.vertices));
         self.mesh
             .patch_vertices(gpu, slot.vertex_base, &geometry.vertices);
         self.mesh.patch_indices(gpu, slot.index_base, &indices);
@@ -1127,17 +1127,6 @@ impl SurfaceGeometry {
     pub fn settle_layout(&mut self, gpu: &Gpu) {
         self.lay_out(gpu);
     }
-
-    /// How much of the stored geometry is empty slots.
-    ///
-    /// The signal for when compaction is worth its cost.
-    pub fn fragmentation(&self) -> f64 {
-        if self.keys.is_empty() {
-            return 0.0;
-        }
-        let empty = self.keys.values().filter(|k| k.indices.is_empty()).count();
-        empty as f64 / self.keys.len() as f64
-    }
 }
 
 /// Writes each vertex's mask weight, when there is a mask to read.
@@ -1214,18 +1203,6 @@ fn read_mesh(mesh: &Mesh) -> Result<(Vec<Vertex>, Vec<u32>), ClayError> {
 
 /// Kept so the document type is visible to readers of the imports.
 const _: fn(&Document) -> bool = |_| true;
-
-/// The corners of a box containing every vertex.
-fn bounds_of(vertices: &[Vertex]) -> Option<([f32; 3], [f32; 3])> {
-    let first = vertices.first()?.position;
-    Some(vertices.iter().fold((first, first), |(min, max), v| {
-        let at = v.position;
-        (
-            [min[0].min(at[0]), min[1].min(at[1]), min[2].min(at[2])],
-            [max[0].max(at[0]), max[1].max(at[1]), max[2].max(at[2])],
-        )
-    }))
-}
 
 /// Both boxes, or whichever one exists.
 fn union(

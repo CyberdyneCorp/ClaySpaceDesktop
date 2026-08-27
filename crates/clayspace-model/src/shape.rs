@@ -269,13 +269,6 @@ pub enum ItemKind {
     Armature,
 }
 
-impl ItemKind {
-    /// Whether the manipulator and the object list address this.
-    pub fn is_object(self) -> bool {
-        self == Self::Object
-    }
-}
-
 /// Where an object is, as the document addresses it.
 ///
 /// The node id is the engine's, carried opaquely: the domain may not depend on
@@ -315,15 +308,6 @@ impl ObjectSource {
             Self::Shape(shape) => Some(*shape),
             Self::Mesh { .. } => None,
         }
-    }
-
-    /// Whether the measurements a shape carries mean anything here.
-    ///
-    /// They do not for a mesh: what it is measured by is the model itself, and
-    /// a panel offering a radius for one would be offering a control that does
-    /// nothing.
-    pub fn takes_measurements(&self) -> bool {
-        matches!(self, Self::Shape(_))
     }
 }
 

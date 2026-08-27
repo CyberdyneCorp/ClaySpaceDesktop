@@ -9,8 +9,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use clayspace_model::{
-    Combine, CombineSettings, GizmoHandle, GizmoMode, GizmoTarget, LayerKey, ModelError, ObjectId,
-    ObjectModel, Representation, SceneObject, Shape, Transform,
+    Combine, CombineSettings, GizmoHandle, GizmoMode, GizmoTarget, ItemKind, LayerKey, ModelError,
+    ObjectId, ObjectModel, Representation, SceneObject, Shape, Transform,
 };
 use clayspace_vm::{Command, ObjectViewModel, Watcher};
 
@@ -38,6 +38,12 @@ struct FakeObjects {
     refuse: Option<&'static str>,
     /// Set to make every transform overrun the frame, as a heavy form does.
     slow: bool,
+    /// What a pick ray meets, whatever it is. `None` is empty space.
+    ///
+    /// Held as the kind rather than as a hit so a test can put a stroke under
+    /// the pointer, which is the case `pick_object` alone cannot report, and
+    /// shared so it can be changed between two presses.
+    under_the_pointer: Rc<RefCell<Option<ItemKind>>>,
 }
 
 impl FakeObjects {
@@ -49,6 +55,7 @@ impl FakeObjects {
             selected: None,
             refuse: None,
             slow: false,
+            under_the_pointer: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -254,6 +261,17 @@ impl ObjectModel for FakeObjects {
             ),
             _ => Ok(()),
         }
+    }
+
+    fn pick_object(&mut self, _origin: [f32; 3], _direction: [f32; 3]) -> Option<ObjectId> {
+        match *self.under_the_pointer.borrow() {
+            Some(ItemKind::Object) => self.objects.first().map(|object| object.id),
+            _ => None,
+        }
+    }
+
+    fn pick_item(&mut self, _origin: [f32; 3], _direction: [f32; 3]) -> Option<ItemKind> {
+        *self.under_the_pointer.borrow()
     }
 
     fn begin_target_drag(&mut self, _target: GizmoTarget) {
@@ -743,5 +761,76 @@ fn a_drag_that_keeps_up_is_not_throttled() {
         calls.borrow().transforms.len(),
         4,
         "a surface that keeps up should be evaluated every frame"
+    );
+}
+
+// -- picking in the viewport ------------------------------------------------
+
+/// A press that lands on a sculpting stroke.
+///
+/// The manipulator does not act on one, and the requirement is that an attempt
+/// to select one "SHALL say so rather than doing nothing": a `None` from
+/// `pick_object` cannot be told apart from a click on empty space, so the
+/// second question is asked and its answer becomes the status line.
+#[test]
+fn a_press_on_a_stroke_says_why_it_was_not_taken() {
+    let calls = Rc::new(RefCell::new(Calls::default()));
+    let mut model = FakeObjects::new(calls.clone());
+    model.objects.push(an_object(1, Shape::Box, [0.0; 3]));
+    *model.under_the_pointer.borrow_mut() = Some(ItemKind::Stroke);
+    let mut vm = ObjectViewModel::new(Box::new(model));
+
+    assert_eq!(
+        vm.pick([0.0, 4.0, 0.0], [0.0, -1.0, 0.0]),
+        None,
+        "a stroke is not selectable as an object"
+    );
+    let notice = vm.notice().get().clone().expect("a stroke was refused");
+    assert!(
+        notice.contains("traço"),
+        "the refusal should name what was clicked, got {notice:?}"
+    );
+    assert_eq!(
+        *vm.selected().get(),
+        None,
+        "nothing should have been selected"
+    );
+}
+
+/// And a press on nothing at all says nothing at all — the case the refusal
+/// above exists to be distinguishable from.
+#[test]
+fn a_press_on_empty_space_leaves_no_notice() {
+    let (mut vm, _calls) = viewmodel();
+
+    assert_eq!(vm.pick([0.0, 4.0, 0.0], [0.0, -1.0, 0.0]), None);
+    assert_eq!(
+        *vm.notice().get(),
+        None,
+        "a click that missed is not a refusal"
+    );
+}
+
+/// A press on a placed object takes the refusal back down: the status line
+/// carries the most recent answer, and this one is "yes".
+#[test]
+fn a_press_on_an_object_answers_with_it_and_clears_the_refusal() {
+    let calls = Rc::new(RefCell::new(Calls::default()));
+    let mut model = FakeObjects::new(calls.clone());
+    model.objects.push(an_object(1, Shape::Box, [0.0; 3]));
+    let id = model.objects[0].id;
+    let under = model.under_the_pointer.clone();
+    *under.borrow_mut() = Some(ItemKind::Stroke);
+    let mut vm = ObjectViewModel::new(Box::new(model));
+
+    vm.pick([0.0, 4.0, 0.0], [0.0, -1.0, 0.0]);
+    assert!(vm.notice().get().is_some(), "the stroke was refused");
+
+    *under.borrow_mut() = Some(ItemKind::Object);
+    assert_eq!(vm.pick([0.0, 4.0, 0.0], [0.0, -1.0, 0.0]), Some(id));
+    assert_eq!(
+        *vm.notice().get(),
+        None,
+        "a press that landed on an object should take the refusal down"
     );
 }

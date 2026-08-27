@@ -102,11 +102,6 @@ impl GizmoHandle {
             other => Self::all_for(other),
         }
     }
-
-    /// Whether this is a ring rather than a shaft or a box.
-    pub fn is_ring(self, mode: GizmoMode) -> bool {
-        mode == GizmoMode::Rotate && matches!(self, Self::Axis(_) | Self::View)
-    }
 }
 
 /// A transform in progress, resolved from where a drag started and where it is

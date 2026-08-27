@@ -101,11 +101,6 @@ impl MeshBrush {
         matches!(self, Self::Paint | Self::Smear)
     }
 
-    /// Whether the verb is told *from where to where* rather than stamped.
-    pub fn is_dragged(self) -> bool {
-        matches!(self, Self::Grab | Self::Snakehook | Self::Nudge)
-    }
-
     fn to_raw(self) -> i32 {
         (match self {
             Self::Grab => sys::clay_mesh_brush::CLAY_MESH_BRUSH_GRAB,

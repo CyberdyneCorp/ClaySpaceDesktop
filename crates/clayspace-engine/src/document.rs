@@ -147,6 +147,34 @@ struct Layer {
 }
 
 impl Layer {
+    /// A layer as every route makes one, before anything read back from the
+    /// engine is written over it.
+    ///
+    /// Most of a new row is the same wherever it is created: it stands at the
+    /// origin, is shown, unprotected, at full intensity, and has neither a
+    /// grid nor a recorded pass yet. That was spelled out at five sites, so a
+    /// field added to `Layer` was five edits and a route that quietly differed
+    /// looked exactly like one that did not. Here it is once, and the two
+    /// routes that genuinely differ — a reopened document, and a mesh row that
+    /// has just been given its triangles — say so by overriding a named field.
+    fn new(id: LayerId, key: LayerKey, name: &str, representation: Representation) -> Self {
+        Self {
+            id,
+            transform: clayspace_model::Transform::default(),
+            key,
+            name: name.to_string(),
+            engine_name: name.to_string(),
+            representation,
+            carries_geometry: representation != Representation::Mesh,
+            visible: true,
+            protection: Protection::default(),
+            intensity: 100,
+            voxel_bounds: None,
+            voxel_chunks: std::collections::BTreeMap::new(),
+            sculpt_layers: Vec::new(),
+        }
+    }
+
     fn summary(&self) -> LayerSummary {
         LayerSummary {
             key: self.key,
@@ -419,36 +447,11 @@ impl ClayDocument {
             .map_err(ModelError::engine)?;
         document.enable_undo().map_err(ModelError::engine)?;
 
-        let cache = BrickCache::new(BrickConfig {
-            // 8-cell bricks. 16 was tried: it covers the surface in a third
-            // as many keys but each holds eight times the cells, and a dilated
-            // dirty set then meshes more cells overall — 64 ms against 39 ms
-            // on the same edit.
-            dim: 8,
-            voxel_size: Self::VOXEL_SIZE,
-            band_voxels: 3,
-            memory_budget: Some(512 * 1024 * 1024),
-            colors: false,
-        })
-        .map_err(ModelError::engine)?;
+        let cache = BrickCache::new(Self::BRICK_CONFIG).map_err(ModelError::engine)?;
 
         let mut model = Self {
             document,
-            layers: vec![Layer {
-                id,
-                transform: clayspace_model::Transform::default(),
-                key: LayerKey(1),
-                name: "Forma".to_string(),
-                engine_name: "Forma".to_string(),
-                representation: Representation::Sdf,
-                carries_geometry: true,
-                visible: true,
-                protection: Protection::default(),
-                intensity: 100,
-                voxel_bounds: None,
-                voxel_chunks: std::collections::BTreeMap::new(),
-                sculpt_layers: Vec::new(),
-            }],
+            layers: vec![Layer::new(id, LayerKey(1), "Forma", Representation::Sdf)],
             active: 0,
             cache,
             policy,
@@ -661,10 +664,6 @@ impl ClayDocument {
         &self.policy
     }
 
-    pub fn policy_mut(&mut self) -> &mut BackendPolicy {
-        &mut self.policy
-    }
-
     /// Adds a voxel layer and makes it active.
     pub fn add_voxel_layer(&mut self, name: &str, voxel_size: f32) -> Result<(), ModelError> {
         // Through the document, so the grid is *in* the document.
@@ -681,23 +680,7 @@ impl ClayDocument {
             .document
             .add_voxel_layer(name, voxel_size)
             .map_err(ModelError::engine)?;
-        let key = self.take_key();
-        self.layers.push(Layer {
-            id,
-            transform: clayspace_model::Transform::default(),
-            key,
-            name: name.to_string(),
-            engine_name: name.to_string(),
-            representation: Representation::Voxel,
-            carries_geometry: true,
-            visible: true,
-            protection: Protection::default(),
-            intensity: 100,
-            voxel_bounds: None,
-            voxel_chunks: std::collections::BTreeMap::new(),
-            sculpt_layers: Vec::new(),
-        });
-        self.active = self.layers.len() - 1;
+        self.adopt_engine_layer(id, name, Representation::Voxel)?;
         Ok(())
     }
 
@@ -1095,21 +1078,7 @@ impl ClayDocument {
         representation: Representation,
     ) -> Result<LayerKey, ModelError> {
         let key = self.take_key();
-        self.layers.push(Layer {
-            id,
-            transform: clayspace_model::Transform::default(),
-            key,
-            name: name.to_string(),
-            engine_name: name.to_string(),
-            representation,
-            carries_geometry: representation != Representation::Mesh,
-            visible: true,
-            protection: Protection::default(),
-            intensity: 100,
-            voxel_bounds: None,
-            voxel_chunks: std::collections::BTreeMap::new(),
-            sculpt_layers: Vec::new(),
-        });
+        self.layers.push(Layer::new(id, key, name, representation));
         self.active = self.layers.len() - 1;
         Ok(key)
     }
@@ -1316,6 +1285,24 @@ impl ClayDocument {
 
     /// The brick cache's sampling, which is what the viewport draws.
     pub const VOXEL_SIZE: f32 = 0.02;
+
+    /// How every document's brick cache is tuned.
+    ///
+    /// One constant rather than a literal per constructor: a document that is
+    /// opened has to mesh the way a document that is made does, and the two
+    /// used to be hand-copied — re-tuning `dim` in one of them would have left
+    /// every *opened* document on the old size with nothing to catch it.
+    ///
+    /// 8-cell bricks. 16 was tried: it covers the surface in a third as many
+    /// keys but each holds eight times the cells, and a dilated dirty set then
+    /// meshes more cells overall — 64 ms against 39 ms on the same edit.
+    const BRICK_CONFIG: BrickConfig = BrickConfig {
+        dim: 8,
+        voxel_size: Self::VOXEL_SIZE,
+        band_voxels: 3,
+        memory_budget: Some(512 * 1024 * 1024),
+        colors: false,
+    };
 
     /// The most positional jitter we pass through to the engine.
     ///
@@ -3975,24 +3962,7 @@ impl SceneModel for ClayDocument {
             _ => self.document.add_sdf_layer(name),
         }
         .map_err(ModelError::engine)?;
-        let key = self.take_key();
-        self.layers.push(Layer {
-            id,
-            transform: clayspace_model::Transform::default(),
-            key,
-            name: name.to_string(),
-            engine_name: name.to_string(),
-            representation,
-            carries_geometry: representation != Representation::Mesh,
-            visible: true,
-            protection: Protection::default(),
-            intensity: 100,
-            voxel_bounds: None,
-            voxel_chunks: std::collections::BTreeMap::new(),
-            sculpt_layers: Vec::new(),
-        });
-        self.active = self.layers.len() - 1;
-        Ok(key)
+        self.adopt_engine_layer(id, name, representation)
     }
 
     fn apply_sculpt_layer_op(
@@ -4431,15 +4401,6 @@ impl ClayDocument {
                     _ => Representation::Sdf,
                 };
                 Layer {
-                    id: *id,
-                    transform: clayspace_model::Transform::default(),
-                    key: LayerKey(index as u64 + 1),
-                    // A layer that was never named comes back empty rather
-                    // than absent, and an unnamed row in the stack is worse to
-                    // work with than a numbered one.
-                    name: engine_name.clone(),
-                    engine_name,
-                    representation,
                     // Read back from the engine, which reports Mesh only for a
                     // layer that carries one — an unattached row exists on
                     // this side alone and never survives a reload.
@@ -4451,22 +4412,20 @@ impl ClayDocument {
                             locked: i.protection.locked,
                         })
                         .unwrap_or_default(),
-                    intensity: 100,
-                    voxel_bounds: None,
-                    voxel_chunks: std::collections::BTreeMap::new(),
-                    sculpt_layers: Vec::new(),
+                    // A layer that was never named comes back empty rather
+                    // than absent, and an unnamed row in the stack is worse to
+                    // work with than a numbered one.
+                    ..Layer::new(
+                        *id,
+                        LayerKey(index as u64 + 1),
+                        &engine_name,
+                        representation,
+                    )
                 }
             })
             .collect();
 
-        let cache = BrickCache::new(BrickConfig {
-            dim: 8,
-            voxel_size: Self::VOXEL_SIZE,
-            band_voxels: 3,
-            memory_budget: Some(512 * 1024 * 1024),
-            colors: false,
-        })
-        .map_err(|e| unreadable(e.to_string()))?;
+        let cache = BrickCache::new(Self::BRICK_CONFIG).map_err(|e| unreadable(e.to_string()))?;
 
         let next_key = layers.len() as u64 + 1;
         let mut model = Self {
@@ -4675,26 +4634,16 @@ impl ClayDocument {
 
         let key = self.take_key();
         self.layers.push(Layer {
-            id,
-            transform: clayspace_model::Transform::default(),
-            key,
-            name: name.to_string(),
-            engine_name: name.to_string(),
-            // Recorded as a mesh so the tools reach it by representation
-            // rather than by a special case. A mesh layer is not evaluated,
-            // and nothing here pretends otherwise.
-            representation: Representation::Mesh,
             // This is the call that gives a mesh row its triangles, so it is
             // where the row becomes sculptable. `add_mesh_layer` records a row
             // with none, and the mesh verbs are unavailable on it until this
-            // has run.
+            // has run — which is why this overrides what `Layer::new` assumes
+            // of a mesh row.
             carries_geometry: true,
-            visible: true,
-            protection: Protection::default(),
-            intensity: 100,
-            voxel_bounds: None,
-            voxel_chunks: std::collections::BTreeMap::new(),
-            sculpt_layers: Vec::new(),
+            // Recorded as a mesh so the tools reach it by representation
+            // rather than by a special case. A mesh layer is not evaluated,
+            // and nothing here pretends otherwise.
+            ..Layer::new(id, key, name, Representation::Mesh)
         });
         self.refresh_stats();
         Ok(())

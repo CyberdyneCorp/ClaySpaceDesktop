@@ -17,7 +17,7 @@ use clayspace_model::{
     BrushSettings, ExchangeModel, ExportSettings, GestureSample, ImportSettings, Representation,
     SceneModel, SculptModel, ToolKind,
 };
-use clayspace_view::{Camera, Vertex};
+use clayspace_view::Camera;
 use support::{save, Harness};
 
 fn with_imported_mesh(who: &str) -> Option<(ClayDocument, std::path::PathBuf)> {
@@ -45,18 +45,7 @@ fn with_imported_mesh(who: &str) -> Option<(ClayDocument, std::path::PathBuf)> {
 
 /// The mesh layers, as the application uploads them.
 fn upload(harness: &mut Harness, document: &mut ClayDocument) {
-    let (positions, normals, colors, indices) = document.visible_mesh_geometry();
-    let vertices: Vec<Vertex> = positions
-        .into_iter()
-        .zip(normals)
-        .zip(colors)
-        .map(|((position, normal), color)| Vertex {
-            position,
-            normal,
-            color,
-            mask: 0.0,
-        })
-        .collect();
+    let (vertices, indices) = support::viewport_geometry(document);
     let gpu = harness.gpu.clone();
     harness.renderer.set_mesh_layers(&gpu, &vertices, &indices);
 }

@@ -14,22 +14,12 @@ mod support;
 
 use clayspace_app::SurfaceGeometry;
 use clayspace_engine::{BackendPolicy, ClayDocument};
-use clayspace_model::{ArmatureModel, SculptModel};
-use clayspace_view::Camera;
-use support::Harness;
+use clayspace_model::ArmatureModel;
+use support::{framed, Harness};
 
 fn document() -> Option<ClayDocument> {
     let policy = BackendPolicy::discover(None).ok()?;
     ClayDocument::new(policy).ok()
-}
-
-fn framed(document: &ClayDocument) -> Camera {
-    let mut camera = Camera::default();
-    match SculptModel::bounds(document) {
-        Some((min, max)) => camera.frame_bounds(min.into(), max.into()),
-        None => camera.frame_default(),
-    }
-    camera
 }
 
 #[test]

@@ -21,8 +21,8 @@ mod support;
 use clayspace_app::SurfaceGeometry;
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{BrushSettings, GestureSample, SculptModel, ToolKind};
-use clayspace_view::{Camera, Image};
-use support::Harness;
+use clayspace_view::Image;
+use support::{framed, Harness};
 
 /// A dab is local, so a whole-image mean would drown it. This is the share of
 /// pixels allowed to differ past the noise floor.
@@ -42,15 +42,6 @@ fn document() -> Option<ClayDocument> {
     ClayDocument::new(policy)
         .and_then(ClayDocument::with_starting_form)
         .ok()
-}
-
-fn framed(document: &ClayDocument) -> Camera {
-    let mut camera = Camera::default();
-    match SculptModel::bounds(document) {
-        Some((min, max)) => camera.frame_bounds(min.into(), max.into()),
-        None => camera.frame_default(),
-    }
-    camera
 }
 
 /// A stroke dragged across the front of the model, in world space.

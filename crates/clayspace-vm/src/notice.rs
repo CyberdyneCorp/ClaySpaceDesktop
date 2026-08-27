@@ -148,12 +148,6 @@ impl NoticeBoard {
         }
     }
 
-    pub fn clear_all(&mut self) {
-        if !self.notices.get().is_empty() {
-            self.notices.set(Vec::new());
-        }
-    }
-
     /// Records memory usage and raises a notice as the budget approaches.
     pub fn set_memory(&mut self, memory: MemoryState) {
         let was_near = self.memory.get().is_near_budget();

@@ -21,7 +21,7 @@ use clayspace_app::SharedDocument;
 use clayspace_app::SurfaceGeometry;
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{BrushSettings, GestureSample, SculptModel, ToolKind};
-use clayspace_view::{Camera, Image};
+use clayspace_view::Image;
 use clayspace_vm::{Command, SculptViewModel};
 
 /// What this fixture sculpts with, and what the roughening below matches.
@@ -35,22 +35,13 @@ use clayspace_vm::{Command, SculptViewModel};
 /// of the roughening on top of the original. `sdf_brushes.rs` is where
 /// symmetry is measured.
 const SYMMETRY: [bool; 3] = [false; 3];
-use support::Harness;
+use support::{framed, Harness};
 
 fn document() -> Option<ClayDocument> {
     let policy = BackendPolicy::discover(None).ok()?;
     ClayDocument::new(policy)
         .and_then(ClayDocument::with_starting_form)
         .ok()
-}
-
-fn framed(document: &ClayDocument) -> Camera {
-    let mut camera = Camera::default();
-    match SculptModel::bounds(document) {
-        Some((min, max)) => camera.frame_bounds(min.into(), max.into()),
-        None => camera.frame_default(),
-    }
-    camera
 }
 
 /// Roughness: how much neighbouring pixels disagree across the subject.

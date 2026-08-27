@@ -13,6 +13,12 @@
 //! - A handle the caller owns releases on drop; a handle borrowed from a
 //!   document cannot outlive it and has no destroy operation.
 //! - No panic and no unwind crosses the C boundary.
+//! - Every wrapper is executed by a test, including the ones nothing above
+//!   this layer calls yet. The surface is deliberately kept whole rather than
+//!   trimmed to today's callers — the engine's entry points are what this
+//!   crate exists to expose — but a wrapper nobody runs is a SAFETY comment
+//!   nobody has checked, so `tests/abi_surface.rs` runs the ones the
+//!   application has not reached for.
 
 mod authoring;
 mod backend;

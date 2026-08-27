@@ -43,6 +43,25 @@ impl Vertex {
     pub const COLOR_OFFSET: usize = 24;
     pub const MASK_OFFSET: usize = 36;
 
+    /// The corners of a box containing every vertex.
+    ///
+    /// Here rather than beside either caller: the renderer takes it to frame
+    /// what it just uploaded and the composition root takes it to accumulate a
+    /// scene's bounds, and two folds over the same attribute agreeing by hand
+    /// is one edit away from not agreeing. Arrays rather than `Vec3` because
+    /// that is the vocabulary the vertex itself is in, and the callers that
+    /// want glam already convert at their own boundary.
+    pub fn bounds(vertices: &[Self]) -> Option<([f32; 3], [f32; 3])> {
+        let first = vertices.first()?.position;
+        Some(vertices.iter().fold((first, first), |(min, max), v| {
+            let at = v.position;
+            (
+                [min[0].min(at[0]), min[1].min(at[1]), min[2].min(at[2])],
+                [max[0].max(at[0]), max[1].max(at[1]), max[2].max(at[2])],
+            )
+        }))
+    }
+
     fn layout() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
             array_stride: Self::STRIDE as u64,
@@ -146,7 +165,7 @@ impl GpuMesh {
                 .write_buffer(&self.indices, 0, bytemuck::cast_slice(indices));
         }
         self.index_count = indices.len() as u32;
-        self.bounds = bounds_of(vertices);
+        self.set_bounds(Vertex::bounds(vertices));
     }
 
     /// Allocates buffers of a fixed size without writing anything.
@@ -247,16 +266,6 @@ fn empty_buffer(gpu: &Gpu, label: &str, usage: wgpu::BufferUsages) -> wgpu::Buff
         usage: usage | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     })
-}
-
-fn bounds_of(vertices: &[Vertex]) -> Option<(Vec3, Vec3)> {
-    let mut iter = vertices.iter();
-    let first = Vec3::from(iter.next()?.position);
-    let (min, max) = iter.fold((first, first), |(min, max), v| {
-        let p = Vec3::from(v.position);
-        (min.min(p), max.max(p))
-    });
-    Some((min, max))
 }
 
 /// What the viewport draws behind the sculpt.
@@ -2264,6 +2273,48 @@ fn gizmo_geometry() -> (Vec<Vertex>, Vec<u32>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn at(position: [f32; 3]) -> Vertex {
+        Vertex {
+            position,
+            normal: [0.0, 1.0, 0.0],
+            color: [1.0; 3],
+            mask: 0.0,
+        }
+    }
+
+    /// The box has to be the extremes on every axis, not the first vertex or
+    /// the last.
+    ///
+    /// This is the framing box the viewport uses and the box the composition
+    /// root accumulates a scene from — the same fold, which used to be written
+    /// out once per crate with nothing keeping the two agreeing.
+    #[test]
+    fn the_bounds_are_the_extremes_on_every_axis() {
+        // The first vertex holds none of the six extremes, so a fold that
+        // seeded itself and then read only some of the axes would be caught.
+        let vertices = [
+            at([0.0, 0.0, 0.0]),
+            at([1.0, -2.0, 9.0]),
+            at([-3.0, 4.0, -7.0]),
+        ];
+        let (min, max) = Vertex::bounds(&vertices).expect("three vertices have a box");
+        assert_eq!(min, [-3.0, -2.0, -7.0]);
+        assert_eq!(max, [1.0, 4.0, 9.0]);
+    }
+
+    /// One vertex is a box of no size at that vertex, and no vertices is no
+    /// box at all — a frame on an empty scene has to fall back rather than
+    /// frame the origin.
+    #[test]
+    fn a_single_vertex_bounds_itself_and_none_bounds_nothing() {
+        let one = [at([2.0, 3.0, 4.0])];
+        assert_eq!(
+            Vertex::bounds(&one),
+            Some(([2.0, 3.0, 4.0], [2.0, 3.0, 4.0]))
+        );
+        assert_eq!(Vertex::bounds(&[]), None);
+    }
 
     /// A cursor at a point that no mirror plane passes through, so a mirror is
     /// always distinguishable from the original.

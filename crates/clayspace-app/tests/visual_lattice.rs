@@ -21,8 +21,8 @@ const LOOKING_DOWN_Z: [f32; 3] = [0.0, 0.0, 1.0];
 use clayspace_app::SurfaceGeometry;
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{Direction, GizmoHandle, GizmoMode, LatticeModel, LatticeState, SculptModel};
-use clayspace_view::{Camera, GizmoView, Image, LatticeView, Vertex};
-use support::Harness;
+use clayspace_view::{GizmoView, Image, LatticeView};
+use support::{framed, Harness};
 
 fn meshed() -> Option<ClayDocument> {
     let policy = BackendPolicy::discover(None).ok()?;
@@ -31,32 +31,6 @@ fn meshed() -> Option<ClayDocument> {
         .ok()?;
     document.convert_layer(Direction::SdfToMesh, 0.03, 0).ok()?;
     Some(document)
-}
-
-fn framed(document: &ClayDocument) -> Camera {
-    let mut camera = Camera::default();
-    match SculptModel::bounds(document) {
-        Some((min, max)) => camera.frame_bounds(min.into(), max.into()),
-        None => camera.frame_default(),
-    }
-    camera
-}
-
-/// The surface the viewport would draw.
-fn surface(document: &mut ClayDocument) -> (Vec<Vertex>, Vec<u32>) {
-    let (positions, normals, colors, indices) = document.visible_mesh_geometry();
-    let vertices = positions
-        .into_iter()
-        .zip(normals)
-        .zip(colors)
-        .map(|((position, normal), color)| Vertex {
-            position,
-            normal,
-            color,
-            mask: 0.0,
-        })
-        .collect();
-    (vertices, indices)
 }
 
 /// The handle size the application computes, spelled the same way.
@@ -87,7 +61,7 @@ fn a_cage_is_drawn_around_the_form() {
         return;
     };
     let camera = framed(&document);
-    let (vertices, indices) = surface(&mut document);
+    let (vertices, indices) = support::viewport_geometry(&mut document);
     let mut mesh = clayspace_view::GpuMesh::new(&harness.gpu);
     mesh.upload(&harness.gpu, &vertices, &indices);
 
@@ -146,7 +120,7 @@ fn the_selected_point_is_told_apart_from_the_rest() {
         return;
     };
     let camera = framed(&document);
-    let (vertices, indices) = surface(&mut document);
+    let (vertices, indices) = support::viewport_geometry(&mut document);
     let mut mesh = clayspace_view::GpuMesh::new(&harness.gpu);
     mesh.upload(&harness.gpu, &vertices, &indices);
 
@@ -193,7 +167,7 @@ fn dragging_the_cage_reaches_the_drawn_surface() {
     let camera = framed(&document);
     let mut mesh = clayspace_view::GpuMesh::new(&harness.gpu);
 
-    let (vertices, indices) = surface(&mut document);
+    let (vertices, indices) = support::viewport_geometry(&mut document);
     mesh.upload(&harness.gpu, &vertices, &indices);
     let before = harness.capture(&mesh, &camera, false, "88-cage-before");
 
@@ -210,7 +184,7 @@ fn dragging_the_cage_reaches_the_drawn_surface() {
     }
     document.apply_lattice().expect("the cage was refused");
 
-    let (vertices, indices) = surface(&mut document);
+    let (vertices, indices) = support::viewport_geometry(&mut document);
     mesh.upload(&harness.gpu, &vertices, &indices);
     harness.renderer.set_lattice(
         &harness.gpu,
@@ -249,7 +223,7 @@ fn each_manipulator_mode_draws_its_own_handles() {
         return;
     };
     let camera = framed(&document);
-    let (vertices, indices) = surface(&mut document);
+    let (vertices, indices) = support::viewport_geometry(&mut document);
     let mut mesh = clayspace_view::GpuMesh::new(&harness.gpu);
     mesh.upload(&harness.gpu, &vertices, &indices);
 
@@ -359,7 +333,7 @@ fn the_bend_reaches_the_screen_while_the_cage_is_being_dragged() {
     let camera = framed(&document);
     let mut mesh = clayspace_view::GpuMesh::new(&harness.gpu);
 
-    let (vertices, indices) = surface(&mut document);
+    let (vertices, indices) = support::viewport_geometry(&mut document);
     mesh.upload(&harness.gpu, &vertices, &indices);
     let rest = harness.capture(&mesh, &camera, false, "98-preview-rest");
 
@@ -379,7 +353,7 @@ fn the_bend_reaches_the_screen_while_the_cage_is_being_dragged() {
 
     // Still mid-gesture: nothing applied, nothing banked, the cage still up.
     assert!(document.lattice().active, "the cage came down on its own");
-    let (vertices, indices) = surface(&mut document);
+    let (vertices, indices) = support::viewport_geometry(&mut document);
     mesh.upload(&harness.gpu, &vertices, &indices);
     let during = harness.capture(&mesh, &camera, false, "99-preview-during");
 
@@ -548,7 +522,7 @@ fn the_form_is_drawn_through_while_a_cage_is_up() {
         return;
     };
     let camera = framed(&document);
-    let (vertices, indices) = surface(&mut document);
+    let (vertices, indices) = support::viewport_geometry(&mut document);
     let mut mesh = clayspace_view::GpuMesh::new(&harness.gpu);
     mesh.upload(&harness.gpu, &vertices, &indices);
 
@@ -640,7 +614,7 @@ fn the_outer_ring_is_drawn_and_faces_the_camera() {
     let Some(mut document) = meshed() else {
         return;
     };
-    let (vertices, indices) = surface(&mut document);
+    let (vertices, indices) = support::viewport_geometry(&mut document);
     let mut mesh = clayspace_view::GpuMesh::new(&harness.gpu);
     mesh.upload(&harness.gpu, &vertices, &indices);
 
@@ -764,7 +738,7 @@ fn turning_a_face_visibly_turns_the_cage_on_screen() {
                 handle: handle(&cage),
             },
         );
-        let (vertices, indices) = surface(document);
+        let (vertices, indices) = support::viewport_geometry(document);
         let mut mesh = clayspace_view::GpuMesh::new(&harness.gpu);
         mesh.upload(&harness.gpu, &vertices, &indices);
         harness.capture(&mesh, &camera, false, name)

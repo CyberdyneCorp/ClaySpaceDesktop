@@ -26,7 +26,7 @@ use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
     BrushSettings, Direction, GestureSample, Representation, SculptModel, ToolKind,
 };
-use clayspace_view::{Camera, Vertex};
+use clayspace_view::Camera;
 use support::Harness;
 
 fn meshed() -> Option<ClayDocument> {
@@ -104,18 +104,7 @@ fn drag(document: &ClayDocument, span: f32, steps: usize) -> Vec<GestureSample> 
 }
 
 fn capture(harness: &Harness, document: &mut ClayDocument, name: &str) {
-    let (positions, normals, colors, indices) = document.visible_mesh_geometry();
-    let vertices: Vec<Vertex> = positions
-        .into_iter()
-        .zip(normals)
-        .zip(colors)
-        .map(|((position, normal), color)| Vertex {
-            position,
-            normal,
-            color,
-            mask: 0.0,
-        })
-        .collect();
+    let (vertices, indices) = support::viewport_geometry(document);
     let mut mesh = clayspace_view::GpuMesh::new(&harness.gpu);
     mesh.upload(&harness.gpu, &vertices, &indices);
     let mut camera = Camera::default();
