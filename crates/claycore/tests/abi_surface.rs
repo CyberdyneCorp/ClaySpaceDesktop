@@ -350,3 +350,161 @@ fn a_cage_reports_the_reach_it_would_have_before_it_warps_anything() {
     // asking it before applying.
     assert!(inside(&doc, [0.0, 0.0, 0.0]), "asking moved the form");
 }
+
+// -- the batched picks, and the reader that forwards them --------------------
+//
+// Added after a review found the promise in `lib.rs` overreaching: it said
+// every wrapper is executed, and four entry points still had no caller and no
+// test anywhere in the workspace. These are those, plus the `Reader`
+// forwarders, so the sentence is true rather than aspirational.
+
+#[test]
+fn a_batch_of_rays_answers_each_one_separately() {
+    let mut doc = Document::new().expect("document");
+    let layer = doc.add_sdf_layer("Base").expect("layer");
+    doc.add_item(layer, &Item::sphere(0.5).expect("sphere"))
+        .expect("place");
+
+    // One ray down the axis into the sphere, one aimed past it entirely.
+    let hits = doc
+        .raycast_many(&[
+            ([0.0, 0.0, 3.0], [0.0, 0.0, -1.0]),
+            ([0.0, 5.0, 3.0], [0.0, 0.0, -1.0]),
+        ])
+        .expect("cast");
+
+    assert_eq!(hits.len(), 2, "one answer per ray, in the order given");
+    let front = hits[0].expect("the ray down the axis met the sphere");
+    assert!(
+        (front.position[2] - 0.5).abs() < 0.05,
+        "met the surface at {:?} rather than the sphere's front face",
+        front.position
+    );
+    assert!(
+        front.normal[2] > 0.9,
+        "the normal at the front face should point back down the ray, got {:?}",
+        front.normal
+    );
+    assert!(hits[1].is_none(), "the ray aimed past it should miss");
+}
+
+#[test]
+fn an_empty_batch_asks_the_engine_nothing() {
+    // The early return exists so that an empty slice never becomes a null
+    // pointer with a non-zero count, which is the shape of the bug the SAFETY
+    // comment on this wrapper is reasoning about.
+    let doc = Document::new().expect("document");
+    assert!(doc.raycast_many(&[]).expect("cast none").is_empty());
+    assert!(doc.snap_to_surface(&[]).expect("snap none").is_empty());
+}
+
+#[test]
+fn snapping_moves_a_point_onto_the_surface() {
+    let mut doc = Document::new().expect("document");
+    let layer = doc.add_sdf_layer("Base").expect("layer");
+    doc.add_item(layer, &Item::sphere(0.5).expect("sphere"))
+        .expect("place");
+
+    // One point well outside the sphere and one well inside it: both should
+    // land on the same surface, which is what distinguishes a snap from a
+    // clamp.
+    let snapped = doc
+        .snap_to_surface(&[[1.5, 0.0, 0.0], [0.1, 0.0, 0.0]])
+        .expect("snap");
+    assert_eq!(snapped.len(), 2);
+    for (at, point) in snapped.iter().enumerate() {
+        let point = point.expect("both points are within reach of the surface");
+        let radius =
+            (point.position[0].powi(2) + point.position[1].powi(2) + point.position[2].powi(2))
+                .sqrt();
+        assert!(
+            (radius - 0.5).abs() < 0.05,
+            "point {at} landed {radius} from the centre, not on the 0.5 surface"
+        );
+    }
+}
+
+#[test]
+fn the_reader_forwards_both_batches_to_the_document() {
+    // `Reader` exists so a borrow can read without holding the document
+    // mutably; these two methods are pure forwards, and the thing worth
+    // asserting is that they answer the same as the document does.
+    let mut doc = Document::new().expect("document");
+    let layer = doc.add_sdf_layer("Base").expect("layer");
+    doc.add_item(layer, &Item::sphere(0.5).expect("sphere"))
+        .expect("place");
+
+    let rays = [([0.0, 0.0, 3.0], [0.0, 0.0, -1.0])];
+    let points = [[1.5, 0.0, 0.0]];
+    let reader = doc.reader();
+
+    let direct = doc.raycast_many(&rays).expect("document")[0].expect("hit");
+    let through = reader.raycast_many(&rays).expect("reader")[0].expect("hit");
+    assert_eq!(direct.position, through.position);
+
+    let direct = doc.snap_to_surface(&points).expect("document")[0].expect("snap");
+    let through = reader.snap_to_surface(&points).expect("reader")[0].expect("snap");
+    assert_eq!(direct.position, through.position);
+}
+
+#[test]
+fn a_volume_item_reads_the_cells_the_grid_holds() {
+    // `clay_item_volume_from_voxels` is the return leg of a crossing: cells
+    // become a field item. Asserted on where the field is, not on `Ok` — a
+    // wrapper that handed back an item built from nothing would pass that.
+    let mut grid = claycore::VoxelGrid::new(0.05).expect("grid");
+    grid.fill_box([-4, -4, -4], [4, 4, 4], 1)
+        .expect("fill a block of cells");
+
+    let item = Item::volume_from_voxels(&grid, 0, 1).expect("read the cells back");
+    let mut doc = Document::new().expect("document");
+    let layer = doc.add_sdf_layer("Base").expect("layer");
+    doc.add_item(layer, &item).expect("place the volume");
+
+    // The block spans four cells of 0.05 either side of the origin, so the
+    // centre is inside it and a point well beyond the corner is not.
+    assert!(inside(&doc, [0.0, 0.0, 0.0]), "the volume has no inside");
+    assert!(
+        !inside(&doc, [1.0, 1.0, 1.0]),
+        "the volume reaches far past the cells it was built from"
+    );
+}
+
+#[test]
+fn an_armature_edit_moves_the_subtree_it_names() {
+    // `clay_layer_armature_edit` is the one wrapper the application chooses
+    // not to call, and says why: reparenting has no op there, so a rig would
+    // have two code paths to keep in step. The wrapper still exists, so its
+    // pointer reasoning still has to be run at least once.
+    let mut doc = Document::new().expect("document");
+    let layer = doc.add_sdf_layer("Rig").expect("layer");
+
+    // Two spheres in a line, the second a child of the first.
+    let mut item = Item::armature().expect("armature");
+    item.set_stroke_points(&[0.0, 0.0, 0.0, 0.25, 0.6, 0.0, 0.0, 0.25])
+        .expect("two nodes, x/y/z/radius each");
+    item.set_armature_parents(&[0, 0])
+        .expect("the second under the first");
+    let node = doc.add_item(layer, &item).expect("place the rig");
+
+    // Well past the child at x = 0.6 and its 0.25 radius.
+    let beyond = [1.4, 0.0, 0.0];
+    assert!(!inside(&doc, beyond), "the rig already reaches {beyond:?}");
+
+    doc.armature_edit(
+        layer,
+        node,
+        claycore::ArmatureEdit::Move {
+            delta: [0.7, 0.0, 0.0],
+        },
+        1,
+        false,
+    )
+    .expect("move the child");
+
+    assert!(
+        inside(&doc, beyond),
+        "the child did not move: {beyond:?} is still outside after a 0.7 shift \
+         that should have carried it there"
+    );
+}

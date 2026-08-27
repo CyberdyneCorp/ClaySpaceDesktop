@@ -318,35 +318,6 @@ impl ObjectViewModel {
         }
     }
 
-    /// What a press in the viewport meets, and why it cannot be taken where it
-    /// cannot.
-    ///
-    /// `pick_object` alone answers `None` for a stroke and `None` for empty
-    /// space, and the two mean different things to a sculptor: one is a click
-    /// that missed, the other is a click on something the manipulator refuses
-    /// to act on. The second question is `pick_item`, and the difference is
-    /// the whole of the requirement that a stroke "SHALL say so rather than
-    /// doing nothing".
-    ///
-    /// Returns the object to select, where there is one. The notice is posted
-    /// here rather than by the caller because it is the refusal that goes with
-    /// this answer, and a caller that forgot to post it would be exactly the
-    /// silence this exists to end.
-    pub fn pick(&mut self, origin: [f32; 3], direction: [f32; 3]) -> Option<ObjectId> {
-        if let Some(id) = self.model.pick_object(origin, direction) {
-            self.notice.set_if_changed(None);
-            return Some(id);
-        }
-        let refusal = self
-            .model
-            .pick_item(origin, direction)
-            .and_then(untransformable);
-        // A click on nothing clears the last refusal rather than leaving it
-        // standing over an empty viewport.
-        self.notice.set_if_changed(refusal.map(str::to_string));
-        None
-    }
-
     /// Refreshes the mesh layers that could be placed.
     ///
     /// Asked of the model rather than filtered from the layer stack here,
@@ -469,24 +440,5 @@ impl ObjectViewModel {
             }
             Err(e) => self.notice.set(Some(e.to_string())),
         }
-    }
-}
-
-/// Why the manipulator will not take an item, where it will not.
-///
-/// `None` for an object, which it does take. The sentences are here rather
-/// than in the interface's own table for the reason an engine refusal is:
-/// they are what the status line says when an action was refused, and that
-/// line already carries the model's words — see the note on `ToolKind::label`.
-fn untransformable(kind: clayspace_model::ItemKind) -> Option<&'static str> {
-    use clayspace_model::ItemKind;
-    match kind {
-        ItemKind::Object => None,
-        // The requirement names this one: a stroke is a gesture that has
-        // finished, and picking one back up is a different feature with a
-        // different question behind it.
-        ItemKind::Stroke => Some("um traço não pode ser transformado"),
-        ItemKind::Curve => Some("um tubo de curva não pode ser transformado"),
-        ItemKind::Armature => Some("a pele de um esqueleto não pode ser transformada"),
     }
 }

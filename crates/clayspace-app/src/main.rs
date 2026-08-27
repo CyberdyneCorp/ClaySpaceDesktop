@@ -1737,15 +1737,15 @@ impl App {
     ///
     /// Returns whether the press was taken. A press that meets a stroke or
     /// empty space is left to fall through to orbiting, so a form can be
-    /// turned to look at without losing what is selected. A press on a stroke
-    /// also leaves a notice saying why it was not taken — the ViewModel posts
-    /// it, because "you cannot transform that" and "you hit nothing" are the
-    /// same `None` here.
+    /// turned to look at without losing what is selected.
     fn pick_object_at(&mut self, point: egui::Pos2) -> bool {
+        use clayspace_model::ObjectModel;
+
         let Some((origin, direction)) = self.ray_at(point) else {
             return false;
         };
-        let Some(id) = self.objects.pick(origin, direction) else {
+        let mut document = self.document.clone();
+        let Some(id) = document.pick_object(origin, direction) else {
             return false;
         };
         self.apply_now(Command::SelectObject(Some(id)));
@@ -2629,15 +2629,11 @@ impl App {
             // A refused reference joins them, and ahead of both: it is the
             // most recent explicit action, and a PNG that will not load is a
             // sentence naming what is wrong with *that* file.
-            // A refused pick joins them for the same reason the mask's did:
-            // clicking a sculpting stroke to move it has to say that a stroke
-            // cannot be moved, and an Observable nobody reads says nothing.
             tool_status: self
                 .references
                 .notice()
                 .get()
                 .as_deref()
-                .or(self.objects.notice().get().as_deref())
                 .or(self.mask.notice().get().as_deref())
                 .or(self.sculpt.tool_status().get().as_deref()),
             symmetry: *self.sculpt.symmetry().get(),
