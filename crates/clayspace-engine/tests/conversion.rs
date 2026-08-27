@@ -63,43 +63,97 @@ fn a_conversion_adds_a_layer_and_leaves_the_source_alone() {
     );
 }
 
-/// A crossing is taken back by removing the layer it added, not by undo.
+/// Undo takes a crossing back whole: the filling and the layer alike.
 ///
-/// That is the specification, and it is the engine's shape rather than a
-/// preference. A conversion produces no undo entry at all: measured here, the
-/// depth is the same before and after, and the one entry that exists belongs
-/// to the starting form. Layer creation and rasterization are not recorded,
-/// and a voxel layer carries no history by construction — "No history; a host
-/// snapshots if it wants undo". Bracketing the crossing in an undo group was
-/// tried and groups nothing, because there are no entries to group.
+/// This changed under us. On engine 0.39.0 a conversion recorded no entry at
+/// all, so undo stepped straight past it and removing the layer was the only
+/// way back — which is what the specification used to say. Since
+/// `unify-the-undo-history` the engine records the filling but still cannot
+/// take back layer creation, so an engine undo on its own empties the new
+/// layer and leaves it standing. Measured across the pin, same document, same
+/// single undo: 0.39.0 left the layer's 3,952 vertices alone, 0.52.2 left it
+/// at zero with the layer still in the list.
 ///
-/// The source layer surviving is what makes removal sufficient, which is why
-/// `a_conversion_adds_a_layer_and_leaves_the_source_alone` is the test this one
-/// leans on.
+/// An empty layer nobody asked for is not "taken back", so the removal is
+/// done by the host, on top of the engine's undo. `crossing_undo` holds the
+/// record that makes that possible.
+///
+/// The source layer surviving is what makes the removal sound, which is why
+/// `a_conversion_adds_a_layer_and_leaves_the_source_alone` is the test this
+/// one leans on.
 #[test]
-fn a_crossing_is_taken_back_by_removing_its_layer() {
+fn a_crossing_is_taken_back_by_undo() {
     let Some(mut doc) = document() else {
         return;
     };
     let before = doc.scene().layers.len();
     let depth_before = doc.history().depth;
 
-    let made = doc
-        .convert_layer(Direction::SdfToVoxel, CELL, 1)
+    doc.convert_layer(Direction::SdfToVoxel, CELL, 1)
         .expect("convert");
     assert_eq!(doc.scene().layers.len(), before + 1);
 
-    // No entry, so nothing for undo to take back. If this ever stops being
-    // true the specification should say so too — `representation-conversion`
-    // states it as a property of the crossing, not as an omission.
+    // The crossing is one step on the stack, not none and not two.
+    assert_eq!(
+        doc.history().depth,
+        depth_before + 1,
+        "a crossing should sit on the undo stack as exactly one step"
+    );
+
+    let undid = SculptModel::undo(&mut doc).expect("undo the crossing");
+    assert!(undid, "undo reported nothing to take back after a crossing");
+    assert_eq!(
+        doc.scene().layers.len(),
+        before,
+        "undo left the converted layer standing. An engine undo empties it \
+         without removing it, so the host takes it off the scene — see \
+         `crossing_undo`"
+    );
     assert_eq!(
         doc.history().depth,
         depth_before,
-        "a conversion has started producing undo entries; the spec says it \
-         does not, and the two have to move together"
+        "undoing a crossing left the stack at a different depth than before \
+         it. Taking the layer back by removing it does exactly this, because \
+         a removal is itself an undo step"
     );
 
-    // What does take it back.
+    // A second undo goes further back rather than putting the emptied layer
+    // back — the failure that removal-based take-back produced.
+    let further = SculptModel::undo(&mut doc).expect("undo twice");
+    assert!(
+        further,
+        "there was more history than the crossing to take back"
+    );
+    assert_eq!(
+        doc.scene().layers.len(),
+        before,
+        "a second undo put the undone crossing's layer back on the scene"
+    );
+
+    // And forward again: the crossing comes back filled, not empty.
+    assert!(
+        SculptModel::redo(&mut doc).expect("redo"),
+        "redo did nothing"
+    );
+    assert!(
+        SculptModel::redo(&mut doc).expect("redo the crossing"),
+        "redo did not reach the crossing"
+    );
+    assert_eq!(
+        doc.scene().layers.len(),
+        before + 1,
+        "redo did not put the converted layer back"
+    );
+    let (positions, _, _, _) = doc.visible_mesh_geometry();
+    assert!(
+        !positions.is_empty(),
+        "the layer redo put back is empty, so the crossing came back without \
+         its filling"
+    );
+
+    // Removing the layer still works, and is still what a sculptor reaches for
+    // when the crossing is no longer the most recent thing they did.
+    let made = doc.scene().layers.last().expect("the converted layer").key;
     doc.remove_layer(made).expect("remove the converted layer");
     assert_eq!(
         doc.scene().layers.len(),
