@@ -686,7 +686,7 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                 // round, which is a crossing this application already offers.
                 let extrudable = clayspace_model::can_extrude(state.representation);
                 for side in ExtrudeSide::ALL {
-                    let label = format!("{} — {}", s.action_extrude, side.label());
+                    let label = format!("{} — {}", s.action_extrude, s.extrude_side_name(side));
                     if ui
                         .add_enabled(
                             state.mask.is_active() && extrudable,
@@ -824,11 +824,13 @@ fn combine_controls(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comma
                 .color(Tokens::text_dim()),
         );
         egui::ComboBox::from_id_salt("combine-op")
-            .selected_text(settings.op.label())
+            .selected_text(state.strings.combine_name(settings.op))
             .width(150.0)
             .show_ui(ui, |ui| {
                 for op in Combine::offered_for_strokes() {
-                    if ui.selectable_label(op == settings.op, op.label()).clicked()
+                    if ui
+                        .selectable_label(op == settings.op, state.strings.combine_name(op))
+                        .clicked()
                         && op != settings.op
                     {
                         queue.push(Command::SetCombine(CombineSettings { op, ..settings }));
@@ -854,12 +856,12 @@ fn combine_controls(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comma
                 .color(Tokens::text_dim()),
         );
         egui::ComboBox::from_id_salt("combine-blend")
-            .selected_text(settings.blend.label())
+            .selected_text(state.strings.blend_name(settings.blend))
             .width(140.0)
             .show_ui(ui, |ui| {
                 for blend in BlendProfile::ALL {
                     if ui
-                        .selectable_label(blend == settings.blend, blend.label())
+                        .selectable_label(blend == settings.blend, state.strings.blend_name(blend))
                         .clicked()
                         && blend != settings.blend
                     {
@@ -2259,7 +2261,10 @@ fn voxel_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQ
     ui.horizontal_wrapped(|ui| {
         for display in VoxelDisplay::ALL {
             let on = state.voxel_display == display;
-            if ui.add(chip(display.label(), on, Tokens::panel())).clicked() {
+            if ui
+                .add(chip(s.voxel_display_name(display), on, Tokens::panel()))
+                .clicked()
+            {
                 queue.push(Command::SetVoxelDisplay(display, state.voxel_blur));
             }
         }
