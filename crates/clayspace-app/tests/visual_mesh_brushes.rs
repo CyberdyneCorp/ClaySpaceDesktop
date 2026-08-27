@@ -143,15 +143,28 @@ fn a_mesh_brush_changes_what_is_drawn() {
                 .capture(&harness.gpu, &harness.renderer, &camera, &nothing, false);
         save(&after, &format!("70-mesh-{}", tool.label().to_lowercase()));
 
-        let differing = before
-            .pixels
-            .chunks_exact(4)
-            .zip(after.pixels.chunks_exact(4))
-            .filter(|(a, b)| a != b)
-            .count();
+        // Past `RENDER_NOISE` rather than byte-exact, for the reason
+        // `visual_to_mesh` measured: a macOS runner leaves 1,294 pixels
+        // byte-differing on an unchanged 3D frame, none past the threshold, so
+        // a byte count with a floor of 100 was satisfied there by the
+        // rasteriser alone whether or not a brush had run.
+        //
+        // The floor drops to 50 because the honest instrument tells the three
+        // tools apart, and one of them is far subtler than the others:
+        //
+        //   Padrão   2,286 past the noise   (12,737 byte-differing)
+        //   Inflar   1,701                  (12,861)
+        //   Pinçar      97                  ( 8,541)
+        //
+        // Pinçar moves a lot of pixels a little — it draws the surface
+        // sideways, which shifts shading far less than pushing it out does.
+        // 50 sits above the zero an unchanged frame gives and below the least
+        // that any of the three actually produces.
+        let differing = support::differing_pixels(&before, &after);
         assert!(
-            differing > 100,
-            "{} left no mark on the drawn mesh ({differing} pixels differ)",
+            differing > 50,
+            "{} left no mark on the drawn mesh ({differing} pixels past the \
+             noise floor)",
             tool.label()
         );
         let _ = std::fs::remove_file(&path);

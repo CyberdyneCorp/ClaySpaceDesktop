@@ -428,15 +428,53 @@ fn a_cage_does_not_make_a_faint_surface_more_solid() {
     let caged = harness.capture(&form, &camera, false, "reference-faint-caged");
     harness.renderer.set_ghosted(false);
 
-    let centre = |image: &Image| image.pixel(image.width / 2, image.height / 2);
-    let (a, c) = (centre(&alone), centre(&caged));
-    let difference: i32 = a
+    // A block at the centre rather than the single pixel there.
+    //
+    // One pixel decided this, and nothing established it was on the clay. If
+    // the sphere ever stopped covering the frame centre — a camera change, a
+    // framing change, a surface that failed to draw at all — both reads become
+    // the background, the difference becomes zero, and the test reports that
+    // the cage changed nothing about a surface that was not there.
+    let block = |image: &Image| {
+        let (cx, cy) = (image.width / 2, image.height / 2);
+        let mut pixels = Vec::new();
+        for y in cy.saturating_sub(16)..(cy + 16).min(image.height) {
+            for x in cx.saturating_sub(16)..(cx + 16).min(image.width) {
+                pixels.push(image.pixel(x, y));
+            }
+        }
+        pixels
+    };
+    let (a, c) = (block(&alone), block(&caged));
+
+    // On the subject, checked before anything is concluded from it.
+    let background = harness.background();
+    let on_clay = a
         .iter()
-        .zip(c)
-        .map(|(x, y)| (i32::from(*x) - i32::from(y)).abs())
-        .sum();
+        .filter(|p| (0..3).any(|i| p[i].abs_diff(background[i]) > 12))
+        .count();
+    assert!(
+        on_clay * 2 > a.len(),
+        "the block this test reads is mostly background ({on_clay} of {} \
+         pixels are on the form), so it cannot tell whether a cage changed \
+         the surface — see target/visual/reference-faint-alone.png",
+        a.len()
+    );
+
+    let difference = a
+        .iter()
+        .zip(&c)
+        .map(|(x, y)| {
+            (0..3)
+                .map(|i| i32::from(x[i]) - i32::from(y[i]))
+                .map(i32::abs)
+                .sum::<i32>()
+        })
+        .max()
+        .unwrap_or(0);
     assert!(
         difference < 12,
-        "raising a cage changed a deliberately faint surface: {a:?} became {c:?}"
+        "raising a cage changed a deliberately faint surface: the worst pixel \
+         of the centre block moved by {difference}"
     );
 }
