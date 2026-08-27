@@ -143,12 +143,23 @@ fn exercise(harness: &mut Harness, tool: ToolKind) -> Option<Outcome> {
         false,
         &format!("brush-{name}-before"),
     );
-    // The same frame again, with nothing done to it in between: whatever
-    // `subject_change` reports for this pair is what two renders of identical
-    // geometry differ by on this machine, and no smaller change is evidence of
-    // anything. Measured rather than assumed, because it is not the same
-    // everywhere — it is zero on Linux and not on macOS, which is how a mask
-    // asserting it moves nothing came to fail there on 0.11% of the subject.
+    // The same frame again, re-meshed in between and otherwise untouched.
+    //
+    // The re-mesh is the point. An earlier version of this captured twice with
+    // *nothing* done between, which measures how much two draws of one vertex
+    // buffer differ — nearly always zero. What the tools below are compared
+    // against is a capture taken after `sync`, and a re-mesh of the same
+    // document can hand back the same surface with its vertices in a different
+    // order, which moves a rasterized edge by a pixel. Leaving it out put the
+    // floor under the noise it was meant to bound: the mask measured 0.10% of
+    // the subject against a floor of 0.10% and failed on the equality.
+    //
+    // Measured rather than assumed, because it is not the same everywhere — it
+    // is zero on Linux and not on macOS, which is how a mask asserting it moves
+    // nothing came to fail there in the first place.
+    document
+        .with(|document| geometry.rebuild(&harness.gpu, document))
+        .expect("the same mesh again");
     let again = harness.capture(
         geometry.mesh(),
         &camera,
@@ -389,8 +400,17 @@ fn every_brush_in_the_shelf_draws_something_worth_looking_at() {
         );
         // Against this machine's own re-render floor, not a fixed share. The
         // claim is that the mask moves nothing, and "nothing" is only
-        // measurable down to what two identical renders already differ by.
-        let allowed = 0.001f64.max(mask.noise * 2.0);
+        // measurable down to what two renders of the same document already
+        // differ by.
+        //
+        // The fixed minimum is 0.2 % rather than 0.1 % because 0.1 % is the
+        // value macOS actually produced — twice, at 0.11 % and 0.105 % — so a
+        // floor there is a coin flip on the machine it exists for. Two things
+        // bound how far it can be raised: a real brush moves at least 1 % of
+        // the subject, and the two smoothing tools, the subtlest that move
+        // anything, are held to 0.2 %. At 0.2 % this still separates a mask
+        // from every tool that sculpts, and it is twice the noise measured.
+        let allowed = 0.002f64.max(mask.noise * 2.0);
         assert!(
             mask.changed < allowed,
             "the mask moved {:.2}% of the surface against a {:.2}% floor for \
