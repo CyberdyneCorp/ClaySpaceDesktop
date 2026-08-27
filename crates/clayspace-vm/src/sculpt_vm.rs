@@ -288,7 +288,21 @@ impl SculptViewModel {
             // Scene, layer, mask and armature commands belong to other
             // ViewModels; the sculpting one ignores them rather than
             // half-handling them.
-            Command::NewDocument
+            // Placed objects are the object ViewModel's, for the reason the
+            // cage is the lattice one's: a brush asks what happens to the
+            // surface under the pointer, and an object asks what happens to a
+            // thing standing in the scene.
+            Command::ToggleShapes
+            | Command::SetShape(_)
+            | Command::SetShapeParameters(_)
+            | Command::PlaceShape
+            | Command::SetMeshOperand(_)
+            | Command::SelectObject(_)
+            | Command::SetObjectShape(..)
+            | Command::SetObjectCombine(_)
+            | Command::RemoveObject
+            | Command::SetGizmoTarget(_)
+            | Command::NewDocument
             | Command::OpenDocument
             | Command::OpenRecent(_)
             | Command::Save

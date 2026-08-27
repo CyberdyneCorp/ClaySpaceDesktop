@@ -85,7 +85,21 @@ impl Direction {
         // the surface is found on, so it sets how far the surface can move and
         // what is too thin to be found at all. Reading a grid does not — the
         // grid already has a cell, and its faces are where they are.
-        matches!(self, Self::SdfToVoxel | Self::MeshToVoxel | Self::SdfToMesh)
+        //
+        // Mesh-to-SDF belongs here and did not. `clay_item_volume_from_mesh`
+        // "samples the model onto a lattice", and the engine's own note on the
+        // parameter is that leaving the cell unset "picks from the source's
+        // own size" — it picks one, it does not do without one. So the
+        // crossing moved the surface by half a cell and lost features thinner
+        // than one all along, and this said it moved nothing and kept its
+        // sharp edges. A sculptor was told a crossing was free.
+        //
+        // Found by placing a mesh as a boolean operand, which pays the same
+        // crossing and states the same costs — and stated none.
+        matches!(
+            self,
+            Self::SdfToVoxel | Self::MeshToVoxel | Self::SdfToMesh | Self::MeshToSdf
+        )
     }
 
     /// Whether what comes out has a topology nothing here will change again.

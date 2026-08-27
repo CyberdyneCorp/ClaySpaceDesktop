@@ -39,6 +39,36 @@ pub enum Command {
     RemoveCurvePoints,
     /// Leaves the swept form and takes the curve down.
     ApplyCurve,
+    // -- placed objects ---------------------------------------------------
+    /// Shows or hides the panel that offers the shapes.
+    ToggleShapes,
+    /// Which shape the picker is set to, and what it is measured by.
+    SetShape(clayspace_model::Shape),
+    /// The numbers for the shape the picker is set to.
+    SetShapeParameters(Vec<f32>),
+    /// Puts the picked shape in the active layer, selected, combining the way
+    /// the options bar is set.
+    PlaceShape,
+    /// Which mesh layer the picker would place as an operand, or none for one
+    /// of the offered shapes.
+    ///
+    /// Choosing one states what the crossing costs; it does not run it.
+    /// Nothing reaches the document until `PlaceShape`.
+    SetMeshOperand(Option<clayspace_model::LayerKey>),
+    /// Selects a placed object, or clears the selection. The manipulator
+    /// follows it.
+    SelectObject(Option<clayspace_model::ObjectId>),
+    /// Exchanges the selected object's shape, keeping where it stands and how
+    /// it combines.
+    SetObjectShape(clayspace_model::Shape, Vec<f32>),
+    /// Changes how the selected object meets what is under it.
+    SetObjectCombine(clayspace_model::CombineSettings),
+    /// Takes the selected object away.
+    RemoveObject,
+    /// What the manipulator is acting on: an object, a whole layer, or a
+    /// curve's points.
+    SetGizmoTarget(Option<clayspace_model::GizmoTarget>),
+
     /// Puts a lattice cage around the active layer, or takes one down.
     ToggleLattice,
     /// How many control points the cage has per axis.
@@ -306,6 +336,16 @@ impl Command {
                 // cage one undo.
                 // Placing and shaping a curve is authoring, and every one of
                 // these reaches the document — so none of them is listed here.
+                // Opening the picker, setting it, choosing an object and
+                // saying what the manipulator is on all change what the
+                // *interface* is doing and not the clay. Placing one is an
+                // edit, and so is moving one, so neither is listed here.
+                | Self::ToggleShapes
+                | Self::SelectObject(_)
+                | Self::SetShape(_)
+                | Self::SetShapeParameters(_)
+                | Self::SetMeshOperand(_)
+                | Self::SetGizmoTarget(_)
                 | Self::ToggleLattice
                 | Self::SetLatticeDivisions(_)
                 | Self::SelectLatticePoint(_)
@@ -376,6 +416,16 @@ impl Command {
             Self::SetCurveProfile(_) => "perfil do tubo",
             Self::RemoveCurvePoints => "remover pontos",
             Self::ApplyCurve => "aplicar curva",
+            Self::ToggleShapes => "formas",
+            Self::SetShape(_) => "forma",
+            Self::SetShapeParameters(_) => "medidas da forma",
+            Self::PlaceShape => "colocar forma",
+            Self::SetMeshOperand(_) => "operando de malha",
+            Self::SelectObject(_) => "selecionar objeto",
+            Self::SetObjectShape(..) => "trocar forma",
+            Self::SetObjectCombine(_) => "combinação do objeto",
+            Self::RemoveObject => "remover objeto",
+            Self::SetGizmoTarget(_) => "alvo do manipulador",
             Self::ToggleLattice => "gaiola",
             Self::SetLatticeDivisions(_) => "divisões da gaiola",
             Self::SelectLatticePoint(_) => "escolher ponto",

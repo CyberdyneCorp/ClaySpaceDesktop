@@ -28,6 +28,7 @@ pub mod reference;
 pub mod scene;
 pub mod sculpt;
 pub mod session;
+pub mod shape;
 pub mod surface;
 pub mod tools;
 pub mod units;
@@ -48,7 +49,7 @@ pub use exchange::{
 };
 pub use gizmo::{
     drag_plane, perpendicular_frame, ring_samples, snapped, GizmoDrag, GizmoHandle, GizmoMode,
-    SNAP_DEGREES,
+    Transform, SNAP_DEGREES,
 };
 pub use instrument::{FrameLog, Stall, FRAME};
 pub use lattice::{
@@ -69,6 +70,10 @@ pub use sculpt::{
     SculptModel,
 };
 pub use session::{AutosavePolicy, RecentDocuments, Recovery};
+pub use shape::{
+    GizmoTarget, ItemKind, ObjectId, ObjectModel, ObjectSource, SceneObject, Shape, ShapeParameter,
+    OBJECT_VERBS, PARAMETER_KEYS,
+};
 pub use surface::SurfaceOpacity;
 pub use tools::{
     BrushSettings, Falloff, LayerOperation, LayerState, Representation, Shaping, ToolKind,

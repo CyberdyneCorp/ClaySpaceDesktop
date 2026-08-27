@@ -148,6 +148,48 @@ pub trait CurveModel {
     /// Moves every selected control point by a displacement.
     fn drag_curve(&mut self, by: [f32; 3]) -> Result<(), ModelError>;
 
+    /// Puts the manipulator on the selected control points.
+    ///
+    /// A curve is the one target the manipulator has that carries no engine
+    /// transform: its points belong to the application while it is being
+    /// authored, so a drag maps each of them to a new place rather than
+    /// producing a position, an axis-angle and a scale for a node. This is the
+    /// same path the deformation cage takes, and it is why the two turn and
+    /// scale identically.
+    ///
+    /// Provided, so a double that models no curves ignores it rather than
+    /// spelling out a refusal it never reaches.
+    fn drag_curve_points(
+        &mut self,
+        drag: crate::GizmoDrag,
+        to: [f32; 3],
+        snap: bool,
+    ) -> Result<(), ModelError> {
+        let _ = (drag, to, snap);
+        Ok(())
+    }
+
+    /// The middle of the selected control points, which is where a manipulator
+    /// on them sits and what a turn is about.
+    ///
+    /// `None` when nothing is selected — a manipulator with nothing to act on
+    /// is not drawn.
+    fn curve_pivot(&self) -> Option<[f32; 3]> {
+        let curve = self.curve();
+        if !curve.active || curve.selection.is_empty() {
+            return None;
+        }
+        let mut middle = [0.0f32; 3];
+        for index in &curve.selection {
+            let point = curve.points.get(*index)?;
+            for (at, value) in middle.iter_mut().zip(point.position) {
+                *at += value;
+            }
+        }
+        let count = curve.selection.len() as f32;
+        Some(middle.map(|value| value / count))
+    }
+
     /// Sets the radius of every selected point, or of all of them where
     /// nothing is selected.
     fn set_curve_radius(&mut self, radius: f32) -> Result<(), ModelError>;

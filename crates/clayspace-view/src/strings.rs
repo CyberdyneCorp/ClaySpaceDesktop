@@ -26,6 +26,27 @@ pub struct Strings {
     /// places that are not the interface: history entries, engine refusals and
     /// the diagnostics report.
     pub tool_names: [&'static str; clayspace_model::ToolKind::ALL.len()],
+    /// What each shape the picker offers is called, in the order
+    /// `Shape::ALL` presents them.
+    pub shape_names: [&'static str; clayspace_model::Shape::ALL.len()],
+    /// What each of a shape's measurements is called, in the order
+    /// `PARAMETER_KEYS` lists them.
+    ///
+    /// A key is a stable identifier written into saved documents; showing one
+    /// to a sculptor is showing them the inside of the file, which is what the
+    /// first capture of this panel did.
+    pub shape_parameter_names: [&'static str; clayspace_model::PARAMETER_KEYS.len()],
+    /// The shapes panel, and what it does.
+    pub action_shapes: &'static str,
+    pub label_shape: &'static str,
+    pub action_place_shape: &'static str,
+    pub action_remove_object: &'static str,
+    pub label_placed_objects: &'static str,
+    pub label_no_placed_objects: &'static str,
+    pub label_object_scale: &'static str,
+    pub hint_shapes: &'static str,
+    pub hint_uniform_scale: &'static str,
+    pub label_shapes_sdf_only: &'static str,
     /// Which language this table is. Carried with the words rather than beside
     /// them, so the language menu's tick and the words on screen cannot
     /// disagree about what the interface is in.
@@ -274,6 +295,52 @@ const PT_BR: Strings = Strings {
         "Borrar",
         "Apagar",
     ],
+    shape_names: [
+        "Caixa",
+        "Esfera",
+        "Cilindro",
+        "Cone",
+        "Toro",
+        "Cápsula",
+        "Elipsoide",
+        "Pirâmide",
+        "Caixa arredondada",
+        "Moldura",
+        "Cilindro arredondado",
+        "Prisma hexagonal",
+        "Prisma triangular",
+        "Octaedro",
+    ],
+    shape_parameter_names: [
+        "Largura",
+        "Altura",
+        "Profundidade",
+        "Raio",
+        "Altura",
+        "Profundidade",
+        "Raio da base",
+        "Raio do topo",
+        "Raio maior",
+        "Raio menor",
+        "Raio em X",
+        "Raio em Y",
+        "Raio em Z",
+        "Altura",
+        "Raio do canto",
+        "Espessura",
+        "Raio da borda",
+        "Tamanho",
+    ],
+    action_shapes: "Formas",
+    label_shape: "Forma",
+    action_place_shape: "Colocar",
+    action_remove_object: "Remover objeto",
+    label_placed_objects: "Objetos",
+    label_no_placed_objects: "nenhum objeto colocado",
+    label_object_scale: "Tamanho",
+    hint_shapes: "Coloque uma forma e mire-a com o manipulador.",
+    hint_uniform_scale: "A escala é uniforme. Use a gaiola para esticar em um eixo só.",
+    label_shapes_sdf_only: "Um objeto vive na lista ordenada de uma camada SDF.",
     locale: Locale::PtBr,
     menu_file: "Arquivo",
     menu_edit: "Editar",
@@ -468,6 +535,52 @@ const EN_US: Strings = Strings {
         "Smear",
         "Erase",
     ],
+    shape_names: [
+        "Box",
+        "Sphere",
+        "Cylinder",
+        "Cone",
+        "Torus",
+        "Capsule",
+        "Ellipsoid",
+        "Pyramid",
+        "Rounded box",
+        "Box frame",
+        "Rounded cylinder",
+        "Hex prism",
+        "Tri prism",
+        "Octahedron",
+    ],
+    shape_parameter_names: [
+        "Width",
+        "Height",
+        "Depth",
+        "Radius",
+        "Height",
+        "Depth",
+        "Base radius",
+        "Top radius",
+        "Major radius",
+        "Minor radius",
+        "Radius in X",
+        "Radius in Y",
+        "Radius in Z",
+        "Height",
+        "Corner radius",
+        "Thickness",
+        "Rim radius",
+        "Size",
+    ],
+    action_shapes: "Shapes",
+    label_shape: "Shape",
+    action_place_shape: "Place",
+    action_remove_object: "Remove object",
+    label_placed_objects: "Objects",
+    label_no_placed_objects: "nothing placed yet",
+    label_object_scale: "Size",
+    hint_shapes: "Place a shape, then aim it with the manipulator.",
+    hint_uniform_scale: "Scale is uniform. Use the cage to stretch along one axis.",
+    label_shapes_sdf_only: "An object lives in an SDF layer's ordered list.",
     locale: Locale::EnUs,
     menu_file: "File",
     menu_edit: "Edit",
@@ -661,6 +774,52 @@ const ES_419: Strings = Strings {
         "Difuminar",
         "Borrar",
     ],
+    shape_names: [
+        "Caja",
+        "Esfera",
+        "Cilindro",
+        "Cono",
+        "Toro",
+        "Cápsula",
+        "Elipsoide",
+        "Pirámide",
+        "Caja redondeada",
+        "Marco",
+        "Cilindro redondeado",
+        "Prisma hexagonal",
+        "Prisma triangular",
+        "Octaedro",
+    ],
+    shape_parameter_names: [
+        "Ancho",
+        "Alto",
+        "Profundidad",
+        "Radio",
+        "Alto",
+        "Profundidad",
+        "Radio de la base",
+        "Radio superior",
+        "Radio mayor",
+        "Radio menor",
+        "Radio en X",
+        "Radio en Y",
+        "Radio en Z",
+        "Alto",
+        "Radio de esquina",
+        "Espesor",
+        "Radio del borde",
+        "Tamaño",
+    ],
+    action_shapes: "Formas",
+    label_shape: "Forma",
+    action_place_shape: "Colocar",
+    action_remove_object: "Quitar objeto",
+    label_placed_objects: "Objetos",
+    label_no_placed_objects: "nada colocado aún",
+    label_object_scale: "Tamaño",
+    hint_shapes: "Coloca una forma y apúntala con el manipulador.",
+    hint_uniform_scale: "La escala es uniforme. Usa la jaula para estirar en un solo eje.",
+    label_shapes_sdf_only: "Un objeto vive en la lista ordenada de una capa SDF.",
     locale: Locale::Es419,
     menu_file: "Archivo",
     menu_edit: "Editar",
@@ -853,6 +1012,37 @@ impl Strings {
             .unwrap_or_else(|| tool.label())
     }
 
+    /// What a shape is called, in this language.
+    ///
+    /// Falls back to the domain's own name, as `tool` does: a picker entry
+    /// with no word on it is worse than one in the wrong language, and the
+    /// fixed-length table makes that unreachable anyway.
+    pub fn shape(&self, shape: clayspace_model::Shape) -> &'static str {
+        clayspace_model::Shape::ALL
+            .iter()
+            .position(|known| *known == shape)
+            .and_then(|at| self.shape_names.get(at).copied())
+            .unwrap_or_else(|| shape.label())
+    }
+
+    /// What one of a shape's measurements is called, in this language.
+    ///
+    /// Falls back to the key, which is the identifier itself — ugly, and
+    /// better than an empty label. The fixed-length table and
+    /// `every_parameter_key_can_be_named` make that unreachable.
+    pub fn shape_parameter(&self, key: &str) -> &'static str {
+        clayspace_model::PARAMETER_KEYS
+            .iter()
+            .position(|known| *known == key)
+            .and_then(|at| self.shape_parameter_names.get(at).copied())
+            .unwrap_or("?")
+    }
+
+    /// Every shape name, for a test that checks the whole vocabulary at once.
+    pub fn shape_names(&self) -> &[&'static str] {
+        &self.shape_names
+    }
+
     pub fn for_locale(locale: Locale) -> &'static Strings {
         match locale {
             Locale::PtBr => &PT_BR,
@@ -867,8 +1057,16 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 138] {
+    pub fn all(&self) -> [&'static str; 146] {
         [
+            self.action_shapes,
+            self.label_shape,
+            self.action_place_shape,
+            self.action_remove_object,
+            self.label_placed_objects,
+            self.label_no_placed_objects,
+            self.label_object_scale,
+            self.label_shapes_sdf_only,
             self.menu_file,
             self.menu_edit,
             self.menu_view,
@@ -1046,6 +1244,41 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn every_shape_has_a_name_in_every_language() {
+        // The same failure the brush shelf had: a picker that showed
+        // `Shape::label()` would be the domain's own Portuguese whatever the
+        // interface language was.
+        for locale in Locale::ALL {
+            let strings = Strings::for_locale(locale);
+            for shape in clayspace_model::Shape::ALL {
+                let name = strings.shape(shape);
+                assert!(
+                    !name.is_empty(),
+                    "{:?} has no name in {}",
+                    shape,
+                    locale.label()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_shape_names_are_translated_rather_than_copied() {
+        let english = Strings::for_locale(Locale::EnUs).shape_names();
+        let portuguese = Strings::for_locale(Locale::PtBr).shape_names();
+        let differing = english
+            .iter()
+            .zip(portuguese.iter())
+            .filter(|(a, b)| a != b)
+            .count();
+        assert!(
+            differing >= 8,
+            "only {differing} of {} shape names differ",
+            english.len()
+        );
     }
 
     #[test]
