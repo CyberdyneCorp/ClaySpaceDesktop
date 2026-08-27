@@ -199,8 +199,14 @@ impl ObjectViewModel {
                     Picked::Object(id)
                 }
                 // The table says the node was placed and the ray no longer
-                // finds it. Nothing to select, and nothing worth saying.
-                None => Picked::Nothing,
+                // finds it. Nothing to select, and nothing worth saying — but
+                // the clearing still has to happen, or a sentence an earlier
+                // press raised outlives a press that found nothing, which is
+                // the one arm of this match that used to let it through.
+                None => {
+                    self.notice.set_if_changed(None);
+                    Picked::Nothing
+                }
             },
             Some(_) => {
                 self.notice

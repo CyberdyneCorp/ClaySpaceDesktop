@@ -2124,6 +2124,15 @@ impl App {
         if let (Some(point), Some(button), true) =
             (input.pointer, input.pressed, input.over_viewport)
         {
+            // Cleared here, at the top of a press, rather than when one turns
+            // into a stroke. A press on a stroke *is* a press on the clay, so
+            // clearing it on `Drag::Sculpt` cleared it on the very press that
+            // raised it and the sentence never reached the screen — which is
+            // the case `object-transform` names ("WHEN the user picks a
+            // sculpting stroke in the viewport"). Clearing here keeps what a
+            // press said until the next press, so it is read once and does not
+            // stand over the session that follows.
+            self.objects.clear_notice();
             // Rigging takes the primary button first, and only where it lands
             // on a sphere: everywhere else the camera keeps working, so a rig
             // can be turned to look at without leaving the mode.
@@ -2191,13 +2200,6 @@ impl App {
                 self.rig_depth_at_press = self.engine_undo_depth();
             }
             if started == Drag::Sculpt {
-                // The press met the clay and became a stroke, so whatever the
-                // objects had to say is not the answer to anything now: the
-                // notice is there for a press that did nothing, and a press
-                // that did something explains itself. Left up, a pick that
-                // met a stroke would stand its sentence over the whole
-                // sculpting session that followed it.
-                self.objects.clear_notice();
                 // Read at the press and carried for the gesture: a key caught
                 // or released mid-drag would change the verb under the
                 // sculptor's hand, and neither reference does that.

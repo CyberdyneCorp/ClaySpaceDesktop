@@ -216,6 +216,8 @@ mod tests {
             "the shell draws {drawn} domain labels, down from \
              {LABELS_STILL_DRAWN} — lower `LABELS_STILL_DRAWN` to {drawn} so \
              the ratchet holds the ground that was just taken"
+        );
+    }
 
     /// What a component writes above a `Color32::from_*` that shades a colour
     /// it was handed rather than inventing one. Spelled out once so the
@@ -253,7 +255,17 @@ mod tests {
             let text = std::fs::read_to_string(&path).expect("read the source");
             let lines: Vec<&str> = text.lines().collect();
             for (at, line) in lines.iter().enumerate() {
-                if !line.contains("Color32::from_") {
+                // Both halves of "written down": a constructor call, and a
+                // named constant. Matching only `from_` left `Color32::RED`
+                // and its siblings walking through a test whose own paragraph
+                // above says every colour comes from a token — verified by
+                // mutation, an inserted `Color32::RED` kept this green.
+                let written_down = line.contains("Color32::from_")
+                    || line
+                        .split("Color32::")
+                        .skip(1)
+                        .any(|rest| rest.starts_with(|c: char| c.is_ascii_uppercase()));
+                if !written_down {
                     continue;
                 }
                 let derived = at
