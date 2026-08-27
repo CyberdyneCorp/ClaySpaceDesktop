@@ -11,12 +11,35 @@
 //! no business remembering that a pointer is down.
 
 use clayspace_model::{
-    CombineSettings, GizmoDrag, GizmoHandle, GizmoMode, GizmoTarget, ObjectId, ObjectModel,
-    Representation, SceneObject, Shape, Transform,
+    CombineSettings, GizmoDrag, GizmoHandle, GizmoMode, GizmoTarget, ItemKind, ObjectId,
+    ObjectModel, Representation, SceneObject, Shape, Transform,
 };
 
 use crate::command::Command;
 use crate::observable::Observable;
+
+/// The notice a press on an item that carries no manipulator raises.
+///
+/// A marker rather than a sentence, for the reason [`crate::TOOL_SUBSTITUTED`]
+/// is one: a ViewModel carries no locale, and the words belong to the view's
+/// string table.
+pub const ITEM_NOT_TRANSFORMABLE: &str = "item-not-transformable";
+
+/// What a press in the viewport met.
+///
+/// Three answers rather than an `Option<ObjectId>`, because the interface has
+/// to tell "that cannot be moved" from "you hit nothing at all": the first is
+/// a sentence to say, and the second is a press that belongs to whatever is
+/// behind the objects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Picked {
+    /// A placed object, for the composition root to select.
+    Object(ObjectId),
+    /// A stroke, an applied curve or a rig's skin. The notice says so.
+    NotTransformable,
+    /// Empty space.
+    Nothing,
+}
 
 pub struct ObjectViewModel {
     model: Box<dyn ObjectModel>,
@@ -142,6 +165,49 @@ impl ObjectViewModel {
 
     pub fn notice(&self) -> &Observable<Option<String>> {
         &self.notice
+    }
+
+    /// Takes the notice back down.
+    ///
+    /// For the composition root, which knows something the ViewModel cannot:
+    /// whether the press that raised a refusal went on to do something else.
+    pub fn clear_notice(&mut self) {
+        self.notice.set_if_changed(None);
+    }
+
+    /// What a ray meets, and why it carries no manipulator when it is not an
+    /// object.
+    ///
+    /// Two questions of the model rather than one. `pick_object` answers
+    /// `None` both for a sculpting stroke and for empty space, and the
+    /// specification asks the interface to say the first out loud — "an
+    /// attempt to select one for transformation SHALL say so rather than doing
+    /// nothing". `pick_item` is the question that can tell them apart.
+    ///
+    /// The second raycast is only paid when the first says there is an object
+    /// to identify, and only on a press: `object.pick.ms` in the recorded
+    /// baseline is 0.09 ms.
+    pub fn pick_at(&mut self, origin: [f32; 3], direction: [f32; 3]) -> Picked {
+        match self.model.pick_item(origin, direction) {
+            None => {
+                self.notice.set_if_changed(None);
+                Picked::Nothing
+            }
+            Some(ItemKind::Object) => match self.model.pick_object(origin, direction) {
+                Some(id) => {
+                    self.notice.set_if_changed(None);
+                    Picked::Object(id)
+                }
+                // The table says the node was placed and the ray no longer
+                // finds it. Nothing to select, and nothing worth saying.
+                None => Picked::Nothing,
+            },
+            Some(_) => {
+                self.notice
+                    .set_if_changed(Some(ITEM_NOT_TRANSFORMABLE.to_string()));
+                Picked::NotTransformable
+            }
+        }
     }
 
     pub fn mesh_operand(&self) -> &Observable<Option<clayspace_model::LayerKey>> {

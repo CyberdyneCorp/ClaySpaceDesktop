@@ -1736,20 +1736,26 @@ impl App {
     /// Selects the object under the pointer, if a placed one is there.
     ///
     /// Returns whether the press was taken. A press that meets a stroke or
-    /// empty space is left to fall through to orbiting, so a form can be
-    /// turned to look at without losing what is selected.
+    /// empty space is left to fall through to sculpting or orbiting, so a form
+    /// can be worked on and turned to look at without losing what is selected.
+    ///
+    /// A stroke is not taken either. The specification asks for a stroke to be
+    /// *said* about — "an attempt to select one for transformation SHALL say
+    /// so rather than doing nothing" — and not for the press: a press on the
+    /// clay is a stroke, and taking that away from the brush to explain
+    /// something would be the worse error. The ViewModel has raised the
+    /// sentence by the time this returns.
     fn pick_object_at(&mut self, point: egui::Pos2) -> bool {
-        use clayspace_model::ObjectModel;
-
         let Some((origin, direction)) = self.ray_at(point) else {
             return false;
         };
-        let mut document = self.document.clone();
-        let Some(id) = document.pick_object(origin, direction) else {
-            return false;
-        };
-        self.apply_now(Command::SelectObject(Some(id)));
-        true
+        match self.objects.pick_at(origin, direction) {
+            clayspace_vm::Picked::Object(id) => {
+                self.apply_now(Command::SelectObject(Some(id)));
+                true
+            }
+            clayspace_vm::Picked::NotTransformable | clayspace_vm::Picked::Nothing => false,
+        }
     }
 
     /// Begins a rig gesture, if the press landed on a sphere.
@@ -2185,6 +2191,13 @@ impl App {
                 self.rig_depth_at_press = self.engine_undo_depth();
             }
             if started == Drag::Sculpt {
+                // The press met the clay and became a stroke, so whatever the
+                // objects had to say is not the answer to anything now: the
+                // notice is there for a press that did nothing, and a press
+                // that did something explains itself. Left up, a pick that
+                // met a stroke would stand its sentence over the whole
+                // sculpting session that followed it.
+                self.objects.clear_notice();
                 // Read at the press and carried for the gesture: a key caught
                 // or released mid-drag would change the verb under the
                 // sculptor's hand, and neither reference does that.
@@ -2670,12 +2683,16 @@ impl App {
             // A refused reference joins them, and ahead of both: it is the
             // most recent explicit action, and a PNG that will not load is a
             // sentence naming what is wrong with *that* file.
+            // An object refusal was the same Observable nobody read: a
+            // re-shape, a re-combine, a removal and a refused transform each
+            // wrote one and none of them reached the screen.
             tool_status: self
                 .references
                 .notice()
                 .get()
                 .as_deref()
                 .or(self.mask.notice().get().as_deref())
+                .or(self.objects.notice().get().as_deref())
                 .or(self.sculpt.tool_status().get().as_deref()),
             symmetry: *self.sculpt.symmetry().get(),
             scene: &scene,

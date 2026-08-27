@@ -4,16 +4,23 @@ Where the project stands, what is left, and what is still undecided. Task
 counts come from the tasks files under `openspec/changes/`, which are the
 authority.
 
-**Two changes.** `add-clayspace-desktop` stands at **107 of 109 tasks** —
+**Five changes.** `add-clayspace-desktop` stands at **107 of 109 tasks** —
 milestones 1 to 4 delivered, milestone 5 all but closed.
 `make-representations-first-class` is **complete**, and is what took the
 application from one vocabulary to three; its own summary is below.
+`place-and-transform-objects` is **complete**: a shape placed in the scene
+stays an addressable item, with a manipulator on it and a boolean that follows
+it. `benchmark-every-operation` stands at **45 of 46** — the table went from
+one brush to every brush, operation, conversion and bake.
+`upgrade-engine-0-52-2` stands at **12 of 13**, and both remainders are the
+same task: re-recording the macOS baseline, which needs a macOS machine.
 
-Engine pinned at ClayCore **0.39.0**, at the tag rather than at `main` — the
+Engine pinned at ClayCore **0.52.2**, at the tag rather than at `main` — the
 tag is a release, `main` is where they are still working. On the reference
-scene a dab is 12.2 ms median against a 50 ms budget and startup to first
-document is 15.1 ms, both recorded against 0.29.1 on macOS aarch64; neither
-0.30.0 nor 0.39.0 has been re-measured on that machine. See *What is slow and why*.
+scene a dab is 2.1 ms median against a 50 ms budget and startup to first
+document is 11.4 ms, recorded against 0.52.2 on Linux x86_64. The macOS
+baseline still reads 0.29.1 — 12.2 ms and 15.1 ms there — and nothing since
+has been re-measured on that machine. See *What is slow and why*.
 
 ## Milestones
 
@@ -496,12 +503,13 @@ and engine produced it. Budget breaches are printed but not enforced without
 `--enforce-budgets`: the specification gates on a change *raising* latency, and
 a gate that is red the day it is installed is one people learn to ignore.
 
-The Linux baseline was recorded after the three representations landed, since
-the tool set and the stroke routing both changed under it: engine 0.39.0, CUDA,
-1280×800, with a dab median of 2.42 ms against a 50 ms budget and a locality
-key ratio of 0.75 against a budget of 2. The macOS baseline still reads engine
-0.29.1 and cannot be re-recorded from here — it takes a run on that hardware,
-the same condition the macOS CI rows are waiting on.
+The Linux baseline was last re-recorded when the engine pin moved, since the
+undo behaviour and the SDF move brush both changed under it: engine 0.52.2,
+CUDA, 1280×800, at 0.13 load per core, with a dab median of 2.10 ms against a
+50 ms budget and a locality key ratio of 0.75 against a budget of 2. The macOS
+baseline still reads engine 0.29.1 and cannot be re-recorded from here — it
+takes a run on that hardware, the same condition the macOS CI rows are waiting
+on.
 
 ## Open decisions
 

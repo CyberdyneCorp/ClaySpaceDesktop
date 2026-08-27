@@ -105,11 +105,15 @@ packaging:
 # These are meant to be looked at: several real defects were invisible to the
 # assertions and obvious in the picture.
 
+# The targets are read off the directory rather than listed here. A
+# hand-written list rendered five of the twenty-five, and what it left out was
+# the newest work: `visual_objects` was the capture that caught a blank first
+# frame and a row of sliders labelled with save-file keys, and it never ran
+# under this recipe.
+
 # Render every visual test and open the capture directory.
 visual:
-    cargo test -p {{app}} --release --test visual_brushes --test visual_shell \
-        --test visual_armature --test visual_bake_tools --test visual_incremental \
-        -- --nocapture
+    cargo test -p {{app}} --release $(for target in crates/clayspace-app/tests/visual_*.rs; do echo --test $(basename $target .rs); done) -- --nocapture
     @just open-visual
 
 # Open the capture directory for this platform.
@@ -140,18 +144,18 @@ budget:
 bench:
     cargo run -q -p {{app}} --release --bin bench
 
-# One group of it, e.g. `just bench-only brush.voxel` or `just bench-only convert`.
-#
 # A filtered run refuses to record a baseline: a baseline recorded from a
 # subset reports every omitted figure as missing on the next comparison.
+
+# One group of it, e.g. `just bench-only brush.voxel` or `just bench-only convert`.
 bench-only prefix:
     cargo run -q -p {{app}} --release --bin bench -- --only {{prefix}}
 
-# Compare against the recorded baseline. This is the CI gate.
-#
 # One baseline per platform. Comparing a Linux run against a macOS recording
 # measures the difference between two machines and calls it a regression, which
 # is worse than no gate: the figures differ by more than any change would.
+
+# Compare against the recorded baseline for this platform. This is the CI gate.
 bench-compare platform=os():
     cargo run -q -p {{app}} --release --bin bench -- \
         --baseline benchmarks/baseline-{{ if platform == "macos" { "macos-aarch64" } else { "linux-x86_64" } }}.json

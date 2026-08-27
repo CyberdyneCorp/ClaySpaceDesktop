@@ -3,9 +3,10 @@
 What works today. Anything not listed here is not built yet — see
 [roadmap.md](roadmap.md).
 
-Four tools currently damage what they touch, and two controls do nothing.
-Neither is a gap in this application: both are engine defects, filed, and
-listed under *Known-degraded* at the end of this page. They are called out
+One control is inert, two brushes are subtler than their names suggest, and
+the coarse surface speckles while it is distant. None of it is waiting on an
+engine: what is left is the engine's design or ours, which is what
+*Known-degraded* at the end of this page says of each. They are called out
 there rather than quietly omitted, because a tool that is offered and does the
 wrong thing is worse than one that is missing.
 
@@ -827,7 +828,7 @@ select it a week later, move it, and the boolean follows: the hole is where the
 cylinder now is. Its operation is a property of *it* rather than of the gesture
 that made it, so a subtraction can become a groove without replacing anything,
 and its shape can be exchanged without losing where it stands. The same
-fourteen combine operations a stroke has, on the same terms — including the
+thirteen combine operations a stroke has, on the same terms — including the
 seven whose slider cannot reach zero, because zero there is not a hard join but
 no operation at all.
 
@@ -865,7 +866,9 @@ A whole drag is **one undo step**, however many frames it took.
 A sculpting stroke is not a target. A stroke is a gesture that has finished,
 and picking one back up is a different question — which of its samples is being
 moved — that moving all of them silently would answer wrongly. Clicking one
-says so rather than doing nothing.
+says so on the options bar rather than doing nothing, and the press stays the
+brush's: a press on the clay is a stroke, and taking that away to explain
+something would be the worse error.
 
 ### When the clay is behind your hand
 
@@ -876,12 +879,14 @@ at the speed of the hand and the surface catches up **once**, when the pointer
 comes up — the same answer the region-based brushes already give, and for the
 same reason.
 
-One of the fourteen operations is dearer than the rest to drag. The engine
+One of the thirteen operations is dearer than the rest to drag. The engine
 drops a node's finite influence bound for a non-local operation anywhere in the
 subtree, so an object set to **Interseção** dirties the whole layer on every
-frame while the same object subtracting dirties its own box. Measured, about
-40 % more per frame. It is not visible from the interface, which is why it is
-worth saying here.
+frame while the same object subtracting dirties its own box. Measured on the
+same object and the same scene: 21.3 ms a frame subtracting against 49.1 ms
+intersecting — `object.drag_frame` and `object.drag_frame_intersect` in
+`benchmarks/baseline-linux-x86_64.json`, better than twice the cost. It is not
+visible from the interface, which is why it is worth saying here.
 
 ### A model as an operand
 
@@ -1301,6 +1306,14 @@ absent on others.
   means the autosave beside it is offered back.
 - Recovered work is unsaved work. It does not take the recovery file's path,
   so the next save asks; and it is marked modified, because it is.
+- Which shapes were *placed* live in a side-car, `<name>.clay.objects`,
+  beside the document rather than inside it: the `.clay` format is the
+  engine's, and which nodes a sculptor put there is this application's own
+  bookkeeping. Send someone the `.clay` on its own and it opens and sculpts
+  with every boolean intact — the hole a cylinder cut is still a hole — but
+  none of its shapes is offered as an object any more, so none can be
+  selected, moved or re-combined. A row that will not parse costs that one
+  object and not the file.
 - Session state lives in Application Support on macOS and `$XDG_STATE_HOME` on
   Linux. State, not cache: losing it costs work.
 - The **reference images** are session state too: each plane's file path and

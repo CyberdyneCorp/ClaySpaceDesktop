@@ -31,3 +31,11 @@
 - [x] 3.3 Report the `brush.sdf.mover` regression upstream with the measured
       localisation (CyberdyneCorp/ClayCore#335)
 - [x] 3.4 Report the half-undo across a crossing upstream (CyberdyneCorp/ClayCore#341)
+
+## 4. Say what moved
+
+- [x] 4.1 Carry the new pin and the re-recorded figures into the documentation
+      that quotes them — the README stat block and its sample `diagnostics`
+      output, and the roadmap's header and baseline paragraph. Moving a pin
+      without this is how the README came to claim 0.39.0 and a 25.7 ms
+      startup across three re-recordings

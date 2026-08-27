@@ -1,10 +1,10 @@
 //! A dab costs what the edit costs, not what the model costs.
 //!
 //! The specification's locality requirement, as a test rather than as a
-//! reported figure. `bench.rs` reports it, and reported `locality.key_ratio`
-//! 0.00 against a budget of 2 while the ten-times scene took 1367 ms for a dab
-//! the reference scene did in 4 — a gate passing *because* its probe had
-//! stopped touching the surface.
+//! reported figure. `src/bin/bench/groups/locality.rs` reports it, and
+//! reported `locality.key_ratio` 0.00 against a budget of 2 while the
+//! ten-times scene took 1367 ms for a dab the reference scene did in 4 — a
+//! gate passing *because* its probe had stopped touching the surface.
 //!
 //! What it was hiding: an empty key list means "every surface brick" at the C
 //! boundary, which is right for an export and wrong for a re-mesh. Filtering
@@ -25,10 +25,10 @@ use support::Harness;
 
 /// How much dearer a dab may be on a model ten times the area.
 ///
-/// The specification asks for the work to follow the edit; `bench.rs` budgets
-/// the *key* ratio at 2, and this is the same claim in milliseconds with room
-/// for the larger scene's cache being colder. The failure this exists for was
-/// 714x.
+/// The specification asks for the work to follow the edit;
+/// `src/bin/bench/groups/locality.rs` budgets the *key* ratio at 2, and this is
+/// the same claim in milliseconds with room for the larger scene's cache being
+/// colder. The failure this exists for was 714x.
 const RATIO: f64 = 10.0;
 
 #[test]
