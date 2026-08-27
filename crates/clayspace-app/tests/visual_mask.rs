@@ -23,8 +23,8 @@ use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
     BrushSettings, Direction, GestureSample, MaskModel, MaskOp, SculptModel, ToolKind,
 };
-use clayspace_view::{Camera, Image, Vertex};
-use support::Harness;
+use clayspace_view::{Image, Vertex};
+use support::{framed, Harness};
 
 /// A sphere crossed into a mesh layer, so the viewport has vertices to carry
 /// the mask on.
@@ -129,15 +129,6 @@ fn difference(before: &Image, after: &Image) -> (usize, f32) {
         }
     }
     (changed, total as f32 / changed.max(1) as f32)
-}
-
-fn framed(document: &ClayDocument) -> Camera {
-    let mut camera = Camera::default();
-    match SculptModel::bounds(document) {
-        Some((min, max)) => camera.frame_bounds(min.into(), max.into()),
-        None => camera.frame_default(),
-    }
-    camera
 }
 
 #[test]

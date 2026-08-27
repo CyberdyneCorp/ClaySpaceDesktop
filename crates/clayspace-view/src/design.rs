@@ -37,12 +37,8 @@ pub mod size {
     /// name in front of it was never bounded.
     pub const LAYER_ROW_TAIL: f32 = 84.0;
 
-    /// A row in a list — scene entries, layer entries.
-    pub const ROW: f32 = 26.0;
     /// A slider or field.
     pub const CONTROL: f32 = 22.0;
-    /// A tool button in the rail.
-    pub const RAIL_BUTTON: f32 = 34.0;
     /// A brush swatch in the shelf.
     pub const SWATCH: f32 = 54.0;
     /// Icon side.
@@ -62,8 +58,6 @@ pub mod type_scale {
     pub const BODY: f32 = 13.0;
     /// Numeric readouts, set in a monospaced face.
     pub const NUMERIC: f32 = 12.0;
-    /// The window title.
-    pub const TITLE: f32 = 14.0;
 }
 
 /// Converts a linear palette colour to an egui colour.

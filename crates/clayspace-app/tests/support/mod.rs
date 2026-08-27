@@ -12,6 +12,8 @@
 use std::path::{Path, PathBuf};
 
 use clayspace_engine::claycore::{self, Document, Mesh, VertexLayout};
+use clayspace_engine::ClayDocument;
+use clayspace_model::SculptModel;
 use clayspace_view::{Camera, Gpu, GpuMesh, Image, OffscreenTarget, Renderer, Vertex};
 
 /// Where captured frames are written.
@@ -244,6 +246,45 @@ pub fn framed_camera(mesh: &Mesh) -> Camera {
         Err(_) => camera.frame_default(),
     }
     camera
+}
+
+/// A camera framing whatever the document covers.
+///
+/// The sibling of [`framed_camera`] for the tests that render a whole
+/// document rather than one engine mesh. Here rather than beside each of
+/// them: it was written out byte-for-byte in seven test files, so how a scene
+/// is framed had to be changed seven times or the captures stopped being
+/// comparable with each other.
+pub fn framed(document: &ClayDocument) -> Camera {
+    let mut camera = Camera::default();
+    match SculptModel::bounds(document) {
+        Some((min, max)) => camera.frame_bounds(min.into(), max.into()),
+        None => camera.frame_default(),
+    }
+    camera
+}
+
+/// The buffer the viewport would upload for a document.
+///
+/// The same call `App::sync_mesh_layers` makes, assembled the same way, so a
+/// test measures the application's own path rather than a test-only one that
+/// could drift from it. One name for it, because six names for one operation
+/// meant a reader of any single file could not tell it was the shared path,
+/// and a change to the vertex layout had to find all six.
+pub fn viewport_geometry(document: &mut ClayDocument) -> (Vec<Vertex>, Vec<u32>) {
+    let (positions, normals, colors, indices) = document.visible_mesh_geometry();
+    let vertices = positions
+        .into_iter()
+        .zip(normals)
+        .zip(colors)
+        .map(|((position, normal), color)| Vertex {
+            position,
+            normal,
+            color,
+            mask: 0.0,
+        })
+        .collect();
+    (vertices, indices)
 }
 
 // -- fixtures ---------------------------------------------------------------

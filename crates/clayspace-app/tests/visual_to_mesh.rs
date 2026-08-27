@@ -17,8 +17,8 @@ mod support;
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{BrushSettings, Direction, GestureSample, SculptModel, ToolKind};
-use clayspace_view::{Camera, Image, Vertex};
-use support::Harness;
+use clayspace_view::{Camera, Image};
+use support::{framed, Harness};
 
 fn document() -> Option<ClayDocument> {
     let policy = BackendPolicy::discover(None).ok()?;
@@ -27,34 +27,8 @@ fn document() -> Option<ClayDocument> {
         .ok()
 }
 
-/// The carried-layer buffer, as the viewport assembles it.
-fn carried(document: &mut ClayDocument) -> (Vec<Vertex>, Vec<u32>) {
-    let (positions, normals, colors, indices) = document.visible_mesh_geometry();
-    let vertices = positions
-        .into_iter()
-        .zip(normals)
-        .zip(colors)
-        .map(|((position, normal), color)| Vertex {
-            position,
-            normal,
-            color,
-            mask: 0.0,
-        })
-        .collect();
-    (vertices, indices)
-}
-
-fn framed(document: &ClayDocument) -> Camera {
-    let mut camera = Camera::default();
-    match SculptModel::bounds(document) {
-        Some((min, max)) => camera.frame_bounds(min.into(), max.into()),
-        None => camera.frame_default(),
-    }
-    camera
-}
-
 fn capture(harness: &Harness, document: &mut ClayDocument, camera: &Camera, name: &str) -> Image {
-    let (vertices, indices) = carried(document);
+    let (vertices, indices) = support::viewport_geometry(document);
     let mut mesh = clayspace_view::GpuMesh::new(&harness.gpu);
     mesh.upload(&harness.gpu, &vertices, &indices);
     harness.capture(&mesh, camera, false, name)
@@ -188,7 +162,7 @@ fn the_polyframe_draws_a_mesh_layers_edges() {
         .expect("the crossing was refused");
 
     let camera = framed(&document);
-    let (vertices, indices) = carried(&mut document);
+    let (vertices, indices) = support::viewport_geometry(&mut document);
     assert!(!indices.is_empty(), "nothing to draw edges on");
     harness
         .renderer

@@ -271,6 +271,25 @@ fn numeric(ui: &mut egui::Ui, text: impl Into<String>) {
     );
 }
 
+/// A toggle chip: a small button that reads as selected or not.
+///
+/// Handed back as a `Button` rather than added here, because one of the five
+/// places that draw a row of these adds it disabled with the reason on it.
+/// `unselected` is what an off chip fills with, which is the surface behind it
+/// — the ground under the viewport bar, a panel everywhere else.
+fn chip(label: &str, on: bool, unselected: egui::Color32) -> egui::Button<'static> {
+    egui::Button::new(
+        egui::RichText::new(label)
+            .size(type_scale::LABEL)
+            .color(if on {
+                Tokens::text()
+            } else {
+                Tokens::text_dim()
+            }),
+    )
+    .fill(if on { Tokens::raised() } else { unselected })
+}
+
 /// A label and its value on one row.
 fn readout(ui: &mut egui::Ui, label: &str, value: impl Into<String>) {
     ui.horizontal(|ui| {
@@ -1289,21 +1308,7 @@ pub fn left_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Command
         );
         for (index, axis) in Axis::ALL.iter().enumerate() {
             let on = state.symmetry[index];
-            let button = egui::Button::new(
-                egui::RichText::new(axis.label())
-                    .size(type_scale::LABEL)
-                    .color(if on {
-                        Tokens::text()
-                    } else {
-                        Tokens::text_dim()
-                    }),
-            )
-            .fill(if on {
-                Tokens::raised()
-            } else {
-                Tokens::panel()
-            });
-            if ui.add(button).clicked() {
+            if ui.add(chip(axis.label(), on, Tokens::panel())).clicked() {
                 queue.push(Command::ToggleSymmetry(*axis));
             }
         }
@@ -2254,21 +2259,7 @@ fn voxel_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQ
     ui.horizontal_wrapped(|ui| {
         for display in VoxelDisplay::ALL {
             let on = state.voxel_display == display;
-            let button = egui::Button::new(
-                egui::RichText::new(display.label())
-                    .size(type_scale::LABEL)
-                    .color(if on {
-                        Tokens::text()
-                    } else {
-                        Tokens::text_dim()
-                    }),
-            )
-            .fill(if on {
-                Tokens::raised()
-            } else {
-                Tokens::panel()
-            });
-            if ui.add(button).clicked() {
+            if ui.add(chip(display.label(), on, Tokens::panel())).clicked() {
                 queue.push(Command::SetVoxelDisplay(display, state.voxel_blur));
             }
         }
@@ -2337,22 +2328,8 @@ fn lattice_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
         for mode in clayspace_model::GizmoMode::ALL {
             let on = state.lattice.mode == mode;
             let usable = can_transform || mode == GizmoMode::Move;
-            let button = egui::Button::new(
-                egui::RichText::new(mode.label())
-                    .size(type_scale::LABEL)
-                    .color(if on {
-                        Tokens::text()
-                    } else {
-                        Tokens::text_dim()
-                    }),
-            )
-            .fill(if on {
-                Tokens::raised()
-            } else {
-                Tokens::panel()
-            });
             let response = ui
-                .add_enabled(usable, button)
+                .add_enabled(usable, chip(mode.label(), on, Tokens::panel()))
                 .on_disabled_hover_text(s.hint_gizmo_needs_two);
             if response.clicked() {
                 queue.push(Command::SetGizmoMode(mode));
@@ -2552,21 +2529,7 @@ pub fn right_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
     ui.horizontal_wrapped(|ui| {
         for falloff in Falloff::ALL {
             let on = state.brush.shaping.falloff == falloff;
-            let button = egui::Button::new(
-                egui::RichText::new(falloff.label())
-                    .size(type_scale::LABEL)
-                    .color(if on {
-                        Tokens::text()
-                    } else {
-                        Tokens::text_dim()
-                    }),
-            )
-            .fill(if on {
-                Tokens::raised()
-            } else {
-                Tokens::panel()
-            });
-            if ui.add(button).clicked() {
+            if ui.add(chip(falloff.label(), on, Tokens::panel())).clicked() {
                 queue.push(Command::SetBrushFalloff(falloff));
             }
         }
@@ -2717,21 +2680,7 @@ pub fn viewport_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comma
         ui.add_space(space::PANEL);
         for preset in ViewPresetKind::ALL {
             let on = state.view_preset == preset;
-            let button = egui::Button::new(
-                egui::RichText::new(preset.label())
-                    .size(type_scale::LABEL)
-                    .color(if on {
-                        Tokens::text()
-                    } else {
-                        Tokens::text_dim()
-                    }),
-            )
-            .fill(if on {
-                Tokens::raised()
-            } else {
-                Tokens::ground()
-            });
-            if ui.add(button).clicked() {
+            if ui.add(chip(preset.label(), on, Tokens::ground())).clicked() {
                 queue.push(Command::SetViewPreset(preset));
             }
         }

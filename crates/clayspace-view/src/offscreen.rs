@@ -293,20 +293,4 @@ impl Image {
         }
         changed as f64 / subject as f64
     }
-
-    /// The average colour of the whole frame, for coarse comparisons.
-    pub fn mean_color(&self) -> [f64; 3] {
-        let mut sums = [0u64; 3];
-        for p in self.pixels.chunks_exact(4) {
-            for c in 0..3 {
-                sums[c] += p[c] as u64;
-            }
-        }
-        let count = (self.pixels.len() / 4) as f64;
-        [
-            sums[0] as f64 / count,
-            sums[1] as f64 / count,
-            sums[2] as f64 / count,
-        ]
-    }
 }

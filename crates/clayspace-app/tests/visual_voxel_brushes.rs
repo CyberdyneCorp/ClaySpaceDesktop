@@ -14,7 +14,7 @@ mod support;
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{BrushSettings, GestureSample, Representation, SculptModel, ToolKind};
-use clayspace_view::{Camera, Image, Vertex};
+use clayspace_view::{Camera, Image};
 use support::Harness;
 
 /// A slab across the whole of x, so a reshaping brush has material at the
@@ -50,23 +50,6 @@ fn packed() -> Option<ClayDocument> {
             .ok()?;
     }
     Some(document)
-}
-
-/// The geometry the viewport would upload for a grid.
-fn viewport(document: &mut ClayDocument) -> (Vec<Vertex>, Vec<u32>) {
-    let (positions, normals, colors, indices) = document.visible_mesh_geometry();
-    let vertices = positions
-        .into_iter()
-        .zip(normals)
-        .zip(colors)
-        .map(|((position, normal), color)| Vertex {
-            position,
-            normal,
-            color,
-            mask: 0.0,
-        })
-        .collect();
-    (vertices, indices)
 }
 
 /// Head-on, and framed on a box centred on the mirror plane.
@@ -185,7 +168,7 @@ fn every_voxel_brush_is_captured_mirrored_and_not() {
     let Some(mut plain) = packed() else {
         return;
     };
-    let (vertices, indices) = viewport(&mut plain);
+    let (vertices, indices) = support::viewport_geometry(&mut plain);
     let mut mesh = clayspace_view::GpuMesh::new(&harness.gpu);
     mesh.upload(&harness.gpu, &vertices, &indices);
     let rest = harness.capture(&mesh, &camera, false, "voxel-sym-rest");
@@ -203,7 +186,7 @@ fn every_voxel_brush_is_captured_mirrored_and_not() {
         let mut shot = |symmetry: [bool; 3], suffix: &str| -> Image {
             let mut document = packed().expect("a slab");
             stroke(&mut document, tool, false, symmetry);
-            let (vertices, indices) = viewport(&mut document);
+            let (vertices, indices) = support::viewport_geometry(&mut document);
             mesh.upload(&harness.gpu, &vertices, &indices);
             harness.capture(
                 &mesh,
@@ -255,7 +238,7 @@ fn each_brush_with_an_opposite_draws_a_different_picture_held() {
         let mut shot = |invert: bool| -> Image {
             let mut document = packed().expect("a slab");
             stroke(&mut document, tool, invert, [false; 3]);
-            let (vertices, indices) = viewport(&mut document);
+            let (vertices, indices) = support::viewport_geometry(&mut document);
             mesh.upload(&harness.gpu, &vertices, &indices);
             harness.capture(
                 &mesh,
@@ -311,7 +294,7 @@ fn a_grid_can_be_drawn_as_boxes_or_as_a_surface() {
         document
             .set_voxel_display(display, SmoothBlur::new(blur))
             .expect("the picture was refused");
-        let (vertices, indices) = viewport(&mut document);
+        let (vertices, indices) = support::viewport_geometry(&mut document);
         mesh.upload(&harness.gpu, &vertices, &indices);
         (harness.capture(mesh, &camera, false, name), vertices.len())
     };

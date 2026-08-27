@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 
 use clayspace_model::{DocumentModel, ModelError, OpenError};
 
-use crate::command::Command;
 use crate::observable::Observable;
 
 /// Whether unsaved work would be lost, and what to do about it.
@@ -183,16 +182,6 @@ impl DocumentViewModel {
         self.modified.set_if_changed(false);
         self.notice.set_if_changed(None);
         Ok(())
-    }
-
-    /// Whether a command is one that makes the document differ from its file.
-    ///
-    /// Undo counts: a document undone back to what the file holds is still
-    /// reported as modified. Tracking that exactly would mean comparing
-    /// against the file, and claiming "saved" when it is not is the more
-    /// expensive mistake of the two.
-    pub fn is_an_edit(command: &Command) -> bool {
-        command.touches_document()
     }
 
     fn adopt(&mut self, path: &Path) {

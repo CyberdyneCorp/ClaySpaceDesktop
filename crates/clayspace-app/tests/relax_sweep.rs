@@ -16,8 +16,8 @@ use clayspace_app::SurfaceGeometry;
 use clayspace_engine::claycore::{RelaxParams, VolumeParams};
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{BrushSettings, GestureSample, SculptModel, ToolKind};
-use clayspace_view::{Camera, Image};
-use support::Harness;
+use clayspace_view::Image;
+use support::{framed, Harness};
 
 const CELL: f32 = 0.02;
 const BRUSH: f32 = 0.18;
@@ -87,15 +87,6 @@ fn bumpy() -> Option<ClayDocument> {
             .ok()?;
     }
     Some(document)
-}
-
-fn framed(document: &ClayDocument) -> Camera {
-    let mut camera = Camera::default();
-    match SculptModel::bounds(document) {
-        Some((min, max)) => camera.frame_bounds(min.into(), max.into()),
-        None => camera.frame_default(),
-    }
-    camera
 }
 
 /// Bakes the region the bumps occupy, relaxes it with the given kernel, and

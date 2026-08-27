@@ -25,7 +25,7 @@ mod support;
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{BrushSettings, GestureSample, SculptModel, ToolKind};
-use clayspace_view::{Camera, Image, Vertex};
+use clayspace_view::{Camera, Image};
 use support::Harness;
 
 /// A document whose only layer is a voxel grid with material in it.
@@ -60,23 +60,6 @@ fn deposit(document: &mut ClayDocument, height: f32) {
     }
 }
 
-/// The vertices and indices the viewport would upload, as it assembles them.
-fn viewport_geometry(document: &mut ClayDocument) -> (Vec<Vertex>, Vec<u32>) {
-    let (positions, normals, colors, indices) = document.visible_mesh_geometry();
-    let vertices = positions
-        .into_iter()
-        .zip(normals)
-        .zip(colors)
-        .map(|((position, normal), color)| Vertex {
-            position,
-            normal,
-            color,
-            mask: 0.0,
-        })
-        .collect();
-    (vertices, indices)
-}
-
 /// How many pixels the surface covers.
 fn lit(image: &Image) -> usize {
     let ground = image.pixel(4, 4);
@@ -96,7 +79,7 @@ fn a_voxel_stroke_reaches_the_viewport() {
         return;
     };
 
-    let (vertices, indices) = viewport_geometry(&mut document);
+    let (vertices, indices) = support::viewport_geometry(&mut document);
     assert!(
         !indices.is_empty(),
         "a sculpted voxel layer offered the viewport no triangles, so nothing \
@@ -139,7 +122,7 @@ fn a_second_voxel_stroke_changes_what_is_drawn() {
     }
 
     let first_revision = document.mesh_revision();
-    let (vertices, indices) = viewport_geometry(&mut document);
+    let (vertices, indices) = support::viewport_geometry(&mut document);
     let mut mesh = clayspace_view::GpuMesh::new(&harness.gpu);
     mesh.upload(&harness.gpu, &vertices, &indices);
     let before = harness.capture(&mesh, &camera, false, "69-voxel-before");
@@ -153,7 +136,7 @@ fn a_second_voxel_stroke_changes_what_is_drawn() {
          its stale copy and never ask for the new triangles"
     );
 
-    let (vertices, indices) = viewport_geometry(&mut document);
+    let (vertices, indices) = support::viewport_geometry(&mut document);
     let mut mesh = clayspace_view::GpuMesh::new(&harness.gpu);
     mesh.upload(&harness.gpu, &vertices, &indices);
     let after = harness.capture(&mesh, &camera, false, "69-voxel-after");
@@ -181,11 +164,11 @@ fn hiding_a_voxel_layer_stops_drawing_it() {
     };
     let key = document.scene().active.expect("an active layer");
 
-    let (_, indices) = viewport_geometry(&mut document);
+    let (_, indices) = support::viewport_geometry(&mut document);
     assert!(!indices.is_empty(), "nothing was drawn to begin with");
 
     document.set_layer_visible(key, false).expect("hide it");
-    let (_, hidden) = viewport_geometry(&mut document);
+    let (_, hidden) = support::viewport_geometry(&mut document);
     assert!(
         hidden.is_empty(),
         "a hidden voxel layer still offered {} indices to the viewport",
@@ -388,7 +371,7 @@ fn the_counters_include_a_voxel_layer() {
     let Some(mut document) = sculpted() else {
         return;
     };
-    let (_, indices) = viewport_geometry(&mut document);
+    let (_, indices) = support::viewport_geometry(&mut document);
     let drawn = indices.len() / 3;
     assert!(drawn > 0, "nothing was drawn to count");
 
