@@ -10,6 +10,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  # `record-baseline` is run by hand, so the workflow has to be dispatchable.
+  workflow_dispatch:
+    inputs:
+      record_baseline:
+        description: Record benchmark baselines and upload them as artifacts
+        type: boolean
+        default: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -135,6 +142,15 @@ jobs:
   # rather than asserted there, and absolute budgets that hold on a developer's
   # machine and not on a shared runner teach people to ignore the gate.
   # Budget breaches are printed either way.
+  #
+  # STATE OF THIS GATE: it is not comparing anything yet, and says so rather
+  # than implying otherwise. `baseline-macos-aarch64.json` predates the
+  # reference suite, so it states one scene where the reader expects a map,
+  # `compare::unlike` declines, and a declining comparison is reported as "not
+  # comparing" rather than as a pass. Recording a replacement needed a Mac
+  # nobody had — except that this workflow already runs on one. `record-baseline`
+  # below is that Mac. Once its artifact is committed, the refusal becomes a
+  # failure (a gate that declines is indistinguishable from a gate that passed).
   benchmark:
     name: Performance
     runs-on: macos-14
@@ -149,6 +165,11 @@ jobs:
           key: benchmark
 
       - name: Measure
+        # `shell: bash` rather than the default `bash -e {0}`, because it also
+        # brings `-o pipefail`. Without it the pipeline's status is `tee`'s,
+        # and `tee` always succeeds — so the exit code the gate uses to fail a
+        # regression was being thrown away before anyone could read it.
+        shell: bash
         run: |
           cargo run --release --bin bench -- \
             --json "$RUNNER_TEMP/now.json" \
@@ -165,6 +186,52 @@ jobs:
           path: |
             ${{ runner.temp }}/now.json
             ${{ runner.temp }}/report.txt
+
+  # The Mac nobody had.
+  #
+  # `baseline-macos-aarch64.json` has been stale since before the reference
+  # suite existed, and the reason it stayed stale is that re-recording it needs
+  # an aarch64 Mac. This workflow has been running on one all along. Dispatched
+  # by hand rather than on every push, because a baseline should be a decision
+  # someone made, not a file that quietly moves under the gate.
+  #
+  # `--allow-busy` is passed deliberately: a shared runner is never quiet by the
+  # threshold `load.rs` measured on a workstation, and refusing forever would
+  # leave the gate with nothing to compare against — which is the worse of the
+  # two failures. The load it was recorded under is written into the file, so
+  # the noise is visible to whoever reads it rather than hidden.
+  record-baseline:
+    name: Record a baseline
+    if: inputs.record_baseline
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14, slug: macos-aarch64 }
+          - { os: ubuntu-24.04, slug: linux-x86_64 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: benchmark-record-${{ matrix.slug }}
+
+      - name: Record
+        shell: bash
+        run: |
+          cargo run --release --bin bench -- \
+            --json "baseline-${{ matrix.slug }}.json" \
+            --allow-busy
+
+      - name: Keep it
+        uses: actions/upload-artifact@v4
+        with:
+          name: baseline-${{ matrix.slug }}
+          path: baseline-${{ matrix.slug }}.json
 
   lint:
     name: Format, lint and audit
