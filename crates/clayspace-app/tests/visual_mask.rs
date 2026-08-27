@@ -86,6 +86,31 @@ fn viewport_geometry(document: &mut ClayDocument) -> (Vec<Vertex>, Vec<u32>) {
 
 /// How many pixels differ between two frames, and by how much on average over
 /// those pixels.
+/// Mean absolute luminance difference across every pixel.
+///
+/// Every pixel, deliberately. `difference` averages over only the pixels that
+/// crossed its threshold, so when a change is small its denominator is small
+/// too and the mean is whatever a handful of pixels happened to do. That is
+/// fine for "did this region get darker" and useless for comparing two
+/// pictures, which is what the mask tests need.
+fn distance(a: &Image, b: &Image) -> f32 {
+    let luma = |p: &[u8]| p[0] as i32 + p[1] as i32 + p[2] as i32;
+    let total: i64 = a
+        .pixels
+        .chunks_exact(4)
+        .zip(b.pixels.chunks_exact(4))
+        .map(|(x, y)| (luma(y) - luma(x)).unsigned_abs() as i64)
+        .sum();
+    total as f32 / (a.pixels.len() / 4).max(1) as f32
+}
+
+/// Pixels that moved, and the mean signed luminance change across them.
+///
+/// The mean is over the changed pixels only, so it is meaningful only once
+/// enough of them changed: assert on `changed` before believing `mean`, as
+/// both callers here do. Skipping that guard is how this file once shipped a
+/// test that passed on Linux because *nothing* changed — a mean of zero over
+/// zero pixels satisfies a "did not get darker" assertion perfectly.
 fn difference(before: &Image, after: &Image) -> (usize, f32) {
     let mut changed = 0usize;
     let mut total = 0i32;
@@ -275,9 +300,26 @@ fn a_dab_beside_the_mask_does_not_wipe_it_off() {
 
     let mut geometry = SurfaceGeometry::new(&harness.gpu);
     geometry.sync(&harness.gpu, &mut document).expect("mesh");
+    // The same surface with no mask on it, kept as the thing the picture must
+    // *not* drift towards. Comparing against it is what makes this test say
+    // something: an absolute "did the pixels move" threshold cannot tell a
+    // mask being wiped off from the dab's own shading, and on a platform where
+    // the dab is subtle it cannot tell either from nothing at all.
+    let plain = harness.capture(geometry.mesh(), &camera, false, "75-field-mask-absent");
+
     freeze_the_near_face(&mut document);
     geometry.refresh_mask(&harness.gpu, &document);
     let masked = harness.capture(geometry.mesh(), &camera, false, "76-field-mask-kept-before");
+
+    // If the mask is not plainly visible to begin with, nothing below can
+    // distinguish it surviving from it never having been drawn.
+    let mask_shows = distance(&plain, &masked);
+    assert!(
+        mask_shows > 1.0,
+        "painting a mask changed the picture by only {mask_shows:.2} per pixel, \
+         so this test cannot tell whether a mask survives a re-mesh. See \
+         target/visual/76-field-mask-kept-before.png"
+    );
 
     // A dab overlapping the frozen patch, which the mask itself resists.
     document
@@ -298,18 +340,26 @@ fn a_dab_beside_the_mask_does_not_wipe_it_off() {
     geometry.sync(&harness.gpu, &mut document).expect("re-mesh");
     let after = harness.capture(geometry.mesh(), &camera, false, "77-field-mask-kept-after");
 
-    let (changed, mean) = difference(&masked, &after);
+    // The question is which of the two pictures the dabbed one resembles: the
+    // masked surface it should still be, or the bare surface it would become
+    // if the re-mesh handed back vertices that had forgotten they were frozen.
+    // A ratio rather than a threshold, because the dab's own contribution to
+    // the picture differs by platform and backend and is not what is on trial.
+    let from_masked = distance(&masked, &after);
+    let from_plain = distance(&plain, &after);
     assert!(
-        mean > -10.0,
-        "the surface got {mean} darker per changed pixel after a dab, which is \
-         the mask being painted twice rather than kept"
-    );
-    // And the frozen region is still there: re-rendering with the mask
-    // dropped would be a large *lightening*, which this bounds.
-    assert!(
-        changed < 4000,
-        "{changed} pixels changed after one dab beside the mask, so the \
-         re-mesh handed back vertices that had forgotten they were frozen. See \
+        from_masked * 4.0 < from_plain,
+        "after a dab beside it the surface is {from_masked:.2} per pixel from \
+         the masked picture and {from_plain:.2} from the unmasked one, so the \
+         re-mesh lost the mask rather than carrying it. See \
          target/visual/77-field-mask-kept-after.png"
+    );
+    // Painted twice rather than kept: the mask laid over itself is darker than
+    // the mask, and would move the picture away from both references at once.
+    assert!(
+        from_masked < mask_shows,
+        "a dab moved the surface {from_masked:.2} per pixel from the masked \
+         picture, more than painting the mask moved it in the first place \
+         ({mask_shows:.2}), which is the mask being applied twice"
     );
 }
