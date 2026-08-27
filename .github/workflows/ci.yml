@@ -30,7 +30,21 @@ jobs:
   test:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # Ninety, because Metal needs about sixty and the budget was sixty.
+    #
+    # Measured on this workflow, the same commit: Linux Vulkan 22 min, Linux
+    # CPU 26, macOS CPU-only 31, macOS Metal **57**. At a sixty-minute budget
+    # the slowest job had three minutes of headroom, so it did not fail — it
+    # was cancelled, which reads as a red X with no failing test in it and
+    # sends whoever looks hunting for one. It has now tipped over on `main`
+    # and on a branch that changes one assertion in one test file.
+    #
+    # Raising the budget rather than trimming the suite: the job is doing real
+    # work — Metal runs the GPU tests CPU-only skips, which is most of the
+    # difference — and a cancelled job teaches people to re-run rather than to
+    # read. If it approaches ninety, the answer is to make it faster, not to
+    # raise this again.
+    timeout-minutes: 90
     strategy:
       # One row failing should not hide the others: a Metal-only regression is
       # worth seeing next to a green CPU run.
