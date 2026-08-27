@@ -118,3 +118,50 @@ that has become disproportionately expensive is visible.
 #### Scenario: A group becomes expensive
 - **WHEN** the benchmark completes
 - **THEN** it reports the time each measurement group took and the total
+
+### Requirement: A figure records the machine load it was measured against
+The benchmark SHALL sample the machine's one-minute load average before any
+measurement begins, report it, and record it in the baseline file, so that a
+figure carries the conditions it was taken under rather than being read as
+though the machine were idle. The load SHALL be judged per core, since the same
+absolute load means something different on a four-core laptop and a twenty-four
+core workstation.
+
+A run measured against other work SHALL NOT be usable to record a baseline
+unless the operator overrides it explicitly, because a noisy baseline stays
+wrong for every run that later compares against it, while a noisy comparison is
+wrong only once.
+
+The threshold is evidence rather than convention: on the reference machine a
+concurrent test suite and database, around 0.2 runnable threads per core, moved
+the move-brush figure by under 2% across three runs, while an unrelated process
+at roughly 0.6 per core moved a single measurement by 25% — several times the
+tolerance the gate applies.
+
+#### Scenario: A run states the load it was measured under
+- **WHEN** the benchmark starts
+- **THEN** it reports the one-minute load, the core count and the load per core
+- **AND** says so plainly when the machine is not quiet
+
+#### Scenario: A busy machine cannot record a baseline
+- **WHEN** a run measured above the per-core threshold is asked to write a
+  baseline file
+- **THEN** it refuses, names the load, and writes nothing
+- **AND** records the baseline anyway if the operator passes an explicit
+  override
+
+#### Scenario: A regression reported from a busy machine is caveated
+- **WHEN** a comparison reports a regression and the run was not measured on a
+  quiet machine
+- **THEN** the load is stated alongside the regressions, so that red is not
+  acted on before it is reproduced
+
+#### Scenario: A baseline recorded on a busy machine is suspected
+- **WHEN** a quiet run reports a regression against a baseline whose recorded
+  load was not quiet
+- **THEN** the comparison says the baseline may be the wrong half of the
+  comparison
+
+#### Scenario: A baseline predating the load record is not assumed quiet
+- **WHEN** a baseline that states no load is read
+- **THEN** its load is treated as unknown rather than as zero

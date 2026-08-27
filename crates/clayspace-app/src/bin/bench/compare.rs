@@ -9,10 +9,16 @@
 use clayspace_app::Conditions;
 
 use crate::json::{self, Baseline};
+use crate::load::Load;
 use crate::run::Run;
 
 /// Compares against a recorded baseline, refusing to compare unlike runs.
-pub fn compare(path: &str, where_: &Conditions, run: &Run) -> std::io::Result<bool> {
+pub fn compare(
+    path: &str,
+    where_: &Conditions,
+    load: Option<&Load>,
+    run: &Run,
+) -> std::io::Result<bool> {
     let baseline = json::read(path)?;
     if let Some(refusal) = unlike(where_, &baseline) {
         println!("\n{refusal} Not comparing.");
@@ -21,7 +27,37 @@ pub fn compare(path: &str, where_: &Conditions, run: &Run) -> std::io::Result<bo
 
     let regressed = table(&baseline, run);
     let missing = missing(&baseline, run);
+    // Said after the table rather than before it: a regression on a busy box
+    // is still worth reading, it just is not yet worth acting on. Whoever
+    // sees red needs this line next to the red, not scrolled off above it.
+    if regressed {
+        if let Some(note) = noise(load, &baseline) {
+            println!("\n{note}");
+        }
+    }
     Ok(regressed || missing)
+}
+
+/// Why a regression reported here might be the machine rather than the code.
+fn noise(load: Option<&Load>, baseline: &Baseline) -> Option<String> {
+    match load {
+        Some(load) if !load.is_quiet() => Some(format!(
+            "Note: this run was measured at {}. Re-run on a quiet machine \
+             before believing the regressions above.",
+            load.describe()
+        )),
+        // The other direction, and the one that is easy to miss: a quiet run
+        // can look like a regression because the *baseline* was recorded on a
+        // busy box and so is faster than the machine really is.
+        _ => match baseline.load_per_core {
+            Some(per_core) if per_core >= 0.25 => Some(format!(
+                "Note: the baseline was recorded at {per_core:.2} load per core, \
+                 which is not a quiet machine. It may be the baseline that is \
+                 wrong, not this run."
+            )),
+            _ => None,
+        },
+    }
 }
 
 /// Why these two runs cannot be compared, if they cannot.
@@ -182,7 +218,44 @@ mod tests {
                 .map(|(name, value)| (name.to_string(), *value))
                 .collect(),
             skipped: BTreeMap::new(),
+            load_per_core: None,
         }
+    }
+
+    #[test]
+    fn a_busy_run_gets_a_caveat_next_to_its_regressions() {
+        let load = Load {
+            one_minute: 15.0,
+            cores: 24,
+        };
+        let note = noise(Some(&load), &baseline(&[])).expect("a busy run is caveated");
+        assert!(note.contains("quiet machine"), "{note}");
+    }
+
+    #[test]
+    fn a_quiet_run_against_a_busy_baseline_blames_the_baseline() {
+        // The failure mode that reads as a regression and is not one: the
+        // baseline was recorded on a loaded box, so it is faster than the
+        // machine can really go, and every honest run after it looks slow.
+        let mut recorded = baseline(&[]);
+        recorded.load_per_core = Some(0.6);
+        let quiet = Load {
+            one_minute: 1.0,
+            cores: 24,
+        };
+        let note = noise(Some(&quiet), &recorded).expect("a busy baseline is caveated");
+        assert!(note.contains("baseline that is"), "{note}");
+    }
+
+    #[test]
+    fn two_quiet_runs_say_nothing() {
+        let mut recorded = baseline(&[]);
+        recorded.load_per_core = Some(0.05);
+        let quiet = Load {
+            one_minute: 1.0,
+            cores: 24,
+        };
+        assert_eq!(noise(Some(&quiet), &recorded), None);
     }
 
     #[test]

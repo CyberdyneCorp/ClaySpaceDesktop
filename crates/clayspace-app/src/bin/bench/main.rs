@@ -22,6 +22,7 @@ mod compare;
 mod figures;
 mod groups;
 mod json;
+mod load;
 mod report;
 mod run;
 mod skip;
@@ -60,6 +61,19 @@ fn main() {
     let where_ = conditions(&policy, VIEWPORT);
     println!("measuring: {}\n", where_.describe());
 
+    // Sampled before the warm-up: once this process is sculpting, the load is
+    // mostly this process, and says nothing about who else is competing.
+    let load = load::Load::sample();
+    match &load {
+        Some(load) if load.is_quiet() => println!("machine: {}\n", load.describe()),
+        Some(load) => println!(
+            "machine: {} — busy. Figures below are measured against other work \
+             on this box; read a surprise with that in mind.\n",
+            load.describe()
+        ),
+        None => println!("machine: load unavailable on this platform\n"),
+    }
+
     // Before anything is timed, and before the clock on the first group
     // starts: what a cold graphics card costs is larger than any regression
     // this gate is looking for. See `groups::warmup`.
@@ -72,7 +86,19 @@ fn main() {
     report::report(&run);
 
     if let Some(path) = json_path {
-        match json::write(&path, &where_, &run) {
+        if let Some(load) = load.filter(|l| l.too_busy_to_record()) {
+            if !args.iter().any(|a| a == "--allow-busy") {
+                eprintln!(
+                    "\nrefusing to record a baseline: {}. A baseline taken against \
+                     other work stays wrong for every run that compares to it. Wait \
+                     for the machine, or pass --allow-busy if you mean it.",
+                    load.describe()
+                );
+                std::process::exit(2);
+            }
+            eprintln!("\nrecording a baseline anyway: {}", load.describe());
+        }
+        match json::write(&path, &where_, load.as_ref(), &run) {
             Ok(()) => println!("\nwritten to {path}"),
             Err(e) => {
                 eprintln!("could not write {path}: {e}");
@@ -85,7 +111,7 @@ fn main() {
     let mut failed = report_budgets(&run, enforce);
 
     if let Some(path) = flag("--baseline") {
-        match compare::compare(&path, &where_, &run) {
+        match compare::compare(&path, &where_, load.as_ref(), &run) {
             Ok(regressions) => failed |= regressions,
             Err(e) => {
                 eprintln!("\ncould not compare against {path}: {e}");

@@ -14,6 +14,7 @@ use std::io::{Error, ErrorKind, Result};
 
 use clayspace_app::Conditions;
 
+use crate::load::Load;
 use crate::run::Run;
 
 /// A recorded run, as read back from a baseline file.
@@ -27,13 +28,18 @@ pub struct Baseline {
     pub figures: BTreeMap<String, f64>,
     /// What that run did not measure, and why.
     pub skipped: BTreeMap<String, String>,
+    /// The one-minute load per core the recording machine was under, where the
+    /// run reported one. Absent from baselines recorded before this was kept,
+    /// which is why it is an `Option` rather than a defaulted number: "quiet"
+    /// and "did not say" are different claims.
+    pub load_per_core: Option<f64>,
 }
 
-pub fn write(path: &str, where_: &Conditions, run: &Run) -> Result<()> {
-    std::fs::write(path, render(where_, run))
+pub fn write(path: &str, where_: &Conditions, load: Option<&Load>, run: &Run) -> Result<()> {
+    std::fs::write(path, render(where_, load, run))
 }
 
-fn render(where_: &Conditions, run: &Run) -> String {
+fn render(where_: &Conditions, load: Option<&Load>, run: &Run) -> String {
     let mut out = String::from("{\n  \"conditions\": {\n    \"scenes\": {\n");
     let members: Vec<String> = where_
         .scenes
@@ -50,9 +56,16 @@ fn render(where_: &Conditions, run: &Run) -> String {
     out.push_str(&format!("    \"backend\": \"{}\",\n", where_.backend));
     out.push_str(&format!("    \"engine\": \"{}\",\n", where_.engine));
     out.push_str(&format!(
-        "    \"viewport\": [{}, {}]\n  }},\n",
+        "    \"viewport\": [{}, {}]",
         where_.viewport.0, where_.viewport.1
     ));
+    match load {
+        Some(load) => out.push_str(&format!(
+            ",\n    \"load_per_core\": {:.4}\n  }},\n",
+            load.per_core()
+        )),
+        None => out.push_str("\n  },\n"),
+    }
 
     let figures: Vec<String> = run
         .figures()
@@ -104,6 +117,9 @@ fn parse(text: &str) -> Result<Baseline> {
         architecture: field(&conditions, "architecture")?.clone().into_string()?,
         backend: field(&conditions, "backend")?.clone().into_string()?,
         engine: field(&conditions, "engine")?.clone().into_string()?,
+        load_per_core: conditions
+            .get("load_per_core")
+            .and_then(|v| v.clone().into_number().ok()),
         figures: field(&root, "figures")?
             .clone()
             .into_object()?
@@ -314,7 +330,7 @@ mod tests {
 
     #[test]
     fn what_is_written_is_what_is_read() {
-        let read = parse(&render(&conditions(), &run())).expect("parses");
+        let read = parse(&render(&conditions(), None, &run())).expect("parses");
         assert_eq!(read.scenes["reference"], "r1");
         assert_eq!(read.scenes["reference-10x"], "r1");
         assert_eq!(read.platform, "linux");
@@ -327,10 +343,28 @@ mod tests {
     }
 
     #[test]
+    fn a_recorded_load_survives_the_round_trip() {
+        let load = Load {
+            one_minute: 3.0,
+            cores: 24,
+        };
+        let read = parse(&render(&conditions(), Some(&load), &run())).expect("parses");
+        assert_eq!(read.load_per_core, Some(0.125));
+    }
+
+    #[test]
+    fn a_baseline_without_a_load_says_so_rather_than_claiming_quiet() {
+        // Every baseline recorded before this field existed. Reading those as
+        // 0.0 would assert a quiet machine nobody measured.
+        let read = parse(&render(&conditions(), None, &run())).expect("parses");
+        assert_eq!(read.load_per_core, None);
+    }
+
+    #[test]
     fn a_run_that_skipped_nothing_reads_back_empty() {
         let mut run = Run::new(None);
         run.insert("dab.median", Figure::ms(1.0, None));
-        let read = parse(&render(&conditions(), &run)).expect("parses");
+        let read = parse(&render(&conditions(), None, &run)).expect("parses");
         assert!(read.skipped.is_empty());
     }
 
