@@ -26,6 +26,23 @@ pub struct Strings {
     /// places that are not the interface: history entries, engine refusals and
     /// the diagnostics report.
     pub tool_names: [&'static str; clayspace_model::ToolKind::ALL.len()],
+    /// Every combine operation, in `Combine::ALL` order.
+    ///
+    /// Here for the same reason `tool_names` is here, and it should have
+    /// arrived at the same time: `Combine::label` returned one hardcoded
+    /// Portuguese arm per variant and the options bar drew it directly, so a
+    /// sculptor on English or Spanish got their menus in their language and
+    /// every boolean control in Portuguese. `combine.rs` even documents the
+    /// intent — "Not `Combine::label`, which is interface text and
+    /// translated" — beside a `label` that was not.
+    pub combine_names: [&'static str; clayspace_model::Combine::ALL.len()],
+    /// Every blend profile, in `BlendProfile::ALL` order.
+    pub blend_names: [&'static str; clayspace_model::BlendProfile::ALL.len()],
+    /// Which way an extrusion goes, in `ExtrudeSide::ALL` order.
+    pub extrude_side_names: [&'static str; clayspace_model::ExtrudeSide::ALL.len()],
+    /// How a grid is drawn, in `VoxelDisplay::ALL` order.
+    pub voxel_display_names: [&'static str; clayspace_model::VoxelDisplay::ALL.len()],
+
     /// What each shape the picker offers is called, in the order
     /// `Shape::ALL` presents them.
     pub shape_names: [&'static str; clayspace_model::Shape::ALL.len()],
@@ -273,6 +290,25 @@ pub struct Strings {
 
 /// The Portuguese strings, which the design specifies.
 const PT_BR: Strings = Strings {
+    combine_names: [
+        "Unir",
+        "Subtrair",
+        "Interseção",
+        "Pintar",
+        "Sulco",
+        "Lingueta",
+        "Tubo",
+        "Gravar",
+        "Relevar",
+        "Embutir",
+        "Casca",
+        "Substituir",
+        "Relevo",
+        "Incisar",
+    ],
+    blend_names: ["Dura", "Quadrática", "Cúbica", "Circular", "Chanfro"],
+    extrude_side_names: ["Para fora", "Para dentro", "Centrado"],
+    voxel_display_names: ["Voxels", "Suave"],
     tool_names: [
         "Padrão",
         "Inflar",
@@ -513,6 +549,25 @@ const PT_BR: Strings = Strings {
 
 /// The English strings.
 const EN_US: Strings = Strings {
+    combine_names: [
+        "Union",
+        "Subtract",
+        "Intersect",
+        "Paint",
+        "Groove",
+        "Tongue",
+        "Pipe",
+        "Engrave",
+        "Emboss",
+        "Inset",
+        "Shell",
+        "Replace",
+        "Relief",
+        "Incise",
+    ],
+    blend_names: ["Hard", "Quadratic", "Cubic", "Circular", "Chamfer"],
+    extrude_side_names: ["Outward", "Inward", "Centred"],
+    voxel_display_names: ["Voxels", "Smooth"],
     tool_names: [
         "Standard",
         "Inflate",
@@ -752,6 +807,25 @@ const EN_US: Strings = Strings {
 
 /// The Latin American Spanish strings.
 const ES_419: Strings = Strings {
+    combine_names: [
+        "Unir",
+        "Restar",
+        "Intersecar",
+        "Pintar",
+        "Ranura",
+        "Lengüeta",
+        "Tubo",
+        "Grabar",
+        "Realzar",
+        "Embutir",
+        "Cáscara",
+        "Reemplazar",
+        "Relieve",
+        "Incidir",
+    ],
+    blend_names: ["Dura", "Cuadrática", "Cúbica", "Circular", "Chaflán"],
+    extrude_side_names: ["Hacia fuera", "Hacia dentro", "Centrado"],
+    voxel_display_names: ["Vóxeles", "Suave"],
     tool_names: [
         "Estándar",
         "Inflar",
@@ -1054,6 +1128,51 @@ impl Strings {
     /// Every brush name, for a test that checks the whole vocabulary at once.
     pub fn tool_names(&self) -> &[&'static str] {
         &self.tool_names
+    }
+
+    /// The name for one combine operation, in this locale.
+    ///
+    /// By position in `Combine::ALL`, which is what makes a new operation
+    /// without a name a compile error rather than a Portuguese word on an
+    /// English screen.
+    pub fn combine_name(&self, op: clayspace_model::Combine) -> &'static str {
+        Self::at(&self.combine_names, clayspace_model::Combine::ALL, op)
+    }
+
+    pub fn blend_name(&self, blend: clayspace_model::BlendProfile) -> &'static str {
+        Self::at(&self.blend_names, clayspace_model::BlendProfile::ALL, blend)
+    }
+
+    pub fn extrude_side_name(&self, side: clayspace_model::ExtrudeSide) -> &'static str {
+        Self::at(
+            &self.extrude_side_names,
+            clayspace_model::ExtrudeSide::ALL,
+            side,
+        )
+    }
+
+    pub fn voxel_display_name(&self, how: clayspace_model::VoxelDisplay) -> &'static str {
+        Self::at(
+            &self.voxel_display_names,
+            clayspace_model::VoxelDisplay::ALL,
+            how,
+        )
+    }
+
+    /// The name sitting at `value`'s position in `all`.
+    ///
+    /// Falls back to the first entry rather than panicking: a missing name is
+    /// a wrong word on screen, and taking the interface down over one would be
+    /// the worse failure. The fixed-length arrays are what actually prevent it.
+    fn at<T: PartialEq + Copy, const N: usize>(
+        names: &[&'static str; N],
+        all: [T; N],
+        value: T,
+    ) -> &'static str {
+        all.iter()
+            .position(|candidate| *candidate == value)
+            .and_then(|at| names.get(at).copied())
+            .unwrap_or(names[0])
     }
 
     /// Every string, for tests that check the whole table at once.

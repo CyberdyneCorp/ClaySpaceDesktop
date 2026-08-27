@@ -182,6 +182,42 @@ pub const INDICATOR_CONTRAST_FLOOR: f64 = 3.0;
 mod tests {
     use super::*;
 
+    /// How many domain `label()` calls the shell still draws.
+    ///
+    /// A ratchet, not a clean bill. `Strings` is where interface words live —
+    /// `tool_names` says so, and `combine.rs` says "Not `Combine::label`,
+    /// which is interface text and translated" beside a `label` that was not.
+    /// The combine picker, the blend profiles, the extrude sides and the voxel
+    /// display are in the table now; these are not, so a sculptor on English
+    /// or Spanish still meets Portuguese in them.
+    ///
+    /// The number may go **down** freely. It going *up* means a new control
+    /// was wired to a domain label instead of to the table, which is the
+    /// mistake this exists to stop repeating while the backlog is worked off.
+    /// Fixing one is: add an array to `Strings` keyed off the enum's `::ALL`,
+    /// fill all three locales, add an accessor, and call it here.
+    const LABELS_STILL_DRAWN: usize = 26;
+
+    #[test]
+    fn the_shell_draws_no_new_untranslated_labels() {
+        let shell = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/shell.rs");
+        let text = std::fs::read_to_string(&shell).expect("the shell's source");
+        let drawn = text.matches(".label()").count();
+        assert!(
+            drawn <= LABELS_STILL_DRAWN,
+            "the shell draws {drawn} domain labels, up from {LABELS_STILL_DRAWN}. \
+             A new control was wired to a domain `label()` rather than to \
+             `Strings`, so it will read in Portuguese on every other locale — \
+             see `Strings::combine_name` for the shape to follow"
+        );
+        assert!(
+            drawn >= LABELS_STILL_DRAWN,
+            "the shell draws {drawn} domain labels, down from \
+             {LABELS_STILL_DRAWN} — lower `LABELS_STILL_DRAWN` to {drawn} so \
+             the ratchet holds the ground that was just taken"
+        );
+    }
+
     #[test]
     fn primary_text_clears_the_contrast_floor_on_every_surface() {
         for (name, surface) in [
