@@ -61,3 +61,12 @@
 - [x] 8.5 Update `docs/architecture.md` and `README.md` where they describe what the gate covers
 - [x] 8.6 Point `stroke_budget.rs`'s cross-version table and `undo_cost.rs`'s narrative at the baseline as the record, keeping their explanations
 - [x] 8.7 Run `just check`, and the `cognitive-complexity` skill over `src/bin/bench/`, keeping every function inside the frontend band — the skill measures C/C++, Python, Go and TypeScript and has no Rust analyser, so the band is held by construction instead: every measurement is a `build → arrange → time → record` sequence whose branches are `?` on a `Result<_, Skip>`, the longest measurement is 46 lines, and the longest function of any kind is `main` at 58, which is a linear sequence of flags, groups and gates rather than a nest of them
+
+## 9. Guard the figures against the machine they run on
+
+- [x] 9.1 Sample the one-minute load before the warm-up, so the reading is of other work rather than of the benchmark itself, and report it per core
+- [x] 9.2 Refuse `--json` above the per-core threshold, with `--allow-busy` as the explicit override, since a noisy baseline outlives the run that recorded it
+- [x] 9.3 Record `load_per_core` in the baseline file as an `Option`, so a baseline that predates the field reads as unknown rather than as quiet
+- [x] 9.4 Caveat a reported regression in both directions — a busy run, and a quiet run against a baseline recorded busy
+- [x] 9.5 Derive the thresholds from measurement on the reference machine and cite both readings in `load.rs`, rather than picking a round number
+- [x] 9.6 Verify the refusal and the override by mutating the threshold and watching both fire, rather than by watching the suite stay green

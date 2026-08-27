@@ -206,6 +206,21 @@ measures one group. A filtered run cannot record a baseline, since a baseline
 recorded from a subset reports every omitted figure as missing on the next
 comparison.
 
+**A figure carries the machine it was measured on.** The one-minute load is
+sampled before the warm-up — after that the load is mostly the benchmark, which
+says nothing about who else is competing — reported per core, and written into
+the baseline's `conditions`. Above half a runnable thread per core the run
+refuses to record a baseline unless `--allow-busy` is passed: a noisy
+comparison is wrong once, a noisy baseline is wrong for every run that comes
+after it. Both directions are caveated when a comparison goes red, because a
+baseline recorded on a loaded box makes every honest run afterwards look like a
+regression.
+
+The thresholds are measured rather than chosen. On the reference machine a
+concurrent test suite and database — about 0.2 per core — left the move-brush
+figure inside 2% across three runs, while an unrelated process at roughly 0.6
+per core moved a single measurement by 25%, several times the gate's tolerance.
+
 16-cell bricks were also tried, and are worse: a third as many keys but eight
 times the cells each, so a dilated set meshes more overall — 64 ms against 39.
 
