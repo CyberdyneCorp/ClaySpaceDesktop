@@ -304,22 +304,44 @@ fn build_shell(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQ
 /// Two passes for the same reason the capture takes two: a scroll area and an
 /// area both measure before they place anything.
 fn probe_shell(state: &ShellState<'_>) -> egui::Context {
+    probe_shell_after(state, &[])
+}
+
+/// The same, with pointer events delivered first — one entry per frame, as
+/// `capture_shell_after` takes them — so a test can ask where things went
+/// once the interface has been driven somewhere.
+fn probe_shell_after(state: &ShellState<'_>, frames: &[Vec<egui::Event>]) -> egui::Context {
     let ctx = egui::Context::default();
     shell::apply_theme(&ctx);
     let mut queue = CommandQueue::new();
     for _ in 0..2 {
-        let _ = ctx.run(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(SHELL_WIDTH as f32, SHELL_HEIGHT as f32),
-                )),
-                ..Default::default()
-            },
-            |ctx| build_shell(ctx, state, &mut queue),
-        );
+        run_shell_frame(&ctx, state, &mut queue, Vec::new());
+    }
+    for events in frames {
+        run_shell_frame(&ctx, state, &mut queue, events.clone());
+        run_shell_frame(&ctx, state, &mut queue, Vec::new());
     }
     ctx
+}
+
+/// One frame of the shell on `ctx`, with `events` delivered to it.
+fn run_shell_frame(
+    ctx: &egui::Context,
+    state: &ShellState<'_>,
+    queue: &mut CommandQueue,
+    events: Vec<egui::Event>,
+) {
+    let _ = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(SHELL_WIDTH as f32, SHELL_HEIGHT as f32),
+            )),
+            events,
+            ..Default::default()
+        },
+        |ctx| build_shell(ctx, state, queue),
+    );
 }
 
 /// Draws the whole shell into one egui frame and returns the captured image.
@@ -3030,4 +3052,85 @@ fn the_edge_profiles_share_one_row_in_every_locale() {
             },
         );
     }
+}
+
+/// Where the right panel's inspectors stand, between the bars above and below.
+fn right_panel_rect() -> egui::Rect {
+    egui::Rect::from_min_max(
+        egui::pos2(
+            SHELL_WIDTH as f32 - region::RIGHT,
+            region::MENU_BAR + region::OPTIONS_BAR,
+        ),
+        egui::pos2(
+            SHELL_WIDTH as f32,
+            SHELL_HEIGHT as f32 - region::STATUS - region::SHELF,
+        ),
+    )
+}
+
+/// A section folds from its heading, and folding is nothing the document hears.
+///
+/// The right panel carries ten sections and a sculptor working the last of
+/// them scrolls past the rest every time. This is the fold that spares them:
+/// the heading row is the control, the body goes away, and — because a fold is
+/// interface state and not document state — no command leaves the view for it.
+#[test]
+fn a_section_folds_from_its_heading_and_emits_nothing() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let set = state(strings, &scene, &materials, &report);
+
+    let heading = shell_rect(
+        &probe_shell(&set),
+        shell::heading_id(strings.section_geometry),
+    )
+    .unwrap_or_else(|| panic!("no {:?} heading was drawn", strings.section_geometry));
+    assert!(
+        heading.left() >= SHELL_WIDTH as f32 - region::RIGHT,
+        "{:?} does not stand in the right panel: {heading:?}",
+        strings.section_geometry
+    );
+
+    let open = capture_shell(&harness, &set, "72-fold-open");
+    let fold = left_click(heading.center());
+    let closed = capture_shell_after(
+        &harness,
+        &set,
+        "72-fold-closed",
+        std::slice::from_ref(&fold),
+        |queue| {
+            assert!(
+                queue.is_empty(),
+                "folding a section emitted {:?}; a fold is view state and no \
+             command's business. See target/visual/72-fold-closed.png",
+                queue.commands()
+            );
+        },
+    );
+
+    let differing = differing_pixels_in(&open, &closed, right_panel_rect());
+    assert!(
+        differing > 0,
+        "clicking the {:?} heading changed nothing in the right panel. See \
+         target/visual/72-fold-open.png and 72-fold-closed.png",
+        strings.section_geometry
+    );
+
+    // The body is gone, not merely covered. A readout writes its row down
+    // every frame it is drawn and the slot is never cleared, so the question
+    // is asked of a frame drawn after the fold with the slot wiped first.
+    let ctx = probe_shell_after(&set, &[fold]);
+    let polygons = shell::readout_id(strings.label_polygons);
+    ctx.data_mut(|data| data.remove::<egui::Rect>(polygons));
+    run_shell_frame(&ctx, &set, &mut CommandQueue::new(), Vec::new());
+    assert!(
+        shell_rect(&ctx, polygons).is_none(),
+        "the {:?} row is still drawn under a folded heading",
+        strings.label_polygons
+    );
 }

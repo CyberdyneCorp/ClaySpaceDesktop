@@ -1600,6 +1600,16 @@ hue, which is what a colour-blind sculptor reads, and the shelf follows the
 "quiet until addressed" rule in the one place it did not. The sections of a
 panel are separated by a hairline rule in the separator tone, never by a box.
 
+**Every section folds from its heading.** The right region carries up to ten
+sections and the left has grown too, so the heading row is a control: a click
+puts the body away and a second brings it back, with a chevron at the row's
+trailing end — faint at rest, lit under the pointer — saying which way it
+stands. A fold is interface state and not document state: it is kept in the
+interface's own memory keyed by the heading's word, enters no history, emits no
+command, and is forgotten when the application closes, so every section opens
+shown. The two placing sections keep their `×` instead, which puts them away
+altogether.
+
 Contrast floors are enforced as tests, not intentions: 4.5:1 for text, 3:1 for
 indicators that carry state. Where the quiet-until-addressed rule would fall
 below a floor, the floor wins.
