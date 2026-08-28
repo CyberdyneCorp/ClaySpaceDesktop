@@ -35,6 +35,24 @@ cage's manipulator already holds.
   dragged
 - **THEN** every control point moves together and the swept form follows
 
+### Requirement: The manipulator is seen wherever it stands
+The manipulator, the deformation cage, a curve's control polygon and a
+selected object's outline SHALL be drawn over the sculpted surface regardless
+of depth: a handle that lies behind or inside the form SHALL be as visible as
+one in front of it. The manipulator's handles SHALL be drawn heavier than a
+single device pixel, and its arms SHALL keep a constant size on screen as the
+camera moves toward or away from what it acts on. The size drawn and the size
+hit-tested SHALL come from one definition.
+
+#### Scenario: A manipulator inside the form
+- **WHEN** a manipulator's pivot and every handle lie inside a placed sphere
+- **THEN** the manipulator is drawn in full over the sphere's surface
+
+#### Scenario: Zooming keeps the widget the same size to the hand
+- **WHEN** the camera moves to half its distance from the selection
+- **THEN** the manipulator's arms cover the same fraction of the viewport as
+  before, and a press at the drawn tip of an arm still finds that arm
+
 ### Requirement: Scale is uniform, and the manipulator offers only that
 Scale mode SHALL offer uniform scaling and SHALL NOT present per-axis scale
 handles for a target the engine can only scale uniformly.

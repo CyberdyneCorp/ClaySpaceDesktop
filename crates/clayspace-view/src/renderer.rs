@@ -437,6 +437,16 @@ pub enum SymmetryAxis {
 pub struct Renderer {
     pipeline: wgpu::RenderPipeline,
     overlay_pipeline: wgpu::RenderPipeline,
+    /// The overlay's lines, drawn whatever is in front of them.
+    ///
+    /// The cage, the curve's control polygon, an object's outline and the
+    /// manipulator are scaffolding around the clay, and half of any of them
+    /// is behind the surface: a subtracting object stands *inside* the form,
+    /// and a manipulator sits on the middle of what it moves. Depth-tested,
+    /// the manipulator on a placed sphere was three arrow tips poking out of
+    /// it and nothing to grab — so this pipeline reads no depth at all, and
+    /// the scaffolding is always where the hand expects it.
+    scaffold_pipeline: wgpu::RenderPipeline,
     /// The mesh layers' own edges, drawn over them.
     wire_pipeline: wgpu::RenderPipeline,
     /// Those edges, as a line list over `mesh_layers`' own vertices.
@@ -637,6 +647,17 @@ impl Renderer {
             wgpu::PrimitiveTopology::LineList,
             false,
         );
+        let scaffold_pipeline = make_pipeline_with_depth(
+            gpu,
+            &layout,
+            &shader,
+            format,
+            "overlay_vs",
+            "overlay_fs",
+            wgpu::PrimitiveTopology::LineList,
+            false,
+            wgpu::CompareFunction::Always,
+        );
 
         // The polyframe. The overlay's vertex stage — it is the same vertex
         // buffer, read the same way — with a fragment that draws ink rather
@@ -791,6 +812,7 @@ impl Renderer {
             surface_opacity: SurfaceOpacity::SOLID,
             pipeline,
             overlay_pipeline,
+            scaffold_pipeline,
             wire_pipeline,
             wire_indices: empty_buffer(gpu, "polyframe", wgpu::BufferUsages::INDEX),
             wire_index_count: 0,
@@ -1247,8 +1269,10 @@ impl Renderer {
                 pass.draw_indexed(0..self.armature_mesh.index_count, 0, 0..1);
             }
 
+            // The scaffolding — cage, curve, outline, manipulator — over
+            // everything, whichever side of the surface it is on.
             if !self.lattice_mesh.is_empty() {
-                pass.set_pipeline(&self.overlay_pipeline);
+                pass.set_pipeline(&self.scaffold_pipeline);
                 pass.set_vertex_buffer(0, self.lattice_mesh.vertices.slice(..));
                 pass.set_index_buffer(
                     self.lattice_mesh.indices.slice(..),
@@ -1528,6 +1552,35 @@ fn make_pipeline(
     topology: wgpu::PrimitiveTopology,
     cull: bool,
 ) -> wgpu::RenderPipeline {
+    make_pipeline_with_depth(
+        gpu,
+        layout,
+        shader,
+        format,
+        vs,
+        fs,
+        topology,
+        cull,
+        wgpu::CompareFunction::LessEqual,
+    )
+}
+
+/// The same, choosing what the depth test compares with.
+///
+/// `LessEqual` is the ordinary case: a thing behind the surface is hidden by
+/// it. `Always` is for scaffolding that has to be seen wherever it is.
+#[allow(clippy::too_many_arguments)]
+fn make_pipeline_with_depth(
+    gpu: &Gpu,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    format: wgpu::TextureFormat,
+    vs: &str,
+    fs: &str,
+    topology: wgpu::PrimitiveTopology,
+    cull: bool,
+    depth_compare: wgpu::CompareFunction,
+) -> wgpu::RenderPipeline {
     // Read from the same place the framebuffer reads it, so the two cannot
     // disagree — a pipeline whose sample count differs from its attachment's
     // is a validation error at draw time rather than at creation.
@@ -1560,7 +1613,7 @@ fn make_pipeline(
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: Framebuffer::DEPTH_FORMAT,
                 depth_write_enabled: cull,
-                depth_compare: wgpu::CompareFunction::LessEqual,
+                depth_compare,
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
@@ -1939,9 +1992,28 @@ const AXIS_COLOURS: [[f32; 3]; 3] = [[0.85, 0.24, 0.24], [0.36, 0.76, 0.30], [0.
 /// meaning — an arrow slides, a ring turns, a box scales — because a person
 /// reaching for a handle is not reading a legend, and because the three
 /// colours are the one part of this a colour-blind sculptor cannot use.
-fn gizmo_geometry_for(view: GizmoView, segment: &mut impl FnMut(Vec3, Vec3, [f32; 3])) {
+fn gizmo_geometry_for(view: GizmoView, emit: &mut impl FnMut(Vec3, Vec3, [f32; 3])) {
     const RING_SEGMENTS: usize = 40;
     let pivot = Vec3::from(view.pivot);
+
+    // Drawn heavier than the cage it stands on. A line is one pixel wide
+    // whatever the device, and a one-pixel manipulator over a shaded form is
+    // a thing to squint for; ZBrush's is a handle. Each stroke is laid down
+    // `HANDLE_WEIGHT` times, stepped *across itself in the screen plane* —
+    // perpendicular both to the stroke and to the eye — so it widens the same
+    // way from every angle, and a box's edges thicken rather than hatch.
+    let eye = normalized(Vec3::from(view.view_axis)).unwrap_or(Vec3::Z);
+    let step = view.reach * HANDLE_STEP;
+    let mut segment = |from: Vec3, to: Vec3, colour: [f32; 3]| {
+        // A stroke pointing straight at the eye has no across; any direction
+        // in the screen plane widens it as well as another.
+        let across = normalized(eye.cross(to - from)).unwrap_or_else(|| frame_about(eye).0);
+        for i in 0..HANDLE_WEIGHT {
+            let t = i as f32 - (HANDLE_WEIGHT - 1) as f32 * 0.5;
+            let offset = across * (t * step);
+            emit(from + offset, to + offset, colour);
+        }
+    };
     let lit = |handle: GizmoHandle, base: [f32; 3]| {
         if view.hovered == Some(handle) {
             [1.0, 0.85, 0.4]
@@ -1998,7 +2070,7 @@ fn gizmo_geometry_for(view: GizmoView, segment: &mut impl FnMut(Vec3, Vec3, [f32
                 } else {
                     // A box: what scales.
                     let box_size = view.reach * 0.08;
-                    cube(tip, box_size, colour, segment);
+                    cube(tip, box_size, colour, &mut segment);
                 }
             }
         }
@@ -2012,7 +2084,7 @@ fn gizmo_geometry_for(view: GizmoView, segment: &mut impl FnMut(Vec3, Vec3, [f32
         // reads as a centre from any angle rather than vanishing edge-on.
         let colour = lit(handle, [0.82, 0.78, 0.42]);
         let size = view.reach * 0.14;
-        cube(pivot, size, colour, segment);
+        cube(pivot, size, colour, &mut segment);
     }
 
     if view.mode == GizmoMode::Rotate {
@@ -2037,6 +2109,11 @@ fn gizmo_geometry_for(view: GizmoView, segment: &mut impl FnMut(Vec3, Vec3, [f32
 
 /// How far out the outer ring sits, against an axis ring's reach.
 pub const VIEW_RING_REACH: f32 = 1.28;
+
+/// How many passes each manipulator stroke is drawn in.
+const HANDLE_WEIGHT: usize = 3;
+/// How far apart those passes sit, against the manipulator's reach.
+const HANDLE_STEP: f32 = 0.006;
 
 /// Not one of the three axis colours: the outer ring belongs to no axis, and
 /// borrowing red, green or blue would say it did.

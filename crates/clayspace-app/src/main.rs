@@ -1353,7 +1353,7 @@ impl App {
                 Some(pivot) => (
                     pivot,
                     *self.objects.mode().get(),
-                    Self::OBJECT_GIZMO_REACH,
+                    Self::object_gizmo_reach(&self.camera),
                     false,
                 ),
                 None => return false,
@@ -1644,7 +1644,7 @@ impl App {
             let object_gizmo = object_pivot.map(|pivot| clayspace_view::GizmoView {
                 pivot,
                 mode: object_mode,
-                reach: Self::OBJECT_GIZMO_REACH,
+                reach: Self::object_gizmo_reach(&camera),
                 hovered: self.gizmo_drag.map(|(handle, _)| handle),
                 view_axis: Self::toward_eye(&camera, pivot),
                 // One scale factor, so one handle for it.
@@ -1716,11 +1716,25 @@ impl App {
 
     /// How long the manipulator's arms are on a placed object, in world units.
     ///
-    /// Fixed rather than taken from the object's own size, unlike the cage's,
-    /// which scales with the box it was built around. An object may be a
-    /// hundredth of the form or twice it, and a manipulator that shrank with a
-    /// small one would be unusable exactly when precision matters most.
-    const OBJECT_GIZMO_REACH: f32 = 0.45;
+    /// A share of the camera's distance rather than a length, so the widget is
+    /// the same size *to the hand* whether the sculptor is looking at the whole
+    /// form or has zoomed into a pore — which is how ZBrush's, Maya's and
+    /// Blender's all behave, and what a fixed length was not: zoomed in, its
+    /// arms left the screen; zoomed out, it was a speck. Not taken from the
+    /// object's own size either, unlike the cage's, which scales with the box
+    /// it was built around: an object may be a hundredth of the form or twice
+    /// it, and a manipulator that shrank with a small one would be unusable
+    /// exactly when precision matters most.
+    ///
+    /// The drawing and the hit test both read this, so the handle drawn and
+    /// the handle grabbed cannot come apart.
+    fn object_gizmo_reach(camera: &Camera) -> f32 {
+        (camera.distance * Self::OBJECT_GIZMO_FRACTION).max(1e-3)
+    }
+
+    /// The manipulator's arm as a share of the distance to the camera's
+    /// target. At the default distance this is the 0.45 the widget always had.
+    const OBJECT_GIZMO_FRACTION: f32 = 0.11;
 
     /// Whether a press on the clay should look for an object rather than
     /// starting a stroke.

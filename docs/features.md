@@ -863,6 +863,24 @@ transform. Use the cage when you mean to stretch along one axis.
 
 A whole drag is **one undo step**, however many frames it took.
 
+**The widget is drawn over the clay, not in it.** A manipulator sits on the
+middle of what it moves, and the middle of a placed sphere is inside the
+sphere; depth-tested, it was three arrow tips poking out of the form and
+nothing to grab, and on a small object inside a large one it was nothing at
+all. The cage, the curve's control polygon, an object's outline and the
+manipulator are all scaffolding around the clay, and scaffolding the clay hides
+is not scaffolding — so the overlay reads no depth, and every handle is where
+the hand expects it whichever side of the surface it is on. The strokes are laid
+down three deep, stepped across themselves in the screen plane, so a handle is
+a handle and not a one-pixel hairline over a shaded form.
+
+**It is the same size to the hand at every zoom.** The arms are a share of the
+distance to the camera's target rather than a length in the scene — the rule
+ZBrush, Maya and Blender all follow. A fixed length left the screen when the
+sculptor zoomed in and shrank to a speck when they zoomed out. The drawing and
+the hit test read one function, so the handle drawn and the handle grabbed
+cannot come apart.
+
 A sculpting stroke is not a target. A stroke is a gesture that has finished,
 and picking one back up is a different question — which of its samples is being
 moved — that moving all of them silently would answer wrongly. Clicking one
