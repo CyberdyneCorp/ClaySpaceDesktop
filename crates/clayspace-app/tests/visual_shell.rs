@@ -1080,6 +1080,26 @@ fn region_width(image: &clayspace_view::Image) -> u32 {
     width.min(image.width)
 }
 
+/// The lightest channel value inside a rect, which for a word on a dark
+/// ground is the tone of its ink.
+///
+/// The capture is one pixel per logical unit, so the rect indexes the image
+/// directly. Shrunk by a hair so a lifted cell's edge does not count for it.
+fn brightest(image: &clayspace_view::Image, rect: egui::Rect) -> u8 {
+    let rect = rect.shrink(2.0);
+    let (x0, y0) = (rect.left().max(0.0) as u32, rect.top().max(0.0) as u32);
+    let x1 = (rect.right() as u32).min(image.width);
+    let y1 = (rect.bottom() as u32).min(image.height);
+    (y0..y1)
+        .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+        .flat_map(|(x, y)| {
+            let [r, g, b, _] = image.pixel(x, y);
+            [r, g, b]
+        })
+        .max()
+        .unwrap_or(0)
+}
+
 /// A right-click on a layer row, as egui receives one.
 fn right_click(at: egui::Pos2) -> Vec<egui::Event> {
     click(at, egui::PointerButton::Secondary)
@@ -2325,7 +2345,31 @@ fn the_edge_profiles_share_one_row_in_every_locale() {
         }
 
         let name = format!("70-edge-chips-{:?}", locale).to_lowercase();
-        capture_shell(&harness, &state, &name);
+        let image = capture_shell(&harness, &state, &name);
+
+        // The current profile is the one lifted cell; the others are quiet.
+        // A galley laid out in one tone and painted with another keeps the
+        // first unless the paint overrides it, and the three quiet words once
+        // came out at the full tone of the chosen one without any assertion
+        // noticing.
+        let current = cells
+            .iter()
+            .find(|(falloff, _)| *falloff == state.brush.shaping.falloff)
+            .map(|(_, rect)| brightest(&image, *rect))
+            .expect("the current profile among the cells");
+        for (falloff, rect) in &cells {
+            if *falloff == state.brush.shaping.falloff {
+                continue;
+            }
+            let quiet = brightest(&image, *rect);
+            assert!(
+                quiet + 12 <= current,
+                "{}: {falloff:?} peaks at {quiet}, as loud as the chosen \
+                 {:?} at {current}; an unchosen profile is dim",
+                locale.label(),
+                state.brush.shaping.falloff
+            );
+        }
 
         // Still wired: choosing a profile that is not the current one asks
         // for it, and nothing else.

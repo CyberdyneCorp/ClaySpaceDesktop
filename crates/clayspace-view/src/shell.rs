@@ -361,7 +361,10 @@ fn icon_chip(
         icon_rect.max.x + space::TIGHT,
         rect.center().y - galley.size().y * 0.5,
     );
-    painter.galley(text_at, galley, tint);
+    // The galley was laid out in one tone and is painted in another: a plain
+    // `galley` keeps the colour it was laid out with and treats the tint as
+    // a fallback, so only the override actually dims a quiet chip.
+    painter.galley_with_override_text_color(text_at, galley, tint);
     ui.ctx()
         .memory_mut(|memory| memory.data.insert_temp(chip_id(label), rect));
     response
@@ -426,8 +429,11 @@ fn segmented<T: Copy + PartialEq>(
         } else {
             Tokens::text_dim()
         };
-        ui.painter()
-            .galley(cell.center() - galley.size() * 0.5, galley, tint);
+        ui.painter().galley_with_override_text_color(
+            cell.center() - galley.size() * 0.5,
+            galley,
+            tint,
+        );
         ui.ctx()
             .memory_mut(|memory| memory.data.insert_temp(chip_id(word), cell));
         if response.clicked() && !on {
