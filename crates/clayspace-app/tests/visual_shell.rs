@@ -282,6 +282,7 @@ fn build_shell(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQ
     shell::export_window(ctx, state, queue);
     shell::reference_window(ctx, state, queue);
     shell::shapes_window(ctx, state, queue);
+    shell::deform_window(ctx, state, queue);
 }
 
 /// Runs the shell without capturing it, so a test can ask where a widget went.
@@ -1994,6 +1995,123 @@ fn the_placed_objects_are_listed_where_the_layers_are() {
     assert!(
         !queue.commands().is_empty() || queue.commands().is_empty(),
         "the panel ran"
+    );
+}
+
+/// An object's manipulator had one mode: the chips that change it were drawn
+/// only with a cage up, so a placed shape could be moved and neither turned
+/// nor scaled from the interface. They stand under the object list now, and
+/// they are wired — a chip that drew and did nothing would look the same.
+#[test]
+fn a_selected_object_offers_the_manipulators_three_modes() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let placed = [clayspace_model::SceneObject {
+        id: clayspace_model::ObjectId {
+            layer: clayspace_model::LayerKey(1),
+            node: 2,
+        },
+        source: clayspace_model::ObjectSource::Shape(clayspace_model::Shape::Box),
+        parameters: clayspace_model::Shape::Box.defaults(),
+        combine: clayspace_model::CombineSettings::default(),
+        position: [0.0; 3],
+        rotation_axis: [0.0, 1.0, 0.0],
+        rotation_angle: 0.0,
+        scale: 1.0,
+    }];
+
+    let mut set = state(strings, &scene, &materials, &report);
+    set.objects = &placed;
+    set.selected_object = Some(placed[0].id);
+
+    let turn = strings.gizmo_mode_name(clayspace_model::GizmoMode::Rotate);
+    let chip = probe_shell(&set)
+        .memory(|memory| memory.data.get_temp::<egui::Rect>(shell::chip_id(turn)))
+        .unwrap_or_else(|| panic!("the object list drew no {turn:?} chip"))
+        .center();
+    capture_shell_after(
+        &harness,
+        &set,
+        "shell-object-manipulator-modes",
+        &[left_click(chip)],
+        |queue| {
+            assert_eq!(
+                queue.commands(),
+                [Command::SetGizmoMode(clayspace_model::GizmoMode::Rotate)],
+                "clicking {turn:?} did not set the manipulator to turn. \
+                 See target/visual/shell-object-manipulator-modes.png"
+            );
+        },
+    );
+
+    // With nothing selected there is nothing for the widget to act on, and
+    // the row is absent rather than drawn and inert.
+    set.selected_object = None;
+    assert!(
+        probe_shell(&set)
+            .memory(|memory| memory.data.get_temp::<egui::Rect>(shell::chip_id(turn)))
+            .is_none(),
+        "the manipulator's modes are offered with no object selected"
+    );
+}
+
+/// The deformation panel names its two verbs as chips with their shape on
+/// them, in the interface's language. Captured because it never was: the
+/// panel was drawn from the domain's own Portuguese on every locale.
+#[test]
+fn the_deform_panel_offers_its_two_verbs_as_chips() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let mut open = state(strings, &scene, &materials, &report);
+    open.representation = clayspace_model::Representation::Mesh;
+    open.show_deform = true;
+    let shown = capture_shell(&harness, &open, "shell-deform");
+    let mut closed = state(strings, &scene, &materials, &report);
+    closed.representation = clayspace_model::Representation::Mesh;
+    let hidden = capture_shell(&harness, &closed, "shell-deform-closed");
+    assert!(
+        shown.mean_difference(&hidden) > 0.002,
+        "the deform panel changed nothing on screen"
+    );
+
+    // Both verbs are there, under their English names, and the one not
+    // chosen is wired: clicking it changes the setting.
+    let twist = strings.deform_verb_name(clayspace_model::DeformVerb::Twist);
+    let chip = probe_shell(&open)
+        .memory(|memory| memory.data.get_temp::<egui::Rect>(shell::chip_id(twist)))
+        .unwrap_or_else(|| panic!("the deform panel drew no {twist:?} chip"))
+        .center();
+    capture_shell_after(
+        &harness,
+        &open,
+        "shell-deform-twist",
+        &[left_click(chip)],
+        |queue| {
+            let verbs: Vec<_> = queue
+                .commands()
+                .iter()
+                .filter_map(|command| match command {
+                    Command::SetDeform(settings) => Some(settings.verb),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                verbs,
+                [clayspace_model::DeformVerb::Twist],
+                "clicking {twist:?} did not choose it"
+            );
+        },
     );
 }
 

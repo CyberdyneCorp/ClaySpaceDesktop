@@ -16,6 +16,16 @@ handle SHALL constrain the drag to that axis, and a drag SHALL be resolved from
 where it started rather than accumulated across frames — the same rules the
 cage's manipulator already holds.
 
+The three modes SHALL be offered as one row of controls wherever a selection
+the manipulator acts on exists — beside the object list, in the shapes panel,
+and in the cage section — each carrying the shape of its handle, and the row
+SHALL be absent when nothing is selected.
+
+#### Scenario: The mode is changed with only an object selected
+- **WHEN** a placed object is selected and no cage is up
+- **THEN** the interface offers move, turn and scale, and choosing turn puts
+  the manipulator in turn mode
+
 #### Scenario: A placed object is moved along one axis
 - **WHEN** the user drags a placed object's vertical axis handle
 - **THEN** the object moves only vertically, and the surface it combines with
@@ -34,6 +44,24 @@ cage's manipulator already holds.
 - **WHEN** a curve's control points are all selected and the manipulator is
   dragged
 - **THEN** every control point moves together and the swept form follows
+
+### Requirement: The manipulator is seen wherever it stands
+The manipulator, the deformation cage, a curve's control polygon and a
+selected object's outline SHALL be drawn over the sculpted surface regardless
+of depth: a handle that lies behind or inside the form SHALL be as visible as
+one in front of it. The manipulator's handles SHALL be drawn heavier than a
+single device pixel, and its arms SHALL keep a constant size on screen as the
+camera moves toward or away from what it acts on. The size drawn and the size
+hit-tested SHALL come from one definition.
+
+#### Scenario: A manipulator inside the form
+- **WHEN** a manipulator's pivot and every handle lie inside a placed sphere
+- **THEN** the manipulator is drawn in full over the sphere's surface
+
+#### Scenario: Zooming keeps the widget the same size to the hand
+- **WHEN** the camera moves to half its distance from the selection
+- **THEN** the manipulator's arms cover the same fraction of the viewport as
+  before, and a press at the drawn tip of an arm still finds that arm
 
 ### Requirement: Scale is uniform, and the manipulator offers only that
 Scale mode SHALL offer uniform scaling and SHALL NOT present per-axis scale

@@ -20,6 +20,7 @@ use clayspace_model::{
 use clayspace_vm::{Axis, Command, CommandQueue};
 
 use crate::design::{size, space, type_scale, Tokens};
+use crate::glyphs;
 use crate::icons::{self, Icon};
 use crate::shortcuts::{Action, Shortcuts};
 use crate::strings::Locale;
@@ -251,7 +252,17 @@ pub fn apply_theme(ctx: &egui::Context) {
 }
 
 /// A section heading: small, spaced, low contrast.
+///
+/// A hairline rule above it where something already stands above it, so the
+/// sections of a long panel read as sections rather than as one column of
+/// rows — by tone, as the design asks, and never by a box around them.
 fn heading(ui: &mut egui::Ui, text: &str) {
+    if ui.min_rect().height() > 0.0 {
+        ui.add_space(space::SNUG);
+        let (rule, _) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
+        ui.painter().rect_filled(rule, 0.0, Tokens::rule());
+    }
     ui.add_space(space::ROOMY);
     ui.label(
         egui::RichText::new(text)
@@ -288,6 +299,115 @@ fn chip(label: &str, on: bool, unselected: egui::Color32) -> egui::Button<'stati
             }),
     )
     .fill(if on { Tokens::raised() } else { unselected })
+}
+
+/// The id a chip carrying an icon is recorded under, so a test can find it.
+///
+/// For the same reason `slider_id` exists: a test that reaches a control by
+/// pixel coordinate reaches a different control the next time a section lands
+/// above it.
+pub fn chip_id(name: &str) -> egui::Id {
+    egui::Id::new(("chip", name))
+}
+
+/// A toggle chip with an icon before its word.
+///
+/// The word alone is what the mode chips were, and Mover, Girar and Escalar
+/// are three words a sculptor has to read; an arrow, a ring and a box are
+/// three shapes they already know from the manipulator itself. The icon is
+/// drawn in the same set at the same weight as every other, and the chip
+/// fills, dims and lifts exactly as `chip` does.
+fn icon_chip(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    label: &str,
+    on: bool,
+    unselected: egui::Color32,
+) -> egui::Response {
+    let padding = ui.spacing().button_padding;
+    let font = egui::FontId::proportional(type_scale::LABEL);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font, Tokens::text());
+    let width = padding.x * 2.0 + size::CHIP_ICON + space::TIGHT + galley.size().x;
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(width, size::CONTROL), egui::Sense::click());
+    let lit = ui.is_enabled() && (on || response.hovered());
+    let tint = if !ui.is_enabled() {
+        Tokens::text_faint()
+    } else if lit {
+        Tokens::text()
+    } else {
+        Tokens::text_dim()
+    };
+    let fill = if on || response.hovered() {
+        Tokens::raised()
+    } else {
+        unselected
+    };
+    let painter = ui.painter();
+    painter.rect_filled(rect, size::RADIUS, fill);
+    let icon_rect = egui::Rect::from_min_size(
+        rect.min + egui::vec2(padding.x, (rect.height() - size::CHIP_ICON) * 0.5),
+        egui::vec2(size::CHIP_ICON, size::CHIP_ICON),
+    );
+    icons::paint(painter, icon_rect, icon, tint);
+    let text_at = egui::pos2(
+        icon_rect.max.x + space::TIGHT,
+        rect.center().y - galley.size().y * 0.5,
+    );
+    painter.galley(text_at, galley, tint);
+    ui.ctx()
+        .memory_mut(|memory| memory.data.insert_temp(chip_id(label), rect));
+    response
+}
+
+/// The icon a manipulator mode wears, the same shape the viewport draws for it.
+fn gizmo_mode_icon(mode: GizmoMode) -> Icon {
+    match mode {
+        GizmoMode::Move => Icon::Move,
+        GizmoMode::Rotate => Icon::Turn,
+        GizmoMode::Scale => Icon::Scale,
+    }
+}
+
+/// The manipulator's three modes as one row of chips.
+///
+/// One row wherever the manipulator can be worked — the cage section, the
+/// object list, the shapes panel — so the sculptor meets the same three chips
+/// in the same order everywhere. `can_transform` is the cage's rule: turning
+/// and scaling act about the middle of the selection, and one point's middle
+/// is itself, so on a selection of one they are disabled with the reason on
+/// them rather than drawn live and inert.
+fn gizmo_mode_row(
+    ui: &mut egui::Ui,
+    state: &ShellState<'_>,
+    current: GizmoMode,
+    can_transform: bool,
+    queue: &mut CommandQueue,
+) {
+    let s = state.strings;
+    ui.horizontal_wrapped(|ui| {
+        for mode in GizmoMode::ALL {
+            let on = current == mode;
+            let usable = can_transform || mode == GizmoMode::Move;
+            let response = ui
+                .add_enabled_ui(usable, |ui| {
+                    icon_chip(
+                        ui,
+                        gizmo_mode_icon(mode),
+                        s.gizmo_mode_name(mode),
+                        on,
+                        Tokens::panel(),
+                    )
+                })
+                .inner
+                .on_disabled_hover_text(s.hint_gizmo_needs_two);
+            if response.clicked() && !on {
+                queue.push(Command::SetGizmoMode(mode));
+            }
+        }
+    });
 }
 
 /// A label and its value on one row.
@@ -910,11 +1030,19 @@ fn alpha_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQ
         );
 
         if !support.accepted() {
-            ui.label(
-                egui::RichText::new(support.to_string())
-                    .size(type_scale::LABEL)
-                    .color(Tokens::text_dim()),
-            );
+            // Cut to the bar's width, with the whole sentence on hover. The
+            // reason is a paragraph, and the bar is one row: drawn whole it
+            // ran under the panel beside it and was read by nobody.
+            let sentence = support.to_string();
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(&sentence)
+                        .size(type_scale::LABEL)
+                        .color(Tokens::text_dim()),
+                )
+                .truncate(),
+            )
+            .on_hover_text(sentence);
             return;
         }
 
@@ -1142,13 +1270,25 @@ pub fn deform_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut Co
                 return;
             }
 
-            for verb in DeformVerb::ALL {
-                let chosen = settings.verb == verb;
-                if ui.radio(chosen, verb.label()).clicked() && !chosen {
-                    settings.verb = verb;
-                    queue.push(Command::SetDeform(settings));
+            // The two deformations as chips with their shape on them, the
+            // way the manipulator's modes are: what a deformation does is a
+            // picture before it is a word.
+            ui.horizontal(|ui| {
+                for verb in DeformVerb::ALL {
+                    let chosen = settings.verb == verb;
+                    let icon = match verb {
+                        DeformVerb::Taper => Icon::Taper,
+                        DeformVerb::Twist => Icon::Twist,
+                    };
+                    if icon_chip(ui, icon, s.deform_verb_name(verb), chosen, Tokens::panel())
+                        .clicked()
+                        && !chosen
+                    {
+                        settings.verb = verb;
+                        queue.push(Command::SetDeform(settings));
+                    }
                 }
-            }
+            });
 
             ui.add_space(space::SNUG);
             if let Some(axis) = axis_control(ui, s.label_axis, settings.axis) {
@@ -1210,7 +1350,7 @@ pub fn deform_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut Co
             }
 
             ui.add_space(space::SECTION);
-            if ui.button(settings.verb.label()).clicked() {
+            if ui.button(s.deform_verb_name(settings.verb)).clicked() {
                 queue.push(Command::RunDeform);
             }
         });
@@ -2329,18 +2469,7 @@ fn lattice_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
     // inert, which is how they were: the rings appeared, the drag ran, and
     // nothing moved.
     let can_transform = state.lattice.can_transform();
-    ui.horizontal_wrapped(|ui| {
-        for mode in clayspace_model::GizmoMode::ALL {
-            let on = state.lattice.mode == mode;
-            let usable = can_transform || mode == GizmoMode::Move;
-            let response = ui
-                .add_enabled(usable, chip(mode.label(), on, Tokens::panel()))
-                .on_disabled_hover_text(s.hint_gizmo_needs_two);
-            if response.clicked() {
-                queue.push(Command::SetGizmoMode(mode));
-            }
-        }
-    });
+    gizmo_mode_row(ui, state, state.lattice.mode, can_transform, queue);
     if !can_transform {
         ui.label(
             egui::RichText::new(s.hint_gizmo_needs_two)
@@ -2581,12 +2710,23 @@ pub fn brush_shelf(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
         ui.add_space(space::PANEL);
         for tool in tools {
             let active = state.tool == tool;
-            ui.vertical(|ui| {
+            // A backdrop under the active swatch and the one under the
+            // pointer, set before the swatch is drawn and filled after, once
+            // its extent is known. The active brush is then carried by tone
+            // as well as by the accent, which is what a colour-blind
+            // sculptor reads; and a swatch lifting under the pointer is the
+            // "quiet until addressed" rule in the one place it was missing.
+            let backdrop = ui.painter().add(egui::Shape::Noop);
+            let group = ui.vertical(|ui| {
                 let (rect, response) = ui.allocate_exact_size(
                     egui::vec2(size::SWATCH, size::SWATCH),
                     egui::Sense::click(),
                 );
                 paint_sphere(ui, rect, Tokens::text_dim(), active);
+                // The brush's mark, in the ground's ink: dark on the lit clay,
+                // the way a mark pressed into a ball reads. Not the accent,
+                // which stays on the active brush alone.
+                glyphs::paint(ui.painter(), rect, tool, Tokens::ground());
                 ui.label(
                     egui::RichText::new(state.strings.tool(tool))
                         .size(type_scale::LABEL)
@@ -2597,10 +2737,29 @@ pub fn brush_shelf(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
                             Tokens::text_dim()
                         }),
                 );
+                // The name and what the brush does, for a hand that hovers.
+                // ZBrush teaches its brushes by tooltip; one sentence costs
+                // nothing and saves a stroke and an undo.
+                let response = response.on_hover_text(format!(
+                    "{}\n{}",
+                    state.strings.tool(tool),
+                    state.strings.tool_hint(tool)
+                ));
                 if response.clicked() {
                     queue.push(Command::SelectTool(tool));
                 }
+                response.hovered()
             });
+            if active || group.inner {
+                ui.painter().set(
+                    backdrop,
+                    egui::Shape::rect_filled(
+                        group.response.rect.expand(space::TIGHT),
+                        size::RADIUS,
+                        Tokens::raised(),
+                    ),
+                );
+            }
             ui.add_space(space::SNUG);
         }
     });
@@ -2948,12 +3107,33 @@ fn selected_object_controls(
     // rather than the next gesture. An operation is a property of the object
     // and stays editable for as long as it does.
     let settings = object.combine;
+    // The three booleans first, as chips with the two discs on them: these
+    // are what a placed shape is for, and a sculptor should not have to open
+    // a list of thirteen to find "cut". The list below keeps the rest.
+    ui.horizontal(|ui| {
+        for (op, icon) in [
+            (Combine::Add, Icon::Union),
+            (Combine::Subtract, Icon::Subtract),
+            (Combine::Intersect, Icon::Intersect),
+        ] {
+            let on = settings.op == op;
+            if icon_chip(ui, icon, s.combine_name(op), on, Tokens::panel()).clicked() && !on {
+                queue.push(Command::SetObjectCombine(CombineSettings {
+                    op,
+                    ..settings
+                }));
+            }
+        }
+    });
     egui::ComboBox::from_id_salt("object-combine-op")
-        .selected_text(settings.op.label())
+        .selected_text(s.combine_name(settings.op))
         .width(280.0)
         .show_ui(ui, |ui| {
             for op in Combine::offered_for_strokes() {
-                if ui.selectable_label(op == settings.op, op.label()).clicked() && op != settings.op
+                if ui
+                    .selectable_label(op == settings.op, s.combine_name(op))
+                    .clicked()
+                    && op != settings.op
                 {
                     queue.push(Command::SetObjectCombine(CombineSettings {
                         op,
@@ -2965,12 +3145,12 @@ fn selected_object_controls(
 
     if settings.op.takes_a_blend() {
         egui::ComboBox::from_id_salt("object-combine-blend")
-            .selected_text(settings.blend.label())
+            .selected_text(s.blend_name(settings.blend))
             .width(280.0)
             .show_ui(ui, |ui| {
                 for blend in BlendProfile::ALL {
                     if ui
-                        .selectable_label(blend == settings.blend, blend.label())
+                        .selectable_label(blend == settings.blend, s.blend_name(blend))
                         .clicked()
                         && blend != settings.blend
                     {
@@ -3000,6 +3180,16 @@ fn selected_object_controls(
             }));
         }
     }
+
+    // How the manipulator on it behaves. Here and under the object list, so
+    // the mode can be changed from whichever of the two is open.
+    ui.add_space(space::SNUG);
+    ui.label(
+        egui::RichText::new(s.label_manipulator)
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    );
+    gizmo_mode_row(ui, state, state.gizmo_mode, true, queue);
 
     ui.add_space(space::SNUG);
     ui.label(
@@ -3060,7 +3250,7 @@ pub fn object_rows(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
         let label = format!(
             "{} · {}",
             object_name(state, object),
-            object.combine.op.label()
+            s.combine_name(object.combine.op)
         );
         if ui.selectable_label(chosen, label).clicked() {
             // Clicking the selected row clears it, so the manipulator can be
@@ -3068,6 +3258,14 @@ pub fn object_rows(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
             let next = (!chosen).then_some(object.id);
             queue.push(Command::SelectObject(next));
         }
+    }
+
+    // The manipulator's modes, while something is selected for it to act on.
+    // Until this row existed the modes could only be changed with a cage up,
+    // so an object's manipulator moved and did nothing else.
+    if state.selected_object.is_some() {
+        ui.add_space(space::TIGHT);
+        gizmo_mode_row(ui, state, state.gizmo_mode, true, queue);
     }
 }
 

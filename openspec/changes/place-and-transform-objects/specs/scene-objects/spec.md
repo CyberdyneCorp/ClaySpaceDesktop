@@ -53,6 +53,15 @@ An object SHALL carry the combine operation and blend profile it was placed
 with, and both SHALL be editable afterwards without replacing the object or
 losing its transform.
 
+The three booleans — union, subtraction, intersection — SHALL be offered
+directly as a row of controls carrying their two-disc marks, ahead of the full
+list of operations, in the interface's language.
+
+#### Scenario: A subtraction is chosen without opening the list
+- **WHEN** a placed object is selected
+- **THEN** union, subtraction and intersection are each one click away, and
+  the chosen one reads as chosen
+
 #### Scenario: An operation is changed after placement
 - **WHEN** a subtracted object is changed to a groove
 - **THEN** the surface shows a groove where the subtraction was, and the object

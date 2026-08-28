@@ -29,10 +29,26 @@ pub enum Icon {
     Add,
     /// Removes something.
     Remove,
+    /// The manipulator's three modes: what a drag on it does. The same
+    /// shapes the viewport draws — an arrow slides, a ring turns, a box
+    /// scales — so the chip and the handle say the same thing.
+    Move,
+    Turn,
+    Scale,
+    /// The three booleans, as the two discs every textbook draws them with:
+    /// the outline of both, the lens where they overlap, and the crescent one
+    /// leaves when the other is taken from it.
+    Union,
+    Subtract,
+    Intersect,
+    /// The two deformations: a section that narrows along an axis, and one
+    /// that turns along it.
+    Taper,
+    Twist,
 }
 
 impl Icon {
-    pub const ALL: [Icon; 8] = [
+    pub const ALL: [Icon; 16] = [
         Self::Visible,
         Self::Hidden,
         Self::Locked,
@@ -41,6 +57,14 @@ impl Icon {
         Self::Expanded,
         Self::Add,
         Self::Remove,
+        Self::Move,
+        Self::Turn,
+        Self::Scale,
+        Self::Union,
+        Self::Subtract,
+        Self::Intersect,
+        Self::Taper,
+        Self::Twist,
     ];
 
     /// What a screen reader or a tooltip says.
@@ -57,6 +81,14 @@ impl Icon {
             Self::Expanded => "recolher",
             Self::Add => "adicionar",
             Self::Remove => "remover",
+            Self::Move => "mover",
+            Self::Turn => "girar",
+            Self::Scale => "escalar",
+            Self::Union => "unir",
+            Self::Subtract => "subtrair",
+            Self::Intersect => "interseção",
+            Self::Taper => "afunilar",
+            Self::Twist => "torcer",
         }
     }
 }
@@ -159,6 +191,161 @@ pub fn paint(painter: &egui::Painter, rect: egui::Rect, icon: Icon, tint: egui::
                 ],
                 stroke,
             );
+        }
+        Icon::Move => {
+            // Four arrows from the centre: free in every direction.
+            for direction in [
+                egui::vec2(1.0, 0.0),
+                egui::vec2(-1.0, 0.0),
+                egui::vec2(0.0, 1.0),
+                egui::vec2(0.0, -1.0),
+            ] {
+                arrow(
+                    painter,
+                    centre,
+                    centre + direction * unit * 0.85,
+                    unit * 0.3,
+                    stroke,
+                );
+            }
+        }
+        Icon::Turn => {
+            // Most of a ring, with an arrowhead where it ends.
+            let radius = unit * 0.78;
+            let start = 0.7 * std::f32::consts::PI;
+            let sweep = 1.6 * std::f32::consts::PI;
+            let points: Vec<egui::Pos2> = (0..=24)
+                .map(|step| {
+                    let a = start + sweep * step as f32 / 24.0;
+                    centre + egui::vec2(a.cos(), a.sin()) * radius
+                })
+                .collect();
+            let end = points[24];
+            let before = points[22];
+            painter.add(egui::Shape::line(points, stroke));
+            arrow(painter, before, end, unit * 0.5, stroke);
+        }
+        Icon::Scale => {
+            // A small box, and the pull that would make it a big one.
+            let box_side = unit * 0.5;
+            let corner = centre + egui::vec2(-unit * 0.75, unit * 0.25);
+            painter.rect_stroke(
+                egui::Rect::from_min_size(corner, egui::vec2(box_side, box_side)),
+                egui::epaint::CornerRadius::same(1),
+                stroke,
+                egui::StrokeKind::Middle,
+            );
+            arrow(
+                painter,
+                corner + egui::vec2(box_side, 0.0),
+                centre + egui::vec2(unit * 0.8, -unit * 0.8),
+                unit * 0.32,
+                stroke,
+            );
+        }
+        Icon::Union | Icon::Subtract | Icon::Intersect => {
+            boolean(painter, centre, unit, icon, stroke)
+        }
+        Icon::Taper => {
+            painter.add(egui::Shape::closed_line(
+                vec![
+                    centre + egui::vec2(-unit * 0.7, unit * 0.65),
+                    centre + egui::vec2(unit * 0.7, unit * 0.65),
+                    centre + egui::vec2(unit * 0.25, -unit * 0.65),
+                    centre + egui::vec2(-unit * 0.25, -unit * 0.65),
+                ],
+                stroke,
+            ));
+        }
+        Icon::Twist => {
+            // Two edges of a band, crossing as it turns half over.
+            for sign in [-1.0f32, 1.0] {
+                let points: Vec<egui::Pos2> = (0..=16)
+                    .map(|step| {
+                        let t = step as f32 / 16.0;
+                        let x = sign
+                            * (t * std::f32::consts::PI).sin()
+                            * unit
+                            * 0.6
+                            * if t < 0.5 { 1.0 } else { -1.0 };
+                        centre + egui::vec2(x, (t - 0.5) * unit * 1.4)
+                    })
+                    .collect();
+                painter.add(egui::Shape::line(points, stroke));
+            }
+        }
+    }
+}
+
+/// A shaft with an open head, from `from` to `to`.
+fn arrow(
+    painter: &egui::Painter,
+    from: egui::Pos2,
+    to: egui::Pos2,
+    head: f32,
+    stroke: egui::Stroke,
+) {
+    let along = (to - from).normalized();
+    let across = egui::vec2(-along.y, along.x);
+    painter.line_segment([from, to], stroke);
+    for side in [-1.0f32, 1.0] {
+        painter.line_segment([to, to - along * head + across * head * side * 0.6], stroke);
+    }
+}
+
+/// Two discs and what a boolean keeps of them, drawn as the arcs that bound
+/// the kept region: both outer arcs for a union, the two inner arcs for an
+/// intersection, and one disc's outer arc with the other's inner arc for a
+/// subtraction — the crescent.
+fn boolean(
+    painter: &egui::Painter,
+    centre: egui::Pos2,
+    unit: f32,
+    icon: Icon,
+    stroke: egui::Stroke,
+) {
+    use std::f32::consts::PI;
+    // Past the set's shared optical size, to the edge of the box: the lens
+    // between two discs is the narrowest mark in the set, and at the shared
+    // size it was a smudge — and the difference between the three is the
+    // whole point.
+    let unit = unit / 0.72 * 0.95;
+    let offset = unit * 0.3;
+    let radius = unit * 0.66;
+    // Where the two circles cross, as an angle from each centre.
+    let alpha = (radius.powi(2) - offset.powi(2))
+        .max(0.0)
+        .sqrt()
+        .atan2(offset);
+    let arc = |middle: egui::Pos2, from: f32, to: f32| {
+        let points: Vec<egui::Pos2> = (0..=20)
+            .map(|step| {
+                let a = from + (to - from) * step as f32 / 20.0;
+                middle + egui::vec2(a.cos(), a.sin()) * radius
+            })
+            .collect();
+        painter.add(egui::Shape::line(points, stroke));
+    };
+    let left = centre - egui::vec2(offset, 0.0);
+    let right = centre + egui::vec2(offset, 0.0);
+    // The left disc's far side, the right disc's far side, and each one's
+    // near side — the part that lies inside the other.
+    let left_outer = || arc(left, alpha, 2.0 * PI - alpha);
+    let right_outer = || arc(right, alpha - PI, PI - alpha);
+    let left_inner = || arc(left, -alpha, alpha);
+    let right_inner = || arc(right, PI - alpha, PI + alpha);
+    match icon {
+        Icon::Union => {
+            left_outer();
+            right_outer();
+        }
+        Icon::Intersect => {
+            left_inner();
+            right_inner();
+        }
+        _ => {
+            left_outer();
+            right_inner();
         }
     }
 }
