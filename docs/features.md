@@ -1227,6 +1227,15 @@ languages; the shell's untranslated-label ratchet (`LABELS_STILL_DRAWN`) stands
 at ten, all of them identifiers — SDF, mm, a mesh's own name — rather than
 words.
 
+**The untitled document is named in the interface's language.** A fresh
+document is "Sem título" to the document ViewModel, which knows no locale, so
+that Portuguese reached the menu bar's document label and the file name the
+save and export dialogs offered on an English or Spanish build. The ViewModel
+still stores and resets to that one marker — it is `clayspace_vm::UNTITLED`
+now, spelled out nowhere else — and the shell translates it where the name is
+shown: **Sem título**, **Untitled**, **Sin título**. A name that came from a
+file passes through untouched.
+
 The interface **opens in English**. That is not the design's own language and
 it is deliberate: it has to open in something a first-time reader can make
 sense of. A system language still wins over that default on a first run —

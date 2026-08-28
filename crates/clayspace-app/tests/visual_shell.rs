@@ -1298,6 +1298,18 @@ fn row_centre(state: &ShellState<'_>, key: LayerKey) -> egui::Pos2 {
 /// a context menu is dark chrome over dark chrome, so most of its pixels
 /// differ by less than a level and counting only the loud ones took the menu
 /// from over 400 pixels to 359.
+fn differing_pixels(a: &clayspace_view::Image, b: &clayspace_view::Image) -> usize {
+    let mut n = 0;
+    for y in 0..a.height.min(b.height) {
+        for x in 0..a.width.min(b.width) {
+            if a.pixel(x, y) != b.pixel(x, y) {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
 /// The pixels that differ between two captures inside one rect.
 ///
 /// The capture is one pixel per logical unit, so the rect indexes the images
@@ -1314,18 +1326,6 @@ fn differing_pixels_in(
         .flat_map(|y| (x0..x1).map(move |x| (x, y)))
         .filter(|&(x, y)| a.pixel(x, y) != b.pixel(x, y))
         .count()
-}
-
-fn differing_pixels(a: &clayspace_view::Image, b: &clayspace_view::Image) -> usize {
-    let mut n = 0;
-    for y in 0..a.height.min(b.height) {
-        for x in 0..a.width.min(b.width) {
-            if a.pixel(x, y) != b.pixel(x, y) {
-                n += 1;
-            }
-        }
-    }
-    n
 }
 
 /// The panel offers the crossings into a mesh, and says what one costs.

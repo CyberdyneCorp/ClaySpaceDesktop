@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use clayspace_model::{DocumentModel, ModelError, OpenError};
-use clayspace_vm::{DocumentViewModel, Guard};
+use clayspace_vm::{DocumentViewModel, Guard, UNTITLED};
 
 #[derive(Default)]
 struct Recorded {
@@ -51,10 +51,7 @@ fn fixture() -> (DocumentViewModel, Rc<RefCell<Recorded>>) {
         save_fails: false,
         open_fails: None,
     };
-    (
-        DocumentViewModel::new(Box::new(model), "Sem título"),
-        recorded,
-    )
+    (DocumentViewModel::new(Box::new(model), UNTITLED), recorded)
 }
 
 fn refusing_to_open(failure: OpenError) -> DocumentViewModel {
@@ -63,13 +60,13 @@ fn refusing_to_open(failure: OpenError) -> DocumentViewModel {
         save_fails: false,
         open_fails: Some(failure),
     };
-    DocumentViewModel::new(Box::new(model), "Sem título")
+    DocumentViewModel::new(Box::new(model), UNTITLED)
 }
 
 #[test]
 fn a_new_document_is_untitled_and_unmodified() {
     let (vm, _) = fixture();
-    assert_eq!(vm.name().get(), "Sem título");
+    assert_eq!(vm.name().get(), UNTITLED);
     assert!(!*vm.modified().get());
     assert!(!vm.has_path());
     assert_eq!(vm.guard(), Guard::Clear);
@@ -138,7 +135,7 @@ fn a_failed_save_does_not_look_like_a_saved_document() {
         save_fails: true,
         open_fails: None,
     };
-    let mut vm = DocumentViewModel::new(Box::new(model), "Sem título");
+    let mut vm = DocumentViewModel::new(Box::new(model), UNTITLED);
     vm.touched();
 
     vm.save_as(Path::new("/read-only/bust.clayspace"))
@@ -178,7 +175,7 @@ fn a_failed_open_changes_nothing_about_the_document() {
         "a failed open cleared the modified flag, so the work now looks safe"
     );
     assert!(!vm.has_path(), "a failed open adopted the path");
-    assert_eq!(vm.name().get(), "Sem título");
+    assert_eq!(vm.name().get(), UNTITLED);
     assert!(vm.notice().get().is_some());
 }
 
@@ -208,7 +205,7 @@ fn starting_a_new_document_forgets_the_file() {
 
     assert_eq!(recorded.borrow().resets, 1);
     assert!(!vm.has_path(), "a new document kept the old file's path");
-    assert_eq!(vm.name().get(), "Sem título");
+    assert_eq!(vm.name().get(), UNTITLED);
     assert!(!*vm.modified().get());
     assert_eq!(vm.guard(), Guard::Clear);
 }
@@ -242,7 +239,7 @@ fn an_autosave_does_not_make_the_document_look_saved() {
             save_fails: false,
             open_fails: None,
         }),
-        "Sem título",
+        UNTITLED,
     );
     vm.touched();
     assert!(*vm.modified().get());
@@ -271,7 +268,7 @@ fn recovered_work_is_unsaved_work_and_has_nowhere_to_go_yet() {
             save_fails: false,
             open_fails: None,
         }),
-        "Sem título",
+        UNTITLED,
     );
 
     vm.recover(Path::new("/tmp/recuperação.clayspace"), "Recuperado")
@@ -298,10 +295,10 @@ fn a_recovery_that_fails_leaves_the_document_alone() {
             save_fails: false,
             open_fails: Some(OpenError::NotFound(PathBuf::from("/gone"))),
         }),
-        "Sem título",
+        UNTITLED,
     );
 
     assert!(vm.recover(Path::new("/gone"), "Recuperado").is_err());
-    assert_eq!(vm.name().get(), "Sem título");
+    assert_eq!(vm.name().get(), UNTITLED);
     assert!(vm.notice().get().is_some(), "the failure was silent");
 }
