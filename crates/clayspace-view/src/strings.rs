@@ -62,6 +62,31 @@ pub struct Strings {
     pub action_place_shape: &'static str,
     pub action_remove_object: &'static str,
     pub label_placed_objects: &'static str,
+    /// The placed objects, as the section under the layers is headed.
+    pub section_objects: &'static str,
+    /// The four views, in `ViewPresetKind::ALL` order. They were drawn from
+    /// the domain's `label()`, so an English screen read Perspectiva,
+    /// Frontal, Lateral, Superior under its viewport.
+    pub view_preset_names: [&'static str; clayspace_model::ViewPresetKind::ALL.len()],
+    /// The brush edge profiles, in `Falloff::ALL` order.
+    pub falloff_names: [&'static str; clayspace_model::Falloff::ALL.len()],
+    /// The reference planes, in `RefPlane::ALL` order.
+    pub ref_plane_names: [&'static str; clayspace_model::RefPlane::ALL.len()],
+    /// How a curve's points join, in `CurveJoin::ALL` order.
+    pub curve_join_names: [&'static str; clayspace_model::CurveJoin::ALL.len()],
+    /// A curve's cross-section, in `CurveProfile::ALL` order.
+    pub curve_profile_names: [&'static str; clayspace_model::CurveProfile::ALL.len()],
+    /// The mask operations. Named fields rather than an array, because
+    /// `MaskOp` carries an amount and has no `ALL` to index by.
+    pub mask_op_invert: &'static str,
+    pub mask_op_clear: &'static str,
+    pub mask_op_expand: &'static str,
+    pub mask_op_contract: &'static str,
+    pub mask_op_smooth: &'static str,
+    pub mask_op_complement: &'static str,
+    /// What the geometry panel says when the counts are not the whole story.
+    pub detail_reduced: &'static str,
+    pub detail_pending: &'static str,
     pub label_no_placed_objects: &'static str,
     pub label_object_scale: &'static str,
     pub hint_shapes: &'static str,
@@ -408,6 +433,20 @@ const PT_BR: Strings = Strings {
     action_place_shape: "Colocar",
     action_remove_object: "Remover objeto",
     label_placed_objects: "Objetos",
+    section_objects: "OBJETOS",
+    view_preset_names: ["Perspectiva", "Frontal", "Lateral", "Superior"],
+    falloff_names: ["Dura", "Linear", "Suave", "Gaussiana"],
+    ref_plane_names: ["Frontal", "Lateral", "Superior"],
+    curve_join_names: ["Cantos", "Pelos pontos", "Arredondado"],
+    curve_profile_names: ["Círculo", "Quadrado", "Hexágono", "Triângulo"],
+    mask_op_invert: "Inverter",
+    mask_op_clear: "Limpar",
+    mask_op_expand: "Expandir",
+    mask_op_contract: "Contrair",
+    mask_op_smooth: "Suavizar máscara",
+    mask_op_complement: "Complemento delimitado",
+    detail_reduced: "detalhe reduzido",
+    detail_pending: "ainda não gerado",
     label_no_placed_objects: "nenhum objeto colocado",
     label_object_scale: "Tamanho",
     hint_shapes: "Coloque uma forma e mire-a com o manipulador.",
@@ -694,6 +733,20 @@ const EN_US: Strings = Strings {
     action_place_shape: "Place",
     action_remove_object: "Remove object",
     label_placed_objects: "Objects",
+    section_objects: "OBJECTS",
+    view_preset_names: ["Perspective", "Front", "Side", "Top"],
+    falloff_names: ["Hard", "Linear", "Smooth", "Gaussian"],
+    ref_plane_names: ["Front", "Side", "Top"],
+    curve_join_names: ["Corners", "Through the points", "Rounded"],
+    curve_profile_names: ["Circle", "Square", "Hexagon", "Triangle"],
+    mask_op_invert: "Invert",
+    mask_op_clear: "Clear",
+    mask_op_expand: "Expand",
+    mask_op_contract: "Contract",
+    mask_op_smooth: "Smooth mask",
+    mask_op_complement: "Bounded complement",
+    detail_reduced: "reduced detail",
+    detail_pending: "not generated yet",
     label_no_placed_objects: "nothing placed yet",
     label_object_scale: "Size",
     hint_shapes: "Place a shape, then aim it with the manipulator.",
@@ -979,6 +1032,20 @@ const ES_419: Strings = Strings {
     action_place_shape: "Colocar",
     action_remove_object: "Quitar objeto",
     label_placed_objects: "Objetos",
+    section_objects: "OBJETOS",
+    view_preset_names: ["Perspectiva", "Frontal", "Lateral", "Superior"],
+    falloff_names: ["Dura", "Lineal", "Suave", "Gaussiana"],
+    ref_plane_names: ["Frontal", "Lateral", "Superior"],
+    curve_join_names: ["Esquinas", "Por los puntos", "Redondeado"],
+    curve_profile_names: ["Círculo", "Cuadrado", "Hexágono", "Triángulo"],
+    mask_op_invert: "Invertir",
+    mask_op_clear: "Limpiar",
+    mask_op_expand: "Expandir",
+    mask_op_contract: "Contraer",
+    mask_op_smooth: "Suavizar máscara",
+    mask_op_complement: "Complemento delimitado",
+    detail_reduced: "detalle reducido",
+    detail_pending: "aún no generado",
     label_no_placed_objects: "nada colocado aún",
     label_object_scale: "Tamaño",
     hint_shapes: "Coloca una forma y apúntala con el manipulador.",
@@ -1244,6 +1311,66 @@ impl Strings {
         Self::at(&self.combine_names, clayspace_model::Combine::ALL, op)
     }
 
+    /// The name for one of the four views, in this locale.
+    pub fn view_preset_name(&self, preset: clayspace_model::ViewPresetKind) -> &'static str {
+        Self::at(
+            &self.view_preset_names,
+            clayspace_model::ViewPresetKind::ALL,
+            preset,
+        )
+    }
+
+    /// The name for a brush edge profile, in this locale.
+    pub fn falloff_name(&self, falloff: clayspace_model::Falloff) -> &'static str {
+        Self::at(&self.falloff_names, clayspace_model::Falloff::ALL, falloff)
+    }
+
+    /// The name for a reference plane, in this locale.
+    pub fn ref_plane_name(&self, plane: clayspace_model::RefPlane) -> &'static str {
+        Self::at(&self.ref_plane_names, clayspace_model::RefPlane::ALL, plane)
+    }
+
+    /// The name for a way of joining a curve's points, in this locale.
+    pub fn curve_join_name(&self, join: clayspace_model::CurveJoin) -> &'static str {
+        Self::at(
+            &self.curve_join_names,
+            clayspace_model::CurveJoin::ALL,
+            join,
+        )
+    }
+
+    /// The name for a curve's cross-section, in this locale.
+    pub fn curve_profile_name(&self, profile: clayspace_model::CurveProfile) -> &'static str {
+        Self::at(
+            &self.curve_profile_names,
+            clayspace_model::CurveProfile::ALL,
+            profile,
+        )
+    }
+
+    /// The name for a mask operation, in this locale, without its amount.
+    pub fn mask_op_name(&self, op: clayspace_model::MaskOp) -> &'static str {
+        use clayspace_model::MaskOp;
+        match op {
+            MaskOp::Invert => self.mask_op_invert,
+            MaskOp::Clear => self.mask_op_clear,
+            MaskOp::Expand(_) => self.mask_op_expand,
+            MaskOp::Contract(_) => self.mask_op_contract,
+            MaskOp::Smooth(_) => self.mask_op_smooth,
+            MaskOp::InvertWithinBounds => self.mask_op_complement,
+        }
+    }
+
+    /// What the geometry panel notes about the counts, in this locale.
+    pub fn detail_note(&self, detail: clayspace_model::Detail) -> Option<&'static str> {
+        use clayspace_model::Detail;
+        match detail {
+            Detail::Full => None,
+            Detail::Reduced => Some(self.detail_reduced),
+            Detail::Pending => Some(self.detail_pending),
+        }
+    }
+
     /// The name for one of the manipulator's modes, in this locale.
     pub fn gizmo_mode_name(&self, mode: clayspace_model::GizmoMode) -> &'static str {
         Self::at(
@@ -1299,13 +1426,22 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 149] {
+    pub fn all(&self) -> [&'static str; 158] {
         [
             self.action_shapes,
             self.label_shape,
             self.action_place_shape,
             self.action_remove_object,
             self.label_placed_objects,
+            self.section_objects,
+            self.mask_op_invert,
+            self.mask_op_clear,
+            self.mask_op_expand,
+            self.mask_op_contract,
+            self.mask_op_smooth,
+            self.mask_op_complement,
+            self.detail_reduced,
+            self.detail_pending,
             self.label_no_placed_objects,
             self.label_object_scale,
             self.label_shapes_sdf_only,
@@ -1608,6 +1744,27 @@ mod tests {
     }
 
     #[test]
+    fn what_the_live_screen_showed_in_portuguese_is_translated() {
+        // Seen on a running English build: Perspectiva under the viewport,
+        // Dura and Suave on the edge chips, "ainda não gerado" in the geometry
+        // panel. Every one of these tables must differ from the Portuguese.
+        let en = Strings::for_locale(Locale::EnUs);
+        let pt = Strings::for_locale(Locale::PtBr);
+        let same = |a: &[&str], b: &[&str]| a.iter().zip(b).filter(|(x, y)| x == y).count();
+        assert_eq!(same(&en.view_preset_names, &pt.view_preset_names), 0);
+        assert!(
+            same(&en.falloff_names, &pt.falloff_names) <= 1,
+            "only Linear may coincide"
+        );
+        assert_eq!(same(&en.ref_plane_names, &pt.ref_plane_names), 0);
+        assert_eq!(same(&en.curve_join_names, &pt.curve_join_names), 0);
+        assert_eq!(same(&en.curve_profile_names, &pt.curve_profile_names), 0);
+        assert_ne!(en.detail_pending, pt.detail_pending);
+        assert_ne!(en.mask_op_invert, pt.mask_op_invert);
+        assert_eq!(en.detail_note(clayspace_model::Detail::Full), None);
+    }
+
+    #[test]
     fn the_manipulator_and_the_deformations_are_named_in_english() {
         // Both were drawn from the domain's `label()`, so an English screen
         // read Mover, Girar, Escalar, Afunilar and Torcer.
@@ -1708,6 +1865,7 @@ mod tests {
             for heading in [
                 strings.section_scene,
                 strings.section_layers,
+                strings.section_objects,
                 strings.section_material,
                 strings.section_geometry,
             ] {
