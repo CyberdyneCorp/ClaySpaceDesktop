@@ -2863,6 +2863,206 @@ pub fn brush_shelf(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
     });
 }
 
+/// One button on the rail: an icon, lit when its state is on.
+///
+/// The tooltip is the whole of its label — the rail is icons alone, so the
+/// word lives on hover — with the key that does the same thing where one is
+/// bound. Recorded under `chip_id(label)` so a test can find it by the word
+/// rather than by the pixel.
+fn rail_button(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    label: &str,
+    tooltip: String,
+    on: bool,
+    enabled: bool,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(size::RAIL_BUTTON, size::RAIL_BUTTON),
+        egui::Sense::click(),
+    );
+    let tint = if !enabled {
+        Tokens::text_faint()
+    } else if on || response.hovered() {
+        Tokens::text()
+    } else {
+        Tokens::text_dim()
+    };
+    if enabled && (on || response.hovered()) {
+        ui.painter()
+            .rect_filled(rect, size::RADIUS, Tokens::raised());
+    }
+    let icon_rect =
+        egui::Rect::from_center_size(rect.center(), egui::vec2(size::CHIP_ICON, size::CHIP_ICON));
+    icons::paint(ui.painter(), icon_rect, icon, tint);
+    ui.ctx()
+        .memory_mut(|memory| memory.data.insert_temp(chip_id(label), rect));
+    response.on_hover_text(tooltip)
+}
+
+/// A label and its chord, for a rail tooltip.
+fn labelled_chord(state: &ShellState<'_>, label: &str, action: Action) -> String {
+    let chord = chord_text(state, action);
+    if chord.is_empty() {
+        label.to_owned()
+    } else {
+        format!("{label}  ·  {chord}")
+    }
+}
+
+/// One entry on the rail: what it shows, what it says, and what it does.
+struct RailEntry {
+    icon: Icon,
+    label: &'static str,
+    tooltip: String,
+    on: bool,
+    enabled: bool,
+    command: Command,
+}
+
+/// The tool rail, on the leading edge as the design places it.
+///
+/// Every button dispatches the command its menu entry does, under the same
+/// conditions, so the two cannot disagree; the rail exists because the menus
+/// were the *only* way to the shapes panel, the cage, the deformations, the
+/// references and the curve, and a panel three menus deep is a panel a new
+/// sculptor never opens. ZBrush keeps these on its shelves for the same
+/// reason. Grouped by what they are: what the pointer does, what the view
+/// shows, which panels and modes are up, and history.
+pub fn tool_rail(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    let cageable = clayspace_model::can_be_caged(state.representation);
+    let plain = |label: &'static str| label.to_owned();
+    let groups: [Vec<RailEntry>; 4] = [
+        // What the pointer does: sculpt, or paint the mask. On while the
+        // mask brush is in hand, which is what the key toggles.
+        vec![RailEntry {
+            icon: Icon::MaskPaint,
+            label: s.action_paint_mask,
+            tooltip: labelled_chord(state, s.action_paint_mask, Action::ToggleMaskPainting),
+            on: state.tool == ToolKind::Mascara,
+            enabled: true,
+            command: Command::ToggleMaskPainting,
+        }],
+        // What the view shows.
+        vec![
+            RailEntry {
+                icon: Icon::Frame,
+                label: s.action_frame_all,
+                tooltip: labelled_chord(state, s.action_frame_all, Action::FrameAll),
+                on: false,
+                enabled: true,
+                command: Command::FrameAll,
+            },
+            RailEntry {
+                icon: Icon::Polyframe,
+                label: s.action_polyframe,
+                tooltip: labelled_chord(state, s.action_polyframe, Action::TogglePolyframe),
+                on: state.polyframe,
+                enabled: true,
+                command: Command::TogglePolyframe,
+            },
+            RailEntry {
+                icon: Icon::Reference,
+                label: s.action_references,
+                tooltip: plain(s.action_references),
+                on: state.show_references,
+                enabled: true,
+                command: Command::ToggleReferences,
+            },
+        ],
+        // The panels and the modes: what is placed rather than brushed.
+        vec![
+            RailEntry {
+                icon: Icon::Shapes,
+                label: s.action_shapes,
+                tooltip: plain(s.action_shapes),
+                on: state.show_shapes,
+                enabled: true,
+                command: Command::ToggleShapes,
+            },
+            RailEntry {
+                icon: Icon::Cage,
+                label: s.action_cage,
+                // Grey with the reason on it, as the menu has it.
+                tooltip: if cageable {
+                    plain(s.action_cage)
+                } else {
+                    format!("{}\n{}", s.action_cage, s.status_cage_needs_a_field)
+                },
+                on: state.lattice.active,
+                enabled: cageable,
+                command: Command::ToggleLattice,
+            },
+            RailEntry {
+                icon: Icon::Curve,
+                label: s.action_curve,
+                tooltip: plain(s.action_curve),
+                on: state.curve.active,
+                enabled: true,
+                command: Command::ToggleCurve,
+            },
+            RailEntry {
+                icon: Icon::Taper,
+                label: s.action_deform,
+                tooltip: plain(s.action_deform),
+                on: state.show_deform,
+                enabled: true,
+                command: Command::ToggleDeform,
+            },
+        ],
+        // History, greyed exactly as the Edit menu greys it.
+        vec![
+            RailEntry {
+                icon: Icon::Undo,
+                label: s.action_undo,
+                tooltip: labelled_chord(state, s.action_undo, Action::Undo),
+                on: false,
+                enabled: state.can_undo,
+                command: Command::Undo,
+            },
+            RailEntry {
+                icon: Icon::Redo,
+                label: s.action_redo,
+                tooltip: labelled_chord(state, s.action_redo, Action::Redo),
+                on: false,
+                enabled: state.can_redo,
+                command: Command::Redo,
+            },
+        ],
+    ];
+
+    ui.vertical_centered(|ui| {
+        ui.add_space(space::SNUG);
+        for (index, group) in groups.into_iter().enumerate() {
+            if index > 0 {
+                rail_rule(ui);
+            }
+            for entry in group {
+                let response = rail_button(
+                    ui,
+                    entry.icon,
+                    entry.label,
+                    entry.tooltip,
+                    entry.on,
+                    entry.enabled,
+                );
+                if response.clicked() && entry.enabled {
+                    queue.push(entry.command);
+                }
+            }
+        }
+    });
+}
+
+/// A short hairline between the rail's groups.
+fn rail_rule(ui: &mut egui::Ui) {
+    ui.add_space(space::SNUG);
+    let (rule, _) = ui.allocate_exact_size(egui::vec2(size::CHIP_ICON, 1.0), egui::Sense::hover());
+    ui.painter().rect_filled(rule, 0.0, Tokens::rule());
+    ui.add_space(space::SNUG);
+}
+
 /// The status area: document, memory, backend and units.
 pub fn status_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
     let s = state.strings;
