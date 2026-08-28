@@ -283,6 +283,13 @@ pub fn apply_theme(ctx: &egui::Context) {
 /// sections of a long panel read as sections rather than as one column of
 /// rows — by tone, as the design asks, and never by a box around them.
 fn heading(ui: &mut egui::Ui, text: &str) {
+    heading_rule(ui);
+    ui.label(heading_text(text));
+    ui.add_space(space::TIGHT);
+}
+
+/// The rule a heading stands under, where something already stands above it.
+fn heading_rule(ui: &mut egui::Ui) {
     if ui.min_rect().height() > 0.0 {
         ui.add_space(space::SNUG);
         let (rule, _) =
@@ -290,12 +297,62 @@ fn heading(ui: &mut egui::Ui, text: &str) {
         ui.painter().rect_filled(rule, 0.0, Tokens::rule());
     }
     ui.add_space(space::ROOMY);
-    ui.label(
-        egui::RichText::new(text)
-            .size(type_scale::HEADING)
-            .color(Tokens::text_faint()),
-    );
+}
+
+/// A heading's word, set as the design sets every heading.
+fn heading_text(text: &str) -> egui::RichText {
+    egui::RichText::new(text)
+        .size(type_scale::HEADING)
+        .color(Tokens::text_faint())
+}
+
+/// The id a section's close control is recorded under, so a test can put the
+/// section away by its word rather than by a pixel.
+pub fn close_id(section: &str) -> egui::Id {
+    egui::Id::new(("close", section))
+}
+
+/// A heading with the means to put its section away. Hands back whether the
+/// sculptor just did.
+///
+/// For the two sections that stand where a window used to: a window is closed
+/// from its own title bar, and a section that could only be closed from the
+/// rail would have taken that with the window. The mark is quiet in the way
+/// every control here is — dim ink at rest, lifting under the pointer — and
+/// at the trailing end, so the word still reads as the other headings do.
+fn closable_heading(ui: &mut egui::Ui, text: &str) -> bool {
+    heading_rule(ui);
+    let closed = ui
+        .horizontal(|ui| {
+            ui.label(heading_text(text));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let (rect, response) = ui.allocate_exact_size(
+                    egui::vec2(size::CONTROL, size::CONTROL),
+                    egui::Sense::click(),
+                );
+                let tint = if response.hovered() {
+                    ui.painter()
+                        .rect_filled(rect, size::RADIUS, Tokens::raised());
+                    Tokens::text()
+                } else {
+                    Tokens::text_dim()
+                };
+                ui.painter().text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "×",
+                    egui::FontId::proportional(type_scale::BODY),
+                    tint,
+                );
+                ui.ctx()
+                    .memory_mut(|memory| memory.data.insert_temp(close_id(text), rect));
+                response.clicked()
+            })
+            .inner
+        })
+        .inner;
     ui.add_space(space::TIGHT);
+    closed
 }
 
 /// A numeric readout, set monospaced so digits do not reflow as they change.
@@ -2602,36 +2659,30 @@ pub fn boolean_op_chip_id(op: clayspace_model::BooleanOp) -> egui::Id {
 /// Resolving a boolean between two subtools.
 ///
 /// Honest about being *resolved* rather than live, which is the whole of what
-/// this panel has to say beyond its four controls: the engine composes layers
-/// by hard union (ClayCore #321), so what comes out is baked, and the operands
-/// are kept because that is what makes the operation recoverable.
-pub fn boolean_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQueue) {
-    if !state.show_boolean {
-        return;
-    }
+/// this section has to say beyond its four controls: the engine composes
+/// layers by hard union (ClayCore #321), so what comes out is baked, and the
+/// operands are kept because that is what makes the operation recoverable.
+///
+/// A section of the right panel rather than a window, because a window floats
+/// over the viewport, and the viewport is where the two forms being cut from
+/// one another stand: it hid the very thing the operation was being set up
+/// on. Docked, the operands stay in view while the sentence about them is
+/// being composed. Closed from its own heading, as the window was from its
+/// title bar, or from the rail.
+fn boolean_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
     let s = state.strings;
-    let mut open = true;
-
-    egui::Window::new(s.action_boolean)
-        .open(&mut open)
-        .resizable(false)
-        .collapsible(false)
-        .show(ctx, |ui| {
-            ui.set_min_width(340.0);
-            boolean_operation(ui, state, queue);
-            ui.add_space(space::SNUG);
-            boolean_operands(ui, state, queue);
-            ui.add_space(space::SNUG);
-            boolean_resolution(ui, state, queue);
-            ui.add_space(space::ROOMY);
-            boolean_costs(ui, state);
-            ui.add_space(space::ROOMY);
-            boolean_confirm(ui, state, queue);
-        });
-
-    if !open {
+    if closable_heading(ui, s.section_boolean) {
         queue.push(Command::ToggleBoolean);
     }
+    boolean_operation(ui, state, queue);
+    ui.add_space(space::SNUG);
+    boolean_operands(ui, state, queue);
+    ui.add_space(space::SNUG);
+    boolean_resolution(ui, state, queue);
+    ui.add_space(space::ROOMY);
+    boolean_costs(ui, state);
+    ui.add_space(space::ROOMY);
+    boolean_confirm(ui, state, queue);
 }
 
 /// Which of the three operations.
@@ -2723,7 +2774,7 @@ fn boolean_operand_picker(
     );
     egui::ComboBox::from_id_salt(id)
         .selected_text(boolean_operand_name(state, chosen))
-        .width(300.0)
+        .width(ui.available_width())
         .show_ui(ui, |ui| {
             for (key, name) in state.boolean_operands {
                 if ui.selectable_label(chosen == Some(*key), name).clicked() {
@@ -3255,6 +3306,15 @@ pub fn right_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
         });
     });
 
+    // The two placing sections, where they stand beside the sculpt they act
+    // on rather than over it.
+    if state.show_shapes {
+        shapes_section(ui, state, queue);
+    }
+    if state.show_boolean {
+        boolean_section(ui, state, queue);
+    }
+
     heading(ui, s.section_geometry);
     // A count without its detail level reads as a smaller model, so where the
     // viewport is not showing full resolution the interface says so.
@@ -3549,6 +3609,14 @@ pub fn tool_rail(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQ
                 on: state.show_shapes,
                 enabled: true,
                 command: Command::ToggleShapes,
+            },
+            RailEntry {
+                icon: Icon::Union,
+                label: s.action_boolean,
+                tooltip: plain(s.action_boolean),
+                on: state.show_boolean,
+                enabled: true,
+                command: Command::ToggleBoolean,
             },
             RailEntry {
                 icon: Icon::Cage,
@@ -3851,63 +3919,58 @@ fn gigabytes(bytes: u64) -> String {
 
 /// The shapes a sculptor can put in the scene, and what the selected one is.
 ///
-/// One panel for both because they are one workflow: pick a shape, place it,
-/// aim it, and change how it meets what is under it. Splitting the picker from
-/// the properties would mean two windows open at once for a single operation.
-pub fn shapes_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQueue) {
-    if !state.show_shapes {
-        return;
-    }
+/// One section for both because they are one workflow: pick a shape, place
+/// it, aim it, and change how it meets what is under it. Splitting the picker
+/// from the properties would mean two places open at once for a single
+/// operation.
+///
+/// A section of the right panel rather than a window, because a window floats
+/// over the viewport, and the viewport is where the form a shape is being
+/// placed into stands: it hid the very thing the shape was being aimed at.
+/// Docked, the picker and the sculpt are side by side while a shape is placed
+/// and turned. Closed from its own heading, as the window was from its title
+/// bar, or from the rail.
+fn shapes_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
     let s = state.strings;
-    let mut open = true;
-
-    egui::Window::new(s.action_shapes)
-        .open(&mut open)
-        .resizable(false)
-        .collapsible(false)
-        .show(ctx, |ui| {
-            ui.set_min_width(300.0);
-            insert_destination(ui, state, queue);
-
-            ui.add_space(space::SNUG);
-            shape_picker(ui, state, queue);
-            // A shape's measurements only where a shape is what would be
-            // placed: a model is measured by itself, and offering a radius for
-            // one would be offering a control that does nothing.
-            if state.mesh_operand.is_none() {
-                ui.add_space(space::SNUG);
-                shape_measurements(ui, state, queue);
-            } else {
-                mesh_operand_cost(ui, state);
-            }
-
-            ui.add_space(space::SNUG);
-            if ui.button(s.action_insert).clicked() {
-                queue.push(Command::InsertShape);
-            }
-
-            ui.separator();
-            other_insert_sources(ui, state, queue);
-
-            if let Some(object) = state
-                .selected_object
-                .and_then(|id| state.objects.iter().find(|object| object.id == id))
-            {
-                ui.separator();
-                selected_object_controls(ui, state, object, queue);
-            }
-
-            ui.add_space(space::SNUG);
-            ui.label(
-                egui::RichText::new(s.hint_shapes)
-                    .size(type_scale::LABEL)
-                    .color(Tokens::text_dim()),
-            );
-        });
-
-    if !open {
+    if closable_heading(ui, s.section_shapes) {
         queue.push(Command::ToggleShapes);
     }
+    insert_destination(ui, state, queue);
+
+    ui.add_space(space::SNUG);
+    shape_picker(ui, state, queue);
+    // A shape's measurements only where a shape is what would be placed: a
+    // model is measured by itself, and offering a radius for one would be
+    // offering a control that does nothing.
+    if state.mesh_operand.is_none() {
+        ui.add_space(space::SNUG);
+        shape_measurements(ui, state, queue);
+    } else {
+        mesh_operand_cost(ui, state);
+    }
+
+    ui.add_space(space::SNUG);
+    if ui.button(s.action_insert).clicked() {
+        queue.push(Command::InsertShape);
+    }
+
+    ui.separator();
+    other_insert_sources(ui, state, queue);
+
+    if let Some(object) = state
+        .selected_object
+        .and_then(|id| state.objects.iter().find(|object| object.id == id))
+    {
+        ui.separator();
+        selected_object_controls(ui, state, object, queue);
+    }
+
+    ui.add_space(space::SNUG);
+    ui.label(
+        egui::RichText::new(s.hint_shapes)
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    );
 }
 
 /// The id one destination chip carries, so a test can press it by name.
@@ -3977,7 +4040,7 @@ fn other_insert_sources(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut C
     ui.add_space(space::TIGHT);
     egui::ComboBox::from_id_salt("copy-subtool")
         .selected_text(s.action_copy_subtool)
-        .width(280.0)
+        .width(ui.available_width())
         .show_ui(ui, |ui| {
             for (key, name) in state.copyable_subtools {
                 if ui.selectable_label(false, name).clicked() {
@@ -4013,7 +4076,7 @@ fn shape_picker(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
     };
     egui::ComboBox::from_id_salt("shape-picker")
         .selected_text(chosen)
-        .width(280.0)
+        .width(ui.available_width())
         .show_ui(ui, |ui| {
             for shape in clayspace_model::Shape::ALL {
                 let picked = state.mesh_operand.is_none() && shape == state.shape;
@@ -4105,8 +4168,10 @@ fn selected_object_controls(
     let settings = object.combine;
     // The three booleans first, as chips with the two discs on them: these
     // are what a placed shape is for, and a sculptor should not have to open
-    // a list of thirteen to find "cut". The list below keeps the rest.
-    ui.horizontal(|ui| {
+    // a list of thirteen to find "cut". The list below keeps the rest. Wrapped,
+    // because the row now stands in the panel rather than in a window sized to
+    // it, and Interseção does not fit beside the other two there.
+    ui.horizontal_wrapped(|ui| {
         for (op, icon) in [
             (Combine::Add, Icon::Union),
             (Combine::Subtract, Icon::Subtract),
@@ -4123,7 +4188,7 @@ fn selected_object_controls(
     });
     egui::ComboBox::from_id_salt("object-combine-op")
         .selected_text(s.combine_name(settings.op))
-        .width(280.0)
+        .width(ui.available_width())
         .show_ui(ui, |ui| {
             for op in Combine::offered_for_strokes() {
                 if ui
@@ -4142,7 +4207,7 @@ fn selected_object_controls(
     if settings.op.takes_a_blend() {
         egui::ComboBox::from_id_salt("object-combine-blend")
             .selected_text(s.blend_name(settings.blend))
-            .width(280.0)
+            .width(ui.available_width())
             .show_ui(ui, |ui| {
                 for blend in BlendProfile::ALL {
                     if ui

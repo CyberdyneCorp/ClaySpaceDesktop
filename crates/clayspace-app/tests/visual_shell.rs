@@ -296,8 +296,6 @@ fn build_shell(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQ
     shell::import_window(ctx, state, queue);
     shell::export_window(ctx, state, queue);
     shell::reference_window(ctx, state, queue);
-    shell::shapes_window(ctx, state, queue);
-    shell::boolean_window(ctx, state, queue);
     shell::deform_window(ctx, state, queue);
 }
 
@@ -691,6 +689,7 @@ fn the_tool_rail_reaches_what_the_menus_reach() {
         strings.action_polyframe,
         strings.action_references,
         strings.action_shapes,
+        strings.action_boolean,
         strings.action_cage,
         strings.action_curve,
         strings.action_deform,
@@ -706,7 +705,7 @@ fn the_tool_rail_reaches_what_the_menus_reach() {
         );
         rail_buttons.push(rect);
     }
-    // Ten buttons in one column, none overlapping another.
+    // Eleven buttons in one column, none overlapping another.
     for (i, a) in rail_buttons.iter().enumerate() {
         for b in &rail_buttons[i + 1..] {
             assert!(!a.intersects(*b), "two rail buttons overlap: {a:?} {b:?}");
@@ -2553,6 +2552,77 @@ fn the_insert_control_stays_reachable_over_a_grid() {
         insert_as_chip(&set, clayspace_model::InsertAs::Subtool).is_some(),
         "the panel drew no destination chips over a grid, so a subtool cannot          be inserted there at all"
     );
+}
+
+/// The shapes and boolean panels were windows floating over the viewport, and
+/// the viewport is where the form a shape is placed into, or cut from, stands:
+/// each hid the very thing it was being used on. Both are sections of the
+/// right panel now, beside the sculpt rather than over it, and each can still
+/// be put away from its own heading as the window could from its title bar.
+#[test]
+fn the_placing_sections_stand_in_the_right_panel_and_close_from_their_heading() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let operands = two_operands();
+
+    // One at a time, as the rail opens them: the two together run past the
+    // panel's fold, and a section under the fold is scrolled to, not clicked.
+    let sections = [
+        (
+            strings.section_shapes,
+            Command::ToggleShapes,
+            "shell-shapes-docked",
+        ),
+        (
+            strings.section_boolean,
+            Command::ToggleBoolean,
+            "shell-boolean-docked",
+        ),
+    ];
+    for (section, command, capture) in &sections {
+        let mut set = state(strings, &scene, &materials, &report);
+        set.show_shapes = *command == Command::ToggleShapes;
+        set.show_boolean = *command == Command::ToggleBoolean;
+        set.boolean_operands = &operands;
+        let close = probe_shell(&set)
+            .memory(|memory| memory.data.get_temp::<egui::Rect>(shell::close_id(section)))
+            .unwrap_or_else(|| panic!("no {section:?} section was drawn"));
+        assert!(
+            close.left() >= SHELL_WIDTH as f32 - region::RIGHT,
+            "{section:?} does not stand in the right panel: {close:?}"
+        );
+        capture_shell_after(
+            &harness,
+            &set,
+            capture,
+            &[left_click(close.center())],
+            |queue| {
+                assert_eq!(
+                    queue.commands(),
+                    std::slice::from_ref(command),
+                    "closing {section:?} from its heading did not put it away. \
+                     See target/visual/{capture}.png"
+                );
+            },
+        );
+    }
+
+    // Put away, a section leaves nothing behind — not a heading over nothing,
+    // and not a close mark for a click to land on.
+    let closed = state(strings, &scene, &materials, &report);
+    let ctx = probe_shell(&closed);
+    for (section, _, _) in sections {
+        assert!(
+            ctx.memory(|memory| memory.data.get_temp::<egui::Rect>(shell::close_id(section)))
+                .is_none(),
+            "{section:?} is drawn while its panel is closed"
+        );
+    }
 }
 
 /// Where a whole-subtool manipulator chip is, asked of the interface that drew

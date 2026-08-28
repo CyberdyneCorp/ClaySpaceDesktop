@@ -211,6 +211,9 @@ pub struct Strings {
     pub section_layers: &'static str,
     pub section_sculpt_settings: &'static str,
     pub section_material: &'static str,
+    /// The docked shapes and boolean sections of the right region.
+    pub section_shapes: &'static str,
+    pub section_boolean: &'static str,
     pub section_geometry: &'static str,
     pub section_resolution: &'static str,
     pub section_brush_controls: &'static str,
@@ -594,6 +597,8 @@ const PT_BR: Strings = Strings {
     section_layers: "CAMADAS",
     section_sculpt_settings: "CONFIGURAÇÕES DE ESCULTURA",
     section_material: "MATERIAL",
+    section_shapes: "FORMAS",
+    section_boolean: "BOOLEANA",
     section_geometry: "GEOMETRIA",
     section_resolution: "RESOLUÇÃO",
     section_brush_controls: "CONTROLES DE PINCEL",
@@ -925,6 +930,8 @@ const EN_US: Strings = Strings {
     section_layers: "LAYERS",
     section_sculpt_settings: "SCULPT SETTINGS",
     section_material: "MATERIAL",
+    section_shapes: "SHAPES",
+    section_boolean: "BOOLEAN",
     section_geometry: "GEOMETRY",
     section_resolution: "RESOLUTION",
     section_brush_controls: "BRUSH CONTROLS",
@@ -1257,6 +1264,8 @@ const ES_419: Strings = Strings {
     section_layers: "CAPAS",
     section_sculpt_settings: "AJUSTES DE ESCULTURA",
     section_material: "MATERIAL",
+    section_shapes: "FORMAS",
+    section_boolean: "BOOLEANA",
     section_geometry: "GEOMETRÍA",
     section_resolution: "RESOLUCIÓN",
     section_brush_controls: "CONTROLES DE PINCEL",
@@ -1625,7 +1634,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 185] {
+    pub fn all(&self) -> [&'static str; 187] {
         [
             self.action_shapes,
             self.label_shape,
@@ -1712,6 +1721,8 @@ impl Strings {
             self.section_layers,
             self.section_sculpt_settings,
             self.section_material,
+            self.section_shapes,
+            self.section_boolean,
             self.section_geometry,
             self.section_resolution,
             self.section_brush_controls,
@@ -2174,6 +2185,8 @@ mod tests {
                 strings.section_layers,
                 strings.section_objects,
                 strings.section_material,
+                strings.section_shapes,
+                strings.section_boolean,
                 strings.section_geometry,
             ] {
                 assert_eq!(

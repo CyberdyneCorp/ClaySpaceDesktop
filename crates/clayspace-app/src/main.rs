@@ -3045,8 +3045,6 @@ impl App {
             shell::convert_window(ctx, &state, &mut queue);
             shell::repair_window(ctx, &state, &mut queue);
             shell::deform_window(ctx, &state, &mut queue);
-            shell::shapes_window(ctx, &state, &mut queue);
-            shell::boolean_window(ctx, &state, &mut queue);
             shell::reference_window(ctx, &state, &mut queue);
             shell::import_window(ctx, &state, &mut queue);
             shell::export_window(ctx, &state, &mut queue);

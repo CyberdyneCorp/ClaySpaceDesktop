@@ -899,6 +899,13 @@ is off it. The two the engine calls unbounded — a plane and an infinite
 cylinder — are not offered: neither has an extent for a manipulator to sit on
 or a bound for the cache to work from.
 
+**The shapes are a section of the right region, not a window.** They were a
+window floating over the viewport, and the viewport is where the form a shape
+is being placed into stands, so the panel hid the very thing the shape was
+being aimed at. Docked under the material, the picker and the sculpt are side
+by side while a shape is placed and turned; the section is put away from the
+`×` on its own heading, as the window was from its title bar, or from the rail.
+
 **The three booleans are chips, with the two discs on them.** Unir, Subtrair
 and Interseção are what a placed shape is for, so they stand as a row above the
 full list of operations — the outline of both discs, the crescent one leaves,
@@ -1179,7 +1186,9 @@ other half of putting forms in a scene — combines two whole forms into a third
 Pick the two, pick **União**, **Subtração** or **Interseção**, read what it
 costs, and confirm. What arrives is a subtool like any other: active on
 arrival, sculptable, movable with the whole-subtool manipulator, and available
-as an operand again.
+as an operand again. It stands in the right region under the shapes, for the
+same reason the shapes do: a window over the viewport covered the two forms
+being cut from one another. The rail reaches it beside **Formas**.
 
 **The panel names the two roles rather than numbering them.** *Base — o subtool
 que é cortado* and *Ferramenta — o subtool que corta*, because subtraction is
@@ -1561,8 +1570,9 @@ indicated by surface tone and weight; a test asserts the accent's coverage
 stays about constant as the active tool changes, so it cannot quietly spread.
 **The tool rail on the leading edge** — the region the design named and the
 first build left empty — holds, as icons with their word and key on hover:
-mask painting; frame, polyframe and the reference images; the shapes panel,
-the deformation cage, the curve and the deformations; undo and redo. Every
+mask painting; frame, polyframe and the reference images; the shapes and
+boolean sections, the deformation cage, the curve and the deformations; undo
+and redo. Every
 button dispatches the command its menu entry does under the same conditions —
 the cage is grey with the reason on it where the layer cannot be caged, undo
 is grey where there is nothing to undo — so the two cannot disagree. It exists

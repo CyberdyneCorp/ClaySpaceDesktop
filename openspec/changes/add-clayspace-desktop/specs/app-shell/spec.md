@@ -5,8 +5,9 @@ The application window SHALL present: a menu bar; a tool rail along the leading 
 
 The tool rail SHALL offer, as icon buttons with their name and shortcut on
 hover, the controls a sculptor reaches for between strokes: mask painting,
-frame, polyframe, the reference images, the shapes panel, the deformation
-cage, the curve, the deformations, undo and redo. Each SHALL dispatch the
+frame, polyframe, the reference images, the shapes section, the boolean
+section, the deformation cage, the curve, the deformations, undo and redo. Each
+SHALL dispatch the
 same command as its menu entry under the same enabled conditions, and SHALL
 show its on/off state where it has one.
 
@@ -14,6 +15,16 @@ show its on/off state where it has one.
 - **WHEN** the shapes button on the rail is clicked
 - **THEN** the same command the Escultura → Formas menu entry dispatches is
   emitted, and the button reads as on while the panel is open
+
+The shapes and the boolean SHALL be sections of the right region rather than
+windows over the viewport, because the viewport holds the form a shape is
+placed into or cut from. Each section SHALL carry a close control on its
+heading that dispatches the same command its rail button and menu entry do.
+
+#### Scenario: A docked section is put away from its heading
+- **WHEN** the close control on the shapes section's heading is clicked
+- **THEN** the same command the rail's shapes button dispatches is emitted,
+  and the section is no longer drawn
 
 #### Scenario: The rail greys what the menu greys
 - **WHEN** the active layer cannot be caged
