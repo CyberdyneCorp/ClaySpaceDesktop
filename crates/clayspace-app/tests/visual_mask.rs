@@ -67,7 +67,7 @@ fn freeze_the_near_face(document: &mut ClayDocument) {
 /// this measures the assembly the application performs rather than a
 /// test-only one that could drift from it.
 fn viewport_geometry(document: &mut ClayDocument) -> (Vec<Vertex>, Vec<u32>) {
-    let (positions, normals, colors, indices) = document.visible_mesh_geometry();
+    let (positions, normals, colors, indices, _) = document.visible_mesh_geometry();
     let frozen = document.mask_at(&positions);
     let vertices = positions
         .into_iter()

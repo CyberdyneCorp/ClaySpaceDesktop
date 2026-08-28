@@ -4,7 +4,7 @@
 //! are different concerns: a test double for one need not implement the other,
 //! and the panels can be exercised without an engine at all.
 
-use clayspace_model::{LayerKey, ModelError, Protection, Representation, Scene, SceneModel};
+use clayspace_model::{LayerKey, ModelError, Protection, Scene, SceneModel};
 
 use crate::command::Command;
 use crate::observable::Observable;
@@ -56,10 +56,11 @@ impl SceneViewModel {
         let outcome = match command {
             Command::SelectLayer(key) => self.model.set_active_layer(*key),
             Command::SetLayerVisible(key, visible) => self.model.set_layer_visible(*key, *visible),
-            Command::AddLayer => {
+            Command::SoloLayer(key) => self.model.set_solo(*key),
+            Command::AddLayer(representation) => {
                 self.created += 1;
                 let name = format!("Camada {}", self.created + 1);
-                self.model.add_layer(&name, Representation::Sdf).map(|_| ())
+                self.model.add_layer(&name, *representation).map(|_| ())
             }
             Command::RemoveLayer(key) => self.model.remove_layer(*key),
             // Not this ViewModel's business.
@@ -90,14 +91,22 @@ impl SceneViewModel {
         self.finish(outcome)
     }
 
-    /// Selects whatever a ray meets.
+    /// Which layer a ray meets, if it meets one.
     ///
-    /// A ray that meets nothing clears the selection rather than leaving it on
-    /// the previous target.
-    pub fn select_at(&mut self, origin: [f32; 3], direction: [f32; 3]) -> Option<LayerKey> {
-        let selected = self.model.select_at(origin, direction);
-        self.refresh();
-        selected
+    /// Answers rather than acts. The composition root turns the answer into
+    /// `Command::SelectLayer`, so a viewport click and a stack row click reach
+    /// `set_active_layer` by the same command instead of by two paths that can
+    /// come to disagree.
+    pub fn layer_at(&mut self, origin: [f32; 3], direction: [f32; 3]) -> Option<LayerKey> {
+        self.model.layer_at(origin, direction)
+    }
+
+    /// The box a layer's geometry occupies, where the model can say.
+    ///
+    /// For the composition root, which sizes the whole-subtool manipulator from
+    /// it: a widget on a form's middle has to reach past that form to be seen.
+    pub fn layer_bounds(&self, key: LayerKey) -> Option<([f32; 3], [f32; 3])> {
+        self.model.layer_bounds(key)
     }
 
     /// Re-reads the scene from the model.

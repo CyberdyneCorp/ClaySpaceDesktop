@@ -55,7 +55,7 @@ fn sculpted() -> ClayDocument {
 
 /// The geometry the viewport would upload.
 fn drawn(document: &mut ClayDocument) -> (Vec<[f32; 3]>, Vec<[f32; 3]>, usize) {
-    let (positions, normals, _, indices) = document.visible_mesh_geometry();
+    let (positions, normals, _, indices, _) = document.visible_mesh_geometry();
     (positions, normals, indices.len())
 }
 

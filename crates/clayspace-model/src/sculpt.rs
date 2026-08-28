@@ -180,6 +180,27 @@ pub trait SculptModel {
         symmetry: [bool; 3],
     ) -> Result<EditOutcome, ModelError>;
 
+    /// The symmetry axes the active subtool is set to.
+    ///
+    /// Per layer rather than per document, because the mirror is: the engine
+    /// stores one plane per layer, and a sculptor who turns symmetry off to
+    /// work one ear has not said anything about the subtool beside it. The
+    /// interface reads this whenever the active subtool changes, so the
+    /// toggles show the incoming subtool's own setting instead of carrying
+    /// the outgoing one's along.
+    fn symmetry(&self) -> [bool; 3] {
+        [false; 3]
+    }
+
+    /// Points the active subtool's mirror at these axes.
+    ///
+    /// Defaulted so a double that models no mirror ignores it rather than
+    /// spelling out a refusal.
+    fn set_symmetry(&mut self, symmetry: [bool; 3]) -> Result<(), ModelError> {
+        let _ = symmetry;
+        Ok(())
+    }
+
     /// How the next SDF edit combines with what is under it.
     ///
     /// State rather than a fifth argument to `apply_stroke`: the choice is made
@@ -248,6 +269,13 @@ pub enum ModelError {
     /// A crossing between representations was refused, with which of the
     /// reasons it was.
     Conversion(crate::conversion::Refusal),
+    /// A boolean between two subtools was refused, naming the operand and the
+    /// cause.
+    ///
+    /// Its own variant rather than an `Engine` string, because the interface
+    /// has to be able to say *which* of the two subtools is the problem and a
+    /// sentence the adapter formatted cannot be asked that afterwards.
+    Boolean(crate::boolean::BooleanRefusal),
 }
 
 impl std::fmt::Display for ModelError {
@@ -256,6 +284,7 @@ impl std::fmt::Display for ModelError {
             Self::Unavailable(why) => write!(f, "{why}"),
             Self::Engine(why) => f.write_str(why),
             Self::Conversion(why) => write!(f, "{why}"),
+            Self::Boolean(why) => write!(f, "{why}"),
         }
     }
 }

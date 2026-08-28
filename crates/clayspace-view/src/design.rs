@@ -197,7 +197,7 @@ mod tests {
     /// mistake this exists to stop repeating while the backlog is worked off.
     /// Fixing one is: add an array to `Strings` keyed off the enum's `::ALL`,
     /// fill all three locales, add an accessor, and call it here.
-    const LABELS_STILL_DRAWN: usize = 26;
+    const LABELS_STILL_DRAWN: usize = 25;
 
     #[test]
     fn the_shell_draws_no_new_untranslated_labels() {

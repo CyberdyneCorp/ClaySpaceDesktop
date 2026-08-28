@@ -136,6 +136,100 @@ pub fn press_sculpts(on_surface: bool, orbit_modifier: bool, caged: bool) -> boo
     on_surface && !orbit_modifier && !caged
 }
 
+/// What a press in the viewport resolved to.
+///
+/// Three answers, in the order the subtools design resolves them, because a
+/// press has to say two different things at once: which subtool the sculptor
+/// is now working on, and whether the press itself belongs to a selection or
+/// falls through to the brush.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Activation {
+    /// A placed object. It is selected and offers its manipulator, and the
+    /// layer it stands in becomes the sculpt target.
+    Object(clayspace_model::ObjectId),
+    /// Geometry that is not a placed object — a stroke, a rig's skin, a grid,
+    /// a carried mesh. Its layer becomes the sculpt target and the press falls
+    /// through to whatever would have had it.
+    Subtool(clayspace_model::LayerKey),
+    /// The ray met nothing.
+    Empty,
+}
+
+impl Activation {
+    /// The subtool this press makes the sculpt target, where it makes one.
+    ///
+    /// `None` only for a press on nothing: a document always has a layer being
+    /// sculpted, so there is no activation to take away.
+    pub fn layer(self) -> Option<clayspace_model::LayerKey> {
+        match self {
+            Self::Object(id) => Some(id.layer),
+            Self::Subtool(key) => Some(key),
+            Self::Empty => None,
+        }
+    }
+}
+
+/// Which subtool a press works on from now on, and what the press itself is.
+///
+/// A rule rather than a step, and here rather than in the event loop for the
+/// reason [`press_sculpts`] is: this is the order the whole feature turns on.
+///
+/// - A placed object keeps what a press on one has always done, and *also*
+///   activates the layer it stands in — an object is part of a subtool, and
+///   reaching for one means working on that subtool.
+/// - Anything else the ray met activates the layer it belongs to. Ghosts never
+///   appear here: the engine excludes them from the attributed raycast, so a
+///   ray through a ghost answers with what stands behind it.
+/// - A ray that met nothing activates nothing. Activation is not cleared,
+///   because a document always has a layer being sculpted; what is put down is
+///   the object selection, which is the selection that can be empty.
+///
+/// `picked` is asked only where the interface is picking objects at all, so a
+/// press on the clay mid-sculpt is not answered with "that cannot be
+/// transformed"; `hit` is the layer the same ray met.
+pub fn activation(
+    picked: clayspace_vm::Picked,
+    hit: Option<clayspace_model::LayerKey>,
+) -> Activation {
+    match (picked, hit) {
+        // The object's own layer rather than `hit`: the two come from the same
+        // attributed raycast, and the object is the more specific answer.
+        (clayspace_vm::Picked::Object(id), _) => Activation::Object(id),
+        (_, Some(key)) => Activation::Subtool(key),
+        (_, None) => Activation::Empty,
+    }
+}
+
+/// What a press does to the object selection, once [`activation`] has said
+/// what it met.
+///
+/// `Some(selection)` is a `Command::SelectObject` to dispatch and `None` is a
+/// press that leaves the selection alone.
+///
+/// Here rather than in the event loop because it carries a requirement of its
+/// own — scene-and-layers, "clicking empty space clears the selection": "the
+/// selection is cleared rather than left on the previous target". That arm sat
+/// inside the composition root where nothing could reach it, and the test that
+/// had held the scenario was rewritten into one that asserts only what the
+/// raycast answered. A press on nothing that left a form selected leaves its
+/// manipulator drawn over clay the sculptor has stopped pointing at.
+///
+/// `selected` is whether anything is selected now: clearing what is already
+/// clear is an entry in the history for nothing.
+pub fn selection_after(
+    activation: Activation,
+    selected: bool,
+) -> Option<Option<clayspace_model::ObjectId>> {
+    match activation {
+        Activation::Object(id) => Some(Some(id)),
+        // A press on a subtool that is not an object falls through to the
+        // brush, and the selection is whatever it was: the sculptor reached
+        // for clay, not for a control.
+        Activation::Subtool(_) => None,
+        Activation::Empty => selected.then_some(None),
+    }
+}
+
 /// The world-space ray through a point of the viewport.
 ///
 /// Free-standing, and used by the binary rather than reimplemented there, so a
@@ -381,5 +475,125 @@ mod press_tests {
                 assert_eq!(input.scroll, 0.0, "no scroll was delivered this frame");
             });
         });
+    }
+}
+
+#[cfg(test)]
+mod activation_tests {
+    use super::{activation, selection_after, Activation};
+    use clayspace_model::{LayerKey, ObjectId};
+    use clayspace_vm::Picked;
+
+    fn object_in(layer: u64) -> ObjectId {
+        ObjectId {
+            layer: LayerKey(layer),
+            node: 7,
+        }
+    }
+
+    /// The order the whole feature turns on: an object hit keeps what a press
+    /// on one has always done, and carries its subtool with it.
+    #[test]
+    fn an_object_hit_selects_the_object() {
+        let id = object_in(2);
+        assert_eq!(
+            activation(Picked::Object(id), Some(LayerKey(9))),
+            Activation::Object(id),
+            "the object's own layer is the specific answer; the ray's is not"
+        );
+        assert_eq!(id.layer, LayerKey(2), "and it is the layer to activate");
+    }
+
+    /// A press on a stroke, a rig's skin or a grid is not a selection — but it
+    /// is still a press on a subtool, and that subtool becomes the one a brush
+    /// lands on.
+    #[test]
+    fn geometry_that_is_not_an_object_still_activates_its_subtool() {
+        assert_eq!(
+            activation(Picked::NotTransformable(LayerKey(4)), Some(LayerKey(4))),
+            Activation::Subtool(LayerKey(4))
+        );
+        assert_eq!(
+            activation(Picked::Nothing, Some(LayerKey(4))),
+            Activation::Subtool(LayerKey(4)),
+            "the object picker answers Nothing for a grid too; the layer the \
+             ray met is what says a form was there"
+        );
+    }
+
+    /// A ghosted subtool is excluded from the engine's raycast, so what
+    /// reaches this rule is the layer *behind* it — there is no ghost case to
+    /// write here, and this holds that none is invented.
+    #[test]
+    fn the_layer_the_ray_answered_is_the_one_activated() {
+        assert_eq!(
+            activation(Picked::Nothing, Some(LayerKey(1))),
+            Activation::Subtool(LayerKey(1))
+        );
+    }
+
+    /// The specification: "the selection is cleared rather than left on the
+    /// previous target".
+    ///
+    /// The scenario had no test at any level. `a_ray_that_met_nothing_activates_nothing`
+    /// stops at the enum value and the ViewModel's own test stops at what the
+    /// pick answered; nothing said what the press then *does*, and the arm that
+    /// does it sat in the event loop. Failure it let through: a press on empty
+    /// space leaving the previously selected form selected, with its
+    /// manipulator still drawn over clay nobody is pointing at.
+    #[test]
+    fn a_press_on_nothing_clears_the_selection() {
+        assert_eq!(
+            selection_after(Activation::Empty, true),
+            Some(None),
+            "a press on nothing has to put the selection down"
+        );
+        assert_eq!(
+            selection_after(Activation::Empty, false),
+            None,
+            "and clearing what is already clear is an entry in the history \
+             for nothing"
+        );
+    }
+
+    /// The other two arms, so the one above cannot be satisfied by clearing
+    /// everything.
+    #[test]
+    fn a_press_on_a_form_leaves_the_selection_where_it_belongs() {
+        let id = object_in(3);
+        assert_eq!(
+            selection_after(Activation::Object(id), false),
+            Some(Some(id)),
+            "a press on a placed object selects it"
+        );
+        assert_eq!(
+            selection_after(Activation::Subtool(LayerKey(5)), true),
+            None,
+            "a press on clay falls through to the brush and takes nothing away"
+        );
+    }
+
+    /// Every activation but the empty one names the subtool to sculpt on.
+    #[test]
+    fn an_activation_names_the_subtool_it_activates() {
+        assert_eq!(Activation::Object(object_in(2)).layer(), Some(LayerKey(2)));
+        assert_eq!(Activation::Subtool(LayerKey(6)).layer(), Some(LayerKey(6)));
+        assert_eq!(
+            Activation::Empty.layer(),
+            None,
+            "a document always has a layer being sculpted, so a press on \
+             nothing takes no activation away"
+        );
+    }
+
+    #[test]
+    fn a_ray_that_met_nothing_activates_nothing() {
+        assert_eq!(activation(Picked::Nothing, None), Activation::Empty);
+        assert_eq!(
+            activation(Picked::NotTransformable(LayerKey(4)), None),
+            Activation::Empty,
+            "the layer comes from the press, not from the pick's own record: \
+             a caller that answered `None` met nothing"
+        );
     }
 }

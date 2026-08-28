@@ -138,14 +138,14 @@ fn no_mesh_verb_shreds_the_surface() {
             return;
         };
         let samples = drag(&document, 0.9, 12);
-        let (before, _, _, before_indices) = document.visible_mesh_geometry();
+        let (before, _, _, before_indices, _) = document.visible_mesh_geometry();
         let smooth = roughness(&before, &before_indices);
 
         document
             .apply_stroke(tool, brush, &samples, [false; 3])
             .expect("the verb was refused on a mesh layer");
 
-        let (after, _, _, after_indices) = document.visible_mesh_geometry();
+        let (after, _, _, after_indices, _) = document.visible_mesh_geometry();
         let ratio = roughness(&after, &after_indices) / smooth.max(1e-9);
         capture(
             &harness,

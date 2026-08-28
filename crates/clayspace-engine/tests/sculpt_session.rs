@@ -511,7 +511,7 @@ mod scene {
         let key = doc.scene().active.expect("active");
 
         assert!(
-            doc.select_at([0.0, 0.0, -5.0], [0.0, 0.0, 1.0]).is_some(),
+            doc.layer_at([0.0, 0.0, -5.0], [0.0, 0.0, 1.0]).is_some(),
             "the form should be picked before it is ghosted"
         );
 
@@ -525,7 +525,7 @@ mod scene {
         .expect("ghost");
 
         assert_eq!(
-            doc.select_at([0.0, 0.0, -5.0], [0.0, 0.0, 1.0]),
+            doc.layer_at([0.0, 0.0, -5.0], [0.0, 0.0, 1.0]),
             None,
             "a ghosted layer was picked; the engine excludes them and this must follow"
         );
@@ -661,7 +661,8 @@ mod scene {
         let mut vm = SceneViewModel::new(Box::new(doc));
         let before = vm.scene().get().layers.len();
 
-        vm.dispatch(&Command::AddLayer).expect("add");
+        vm.dispatch(&Command::AddLayer(Representation::Sdf))
+            .expect("add");
         vm.refresh();
         assert_eq!(
             vm.scene().get().layers.len(),

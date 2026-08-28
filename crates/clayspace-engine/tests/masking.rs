@@ -329,16 +329,22 @@ fn a_mask_survives_a_resolution_change() {
     document
         .add_voxel_layer("Grosso", 0.08)
         .expect("voxel layer");
+
+    // Asked on the subtool it was painted on, because that is where it lives
+    // now. A mask belongs to its subtool, and adding a layer makes the new one
+    // active — so `mask_state` here answers for the grid that was just made,
+    // which has no mask and never had one. What this scenario is about is
+    // unchanged and is what the two assertions below hold: nothing that
+    // happened at another resolution disturbed what was frozen.
+    document
+        .set_active_layer(document.scene().layers[0].key)
+        .expect("back to the sculpted layer");
     assert_eq!(
         document.mask_state().painted_cells,
         painted,
         "adding a layer at another resolution changed the mask"
     );
 
-    // And it still freezes, on the layer it was painted for.
-    document
-        .set_active_layer(document.scene().layers[0].key)
-        .expect("back to the sculpted layer");
     let before = radius_along(&document, at).expect("surface");
     let samples: Vec<GestureSample> = (0..6)
         .map(|i| GestureSample {

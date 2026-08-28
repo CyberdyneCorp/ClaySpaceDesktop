@@ -4,7 +4,7 @@ Where the project stands, what is left, and what is still undecided. Task
 counts come from the tasks files under `openspec/changes/`, which are the
 authority.
 
-**Five changes.** `add-clayspace-desktop` stands at **107 of 109 tasks** —
+**Six changes.** `add-clayspace-desktop` stands at **107 of 109 tasks** —
 milestones 1 to 4 delivered, milestone 5 all but closed.
 `make-representations-first-class` is **complete**, and is what took the
 application from one vocabulary to three; its own summary is below.
@@ -14,6 +14,14 @@ it. `benchmark-every-operation` stands at **45 of 46** — the table went from
 one brush to every brush, operation, conversion and bake.
 `upgrade-engine-0-52-2` stands at **12 of 13**, and both remainders are the
 same task: re-recording the macOS baseline, which needs a macOS machine.
+`subtools` stands at **36 of 38**: a scene is now a list of separate forms,
+each activated by clicking it, each with its own mask, symmetry and rig, each
+movable whole, and any two of them resolvable into a third by a boolean. Two
+remainders: the per-layer mask reaching the engine's own — see *What is
+blocked, and what is not* — and activation on a carried mesh subtool, which
+holds the interface thread for 160 ms against a 16 ms bound and has no shipped
+mitigation. See *What is slow and why* for both what bounds it and what would
+remove it.
 
 Engine pinned at ClayCore **0.52.2**, at the tag rather than at `main` — the
 tag is a release, `main` is where they are still working. On the reference
@@ -95,12 +103,48 @@ meshed. ClayCore 0.30.0 added `clay_brick_cache_mesh_lod` (#93) and 3.9 closed
 on it — see *Level of detail, as delivered*. What is left on the list is
 waiting on a decision rather than on an engine.
 
-Four upstream findings are open, and none of them blocks anything.
+Six upstream findings are open, and none of them blocks anything. Four carry
+numbers, and two of those were filed from the subtools work.
+
+[#321](https://github.com/CyberdyneCorp/ClayCore/issues/321) — **a layer carries
+no combine operation.** The document composes its layers by hard union
+(`clay/scene/tape.h`), so there is no way to say that one layer *subtracts* from
+another. This is what a **live** subtool boolean waits on. What is built instead
+is a *resolved* one: each operand is sampled into a volume, the two are combined
+in a subtool of its own, and moving an operand afterwards does not update the
+result. The interface says so rather than implying otherwise, and the operands
+are kept so the operation can be run again from a new position. When #321 lands,
+the same vocabulary upgrades to a live boolean without a word of it changing —
+see [features.md](features.md#a-boolean-between-two-subtools).
 
 [#210](https://github.com/CyberdyneCorp/ClayCore/issues/210) — `clay_document_undo`
 does not report what it changed, so an undo has to dirty the whole layer. Undo
 works and is correct; it costs far more than the edit it reverses. See *Undo,
-which costs far more than the edit it takes back*.
+which costs far more than the edit it takes back*. Subtools made it cost a
+little more again: solo has no journal pause to hide behind, so its visibility
+commands land on the engine's stack and undo steps over them before it reaches
+the edit underneath — measured, a ⌘Z after a released solo on a three-subtool
+document is 203 ms against the 87 ms an undo costs alone, and every millisecond
+of the difference is a hop paying #210's whole-layer refill.
+
+[#364](https://github.com/CyberdyneCorp/ClayCore/issues/364) — **instance layers
+are specified and have no constructor.** The header describes a layer that
+shares another's content under its own transform; nothing in the ABI creates
+one. This is what a *cheap* duplicate waits on. What is built instead is an
+honest copy: the source is sampled into a volume of its own, so sculpting the
+copy cannot reach the original, and the control says **copiar** rather than
+naming something this cannot do. Measured, a copy of the reference form is
+4.3 s — the whole of which is the sampling an instance would not do. Filed from
+this work.
+
+[#365](https://github.com/CyberdyneCorp/ClayCore/issues/365) — **a voxel grid is
+reachable only by name.** `clay_document_voxel_layer` takes a string, so two
+layers sharing a name shadow each other's grid and a stroke lands on the wrong
+one. Harmless while a document held one grid; a scene of subtools is exactly
+where two layers come to share a name. Until it lands, every insertion derives a
+unique default name — `unique_layer_name`, which the mesh import and the stack's
+add control go through as well, since a collision made after the fact shadows a
+grid just as surely. Filed from this work.
 
 **`clay_item_set_gate` is accepted and inert.** The entry point that would make
 a mask protect a surface from an *operation* rather than only from a brush — the
@@ -117,7 +161,19 @@ written to fail when the engine honours it, and names `stroke_sdf` as where the
 call goes back.
 
 **A placed node's transform, parameters and operation can be set and never
-read.** `clay_layer_set_transform`, `clay_layer_set_prim` and
+read** — [#317](https://github.com/CyberdyneCorp/ClayCore/issues/317), which
+upstream **closed as completed on 2026-08-26** and which is nonetheless still
+true of the engine this build links. Checked against the pinned 0.52.2 header,
+`vendor/ClayCore/bindings/c/clay.h`: it declares `clay_layer_node_prim`,
+`clay_layer_node_count`, `clay_layer_node_at` and `clay_layer_children`, and it
+declares none of `clay_layer_node_transform`, `clay_layer_node_params` or
+`clay_layer_node_op_blend` — the three readers the issue asked for. So the gap
+below stands exactly as it stood, and `clayspace_engine::objects`'s sidecar
+table stays. It comes out in a follow-up change when the pin moves to a release
+that carries the readers, and `clayspace-app/tests/claycore_repros.rs` is what
+will say the day that is true.
+
+`clay_layer_set_transform`, `clay_layer_set_prim` and
 `clay_layer_set_op_blend` write them; nothing reads any of them back. What can
 be read is `clay_layer_node_prim` — which primitive a node carries — and its
 own note gives the reload model it belongs to: "ask what the node is, then call
@@ -136,9 +192,12 @@ scaled by 1.25 reports a box 1.0 wide, and an object placed at 0.9 in a
 mirrored layer reports its bound centred at the origin.
 
 Asked for as `clay_layer_node_transform`, `clay_layer_node_params` and
-`clay_layer_node_op_blend`. `clayspace-app/tests/claycore_repros.rs` holds the
-gap as it stands today and fails when it closes, which is when
-`clayspace_engine::objects`'s table comes out rather than being adapted.
+`clay_layer_node_op_blend`, which is #317. `clayspace-app/tests/claycore_repros.rs`
+holds the gap as it stands today and fails when it closes, which is when
+`clayspace_engine::objects`'s table comes out rather than being adapted. That
+the issue is closed and the readers are absent from the pinned header is the
+reason the tripwire is a test rather than a note: a changelog says a thing is
+done, and a test says whether this build can call it.
 
 **A stroke does not carry its template item's deformer chain.**
 `clay_layer_apply_stroke` documents its item as "the stamp template scaled to
@@ -151,6 +210,15 @@ voxels and on meshes, which take one by their own routes, and an SDF *stroke*
 states the refusal rather than passing an alpha that would be discarded.
 `claycore/tests/alpha_deformer.rs` holds both halves and fails when the stroke
 starts carrying the chain.
+
+One more gap has no number yet, and is recorded under *Not built yet* in
+[features.md](features.md) rather than here because what stands in the way is on
+this side: the engine's **per-layer mask** is written with the document
+(measured — a mask covering 5,600 cells comes back covering 5,600 after a save
+and a reopen), and `claycore`'s masking surface cannot reach it, because a
+document-owned mask is lent *out* of the document and all five masked verbs take
+the document and the mask together. Masks are per subtool and per session until
+those five entry points take a mask's *layer* instead.
 
 Every other issue filed from this work has been released and taken up —
 including [#71](https://github.com/CyberdyneCorp/ClayCore/issues/71), which was
@@ -205,11 +273,20 @@ shape a mesh layer has always had. The next step is a per-chunk slot layout in
 that buffer, which is what `SurfaceGeometry` already does for the field side;
 it is not owed until a document holds a grid past about two million triangles.
 
-**One upstream issue is open:**
+**Four numbered upstream issues are open:**
 [#210](https://github.com/CyberdyneCorp/ClayCore/issues/210), an undo that
-cannot say what it changed. It costs latency and blocks nothing — see *What is
-blocked, and what is not*. Every other issue filed from this work has been
-released.
+cannot say what it changed;
+[#321](https://github.com/CyberdyneCorp/ClayCore/issues/321), a layer with no
+combine operation, which is what a live subtool boolean waits on;
+[#364](https://github.com/CyberdyneCorp/ClayCore/issues/364), instance layers
+with no constructor, which is what a cheap duplicate waits on; and
+[#365](https://github.com/CyberdyneCorp/ClayCore/issues/365), a voxel grid
+reachable only by name. Each costs latency or a cheaper implementation and none
+of them blocks anything — see *What is blocked, and what is not*. Every other
+issue filed from this work has been released, and
+[#317](https://github.com/CyberdyneCorp/ClayCore/issues/317) is the one that
+was released and does not help yet: closed upstream on 2026-08-26, and the
+readers it promised are not in the 0.52.2 header this build links.
 
 ## What is left
 
@@ -479,6 +556,68 @@ was not before the shading split.
 56 ms back to 13 ms. Nothing surfaces it. It costs 6.4 s on that layer, so it
 belongs on a deliberate action, not mid-stroke. The specification requires it
 never run unasked; it does not require us to keep quiet about it.
+
+### Subtools: what switching costs, and what a boolean costs
+
+Six new figures, all on the Linux baseline, all measured on the reference
+suite:
+
+| figure | cost | what it is |
+|---|---|---|
+| `subtool.activate.sdf` | **0.00 ms** | making a field subtool the sculpt target |
+| `subtool.activate.mesh` | **160 ms** mean, 170 ms p95 | making a *carried mesh* subtool the sculpt target |
+| `subtool.solo` | 14 ms mean, 21 ms p95 | showing one subtool alone and putting the scene back |
+| `subtool.solo_undo` | 203 ms | a ⌘Z after a released solo, against the 87 ms an undo costs alone |
+| `subtool.copy` | 4.3 s | one subtool sampled into a subtool of its own |
+| `subtool.boolean` | 10.2 s | two operands sampled and combined into a third subtool |
+
+**Activation on a mesh subtool is the one that misses a stated bound.** The
+specification says no engine operation may block the interface thread for more
+than 16 ms, and this is 160. All of it is `MeshSculptor::for_layer` — a weld and
+an adjacency pass over the layer's 296,216 triangles — which the application
+pays when a mesh layer becomes the one being worked on. It is the only figure in
+the suite reported over its budget, and it is reported rather than enforced,
+which is what `--enforce-budgets` being off by default is for.
+
+Two things bound it. It is **zero on a field**, which is what most of a document
+holds; and with a single carried mesh in the scene the sculptor stays built, so
+a document like that pays this once and not once per click. The figure above
+alternates between *two* mesh subtools on purpose: the cache holds one layer at
+a time, so a second carried mesh evicts the first and every switch pays again.
+That is the worst case, and it is the one a scene of subtools invites.
+
+The design's stated fallback was to arm the sculptor lazily on the first dab
+instead of on activation. **Measured, that does not work**, and the measurement
+is the two tests that fail when the arming is removed:
+`the_pointer_finds_an_imported_mesh` and `the_mesh_reports_what_its_queries_cost`
+in `clayspace-engine/tests/mesh_sculpting.rs`. A pick against a mesh layer is
+answered by the sculptor's own raycast; the interface places a stroke where the
+pick reported and sends nothing where it reported nothing; so with no sculptor
+there is no pick, with no pick there is no first dab, and the layer is
+unsculptable through the pointer. That deadlock is what the arming was added to
+fix. Arming inside the pick instead would pay the same 160 ms on the first
+pointer *motion* after a switch — the same cost, attached to a gesture the
+sculptor did not make.
+
+What would actually remove it is holding a sculptor for more than one layer:
+`mesh_sculptor` is one `Option<(LayerKey, MeshSculptor)>`, which was right when
+a document had one thing to sculpt and is what makes switching between two mesh
+subtools pay every time. That is a change to the mesh-sculpting surface rather
+than to activation, and it is not made here.
+
+So this bound is **still breached**, and the task that would have fixed it is
+left unticked in the change's own tasks.md rather than standing over a figure
+nobody moved. It is the one open budget in the suite. Two presses reach it now
+rather than one — the stack row and, since subtools, a click on the form in the
+viewport — which raises how often it is paid without changing what it costs.
+
+**A boolean is two of a copy, and a copy is one sampling.** 4.3 s for one
+operand at the brick cache's 0.02 cell over the reference form's box; 10.2 s for
+two of them over the pair's larger box plus the layer that holds them. Neither
+runs unasked: the panel states the cost in cells and in what the resolution
+loses, and nothing happens until it is confirmed — which is the whole reason the
+figure is allowed to be seconds rather than milliseconds. The resolution is the
+sculptor's, and it is the term these figures scale with.
 
 ## Continuous integration
 

@@ -12,6 +12,7 @@
 
 pub mod alpha;
 pub mod armature;
+pub mod boolean;
 pub mod combine;
 pub mod conversion;
 pub mod curve;
@@ -36,6 +37,7 @@ pub mod voxel_display;
 
 pub use alpha::{Alpha, AlphaRefusal, AlphaSupport};
 pub use armature::{Armature, ArmatureModel, NodeIndex, SkinSettings, Zsphere};
+pub use boolean::{BooleanOp, BooleanRefusal, BooleanSettings};
 pub use combine::{BlendProfile, Combine, CombineSettings, StrokeModifiers};
 pub use conversion::{
     ConversionSettings, Cost, DeformSettings, DeformVerb, Direction, Refusal, RepairReport,
@@ -71,8 +73,8 @@ pub use sculpt::{
 };
 pub use session::{AutosavePolicy, RecentDocuments, Recovery};
 pub use shape::{
-    GizmoTarget, ItemKind, ObjectId, ObjectModel, ObjectSource, SceneObject, Shape, ShapeParameter,
-    OBJECT_VERBS, PARAMETER_KEYS,
+    GizmoTarget, InsertAs, Inserted, ItemKind, ObjectId, ObjectModel, ObjectSource, SceneObject,
+    Shape, ShapeParameter, OBJECT_VERBS, PARAMETER_KEYS,
 };
 pub use surface::SurfaceOpacity;
 pub use tools::{

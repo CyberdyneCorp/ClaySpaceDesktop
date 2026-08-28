@@ -489,7 +489,12 @@ impl Item {
     /// nothing can be lost, and the surface keeps the lattice's terracing; 1 is
     /// what an organic sculpt wants. `index` selects a palette entry, which is
     /// how colour survives: one volume item per entry.
-    pub fn volume_from_voxels(grid: &crate::VoxelGrid, blur: i32, index: i32) -> Result<Item> {
+    /// Takes the grid as a [`crate::VoxelField`] rather than an owned
+    /// [`crate::VoxelGrid`], because a grid *borrowed from a document* is a
+    /// `VoxelGridRef` and the two share only that. A caller holding an owned
+    /// grid still passes `&grid`, which coerces. Widened for the subtool
+    /// boolean, which reads a document's own grid as an operand.
+    pub fn volume_from_voxels(grid: &crate::VoxelField, blur: i32, index: i32) -> Result<Item> {
         let mut item = std::ptr::null_mut();
         // SAFETY: a valid grid handle and an out-parameter written only on
         // success.

@@ -6,18 +6,19 @@
 
 use claycore::{
     Blend, BrickCache, BrickConfig, BrickKey, BrushParams, BrushShape, ClayError, Document,
-    Falloff, ImportBudget, Item, LayerId, Mask, Mesh, MeshLayerDesc, MeshParams, Mesher, NodeId,
-    Op, StrokePreset, VolumeParams,
+    Falloff, ImportBudget, Item, LayerId, Mask, MaskField, Mesh, MeshLayerDesc, MeshParams, Mesher,
+    NodeId, Op, StrokePreset, VolumeParams,
 };
 use clayspace_model::{
-    Alpha, Armature, ArmatureModel, BlendProfile, BrushSettings, Combine, CombineSettings, Cost,
-    CurveJoin, CurveModel, CurvePoint, CurveProfile, CurveState, Direction, DocumentModel,
-    EditOutcome, ExchangeModel, ExportMesher, ExportSettings, ExtrudeSettings, Format,
-    GestureSample, GizmoDrag, GizmoHandle, GizmoMode, GizmoTarget, HistoryState, ImportAs,
-    ImportSettings, ItemKind, LatticeModel, LatticeState, LayerKey, LayerSummary, MaskModel,
-    MaskOp, MaskState, ModelError, NodeIndex, ObjectId, ObjectModel, OpenError, Protection,
-    Refusal, Representation, Scene, SceneModel, SceneNode, SceneStats, SculptModel, Shape,
-    SkinSettings, SmoothBlur, ToolKind, VoxelDisplay, OBJECT_VERBS,
+    Alpha, Armature, ArmatureModel, BlendProfile, BooleanOp, BooleanRefusal, BooleanSettings,
+    BrushSettings, Combine, CombineSettings, ConversionSettings, Cost, CurveJoin, CurveModel,
+    CurvePoint, CurveProfile, CurveState, Direction, DocumentModel, EditOutcome, ExchangeModel,
+    ExportMesher, ExportSettings, ExtrudeSettings, Format, GestureSample, GizmoDrag, GizmoHandle,
+    GizmoMode, GizmoTarget, HistoryState, ImportAs, ImportSettings, Inserted, ItemKind,
+    LatticeModel, LatticeState, LayerKey, LayerSummary, MaskModel, MaskOp, MaskState, ModelError,
+    NodeIndex, ObjectId, ObjectModel, OpenError, Protection, Refusal, Representation, Scene,
+    SceneModel, SceneNode, SceneStats, SculptModel, Shape, SkinSettings, SmoothBlur, ToolKind,
+    VoxelDisplay, OBJECT_VERBS,
 };
 
 use crate::backend::{BackendPolicy, Operation};
@@ -127,6 +128,20 @@ struct Layer {
     /// grid framed the default box and the conversion panel measured the
     /// region as zero.
     voxel_bounds: Option<([f32; 3], [f32; 3])>,
+    /// The box this layer's triangles occupy, in the mesh's *own* coordinates.
+    ///
+    /// Cached for the reason `voxel_bounds` is, and answering the same question
+    /// for the third representation: `clay_layer_bounds` reports a layer's SDF
+    /// extent and a carried mesh has none, so the question had no answer at all
+    /// — the whole-subtool manipulator sized itself to a default on every mesh
+    /// subtool and Frame All framed nothing. Reading the triangles back needs a
+    /// mutable borrow of the document and `layer_bounds` takes a shared one,
+    /// which is why it is remembered rather than asked.
+    ///
+    /// Before the layer transform, because the transform moves under it: the
+    /// vertices are what the engine holds and where they *stand* is
+    /// [`ClayDocument::layer_placement`]'s answer.
+    mesh_bounds: Option<([f32; 3], [f32; 3])>,
     /// This layer's grid as triangles, one entry per chunk.
     ///
     /// Kept per chunk so an edit costs the edit. Meshing a grid whole after
@@ -144,9 +159,69 @@ struct Layer {
     /// [`ClayDocument::refresh_sculpt_layers`] after anything that could change
     /// it, so a stale stack is a missed call rather than a silent drift.
     sculpt_layers: Vec<clayspace_model::SculptLayer>,
+    /// The mirror this subtool is worked with.
+    ///
+    /// Per layer because the engine's mirror is: `clay_set_layer_mirror` takes
+    /// a layer, and one number for the whole document meant the mirror was
+    /// re-pointed at whichever layer was active — so turning symmetry off to
+    /// work one ear turned it off on every other subtool too, and coming back
+    /// found it still off.
+    symmetry: [bool; 3],
+    /// What the engine was last told this layer's mirror is.
+    ///
+    /// Recorded rather than read: the ABI sets a layer mirror and has no call
+    /// that reads one back, so this is the only account of it there is — the
+    /// same reason the layer transform is kept here.
+    ///
+    /// Held apart from the setting above because the two change at different
+    /// moments and for different reasons. The setting is the sculptor's and
+    /// costs nothing; writing the mirror is an *edit*, with its own entry in
+    /// the engine's history, and it belongs inside the stroke that needs it —
+    /// where the ViewModel counts it and one undo spends it along with the
+    /// rest of the gesture. Written at the toggle instead, it would sit on the
+    /// engine's stack unaccounted, and the next undo would spend itself on the
+    /// mirror and leave part of the stroke standing.
+    mirror: [bool; 3],
+    /// The frozen region painted on this subtool, when one has been.
+    ///
+    /// A mask belongs to what it was painted on. One mask for the document
+    /// froze a region of empty space as far as every other subtool was
+    /// concerned, and switching subtools handed the new one a mask sized and
+    /// placed for the old one's form.
+    mask: Option<Mask>,
+    /// The rig this subtool carries: the nodes it placed, and the tree behind
+    /// them.
+    ///
+    /// The tree is held here because the engine's parent array has no getter —
+    /// positions and radii read back, the topology does not. So this is the
+    /// record and the engine is written from it.
+    ///
+    /// One node since ClayCore 0.30.0 (#99), because the signs made the rig a
+    /// single item again. It stays a list because rewriting is defined over
+    /// whatever was placed: when a negative sphere was a second subtractive
+    /// item, tracking only the armature's own node left the cutters behind on
+    /// each rewrite, and an edited rig accumulated a subtraction per edit.
+    armature: Option<(Vec<NodeId>, Armature)>,
+    /// The box this subtool's rig last occupied.
+    ///
+    /// Kept because an edit that *shrinks* a rig leaves surface behind
+    /// otherwise: the new node's own region is refilled when it is placed, and
+    /// the bricks the old one used are never told anything changed. Removing an
+    /// arm left the arm on screen.
+    armature_bounds: Option<([f32; 3], [f32; 3])>,
 }
 
 impl Layer {
+    /// X on, as the design asks, on every subtool a document gains.
+    ///
+    /// This was off for the whole of 0.26 and 0.27: `clay_set_layer_mirror`
+    /// stored the plane, but per-item participation defaulted to *excluded*,
+    /// so the sequence every host writes — set the mirror, add items —
+    /// mirrored nothing, and a sculptor would have watched half of every
+    /// stroke vanish. ClayCore 0.28.0 makes participation default to
+    /// mirrored (#60), and `claycore_repros.rs` is what noticed.
+    const STARTING_SYMMETRY: [bool; 3] = [true, false, false];
+
     /// A layer as every route makes one, before anything read back from the
     /// engine is written over it.
     ///
@@ -170,8 +245,17 @@ impl Layer {
             protection: Protection::default(),
             intensity: 100,
             voxel_bounds: None,
+            mesh_bounds: None,
             voxel_chunks: std::collections::BTreeMap::new(),
             sculpt_layers: Vec::new(),
+            symmetry: Self::STARTING_SYMMETRY,
+            // A layer the engine has just made carries no mirror — axes
+            // 0/0/0 is what "off" is — so that is what it has been told, and
+            // the first stroke that wants the setting above is what writes it.
+            mirror: [false; 3],
+            mask: None,
+            armature: None,
+            armature_bounds: None,
         }
     }
 
@@ -208,6 +292,97 @@ struct Crossing {
     layer: LayerId,
     /// The engine's undo depth when this was recorded. See `mesh_undo`.
     engine_depth: usize,
+}
+
+/// A layer shown alone, and what the rest looked like before it was.
+///
+/// The snapshot is the whole of what a release needs: the engine's contract is
+/// that "a hidden layer contributes nothing to the field; showing it again
+/// restores the original field exactly", so putting the recorded flags back
+/// puts the scene back.
+#[derive(Debug, Clone, PartialEq)]
+struct Solo {
+    layer: LayerKey,
+    /// Every layer's visibility at the moment the solo began.
+    was: Vec<(LayerKey, bool)>,
+}
+
+/// A batch of visibility commands the host issued for its own reasons, and
+/// where it sits in the engine's history.
+///
+/// Solo and the hide-and-restore a bake needs are ways of *looking* at the
+/// document, but the engine has no journal pause — once undo is enabled every
+/// command is recorded, `SetLayerVisibleCmd` among them — and the merged SDF
+/// surface cannot drop a layer any other way than engine visibility. So the
+/// entries are made and then stepped over: undo hops a whole gesture the way
+/// it already hops between `mesh_undo` and the engine's own stack, and for the
+/// same reason — depth is what says which record is the more recent one.
+struct VisibilityGesture {
+    /// The engine's undo depths the batch produced, ascending. See `mesh_undo`.
+    depths: Vec<usize>,
+    /// What was shown alone before the batch, and after it.
+    ///
+    /// Carried so that hopping the gesture in either direction restores the
+    /// gesture as well as the flags it wrote: a solo whose commands undo has
+    /// taken back is a solo the document is no longer in, and an indicator
+    /// saying otherwise would describe a state that had left.
+    before: Option<Solo>,
+    after: Option<Solo>,
+}
+
+/// Which slice of the carried buffer one layer's triangles occupy.
+///
+/// The viewport draws every visible voxel and mesh layer from a single
+/// concatenated buffer, so without this nothing downstream can say where one
+/// subtool ends and the next begins — which is what an active-subtool cue has
+/// to know before it can tint one of them and leave the rest alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CarriedSpan {
+    pub layer: LayerKey,
+    /// Positions into the index buffer, not into the vertex buffer: what a
+    /// draw call takes is a range of indices.
+    pub indices: std::ops::Range<u32>,
+}
+
+/// The one buffer every carried layer is concatenated into.
+///
+/// The four parallel vectors travel together everywhere, and the rebasing that
+/// joins one layer's indices onto what is already there is the one step that
+/// must not be got wrong twice — a voxel grid and a mesh layer used to spell
+/// it out separately. Named here so there is a single `append`.
+#[derive(Default)]
+struct CarriedBuffer {
+    positions: Vec<[f32; 3]>,
+    normals: Vec<[f32; 3]>,
+    colors: Vec<[f32; 3]>,
+    indices: Vec<u32>,
+}
+
+impl CarriedBuffer {
+    fn with_capacity(vertices: usize, triangles: usize) -> Self {
+        Self {
+            positions: Vec::with_capacity(vertices),
+            normals: Vec::with_capacity(vertices),
+            colors: Vec::with_capacity(vertices),
+            indices: Vec::with_capacity(triangles),
+        }
+    }
+
+    /// Appends one layer's triangles, shifting its indices past the vertices
+    /// already collected.
+    fn append(
+        &mut self,
+        positions: &[[f32; 3]],
+        normals: &[[f32; 3]],
+        colors: &[[f32; 3]],
+        indices: &[u32],
+    ) {
+        let base = self.positions.len() as u32;
+        self.indices.extend(indices.iter().map(|i| i + base));
+        self.positions.extend_from_slice(positions);
+        self.normals.extend_from_slice(normals);
+        self.colors.extend_from_slice(colors);
+    }
 }
 
 pub struct ClayDocument {
@@ -286,8 +461,6 @@ pub struct ClayDocument {
     /// leaving a trail of them: a segment that added its own item restarted
     /// the taper, which beaded the tendril into a string of spheres.
     live_hook: Option<(LayerId, claycore::NodeId)>,
-    /// A mask the tools consult, when one has been painted.
-    mask: Option<Mask>,
     /// Changes whenever the cage does — its points, its selection or its
     /// resolution.
     cage_revision: u64,
@@ -362,9 +535,47 @@ pub struct ClayDocument {
     /// host is whether the layer is in the scene. `reconcile_layers` skips
     /// these and `save` drops them, so nothing outside this type sees one.
     suppressed: std::collections::HashSet<LayerId>,
-    /// The mirror currently set on the active layer, so it is only rewritten
-    /// when it actually changes.
-    symmetry: [bool; 3],
+    /// Layers the document no longer holds, kept in case history brings one
+    /// back.
+    ///
+    /// A removal is undoable, and the engine puts the layer back with the id it
+    /// had. What the engine cannot put back is everything this side keeps about
+    /// it: its `LayerKey`, its mask, its mirror, where it stands, its meshed
+    /// chunks. Rebuilt from what the document can answer, a restored layer got a
+    /// freshly minted key and a default of each — measured after a consuming
+    /// boolean, the two operands came back as new keys with the painted mask
+    /// gone, symmetry back at the default, and every `PlacedObject` row still
+    /// filed under the keys that had gone, so the rows vanished and the
+    /// whole-subtool manipulator drew at the origin while the engine held the
+    /// real transform.
+    ///
+    /// Held until the layer comes back or the session ends. Bounded by how many
+    /// layers a session removes, which is what makes carrying the chunks along
+    /// affordable — and carrying them is what lets a restored grid draw without
+    /// waiting for the next edit to dirty it.
+    retired: std::collections::HashMap<LayerId, Layer>,
+    /// The layer being shown alone, while one is.
+    solo: Option<Solo>,
+    /// Visibility batches the history hops rather than stops on, newest last,
+    /// and the redo side of the same. See [`VisibilityGesture`].
+    visibility_undo: Vec<VisibilityGesture>,
+    visibility_redo: Vec<VisibilityGesture>,
+    /// How much the engine held on its redo side when a history step was last
+    /// taken.
+    ///
+    /// The engine truncates its redo stack the moment a new command lands, and
+    /// says so no other way. A drop against this is that signal — and so is a
+    /// redo stack that has gone empty, since a visibility gesture is hopped by
+    /// redoing the engine's own entries and there are none.
+    ///
+    /// Without it a gesture left on the redo side went on matching
+    /// `depths.first() == engine_undo_depth() + 1` whenever the depth happened
+    /// to return to that value. Measured: solo, undo, an ordinary dab, undo,
+    /// redo — the redo was spent putting the dab back through the *hop*, so
+    /// `resync_objects`, `resync_layer_transforms` and `resync_armature` were
+    /// all skipped for it, and the interface was left showing a solo engaged
+    /// over a scene in which every layer was visible.
+    redo_room: usize,
     /// How the next SDF edit combines with what is under it.
     combine: CombineSettings,
     /// The one alpha stamp loaded, which every brush with `alpha` set uses.
@@ -378,27 +589,6 @@ pub struct ClayDocument {
     /// Hands out layer keys. Monotone, so a key is never reused for a
     /// different layer after a removal.
     next_key: u64,
-    selected: Option<LayerKey>,
-    /// The armature on the active layer: which node carries it, and the tree.
-    ///
-    /// The tree is held here because the engine's parent array has no getter —
-    /// positions and radii read back, the topology does not. So this is the
-    /// record and the engine is written from it.
-    /// The rig: its layer, the nodes it placed, and the tree behind them.
-    ///
-    /// One node since ClayCore 0.30.0 (#99), because the signs made the rig a
-    /// single item again. It stays a list because rewriting is defined over
-    /// whatever was placed: when a negative sphere was a second subtractive
-    /// item, tracking only the armature's own node left the cutters behind on
-    /// each rewrite, and an edited rig accumulated a subtraction per edit.
-    armature: Option<(LayerId, Vec<NodeId>, Armature)>,
-    /// The box the placed armature last occupied.
-    ///
-    /// Kept because an edit that *shrinks* a rig leaves surface behind
-    /// otherwise: the new node's own region is refilled when it is placed, and
-    /// the bricks the old one used are never told anything changed. Removing an
-    /// arm left the arm on screen.
-    armature_bounds: Option<([f32; 3], [f32; 3])>,
     skin: SkinSettings,
     /// The placed objects, and everything about them the engine will not read
     /// back. See `crate::objects` for why this exists at all.
@@ -421,6 +611,15 @@ pub struct ClayDocument {
     /// nothing, which leaves the table alone: correct, because it did not
     /// change.
     object_states: std::collections::BTreeMap<usize, Vec<PlacedObject>>,
+    /// Where each layer stood at each of the engine's undo depths.
+    ///
+    /// The same arrangement as `object_states` and for the same reason, one
+    /// level up: a layer's transform is written to the engine and cached here,
+    /// the engine reverts it on an undo and cannot say that it did. Without
+    /// this the cached copy stayed where the drag left it — the manipulator sat
+    /// where the form no longer was, and the next drag resolved from a number
+    /// undo had already taken back.
+    layer_states: std::collections::BTreeMap<usize, Vec<(LayerKey, clayspace_model::Transform)>>,
 }
 
 impl ClayDocument {
@@ -430,20 +629,10 @@ impl ClayDocument {
         let id = document
             .add_sdf_layer("Forma")
             .map_err(ModelError::engine)?;
-        // X, as the design asks for.
-        //
-        // This was off for the whole of 0.26 and 0.27: `clay_set_layer_mirror`
-        // stored the plane, but per-item participation defaulted to *excluded*,
-        // so the sequence every host writes — set the mirror, add items —
-        // mirrored nothing, and a sculptor would have watched half of every
-        // stroke vanish. ClayCore 0.28.0 makes participation default to
-        // mirrored (#60), and `claycore_repros.rs` is what noticed.
-        //
-        // Set before undo starts recording either way: the starting mirror is
-        // part of making the document, not something a user did.
-        let symmetry = [true, false, false];
+        // Set before undo starts recording: the starting mirror is part of
+        // making the document, not something a user did.
         document
-            .set_layer_mirror(id, symmetry, 0.0)
+            .set_layer_mirror(id, Layer::STARTING_SYMMETRY, 0.0)
             .map_err(ModelError::engine)?;
         document.enable_undo().map_err(ModelError::engine)?;
 
@@ -451,7 +640,11 @@ impl ClayDocument {
 
         let mut model = Self {
             document,
-            layers: vec![Layer::new(id, LayerKey(1), "Forma", Representation::Sdf)],
+            layers: vec![Layer {
+                // Written above, before undo started recording.
+                mirror: Layer::STARTING_SYMMETRY,
+                ..Layer::new(id, LayerKey(1), "Forma", Representation::Sdf)
+            }],
             active: 0,
             cache,
             policy,
@@ -472,25 +665,26 @@ impl ClayDocument {
             crossing_undo: Vec::new(),
             crossing_redo: Vec::new(),
             suppressed: std::collections::HashSet::new(),
+            retired: std::collections::HashMap::new(),
+            solo: None,
+            visibility_undo: Vec::new(),
+            visibility_redo: Vec::new(),
+            redo_room: 0,
             curve: None,
             live_hook: None,
             lattice: None,
             voxel_display: VoxelDisplay::default(),
             voxel_blur: SmoothBlur::default(),
             voxel_smooth: std::collections::BTreeMap::new(),
-            mask: None,
             cage_revision: 0,
             mask_revision: 0,
-            symmetry,
             next_key: 2,
-            selected: None,
-            armature: None,
-            armature_bounds: None,
             skin: SkinSettings::default(),
             objects: Vec::new(),
             selected_object: None,
             dragging: None,
             object_states: std::collections::BTreeMap::new(),
+            layer_states: std::collections::BTreeMap::new(),
         };
         model.refresh_stats();
         Ok(model)
@@ -701,6 +895,37 @@ impl ClayDocument {
         &self.layers[self.active]
     }
 
+    /// Refuses unless the active subtool carries a mask with something in it.
+    ///
+    /// Split out because the caller needs the answer before it knows which
+    /// route it is taking, and holding a borrow of the mask across that choice
+    /// is what it cannot do: two of the three routes take the document
+    /// mutably.
+    fn a_mask_worth_extruding(&self) -> Result<(), ModelError> {
+        match Self::active_mask(&self.layers, self.active) {
+            None => Err(ModelError::engine("não há máscara para extrudar")),
+            Some(mask) if mask.painted_count().unwrap_or(0) == 0 => {
+                Err(ModelError::engine("a máscara está vazia"))
+            }
+            Some(_) => Ok(()),
+        }
+    }
+
+    /// The frozen region the active subtool carries, for a verb to consult.
+    ///
+    /// Taken off the layer list rather than through [`Self::active_layer`]
+    /// because most callers hold the document mutably at the same moment: the
+    /// two are disjoint fields and the borrow checker can see that only when
+    /// the field is named.
+    fn active_mask(layers: &[Layer], active: usize) -> Option<&Mask> {
+        layers[active].mask.as_ref()
+    }
+
+    /// The same, in the form the engine's masked verbs take.
+    fn active_mask_field(layers: &[Layer], active: usize) -> Option<&MaskField> {
+        layers[active].mask.as_deref()
+    }
+
     /// Refills the cache for what an edit reached, recording exactly which
     /// keys were dirty.
     ///
@@ -799,7 +1024,14 @@ impl ClayDocument {
         )
         .map_err(ModelError::Conversion)?;
 
-        let name = format!("{} · {}", source.name, direction.to().label());
+        // Made unique here as well, and this is the path that most needs it:
+        // the crossing is what actually creates voxel layers, and a grid is
+        // reachable only by name (ClayCore #365). Crossing one source twice
+        // gave two layers called "Forma · voxel", both resolving to the first
+        // grid — so a stroke aimed at the second wrote into the first, the
+        // chunks were meshed from the wrong grid, and `rename_layer` refused to
+        // untangle it because the name it would set was already taken.
+        let name = self.unique_layer_name(&format!("{} · {}", source.name, direction.to().label()));
         // Bracketed, because a crossing is several engine edits — the layer,
         // then whatever fills it — and a sculptor asked for one thing. Without
         // the group, undo took back the filling and left the empty layer
@@ -874,6 +1106,365 @@ impl ClayDocument {
         self.refill(layer, &[])?;
         self.resync_armature();
         Ok(true)
+    }
+
+    /// Every layer's visibility as it stands.
+    fn visibility_snapshot(&self) -> Vec<(LayerKey, bool)> {
+        self.layers
+            .iter()
+            .map(|layer| (layer.key, layer.visible))
+            .collect()
+    }
+
+    /// Writes a visibility pattern and files what it cost the engine's history
+    /// as one gesture undo hops over.
+    ///
+    /// A flag already set is left alone rather than written again: the engine
+    /// records the command whether or not it changes anything — measured, a
+    /// second hide of a hidden layer raises the undo depth — and an entry that
+    /// changes nothing is still an entry to step over.
+    fn write_visibility(
+        &mut self,
+        wanted: &[(LayerKey, bool)],
+        after: Option<Solo>,
+    ) -> Result<(), ModelError> {
+        let before = self.solo.clone();
+        let mut depths = Vec::new();
+        let outcome = self.write_each_visibility(wanted, &mut depths);
+        // The state only reaches the one asked for if every flag did. A batch
+        // that failed halfway is a batch whose caller is about to restore.
+        if outcome.is_ok() {
+            self.solo = after;
+        }
+        // Recorded even when it failed halfway, because half a batch is still
+        // entries in the engine's history and undo has to step over those too.
+        if !depths.is_empty() {
+            self.visibility_undo.push(VisibilityGesture {
+                depths,
+                before,
+                after: self.solo.clone(),
+            });
+            self.visibility_redo.clear();
+        }
+        outcome
+    }
+
+    /// The writes themselves, recording each depth as it lands.
+    ///
+    /// Apart from [`Self::write_visibility`] so that the record is kept by a
+    /// caller that owns it however this ends — including where a layer refuses
+    /// midway.
+    fn write_each_visibility(
+        &mut self,
+        wanted: &[(LayerKey, bool)],
+        depths: &mut Vec<usize>,
+    ) -> Result<(), ModelError> {
+        for &(key, visible) in wanted {
+            // A layer the snapshot names and the document no longer has: undo
+            // may have taken a crossing back since. Skipped rather than
+            // refused, because there is nothing to put back and refusing would
+            // strand the layers that are still there.
+            let Ok(index) = self.index_of(key) else {
+                continue;
+            };
+            if self.layers[index].visible == visible {
+                continue;
+            }
+            SceneModel::set_layer_visible(self, key, visible)?;
+            depths.push(self.engine_undo_depth());
+        }
+        Ok(())
+    }
+
+    /// Runs `body` with this visibility pattern in force, and puts back what
+    /// every layer had however it ends.
+    ///
+    /// The restore owns the exit. `body` returning an error, or returning
+    /// early, or refusing before it has done anything, all arrive here the
+    /// same way — no *return* from this function leaves the document showing
+    /// what the operation wanted rather than what the sculptor set. That is not
+    /// a theoretical care: baking one subtool alone means hiding the sculptor's
+    /// whole scene, and a bake that refuses halfway would otherwise leave it
+    /// hidden.
+    ///
+    /// A panic unwinding out of `body` is the one exit this does not cover, and
+    /// it cannot be from here: the restore needs `&mut self` and `body` is
+    /// holding it, so there is no `Drop` guard to hang it on. Nothing in this
+    /// application catches one — a panic ends the process — so the document a
+    /// half-restored visibility would be left in is a document nobody goes on
+    /// to use. Said out loud because the promise above is otherwise read as
+    /// covering it.
+    fn with_visibility<T>(
+        &mut self,
+        wanted: &[(LayerKey, bool)],
+        body: impl FnOnce(&mut Self) -> Result<T, ModelError>,
+    ) -> Result<T, ModelError> {
+        let was = self.visibility_snapshot();
+        // The solo is a fact about the scene, not about the window this opens:
+        // an operation that hides everything but one layer has not released a
+        // solo, and the flags it borrowed are given back below.
+        let solo = self.solo.clone();
+        if let Err(e) = self.write_visibility(wanted, solo.clone()) {
+            let _ = self.write_visibility(&was, solo);
+            return Err(e);
+        }
+        let outcome = body(self);
+        let restored = self.write_visibility(&was, solo);
+        // The body's failure is the one worth reporting; the restore's is
+        // reported only if the body succeeded. Ordered as `convert_layer`
+        // orders its group, and for the same reason.
+        let value = outcome?;
+        restored?;
+        Ok(value)
+    }
+
+    /// Runs `body` with only these layers shown, and restores the rest
+    /// afterwards.
+    ///
+    /// The primitive the subtool boolean bakes through: `clay_item_volume_from_document`
+    /// samples the whole document's field, and the engine's contract is that a
+    /// hidden layer "contributes nothing to the field; showing it again
+    /// restores the original field exactly" — so baking one subtool alone *is*
+    /// hiding the others around the bake.
+    ///
+    /// Public because that caller wants it and because the restore is a
+    /// promise worth testing on its own, with an operation that fails inside.
+    pub fn with_only_visible<T>(
+        &mut self,
+        shown: &[LayerKey],
+        body: impl FnOnce(&mut Self) -> Result<T, ModelError>,
+    ) -> Result<T, ModelError> {
+        let wanted: Vec<(LayerKey, bool)> = self
+            .layers
+            .iter()
+            .map(|layer| (layer.key, shown.contains(&layer.key)))
+            .collect();
+        self.with_visibility(&wanted, body)
+    }
+
+    /// Whether the newest thing in the engine's history is a visibility
+    /// gesture this side made.
+    ///
+    /// True when no engine edit has landed since — any that had would have
+    /// raised the depth past the last one the gesture recorded.
+    fn visibility_is_newest(&self) -> bool {
+        self.visibility_undo
+            .last()
+            .and_then(|gesture| gesture.depths.last())
+            .is_some_and(|depth| *depth == self.engine_undo_depth())
+    }
+
+    /// Steps back over every visibility gesture sitting on top of the history.
+    ///
+    /// Hopped rather than stopped on: the spec says a solo "SHALL NOT change
+    /// which layer is active or add entries to the undo history", and the
+    /// engine gives no way to keep the commands out of the journal, so the
+    /// only place the promise can be kept is here. A solo and its release
+    /// cancel exactly — the hides are taken back and then the shows are, and
+    /// what the sculptor set is what remains — so a ⌘Z after a released solo
+    /// reaches the edit underneath it.
+    fn hop_visibility_back(&mut self) -> Result<(), ModelError> {
+        while self.visibility_is_newest() {
+            let Some(gesture) = self.visibility_undo.pop() else {
+                break;
+            };
+            for _ in &gesture.depths {
+                if !self.document.undo().map_err(ModelError::engine)? {
+                    break;
+                }
+            }
+            self.solo = gesture.before.clone();
+            self.visibility_redo.push(gesture);
+            self.after_visibility_history()?;
+        }
+        Ok(())
+    }
+
+    /// The mirror: steps forward over the gestures a hop back put away.
+    fn hop_visibility_forward(&mut self) -> Result<(), ModelError> {
+        while self
+            .visibility_redo
+            .last()
+            .and_then(|gesture| gesture.depths.first())
+            .is_some_and(|depth| *depth == self.engine_undo_depth() + 1)
+        {
+            let Some(gesture) = self.visibility_redo.pop() else {
+                break;
+            };
+            for _ in &gesture.depths {
+                if !self.document.redo().map_err(ModelError::engine)? {
+                    break;
+                }
+            }
+            self.solo = gesture.after.clone();
+            self.visibility_undo.push(gesture);
+            self.after_visibility_history()?;
+        }
+        Ok(())
+    }
+
+    /// What either direction owes once the engine has moved the flags.
+    fn after_visibility_history(&mut self) -> Result<(), ModelError> {
+        // `reconcile_layers` re-reads what the document now shows, so the eye
+        // in the stack follows the hop rather than sitting where the gesture
+        // left it.
+        self.reconcile_layers();
+        let layer = self.active_layer().id;
+        // A hidden layer contributes nothing to the field, so the surface is a
+        // different surface either way and the bound is the whole layer.
+        self.refill(layer, &[])?;
+        Ok(())
+    }
+
+    /// Drops the visibility gestures a new edit has invalidated, and records
+    /// what the engine holds forward now.
+    ///
+    /// Run on both sides of every history step, which is the only moment this
+    /// side can look. See [`ClayDocument::redo_room`] for what the two
+    /// conditions mean and for the defect that has no other floor under it:
+    /// unlike a mesh gesture or a crossing, a visibility gesture is hopped
+    /// *without being asked for*, so a stale one does not merely answer a
+    /// question wrongly — it silently spends a step the sculptor meant for
+    /// their own work.
+    fn settle_history_room(&mut self) {
+        let room = self
+            .document
+            .undo_state()
+            .map(|state| state.redo_depth)
+            .unwrap_or(0);
+        if room == 0 || room < self.redo_room {
+            self.visibility_redo.clear();
+        }
+        self.redo_room = room;
+    }
+
+    /// Lets go of a solo whose subtool has left the document.
+    ///
+    /// The visibility the solo borrowed is given back rather than merely
+    /// forgotten: what the solo hid is still hidden, and the row that would
+    /// release it is the one that was just removed. Measured before this —
+    /// solo the second of two subtools, remove it, and the document reported
+    /// `soloed Some(LayerKey(2))` over a scene whose only remaining layer was
+    /// hidden, with the viewport blank and no control anywhere that could put
+    /// it back.
+    ///
+    /// A removal that is not the soloed one only prunes the snapshot, so the
+    /// pattern `save` writes describes the layers the document still has.
+    fn release_solo_of(&mut self, gone: LayerKey) -> Result<(), ModelError> {
+        let Some(solo) = self.solo.clone() else {
+            return Ok(());
+        };
+        if solo.layer != gone {
+            if let Some(held) = &mut self.solo {
+                held.was.retain(|(key, _)| *key != gone);
+            }
+            return Ok(());
+        }
+        self.write_visibility(&solo.was, None)
+    }
+
+    fn undo_step(&mut self) -> Result<bool, ModelError> {
+        // A mesh gesture is asked about *before* the hop as well as after.
+        //
+        // It records the engine's depth and does not raise it, so a solo
+        // engaged before the stroke ends at exactly the depth the gesture
+        // remembers and both answer "newest" — and only one of them can be.
+        // The stroke is: had the solo come after it, its writes would have
+        // carried the depth past what the gesture recorded. Hopping first
+        // stepped over the solo and then undid the engine entry *underneath*
+        // the stroke — measured, a dab on a soloed mesh subtool undone once
+        // released the solo and took back the import that made the layer, and
+        // the stroke's own gesture was stranded at a depth the engine would
+        // never return to.
+        if self.mesh_gesture_is_newest() {
+            return self.undo_mesh_gesture();
+        }
+        // Solo, and the hide-and-restore a bake borrows, sit on top of the
+        // engine's history without being anything the sculptor did. Stepped
+        // over here, so that what follows is asked of the newest *edit*
+        // rather than of a way of looking at the scene.
+        self.hop_visibility_back()?;
+        // Whichever history holds the more recent edit answers. See
+        // `mesh_undo` for why depth is what orders them.
+        if self.mesh_gesture_is_newest() {
+            return self.undo_mesh_gesture();
+        }
+        // A crossing sits on its own engine entry, so it is tested the same
+        // way and before the plain path: undoing only the engine's half would
+        // leave the layer it made standing and empty.
+        if self.crossing_is_newest() {
+            return self.undo_crossing();
+        }
+        let moved = self.document.undo().map_err(ModelError::engine)?;
+        if moved {
+            self.reconcile_layers();
+            let layer = self.active_layer().id;
+            // Undo can move anything the layer holds, so the bound is the
+            // layer rather than a node set.
+            self.refill(layer, &[])?;
+            self.resync_armature();
+            // The engine reverted whatever it reverted and cannot tell the
+            // object table it did; the table follows by depth, and so does
+            // where each layer stands.
+            self.resync_objects();
+            self.resync_layer_transforms();
+        }
+        Ok(moved)
+    }
+
+    fn redo_step(&mut self) -> Result<bool, ModelError> {
+        // The mirror of `undo`'s first check, and it is first here for the same
+        // reason. A mesh undo moves no engine depth, so a solo undone under the
+        // stroke leaves its gesture sitting at depth + 1 and the hop's guard is
+        // satisfied by a gesture that is not what was taken back last. Measured:
+        // the redo went to the solo, the engine depth moved past what the mesh
+        // gesture recorded, and the stroke could never be put back — the
+        // interface said "nothing to redo" over a stroke it still held.
+        if self.mesh_redo_is_next() {
+            return self.redo_mesh_gesture();
+        }
+        // The mirror of the hop in `undo`, and it runs on both sides of the
+        // step: a gesture may be the next entry forward — a solo taken back
+        // with no edit under it — and more of them may sit above whatever is
+        // redone here.
+        self.hop_visibility_forward()?;
+        // The mirror of `undo`: a mesh gesture on the redo stack recorded at
+        // the current engine depth is the one that was taken back last.
+        if self.mesh_redo_is_next() {
+            return self.redo_mesh_gesture();
+        }
+        // The mirror: an undone crossing's entry is the next one forward.
+        if self
+            .crossing_redo
+            .last()
+            .is_some_and(|crossing| crossing.engine_depth == self.engine_undo_depth() + 1)
+        {
+            return self.redo_crossing();
+        }
+        let moved = self.document.redo().map_err(ModelError::engine)?;
+        if moved {
+            self.reconcile_layers();
+            let layer = self.active_layer().id;
+            self.refill(layer, &[])?;
+            self.resync_armature();
+            // The engine reverted whatever it reverted and cannot tell the
+            // object table it did; the table follows by depth, and so does
+            // where each layer stands.
+            self.resync_objects();
+            self.resync_layer_transforms();
+        }
+        // And the gestures that sat above the entry just put back.
+        self.hop_visibility_forward()?;
+        Ok(moved)
+    }
+
+    /// How many of the engine's entries are gestures rather than edits.
+    ///
+    /// Subtracted from the depth the interface is shown: solo adds nothing the
+    /// sculptor would have to undo, and a history that counted its commands
+    /// would offer an Undo that takes back a way of looking at the scene.
+    fn visibility_entries(stack: &[VisibilityGesture]) -> usize {
+        stack.iter().map(|gesture| gesture.depths.len()).sum()
     }
 
     fn rasterize_to_voxels(&mut self, name: &str, cell_size: f32) -> Result<LayerKey, ModelError> {
@@ -1080,13 +1671,25 @@ impl ClayDocument {
     ) -> Result<LayerKey, ModelError> {
         let key = self.take_key();
         self.layers.push(Layer::new(id, key, name, representation));
-        self.active = self.layers.len() - 1;
+        // Through the one activation call rather than by assigning the index:
+        // a new layer becoming the sculpt target is the same fact a stack click
+        // states, and everything activation owes is owed here too — arming a
+        // mesh for sculpting among it.
+        self.set_active_layer(key)?;
         Ok(key)
     }
 
     /// What every direction owes once its new layer exists.
     fn after_conversion(&mut self, key: LayerKey) -> Result<LayerKey, ModelError> {
         self.reconcile_layers();
+        // Where the new grid is, if it is one. `clay_layer_bounds` reports a
+        // layer's *SDF* extent and a grid has none, so this cache is the only
+        // account of a voxel layer's box there is — and it was refreshed by a
+        // voxel stroke and by opening a file, but not by the crossing that
+        // creates the grid. A rasterized layer therefore reported no extent
+        // until the first dab landed on it: Frame All framed the default box,
+        // and a boolean naming it as an operand refused it as empty.
+        self.refresh_sculpt_layers(key)?;
         // A mesh layer has no bricks and is not evaluated, so there is nothing
         // to refill for one — the viewport draws it through the carried-layer
         // path instead. Marking it dirty would ask the cache to mark a layer
@@ -1382,15 +1985,22 @@ impl ClayDocument {
     /// this, so the mirror kept whatever it was last set to: the starting form
     /// turns X on, and a snakehook with symmetry switched **off** still came
     /// out on both sides because nothing had told the layer otherwise.
+    ///
+    /// Compared against the *layer's* record and not one number for the
+    /// document. With one number, a switch of subtool left it holding the
+    /// outgoing subtool's axes, so a stroke on the incoming one that asked for
+    /// the same axes wrote nothing and mirrored against whatever plane that
+    /// layer happened to carry.
     fn point_the_mirror(&mut self, symmetry: [bool; 3]) -> Result<(), ModelError> {
-        if self.symmetry == symmetry {
+        let index = self.active;
+        if self.layers[index].mirror == symmetry {
             return Ok(());
         }
-        let layer = self.active_layer().id;
+        let layer = self.layers[index].id;
         self.document
             .set_layer_mirror(layer, symmetry, 0.0)
             .map_err(ModelError::engine)?;
-        self.symmetry = symmetry;
+        self.layers[index].mirror = symmetry;
         Ok(())
     }
 
@@ -1528,7 +2138,7 @@ impl ClayDocument {
         // with it. Measured, and recorded in
         // `claycore/tests/alpha_deformer.rs`.
 
-        let mask = self.mask.as_deref();
+        let mask = Self::active_mask_field(&self.layers, self.active);
 
         // No gate on the stamp, and that is a measurement rather than an
         // omission. `clay_item_set_gate` is what would make a mask protect a
@@ -1640,7 +2250,7 @@ impl ClayDocument {
         // region would be pulled like any other. Sampling the mask along the
         // path and dropping the frozen samples is the same rule applied where
         // this verb can apply it.
-        let live: Vec<&GestureSample> = match self.mask.as_ref() {
+        let live: Vec<&GestureSample> = match Self::active_mask(&self.layers, self.active) {
             Some(mask) => {
                 let positions: Vec<[f32; 3]> = samples.iter().map(|s| s.position).collect();
                 let frozen = mask.sample_many(&positions).map_err(ModelError::engine)?;
@@ -1775,7 +2385,7 @@ impl ClayDocument {
                     centre,
                     region_radius: brush.size,
                     falloff: brush.size * 0.5,
-                    mask: self.mask.as_deref(),
+                    mask: Self::active_mask_field(&self.layers, self.active),
                 },
                 Self::bake_volume(cell),
                 min,
@@ -1817,7 +2427,8 @@ impl ClayDocument {
             })
             .collect();
 
-        if self.mask.is_none() {
+        let index = self.active;
+        if self.layers[index].mask.is_none() {
             // The cache's own spacing, not a fraction of the brush.
             //
             // A quarter of the brush was tried: at the default brush that is a
@@ -1826,11 +2437,12 @@ impl ClayDocument {
             // so a mask painted with a large brush could not be extruded at any
             // sensible thickness. Matching the voxel size makes a mask as fine
             // as the thing it freezes.
-            self.mask = Some(Mask::new(Self::VOXEL_SIZE).map_err(ModelError::engine)?);
+            self.layers[index].mask =
+                Some(Mask::new(Self::VOXEL_SIZE).map_err(ModelError::engine)?);
         }
 
         let painted = {
-            let mask = self.mask.as_mut().expect("just created");
+            let mask = self.layers[index].mask.as_mut().expect("just created");
             mask.apply_stroke(
                 &stroke,
                 &preset,
@@ -1944,7 +2556,7 @@ impl ClayDocument {
                     } else {
                         claycore::FlattenMode::CutOnly
                     },
-                    mask: self.mask.as_deref(),
+                    mask: Self::active_mask_field(&self.layers, self.active),
                 },
                 Self::bake_volume(cell),
                 min,
@@ -1987,7 +2599,20 @@ impl ClayDocument {
         let engine_name = self.active_layer().engine_name.clone();
         self.ensure_mesh_sculptor(key, &engine_name)?;
 
-        let brush = brush.sanitized();
+        // The sculptor holds this layer's vertices as the engine does, and the
+        // layer transform moves only where they are *drawn* — see
+        // `carried_placement`. So a gesture aimed at the form on screen is
+        // carried back into those coordinates before anything at all is derived
+        // from it, and the brush with it: a subtool scaled to half its size
+        // wants half the radius against the vertices it actually has.
+        let placement = self.carried_placement(key);
+        let carried = Self::carried_samples(&placement, samples);
+        let samples = carried.as_deref().unwrap_or(samples);
+
+        let mut brush = brush.sanitized();
+        if let Some(transform) = &placement {
+            brush.size /= transform.scale.max(1e-4);
+        }
         // Read before the sculptor is borrowed mutably. A mesh takes an alpha
         // by a third route — the brush descriptor's own block — and it is not
         // gated on a combine operation, which is the SDF side's vocabulary.
@@ -2227,7 +2852,7 @@ impl ClayDocument {
                                 center: mirror.point(stamp.center),
                                 ..stamp
                             },
-                            self.mask.as_ref(),
+                            Self::active_mask(&self.layers, self.active),
                             Some(&mut deltas),
                         )
                         .map_err(ModelError::engine)?
@@ -2248,7 +2873,7 @@ impl ClayDocument {
                                 center: mirror.point(stamp.center),
                                 ..stamp
                             },
-                            self.mask.as_ref(),
+                            Self::active_mask(&self.layers, self.active),
                             Some(&mut deltas),
                         )
                         .map_err(ModelError::engine)?
@@ -2282,6 +2907,8 @@ impl ClayDocument {
             // A new edit ends the redo line, exactly as the engine's own does.
             self.mesh_redo.clear();
         }
+        // The vertices moved, so the box `layer_bounds` answers from is stale.
+        self.refresh_mesh_bounds(key);
         Ok(EditOutcome {
             changed: moved > 0,
             // A mesh layer is not in the brick cache at all, so nothing was
@@ -2314,12 +2941,48 @@ impl ClayDocument {
             origin[i] + direction[i] / length * hit.distance
         }))
     }
+    /// A gesture written in a moved mesh subtool's own coordinates.
+    ///
+    /// `None` where the subtool stands at the origin unturned, which is the
+    /// common case and the one that copies nothing.
+    fn carried_samples(
+        placement: &Option<clayspace_model::Transform>,
+        samples: &[GestureSample],
+    ) -> Option<Vec<GestureSample>> {
+        let transform = placement.as_ref()?;
+        Some(
+            samples
+                .iter()
+                .map(|sample| GestureSample {
+                    position: Self::into_local(transform, sample.position),
+                    ..*sample
+                })
+                .collect(),
+        )
+    }
+
     /// Where a ray meets the active mesh layer's triangles.
     ///
     /// Answered by the sculptor's own tree, through the cell that field is
     /// held in — see there for why.
     fn pick_active_mesh(&self, origin: [f32; 3], direction: [f32; 3]) -> Option<[f32; 3]> {
         let key = self.active_layer().key;
+        // The sculptor knows the vertices as the engine holds them, so a ray
+        // aimed at where the subtool is *drawn* has to be carried back into
+        // those coordinates and the answer carried out again. Without it a
+        // moved mesh subtool draws in one place and picks in another.
+        let placement = self.carried_placement(key);
+        let (origin, direction) = match &placement {
+            Some(transform) => (
+                Self::into_local(transform, origin),
+                Self::turned_by(
+                    transform.rotation_axis,
+                    -transform.rotation_angle,
+                    direction,
+                ),
+            ),
+            None => (origin, direction),
+        };
         let mut held = self.mesh_sculptor.borrow_mut();
         let (built_for, sculptor) = held.as_mut()?;
         if *built_for != key {
@@ -2334,7 +2997,10 @@ impl ClayDocument {
             .raycast(origin, direction)
             .ok()
             .flatten()
-            .map(|hit| hit.position)
+            .map(|hit| match &placement {
+                Some(transform) => Self::into_world(transform, hit.position),
+                None => hit.position,
+            })
     }
 
     /// What is wrong with the active voxel layer, before anything is repaired.
@@ -2471,10 +3137,22 @@ impl ClayDocument {
     ///
     /// Hidden layers are left out rather than uploaded and skipped — the point
     /// of hiding one is not to pay for it.
+    ///
+    /// The walk is in layer order and already rebases each layer's indices, so
+    /// it is also the only place that can say which run of the buffer belongs
+    /// to which layer: the spans come out of the same loop rather than being
+    /// reconstructed afterwards from a concatenation that has forgotten its
+    /// seams.
     #[allow(clippy::type_complexity)]
     pub fn visible_mesh_geometry(
         &mut self,
-    ) -> (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<u32>) {
+    ) -> (
+        Vec<[f32; 3]>,
+        Vec<[f32; 3]>,
+        Vec<[f32; 3]>,
+        Vec<u32>,
+        Vec<CarriedSpan>,
+    ) {
         // Every grid first, visible or not: the dirty set is the engine's and
         // draining it is what keeps a chunk's geometry in step with its cells.
         // Skipping a hidden layer would leave its keys queued, and showing it
@@ -2503,10 +3181,7 @@ impl ClayDocument {
                 triangles += chunk.indices.len();
             }
         }
-        let mut positions = Vec::with_capacity(vertices);
-        let mut normals = Vec::with_capacity(vertices);
-        let mut colors = Vec::with_capacity(vertices);
-        let mut indices = Vec::with_capacity(triangles);
+        let mut carried = CarriedBuffer::with_capacity(vertices, triangles);
 
         let drawn: Vec<(usize, Representation, String)> = self
             .layers
@@ -2517,46 +3192,95 @@ impl ClayDocument {
             .map(|(index, layer)| (index, layer.representation, layer.engine_name.clone()))
             .collect();
 
+        let mut spans: Vec<CarriedSpan> = Vec::with_capacity(drawn.len());
         for (index, representation, name) in drawn {
+            let layer = self.layers[index].key;
+            let first = carried.indices.len() as u32;
             if representation == Representation::Voxel {
-                // The smooth picture, where one has been built. Whole-grid and
-                // so a single splice, unlike the chunked boxes below.
-                if let Some((_, smooth)) = self.voxel_smooth.get(&self.layers[index].key) {
-                    let base = positions.len() as u32;
-                    indices.extend(smooth.indices.iter().map(|i| i + base));
-                    positions.extend_from_slice(&smooth.positions);
-                    normals.extend_from_slice(&smooth.normals);
-                    colors.extend_from_slice(&smooth.colors);
-                    continue;
-                }
-                // Spliced from what was meshed per chunk. The ranges partition
-                // the mesh, so concatenating them is the whole of the join —
-                // there is no seam to weld, unlike the brick cache's.
-                for chunk in self.layers[index].voxel_chunks.values() {
-                    let base = positions.len() as u32;
-                    indices.extend(chunk.indices.iter().map(|i| i + base));
-                    positions.extend_from_slice(&chunk.positions);
-                    normals.extend_from_slice(&chunk.normals);
-                    colors.extend_from_slice(&chunk.colors);
-                }
-                continue;
+                self.append_voxel_layer(index, &mut carried);
+            } else {
+                self.append_mesh_layer(layer, &name, &mut carried);
             }
-            let Ok((p, n, c, i)) = self.document.read_mesh_layer(&name) else {
-                continue;
-            };
-            let base = positions.len() as u32;
-            indices.extend(i.into_iter().map(|index| index + base));
-            positions.extend(p);
-            normals.extend(n);
-            colors.extend(c);
+            // A layer that contributed nothing gets no span: an empty range is
+            // an empty draw call, and a cue that has to skip it is a cue with
+            // an exception in it.
+            let last = carried.indices.len() as u32;
+            if last > first {
+                spans.push(CarriedSpan {
+                    layer,
+                    indices: first..last,
+                });
+            }
         }
 
         // What the viewport was handed, so the interface can count what is on
         // screen rather than only what the brick cache built. A mesh or voxel
         // layer draws triangles the surface cache knows nothing about, and the
         // panel used to report a sculpted grid as an empty document.
-        self.carried = (indices.len() / 3, positions.len());
-        (positions, normals, colors, indices)
+        self.carried = (carried.indices.len() / 3, carried.positions.len());
+        let CarriedBuffer {
+            positions,
+            normals,
+            colors,
+            indices,
+        } = carried;
+        (positions, normals, colors, indices, spans)
+    }
+
+    /// Appends one carried mesh layer's triangles, standing where its layer
+    /// transform puts them.
+    ///
+    /// The engine holds a carried mesh's vertices and never moves them: a layer
+    /// transform moves what the *tape* evaluates, and a mesh layer contributes
+    /// nothing to it. So the whole-subtool manipulator reaches a mesh here or
+    /// nowhere — measured, a mesh subtool dragged five units along X drew its
+    /// first vertex exactly where it drew it before.
+    fn append_mesh_layer(&mut self, layer: LayerKey, name: &str, carried: &mut CarriedBuffer) {
+        let Ok((mut positions, mut normals, colors, indices)) = self.document.read_mesh_layer(name)
+        else {
+            return;
+        };
+        if let Some(transform) = self.carried_placement(layer) {
+            for point in &mut positions {
+                *point = Self::into_world(&transform, *point);
+            }
+            // Turned and not moved: a normal is a direction, and the scale is
+            // uniform so it needs no inverse-transpose.
+            for normal in &mut normals {
+                *normal =
+                    Self::turned_by(transform.rotation_axis, transform.rotation_angle, *normal);
+            }
+        }
+        carried.append(&positions, &normals, &colors, &indices);
+    }
+
+    /// Appends one voxel layer's triangles to the carried buffer.
+    ///
+    /// Two sources for one layer and only ever one of them: the smooth surface
+    /// where one has been built, and the per-chunk boxes otherwise.
+    fn append_voxel_layer(&self, index: usize, carried: &mut CarriedBuffer) {
+        // The smooth picture, where one has been built. Whole-grid and so a
+        // single splice, unlike the chunked boxes below.
+        if let Some((_, smooth)) = self.voxel_smooth.get(&self.layers[index].key) {
+            carried.append(
+                &smooth.positions,
+                &smooth.normals,
+                &smooth.colors,
+                &smooth.indices,
+            );
+            return;
+        }
+        // Spliced from what was meshed per chunk. The ranges partition the
+        // mesh, so concatenating them is the whole of the join — there is no
+        // seam to weld, unlike the brick cache's.
+        for chunk in self.layers[index].voxel_chunks.values() {
+            carried.append(
+                &chunk.positions,
+                &chunk.normals,
+                &chunk.colors,
+                &chunk.indices,
+            );
+        }
     }
 
     /// Brings one voxel layer's cached chunks in line with its grid.
@@ -2763,7 +3487,7 @@ impl ClayDocument {
     /// entirely — which is the common case, and the case where sampling every
     /// vertex of the surface would be pure waste.
     pub fn mask_at(&self, points: &[[f32; 3]]) -> Option<Vec<f32>> {
-        let mask = self.mask.as_ref()?;
+        let mask = Self::active_mask(&self.layers, self.active)?;
         if mask.is_empty().unwrap_or(true) {
             return None;
         }
@@ -2869,6 +3593,14 @@ impl ClayDocument {
             .is_some_and(|gesture| gesture.engine_depth == self.engine_undo_depth())
     }
 
+    /// The mirror on the redo side: whether the newest undone mesh gesture is
+    /// the next thing forward.
+    fn mesh_redo_is_next(&self) -> bool {
+        self.mesh_redo
+            .last()
+            .is_some_and(|gesture| gesture.engine_depth == self.engine_undo_depth())
+    }
+
     /// Takes back one mesh gesture, bit exactly.
     fn undo_mesh_gesture(&mut self) -> Result<bool, ModelError> {
         let Some(gesture) = self.mesh_undo.pop() else {
@@ -2896,7 +3628,9 @@ impl ClayDocument {
                 .map_err(ModelError::engine)?;
             sculptor.refit().map_err(ModelError::engine)?;
         }
+        let layer = gesture.layer;
         self.mesh_redo.push(gesture);
+        self.refresh_mesh_bounds(layer);
         Ok(true)
     }
 
@@ -2922,7 +3656,9 @@ impl ClayDocument {
             gesture.deltas.apply(sculptor).map_err(ModelError::engine)?;
             sculptor.refit().map_err(ModelError::engine)?;
         }
+        let layer = gesture.layer;
         self.mesh_undo.push(gesture);
+        self.refresh_mesh_bounds(layer);
         Ok(true)
     }
 
@@ -2991,10 +3727,13 @@ impl ClayDocument {
                 .map_err(ModelError::engine)?;
             grid.voxel_size().map_err(ModelError::engine)?
         };
-        // Split the borrows by field: the mask, the layers and the document
-        // are disjoint, but `&self` for one and `&mut self` for another is
-        // not.
-        let Self { document, mask, .. } = self;
+        // Split the borrows by field: the layer list — which is where the
+        // mask lives — and the document are disjoint, but `&self` for one and
+        // `&mut self` for another is not.
+        let Self {
+            document, layers, ..
+        } = self;
+        let mask = layers[index].mask.as_deref();
         let brush = brush.sanitized();
         let params = BrushParams {
             size: ((brush.size / voxel_size).round() as i32).clamp(1, 64),
@@ -3007,7 +3746,7 @@ impl ClayDocument {
             },
             strength: brush.intensity,
             seed: 0,
-            mask: mask.as_deref(),
+            mask,
         };
 
         // Borrowed for the length of this stroke and no longer, which is what
@@ -3246,6 +3985,19 @@ impl SculptModel for ClayDocument {
         }
     }
 
+    fn symmetry(&self) -> [bool; 3] {
+        self.active_layer().symmetry
+    }
+
+    fn set_symmetry(&mut self, symmetry: [bool; 3]) -> Result<(), ModelError> {
+        // Recorded, not written. The engine's mirror is pointed by the stroke
+        // that uses it — see `point_the_mirror` and the note on `Layer::mirror`
+        // for why the entry has to land inside a gesture rather than beside
+        // one.
+        self.layers[self.active].symmetry = symmetry;
+        Ok(())
+    }
+
     fn set_combine(&mut self, combine: CombineSettings) {
         self.combine = combine.sanitized();
     }
@@ -3322,7 +4074,7 @@ impl SculptModel for ClayDocument {
                         scale_end,
                         ..claycore::MeshDeformer::default()
                     },
-                    self.mask.as_ref(),
+                    Self::active_mask(&self.layers, self.active),
                     Some(&mut deltas),
                 ),
                 clayspace_model::LayerOperation::Twist { axis, span, angle } => sculptor.deform(
@@ -3333,7 +4085,7 @@ impl SculptModel for ClayDocument {
                         angle,
                         ..claycore::MeshDeformer::default()
                     },
-                    self.mask.as_ref(),
+                    Self::active_mask(&self.layers, self.active),
                     Some(&mut deltas),
                 ),
                 clayspace_model::LayerOperation::LatticeDrag {
@@ -3382,6 +4134,7 @@ impl SculptModel for ClayDocument {
             });
             self.mesh_redo.clear();
         }
+        self.refresh_mesh_bounds(key);
         Ok(EditOutcome {
             changed: moved > 0,
             dirty_bricks: 0,
@@ -3422,61 +4175,21 @@ impl SculptModel for ClayDocument {
     }
 
     fn undo(&mut self) -> Result<bool, ModelError> {
-        // Whichever history holds the more recent edit answers. See
-        // `mesh_undo` for why depth is what orders them.
-        if self.mesh_gesture_is_newest() {
-            return self.undo_mesh_gesture();
-        }
-        // A crossing sits on its own engine entry, so it is tested the same
-        // way and before the plain path: undoing only the engine's half would
-        // leave the layer it made standing and empty.
-        if self.crossing_is_newest() {
-            return self.undo_crossing();
-        }
-        let moved = self.document.undo().map_err(ModelError::engine)?;
-        if moved {
-            self.reconcile_layers();
-            let layer = self.active_layer().id;
-            // Undo can move anything the layer holds, so the bound is the
-            // layer rather than a node set.
-            self.refill(layer, &[])?;
-            self.resync_armature();
-            // The engine reverted whatever it reverted and cannot tell the
-            // object table it did; the table follows by depth.
-            self.resync_objects();
-        }
-        Ok(moved)
+        // On both sides of the step, because between two of them is the only
+        // moment this side can look at what the engine holds forward — and a
+        // redo stack the engine truncated is the only word there is that an
+        // edit landed since the last one.
+        self.settle_history_room();
+        let moved = self.undo_step();
+        self.settle_history_room();
+        moved
     }
 
     fn redo(&mut self) -> Result<bool, ModelError> {
-        // The mirror of `undo`: a mesh gesture on the redo stack recorded at
-        // the current engine depth is the one that was taken back last.
-        if self
-            .mesh_redo
-            .last()
-            .is_some_and(|gesture| gesture.engine_depth == self.engine_undo_depth())
-        {
-            return self.redo_mesh_gesture();
-        }
-        // The mirror: an undone crossing's entry is the next one forward.
-        if self
-            .crossing_redo
-            .last()
-            .is_some_and(|crossing| crossing.engine_depth == self.engine_undo_depth() + 1)
-        {
-            return self.redo_crossing();
-        }
-        let moved = self.document.redo().map_err(ModelError::engine)?;
-        if moved {
-            self.reconcile_layers();
-            let layer = self.active_layer().id;
-            self.refill(layer, &[])?;
-            self.resync_armature();
-            // The engine reverted whatever it reverted and cannot tell the
-            // object table it did; the table follows by depth.
-            self.resync_objects();
-        }
-        Ok(moved)
+        self.settle_history_room();
+        let moved = self.redo_step();
+        self.settle_history_room();
+        moved
     }
 
     fn history(&self) -> HistoryState {
@@ -3484,13 +4197,24 @@ impl SculptModel for ClayDocument {
         // question and a mesh gesture is as undoable as an engine entry. A
         // depth that counted only the engine's would grey out Undo in the
         // middle of a mesh sculpting session.
+        //
+        // And minus what solo left there. Those are entries the engine holds
+        // and the sculptor never made: counted, the panel would say a fresh
+        // document had three things to take back because someone looked at one
+        // subtool on its own.
+        let hopped = Self::visibility_entries(&self.visibility_undo);
+        let hopped_forward = Self::visibility_entries(&self.visibility_redo);
         match self.document.undo_state() {
-            Ok(state) => HistoryState {
-                can_undo: state.undo_depth > 0 || !self.mesh_undo.is_empty(),
-                can_redo: state.redo_depth > 0 || !self.mesh_redo.is_empty(),
-                depth: state.undo_depth + self.mesh_undo.len(),
-                redo_depth: state.redo_depth + self.mesh_redo.len(),
-            },
+            Ok(state) => {
+                let undo_depth = state.undo_depth.saturating_sub(hopped);
+                let redo_depth = state.redo_depth.saturating_sub(hopped_forward);
+                HistoryState {
+                    can_undo: undo_depth > 0 || !self.mesh_undo.is_empty(),
+                    can_redo: redo_depth > 0 || !self.mesh_redo.is_empty(),
+                    depth: undo_depth + self.mesh_undo.len(),
+                    redo_depth: redo_depth + self.mesh_redo.len(),
+                }
+            }
             Err(_) => HistoryState::default(),
         }
     }
@@ -3541,15 +4265,10 @@ impl SculptModel for ClayDocument {
     }
 
     fn bounds(&self) -> Option<([f32; 3], [f32; 3])> {
-        let layer = self.active_layer();
-        // A grid says where it is itself. `layer_bounds` answers with a
-        // layer's SDF extent, which a voxel layer does not have — it reported
-        // nothing for one however much material was in it, so Frame All framed
-        // the default box over a sculpt that was somewhere else.
-        if layer.representation == Representation::Voxel {
-            return layer.voxel_bounds;
-        }
-        self.document.layer_bounds(layer.id).ok().flatten()
+        // The active layer's, which is the same question `layer_bounds` answers
+        // for any of them — one implementation, so Frame All and the widgets
+        // that size themselves to a subtool cannot come to disagree.
+        SceneModel::layer_bounds(self, self.active_layer().key)
     }
 }
 
@@ -3865,13 +4584,35 @@ impl SceneModel for ClayDocument {
             nodes,
             layers: self.layers.iter().map(Layer::summary).collect(),
             active: self.layers.get(self.active).map(|layer| layer.key),
-            selected: self.selected,
+            soloed: self.solo.as_ref().map(|solo| solo.layer),
         }
     }
 
+    /// The one place activation changes.
+    ///
+    /// Every route to it — the stack row, the viewport click, a layer that has
+    /// just been created — arrives as `Command::SelectLayer`, so there is no
+    /// second writer that could leave the picked layer and the sculpted one
+    /// disagreeing.
     fn set_active_layer(&mut self, key: LayerKey) -> Result<(), ModelError> {
-        self.active = self.index_of(key)?;
-        self.selected = Some(key);
+        let index = self.index_of(key)?;
+        if index == self.active {
+            return Ok(());
+        }
+        self.drop_a_foreign_cage(key);
+        self.active = index;
+        // The mask, the mirror and the rig belong to the subtool, so all three
+        // change with it and none of them is re-pointed at the incoming one.
+        // The mirror in particular: the engine already holds one per layer,
+        // set when the sculptor toggled it there, so activation has nothing to
+        // write — it used to, and that is what carried one subtool's symmetry
+        // onto the next.
+        //
+        // The frozen region is drawn, and a different subtool's mask is a
+        // different picture, so the viewport is told to look again. Nothing in
+        // the surface moved, which is exactly why the mask carries a counter
+        // of its own.
+        self.mask_revision = self.mask_revision.wrapping_add(1);
         self.arm_mesh_sculptor();
         Ok(())
     }
@@ -3886,6 +4627,56 @@ impl SceneModel for ClayDocument {
         // Hiding a layer removes its contribution, so the surface moves.
         self.refill(id, &[])?;
         Ok(())
+    }
+
+    /// Shows one subtool alone, or releases the solo and puts the scene back.
+    ///
+    /// Nothing here touches `active`: the spec asks for a viewing convenience,
+    /// and a sculptor who solos a layer to look at it has not said they want
+    /// to sculpt on it.
+    fn set_solo(&mut self, key: Option<LayerKey>) -> Result<(), ModelError> {
+        let Some(key) = key else {
+            let Some(solo) = self.solo.clone() else {
+                return Ok(());
+            };
+            return self.write_visibility(&solo.was, None);
+        };
+        // Refused before anything is hidden, so a solo on a layer that has
+        // gone leaves the scene as it was.
+        self.index_of(key)?;
+
+        // What to restore is what stood before the *first* solo, not what the
+        // one already engaged left behind — otherwise soloing a second subtool
+        // would make the first solo's hiding permanent. Layers that arrived
+        // since keep what they have now, since the older snapshot has nothing
+        // to say about them.
+        let mut was = self.visibility_snapshot();
+        if let Some(solo) = &self.solo {
+            for (key, visible) in &solo.was {
+                if let Some(entry) = was.iter_mut().find(|(known, _)| known == key) {
+                    entry.1 = *visible;
+                }
+            }
+        }
+
+        let wanted: Vec<(LayerKey, bool)> = self
+            .layers
+            .iter()
+            .map(|layer| (layer.key, layer.key == key))
+            .collect();
+        let before = self.visibility_snapshot();
+        let outcome = self.write_visibility(&wanted, Some(Solo { layer: key, was }));
+        // `write_visibility` states that "a batch that failed halfway is a
+        // batch whose caller is about to restore", and this is that caller.
+        // Each flag goes through `set_layer_visible`, which refills and can
+        // genuinely fail; without the restore the scene was left with some
+        // layers hidden and some not, and `self.solo` stayed `None` — so the
+        // interface showed no solo engaged and offered nothing that would put
+        // the rest of the scene back.
+        if outcome.is_err() {
+            let _ = self.write_visibility(&before, None);
+        }
+        outcome
     }
 
     fn set_layer_protection(
@@ -3953,6 +4744,25 @@ impl SceneModel for ClayDocument {
         name: &str,
         representation: Representation,
     ) -> Result<LayerKey, ModelError> {
+        // A mesh layer is made by *carrying* a mesh, and there is no engine
+        // call that makes an empty one — `attach_mesh_layer` takes the
+        // triangles. Asked for one anyway, this used to fall through to
+        // `add_sdf_layer` and then record the row as a mesh: the sculptor got a
+        // row labelled "Malha" backed by a field layer that nothing could ever
+        // put triangles into, offering the mesh vocabulary over nothing, and
+        // active on arrival. The specification qualifies the offer — "SDF,
+        // voxel and mesh *where a mesh source is at hand*" — and here there is
+        // none, so this says so instead of making the dead row.
+        if representation == Representation::Mesh {
+            return Err(ModelError::engine(
+                "uma camada de malha vem de uma malha importada; use Ficheiro → Importar",
+            ));
+        }
+        // Made unique before the engine sees it. A voxel layer's grid is
+        // reachable only by name (ClayCore #365), so two of them sharing one
+        // shadow each other; `rename_layer` refuses a collision a sculptor
+        // typed, and this is the collision nobody typed.
+        let name = &self.unique_layer_name(name);
         // A voxel representation is a different call, not a flag: the grid
         // has to be the document's or it is not saved with it.
         let id = match representation {
@@ -4081,11 +4891,24 @@ impl SceneModel for ClayDocument {
         });
 
         self.document.remove_layer(id).map_err(ModelError::engine)?;
-        self.layers.remove(index);
-        self.active = self.active.min(self.layers.len() - 1);
-        if self.selected == Some(key) {
-            self.selected = None;
+        let retired = self.layers.remove(index);
+        // Kept, because a removal is undoable and everything this side knows
+        // about the layer is not — see `retired`.
+        self.retired.insert(id, retired);
+        // The sculpt target follows the layer it pointed at rather than the
+        // *index* it sat on. Every row above the one removed shifts down by
+        // one, and clamping alone left `active` where it was: removing the
+        // first of three while the second was active moved the sculpt target
+        // to the third — and with it the mask, the mirror and the rig, since
+        // all three are the active subtool's now.
+        if self.active > index {
+            self.active -= 1;
         }
+        self.active = self.active.min(self.layers.len() - 1);
+        // A solo naming a layer that has gone is a solo no row can release:
+        // the control is drawn per stack row and the soloed row is the one that
+        // left, so the rest of the scene stayed hidden with no way back.
+        self.release_solo_of(key)?;
         let active = self.active_layer().id;
         self.refill(active, &[])?;
         // Re-evaluated against the document as it is now, which is what drops
@@ -4149,6 +4972,32 @@ impl SceneModel for ClayDocument {
         )
     }
 
+    fn layer_bounds(&self, key: LayerKey) -> Option<([f32; 3], [f32; 3])> {
+        let index = self.index_of(key).ok()?;
+        let layer = &self.layers[index];
+        // A grid says where it is itself. `clay_layer_bounds` answers with a
+        // layer's SDF extent, which a voxel layer does not have — it reported
+        // nothing for one however much material was in it, so Frame All framed
+        // the default box over a sculpt that was somewhere else.
+        if layer.representation == Representation::Voxel {
+            return layer.voxel_bounds;
+        }
+        // And a carried mesh says where it is itself, for the same reason: it
+        // holds no SDF content either, so the engine reported nothing for one
+        // however many triangles were in it — which left the whole-subtool
+        // manipulator on a mesh sized to a default and Frame All framing
+        // nothing. Placed, because the vertices are remembered where the engine
+        // holds them and the layer transform moves them.
+        if layer.representation == Representation::Mesh {
+            let measured = layer.mesh_bounds?;
+            return Some(match self.carried_placement(key) {
+                Some(transform) => Self::placed_box(&transform, measured),
+                None => measured,
+            });
+        }
+        self.document.layer_bounds(layer.id).ok().flatten()
+    }
+
     fn layer_cost(&self, key: LayerKey) -> Result<clayspace_model::LayerCost, ModelError> {
         let id = self.layer_id(key)?;
         // The threshold below which the engine advises collapsing. Its own
@@ -4197,41 +5046,28 @@ impl SceneModel for ClayDocument {
             .add_sdf_layer(name)
             .map_err(ModelError::engine)?;
         let key = self.take_key();
-        self.layers.push(Layer {
-            id,
-            transform: clayspace_model::Transform::default(),
-            key,
-            name: name.to_string(),
-            engine_name: name.to_string(),
-            representation: Representation::Mesh,
-            carries_geometry: false,
-            visible: true,
-            protection: Protection::default(),
-            intensity: 100,
-            voxel_bounds: None,
-            voxel_chunks: std::collections::BTreeMap::new(),
-            sculpt_layers: Vec::new(),
-        });
+        // A mesh row is recorded before its triangles arrive, which is what
+        // `Layer::new` already says for this representation.
+        self.layers
+            .push(Layer::new(id, key, name, Representation::Mesh));
         Ok(key)
     }
 
-    fn select_at(&mut self, origin: [f32; 3], direction: [f32; 3]) -> Option<LayerKey> {
-        // Attributed, because a selection has to name what it selected. The
-        // engine excludes ghosted layers from picking, so honouring ghost is
-        // not something this has to reimplement.
+    fn layer_at(&mut self, origin: [f32; 3], direction: [f32; 3]) -> Option<LayerKey> {
+        // Attributed, because a pick has to name what it met. The engine
+        // excludes ghosted layers from picking, so honouring ghost is not
+        // something this has to reimplement — a ray through a ghost answers
+        // with whatever stands behind it.
         let hit = self
             .document
             .raycast_attributed(origin, direction)
             .ok()
-            .flatten();
-
-        self.selected = hit.and_then(|hit| hit.layer).and_then(|id| {
-            self.layers
-                .iter()
-                .find(|layer| layer.id == id)
-                .map(|layer| layer.key)
-        });
-        self.selected
+            .flatten()?;
+        let id = hit.layer?;
+        self.layers
+            .iter()
+            .find(|layer| layer.id == id)
+            .map(|layer| layer.key)
     }
 }
 
@@ -4310,7 +5146,17 @@ impl DocumentModel for ClayDocument {
             let _ = self.document.remove_layer(layer);
         }
         self.crossing_redo.clear();
-        self.document.save(path).map_err(ModelError::engine)?;
+        // A solo is a way of looking at the document, not part of it. Written
+        // as it stands, the file would reopen with everything but one subtool
+        // hidden — and so would the crash recovery, which is the copy nobody
+        // gets to check before trusting it. So the real pattern goes down and
+        // the solo is put back around the write.
+        match self.solo.clone() {
+            Some(solo) => self.with_visibility(&solo.was, |doc| {
+                doc.document.save(path).map_err(ModelError::engine)
+            })?,
+            None => self.document.save(path).map_err(ModelError::engine)?,
+        }
         // The object table, beside it. A failure to write it is reported and
         // does not fail the save: the sculpture is in the `.clay` and losing
         // the bookkeeping is not losing the work. It would be a poor trade to
@@ -4413,6 +5259,19 @@ impl ClayDocument {
                             locked: i.protection.locked,
                         })
                         .unwrap_or_default(),
+                    // Read as off rather than as a fresh layer's X.
+                    //
+                    // The ABI sets a layer mirror and has no call that reads
+                    // one back, and the file keeps whatever was saved — so
+                    // neither of these can be made true here by asking.
+                    // Writing the fresh-layer default over what was loaded
+                    // would be worse than assuming: the mirror is a property
+                    // evaluation reads, so a layer saved unmirrored would come
+                    // back mirrored and the form itself would change on
+                    // reopen. Off is what a reopened document has always
+                    // recorded, and the first stroke that wants otherwise
+                    // writes through and makes both true.
+                    symmetry: [false; 3],
                     // A layer that was never named comes back empty rather
                     // than absent, and an unnamed row in the stack is worse to
                     // work with than a numbered one.
@@ -4449,28 +5308,29 @@ impl ClayDocument {
             crossing_undo: Vec::new(),
             crossing_redo: Vec::new(),
             suppressed: std::collections::HashSet::new(),
+            retired: std::collections::HashMap::new(),
+            solo: None,
+            visibility_undo: Vec::new(),
+            visibility_redo: Vec::new(),
+            redo_room: 0,
             curve: None,
             live_hook: None,
             lattice: None,
             voxel_display: VoxelDisplay::default(),
             voxel_blur: SmoothBlur::default(),
             voxel_smooth: std::collections::BTreeMap::new(),
-            mask: None,
             cage_revision: 0,
             mask_revision: 0,
-            symmetry: [false; 3],
             combine: CombineSettings::for_strokes(),
             alpha: None,
             recording_pass: false,
             next_key,
-            selected: None,
-            armature: None,
-            armature_bounds: None,
             skin: SkinSettings::default(),
             objects: Vec::new(),
             selected_object: None,
             dragging: None,
             object_states: std::collections::BTreeMap::new(),
+            layer_states: std::collections::BTreeMap::new(),
         };
 
         // Undo starts recording from here: opening is not something the user
@@ -4508,26 +5368,45 @@ impl ClayDocument {
                 .map_err(|e| unreadable(e.to_string()))?;
         }
 
-        // The rig, if the document carries one. Before ClayCore 0.29.0 a
-        // placed armature was write-only, so a reopened document held the
-        // skinned surface and nothing that could pose it (#77).
+        // And where every carried mesh's triangles are, for the same reason:
+        // that box is cached on the layer and a layer rebuilt from a file
+        // starts without one, so a reopened mesh subtool would report no
+        // extent and take a manipulator sized to a default.
+        let carried: Vec<LayerKey> = model
+            .layers
+            .iter()
+            .filter(|layer| layer.representation == Representation::Mesh)
+            .map(|layer| layer.key)
+            .collect();
+        for key in carried {
+            model.refresh_mesh_bounds(key);
+        }
+
+        // Every rig the document carries, each onto the subtool that holds it.
+        // Before ClayCore 0.29.0 a placed armature was write-only, so a
+        // reopened document held the skinned surface and nothing that could
+        // pose it (#77). Recovering all of them rather than the first is what
+        // makes two rigs survive a reopen: the record is per layer now, so a
+        // second one no longer overwrites the first.
+        let mut first_rig = None;
         for (index, id) in ids.into_iter().enumerate() {
-            if let Some((node, tree)) = Self::recover_armature(&model.document, id) {
-                model.armature_bounds = Some(Self::armature_bounds(&tree, model.skin));
-                // One node, which is the whole rig: since ClayCore 0.30.0 the
-                // signs travel with it, so there are no separate cutter items
-                // left behind for a reader to miss (#99).
-                model.armature = Some((id, vec![node], tree));
-                // And that layer becomes the active one.
-                //
-                // `armature()` answers only for the active layer — deliberately,
-                // so switching layers cannot hand the next click someone else's
-                // rig — so recovering a tree onto an inactive layer recovers it
-                // into somewhere nothing can see it. Reopening a document that
-                // holds a rig should put you on the rig.
-                model.active = index;
-                break;
-            }
+            let Some((node, tree)) = Self::recover_armature(&model.document, id) else {
+                continue;
+            };
+            model.layers[index].armature_bounds = Some(Self::armature_bounds(&tree, model.skin));
+            // One node, which is the whole rig: since ClayCore 0.30.0 the
+            // signs travel with it, so there are no separate cutter items
+            // left behind for a reader to miss (#99).
+            model.layers[index].armature = Some((vec![node], tree));
+            first_rig = first_rig.or(Some(index));
+        }
+        // And the first rigged subtool becomes the active one.
+        //
+        // `armature()` answers only for the active subtool — deliberately, so
+        // switching subtools cannot hand the next click someone else's rig —
+        // so reopening a document that holds a rig should put you on one.
+        if let Some(index) = first_rig {
+            model.active = index;
         }
 
         model.refresh_stats();
@@ -4567,10 +5446,15 @@ impl ExchangeModel for ClayDocument {
         )
         .map_err(ModelError::engine)?;
 
-        let name = path
-            .file_stem()
-            .map(|stem| stem.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "Importado".to_string());
+        // Made unique against the stack, because importing the same file twice
+        // is a thing sculptors do and two layers sharing a name shadow one
+        // another's grid once either is crossed to voxels (ClayCore #365).
+        let name = self.unique_layer_name(
+            &path
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "Importado".to_string()),
+        );
 
         match settings.becomes {
             ImportAs::Reference => self.attach_reference(&mesh, &name, settings),
@@ -4646,6 +5530,16 @@ impl ClayDocument {
             // and nothing here pretends otherwise.
             ..Layer::new(id, key, name, Representation::Mesh)
         });
+        // Where the triangles are, which is the only account of a carried
+        // mesh's extent there is — the engine answers `clay_layer_bounds` from
+        // a layer's SDF content and this layer has none.
+        self.refresh_mesh_bounds(key);
+        // The imported form is the one the sculptor just asked for, so it is
+        // the one they are working on: the spec says an inserted subtool
+        // "arrives selected". Through the one activation call rather than by
+        // assigning the index, so everything activation owes — arming the mesh
+        // sculptor among it — is owed here too.
+        self.set_active_layer(key)?;
         self.refresh_stats();
         Ok(())
     }
@@ -4795,11 +5689,18 @@ impl ClayDocument {
     /// thing whatever it was run on. Unblurred: a wall is a thickness, and
     /// rounding it off is the rim controls' job rather than the crossing's.
     fn extrude_from_grid(&mut self, settings: ExtrudeSettings) -> Result<(), ModelError> {
-        let engine_name = self.active_layer().engine_name.clone();
+        let index = self.active;
+        let engine_name = self.layers[index].engine_name.clone();
+        // A literal name is a collision waiting for the second extrusion, and a
+        // collision shadows a grid (ClayCore #365) — so this goes through the
+        // same derivation every other layer-creating route does.
+        let name = self.unique_layer_name("Extrusão");
         // Split by field, because the grid borrows the document exclusively
-        // and the mask is a sibling.
-        let Self { document, mask, .. } = self;
-        let mask = mask.as_ref().expect("checked by the caller");
+        // and the layer list holding the mask is a sibling.
+        let Self {
+            document, layers, ..
+        } = self;
+        let mask = layers[index].mask.as_ref().expect("checked by the caller");
         let extruded = {
             let (_, grid) = document
                 .voxel_layer(&engine_name)
@@ -4808,11 +5709,25 @@ impl ClayDocument {
                 .map_err(ModelError::engine)?
         };
         let id = document
-            .voxel_to_layer(&extruded, "Extrusão", 0)
+            .voxel_to_layer(&extruded, &name, 0)
             .map_err(ModelError::engine)?;
-        let key = self.adopt_engine_layer(id, "Extrusão", Representation::Sdf)?;
+        let key = self.adopt_engine_layer(id, &name, Representation::Sdf)?;
         self.after_conversion(key)?;
-        Ok(())
+        self.stay_on_the_masked_subtool(index)
+    }
+
+    /// Puts the sculptor back on the subtool they were masking.
+    ///
+    /// An extrusion arrives as a row of its own, and creating a row activates
+    /// it — which, now that a mask belongs to the subtool it was painted on,
+    /// would make the mask look consumed: the panel would be reading the
+    /// mask of the shell that was just made, and there is none. The promise is
+    /// the opposite one, and it is the reason Extrudar reads the mask rather
+    /// than taking it: an extrusion you do not like is thrown away without
+    /// painting the mask again.
+    fn stay_on_the_masked_subtool(&mut self, index: usize) -> Result<(), ModelError> {
+        let key = self.layers[index].key;
+        self.set_active_layer(key)
     }
 }
 
@@ -5336,6 +6251,25 @@ impl LatticeModel for ClayDocument {
 }
 
 impl ClayDocument {
+    /// Takes down a cage that belongs to a subtool other than `incoming`.
+    ///
+    /// A cage is a transient authoring gesture, not per-subtool state: it is
+    /// sized to what one form contains, and that box means nothing around
+    /// another. So it does not travel. The sculptor is asked to apply or drop
+    /// it before the switch is dispatched — `LatticeViewModel` holds that
+    /// question — and this is the floor under that: a cage that reaches the
+    /// switch unresolved is dropped, preview and all, rather than reappearing
+    /// around a form it was never fitted to.
+    fn drop_a_foreign_cage(&mut self, incoming: LayerKey) {
+        if self
+            .lattice
+            .as_ref()
+            .is_some_and(|cage| cage.layer != incoming)
+        {
+            self.cancel_lattice();
+        }
+    }
+
     /// The box to wrap a cage around the active layer with.
     ///
     /// `bounds` answers from the layer's *SDF* extent, which a mesh layer does
@@ -5347,17 +6281,12 @@ impl ClayDocument {
         if representation != Representation::Mesh {
             return self.bounds();
         }
-        let name = self.active_layer().engine_name.clone();
-        let (positions, _, _, _) = self.document.read_mesh_layer(&name).ok()?;
-        let mut min = [f32::MAX; 3];
-        let mut max = [f32::MIN; 3];
-        for vertex in &positions {
-            for axis in 0..3 {
-                min[axis] = min[axis].min(vertex[axis]);
-                max[axis] = max[axis].max(vertex[axis]);
-            }
-        }
-        (!positions.is_empty()).then_some((min, max))
+        // Through the one cache both this and `layer_bounds` read, so the cage
+        // and the whole-subtool manipulator cannot come to different answers
+        // about how big the form is or where it stands.
+        let key = self.active_layer().key;
+        self.refresh_mesh_bounds(key);
+        SceneModel::layer_bounds(self, key)
     }
 
     /// Bends a mesh layer through the cage, forward.
@@ -5372,7 +6301,10 @@ impl ClayDocument {
         let engine_name = self.layers[index].engine_name.clone();
         self.ensure_mesh_sculptor(cage.layer, &engine_name)?;
 
-        let lattice = Self::cage_lattice(cage)?;
+        let lattice = match self.carried_placement(cage.layer) {
+            Some(transform) => Self::carried_cage_lattice(cage, &transform)?,
+            None => Self::cage_lattice(cage)?,
+        };
 
         let mut deltas = claycore::MeshDeltas::new().map_err(ModelError::engine)?;
         // What the last preview did, taken back before the cage is laid down
@@ -5415,6 +6347,7 @@ impl ClayDocument {
             });
             self.mesh_redo.clear();
         }
+        self.refresh_mesh_bounds(cage.layer);
         self.refresh_stats();
         Ok(())
     }
@@ -5454,6 +6387,52 @@ impl ClayDocument {
                 .map_err(ModelError::engine)?;
         }
         Ok(lattice)
+    }
+
+    /// The same cage, written in a moved mesh subtool's own coordinates.
+    ///
+    /// The sculptor drags the cage's corners where the form is *drawn*, and
+    /// the sculptor's vertices are where the engine holds them — see
+    /// [`ClayDocument::carried_placement`]. So the box is carried back and each
+    /// control point is given what the drawn cage would displace the point it
+    /// stands over by, turned and scaled the same way back.
+    ///
+    /// Exact for a subtool that was moved or resized, which is what the
+    /// whole-subtool manipulator writes most of the time. A *turned* one is
+    /// resampled onto the enclosing axis-aligned box, since a lattice takes one
+    /// — the error is the same order as the preview's own, and the alternative
+    /// is a cage that misses the vertices altogether.
+    fn carried_cage_lattice(
+        cage: &Cage,
+        transform: &clayspace_model::Transform,
+    ) -> Result<claycore::MeshLattice, ModelError> {
+        let drawn = Self::cage_lattice(cage)?;
+        let (min, max) = Self::box_through((cage.min, cage.max), |point| {
+            Self::into_local(transform, point)
+        });
+        let mut carried =
+            claycore::MeshLattice::new(min, max, cage.divisions).map_err(ModelError::engine)?;
+        let [nx, ny, _] = cage.divisions.map(|n| n as usize);
+        for at in 0..cage.point_count() {
+            let coordinate = [
+                (at % nx) as i32,
+                ((at / nx) % ny) as i32,
+                (at / (nx * ny)) as i32,
+            ];
+            let rest = carried.position(coordinate).map_err(ModelError::engine)?;
+            let moved = drawn
+                .displacement(Self::into_world(transform, rest))
+                .map_err(ModelError::engine)?;
+            if moved.iter().all(|axis| *axis == 0.0) {
+                continue;
+            }
+            let turned = Self::turned_by(transform.rotation_axis, -transform.rotation_angle, moved);
+            let scale = transform.scale.max(1e-4);
+            carried
+                .set_offset(coordinate, std::array::from_fn(|i| turned[i] / scale))
+                .map_err(ModelError::engine)?;
+        }
+        Ok(carried)
     }
 
     /// What the cage would move each of these points by.
@@ -5570,7 +6549,7 @@ impl ClayDocument {
 
 impl MaskModel for ClayDocument {
     fn mask_state(&self) -> MaskState {
-        match &self.mask {
+        match Self::active_mask(&self.layers, self.active) {
             Some(mask) => MaskState {
                 present: true,
                 painted_cells: mask.painted_count().unwrap_or(0),
@@ -5588,12 +6567,13 @@ impl MaskModel for ClayDocument {
         // Clearing a mask that was never painted is a no-op rather than a
         // refusal: the menu entry is always there, and pressing it on an empty
         // mask should do the obvious nothing.
+        let index = self.active;
         if matches!(op, MaskOp::Clear) {
-            self.mask = None;
+            self.layers[index].mask = None;
             return Ok(());
         }
 
-        let Some(mask) = self.mask.as_mut() else {
+        let Some(mask) = self.layers[index].mask.as_mut() else {
             return Err(ModelError::engine("não há máscara para editar"));
         };
 
@@ -5624,12 +6604,9 @@ impl MaskModel for ClayDocument {
 
     fn extrude_mask(&mut self, settings: ExtrudeSettings) -> Result<(), ModelError> {
         let settings = settings.sanitized();
-        let Some(mask) = self.mask.as_ref() else {
-            return Err(ModelError::engine("não há máscara para extrudar"));
-        };
-        if mask.painted_count().unwrap_or(0) == 0 {
-            return Err(ModelError::engine("a máscara está vazia"));
-        }
+        let index = self.active;
+        let source = index;
+        self.a_mask_worth_extruding()?;
 
         // Three representations, two verbs, one of them absent.
         //
@@ -5649,9 +6626,12 @@ impl MaskModel for ClayDocument {
             Representation::Sdf => {}
         }
 
-        let layer = self.active_layer().id;
-        let item = self
-            .document
+        let layer = self.layers[index].id;
+        let Self {
+            document, layers, ..
+        } = self;
+        let mask = layers[index].mask.as_ref().expect("checked above");
+        let item = document
             .mask_extrude(layer, mask, extrude_params(settings))
             .map_err(ModelError::engine)?;
 
@@ -5667,16 +6647,17 @@ impl MaskModel for ClayDocument {
             .map_err(ModelError::engine)?;
         self.refill(id, &[node])?;
         self.refresh_stats();
-        Ok(())
+        self.stay_on_the_masked_subtool(source)
     }
 }
 
 impl ArmatureModel for ClayDocument {
     fn armature(&self) -> Option<Armature> {
-        let (layer, _, tree) = self.armature.as_ref()?;
-        // Only while it still belongs to the layer being worked on: an
-        // armature on a hidden layer is not the one a click should edit.
-        (*layer == self.active_layer().id).then(|| tree.clone())
+        // The active subtool's own rig and no other. A document may carry one
+        // per layer, and a click edits the one belonging to what is being
+        // worked on — an armature on the subtool beside it is not.
+        let (_, tree) = self.active_layer().armature.as_ref()?;
+        Some(tree.clone())
     }
 
     fn begin_armature(&mut self, position: [f32; 3], radius: f32) -> Result<(), ModelError> {
@@ -5695,6 +6676,16 @@ impl ArmatureModel for ClayDocument {
         // removable without touching the sculpt.
         let key = self.add_layer("Armadura", Representation::Sdf)?;
         let layer = self.layer_id(key)?;
+
+        // And with symmetry off, unlike every other new subtool.
+        //
+        // A rig does its own mirroring: `add_zsphere` places the reflected
+        // node itself, because the host holds the topology and the tree has to
+        // carry both halves for either to be posable. A layer mirror would
+        // reflect the placed item *as well*, so a stroke on the rig's own
+        // subtool at the fresh-subtool default would hang a second left arm
+        // off the first one.
+        self.set_symmetry([false; 3])?;
 
         // And everything else steps out of the way.
         //
@@ -5725,7 +6716,8 @@ impl ArmatureModel for ClayDocument {
             .map_err(ModelError::engine)?;
         let placed = self.place_armature(layer, &tree);
         self.document.end_undo_group().map_err(ModelError::engine)?;
-        self.armature = Some((layer, placed?, tree));
+        let index = self.index_of(key)?;
+        self.layers[index].armature = Some((placed?, tree));
         Ok(())
     }
 
@@ -5736,7 +6728,7 @@ impl ArmatureModel for ClayDocument {
         radius: f32,
         mirrored: bool,
     ) -> Result<NodeIndex, ModelError> {
-        let Some((_, _, tree)) = self.armature.as_mut() else {
+        let Some((_, tree)) = self.layers[self.active].armature.as_mut() else {
             return Err(ModelError::engine("não há armadura nesta camada"));
         };
         if tree.get(parent).is_none() {
@@ -5753,7 +6745,7 @@ impl ArmatureModel for ClayDocument {
                 // what keeps two arms hanging off two shoulders rather than
                 // both off the same one.
                 let mirror_parent = self.mirror_of(parent).unwrap_or(parent);
-                if let Some((_, _, tree)) = self.armature.as_mut() {
+                if let Some((_, tree)) = self.layers[self.active].armature.as_mut() {
                     tree.add_child(mirror_parent, reflected, radius);
                 }
             }
@@ -5764,7 +6756,7 @@ impl ArmatureModel for ClayDocument {
     }
 
     fn move_zsphere(&mut self, index: NodeIndex, delta: [f32; 3]) -> Result<(), ModelError> {
-        let Some((_, _, tree)) = self.armature.as_mut() else {
+        let Some((_, tree)) = self.layers[self.active].armature.as_mut() else {
             return Err(ModelError::engine("não há armadura nesta camada"));
         };
         tree.move_subtree(index, delta);
@@ -5772,7 +6764,7 @@ impl ArmatureModel for ClayDocument {
     }
 
     fn resize_zsphere(&mut self, index: NodeIndex, radius: f32) -> Result<(), ModelError> {
-        let Some((_, _, tree)) = self.armature.as_mut() else {
+        let Some((_, tree)) = self.layers[self.active].armature.as_mut() else {
             return Err(ModelError::engine("não há armadura nesta camada"));
         };
         tree.set_radius(index, radius);
@@ -5788,7 +6780,7 @@ impl ArmatureModel for ClayDocument {
         // move, set-radius and delete — so it is done by rewriting the whole
         // node, which is what the engine does underneath for every one of them
         // anyway.
-        let Some((_, _, tree)) = self.armature.as_mut() else {
+        let Some((_, tree)) = self.layers[self.active].armature.as_mut() else {
             return Err(ModelError::engine("não há armadura nesta camada"));
         };
         tree.reparent(index, new_parent)?;
@@ -5796,7 +6788,7 @@ impl ArmatureModel for ClayDocument {
     }
 
     fn remove_zsphere(&mut self, index: NodeIndex) -> Result<(), ModelError> {
-        let Some((_, _, tree)) = self.armature.as_mut() else {
+        let Some((_, tree)) = self.layers[self.active].armature.as_mut() else {
             return Err(ModelError::engine("não há armadura nesta camada"));
         };
         if tree.nodes.len() <= 1 {
@@ -5812,7 +6804,7 @@ impl ArmatureModel for ClayDocument {
     }
 
     fn insert_zsphere(&mut self, child: NodeIndex) -> Result<NodeIndex, ModelError> {
-        let Some((_, _, tree)) = self.armature.as_mut() else {
+        let Some((_, tree)) = self.layers[self.active].armature.as_mut() else {
             return Err(ModelError::engine("não há armadura nesta camada"));
         };
         let inserted = tree
@@ -5823,7 +6815,7 @@ impl ArmatureModel for ClayDocument {
     }
 
     fn set_zsphere_negative(&mut self, index: NodeIndex, negative: bool) -> Result<(), ModelError> {
-        let Some((_, _, tree)) = self.armature.as_mut() else {
+        let Some((_, tree)) = self.layers[self.active].armature.as_mut() else {
             return Err(ModelError::engine("não há armadura nesta camada"));
         };
         tree.set_negative(index, negative)?;
@@ -5832,7 +6824,7 @@ impl ArmatureModel for ClayDocument {
 
     fn set_skin(&mut self, skin: SkinSettings) -> Result<(), ModelError> {
         self.skin = skin;
-        if self.armature.is_some() {
+        if self.active_layer().armature.is_some() {
             self.rewrite_armature()?;
         }
         Ok(())
@@ -5902,8 +6894,12 @@ impl ClayDocument {
         let placed = vec![node];
 
         // Bounds over the whole tree, negatives included: they are what the
-        // vacated box has to cover when a rig is rewritten.
-        self.armature_bounds = Some(Self::armature_bounds(tree, self.skin));
+        // vacated box has to cover when a rig is rewritten. On the rig's own
+        // layer, because that is where the rig is.
+        let bounds = Self::armature_bounds(tree, self.skin);
+        if let Some(row) = self.layers.iter_mut().find(|row| row.id == layer) {
+            row.armature_bounds = Some(bounds);
+        }
         self.refill(layer, &placed)?;
         self.refresh_stats();
         Ok(placed)
@@ -5945,7 +6941,25 @@ impl ClayDocument {
                 kept.remove(id);
                 continue;
             }
-            if let Some(known) = kept.remove(id) {
+            // A layer this side removed and history has brought back: the
+            // engine restores it with the id it had, and everything the host
+            // knows about it — its key, its mask, its mirror, where it stands,
+            // its meshed chunks — is only recoverable from the record kept when
+            // it left. Rebuilt from the document instead, a restored operand
+            // came back under a new `LayerKey`, so the mask and the symmetry
+            // were gone, every `PlacedObject` row was still filed under a key
+            // that no longer existed, and the whole-subtool manipulator drew at
+            // the origin while the engine held the real transform.
+            if let Some(mut known) = kept.remove(id).or_else(|| self.retired.remove(id)) {
+                // Visibility is the one fact about a surviving layer that
+                // history moves under it. `SetLayerVisibleCmd` is journaled
+                // like everything else and the engine reverts it exactly, but
+                // it cannot tell this side that it did — so the eye in the
+                // stack sat where the command left it while the surface showed
+                // the layer undo had brought back.
+                if let Ok(info) = self.document.layer_info(*id) {
+                    known.visible = info.visible;
+                }
                 rebuilt.push(known);
                 continue;
             }
@@ -5956,17 +6970,13 @@ impl ClayDocument {
                 .ok()
                 .filter(|name| !name.is_empty())
                 .unwrap_or_else(|| format!("Camada {}", rebuilt.len() + 1));
+            let representation = match info.map(|i| i.representation) {
+                Some(claycore::LayerRepresentation::Voxel) => Representation::Voxel,
+                Some(claycore::LayerRepresentation::Mesh) => Representation::Mesh,
+                _ => Representation::Sdf,
+            };
+            let key = self.take_key();
             rebuilt.push(Layer {
-                id: *id,
-                transform: clayspace_model::Transform::default(),
-                key: self.take_key(),
-                name: name.clone(),
-                engine_name: name,
-                representation: match info.map(|i| i.representation) {
-                    Some(claycore::LayerRepresentation::Voxel) => Representation::Voxel,
-                    Some(claycore::LayerRepresentation::Mesh) => Representation::Mesh,
-                    _ => Representation::Sdf,
-                },
                 // As above: the engine's own answer, so a Mesh row here has
                 // triangles behind it.
                 carries_geometry: true,
@@ -5977,19 +6987,40 @@ impl ClayDocument {
                         locked: i.protection.locked,
                     })
                     .unwrap_or_default(),
-                intensity: 100,
-                voxel_bounds: None,
-                voxel_chunks: std::collections::BTreeMap::new(),
-                sculpt_layers: Vec::new(),
+                // A layer that comes back is one a redo rebuilt, so anything
+                // it carried has to be read out of the document again. The rig
+                // is the only part the document can answer for — a mask and a
+                // mirror are host state, and a redone creation starts them
+                // where a fresh layer starts them.
+                armature: Self::recover_armature(&self.document, *id)
+                    .map(|(node, tree)| (vec![node], tree)),
+                ..Layer::new(*id, key, &name, representation)
             });
         }
 
         self.layers = rebuilt;
+        // Whatever the document no longer holds joins the record above rather
+        // than being dropped: a step forward over the removal takes it away
+        // again, and a step back brings it once more to the same layer it was.
+        self.retired.extend(kept);
         // The layer that was active, if it is still there; otherwise the last
         // one, which is where a removal leaves you in every panel of this kind.
         self.active = active_id
             .and_then(|id| self.layers.iter().position(|layer| layer.id == id))
             .unwrap_or_else(|| self.layers.len().saturating_sub(1));
+        // A mesh layer the engine has just put back carries triangles and no
+        // record of where they are, since that box is the host's.
+        let unmeasured: Vec<LayerKey> = self
+            .layers
+            .iter()
+            .filter(|layer| {
+                layer.representation == Representation::Mesh && layer.mesh_bounds.is_none()
+            })
+            .map(|layer| layer.key)
+            .collect();
+        for key in unmeasured {
+            self.refresh_mesh_bounds(key);
+        }
     }
 
     /// Re-reads the rig from the document after history moved underneath it.
@@ -6003,32 +7034,45 @@ impl ClayDocument {
     /// ClayCore 0.29.0 the document can be asked what the tree is (#77), so it
     /// stays the single source of truth and there is no second history to keep
     /// in step with the first.
+    ///
+    /// Every layer that carries one, because a document may carry several: a
+    /// history step reaches whichever rig its edit belonged to, and re-reading
+    /// only the active subtool's would leave the others describing shapes the
+    /// engine no longer holds. Layers that carry none are skipped, so the cost
+    /// is one probe per rig rather than one per layer.
     fn resync_armature(&mut self) {
-        let Some(layer) = self.armature.as_ref().map(|(l, _, _)| *l) else {
-            return;
-        };
-        // Where the rig was before history moved it. Refilling the layer alone
-        // is not enough: a rig that shrank leaves surface outside its new
-        // bounds, and nothing marks those bricks — the same debt a rewrite
-        // pays with `refill_region`.
-        let vacated = self.armature_bounds;
-        match Self::recover_armature(&self.document, layer) {
-            Some((node, tree)) => {
-                self.armature_bounds = Some(Self::armature_bounds(&tree, self.skin));
-                self.armature = Some((layer, vec![node], tree));
+        let rigged: Vec<(usize, LayerId)> = self
+            .layers
+            .iter()
+            .enumerate()
+            .filter(|(_, layer)| layer.armature.is_some())
+            .map(|(index, layer)| (index, layer.id))
+            .collect();
+        for (index, layer) in rigged {
+            // Where the rig was before history moved it. Refilling the layer
+            // alone is not enough: a rig that shrank leaves surface outside its
+            // new bounds, and nothing marks those bricks — the same debt a
+            // rewrite pays with `refill_region`.
+            let vacated = self.layers[index].armature_bounds;
+            match Self::recover_armature(&self.document, layer) {
+                Some((node, tree)) => {
+                    self.layers[index].armature_bounds =
+                        Some(Self::armature_bounds(&tree, self.skin));
+                    self.layers[index].armature = Some((vec![node], tree));
+                }
+                // Undone past the rig's own creation: there is no armature now,
+                // and saying so is what stops the next click editing a ghost.
+                None => {
+                    self.layers[index].armature = None;
+                    self.layers[index].armature_bounds = None;
+                }
             }
-            // Undone past the rig's own creation: there is no armature now,
-            // and saying so is what stops the next click editing a ghost.
-            None => {
-                self.armature = None;
-                self.armature_bounds = None;
-            }
-        }
-        if let Some((min, max)) = vacated {
-            if let Err(e) = self.refill_region(min, max) {
-                // Not fatal: the geometry is stale rather than wrong, and the
-                // next edit or settle clears it. Worth saying, though.
-                eprintln!("a região da armadura não pôde ser remalhada: {e}");
+            if let Some((min, max)) = vacated {
+                if let Err(e) = self.refill_region(min, max) {
+                    // Not fatal: the geometry is stale rather than wrong, and
+                    // the next edit or settle clears it. Worth saying, though.
+                    eprintln!("a região da armadura não pôde ser remalhada: {e}");
+                }
             }
         }
     }
@@ -6125,11 +7169,13 @@ impl ClayDocument {
     /// implementation of those ops is a whole-tree replace, so this costs what
     /// they cost.
     fn rewrite_armature(&mut self) -> Result<(), ModelError> {
-        let Some((layer, nodes, tree)) = self.armature.take() else {
+        let index = self.active;
+        let Some((nodes, tree)) = self.layers[index].armature.take() else {
             return Ok(());
         };
+        let layer = self.layers[index].id;
         // Where it was, before it is replaced by where it now is.
-        let vacated = self.armature_bounds;
+        let vacated = self.layers[index].armature_bounds;
 
         // One undoable action, however many engine commands it takes. A rig
         // edit is a remove and a place — and a place is several items once
@@ -6149,7 +7195,7 @@ impl ClayDocument {
         self.document.end_undo_group().map_err(ModelError::engine)?;
 
         let fresh = result?;
-        self.armature = Some((layer, fresh, tree));
+        self.layers[index].armature = Some((fresh, tree));
 
         // An edit that shrinks the rig leaves its old surface behind
         // otherwise: placing the new node refills the region it occupies, and
@@ -6162,7 +7208,7 @@ impl ClayDocument {
 
     /// The node reflecting `index` through x = 0, if the tree holds one.
     fn mirror_of(&self, index: NodeIndex) -> Option<NodeIndex> {
-        let (_, _, tree) = self.armature.as_ref()?;
+        let (_, tree) = self.active_layer().armature.as_ref()?;
         let node = tree.get(index)?;
         let target = Armature::mirrored_position(node.position)?;
         tree.nodes
@@ -6229,6 +7275,37 @@ impl ClayDocument {
     /// Called after an undo or a redo has moved the engine. A depth nothing
     /// recorded leaves the table alone, which is right: the entry that moved
     /// was not an object edit.
+    /// Records where every layer stands, keyed by the engine's current depth.
+    ///
+    /// One snapshot of the whole stack rather than one per layer: a document
+    /// holds a handful of layers, and a partial record would have to say which
+    /// of them the entry belonged to.
+    fn remember_layers(&mut self) {
+        let depth = self.engine_undo_depth();
+        let standing = self
+            .layers
+            .iter()
+            .map(|layer| (layer.key, layer.transform))
+            .collect();
+        self.layer_states.insert(depth, standing);
+    }
+
+    /// Brings the cached layer transforms back to the engine's current depth.
+    ///
+    /// A depth nothing recorded leaves them alone, which is right: the entry
+    /// that moved was not a layer placement.
+    fn resync_layer_transforms(&mut self) {
+        let depth = self.engine_undo_depth();
+        let Some(standing) = self.layer_states.get(&depth).cloned() else {
+            return;
+        };
+        for (key, transform) in standing {
+            if let Some(layer) = self.layers.iter_mut().find(|layer| layer.key == key) {
+                layer.transform = transform;
+            }
+        }
+    }
+
     fn resync_objects(&mut self) {
         let depth = self.engine_undo_depth();
         if let Some(table) = self.object_states.get(&depth) {
@@ -6254,6 +7331,14 @@ impl ClayDocument {
     ) -> Result<(), ModelError> {
         let index = self.index_of(key)?;
         let id = self.layers[index].id;
+        // Inside a gesture the group is already open and the stack was already
+        // recorded at its start; snapshotting per frame would key thirty states
+        // to one undo depth and keep only the last. The object table takes the
+        // same care for the same reason.
+        let gesturing = self.dragging.is_some();
+        if !gesturing {
+            self.remember_layers();
+        }
         self.document
             .set_layer_transform(
                 id,
@@ -6264,9 +7349,128 @@ impl ClayDocument {
             )
             .map_err(ModelError::engine)?;
         self.layers[index].transform = transform;
+        if !gesturing {
+            self.remember_layers();
+        }
         // The layer, because a layer transform moves everything it holds and
         // there is no smaller bound to take.
         self.refill(id, &[])
+    }
+
+    /// Where a carried mesh layer stands, when that is anywhere but the
+    /// origin.
+    ///
+    /// A mesh layer is *carried* rather than evaluated: its triangles are the
+    /// engine's own vertex arrays, and `clay_document_set_layer_transform`
+    /// moves what the tape evaluates — which for this layer is nothing.
+    /// Measured: a mesh subtool moved five units along X drew its first vertex
+    /// at exactly where it drew it before. So the transform the whole-subtool
+    /// manipulator writes reaches a mesh only if the host applies it, and every
+    /// crossing between world space and those vertices goes through this and
+    /// the two conversions below — otherwise a subtool would be drawn in one
+    /// place and sculpted in another.
+    ///
+    /// `None` where the layer stands at the origin unturned and unscaled, which
+    /// is every mesh subtool until one is dragged: the conversion is then the
+    /// identity and skipping it keeps the common path free.
+    fn carried_placement(&self, key: LayerKey) -> Option<clayspace_model::Transform> {
+        let index = self.index_of(key).ok()?;
+        let transform = self.layers[index].transform;
+        (transform != clayspace_model::Transform::default()).then_some(transform)
+    }
+
+    /// A vector turned by an axis-angle rotation.
+    ///
+    /// Rodrigues, because that is the pair the ABI takes: `clay_document_set_layer_transform`
+    /// is given an axis and an angle, so this is the same rotation the engine
+    /// applies to a layer it *can* move, and a mesh subtool turns the way an
+    /// SDF one does.
+    fn turned_by(axis: [f32; 3], angle: f32, v: [f32; 3]) -> [f32; 3] {
+        let length = axis.iter().map(|a| a * a).sum::<f32>().sqrt();
+        if length <= f32::EPSILON || angle == 0.0 {
+            return v;
+        }
+        let k: [f32; 3] = std::array::from_fn(|i| axis[i] / length);
+        let (sin, cos) = angle.sin_cos();
+        let dot = k[0] * v[0] + k[1] * v[1] + k[2] * v[2];
+        let cross = [
+            k[1] * v[2] - k[2] * v[1],
+            k[2] * v[0] - k[0] * v[2],
+            k[0] * v[1] - k[1] * v[0],
+        ];
+        std::array::from_fn(|i| v[i] * cos + cross[i] * sin + k[i] * dot * (1.0 - cos))
+    }
+
+    /// A point of a carried mesh, standing where the layer transform puts it.
+    fn into_world(transform: &clayspace_model::Transform, point: [f32; 3]) -> [f32; 3] {
+        let turned = Self::turned_by(transform.rotation_axis, transform.rotation_angle, point);
+        let scale = transform.scale.max(1e-4);
+        std::array::from_fn(|i| turned[i] * scale + transform.position[i])
+    }
+
+    /// The way back: a world point in the mesh's own coordinates.
+    fn into_local(transform: &clayspace_model::Transform, point: [f32; 3]) -> [f32; 3] {
+        let scale = transform.scale.max(1e-4);
+        let moved: [f32; 3] = std::array::from_fn(|i| (point[i] - transform.position[i]) / scale);
+        Self::turned_by(transform.rotation_axis, -transform.rotation_angle, moved)
+    }
+
+    /// The box that holds a box once every corner of it has been moved.
+    ///
+    /// All eight corners, because a turned box is not axis aligned and taking
+    /// the two named corners alone would report a smaller box than the form
+    /// occupies.
+    fn box_through((min, max): Bounds, map: impl Fn([f32; 3]) -> [f32; 3]) -> Bounds {
+        let mut held_min = [f32::MAX; 3];
+        let mut held_max = [f32::MIN; 3];
+        for corner in 0..8 {
+            let point = map(std::array::from_fn(|axis| {
+                if corner >> axis & 1 == 0 {
+                    min[axis]
+                } else {
+                    max[axis]
+                }
+            }));
+            for axis in 0..3 {
+                held_min[axis] = held_min[axis].min(point[axis]);
+                held_max[axis] = held_max[axis].max(point[axis]);
+            }
+        }
+        (held_min, held_max)
+    }
+
+    /// A carried mesh's own box, standing where the layer transform puts it.
+    fn placed_box(transform: &clayspace_model::Transform, bounds: Bounds) -> Bounds {
+        Self::box_through(bounds, |point| Self::into_world(transform, point))
+    }
+
+    /// Re-reads a mesh layer's own box after something moved its vertices.
+    ///
+    /// Every mesh edit lands in the sculptor's vertex arrays and nothing else
+    /// notices, so the cache `layer_bounds` answers from is only right if the
+    /// edits say so. Cheap: one read of the layer's positions.
+    fn refresh_mesh_bounds(&mut self, key: LayerKey) {
+        let Ok(index) = self.index_of(key) else {
+            return;
+        };
+        if self.layers[index].representation != Representation::Mesh {
+            return;
+        }
+        let engine_name = self.layers[index].engine_name.clone();
+        let measured =
+            self.document
+                .read_mesh_layer(&engine_name)
+                .ok()
+                .and_then(|(positions, ..)| {
+                    let first = *positions.first()?;
+                    Some(positions.iter().fold((first, first), |(min, max), point| {
+                        (
+                            std::array::from_fn(|axis| min[axis].min(point[axis])),
+                            std::array::from_fn(|axis| max[axis].max(point[axis])),
+                        )
+                    }))
+                });
+        self.layers[index].mesh_bounds = measured;
     }
 
     /// The engine half of a placement: the item, then where it goes.
@@ -6309,6 +7513,200 @@ impl ClayDocument {
         Ok(node)
     }
 
+    /// What a copied subtool is called, before the number that makes it unique.
+    const COPY_SUFFIX: &'static str = "cópia";
+
+    /// A name no other layer in the document is using.
+    ///
+    /// A voxel layer's grid is reachable only by name — the ABI has no
+    /// id-addressed accessor, and the lookup answers with the first layer in
+    /// stack order carrying it (ClayCore #365) — so two layers sharing a name
+    /// shadow one another's grid and a stroke lands on the wrong one. The
+    /// rename path already refuses a collision for that reason; an insertion
+    /// cannot refuse, because the sculptor never typed the name, so it derives
+    /// one instead.
+    ///
+    /// Every representation, not only voxels: a sculptor who inserts three
+    /// spheres and then crosses one to a grid would otherwise create the
+    /// collision after the fact.
+    fn unique_layer_name(&self, base: &str) -> String {
+        let base = if base.trim().is_empty() {
+            "Subtool"
+        } else {
+            base.trim()
+        };
+        if !self.layer_name_taken(base) {
+            return base.to_string();
+        }
+        // From two, because the first one carries the bare name: "Esfera",
+        // "Esfera 2", "Esfera 3" is how a sculptor counts them.
+        let mut ordinal = 2_u32;
+        loop {
+            let candidate = format!("{base} {ordinal}");
+            if !self.layer_name_taken(&candidate) {
+                return candidate;
+            }
+            ordinal += 1;
+        }
+    }
+
+    /// Both names a layer answers to: the one shown and the one a grid is
+    /// fetched with. They agree unless a rename was refused halfway.
+    fn layer_name_taken(&self, candidate: &str) -> bool {
+        self.layers
+            .iter()
+            .any(|layer| layer.name == candidate || layer.engine_name == candidate)
+    }
+
+    /// Samples one subtool alone into a volume item.
+    ///
+    /// `clay_item_volume_from_document` samples the *whole* document's field,
+    /// and the engine's contract is that a hidden layer "contributes nothing to
+    /// the field; showing it again restores the original field exactly" — so
+    /// baking one subtool alone is hiding the others around the bake, which is
+    /// what [`ClayDocument::with_only_visible`] is for. Every exit path
+    /// restores, including the one where the bake refuses.
+    ///
+    /// Public because the subtool boolean bakes each of its operands exactly
+    /// this way; a copy is the same operation with one operand.
+    pub fn bake_subtool(&mut self, key: LayerKey, cell: f32) -> Result<Item, ModelError> {
+        let cell = cell.max(1e-4);
+        let (min, max) = self.operand_bounds(key).ok_or_else(|| {
+            ModelError::engine("esta camada não tem extensão para copiar; está vazia")
+        })?;
+        // Padded by the band, because the box is where the field is *sampled*
+        // and a surface lying exactly on a face has no room for the band the
+        // mesher needs on both sides of it.
+        let band = Self::feather_for(cell);
+        let min: [f32; 3] = std::array::from_fn(|axis| min[axis] - band);
+        let max: [f32; 3] = std::array::from_fn(|axis| max[axis] + band);
+        // Through the operand's three routes rather than straight to the
+        // document sampler. A *grid* is not one of the sampler's: measured,
+        // `clay_item_volume_from_document` over a document whose only shown
+        // layer is a voxel one refuses with "invalid argument (empty
+        // document)", so every attempt to copy a grid was a hard refusal from a
+        // control that offered it.
+        self.bake_operand(key, cell, (min, max))
+    }
+
+    /// The same, sampled over a region the caller chose.
+    ///
+    /// The boolean bakes both of its operands over one region — the pair's
+    /// box, padded by the band — rather than each over its own. Two reasons,
+    /// and neither is that a volume item goes wrong outside its lattice: it
+    /// reads as *outside* there, which is measured in
+    /// `an_intersection_with_a_grid_keeps_only_what_both_hold` and is what
+    /// makes a grid operand, which has no region to be given, work at all.
+    ///
+    /// The first is that both halves of the result then sit on the *same*
+    /// lattice — same origin, same cell — so the surfaces they carry meet
+    /// cell-for-cell at the join rather than beating against each other at
+    /// half a cell of phase. The second is that a cost is stated for one
+    /// region before the operation runs, and sampling two of a different size
+    /// would be pricing something other than what was done.
+    fn bake_subtool_over(
+        &mut self,
+        key: LayerKey,
+        cell: f32,
+        min: [f32; 3],
+        max: [f32; 3],
+    ) -> Result<Item, ModelError> {
+        let cell = cell.max(1e-4);
+        self.with_only_visible(&[key], |doc| {
+            doc.document
+                .volume_from_region(
+                    VolumeParams {
+                        cell_size: Some(cell),
+                        // No feather: the volume is added into a layer of its
+                        // own with `Op::Add`, and the engine ignores the
+                        // feather for every op but replace — the same bargain
+                        // an imported mesh makes.
+                        ..Default::default()
+                    },
+                    min,
+                    max,
+                )
+                .map_err(ModelError::engine)
+        })
+    }
+
+    /// Creates a subtool and fills it, as one thing the sculptor asked for.
+    ///
+    /// The bracket every insertion shares. Creating the layer and putting the
+    /// form in it are two engine edits, and without the group one step back
+    /// takes the form away and leaves an empty subtool standing — the same
+    /// shape `place_object` already brackets for.
+    ///
+    /// The layer is the active one when this returns, because
+    /// [`ClayDocument::adopt_engine_layer`] routes through the one activation
+    /// call: a subtool arrives selected, which is what makes the next dab land
+    /// on it.
+    fn insert_subtool(
+        &mut self,
+        name: &str,
+        fill: impl FnOnce(&mut Self, LayerId) -> Result<NodeId, ModelError>,
+    ) -> Result<(LayerKey, LayerId, NodeId), ModelError> {
+        self.remember_objects_before();
+        self.remember_layers();
+        self.document
+            .begin_undo_group()
+            .map_err(ModelError::engine)?;
+        let made = (|| -> Result<(LayerKey, LayerId, NodeId), ModelError> {
+            let id = self
+                .document
+                .add_sdf_layer(name)
+                .map_err(ModelError::engine)?;
+            let key = self.adopt_engine_layer(id, name, Representation::Sdf)?;
+            let node = fill(self, id)?;
+            Ok((key, id, node))
+        })();
+        // Closed on the failing path too: a group left open swallows every
+        // edit after it into one undo step.
+        let closed = self.document.end_undo_group().map_err(ModelError::engine);
+        let made = made?;
+        closed?;
+        Ok(made)
+    }
+
+    /// What every insertion owes once its subtool is standing.
+    ///
+    /// The whole layer rather than the node's bound: nothing about it was there
+    /// before, which is the same reason a crossing's new layer is refilled
+    /// whole.
+    fn settle_subtool(&mut self, layer: LayerId) -> Result<(), ModelError> {
+        self.remember_objects_after();
+        self.remember_layers();
+        self.refill(layer, &[])?;
+        self.refresh_stats();
+        Ok(())
+    }
+
+    /// Stands a whole subtool where the sculptor pointed.
+    ///
+    /// The *layer* moves and the form sits at its middle, rather than the form
+    /// sitting off-centre in a layer that stays at the origin. That is what
+    /// leaves the whole-subtool manipulator on the form it addresses:
+    /// `GizmoTarget::Layer` reads the layer's transform, and a layer left at
+    /// the origin would put the widget in empty space.
+    ///
+    /// Written through the engine directly rather than through `place_layer`,
+    /// because this runs inside the insertion's undo group and `place_layer`
+    /// would snapshot and refill in the middle of it.
+    fn stand_subtool_at(&mut self, layer: LayerId, at: [f32; 3]) -> Result<(), ModelError> {
+        self.document
+            .set_layer_transform(layer, at, [0.0, 1.0, 0.0], 0.0, 1.0)
+            .map_err(ModelError::engine)?;
+        if let Some(known) = self.layers.iter_mut().find(|known| known.id == layer) {
+            known.transform = clayspace_model::Transform {
+                position: at,
+                rotation_axis: [0.0, 1.0, 0.0],
+                rotation_angle: 0.0,
+                scale: 1.0,
+            };
+        }
+        Ok(())
+    }
+
     /// The active layer, when it is one an object can live in.
     fn layer_for_objects(&self) -> Result<(LayerKey, LayerId), ModelError> {
         let layer = self.active_layer();
@@ -6321,6 +7719,297 @@ impl ClayDocument {
             ));
         }
         Ok((layer.key, layer.id))
+    }
+}
+
+/// A box in world space, as every one of these calls hands one over.
+type Bounds = ([f32; 3], [f32; 3]);
+
+/// Resolving a boolean between two subtools.
+///
+/// The engine composes layers by hard union, so there is no live boolean
+/// between two of them (ClayCore #321). What there is: a hidden layer
+/// "contributes nothing to the field", and `clay_item_volume_from_document`
+/// samples what is left — so each operand can be baked alone and the two
+/// volumes combined in a subtool of their own.
+impl ClayDocument {
+    /// What the interface calls an operand.
+    fn operand_name(&self, key: LayerKey) -> Result<String, ModelError> {
+        let index = self.index_of(key)?;
+        Ok(self.layers[index].name.clone())
+    }
+
+    /// Whether an operand may take part, and why not when it may not.
+    ///
+    /// Ghost and lock both refuse. A ghosted subtool is not pickable and a
+    /// locked one is protected against editing; consuming either — or baking
+    /// it into a result that then stands in for it — is the edit the
+    /// protection was set to prevent.
+    fn operand_is_free(&self, key: LayerKey) -> Result<(), ModelError> {
+        let index = self.index_of(key)?;
+        let layer = &self.layers[index];
+        if layer.protection.is_editable() {
+            return Ok(());
+        }
+        Err(ModelError::Boolean(BooleanRefusal::Protected {
+            operand: layer.name.clone(),
+            ghost: layer.protection.ghost,
+        }))
+    }
+
+    /// The box an operand occupies, whatever it is made of.
+    ///
+    /// A mesh layer is carried rather than evaluated, so it has no SDF extent
+    /// to report and its own triangles are the only account of where it is —
+    /// the same measurement [`ObjectModel::mesh_operand_cost`] takes for the
+    /// same reason.
+    fn operand_bounds(&mut self, key: LayerKey) -> Option<Bounds> {
+        let index = self.index_of(key).ok()?;
+        // Re-measured first, because the cache the answer comes from is only
+        // as fresh as the last edit that refreshed it and a boolean prices the
+        // region it is about to sample.
+        if self.layers[index].representation == Representation::Mesh {
+            self.refresh_mesh_bounds(key);
+        }
+        SceneModel::layer_bounds(self, key)
+    }
+
+    /// The same, refusing by name where there is nothing there.
+    fn operand_extent(&mut self, key: LayerKey) -> Result<Bounds, ModelError> {
+        let operand = self.operand_name(key)?;
+        self.operand_bounds(key)
+            .ok_or(ModelError::Boolean(BooleanRefusal::Empty { operand }))
+    }
+
+    /// Both operands' boxes, once both are able to take part at all.
+    fn boolean_extents(
+        &mut self,
+        base: LayerKey,
+        tool: LayerKey,
+    ) -> Result<(Bounds, Bounds), ModelError> {
+        self.operand_is_free(base)?;
+        self.operand_is_free(tool)?;
+        Ok((self.operand_extent(base)?, self.operand_extent(tool)?))
+    }
+
+    /// The region both operands are sampled over: the pair's box, padded by
+    /// the band. See [`ClayDocument::bake_subtool_over`] for why it is one
+    /// region and not two.
+    fn boolean_region(base: Bounds, tool: Bounds, cell: f32) -> Bounds {
+        let band = Self::feather_for(cell);
+        (
+            std::array::from_fn(|axis| base.0[axis].min(tool.0[axis]) - band),
+            std::array::from_fn(|axis| base.1[axis].max(tool.1[axis]) + band),
+        )
+    }
+
+    /// Whether the two forms' boxes meet at all.
+    ///
+    /// A box test, which is what can be answered before anything is sampled:
+    /// two boxes that do not touch hold two forms that certainly do not, which
+    /// is the case the specification names — "two subtools standing apart".
+    fn boxes_meet(base: Bounds, tool: Bounds) -> bool {
+        (0..3).all(|axis| base.0[axis] <= tool.1[axis] && tool.0[axis] <= base.1[axis])
+    }
+
+    /// What the pair costs at this resolution.
+    fn boolean_cost_over(region: Bounds, cell: f32) -> Cost {
+        let extent: [f32; 3] =
+            std::array::from_fn(|axis| (region.1[axis] - region.0[axis]).max(0.0));
+        // The same crossing the conversion panel prices: a field sampled onto
+        // a lattice. `MeshToSdf` and `SdfToVoxel` compute the same figures —
+        // both choose a resolution and neither ends in a fixed topology — so
+        // one direction prices a pair whatever the two are made of.
+        Cost::of(Direction::SdfToVoxel, cell, extent)
+    }
+
+    /// Refuses a pair the document's memory budget will not hold.
+    fn boolean_fits_the_budget(&self, region: Bounds, cell: f32) -> Result<(), ModelError> {
+        let budget = self
+            .cache
+            .stats()
+            .ok()
+            .and_then(|stats| stats.memory_budget)
+            .unwrap_or(u64::MAX);
+        Self::boolean_cost_over(region, cell)
+            .within(budget, Self::BYTES_PER_CELL)
+            .map_err(|refusal| match refusal {
+                Refusal::OverBudget {
+                    cells,
+                    budget_bytes,
+                } => ModelError::Boolean(BooleanRefusal::OverBudget {
+                    cells,
+                    budget_bytes,
+                }),
+                other => ModelError::Conversion(other),
+            })
+    }
+
+    /// The cell an operand is worked at.
+    ///
+    /// A grid says so itself; a field and a mesh are worked at the brick
+    /// cache's cell, which is the resolution the rest of the application
+    /// already samples at.
+    fn operand_detail(&mut self, key: LayerKey) -> f32 {
+        let working = self.cache.config().voxel_size;
+        let Ok(index) = self.index_of(key) else {
+            return working;
+        };
+        if self.layers[index].representation != Representation::Voxel {
+            return working;
+        }
+        let engine_name = self.layers[index].engine_name.clone();
+        self.document
+            .voxel_layer(&engine_name)
+            .ok()
+            .and_then(|(_, grid)| grid.voxel_size().ok())
+            .filter(|cell| *cell > 0.0)
+            .unwrap_or(working)
+    }
+
+    /// One operand as a volume item, whatever it is made of.
+    ///
+    /// Three routes because there are three, and the specification says the
+    /// crossing each one needs is "performed as part of the operation rather
+    /// than demanded of the sculptor beforehand" — so this is where each is
+    /// performed:
+    ///
+    /// - A **field** is sampled out of the document with the rest of the scene
+    ///   hidden, over the pair's region.
+    /// - A **grid** is read back through `clay_item_volume_from_voxels`, which
+    ///   is what `clay_voxel_to_layer` does in a loop. It does not reach the
+    ///   document's field at all — measured, sampling a document whose only
+    ///   shown layer is a grid refuses with "empty document" — so the region
+    ///   has nothing to say here and the grid's own cells are the extent.
+    /// - A **mesh** takes the crossing `place_mesh_object` already pays, for
+    ///   the same reason: a mesh layer is carried rather than evaluated.
+    fn bake_operand(
+        &mut self,
+        key: LayerKey,
+        cell: f32,
+        region: Bounds,
+    ) -> Result<Item, ModelError> {
+        let index = self.index_of(key)?;
+        let engine_name = self.layers[index].engine_name.clone();
+        match self.layers[index].representation {
+            Representation::Sdf => self.bake_subtool_over(key, cell, region.0, region.1),
+            Representation::Voxel => {
+                let (_, grid) = self
+                    .document
+                    .voxel_layer(&engine_name)
+                    .map_err(ModelError::engine)?;
+                // Index zero is every occupied cell as one item, which is what
+                // a boolean wants: the palette carries colour and a boolean is
+                // about form. The blur is the conversion panel's own default —
+                // what an organic sculpt wants — so a grid read here and a grid
+                // crossed through the panel come back the same shape.
+                Item::volume_from_voxels(&grid, ConversionSettings::default().blur, 0)
+                    .map_err(ModelError::engine)
+            }
+            Representation::Mesh => self
+                .document
+                .mesh_layer_as_volume(&engine_name, Self::bake_volume(cell))
+                .map_err(ModelError::engine),
+        }
+    }
+
+    /// What becomes of the operands once the result is standing.
+    ///
+    /// Hidden by default: keeping them is what makes the boolean recoverable,
+    /// since the result is baked and the operands cannot be re-edited through
+    /// it. Removed only where the sculptor said so, and either way inside the
+    /// result's own undo group, so one step back takes the whole operation.
+    fn retire_operands(
+        &mut self,
+        base: LayerKey,
+        tool: LayerKey,
+        consume: bool,
+    ) -> Result<(), ModelError> {
+        for operand in [base, tool] {
+            if consume {
+                SceneModel::remove_layer(self, operand)?;
+            } else {
+                SceneModel::set_layer_visible(self, operand, false)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Bakes both operands and stands the result in a subtool of its own.
+    ///
+    /// The bakes happen before the undo group opens, exactly as a copy's does:
+    /// the hide-and-restore around each sampling writes visibility commands of
+    /// its own, and the sculptor's one step back has to reach the boolean
+    /// rather than the flags the bake borrowed.
+    fn build_boolean(
+        &mut self,
+        settings: BooleanSettings,
+        pair: (LayerKey, LayerKey),
+        region: Bounds,
+        name: &str,
+    ) -> Result<Inserted, ModelError> {
+        let (base, tool) = pair;
+        let cell = settings.cell_size;
+        let mut first = self.bake_operand(base, cell, region)?;
+        // What the result is made of, always. The operation is the *second*
+        // operand's, which is the whole of what the sculptor chose.
+        first.set_op(Op::Add).map_err(ModelError::engine)?;
+        let mut second = self.bake_operand(tool, cell, region)?;
+        second
+            .set_op(engine_op(settings.op.combine()))
+            .map_err(ModelError::engine)?;
+
+        // Where a *carried* operand stands. `clay_item_volume_from_mesh` reads
+        // the vertices the engine holds, and a mesh layer's own transform never
+        // reaches those — see `carried_placement` — so a moved mesh operand
+        // would otherwise be crossed in at the origin, cutting somewhere the
+        // sculptor cannot see it.
+        let placed = [base, tool].map(|operand| {
+            self.index_of(operand)
+                .ok()
+                .filter(|index| self.layers[*index].representation == Representation::Mesh)
+                .and_then(|_| self.carried_placement(operand))
+        });
+
+        let consume = settings.consume;
+        let (key, layer, _) = self.insert_subtool(name, move |doc, layer| {
+            let first_node = doc
+                .document
+                .add_item(layer, &first)
+                .map_err(ModelError::engine)?;
+            let node = doc
+                .document
+                .add_item(layer, &second)
+                .map_err(ModelError::engine)?;
+            for (item, transform) in [first_node, node].into_iter().zip(placed) {
+                let Some(transform) = transform else {
+                    continue;
+                };
+                doc.document
+                    .set_node_transform(
+                        layer,
+                        item,
+                        transform.position,
+                        transform.rotation_axis,
+                        transform.rotation_angle,
+                        transform.scale.max(1e-4),
+                    )
+                    .map_err(ModelError::engine)?;
+            }
+            // Inside the group, so hiding or consuming the operands is part of
+            // the one thing the sculptor asked for.
+            doc.retire_operands(base, tool, consume)?;
+            Ok(node)
+        })?;
+        // No object row: what stands in the result is a pair of sampled
+        // volumes rather than one of the offered shapes, so there is nothing
+        // for the shape controls to measure. The subtool is the selection.
+        self.selected_object = None;
+        self.settle_subtool(layer)?;
+        Ok(Inserted {
+            layer: key,
+            object: None,
+        })
     }
 }
 
@@ -6397,6 +8086,163 @@ impl ObjectModel for ClayDocument {
         Ok(id)
     }
 
+    fn insert_shape_subtool(
+        &mut self,
+        shape: Shape,
+        parameters: &[f32],
+        at: [f32; 3],
+        combine: CombineSettings,
+    ) -> Result<Inserted, ModelError> {
+        let parameters = shape.sanitised(parameters);
+        // The shape's own word for itself, made unique against the stack. Not
+        // "Camada 4": a sculptor looking for the cylinder they inserted looks
+        // for a cylinder.
+        let name = self.unique_layer_name(shape.label());
+
+        let placed = parameters.clone();
+        let (key, layer, node) = self.insert_subtool(&name, move |doc, layer| {
+            // At the layer's own origin, and the layer stands where the
+            // sculptor pointed — see `stand_subtool_at`.
+            let node = doc.place_item(layer, shape, &placed, [0.0; 3], combine)?;
+            doc.stand_subtool_at(layer, at)?;
+            Ok(node)
+        })?;
+
+        let object = PlacedObject::new(
+            key,
+            node,
+            clayspace_model::ObjectSource::Shape(shape),
+            parameters,
+            combine,
+            // Where it stands inside its subtool, which is the middle: the
+            // layer carries the position. Recording `at` here would report the
+            // offset twice, once in the node and once in the layer.
+            [0.0; 3],
+        );
+        let id = object.id();
+        self.objects.push(object);
+        // The *subtool* is what arrived, so the subtool is the selection —
+        // "a new subtool holds the sphere, it is the active subtool". Leaving
+        // the item selected too would put two manipulators over one thing: the
+        // panel hides the whole-subtool controls whenever an object is
+        // selected, so a form inserted to be aimed would arrive with no way to
+        // aim it. The row is in the list and one click selects it.
+        self.selected_object = None;
+        self.settle_subtool(layer)?;
+        Ok(Inserted {
+            layer: key,
+            object: Some(id),
+        })
+    }
+
+    fn copy_subtool(&mut self, from: LayerKey, cell_size: f32) -> Result<Inserted, ModelError> {
+        let index = self.index_of(from)?;
+        let source = self.layers[index].name.clone();
+        // Baked before anything is created, and outside the undo group below:
+        // the hide-and-restore around the sampling writes visibility commands
+        // of its own, and the sculptor's one step back has to reach the copy
+        // rather than the flags the bake borrowed.
+        let mut item = self.bake_subtool(from, cell_size)?;
+        item.set_op(Op::Add).map_err(ModelError::engine)?;
+
+        let name = self.unique_layer_name(&format!("{source} {}", Self::COPY_SUFFIX));
+        let (key, layer, _) = self.insert_subtool(&name, move |doc, layer| {
+            doc.document
+                .add_item(layer, &item)
+                .map_err(ModelError::engine)
+        })?;
+        // No object row: what stands in the copy is a sampled volume, not one
+        // of the offered shapes, so there is nothing for the shape controls to
+        // measure. The subtool itself is the selection, and the whole-subtool
+        // manipulator is what moves it.
+        self.selected_object = None;
+        self.settle_subtool(layer)?;
+        Ok(Inserted {
+            layer: key,
+            object: None,
+        })
+    }
+
+    fn copyable_subtools(&mut self) -> Vec<(LayerKey, String)> {
+        // What the bake can actually sample: a layer with an extent. An empty
+        // one would copy to an empty subtool, and a mesh layer is carried
+        // rather than evaluated, so neither contributes a field to sample.
+        self.layers
+            .iter()
+            .filter(|layer| layer.representation != Representation::Mesh)
+            .map(|layer| (layer.key, layer.name.clone()))
+            .filter(|(key, _)| SceneModel::layer_bounds(self, *key).is_some())
+            .collect()
+    }
+
+    fn boolean_operands(&mut self) -> Vec<(LayerKey, String)> {
+        // Every representation, because every one of them can be an operand —
+        // a mesh through the crossing `bake_operand` performs for it. Protected
+        // subtools stay on the list so the refusal can name them, which is what
+        // the specification asks for; empty ones do not, because there is
+        // nothing in them to combine.
+        let named: Vec<(LayerKey, String)> = self
+            .layers
+            .iter()
+            .map(|layer| (layer.key, layer.name.clone()))
+            .collect();
+        named
+            .into_iter()
+            .filter(|(key, _)| self.operand_bounds(*key).is_some())
+            .collect()
+    }
+
+    fn boolean_cell(&mut self, base: LayerKey, tool: LayerKey) -> Option<f32> {
+        self.index_of(base).ok()?;
+        self.index_of(tool).ok()?;
+        // The finer of the two, so the coarser operand does not decide how much
+        // of the finer one survives.
+        Some(self.operand_detail(base).min(self.operand_detail(tool)))
+    }
+
+    fn boolean_cost(&mut self, settings: BooleanSettings) -> Option<Cost> {
+        let settings = settings.sanitized();
+        let (base, tool) = settings.pair()?;
+        // The boxes rather than the refusals: a panel prices what it can and
+        // the refusal is the run's to state, so a ghosted operand still shows
+        // what the operation would cost if it were not.
+        let region = Self::boolean_region(
+            self.operand_bounds(base)?,
+            self.operand_bounds(tool)?,
+            settings.cell_size,
+        );
+        Some(Self::boolean_cost_over(region, settings.cell_size))
+    }
+
+    fn run_boolean(&mut self, settings: BooleanSettings) -> Result<Inserted, ModelError> {
+        let settings = settings.sanitized();
+        let pair = settings
+            .pair()
+            .ok_or(ModelError::Boolean(BooleanRefusal::NotAPair))?;
+        let (base, tool) = pair;
+        let (base_box, tool_box) = self.boolean_extents(base, tool)?;
+        // An intersection of two forms that do not meet is nothing, and the
+        // specification says to say so rather than to make an empty subtool.
+        if settings.op == BooleanOp::Intersect && !Self::boxes_meet(base_box, tool_box) {
+            return Err(ModelError::Boolean(BooleanRefusal::NoOverlap {
+                base: self.operand_name(base)?,
+                tool: self.operand_name(tool)?,
+            }));
+        }
+        let region = Self::boolean_region(base_box, tool_box, settings.cell_size);
+        self.boolean_fits_the_budget(region, settings.cell_size)?;
+
+        // Named for what made it, in a mark that reads the same in every
+        // language the interface is offered in.
+        let name = self.unique_layer_name(&format!(
+            "{} {} {}",
+            self.operand_name(base)?,
+            settings.op.mark(),
+            self.operand_name(tool)?
+        ));
+        self.build_boolean(settings, pair, region, &name)
+    }
+
     fn mesh_operands(&mut self) -> Vec<(LayerKey, String)> {
         self.layers
             .iter()
@@ -6419,22 +8265,12 @@ impl ObjectModel for ClayDocument {
         if self.layers[index].representation != Representation::Mesh {
             return None;
         }
-        let engine_name = self.layers[index].engine_name.clone();
         // The mesh's own bounds, which is what a crossing of it covers — not
         // `bounds()`, which answers for the *active* layer and would price the
-        // wrong model.
-        let (positions, ..) = self.document.read_mesh_layer(&engine_name).ok()?;
-        if positions.is_empty() {
-            return None;
-        }
-        let mut min = positions[0];
-        let mut max = positions[0];
-        for point in &positions {
-            for axis in 0..3 {
-                min[axis] = min[axis].min(point[axis]);
-                max[axis] = max[axis].max(point[axis]);
-            }
-        }
+        // wrong model. Through `operand_bounds` because the boolean asks the
+        // same question of the same layer, and two answers to "where is that
+        // model" is one more than there should be.
+        let (min, max) = self.operand_bounds(from)?;
         let extent: [f32; 3] = std::array::from_fn(|i| (max[i] - min[i]).max(0.0));
         // The conversion panel's own computation, for the same crossing at the
         // same resolution — because it is the same crossing.
@@ -6665,8 +8501,10 @@ impl ObjectModel for ClayDocument {
             self.end_target_drag();
         }
         // The table before the gesture, so an undo of the whole drag finds the
-        // state it started from rather than the state one frame in.
+        // state it started from rather than the state one frame in. The layer
+        // stack too: a drag on a whole subtool moves a layer and not a node.
         self.remember_objects_before();
+        self.remember_layers();
         if self.document.begin_undo_group().is_ok() {
             self.dragging = Some(target);
         }
@@ -6678,6 +8516,7 @@ impl ObjectModel for ClayDocument {
         }
         let _ = self.document.end_undo_group();
         self.remember_objects_after();
+        self.remember_layers();
     }
 
     fn set_target_transform(
@@ -6706,7 +8545,7 @@ impl ObjectModel for ClayDocument {
         }
     }
 
-    fn pick_item(&mut self, origin: [f32; 3], direction: [f32; 3]) -> Option<ItemKind> {
+    fn pick_item(&mut self, origin: [f32; 3], direction: [f32; 3]) -> Option<(ItemKind, LayerKey)> {
         let hit = self
             .document
             .raycast_attributed(origin, direction)
@@ -6729,7 +8568,7 @@ impl ObjectModel for ClayDocument {
             layer: key,
             node: node.get(),
         });
-        Some(match placed {
+        let kind = match placed {
             Some(_) => ItemKind::Object,
             None => match kind_of(prim) {
                 // An item nobody placed and whose primitive says "object" is a
@@ -6737,7 +8576,11 @@ impl ObjectModel for ClayDocument {
                 ItemKind::Object => ItemKind::Stroke,
                 other => other,
             },
-        })
+        };
+        // The layer travels with the kind because this raycast already
+        // attributed it: a press needs both answers and used to pay for a
+        // second attributed raycast to get the second one.
+        Some((kind, key))
     }
 
     fn pick_object(&mut self, origin: [f32; 3], direction: [f32; 3]) -> Option<ObjectId> {

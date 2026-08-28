@@ -71,6 +71,19 @@ pub struct ShellState<'a> {
     /// own answer could disagree with the one the conversion actually uses.
     pub conversion: clayspace_model::ConversionSettings,
     pub conversion_cost: Option<clayspace_model::Cost>,
+    /// The boolean panel: whether it is open, what it is set to, what could
+    /// take part, what the pair would cost, and why the last attempt was
+    /// refused.
+    ///
+    /// The cost is computed by the layer that can see both operands' extents
+    /// and handed in, as the conversion's is and for the same reason: a View
+    /// that worked out its own answer could disagree with the one the
+    /// operation actually uses.
+    pub show_boolean: bool,
+    pub boolean: clayspace_model::BooleanSettings,
+    pub boolean_operands: &'a [(LayerKey, String)],
+    pub boolean_cost: Option<clayspace_model::Cost>,
+    pub boolean_notice: Option<&'a str>,
     pub show_import: bool,
     pub show_export: bool,
     pub import: ImportSettings,
@@ -101,6 +114,11 @@ pub struct ShellState<'a> {
     /// The shapes panel: whether it is open, what it is set to, and what has
     /// been placed.
     pub show_shapes: bool,
+    /// Where the next insertion lands: a subtool of its own, or an object in
+    /// the active layer.
+    pub insert_as: clayspace_model::InsertAs,
+    /// The subtools a copy could be made from, and what they are called.
+    pub copyable_subtools: &'a [(LayerKey, String)],
     /// The mesh layers that could be placed as a boolean operand, and which
     /// one the picker is set to.
     pub mesh_operands: &'a [(LayerKey, String)],
@@ -116,6 +134,9 @@ pub struct ShellState<'a> {
     pub selected_object: Option<clayspace_model::ObjectId>,
     /// Which of the manipulator's three modes is in force.
     pub gizmo_mode: clayspace_model::GizmoMode,
+    /// What the manipulator is acting on, so a control that puts it on the
+    /// whole layer can read as on rather than guessing from the mode.
+    pub gizmo_target: Option<clayspace_model::GizmoTarget>,
     /// The cage around the form, while one is up.
     pub lattice: clayspace_model::LatticeState,
     /// What a fresh cage would be built with.
@@ -389,6 +410,21 @@ fn item(ui: &mut egui::Ui, state: &ShellState<'_>, label: &str, action: Action) 
     ui.add(egui::Button::new(label).shortcut_text(chord_text(state, action)))
 }
 
+/// The menu entries that open a panel, in the order given.
+///
+/// One helper rather than a copy of the same four lines per panel: none of them
+/// carries a chord to label, none of them is ever disabled, and what the File
+/// menu has to say about them is the order they stand in — which is a decision,
+/// and is the only thing left at the call site.
+fn panel_items(ui: &mut egui::Ui, queue: &mut CommandQueue, entries: &[(&str, Command)]) {
+    for (label, command) in entries {
+        if ui.button(*label).clicked() {
+            queue.push(command.clone());
+            ui.close_menu();
+        }
+    }
+}
+
 /// The same, greyed out when the action cannot be taken.
 fn item_enabled(
     ui: &mut egui::Ui,
@@ -447,33 +483,25 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                     ui.close_menu();
                 }
                 ui.separator();
-                // Beside import and export, because a crossing is the same
-                // kind of act: it produces a new layer from something the
-                // document already holds, and states what it costs first.
-                if ui.button(s.action_convert).clicked() {
-                    queue.push(Command::ToggleConvert);
-                    ui.close_menu();
-                }
-                if ui.button(s.action_repair).clicked() {
-                    queue.push(Command::ToggleRepair);
-                    ui.close_menu();
-                }
-                if ui.button(s.action_deform).clicked() {
-                    queue.push(Command::ToggleDeform);
-                    ui.close_menu();
-                }
-                if ui.button(s.action_shapes).clicked() {
-                    queue.push(Command::ToggleShapes);
-                    ui.close_menu();
-                }
-                if ui.button(s.action_import).clicked() {
-                    queue.push(Command::ToggleImport);
-                    ui.close_menu();
-                }
-                if ui.button(s.action_export).clicked() {
-                    queue.push(Command::ToggleExport);
-                    ui.close_menu();
-                }
+                // Convert beside import and export, because a crossing is the
+                // same kind of act: it produces a new layer from something the
+                // document already holds, and states what it costs first. And
+                // the boolean beside the shapes, because it is the other half
+                // of putting forms in a scene: one puts a second form in, this
+                // one says what the two of them make.
+                panel_items(
+                    ui,
+                    queue,
+                    &[
+                        (s.action_convert, Command::ToggleConvert),
+                        (s.action_repair, Command::ToggleRepair),
+                        (s.action_deform, Command::ToggleDeform),
+                        (s.action_shapes, Command::ToggleShapes),
+                        (s.action_boolean, Command::ToggleBoolean),
+                        (s.action_import, Command::ToggleImport),
+                        (s.action_export, Command::ToggleExport),
+                    ],
+                );
                 ui.separator();
                 if item(ui, state, s.action_quit, Action::Quit).clicked() {
                     queue.push(Command::Quit);
@@ -1251,7 +1279,10 @@ pub fn left_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Command
     for node in &state.scene.nodes {
         ui.horizontal(|ui| {
             ui.add_space(space::SNUG + node.depth as f32 * space::ROOMY);
-            let selected = state.scene.selected == Some(node.key);
+            // The active layer, because there is only one: the tree and the
+            // stack read the same fact, so a click in the viewport lights the
+            // same row a click in the stack does.
+            let selected = state.scene.active == Some(node.key);
             let text = egui::RichText::new(&node.name)
                 .size(type_scale::BODY)
                 .color(if selected {
@@ -1296,10 +1327,9 @@ pub fn left_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Command
     }
 
     ui.add_space(space::SNUG);
-    if ui.button(format!("+  {}", s.label_new_layer)).clicked() {
-        // Layer creation is a document change like any other.
-        queue.push(Command::AddLayer);
-    }
+    add_layer_control(ui, state, queue);
+
+    layer_transform_section(ui, state, queue);
 
     heading(ui, s.section_sculpt_settings);
     ui.horizontal(|ui| {
@@ -1315,6 +1345,144 @@ pub fn left_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Command
             }
         }
     });
+}
+
+/// Adding a layer, and saying what it should hold.
+///
+/// The button alone makes the field layer it always made — "the default stays
+/// what it was" — and the list beside it is how a sculptor asks for a grid
+/// without crossing one afterwards, which is the cost the choice exists to
+/// avoid.
+///
+/// `Representation::CREATABLE` and not `ALL`: a mesh layer comes from carrying
+/// a mesh, and the entry that offered one here made a row labelled "Malha"
+/// that could never hold a triangle. See the constant for the specification's
+/// own qualification.
+fn add_layer_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    ui.horizontal(|ui| {
+        let button = ui.button(format!("+  {}", s.label_new_layer));
+        ui.ctx()
+            .memory_mut(|memory| memory.data.insert_temp(new_layer_button_id(), button.rect));
+        if button.clicked() {
+            // Layer creation is a document change like any other.
+            queue.push(Command::AddLayer(Representation::Sdf));
+        }
+        let list = egui::ComboBox::from_id_salt("new-layer-kind")
+            .selected_text(s.label_new_layer_kind)
+            .width(96.0)
+            .show_ui(ui, |ui| {
+                for representation in Representation::CREATABLE {
+                    let response =
+                        ui.selectable_label(false, s.representation_name(representation));
+                    // Recorded where a test can find it, for the reason
+                    // `slider_id` states: this whole control was unreachable
+                    // from a test, which is how the entry that made a dead mesh
+                    // row went unnoticed.
+                    ui.ctx().memory_mut(|memory| {
+                        memory
+                            .data
+                            .insert_temp(new_layer_kind_id(representation), response.rect)
+                    });
+                    if response.clicked() {
+                        queue.push(Command::AddLayer(representation));
+                    }
+                }
+            });
+        ui.ctx().memory_mut(|memory| {
+            memory
+                .data
+                .insert_temp(new_layer_kind_menu_id(), list.response.rect)
+        });
+    });
+}
+
+/// The id the "new layer" button carries, so a test can press it.
+///
+/// The same arrangement [`insert_as_chip_id`] has and for the same reason:
+/// reaching a control by coordinate reaches whatever landed above it.
+pub fn new_layer_button_id() -> egui::Id {
+    egui::Id::new("new-layer-button")
+}
+
+/// The id the list beside it carries, which is what has to be pressed before
+/// the entries inside it exist at all.
+pub fn new_layer_kind_menu_id() -> egui::Id {
+    egui::Id::new("new-layer-kind-menu")
+}
+
+/// The id one entry of that list carries.
+pub fn new_layer_kind_id(representation: Representation) -> egui::Id {
+    // By position rather than by name: `representation_name` is interface text
+    // and an id built from one moves when a translation does.
+    egui::Id::new(("new-layer-kind", representation as u8))
+}
+
+/// The id a whole-subtool manipulator chip carries, so a test can find it.
+///
+/// The same arrangement [`slider_id`] has and for the same reason: a control
+/// this panel draws is wiring that has to be exercised, and reaching it by
+/// coordinate reaches whatever landed above it instead.
+pub fn layer_transform_chip_id(mode: clayspace_model::GizmoMode) -> egui::Id {
+    // Keyed by the mode's position rather than by its name: `label()` is the
+    // domain's Portuguese word, and an id built from interface text is an id
+    // that moves when a translation does.
+    egui::Id::new(("layer-transform", mode as u8))
+}
+
+/// The manipulator that moves, turns and scales the whole active layer.
+///
+/// `GizmoTarget::Layer` has been implemented and tested in the document since
+/// the objects work landed, and nothing in the interface reached it: a whole
+/// form could be moved from a test and not from the application. This is the
+/// control that reaches it.
+///
+/// Drawn only where nothing smaller owns the widget. A cage that is up, a curve
+/// being authored and a selected object each already have the manipulator, and
+/// two of them over one selection is a press nobody can aim — which is the same
+/// rule `begin_gizmo_drag` applies on the other side.
+fn layer_transform_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let Some(key) = state.scene.active else {
+        return;
+    };
+    if state.selected_object.is_some() || state.lattice.active || state.curve.active {
+        return;
+    }
+
+    let s = state.strings;
+    heading(ui, s.section_layer_transform);
+    let on_this_layer = state.gizmo_target == Some(clayspace_model::GizmoTarget::Layer(key));
+    ui.horizontal_wrapped(|ui| {
+        for mode in GizmoMode::ALL {
+            let on = on_this_layer && state.gizmo_mode == mode;
+            let response = ui.add(chip(s.gizmo_mode_name(mode), on, Tokens::panel()));
+            // Recorded where a test can find it, for the reason `slider_id`
+            // states: a control reached by pixel coordinate is a different
+            // control the next time a section lands above it.
+            ui.ctx().memory_mut(|memory| {
+                memory
+                    .data
+                    .insert_temp(layer_transform_chip_id(mode), response.rect)
+            });
+            if response.clicked() {
+                // Pressing the mode that is already in force puts the
+                // manipulator away, so a form can be looked at without one
+                // standing over the middle of it. The same bargain the object
+                // rows make, where clicking the selected row clears it.
+                queue.push(Command::SetGizmoTarget(
+                    (!on).then_some(clayspace_model::GizmoTarget::Layer(key)),
+                ));
+                if !on {
+                    queue.push(Command::SetGizmoMode(mode));
+                }
+            }
+        }
+    });
+    ui.label(
+        egui::RichText::new(s.hint_layer_transform)
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    );
 }
 
 fn layer_row(
@@ -1608,6 +1776,19 @@ fn layer_menu(
     let s = state.strings;
     if ui.button(s.action_rename_layer).clicked() {
         queue.push(Command::BeginRenameLayer(layer.key));
+        ui.close_menu();
+    }
+    // The state to push rather than a toggle read off the row: the scene says
+    // which subtool is alone, so the entry cannot offer to solo one that
+    // already is.
+    let soloed = state.scene.is_soloed(layer.key);
+    let solo = if soloed {
+        s.action_release_solo
+    } else {
+        s.action_solo_layer
+    };
+    if ui.button(solo).clicked() {
+        queue.push(Command::SoloLayer((!soloed).then_some(layer.key)));
         ui.close_menu();
     }
     // Disabled with the reason on it rather than offered and refused. The
@@ -2053,6 +2234,272 @@ fn crossing_cost_lines(
     lines
 }
 
+/// The id one operation chip carries, so a test can press it by name.
+///
+/// By position rather than by label, for the reason [`insert_as_chip_id`]
+/// states: an id built from interface text moves when a translation does.
+pub fn boolean_op_chip_id(op: clayspace_model::BooleanOp) -> egui::Id {
+    egui::Id::new(("boolean-op", op as u8))
+}
+
+/// Resolving a boolean between two subtools.
+///
+/// Honest about being *resolved* rather than live, which is the whole of what
+/// this panel has to say beyond its four controls: the engine composes layers
+/// by hard union (ClayCore #321), so what comes out is baked, and the operands
+/// are kept because that is what makes the operation recoverable.
+pub fn boolean_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    if !state.show_boolean {
+        return;
+    }
+    let s = state.strings;
+    let mut open = true;
+
+    egui::Window::new(s.action_boolean)
+        .open(&mut open)
+        .resizable(false)
+        .collapsible(false)
+        .show(ctx, |ui| {
+            ui.set_min_width(340.0);
+            boolean_operation(ui, state, queue);
+            ui.add_space(space::SNUG);
+            boolean_operands(ui, state, queue);
+            ui.add_space(space::SNUG);
+            boolean_resolution(ui, state, queue);
+            ui.add_space(space::ROOMY);
+            boolean_costs(ui, state);
+            ui.add_space(space::ROOMY);
+            boolean_confirm(ui, state, queue);
+        });
+
+    if !open {
+        queue.push(Command::ToggleBoolean);
+    }
+}
+
+/// Which of the three operations.
+fn boolean_operation(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    ui.label(
+        egui::RichText::new(s.label_boolean_op)
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    );
+    ui.horizontal(|ui| {
+        for op in clayspace_model::BooleanOp::ALL {
+            let on = state.boolean.op == op;
+            let response = ui.add(chip(s.boolean_op(op), on, Tokens::panel()));
+            ui.ctx().memory_mut(|memory| {
+                memory
+                    .data
+                    .insert_temp(boolean_op_chip_id(op), response.rect)
+            });
+            if response.clicked() && !on {
+                queue.push(Command::SetBoolean(clayspace_model::BooleanSettings {
+                    op,
+                    ..state.boolean
+                }));
+            }
+        }
+    });
+}
+
+/// The two operands, each under the name of the role it plays.
+///
+/// Both are named because subtraction is not symmetric: "A minus B" is the
+/// whole of what the sculptor is choosing, and a panel that offered two
+/// unlabelled slots would leave them to find out which way round it went by
+/// running it.
+fn boolean_operands(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    boolean_operand_picker(ui, state, queue, Role::Base);
+    ui.add_space(space::TIGHT);
+    boolean_operand_picker(ui, state, queue, Role::Tool);
+
+    // The sentence the operation reads as, spelled out where the order
+    // matters. Swapping the two above changes it, which is the point.
+    if !state.boolean.op.is_symmetric() {
+        if let (Some(base), Some(tool)) = (state.boolean.base, state.boolean.tool) {
+            ui.add_space(space::TIGHT);
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} {} {}",
+                    boolean_operand_name(state, Some(base)),
+                    s.boolean_minus,
+                    boolean_operand_name(state, Some(tool))
+                ))
+                .size(type_scale::LABEL)
+                .color(Tokens::accent()),
+            );
+        }
+    }
+}
+
+/// Which of the two an operand picker is for.
+///
+/// Named rather than passed as a setter, because the two differ in three
+/// things at once — the label, the widget's id and which field a choice lands
+/// in — and a picker that took all three separately could be given a label for
+/// one and a field for the other.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Role {
+    Base,
+    Tool,
+}
+
+/// One operand's label and its picker.
+fn boolean_operand_picker(
+    ui: &mut egui::Ui,
+    state: &ShellState<'_>,
+    queue: &mut CommandQueue,
+    role: Role,
+) {
+    let s = state.strings;
+    let (id, label, chosen) = match role {
+        Role::Base => ("boolean-base", s.label_boolean_base, state.boolean.base),
+        Role::Tool => ("boolean-tool", s.label_boolean_tool, state.boolean.tool),
+    };
+    ui.label(
+        egui::RichText::new(label)
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    );
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(boolean_operand_name(state, chosen))
+        .width(300.0)
+        .show_ui(ui, |ui| {
+            for (key, name) in state.boolean_operands {
+                if ui.selectable_label(chosen == Some(*key), name).clicked() {
+                    let mut settings = state.boolean;
+                    match role {
+                        Role::Base => settings.base = Some(*key),
+                        Role::Tool => settings.tool = Some(*key),
+                    }
+                    queue.push(Command::SetBoolean(settings));
+                }
+            }
+        });
+}
+
+/// What a chosen operand is called, or the prompt where none is chosen.
+fn boolean_operand_name(state: &ShellState<'_>, key: Option<LayerKey>) -> String {
+    key.and_then(|key| {
+        state
+            .boolean_operands
+            .iter()
+            .find(|(candidate, _)| *candidate == key)
+    })
+    .map(|(_, name)| name.clone())
+    .unwrap_or_else(|| state.strings.boolean_pick_one.to_string())
+}
+
+/// The cell the result is sampled at. The sculptor's to change, starting from
+/// the operands' own detail.
+fn boolean_resolution(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    if let Some(cell) = slider_named(
+        ui,
+        "boolean-cell",
+        s.label_cell_size,
+        state.boolean.cell_size,
+        clayspace_model::ConversionSettings::CELL_RANGE,
+        3,
+    ) {
+        queue.push(Command::SetBoolean(clayspace_model::BooleanSettings {
+            cell_size: cell,
+            ..state.boolean
+        }));
+    }
+}
+
+/// What the operation costs, before it runs.
+///
+/// The conversion panel's own lines, because the result is sampled onto a
+/// lattice exactly as a crossing is — plus the two sentences that belong to
+/// this operation alone: that it is resolved rather than live, and what
+/// becomes of the operands.
+fn boolean_costs(ui: &mut egui::Ui, state: &ShellState<'_>) {
+    let s = state.strings;
+    // The heading only where there are figures under it: a pair has not been
+    // chosen yet, and a heading over nothing reads as a panel that failed to
+    // work something out.
+    if let Some(cost) = state.boolean_cost {
+        ui.label(
+            egui::RichText::new(s.label_convert_costs)
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+        );
+        for line in crossing_cost_lines(state, clayspace_model::Direction::SdfToVoxel, cost) {
+            ui.label(
+                egui::RichText::new(line)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+        }
+    }
+    ui.label(
+        egui::RichText::new(s.boolean_resolved)
+            .size(type_scale::LABEL)
+            .color(Tokens::accent()),
+    );
+    if !state.boolean.consume {
+        ui.label(
+            egui::RichText::new(s.boolean_keeps_operands)
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+        );
+    }
+}
+
+/// What happens to the operands, and the consent itself.
+fn boolean_confirm(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    let mut consume = state.boolean.consume;
+    if ui
+        .checkbox(&mut consume, s.action_boolean_consume)
+        .changed()
+    {
+        queue.push(Command::SetBoolean(clayspace_model::BooleanSettings {
+            consume,
+            ..state.boolean
+        }));
+    }
+    if state.boolean.consume {
+        // Said before it runs rather than discovered after: consuming is the
+        // one choice here that cannot be reconsidered from what is left.
+        ui.label(
+            egui::RichText::new(s.hint_boolean_consume)
+                .size(type_scale::LABEL)
+                .color(Tokens::accent()),
+        );
+    }
+
+    ui.add_space(space::SNUG);
+    // Nothing runs unconfirmed, and nothing is offered to confirm until there
+    // are two different subtools to run it between.
+    let ready = state.boolean.pair().is_some();
+    if ui
+        .add_enabled(ready, egui::Button::new(s.action_boolean_run))
+        .clicked()
+    {
+        queue.push(Command::RunBoolean);
+    }
+    if !ready {
+        ui.label(
+            egui::RichText::new(s.boolean_pick_two)
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+        );
+    }
+    if let Some(refusal) = state.boolean_notice {
+        ui.label(
+            egui::RichText::new(refusal)
+                .size(type_scale::LABEL)
+                .color(Tokens::accent()),
+        );
+    }
+}
+
 pub fn import_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQueue) {
     if !state.show_import {
         return;
@@ -2334,7 +2781,7 @@ fn lattice_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
             let on = state.lattice.mode == mode;
             let usable = can_transform || mode == GizmoMode::Move;
             let response = ui
-                .add_enabled(usable, chip(mode.label(), on, Tokens::panel()))
+                .add_enabled(usable, chip(s.gizmo_mode_name(mode), on, Tokens::panel()))
                 .on_disabled_hover_text(s.hint_gizmo_needs_two);
             if response.clicked() {
                 queue.push(Command::SetGizmoMode(mode));
@@ -2788,18 +3235,9 @@ pub fn shapes_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut Co
         .collapsible(false)
         .show(ctx, |ui| {
             ui.set_min_width(300.0);
-            // An object is an item in an SDF layer's ordered list, and a grid
-            // and a mesh have no such list. Said here rather than left to a
-            // refusal after the click.
-            if state.representation != Representation::Sdf {
-                ui.label(
-                    egui::RichText::new(s.label_shapes_sdf_only)
-                        .size(type_scale::LABEL)
-                        .color(Tokens::text_dim()),
-                );
-                return;
-            }
+            insert_destination(ui, state, queue);
 
+            ui.add_space(space::SNUG);
             shape_picker(ui, state, queue);
             // A shape's measurements only where a shape is what would be
             // placed: a model is measured by itself, and offering a radius for
@@ -2812,9 +3250,12 @@ pub fn shapes_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut Co
             }
 
             ui.add_space(space::SNUG);
-            if ui.button(s.action_place_shape).clicked() {
-                queue.push(Command::PlaceShape);
+            if ui.button(s.action_insert).clicked() {
+                queue.push(Command::InsertShape);
             }
+
+            ui.separator();
+            other_insert_sources(ui, state, queue);
 
             if let Some(object) = state
                 .selected_object
@@ -2835,6 +3276,88 @@ pub fn shapes_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut Co
     if !open {
         queue.push(Command::ToggleShapes);
     }
+}
+
+/// The id one destination chip carries, so a test can press it by name.
+///
+/// The same arrangement [`layer_transform_chip_id`] has and for the same
+/// reason: reaching a control by coordinate reaches whatever landed above it.
+pub fn insert_as_chip_id(destination: clayspace_model::InsertAs) -> egui::Id {
+    // By position rather than by name, because a name is interface text and an
+    // id built from one moves when a translation does.
+    egui::Id::new(("insert-as", destination as u8))
+}
+
+/// Where the next inserted form lands.
+///
+/// Offered rather than inferred: the specification says a form worked on its
+/// own is a subtool and a form put into the layer being worked is a part of
+/// that form, that both are wanted, and that guessing between them from context
+/// would be wrong half the time.
+fn insert_destination(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    ui.label(
+        egui::RichText::new(s.label_insert_as)
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    );
+    ui.horizontal(|ui| {
+        for destination in clayspace_model::InsertAs::ALL {
+            let on = state.insert_as == destination;
+            let response = ui.add(chip(s.insert_as_name(destination), on, Tokens::panel()));
+            // Recorded where a test can find it, for the reason `slider_id`
+            // states: a control reached by pixel coordinate is a different
+            // control the next time a section lands above it.
+            ui.ctx().memory_mut(|memory| {
+                memory
+                    .data
+                    .insert_temp(insert_as_chip_id(destination), response.rect)
+            });
+            if response.clicked() {
+                queue.push(Command::SetInsertAs(destination));
+            }
+        }
+    });
+    // An object is an item in an SDF layer's ordered list, and a grid and a
+    // mesh have no such list. Said while the choice is being made rather than
+    // left to a refusal after the click — and the subtool destination stays
+    // available, which is the whole point of stating it here.
+    if state.representation != Representation::Sdf {
+        ui.label(
+            egui::RichText::new(s.label_shapes_sdf_only)
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+        );
+    }
+}
+
+/// The two insertion sources that are not one of the offered shapes.
+///
+/// Under the shapes and separated from them, because neither is a thing the
+/// picker above is set to: one reads a file and the other resamples a subtool
+/// already in the scene, and both always arrive as a subtool of their own.
+fn other_insert_sources(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    if ui.button(s.action_insert_mesh).clicked() {
+        queue.push(Command::InsertMesh);
+    }
+
+    ui.add_space(space::TIGHT);
+    egui::ComboBox::from_id_salt("copy-subtool")
+        .selected_text(s.action_copy_subtool)
+        .width(280.0)
+        .show_ui(ui, |ui| {
+            for (key, name) in state.copyable_subtools {
+                if ui.selectable_label(false, name).clicked() {
+                    queue.push(Command::CopySubtool(*key));
+                }
+            }
+        });
+    ui.label(
+        egui::RichText::new(s.hint_copy_subtool)
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    );
 }
 
 /// Which shape a placement would use.

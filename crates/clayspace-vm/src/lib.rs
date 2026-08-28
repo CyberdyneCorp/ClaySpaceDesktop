@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 pub mod armature_vm;
+pub mod boolean_vm;
 pub mod command;
 mod curve_vm;
 pub mod document_vm;
@@ -31,6 +32,7 @@ pub use scene_vm::SceneViewModel;
 pub use sculpt_vm::{LastAction, SculptViewModel, TOOL_SUBSTITUTED};
 
 pub use armature_vm::{ArmatureViewModel, Grab};
+pub use boolean_vm::BooleanViewModel;
 pub use curve_vm::CurveViewModel;
 pub use document_vm::{DocumentViewModel, Guard};
 pub use lattice_vm::LatticeViewModel;
