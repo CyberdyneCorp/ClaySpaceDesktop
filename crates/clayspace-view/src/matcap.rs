@@ -59,6 +59,20 @@ impl MatCap {
     /// maps to it, so shading it once here is what lets the fragment shader be
     /// a single texture fetch.
     pub fn generate(self, size: u32) -> Vec<u8> {
+        self.image(size, false)
+    }
+
+    /// The same sphere with nothing around it: the swatch the interface
+    /// shows for this material.
+    ///
+    /// Outside the sphere the texels are transparent rather than the rim
+    /// colour, and the edge is feathered over a texel, so the ball sits on
+    /// whatever panel it is drawn on instead of in a dark square.
+    pub fn swatch(self, size: u32) -> Vec<u8> {
+        self.image(size, true)
+    }
+
+    fn image(self, size: u32, cut_out: bool) -> Vec<u8> {
         let (base, specular_strength, specular_power) = self.recipe();
         // Upper left, which is where the design's material previews are lit
         // from and where a sculptor expects a key light.
@@ -74,6 +88,10 @@ impl MatCap {
                 let r2 = nx * nx + ny * ny;
 
                 if r2 > 1.0 {
+                    if cut_out {
+                        pixels.extend_from_slice(&[0, 0, 0, 0]);
+                        continue;
+                    }
                     // Outside the sphere. These texels are only reached by a
                     // normal facing directly away, so they take the darkest
                     // rim value rather than a background colour that would
@@ -87,6 +105,13 @@ impl MatCap {
                     ]);
                     continue;
                 }
+                // Feathered over about a texel at the silhouette, for the
+                // swatch only; the material texture is never seen edge-on.
+                let alpha = if cut_out {
+                    (((1.0 - r2.sqrt()) * size as f32 * 0.5).clamp(0.0, 1.0) * 255.0) as u8
+                } else {
+                    255
+                };
 
                 let nz = (1.0 - r2).sqrt();
                 let normal = [nx, ny, nz];
@@ -114,7 +139,7 @@ impl MatCap {
                     to_srgb8(rgb[0]),
                     to_srgb8(rgb[1]),
                     to_srgb8(rgb[2]),
-                    255,
+                    alpha,
                 ]);
             }
         }

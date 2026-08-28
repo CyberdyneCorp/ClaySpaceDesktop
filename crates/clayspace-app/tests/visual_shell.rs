@@ -207,6 +207,7 @@ fn state<'a>(
         },
         view_preset: ViewPresetKind::Perspective,
         material: "MatCap Cinza 01",
+        matcap: clayspace_view::MatCap::default(),
         materials,
         can_undo: true,
         can_redo: false,
