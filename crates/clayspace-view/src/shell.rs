@@ -638,7 +638,7 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                         ViewPresetKind::Side => Action::ViewSide,
                         ViewPresetKind::Top => Action::ViewTop,
                     };
-                    if item(ui, state, preset.label(), action).clicked() {
+                    if item(ui, state, s.view_preset_name(preset), action).clicked() {
                         queue.push(Command::SetViewPreset(preset));
                         ui.close_menu();
                     }
@@ -811,8 +811,8 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                     // panel — and the two units it stands for, cells and
                     // passes, are not the same quantity.
                     let label = match op.amount() {
-                        Some(amount) => format!("{} · {amount}", op.label()),
-                        None => op.label().to_string(),
+                        Some(amount) => format!("{} · {amount}", s.mask_op_name(op)),
+                        None => s.mask_op_name(op).to_string(),
                     };
                     if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
                         queue.push(Command::ApplyMaskOp(op));
@@ -1234,7 +1234,7 @@ fn reference_plane(
     queue: &mut CommandQueue,
 ) {
     let settings = slot.settings;
-    heading(ui, plane.label());
+    heading(ui, s.ref_plane_name(plane));
     ui.horizontal(|ui| match slot.name {
         Some(name) => {
             // Shown, and only then, because there is nothing to hide.
@@ -2439,7 +2439,7 @@ fn curve_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQ
     ui.horizontal_wrapped(|ui| {
         for join in CurveJoin::ALL {
             if ui
-                .selectable_label(state.curve.join == join, join.label())
+                .selectable_label(state.curve.join == join, s.curve_join_name(join))
                 .clicked()
             {
                 queue.push(Command::SetCurveJoin(join));
@@ -2455,7 +2455,10 @@ fn curve_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQ
     ui.horizontal_wrapped(|ui| {
         for profile in CurveProfile::ALL {
             if ui
-                .selectable_label(state.curve.profile == profile, profile.label())
+                .selectable_label(
+                    state.curve.profile == profile,
+                    s.curve_profile_name(profile),
+                )
                 .clicked()
             {
                 queue.push(Command::SetCurveProfile(profile));
@@ -2689,7 +2692,7 @@ pub fn right_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
     heading(ui, s.section_geometry);
     // A count without its detail level reads as a smaller model, so where the
     // viewport is not showing full resolution the interface says so.
-    if let Some(note) = state.stats.detail.note() {
+    if let Some(note) = s.detail_note(state.stats.detail) {
         ui.label(
             egui::RichText::new(note)
                 .size(type_scale::LABEL)
@@ -2761,7 +2764,10 @@ pub fn right_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
     ui.horizontal_wrapped(|ui| {
         for falloff in Falloff::ALL {
             let on = state.brush.shaping.falloff == falloff;
-            if ui.add(chip(falloff.label(), on, Tokens::panel())).clicked() {
+            if ui
+                .add(chip(s.falloff_name(falloff), on, Tokens::panel()))
+                .clicked()
+            {
                 queue.push(Command::SetBrushFalloff(falloff));
             }
         }
@@ -3149,7 +3155,11 @@ pub fn viewport_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comma
                 ViewPresetKind::Top => Action::ViewTop,
             };
             if with_chord(
-                ui.add(chip(preset.label(), on, Tokens::ground())),
+                ui.add(chip(
+                    state.strings.view_preset_name(preset),
+                    on,
+                    Tokens::ground(),
+                )),
                 state,
                 action,
             )
@@ -3575,11 +3585,10 @@ fn object_name(state: &ShellState<'_>, object: &clayspace_model::SceneObject) ->
 /// objecthood is recorded rather than inferred from what a layer contains.
 pub fn object_rows(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
     let s = state.strings;
-    ui.label(
-        egui::RichText::new(s.label_placed_objects)
-            .size(type_scale::LABEL)
-            .color(Tokens::text_dim()),
-    );
+    // A section like Scene and Layers above it, not a label: it is a list of
+    // things in the scene, and it read as a stray caption between two
+    // headings.
+    heading(ui, s.section_objects);
 
     if state.objects.is_empty() {
         ui.label(

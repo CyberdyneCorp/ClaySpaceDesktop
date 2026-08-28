@@ -1071,6 +1071,15 @@ sits inside a torso — and picking the far one makes a chest impossible to grab
 
 ## Viewport
 
+**The symmetry plane is an outline, not a lattice.** Drawn as a grid across
+the mirror plane it was a wall of orange lines over the form on a running
+build, whatever the dimming, because the camera sits inside the plane's extent.
+It is six lines now — the plane's edge and its two centre lines, the mirror's
+axis where it meets the floor — at a fifth of the accent: it says where the
+mirror is and puts nothing across the clay. The navigation gizmo in the corner
+draws each half-axis as a bundle of five lines, so it reads as a rod rather
+than a hairline.
+
 ### Zooming
 
 The wheel zooms **at what is under the pointer** and stops a little short of
@@ -1206,6 +1215,17 @@ translations: **Português (Brasil)**, **English (US)** and **Español
 (Latinoamérica)**. Each is named in itself, which is the one rule a language
 menu has — a reader who cannot read the current interface can still find their
 own. The choice is written to the session directory, so it survives a restart.
+
+**What a running English build still said in Portuguese is translated.** A
+screenshot of the live application, not a capture, showed Perspectiva, Frontal,
+Lateral and Superior under the viewport, Dura and Suave on the edge chips, and
+"ainda não gerado" in the geometry panel: each was drawn from the domain's own
+`label()` rather than from the string table. The four views, the four edge
+profiles, the three reference planes, the curve's joins and profiles, the six
+mask operations and the two detail notes are in the table now, in all three
+languages; the shell's untranslated-label ratchet (`LABELS_STILL_DRAWN`) stands
+at ten, all of them identifiers — SDF, mm, a mesh's own name — rather than
+words.
 
 The interface **opens in English**. That is not the design's own language and
 it is deliberate: it has to open in something a first-time reader can make

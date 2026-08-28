@@ -94,6 +94,11 @@ While a sculpting tool is active and the pointer is over the surface, the viewpo
 ### Requirement: Reference overlays are available and unobtrusive
 The viewport SHALL offer a ground grid and a symmetry-plane indicator as toggleable overlays. Overlays SHALL render behind or beneath the sculpt in visual weight, SHALL never obscure the silhouette, and SHALL be excluded from every export.
 
+#### Scenario: The symmetry plane does not cross the form
+- **WHEN** a symmetry plane is shown with the camera inside the plane's extent
+- **THEN** the indicator is the plane's outline and centre lines only, drawn at
+  a fraction of the accent, with no lattice of lines across the sculpt
+
 #### Scenario: Overlays never reach an export
 - **WHEN** a mesh is exported with the grid and symmetry plane visible
 - **THEN** the exported file contains only the sculpted geometry

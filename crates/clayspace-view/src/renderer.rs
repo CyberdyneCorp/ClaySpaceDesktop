@@ -1831,10 +1831,15 @@ fn overlay_geometry(overlays: Overlays, extent: f32) -> (Vec<Vertex>, Vec<u32>) 
         // scene furniture — but dimmed, since a reference overlay must not be
         // the brightest thing on screen. At 0.25 over an eight-by-eight grid
         // it was: the capture showed a bright orange wall with the sculpt
-        // behind it. Sparser and darker reads as "the mirror is here" without
-        // competing with the thing being sculpted.
-        let color = palette::dimmed(palette::ACCENT, 0.12);
-        let steps = 4;
+        // behind it. Four steps was still a lattice of orange across the
+        // form on a running build, with the camera inside the plane's extent.
+        // Two steps is the plane's outline and its two centre lines — the
+        // mirror's axis where it meets the floor, and its edge — which says
+        // "the mirror is here" and puts nothing across the clay. Six lines
+        // can afford a little more light than forty: still a fifth of the
+        // accent, nowhere near the active brush's ring.
+        let color = palette::dimmed(palette::ACCENT, 0.22);
+        let steps = 2;
         let step = extent * 2.0 / steps as f32;
         for i in 0..=steps {
             let t = -extent + i as f32 * step;
@@ -2438,6 +2443,10 @@ fn armature_geometry(view: ArmatureView<'_>) -> (Vec<Vertex>, Vec<u32>) {
 
 /// How much of the frame's height the gizmo occupies.
 const GIZMO_FRACTION: f32 = 0.18;
+/// How many lines each half-axis of the navigation gizmo is drawn as.
+const GIZMO_BUNDLE: usize = 5;
+/// How far the copies sit from the axis, in the gizmo's own units.
+const GIZMO_ROD: f32 = 0.018;
 
 /// The three labelled axes, drawn as lines from the origin.
 ///
@@ -2453,23 +2462,39 @@ fn gizmo_geometry() -> (Vec<Vertex>, Vec<u32>) {
         (Vec3::Z, [0.28, 0.48, 0.88]),
     ];
 
+    // Each half-axis is a bundle of `GIZMO_BUNDLE` lines — the axis and four
+    // copies stepped a little along the other two axes — so it reads as a rod
+    // from every angle rather than as a hairline. A line is one pixel wide
+    // whatever the device; the manipulator thickens itself the same way.
+    let offsets = |direction: Vec3| -> [Vec3; GIZMO_BUNDLE] {
+        let (across, other) = frame_about(direction);
+        [
+            Vec3::ZERO,
+            across * GIZMO_ROD,
+            -across * GIZMO_ROD,
+            other * GIZMO_ROD,
+            -other * GIZMO_ROD,
+        ]
+    };
     for (direction, color) in axes {
         for (end, shade) in [(direction, 1.0f32), (-direction, 0.25)] {
-            let base = vertices.len() as u32;
             let tint = [color[0] * shade, color[1] * shade, color[2] * shade];
-            vertices.push(Vertex {
-                position: [0.0, 0.0, 0.0],
-                normal: [0.0, 1.0, 0.0],
-                color: tint,
-                mask: 0.0,
-            });
-            vertices.push(Vertex {
-                position: (end * 0.9).into(),
-                normal: [0.0, 1.0, 0.0],
-                color: tint,
-                mask: 0.0,
-            });
-            indices.extend_from_slice(&[base, base + 1]);
+            for offset in offsets(direction) {
+                let base = vertices.len() as u32;
+                vertices.push(Vertex {
+                    position: offset.into(),
+                    normal: [0.0, 1.0, 0.0],
+                    color: tint,
+                    mask: 0.0,
+                });
+                vertices.push(Vertex {
+                    position: (end * 0.9 + offset).into(),
+                    normal: [0.0, 1.0, 0.0],
+                    color: tint,
+                    mask: 0.0,
+                });
+                indices.extend_from_slice(&[base, base + 1]);
+            }
         }
     }
 
@@ -2793,22 +2818,20 @@ mod tests {
     #[test]
     fn the_gizmo_draws_three_axes_in_both_directions() {
         let (vertices, indices) = gizmo_geometry();
-        // Three axes, positive and negative, two vertices each.
-        assert_eq!(vertices.len(), 12);
-        assert_eq!(indices.len(), 12);
+        // Six half-axes, each a bundle of lines, two vertices a line.
+        assert_eq!(vertices.len(), 6 * GIZMO_BUNDLE * 2);
+        assert_eq!(indices.len(), 6 * GIZMO_BUNDLE * 2);
 
         // Each axis must be distinguishable by hue, or the gizmo reports
-        // nothing a glance can read.
-        let hues: Vec<[f32; 3]> = vertices
-            .chunks_exact(2)
-            .step_by(2)
-            .map(|pair| pair[0].color)
+        // nothing a glance can read: three full-shade hues and three dimmed,
+        // six distinct colours over the whole bundle.
+        let mut hues: Vec<[u8; 3]> = vertices
+            .iter()
+            .map(|v| v.color.map(|c| (c * 255.0) as u8))
             .collect();
-        for (i, a) in hues.iter().enumerate() {
-            for b in hues.iter().skip(i + 1) {
-                assert_ne!(a, b, "two gizmo axes share a colour");
-            }
-        }
+        hues.sort();
+        hues.dedup();
+        assert_eq!(hues.len(), 6, "the gizmo's axes do not read as six colours");
     }
 
     #[test]
