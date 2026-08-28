@@ -479,14 +479,23 @@ fn icon_chip(
     on: bool,
     unselected: egui::Color32,
 ) -> egui::Response {
-    icon_chip_recorded(ui, icon, label, on, unselected, true)
+    icon_chip_recorded(ui, icon, label, on, unselected, true, true)
 }
 
-/// The same, choosing whether the chip claims `chip_id(label)`.
+/// The same, choosing whether the chip claims `chip_id(label)` and whether
+/// it is enabled.
 ///
 /// Two rows can carry the same word — the object list's Girar and the layer
 /// transform's — and one memory slot cannot hold both. A caller with ids of
-/// its own passes `false` and leaves the slot to the row a test looks for.
+/// its own passes `record: false` and leaves the slot to the row a test looks
+/// for.
+///
+/// `enabled` is a parameter rather than `add_enabled_ui` around the call
+/// because that scope is a child ui, and a wrapped row places a child at its
+/// cursor without the wrap: the third mode chip in the object list ran off
+/// the panel while the same three chips wrapped everywhere they were drawn
+/// bare.
+#[allow(clippy::too_many_arguments)]
 fn icon_chip_recorded(
     ui: &mut egui::Ui,
     icon: Icon,
@@ -494,7 +503,9 @@ fn icon_chip_recorded(
     on: bool,
     unselected: egui::Color32,
     record: bool,
+    enabled: bool,
 ) -> egui::Response {
+    let enabled = enabled && ui.is_enabled();
     let padding = ui.spacing().button_padding;
     let font = egui::FontId::proportional(type_scale::LABEL);
     let galley = ui
@@ -503,15 +514,15 @@ fn icon_chip_recorded(
     let width = padding.x * 2.0 + size::CHIP_ICON + space::TIGHT + galley.size().x;
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(width, size::CONTROL), egui::Sense::click());
-    let lit = ui.is_enabled() && (on || response.hovered());
-    let tint = if !ui.is_enabled() {
+    let lit = enabled && (on || response.hovered());
+    let tint = if !enabled {
         Tokens::text_faint()
     } else if lit {
         Tokens::text()
     } else {
         Tokens::text_dim()
     };
-    let fill = if on || response.hovered() {
+    let fill = if enabled && (on || response.hovered()) {
         Tokens::raised()
     } else {
         unselected
@@ -640,18 +651,19 @@ fn gizmo_mode_row(
         for mode in GizmoMode::ALL {
             let on = current == mode;
             let usable = can_transform || mode == GizmoMode::Move;
-            let response = ui
-                .add_enabled_ui(usable, |ui| {
-                    icon_chip(
-                        ui,
-                        gizmo_mode_icon(mode),
-                        s.gizmo_mode_name(mode),
-                        on,
-                        Tokens::panel(),
-                    )
-                })
-                .inner
-                .on_disabled_hover_text(s.hint_gizmo_needs_two);
+            let response = icon_chip_recorded(
+                ui,
+                gizmo_mode_icon(mode),
+                s.gizmo_mode_name(mode),
+                on,
+                Tokens::panel(),
+                true,
+                usable,
+            );
+            if !usable {
+                response.on_hover_text(s.hint_gizmo_needs_two);
+                continue;
+            }
             if response.clicked() && !on {
                 queue.push(Command::SetGizmoMode(mode));
             }
@@ -1974,6 +1986,7 @@ fn layer_transform_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mu
                 on,
                 Tokens::panel(),
                 false,
+                true,
             );
             // Recorded where a test can find it, for the reason `slider_id`
             // states: a control reached by pixel coordinate is a different

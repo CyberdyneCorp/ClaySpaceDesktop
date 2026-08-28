@@ -2219,7 +2219,21 @@ fn a_selected_object_offers_the_manipulators_three_modes() {
     set.selected_object = Some(placed[0].id);
 
     let turn = strings.gizmo_mode_name(clayspace_model::GizmoMode::Rotate);
-    let chip = probe_shell(&set)
+    let probe = probe_shell(&set);
+    // All three inside the left panel. The third ran off its edge once: the
+    // chips were wrapped in an enabled-scope, and a wrapped row places a
+    // child scope at its cursor without the wrap.
+    for mode in clayspace_model::GizmoMode::ALL {
+        let name = strings.gizmo_mode_name(mode);
+        let rect = probe
+            .memory(|memory| memory.data.get_temp::<egui::Rect>(shell::chip_id(name)))
+            .unwrap_or_else(|| panic!("the object list drew no {name:?} chip"));
+        assert!(
+            rect.right() <= region::RAIL + region::LEFT,
+            "{name:?} at {rect:?} runs off the left panel"
+        );
+    }
+    let chip = probe
         .memory(|memory| memory.data.get_temp::<egui::Rect>(shell::chip_id(turn)))
         .unwrap_or_else(|| panic!("the object list drew no {turn:?} chip"))
         .center();
