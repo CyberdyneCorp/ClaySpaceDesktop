@@ -35,6 +35,17 @@ pub enum Representation {
 impl Representation {
     pub const ALL: [Representation; 3] = [Self::Sdf, Self::Voxel, Self::Mesh];
 
+    /// The representations an *empty* layer can be created in.
+    ///
+    /// Two, not three. A mesh layer is made by carrying a mesh — there is no
+    /// call anywhere that makes an empty one — so "add a layer and choose
+    /// mesh" produced a row labelled mesh with a field layer behind it that
+    /// nothing could ever put triangles into. The specification qualifies the
+    /// offer, "SDF, voxel and mesh *where a mesh source is at hand*", and at
+    /// the moment a layer is added out of nothing there is none: that route is
+    /// the import, which makes its own layer.
+    pub const CREATABLE: [Representation; 2] = [Self::Sdf, Self::Voxel];
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Sdf => "SDF",

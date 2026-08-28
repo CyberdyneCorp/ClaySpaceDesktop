@@ -45,9 +45,11 @@ fn with_imported_mesh(who: &str) -> Option<(ClayDocument, std::path::PathBuf)> {
 
 /// The mesh layers, as the application uploads them.
 fn upload(harness: &mut Harness, document: &mut ClayDocument) {
-    let (vertices, indices) = support::viewport_geometry(document);
+    let (vertices, indices, spans) = support::viewport_layers(document);
     let gpu = harness.gpu.clone();
-    harness.renderer.set_mesh_layers(&gpu, &vertices, &indices);
+    harness
+        .renderer
+        .set_mesh_layers(&gpu, &vertices, &indices, &spans);
 }
 
 /// The one that says the viewport draws a mesh layer at all.

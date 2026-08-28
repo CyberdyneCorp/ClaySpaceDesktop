@@ -12,7 +12,22 @@ use crate::camera::Camera;
 use crate::gpu::{Framebuffer, Gpu};
 use crate::matcap::MatCap;
 use crate::palette;
-use clayspace_model::{GizmoHandle, GizmoMode, SurfaceOpacity};
+use clayspace_model::{GizmoHandle, GizmoMode, LayerKey, SurfaceOpacity};
+
+/// Which run of the carried buffer belongs to which subtool.
+///
+/// The voxel and mesh layers arrive as one concatenated buffer, so this is the
+/// only thing that says where one subtool's triangles end and the next one's
+/// begin — and therefore the only thing that lets the active one be drawn
+/// differently from the rest. One draw call per span rather than an instancing
+/// scheme: a scene holds a handful of subtools, and a handful of draws is
+/// noise beside the buffer they share.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MeshSpan {
+    pub layer: LayerKey,
+    /// Positions into the index buffer, which is what a draw call takes.
+    pub indices: std::ops::Range<u32>,
+}
 
 /// One vertex, in the layout the shader and the engine's copy both use.
 ///
@@ -384,6 +399,14 @@ pub struct LatticeView<'a> {
     /// a primitive on the interface thread every frame — this is a frame of
     /// reference, not a preview.
     pub outline: Option<([f32; 3], [f32; 3])>,
+    /// The box the active SDF subtool occupies, when the cue applies to one.
+    ///
+    /// The merged surface is the hard union of every visible SDF layer and the
+    /// engine attributes no triangle to the layer it came from, so an active
+    /// SDF subtool cannot be tinted the way a carried one is. Its box is the
+    /// cue instead: the same drawing a selected object gets, in its own colour,
+    /// saying which of the forms in the union is the one a dab would land on.
+    pub subtool_outline: Option<([f32; 3], [f32; 3])>,
     /// How big a control point handle is, in world units.
     ///
     /// Handed in rather than fixed, because a cage around a thumbnail and one
@@ -501,6 +524,20 @@ pub struct Renderer {
     /// bricks, so it never enters the per-key storage the surface is
     /// reassembled from, and the two are rebuilt by different things.
     mesh_layers: GpuMesh,
+    /// Which run of `mesh_layers` each subtool owns, in the order they were
+    /// concatenated. Empty means "draw the buffer whole", which is what a
+    /// caller that has nothing to cue wants.
+    mesh_spans: Vec<MeshSpan>,
+    /// The subtool a dab would land on, when it is one of the carried ones.
+    active_subtool: Option<LayerKey>,
+    /// The material the active subtool is drawn with.
+    ///
+    /// A second buffer and a second bind group rather than one buffer written
+    /// twice: `Queue::write_buffer` is ordered against the *submission*, not
+    /// against the draws inside it, so writing the tint between two draw calls
+    /// would give both of them whichever value was written last.
+    active_material_buffer: wgpu::Buffer,
+    active_bind_group: wgpu::BindGroup,
     cursor_mesh: GpuMesh,
     /// The ZSphere rig, drawn over the surface it skins.
     armature_mesh: GpuMesh,
@@ -530,6 +567,39 @@ pub struct Renderer {
     gizmo_mesh: GpuMesh,
     gizmo_camera_buffer: wgpu::Buffer,
     gizmo_bind_group: wgpu::BindGroup,
+}
+
+/// How far the active subtool's clay is carried toward the accent's hue.
+///
+/// Short of the whole way on purpose. The cue has to survive being looked past
+/// — a sculptor reads the silhouette, not the colour — so it is a warmth the
+/// eye picks up beside a neutral neighbour rather than a coat of paint.
+const ACTIVE_TINT_STRENGTH: f32 = 0.45;
+
+/// The multiplier the active subtool's material is drawn with.
+///
+/// The accent is the design's reserved colour for active tool state, and which
+/// subtool a dab lands on is exactly that. A multiplier over the MatCap rather
+/// than a replacement of it: the material carries the form's shading, and
+/// overwriting it would say the active subtool is made of something else.
+const ACTIVE_TINT: [f32; 3] = active_tint();
+
+/// The accent's hue at full value, mixed back toward white.
+///
+/// Divided by its own strongest channel — red, which the accent's hex says it
+/// is — so what survives is the ratio between the channels and not the accent's
+/// darkness: multiplying the clay by the accent as stored took two thirds of
+/// the value out of it, which reads as a shadow rather than as a cue.
+const fn active_tint() -> [f32; 3] {
+    let peak = palette::ACCENT[0];
+    let mut tint = [0.0f32; 3];
+    let mut channel = 0;
+    while channel < 3 {
+        let hue = palette::ACCENT[channel] / peak;
+        tint[channel] = 1.0 - ACTIVE_TINT_STRENGTH * (1.0 - hue);
+        channel += 1;
+    }
+    tint
 }
 
 impl Renderer {
@@ -588,6 +658,12 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let active_material_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("active subtool material"),
+            size: std::mem::size_of::<MaterialUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
         let sampler = gpu.device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("matcap"),
@@ -622,6 +698,16 @@ impl Renderer {
             &bind_group_layout,
             &gizmo_camera_buffer,
             &material_buffer,
+            &texture_view,
+            &sampler,
+        );
+        // And the active subtool the other way round: the scene's camera, its
+        // own material.
+        let active_bind_group = make_bind_group(
+            gpu,
+            &bind_group_layout,
+            &camera_buffer,
+            &active_material_buffer,
             &texture_view,
             &sampler,
         );
@@ -855,6 +941,10 @@ impl Renderer {
             show_gizmo: false,
             overlay_mesh: GpuMesh::new(gpu),
             mesh_layers: GpuMesh::new(gpu),
+            mesh_spans: Vec::new(),
+            active_subtool: None,
+            active_material_buffer,
+            active_bind_group,
             cursor_mesh: GpuMesh::new(gpu),
             armature_mesh: GpuMesh::new(gpu),
             lattice_mesh: GpuMesh::new(gpu),
@@ -890,6 +980,17 @@ impl Renderer {
             &self.bind_group_layout,
             &self.camera_buffer,
             &self.material_buffer,
+            &texture_view,
+            &self.sampler,
+        );
+        // The active subtool's group reads the same texture, so a material the
+        // sculptor changed has to reach it too — the first version rebuilt only
+        // the plain one and the tinted subtool kept the old MatCap.
+        self.active_bind_group = make_bind_group(
+            gpu,
+            &self.bind_group_layout,
+            &self.camera_buffer,
+            &self.active_material_buffer,
             &texture_view,
             &self.sampler,
         );
@@ -1015,9 +1116,30 @@ impl Renderer {
     /// Drawn with the surface pipeline and the same material, because a mesh
     /// layer *is* surface as far as a sculptor is concerned — it is only the
     /// route it took to get here that differs.
-    pub fn set_mesh_layers(&mut self, gpu: &Gpu, vertices: &[Vertex], indices: &[u32]) {
+    /// The spans arrive with the buffer they describe rather than through a
+    /// setter of their own, so a range can never outlive the indices it points
+    /// into.
+    pub fn set_mesh_layers(
+        &mut self,
+        gpu: &Gpu,
+        vertices: &[Vertex],
+        indices: &[u32],
+        spans: &[MeshSpan],
+    ) {
         self.mesh_layers.upload(gpu, vertices, indices);
+        self.mesh_spans = spans.to_vec();
         self.upload_edges(gpu, indices);
+    }
+
+    /// Which subtool a dab would land on, for the cue to mark.
+    ///
+    /// Separate from the buffer because activation is a click and re-walking
+    /// every visible grid to say the same triangles again would make choosing a
+    /// subtool cost what sculpting one does. A key naming no span simply tints
+    /// nothing, which is the honest answer when the active subtool is an SDF
+    /// one — that cue is the outline instead.
+    pub fn set_active_subtool(&mut self, layer: Option<LayerKey>) {
+        self.active_subtool = layer;
     }
 
     /// Whether the surface is drawn through.
@@ -1104,6 +1226,28 @@ impl Renderer {
         self.overlay_mesh.upload(gpu, &vertices, &indices);
     }
 
+    /// The carried layers, one draw per subtool.
+    ///
+    /// A caller that uploaded triangles without saying whose they are still has
+    /// to see them, so an empty span list is the whole buffer in one draw —
+    /// which is also what every frame did before there were subtools to tell
+    /// apart.
+    fn draw_carried(&self, pass: &mut wgpu::RenderPass<'_>) {
+        if self.mesh_spans.is_empty() {
+            pass.draw_indexed(0..self.mesh_layers.index_count, 0, 0..1);
+            return;
+        }
+        for span in &self.mesh_spans {
+            let material = if Some(span.layer) == self.active_subtool {
+                &self.active_bind_group
+            } else {
+                &self.bind_group
+            };
+            pass.set_bind_group(0, material, &[]);
+            pass.draw_indexed(span.indices.clone(), 0, 0..1);
+        }
+    }
+
     /// Draws one frame into `target`.
     pub fn render(
         &self,
@@ -1130,15 +1274,25 @@ impl Renderer {
         };
         gpu.queue
             .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
+        let colored = if has_vertex_colors { 1.0 } else { 0.0 };
+        // The effective opacity and not the dial: the cage imposes its own
+        // ceiling, and writing the dial here would select the ghost pipeline
+        // and then draw it solid.
+        let ghost = [self.drawn_opacity().get(), 0.0, 0.0, 0.0];
         gpu.queue.write_buffer(
             &self.material_buffer,
             0,
             bytemuck::bytes_of(&MaterialUniform {
-                tint: [1.0, 1.0, 1.0, if has_vertex_colors { 1.0 } else { 0.0 }],
-                // The effective opacity and not the dial: the cage imposes its
-                // own ceiling, and writing the dial here would select the ghost
-                // pipeline and then draw it solid.
-                ghost: [self.drawn_opacity().get(), 0.0, 0.0, 0.0],
+                tint: [1.0, 1.0, 1.0, colored],
+                ghost,
+            }),
+        );
+        gpu.queue.write_buffer(
+            &self.active_material_buffer,
+            0,
+            bytemuck::bytes_of(&MaterialUniform {
+                tint: [ACTIVE_TINT[0], ACTIVE_TINT[1], ACTIVE_TINT[2], colored],
+                ghost,
             }),
         );
 
@@ -1247,7 +1401,10 @@ impl Renderer {
                     self.mesh_layers.indices.slice(..),
                     wgpu::IndexFormat::Uint32,
                 );
-                pass.draw_indexed(0..self.mesh_layers.index_count, 0, 0..1);
+                self.draw_carried(&mut pass);
+                // Back to the plain material, which a tinted span may have
+                // replaced: everything after this belongs to no subtool.
+                pass.set_bind_group(0, &self.bind_group, &[]);
 
                 // And its edges over it, when the polyframe is on. The same
                 // vertex buffer, read as a line list through its own indices.
@@ -2186,6 +2343,35 @@ fn cube(centre: Vec3, size: f32, colour: [f32; 3], segment: &mut impl FnMut(Vec3
     }
 }
 
+/// The twelve edges of an axis-aligned box.
+///
+/// Two callers now — a selected object and the active subtool — and the corner
+/// arithmetic is the part that is easy to get subtly wrong, so it is written
+/// once.
+fn outline_box(
+    (min, max): ([f32; 3], [f32; 3]),
+    colour: [f32; 3],
+    segment: &mut impl FnMut(Vec3, Vec3, [f32; 3]),
+) {
+    let corner = |i: usize| {
+        Vec3::new(
+            if i & 1 == 0 { min[0] } else { max[0] },
+            if i & 2 == 0 { min[1] } else { max[1] },
+            if i & 4 == 0 { min[2] } else { max[2] },
+        )
+    };
+    // Every pair of corners differing in one bit, which is every pair one axis
+    // apart.
+    for a in 0..8usize {
+        for bit in [1usize, 2, 4] {
+            let b = a | bit;
+            if b != a {
+                segment(corner(a), corner(b), colour);
+            }
+        }
+    }
+}
+
 /// Where the solid handles are lit from, in world space.
 ///
 /// The overlay shader draws vertex colour as it is, so what makes a cone read
@@ -2301,25 +2487,18 @@ fn lattice_geometry(view: LatticeView<'_>) -> LatticeGeometry {
 
     // A selected object's box, quieter still than the cage: it says where a
     // shape is, and a bright one would read as the shape itself.
-    if let Some((min, max)) = view.outline {
-        const OUTLINE: [f32; 3] = [0.52, 0.62, 0.72];
-        let corner = |i: usize| {
-            Vec3::new(
-                if i & 1 == 0 { min[0] } else { max[0] },
-                if i & 2 == 0 { min[1] } else { max[1] },
-                if i & 4 == 0 { min[2] } else { max[2] },
-            )
-        };
-        // The twelve edges of a box: every pair of corners differing in one
-        // bit, which is every pair one axis apart.
-        for a in 0..8usize {
-            for bit in [1usize, 2, 4] {
-                let b = a | bit;
-                if b != a {
-                    segment(corner(a), corner(b), OUTLINE);
-                }
-            }
-        }
+    const OUTLINE: [f32; 3] = [0.52, 0.62, 0.72];
+    /// The active SDF subtool's box, in the same hue its carried siblings are
+    /// tinted with — one cue, two mechanisms, and a second colour would read as
+    /// a second fact. Dimmed to sit a little below the object outline: which
+    /// subtool is active is standing state, and the box a sculptor just put an
+    /// object into is the more urgent of the two.
+    const SUBTOOL_OUTLINE: [f32; 3] = palette::dimmed(ACTIVE_TINT, 0.68);
+    if let Some(box_) = view.outline {
+        outline_box(box_, OUTLINE, &mut segment);
+    }
+    if let Some(box_) = view.subtool_outline {
+        outline_box(box_, SUBTOOL_OUTLINE, &mut segment);
     }
 
     // The cage itself, quiet: it is a frame of reference, and a bright one

@@ -162,11 +162,11 @@ fn the_polyframe_draws_a_mesh_layers_edges() {
         .expect("the crossing was refused");
 
     let camera = framed(&document);
-    let (vertices, indices) = support::viewport_geometry(&mut document);
+    let (vertices, indices, spans) = support::viewport_layers(&mut document);
     assert!(!indices.is_empty(), "nothing to draw edges on");
     harness
         .renderer
-        .set_mesh_layers(&harness.gpu, &vertices, &indices);
+        .set_mesh_layers(&harness.gpu, &vertices, &indices, &spans);
 
     // Nothing in the surface slot: the mesh layer is the whole subject, and
     // the polyframe is drawn over the mesh layers rather than over it.

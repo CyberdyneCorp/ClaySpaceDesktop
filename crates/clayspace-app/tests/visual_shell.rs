@@ -41,8 +41,10 @@ fn scene() -> Scene {
                 visible: true,
                 expandable: true,
             },
+            // The active layer's key, because the tree and the stack read the
+            // same fact: there is one active layer, and both light its row.
             SceneNode {
-                key: LayerKey(1),
+                key: LayerKey(11),
                 name: "Cabeça".into(),
                 depth: 1,
                 visible: true,
@@ -92,7 +94,7 @@ fn scene() -> Scene {
             ),
         ],
         active: Some(LayerKey(11)),
-        selected: Some(LayerKey(1)),
+        soloed: None,
     }
 }
 
@@ -141,15 +143,23 @@ fn state<'a>(
         shortcuts: shortcuts(),
         representation: clayspace_model::Representation::Sdf,
         show_shapes: false,
+        insert_as: clayspace_model::InsertAs::default(),
+        copyable_subtools: &[],
         mesh_operands: &[],
         mesh_operand: None,
         mesh_operand_cost: None,
+        show_boolean: false,
+        boolean: clayspace_model::BooleanSettings::default(),
+        boolean_operands: &[],
+        boolean_cost: None,
+        boolean_notice: None,
         shape: clayspace_model::Shape::default(),
         shape_parameters: &[],
         object_combine: clayspace_model::CombineSettings::default(),
         objects: &[],
         selected_object: None,
         gizmo_mode: clayspace_model::GizmoMode::default(),
+        gizmo_target: None,
         show_repair: false,
         repair: None,
         show_references: false,
@@ -287,6 +297,7 @@ fn build_shell(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQ
     shell::export_window(ctx, state, queue);
     shell::reference_window(ctx, state, queue);
     shell::shapes_window(ctx, state, queue);
+    shell::boolean_window(ctx, state, queue);
     shell::deform_window(ctx, state, queue);
 }
 
@@ -1108,14 +1119,15 @@ fn click(at: egui::Pos2, button: egui::PointerButton) -> Vec<egui::Event> {
     ]
 }
 
-/// The two entries of a layer's menu, relative to where it was opened.
+/// The entries of a layer's menu, relative to where it was opened.
 ///
 /// A menu is laid out below and to the right of the pointer, so its entries
 /// are found from the click rather than from the panel. The offsets are the
 /// frame's own padding and one entry's height — small enough that landing on
 /// the wrong one is caught by the assertion, not silently tolerated.
 const RENAME_ENTRY: egui::Vec2 = egui::Vec2::new(37.0, 17.0);
-const DELETE_ENTRY: egui::Vec2 = egui::Vec2::new(37.0, 42.0);
+const SOLO_ENTRY: egui::Vec2 = egui::Vec2::new(37.0, 42.0);
+const DELETE_ENTRY: egui::Vec2 = egui::Vec2::new(37.0, 67.0);
 
 /// Renaming and deleting are reachable from a layer row.
 ///
@@ -1178,6 +1190,44 @@ fn a_layer_row_offers_renaming_and_deleting() {
                 queue.commands(),
                 [Command::BeginRenameLayer(top)],
                 "Renomear did not open the rename field on the row it was on"
+            );
+        },
+    );
+
+    // The row's own solo, which pushes the state to be in rather than a
+    // toggle: nothing is soloed here, so the entry offers to show this one
+    // alone.
+    let report = diagnostics();
+    let solo_state = state(strings, &scene, &materials, &report);
+    capture_shell_after(
+        &harness,
+        &solo_state,
+        "68-layer-menu-solo",
+        &[right_click(row), left_click(row + SOLO_ENTRY)],
+        |queue| {
+            assert_eq!(
+                queue.commands(),
+                [Command::SoloLayer(Some(top))],
+                "Mostrar só esta did not solo the row it was on"
+            );
+        },
+    );
+
+    // And on the row already alone it offers the way back instead.
+    let mut soloed = scene.clone();
+    soloed.soloed = Some(top);
+    let report = diagnostics();
+    let release_state = state(strings, &soloed, &materials, &report);
+    capture_shell_after(
+        &harness,
+        &release_state,
+        "68-layer-menu-release-solo",
+        &[right_click(row), left_click(row + SOLO_ENTRY)],
+        |queue| {
+            assert_eq!(
+                queue.commands(),
+                [Command::SoloLayer(None)],
+                "the soloed row did not offer to bring the rest back"
             );
         },
     );
@@ -2268,5 +2318,438 @@ fn choosing_a_mesh_operand_states_what_the_crossing_costs() {
         image.mean_difference(&plain) > 0.001,
         "choosing a mesh operand changed nothing on screen, so the costs are \
          not being stated"
+    );
+}
+
+/// Where an operation chip in the boolean panel is, asked of the interface
+/// that drew it.
+fn boolean_op_chip(state: &ShellState<'_>, op: clayspace_model::BooleanOp) -> Option<egui::Pos2> {
+    probe_shell(state)
+        .memory(|memory| {
+            memory
+                .data
+                .get_temp::<egui::Rect>(shell::boolean_op_chip_id(op))
+        })
+        .map(|rect| rect.center())
+}
+
+/// Two subtools to run a boolean between, as the panel is handed them.
+fn two_operands() -> Vec<(LayerKey, String)> {
+    vec![
+        (LayerKey(1), "Esfera".to_string()),
+        (LayerKey(2), "Cilindro".to_string()),
+    ]
+}
+
+/// The three operations, each wired to the command it is labelled with.
+/// Drawing three chips and wiring them to nothing looks exactly like a panel
+/// that works.
+#[test]
+fn the_boolean_panel_offers_the_three_operations() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let operands = two_operands();
+    let mut set = state(strings, &scene, &materials, &report);
+    set.show_boolean = true;
+    set.boolean_operands = &operands;
+
+    for op in clayspace_model::BooleanOp::ALL {
+        let at = boolean_op_chip(&set, op).unwrap_or_else(|| panic!("no {op:?} chip was drawn"));
+        capture_shell_after(
+            &harness,
+            &set,
+            "93-boolean-operation",
+            &[click(at, egui::PointerButton::Primary)],
+            |queue| {
+                assert!(
+                    queue.commands().iter().any(|command| matches!(
+                        command,
+                        Command::SetBoolean(settings) if settings.op == op
+                    )) || op == set.boolean.op,
+                    "{op:?} is not wired to the command it is labelled with: {:?}",
+                    queue.commands()
+                );
+            },
+        );
+    }
+}
+
+/// "The interface names which is being cut and which is doing the cutting."
+/// A subtraction with both operands chosen reads differently from the union of
+/// the same pair, which is the sentence the specification asks for.
+#[test]
+fn the_boolean_panel_names_which_subtool_is_cut() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let operands = two_operands();
+    let mut set = state(strings, &scene, &materials, &report);
+    set.show_boolean = true;
+    set.boolean_operands = &operands;
+    set.boolean = clayspace_model::BooleanSettings {
+        base: Some(LayerKey(1)),
+        tool: Some(LayerKey(2)),
+        op: clayspace_model::BooleanOp::Subtract,
+        cell_size: 0.02,
+        consume: false,
+    };
+    set.boolean_cost = Some(clayspace_model::Cost::of(
+        clayspace_model::Direction::SdfToVoxel,
+        0.02,
+        [1.4, 2.0, 1.4],
+    ));
+    let cutting = capture_shell(&harness, &set, "93-boolean-subtraction");
+
+    set.boolean.op = clayspace_model::BooleanOp::Union;
+    let uniting = capture_shell(&harness, &set, "93-boolean-union");
+    assert!(
+        cutting.mean_difference(&uniting) > 0.0005,
+        "a subtraction and a union of the same pair drew the same panel, so \
+         which subtool is cut is not being named"
+    );
+}
+
+/// Nothing runs unconfirmed, and there is nothing to confirm until two
+/// different subtools have been chosen — so the panel offers a disabled button
+/// rather than one that can only be refused.
+#[test]
+fn the_boolean_panel_waits_for_a_pair_and_a_confirmation() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let operands = two_operands();
+    let mut set = state(strings, &scene, &materials, &report);
+    set.show_boolean = true;
+    set.boolean_operands = &operands;
+
+    // `capture_shell` asserts that drawing the interface emits nothing at all,
+    // which is the whole of "it shall not run a boolean the sculptor has not
+    // confirmed" as far as the View can be held to it.
+    let waiting = capture_shell(&harness, &set, "93-boolean-waiting");
+
+    set.boolean.base = Some(LayerKey(1));
+    set.boolean.tool = Some(LayerKey(2));
+    let ready = capture_shell(&harness, &set, "93-boolean-ready");
+    assert!(
+        waiting.mean_difference(&ready) > 0.0005,
+        "the panel looks the same with and without a pair, so the confirm \
+         button never becomes reachable"
+    );
+}
+
+/// "The interface has stated that this is what will happen before it runs."
+/// Consuming the operands is the one choice in the panel that cannot be
+/// reconsidered from what is left, so choosing it says so on the panel rather
+/// than after the fact.
+#[test]
+fn the_boolean_panel_says_what_consuming_the_operands_costs() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let operands = two_operands();
+    let mut set = state(strings, &scene, &materials, &report);
+    set.show_boolean = true;
+    set.boolean_operands = &operands;
+    set.boolean = clayspace_model::BooleanSettings {
+        base: Some(LayerKey(1)),
+        tool: Some(LayerKey(2)),
+        op: clayspace_model::BooleanOp::Subtract,
+        cell_size: 0.02,
+        consume: false,
+    };
+    let keeping = capture_shell(&harness, &set, "93-boolean-keeping");
+
+    set.boolean.consume = true;
+    let consuming = capture_shell(&harness, &set, "93-boolean-consuming");
+    assert!(
+        keeping.mean_difference(&consuming) > 0.0005,
+        "the panel reads the same whether the operands are kept or consumed, \
+         so what consuming does is never stated"
+    );
+}
+
+/// Where a destination chip in the insert control is, asked of the interface
+/// that drew it.
+fn insert_as_chip(
+    state: &ShellState<'_>,
+    destination: clayspace_model::InsertAs,
+) -> Option<egui::Pos2> {
+    probe_shell(state)
+        .memory(|memory| {
+            memory
+                .data
+                .get_temp::<egui::Rect>(shell::insert_as_chip_id(destination))
+        })
+        .map(|rect| rect.center())
+}
+
+/// The control the whole of task group 4 exists to reach: a sculptor can say
+/// that the next form goes in as a subtool of its own. Drawing the chips and
+/// wiring them to nothing looks exactly like a control that works, which is
+/// what this rules out.
+#[test]
+fn the_insert_control_offers_both_destinations() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let mut set = state(strings, &scene, &materials, &report);
+    set.show_shapes = true;
+
+    for destination in clayspace_model::InsertAs::ALL {
+        let at = insert_as_chip(&set, destination)
+            .unwrap_or_else(|| panic!("the panel drew no {destination:?} chip"));
+        capture_shell_after(
+            &harness,
+            &set,
+            "92-insert-destination",
+            &[click(at, egui::PointerButton::Primary)],
+            |queue| {
+                assert!(
+                    queue.commands().contains(&Command::SetInsertAs(destination)),
+                    "{destination:?} is not wired to the command it is labelled                      with: {:?}",
+                    queue.commands()
+                );
+            },
+        );
+    }
+}
+
+/// A grid has no ordered list to put an item in, so the object destination is
+/// refused there — and the panel used to answer that by drawing nothing at all,
+/// which took the *subtool* insertion away with it. The specification says
+/// inserting the same primitive as its own subtool remains available.
+#[test]
+fn the_insert_control_stays_reachable_over_a_grid() {
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let mut set = state(strings, &scene, &materials, &report);
+    set.show_shapes = true;
+    set.representation = clayspace_model::Representation::Voxel;
+
+    assert!(
+        insert_as_chip(&set, clayspace_model::InsertAs::Subtool).is_some(),
+        "the panel drew no destination chips over a grid, so a subtool cannot          be inserted there at all"
+    );
+}
+
+/// Where a whole-subtool manipulator chip is, asked of the interface that drew
+/// it. `None` where the section is not drawn at all.
+fn layer_transform_chip(
+    state: &ShellState<'_>,
+    mode: clayspace_model::GizmoMode,
+) -> Option<egui::Pos2> {
+    probe_shell(state)
+        .memory(|memory| {
+            memory
+                .data
+                .get_temp::<egui::Rect>(shell::layer_transform_chip_id(mode))
+        })
+        .map(|rect| rect.center())
+}
+
+/// `GizmoTarget::Layer` was implemented, tested at the engine boundary and
+/// reachable from no control at all — a whole form could be moved from a test
+/// and not from the application. This is the control, and a control that draws
+/// and is wired to nothing looks exactly like one that works.
+#[test]
+fn the_subtool_manipulator_chips_put_the_widget_on_the_active_layer() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let set = state(strings, &scene, &materials, &report);
+    let active = set.scene.active.expect("an active layer");
+
+    for mode in clayspace_model::GizmoMode::ALL {
+        let at = layer_transform_chip(&set, mode)
+            .unwrap_or_else(|| panic!("the panel drew no {mode:?} chip"));
+        capture_shell_after(
+            &harness,
+            &set,
+            "91-subtool-manipulator",
+            &[click(at, egui::PointerButton::Primary)],
+            |queue| {
+                assert!(
+                    queue.commands().contains(&Command::SetGizmoTarget(Some(
+                        clayspace_model::GizmoTarget::Layer(active)
+                    ))),
+                    "{mode:?} did not put the manipulator on the active subtool: {:?}",
+                    queue.commands()
+                );
+                assert!(
+                    queue.commands().contains(&Command::SetGizmoMode(mode)),
+                    "{mode:?} did not set the mode it is labelled with"
+                );
+            },
+        );
+    }
+}
+
+/// The manipulator on the whole layer is offered only where nothing smaller
+/// owns the widget: a selected object, a cage that is up and a curve being
+/// authored each already have it, and two manipulators over one selection is a
+/// press nobody can aim.
+#[test]
+fn the_subtool_manipulator_yields_to_whatever_owns_the_widget() {
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let plain = state(strings, &scene, &materials, &report);
+    assert!(
+        layer_transform_chip(&plain, clayspace_model::GizmoMode::Move).is_some(),
+        "nothing else owns the widget, so the subtool's manipulator is offered"
+    );
+
+    let mut with_object = state(strings, &scene, &materials, &report);
+    with_object.selected_object = Some(clayspace_model::ObjectId {
+        layer: LayerKey(1),
+        node: 2,
+    });
+    assert!(
+        layer_transform_chip(&with_object, clayspace_model::GizmoMode::Move).is_none(),
+        "a selected object already has the manipulator"
+    );
+
+    let mut with_cage = state(strings, &scene, &materials, &report);
+    with_cage.lattice.active = true;
+    assert!(
+        layer_transform_chip(&with_cage, clayspace_model::GizmoMode::Move).is_none(),
+        "a cage that is up owns the widget"
+    );
+
+    let mut with_curve = state(strings, &scene, &materials, &report);
+    with_curve.curve.active = true;
+    assert!(
+        layer_transform_chip(&with_curve, clayspace_model::GizmoMode::Move).is_none(),
+        "a curve being authored owns the widget"
+    );
+}
+
+/// Where a control the layer stack drew is, asked of the interface that drew
+/// it.
+fn shell_rect(ctx: &egui::Context, id: egui::Id) -> Option<egui::Rect> {
+    ctx.memory(|memory| memory.data.get_temp::<egui::Rect>(id))
+}
+
+/// The new-layer control, driven the way a sculptor drives it.
+///
+/// The whole control was untested at the view level — grep found no reference
+/// to `AddLayer` in this crate's tests at all — which is how an entry that
+/// created a permanently empty mesh layer went unnoticed. Two of the
+/// scene-and-layers scenarios live here: "the default stays what it was", and
+/// the list offering only representations a layer can actually be made in.
+#[test]
+fn the_new_layer_control_makes_a_field_layer_by_default_and_offers_a_grid() {
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let set = state(strings, &scene, &materials, &report);
+
+    let ctx = egui::Context::default();
+    shell::apply_theme(&ctx);
+    let mut queue = CommandQueue::new();
+    let raw = || egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(SHELL_WIDTH as f32, SHELL_HEIGHT as f32),
+        )),
+        ..Default::default()
+    };
+    let frame = |ctx: &egui::Context, events: Vec<egui::Event>, queue: &mut CommandQueue| {
+        let _ = ctx.run(egui::RawInput { events, ..raw() }, |ctx| {
+            build_shell(ctx, &set, queue)
+        });
+    };
+
+    // Laid out. An `Area` measures on its first frame and paints on the next.
+    frame(&ctx, Vec::new(), &mut queue);
+    frame(&ctx, Vec::new(), &mut queue);
+    let _ = queue.drain();
+
+    // "The user adds a layer without engaging the choice — an SDF layer is
+    // created, as before."
+    let button =
+        shell_rect(&ctx, shell::new_layer_button_id()).expect("the stack drew no new-layer button");
+    frame(
+        &ctx,
+        click(button.center(), egui::PointerButton::Primary),
+        &mut queue,
+    );
+    assert!(
+        queue
+            .commands()
+            .contains(&Command::AddLayer(clayspace_model::Representation::Sdf)),
+        "the button alone did not ask for the field layer it always made: {:?}",
+        queue.commands()
+    );
+    let _ = queue.drain();
+
+    // And the list beside it, which has to be opened before what it holds
+    // exists at all.
+    let list = shell_rect(&ctx, shell::new_layer_kind_menu_id())
+        .expect("the stack drew no new-layer list");
+    frame(
+        &ctx,
+        click(list.center(), egui::PointerButton::Primary),
+        &mut queue,
+    );
+    frame(&ctx, Vec::new(), &mut queue);
+    let _ = queue.drain();
+
+    assert!(
+        shell_rect(
+            &ctx,
+            shell::new_layer_kind_id(clayspace_model::Representation::Mesh)
+        )
+        .is_none(),
+        "the list offers a mesh layer, which the document refuses to make and \
+         which used to arrive as a row nothing could ever put a triangle into"
+    );
+    let voxel = shell_rect(
+        &ctx,
+        shell::new_layer_kind_id(clayspace_model::Representation::Voxel),
+    )
+    .expect("the list drew no voxel entry");
+    frame(
+        &ctx,
+        click(voxel.center(), egui::PointerButton::Primary),
+        &mut queue,
+    );
+    assert!(
+        queue
+            .commands()
+            .contains(&Command::AddLayer(clayspace_model::Representation::Voxel)),
+        "the voxel entry is wired to nothing, so \"a voxel subtool is created \
+         directly\" is a control that only looks like one: {:?}",
+        queue.commands()
     );
 }

@@ -140,7 +140,7 @@ fn a_crossing_is_taken_back_by_undo() {
         before + 1,
         "redo did not put the converted layer back"
     );
-    let (positions, _, _, _) = doc.visible_mesh_geometry();
+    let (positions, _, _, _, _) = doc.visible_mesh_geometry();
     assert!(
         !positions.is_empty(),
         "the layer redo put back is empty, so the crossing came back without \
@@ -368,4 +368,165 @@ mod mesh_strokes {
             "the refusal must name where the tool does apply: {error}"
         );
     }
+}
+
+/// Crossing one source twice names the two grids apart.
+///
+/// `unique_layer_name` was wired into `add_layer`, the import, insertion, copy
+/// and the boolean, and *not* into the crossing — which is the path that
+/// actually creates voxel layers, and so the one that most needs it. A voxel
+/// layer's grid is reachable only by name (ClayCore #365) and the lookup
+/// answers with the first layer in stack order carrying it, so two rows called
+/// "Forma · voxel" shadow one another: a stroke aimed at the second writes
+/// into the first's grid, the chunks are meshed from the wrong grid, and
+/// `rename_layer` refuses to untangle it because the name it would set is
+/// already taken.
+#[test]
+fn crossing_the_same_source_twice_names_the_grids_apart() {
+    let mut doc = document();
+    let source = doc.scene().active.expect("an active layer");
+
+    doc.convert_layer(Direction::SdfToVoxel, CELL, 1)
+        .expect("the first crossing");
+    doc.set_active_layer(source).expect("back to the source");
+    let second = doc
+        .convert_layer(Direction::SdfToVoxel, CELL / 2.0, 1)
+        .expect("the second crossing");
+
+    let names: Vec<String> = doc
+        .scene()
+        .layers
+        .iter()
+        .map(|layer| layer.name.clone())
+        .collect();
+    let mut sorted = names.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(
+        sorted.len(),
+        names.len(),
+        "two layers share a name, so one shadows the other's grid: {names:?}"
+    );
+    // And the second grid is reachable, which is the failure the names cause.
+    doc.set_active_layer(second).expect("work the second grid");
+    assert!(
+        doc.layer_bounds(second).is_some(),
+        "the second grid answers with no extent, which is what a shadowed \
+         lookup looks like"
+    );
+}
+
+/// A grid subtool can be copied.
+///
+/// `copyable_subtools` offers every layer with an extent that is not a mesh,
+/// so every voxel grid was on the list — and `bake_subtool` went straight to
+/// `clay_item_volume_from_document`, which refuses a document whose only shown
+/// layer is a grid: "invalid argument (empty document)". `bake_operand` has the
+/// branch that reads a grid back through `clay_item_volume_from_voxels` and
+/// documents why; the copy never got it, so copying any grid was a hard
+/// refusal from a control that offered it.
+#[test]
+fn a_grid_subtool_can_be_copied() {
+    use clayspace_model::ObjectModel;
+
+    let mut doc = document();
+    let grid = doc
+        .convert_layer(Direction::SdfToVoxel, CELL, 1)
+        .expect("a grid to copy");
+    assert!(
+        doc.copyable_subtools().iter().any(|(key, _)| *key == grid),
+        "the grid is not offered, so there is nothing to hold here"
+    );
+
+    let before = doc.scene().layers.len();
+    let copy = doc.copy_subtool(grid, CELL).expect("copy the grid");
+
+    assert_eq!(doc.scene().layers.len(), before + 1);
+    assert!(
+        doc.layer_bounds(copy.layer).is_some(),
+        "the copy holds nothing, so the bake sampled an empty document"
+    );
+}
+
+/// A layer cannot be asked for as a mesh.
+///
+/// `add_layer` matched only `Voxel` and sent everything else to
+/// `add_sdf_layer`, then recorded the row as a mesh — a row labelled "Malha"
+/// backed by a field layer that nothing could ever put triangles into, active
+/// on arrival, offering the mesh vocabulary over nothing. The specification
+/// qualifies the offer: "SDF, voxel and mesh *where a mesh source is at hand*",
+/// and when a layer is made out of nothing there is none.
+#[test]
+fn a_new_layer_cannot_be_asked_for_as_a_mesh() {
+    let mut doc = document();
+    let before = doc.scene().layers.len();
+
+    let refusal = doc
+        .add_layer("Malha", Representation::Mesh)
+        .expect_err("an empty mesh layer is not a thing the engine can make");
+
+    assert!(
+        refusal.to_string().to_lowercase().contains("import"),
+        "the refusal has to say where a mesh layer does come from: {refusal}"
+    );
+    assert_eq!(
+        doc.scene().layers.len(),
+        before,
+        "the refusal still made a layer"
+    );
+    assert!(
+        Representation::CREATABLE
+            .iter()
+            .all(|kind| *kind != Representation::Mesh),
+        "the control offers a representation the document refuses"
+    );
+}
+
+/// A carried mesh can be crossed to a grid.
+///
+/// Found alongside the manipulator work: `mesh_to_voxels` takes its region from
+/// `bounds()`, which is the active layer's box — and a mesh layer had none, so
+/// every attempt at this crossing was refused as an unbounded region however
+/// many triangles the source held. The panel priced it as nothing for the same
+/// reason. `Layer::mesh_bounds` is the account of a carried mesh's extent that
+/// the engine does not keep.
+#[test]
+fn a_carried_mesh_can_be_crossed_to_a_grid() {
+    use clayspace_model::{ExchangeModel, ImportAs, ImportSettings};
+
+    let mut doc = document();
+    let path = std::env::temp_dir().join("clayspace-conversion-carried.obj");
+    let _ = std::fs::remove_file(&path);
+    doc.export_mesh(&path, clayspace_model::ExportSettings::default())
+        .expect("something to import");
+    doc.import_mesh(
+        &path,
+        ImportSettings {
+            becomes: ImportAs::Reference,
+            ..Default::default()
+        },
+    )
+    .expect("import the mesh");
+    let _ = std::fs::remove_file(&path);
+
+    let cost = doc
+        .conversion_cost(Direction::MeshToVoxel, CELL)
+        .expect("the crossing has to be priced before it is offered");
+    assert!(cost.cells > 0, "the panel priced an empty region");
+
+    let made = doc
+        .convert_layer(Direction::MeshToVoxel, CELL, 1)
+        .expect("cross the carried mesh to a grid");
+    assert_eq!(
+        doc.scene()
+            .layer(made)
+            .expect("the new layer")
+            .representation,
+        Representation::Voxel
+    );
+    assert!(
+        doc.layer_bounds(made).is_some(),
+        "the grid holds nothing, so the region it was rasterized over was not \
+         the mesh's"
+    );
 }

@@ -10,15 +10,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use clayspace_app::input::Activation;
 use clayspace_app::{
     chord_for, ray_at, SessionStore, SharedDocument, SurfaceGeometry, ViewportInput,
 };
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
     AutosavePolicy, Detail, DetailPolicy, Diagnostics, ExchangeModel, ExportSettings,
-    ExportWarning, Format, FrameLog, ImportSettings, LayerOperation, RecentDocuments, Recovery,
-    RefFormat, RefPlane, SceneModel, SculptModel, SkinSettings, StrokeModifiers, Units,
-    ViewPresetKind, FRAME,
+    ExportWarning, Format, FrameLog, ImportSettings, LayerKey, LayerOperation, RecentDocuments,
+    Recovery, RefFormat, RefPlane, Representation, SceneModel, SculptModel, SkinSettings,
+    StrokeModifiers, Units, ViewPresetKind, FRAME,
 };
 use clayspace_view::shell::{self, region, ArmatureState, ShellState};
 use clayspace_view::{
@@ -26,9 +27,9 @@ use clayspace_view::{
     Overlays, Renderer, Shortcuts, Strings, SurfaceLoss, Vertex, ViewPreset, WindowSurface,
 };
 use clayspace_vm::{
-    ArmatureViewModel, Axis, Command, CommandQueue, CurveViewModel, DocumentViewModel, Grab, Guard,
-    LatticeViewModel, MaskViewModel, ObjectViewModel, ReferenceViewModel, SceneViewModel,
-    SculptViewModel,
+    ArmatureViewModel, Axis, BooleanViewModel, Command, CommandQueue, CurveViewModel,
+    DocumentViewModel, Grab, Guard, LatticeViewModel, MaskViewModel, ObjectViewModel,
+    ReferenceViewModel, SceneViewModel, SculptViewModel,
 };
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -138,6 +139,8 @@ struct App {
     lattice: LatticeViewModel,
     /// The shapes a sculptor has placed, and the manipulator on one.
     objects: ObjectViewModel,
+    /// The boolean between two subtools, while one is being set up.
+    boolean: BooleanViewModel,
     curve: CurveViewModel,
     /// The plane a curve drag runs on, and where it started.
     curve_drag: Option<([f32; 3], [f32; 3], [f32; 3])>,
@@ -309,6 +312,7 @@ impl App {
         let mask = MaskViewModel::new(Box::new(document.clone()));
         let lattice = LatticeViewModel::new(Box::new(document.clone()));
         let objects = ObjectViewModel::new(Box::new(document.clone()));
+        let boolean = BooleanViewModel::new(Box::new(document.clone()));
         let curve = CurveViewModel::new(Box::new(document.clone()));
         let armature = ArmatureViewModel::new(Box::new(document.clone()));
 
@@ -356,6 +360,7 @@ impl App {
             mask,
             lattice,
             objects,
+            boolean,
             curve,
             curve_drag: None,
             cage_plane: None,
@@ -647,8 +652,30 @@ impl App {
         }
     }
 
+    /// Asks for a mesh file and brings it in as a subtool of its own.
+    ///
+    /// The import panel's own settings, with one overridden: an insertion is
+    /// asked for as a *subtool*, and `ImportAs::Clay` samples the triangles
+    /// into a field and gives up the geometry that made the model worth
+    /// importing. Carried is what "brings a mesh in" means here, and it is what
+    /// the spec asks for — "it stands in the scene as its own subtool, carries
+    /// its geometry, and can be moved with the manipulator".
+    fn insert_mesh_subtool(&mut self) {
+        let settings = ImportSettings {
+            becomes: clayspace_model::ImportAs::Reference,
+            ..self.import
+        };
+        self.import_mesh_with(settings);
+    }
+
     /// Asks for a file and brings it in.
     fn import_mesh(&mut self) {
+        let settings = self.import;
+        self.import_mesh_with(settings);
+    }
+
+    /// The dialog and the import behind both routes into the document.
+    fn import_mesh_with(&mut self, settings: ImportSettings) {
         // Only the formats the engine actually reads. GLB is written and not
         // read, and offering it here would be a dialog that leads to a
         // refusal.
@@ -664,7 +691,6 @@ impl App {
         else {
             return;
         };
-        let settings = self.import;
         match self.timed("importar", |app| app.document.import_mesh(&path, settings)) {
             Ok(()) => {
                 self.show_import = false;
@@ -787,6 +813,50 @@ impl App {
             == rfd::MessageDialogResult::Yes
     }
 
+    /// Settles a cage left standing before the active subtool changes.
+    ///
+    /// Returns whether the switch may go ahead. A cage is a transient
+    /// authoring gesture rather than per-subtool state — it is sized to what
+    /// one form contains, and that box means nothing around another — so it
+    /// cannot follow the sculptor across. An untouched cage is exactly the
+    /// identity and is taken down without asking, which is the same bargain
+    /// `apply_lattice` already makes with one. A dragged cage is work, so the
+    /// sculptor says what becomes of it, and staying put is one of the
+    /// answers.
+    fn resolve_a_standing_cage(&mut self, incoming: clayspace_model::LayerKey) -> bool {
+        let standing = {
+            let cage = self.lattice.state().get();
+            cage.active && cage.touched
+        };
+        if !standing || self.scene.scene().get().active == Some(incoming) {
+            return true;
+        }
+        let s = self.strings;
+        let answer = rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Warning)
+            .set_title(s.cage_switch_title)
+            .set_description(s.cage_switch_question)
+            .set_buttons(rfd::MessageButtons::YesNoCancelCustom(
+                s.cage_switch_apply.to_string(),
+                s.cage_switch_drop.to_string(),
+                s.cage_switch_stay.to_string(),
+            ))
+            .show();
+        match answer {
+            rfd::MessageDialogResult::Custom(chosen) if chosen == s.cage_switch_apply => {
+                self.apply(Command::ApplyLattice);
+                true
+            }
+            rfd::MessageDialogResult::Custom(chosen) if chosen == s.cage_switch_drop => {
+                // The one command that takes a cage down; the model discards
+                // its preview with it.
+                self.apply(Command::ToggleLattice);
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Everything that has to catch up when the document underneath changes.
     fn after_document_replaced(&mut self) {
         self.scene.refresh();
@@ -800,6 +870,10 @@ impl App {
         // would hand the next click to a tree that was thrown away.
         self.rigging = self.rigging && self.armature.is_rigging();
         self.sculpt.forget_history();
+        // The shelf, the brush and the symmetry toggles all belong to the
+        // active subtool, and the document underneath just became a different
+        // one.
+        self.sculpt.refresh_after_open();
         if let Some(graphics) = self.graphics.as_mut() {
             let gpu = graphics.gpu.clone();
             // A rebuild rather than a sync: nothing about the old document's
@@ -1031,8 +1105,8 @@ impl App {
         }
         self.mesh_revision = Some(revision);
         self.timed("camadas de malha", |app| {
-            let (vertices, indices) = app.document.with(|document| {
-                let (positions, normals, colors, indices) = document.visible_mesh_geometry();
+            let (vertices, indices, spans) = app.document.with(|document| {
+                let (positions, normals, colors, indices, spans) = document.visible_mesh_geometry();
                 // The frozen region reaches a carried layer the same way it
                 // reaches the brick surface, and from the same sample call —
                 // a mask is world-addressed, so it does not care which of the
@@ -1050,14 +1124,53 @@ impl App {
                         mask: frozen.as_ref().map_or(0.0, |weights| weights[at]),
                     })
                     .collect();
-                (vertices, indices)
+                // The spans travel with the buffer they describe, so a range
+                // can never name indices that a later rebuild moved.
+                let spans: Vec<clayspace_view::MeshSpan> = spans
+                    .into_iter()
+                    .map(|span| clayspace_view::MeshSpan {
+                        layer: span.layer,
+                        indices: span.indices,
+                    })
+                    .collect();
+                (vertices, indices, spans)
             });
             let Some(graphics) = app.graphics.as_mut() else {
                 return;
             };
             let gpu = graphics.gpu.clone();
-            graphics.renderer.set_mesh_layers(&gpu, &vertices, &indices);
+            graphics
+                .renderer
+                .set_mesh_layers(&gpu, &vertices, &indices, &spans);
         });
+    }
+
+    /// Tells the viewport which subtool a dab would land on.
+    ///
+    /// Its own pass, and not part of `sync_mesh_layers`: activating a subtool
+    /// changes no triangle, and folding it into the buffer's staleness check
+    /// would make every click re-walk and re-upload every visible grid.
+    ///
+    /// Nothing is cued while one layer is visible on its own. The requirement
+    /// is that the active subtool be distinguishable *from the other visible
+    /// ones*, and with none to be distinguished from a tint says only that the
+    /// clay has changed colour.
+    fn sync_active_subtool(&mut self) {
+        let cued = self.cued_subtool();
+        let Some(graphics) = self.graphics.as_mut() else {
+            return;
+        };
+        graphics.renderer.set_active_subtool(cued);
+    }
+
+    /// The active layer, when the viewport has something to contrast it with.
+    fn cued_subtool(&self) -> Option<LayerKey> {
+        let scene = self.scene.scene().get();
+        if scene.layers.iter().filter(|layer| layer.visible).count() < 2 {
+            return None;
+        }
+        let active = scene.active_layer()?;
+        active.visible.then_some(active.key)
     }
 
     /// Brings the drawn surface's idea of the frozen region up to date.
@@ -1350,12 +1463,7 @@ impl App {
             }
         } else {
             match self.objects.pivot() {
-                Some(pivot) => (
-                    pivot,
-                    *self.objects.mode().get(),
-                    Self::object_gizmo_reach(&self.camera),
-                    false,
-                ),
+                Some(pivot) => (pivot, *self.objects.mode().get(), self.gizmo_reach(), false),
                 None => return false,
             }
         };
@@ -1605,7 +1713,11 @@ impl App {
         // Copied before the viewport is reached for, which borrows `self`.
         let camera = self.camera;
         let object_pivot = self.objects.pivot();
+        // Read here rather than at the draw, which borrows the graphics: the
+        // reach asks the scene how big the subtool is.
+        let object_reach = self.gizmo_reach();
         let outline = self.selected_outline();
+        let subtool_outline = self.active_subtool_outline();
         let object_mode = *self.objects.mode().get();
         let Some(graphics) = self.graphics.as_mut() else {
             return;
@@ -1632,6 +1744,7 @@ impl App {
                         selected: &curve.selection,
                         gizmo: None,
                         outline: None,
+                        subtool_outline: None,
                         handle: Self::curve_handle(&curve),
                     },
                 );
@@ -1644,7 +1757,7 @@ impl App {
             let object_gizmo = object_pivot.map(|pivot| clayspace_view::GizmoView {
                 pivot,
                 mode: object_mode,
-                reach: Self::object_gizmo_reach(&camera),
+                reach: object_reach,
                 hovered: self.gizmo_drag.map(|(handle, _)| handle),
                 view_axis: Self::toward_eye(&camera, pivot),
                 // One scale factor, so one handle for it.
@@ -1658,6 +1771,7 @@ impl App {
                     selected: &[],
                     gizmo: object_gizmo,
                     outline,
+                    subtool_outline,
                     handle: 0.0,
                 },
             );
@@ -1681,9 +1795,30 @@ impl App {
                     per_axis_scale: true,
                 }),
                 outline: None,
+                // A cage is already the sculptor's answer to "which form am I
+                // working": a box around the same form would be a second frame
+                // saying the same thing.
+                subtool_outline: None,
                 handle,
             },
         );
+    }
+
+    /// The box the active subtool occupies, when its cue is an outline.
+    ///
+    /// Only for an SDF subtool. A voxel or mesh one is tinted in the carried
+    /// buffer, which is the better cue — it marks the form itself rather than
+    /// the air around it — and the merged SDF surface is the one picture that
+    /// cannot be split per layer: the engine attributes no triangle to the
+    /// layer it came from, so the box is what is left.
+    fn active_subtool_outline(&self) -> Option<([f32; 3], [f32; 3])> {
+        let key = self.cued_subtool()?;
+        let scene = self.scene.scene().get();
+        let layer = scene.layer(key)?;
+        if layer.representation != Representation::Sdf {
+            return None;
+        }
+        self.scene.layer_bounds(key)
     }
 
     /// The box a selected object occupies, for the viewport to outline.
@@ -1736,6 +1871,18 @@ impl App {
     /// target. At the default distance this is the 0.45 the widget always had.
     const OBJECT_GIZMO_FRACTION: f32 = 0.11;
 
+    /// How long the manipulator's arms are on whatever is selected.
+    ///
+    /// One rule for a placed object and a whole subtool alike: a share of the
+    /// camera's distance, so the widget is the same size to the hand whether
+    /// the sculptor is looking at the whole scene or has zoomed into a pore —
+    /// see `object_gizmo_reach`. It was sized to the subtool's own box once,
+    /// which left the widget on a small subtool a speck and the one on a
+    /// large subtool off the screen at any zoom that showed its detail.
+    fn gizmo_reach(&self) -> f32 {
+        Self::object_gizmo_reach(&self.camera)
+    }
+
     /// Whether a press on the clay should look for an object rather than
     /// starting a stroke.
     ///
@@ -1747,7 +1894,7 @@ impl App {
         *self.objects.picking().get() || self.objects.selected().get().is_some()
     }
 
-    /// Selects the object under the pointer, if a placed one is there.
+    /// Selects what the pointer is on, and makes its subtool the sculpt target.
     ///
     /// Returns whether the press was taken. A press that meets a stroke or
     /// empty space is left to fall through to sculpting or orbiting, so a form
@@ -1759,17 +1906,63 @@ impl App {
     /// clay is a stroke, and taking that away from the brush to explain
     /// something would be the worse error. The ViewModel has raised the
     /// sentence by the time this returns.
+    ///
+    /// Activation rides the same press rather than getting a picker of its own.
+    /// Two pickers over one click is how the picked layer and the sculpted one
+    /// came to disagree, and the answer both need is the one attributed raycast
+    /// this already pays for.
     fn pick_object_at(&mut self, point: egui::Pos2) -> bool {
         let Some((origin, direction)) = self.ray_at(point) else {
             return false;
         };
-        match self.objects.pick_at(origin, direction) {
-            clayspace_vm::Picked::Object(id) => {
-                self.apply_now(Command::SelectObject(Some(id)));
-                true
-            }
-            clayspace_vm::Picked::NotTransformable | clayspace_vm::Picked::Nothing => false,
+        // Asked only where the interface is picking objects at all: `pick_at`
+        // is what raises "that cannot be transformed", and a sculptor pressing
+        // on the clay must not be told that about their own strokes.
+        let picked = if self.picking_objects() {
+            self.objects.pick_at(origin, direction)
+        } else {
+            clayspace_vm::Picked::Nothing
+        };
+        // The layer the object pick already attributed, and a raycast of this
+        // own only where it did not answer — a press the interface did not
+        // pick objects for at all, or one that met no item. `pick_item`
+        // attributes the layer alongside the kind, so asking the scene again
+        // was paying a second attributed raycast for a question that had
+        // already been answered, on every press including the start of every
+        // stroke.
+        let hit = picked
+            .layer()
+            .or_else(|| self.scene.layer_at(origin, direction));
+        let activation = clayspace_app::input::activation(picked, hit);
+        // A document always has a layer being sculpted, so there is no
+        // activation to take away. What a press on nothing puts down is the
+        // object selection, which is the one that can be empty — the rule and
+        // its reasons are in `input`, where they can be exercised.
+        let selection = clayspace_app::input::selection_after(
+            activation,
+            self.objects.selected().get().is_some(),
+        );
+        if let Some(id) = activation.layer() {
+            self.activate(id);
         }
+        if let Some(selection) = selection {
+            self.apply_now(Command::SelectObject(selection));
+        }
+        matches!(activation, Activation::Object(_))
+    }
+
+    /// Makes a layer the sculpt target, if it is not already.
+    ///
+    /// Through `SelectLayer` and no other way, so the viewport and the layer
+    /// stack cannot come to disagree about which subtool is being worked on.
+    /// Silent when nothing changes: activation arms the mesh sculptor and
+    /// re-meshes, and a press that lands on the layer already being sculpted
+    /// should cost neither.
+    fn activate(&mut self, key: clayspace_model::LayerKey) {
+        if self.scene.scene().get().active == Some(key) {
+            return;
+        }
+        self.handle(Command::SelectLayer(key));
     }
 
     /// Begins a rig gesture, if the press landed on a sphere.
@@ -1846,7 +2039,13 @@ impl App {
                 | Command::Save
                 | Command::SaveAs
                 | Command::RunImport
+                | Command::InsertMesh
                 | Command::RunExport
+                // The bake samples a whole subtool's field, so it is a file of
+                // somebody else's size in the same way an import is.
+                | Command::CopySubtool(_)
+                // Two of those bakes and a re-mesh of what they make.
+                | Command::RunBoolean
         )
     }
 
@@ -2174,16 +2373,18 @@ impl App {
                 && !manipulated
                 && button == egui::PointerButton::Primary
                 && self.begin_cage_drag(point, input.smooth_modifier);
-            // Last of the four, and only while a shape is being placed or one
-            // is already selected: a press on the clay is a stroke, and a
-            // sculptor who is sculpting must not have one turn into a
-            // selection because a cylinder happens to be under the brush.
+            // Last of the four. It always runs now, because a press on
+            // geometry is what makes that geometry's subtool the sculpt
+            // target; whether it also *takes* the press is decided inside, and
+            // stays what it was — only while a shape is being placed or one is
+            // already selected, since a press on the clay is a stroke and a
+            // sculptor who is sculpting must not have one turn into a selection
+            // because a cylinder happens to be under the brush.
             let picked_object = !rigged
                 && !on_curve
                 && !manipulated
                 && !caged
                 && button == egui::PointerButton::Primary
-                && self.picking_objects()
                 && self.pick_object_at(point);
             let on_surface = !rigged
                 && !on_curve
@@ -2459,37 +2660,69 @@ impl App {
         self.timed(label, |app| app.apply_now(command));
     }
 
+    /// One command, in the three phases it has always had.
+    ///
+    /// Named phases rather than one run of statements, because the order
+    /// between them is the whole of what this function knows: every ViewModel
+    /// sees the command first, the application's own state follows, and what
+    /// has to be looked at again is settled last. Run in another order, a
+    /// panel refreshes against a document the command has not reached yet.
     fn apply_now(&mut self, command: Command) {
+        self.dispatch_to_models(&command);
+        self.apply_app_effects(&command);
+        self.settle_after(&command);
+        self.request_redraw();
+    }
+
+    /// Hands the command to every ViewModel that has an interest in it.
+    fn dispatch_to_models(&mut self, command: &Command) {
         if let Err(e) = self.sculpt.dispatch(command.clone()) {
             // A refusal is not swallowed; the tool status carries the reason
             // to the options bar, and this records it for the log.
             eprintln!("{e}");
         }
-        if let Err(e) = self.scene.dispatch(&command) {
+        if let Err(e) = self.scene.dispatch(command) {
             eprintln!("{e}");
         }
-        self.mask.dispatch(&command);
+        self.mask.dispatch(command);
         // The representation is handed in rather than looked up: a cage's
         // resolution ceiling is the layer's, and the ViewModel may not reach
         // past its own interface to ask.
         self.lattice
-            .dispatch(&command, self.sculpt.active_representation());
+            .dispatch(command, self.sculpt.active_representation());
         // The manipulator's commands reach both, and which of them acts is
         // decided by what has a target: a cage that is up owns the widget, and
         // a selected object owns it otherwise. They cannot both, because a
         // cage takes the selection away when it goes up.
         self.objects
-            .dispatch(&command, self.sculpt.active_representation());
+            .dispatch(command, self.sculpt.active_representation());
+        self.boolean.dispatch(command);
+        // The whole-subtool manipulator lands on what a boolean left, exactly
+        // as it lands on an inserted form: what arrived is a form to stand
+        // somewhere, and the sculptor's next gesture is aiming it.
+        if let Some(result) = self.boolean.take_result() {
+            self.objects.dispatch(
+                &Command::SetGizmoTarget(Some(clayspace_model::GizmoTarget::Layer(result))),
+                self.sculpt.active_representation(),
+            );
+        }
         // The layer stack can change under a command — a conversion adds one,
         // a removal takes one away — and the operand list is drawn from it.
         if command.touches_document() {
             self.objects.refresh();
             self.objects.refresh_operands();
+            // The same for the boolean panel's own list, which answers only
+            // while it is open.
+            self.boolean.refresh();
         }
-        self.curve.dispatch(&command);
-        // A rig belongs to a layer, so choosing another layer changes which
-        // one — or whether there is one at all.
-        match &command {
+        self.curve.dispatch(command);
+    }
+
+    /// The state that belongs to the application itself rather than to a
+    /// ViewModel: which windows are open, and the operations the composition
+    /// root runs.
+    fn apply_app_effects(&mut self, command: &Command) {
+        match command {
             Command::ToggleConvert => self.show_convert = !self.show_convert,
             Command::SetConversion(settings) => self.conversion = settings.sanitized(),
             Command::RunConversion => self.run_conversion(),
@@ -2499,7 +2732,7 @@ impl App {
             Command::ToggleReferences => self.show_references = !self.show_references,
             Command::LoadReference(plane) => self.load_reference(*plane),
             Command::ClearReference(_) | Command::SetReferenceSettings(..) => {
-                self.references.dispatch(&command);
+                self.references.dispatch(command);
                 self.save_references();
             }
             Command::SetSurfaceOpacity(opacity) => {
@@ -2521,6 +2754,14 @@ impl App {
                     *draft = name.clone();
                 }
             }
+            // Solo changes what the surface is made of without changing the
+            // document, so the viewport is rebuilt here rather than by the
+            // `touches_document` path — which would also mark the sculpture
+            // unsaved for a way of looking at it.
+            Command::SoloLayer(_) => {
+                self.scene.refresh();
+                self.sync_geometry();
+            }
             Command::CommitRenameLayer => self.commit_rename(),
             Command::CancelRenameLayer => self.renaming = None,
             // The stack just changed under the field. Left open it would
@@ -2528,17 +2769,22 @@ impl App {
             Command::RemoveLayer(_) => self.renaming = None,
             _ => {}
         }
-        if matches!(command, Command::SelectLayer(_)) {
-            self.armature.refresh();
-            self.rigging = self.rigging && self.armature.is_rigging();
-        }
-        // History moves the rig as surely as it moves the surface, and the
-        // tree the viewport draws is read from the document rather than kept
-        // alongside it — so an undone rig edit has to be looked up again or
-        // the scaffolding keeps showing the shape that was just taken back.
-        if matches!(command, Command::Undo | Command::Redo) {
-            self.armature.refresh();
-            self.rigging = self.rigging && self.armature.is_rigging();
+    }
+
+    /// What has to be looked at again once the command has landed.
+    ///
+    /// A rig belongs to a layer, so choosing another layer changes which one —
+    /// or whether there is one at all. History moves the rig as surely as it
+    /// moves the surface, and the tree the viewport draws is read from the
+    /// document rather than kept alongside it, so an undone rig edit has to be
+    /// looked up again or the scaffolding keeps showing the shape that was
+    /// just taken back.
+    fn settle_after(&mut self, command: &Command) {
+        if matches!(
+            command,
+            Command::SelectLayer(_) | Command::Undo | Command::Redo
+        ) {
+            self.refresh_rig();
         }
         if command.touches_document() {
             self.edited_this_frame = true;
@@ -2560,11 +2806,14 @@ impl App {
         // much as a finished one.
         if matches!(command, Command::EndStroke | Command::CancelStroke) {
             self.drag_anchor = None;
-        }
-        if matches!(command, Command::EndStroke | Command::CancelStroke) {
             self.build_mips();
         }
-        self.request_redraw();
+    }
+
+    /// Looks the rig up again, and leaves rigging mode if there is none.
+    fn refresh_rig(&mut self) {
+        self.armature.refresh();
+        self.rigging = self.rigging && self.armature.is_rigging();
     }
 
     fn redraw(&mut self) {
@@ -2631,15 +2880,23 @@ impl App {
             show_repair: self.show_repair,
             show_deform: self.show_deform,
             show_shapes: *self.objects.picking().get(),
+            insert_as: *self.objects.insert_as().get(),
+            copyable_subtools: self.objects.copyable().get(),
             mesh_operands: self.objects.mesh_operands().get(),
             mesh_operand: *self.objects.mesh_operand().get(),
             mesh_operand_cost: *self.objects.mesh_cost().get(),
+            show_boolean: *self.boolean.open().get(),
+            boolean: *self.boolean.settings().get(),
+            boolean_operands: self.boolean.operands().get(),
+            boolean_cost: *self.boolean.cost().get(),
+            boolean_notice: self.boolean.notice().get().as_deref(),
             shape: *self.objects.shape().get(),
             shape_parameters: self.objects.parameters().get(),
             object_combine: *self.objects.combine().get(),
             objects: self.objects.objects().get(),
             selected_object: *self.objects.selected().get(),
             gizmo_mode: *self.objects.mode().get(),
+            gizmo_target: *self.objects.target().get(),
             show_references: self.show_references,
             surface_opacity: self.surface_opacity,
             references: RefPlane::ALL.map(|plane| shell::ReferenceSlot {
@@ -2781,6 +3038,7 @@ impl App {
             shell::repair_window(ctx, &state, &mut queue);
             shell::deform_window(ctx, &state, &mut queue);
             shell::shapes_window(ctx, &state, &mut queue);
+            shell::boolean_window(ctx, &state, &mut queue);
             shell::reference_window(ctx, &state, &mut queue);
             shell::import_window(ctx, &state, &mut queue);
             shell::export_window(ctx, &state, &mut queue);
@@ -2828,7 +3086,7 @@ impl App {
         // having to move to prompt them.
         // Where a placement would land: under the pointer on the surface,
         // and where the camera is looking when the pointer is off it. Set
-        // before the frame's commands, so a `PlaceShape` in this frame places
+        // before the frame's commands, so an `InsertShape` in this frame places
         // where the sculptor was looking when they asked — placing at the
         // origin puts a subtracting shape *inside* the form, cutting something
         // nobody can see.
@@ -2847,6 +3105,7 @@ impl App {
             ]
         });
         self.sync_mesh_layers();
+        self.sync_active_subtool();
         self.sync_cage();
         self.sync_mask();
         self.sync_lattice_view();
@@ -2953,6 +3212,7 @@ impl App {
                 self.request_redraw();
             }
             Command::RunImport => self.import_mesh(),
+            Command::InsertMesh => self.insert_mesh_subtool(),
             Command::LoadAlpha => self.load_alpha(),
             Command::ClearAlpha => {
                 self.document.with(|document| document.set_alpha(None));
@@ -3048,6 +3308,14 @@ impl App {
                 let before = self.engine_undo_depth();
                 self.armature.set_skin(SkinSettings { thickness });
                 self.after_armature_edit(before);
+            }
+            // The cage settles before the switch rather than after it: the
+            // sculptor may say to stay, and a switch already made cannot be
+            // taken back by answering the question that follows it.
+            Command::SelectLayer(key) => {
+                if self.resolve_a_standing_cage(key) {
+                    self.apply(Command::SelectLayer(key));
+                }
             }
             Command::SetViewPreset(preset) => {
                 self.camera.apply_preset(match preset {

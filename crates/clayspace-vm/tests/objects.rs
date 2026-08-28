@@ -9,14 +9,24 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use clayspace_model::{
-    Combine, CombineSettings, GizmoHandle, GizmoMode, GizmoTarget, ItemKind, LayerKey, ModelError,
-    ObjectId, ObjectModel, Representation, SceneObject, Shape, Transform,
+    Combine, CombineSettings, GizmoHandle, GizmoMode, GizmoTarget, InsertAs, ItemKind, LayerKey,
+    ModelError, ObjectId, ObjectModel, Representation, SceneObject, Shape, Transform,
 };
 use clayspace_vm::{Command, ObjectViewModel, Picked, Watcher, ITEM_NOT_TRANSFORMABLE};
+
+/// The subtool this fake attributes every hit to.
+///
+/// `pick_item` answers the layer alongside the kind — one attributed raycast
+/// answering both of a press's questions — so a fake has to name one.
+const HIT_LAYER: LayerKey = LayerKey(1);
 
 #[derive(Debug, Default)]
 struct Calls {
     placed: Vec<(Shape, Vec<f32>)>,
+    /// The shapes inserted as subtools of their own, with where each stood.
+    inserted: Vec<(Shape, [f32; 3])>,
+    /// The subtools copied, in order.
+    copied: Vec<LayerKey>,
     mesh_placed: Vec<LayerKey>,
     transforms: Vec<Transform>,
     removed: Vec<ObjectId>,
@@ -33,6 +43,9 @@ struct FakeObjects {
     /// Shared so a test can take one away from under the ViewModel, which is
     /// the case worth checking: a price quoted for a layer nobody can see.
     meshes: Rc<RefCell<Vec<(LayerKey, String)>>>,
+    /// The subtools a copy could be made from. Shared for the same reason
+    /// `meshes` is, and it grows as insertions arrive.
+    subtools: Rc<RefCell<Vec<(LayerKey, String)>>>,
     selected: Option<ObjectId>,
     /// Set to refuse the next edit, as a locked layer would.
     refuse: Option<&'static str>,
@@ -49,6 +62,7 @@ impl FakeObjects {
             calls,
             objects: Vec::new(),
             meshes: Rc::new(RefCell::new(Vec::new())),
+            subtools: Rc::new(RefCell::new(Vec::new())),
             selected: None,
             refuse: None,
             slow: false,
@@ -111,6 +125,61 @@ impl ObjectModel for FakeObjects {
         self.objects.push(object.clone());
         self.selected = Some(object.id);
         Ok(object.id)
+    }
+
+    fn insert_shape_subtool(
+        &mut self,
+        shape: Shape,
+        parameters: &[f32],
+        at: [f32; 3],
+        combine: CombineSettings,
+    ) -> Result<clayspace_model::Inserted, ModelError> {
+        if self.refuse.is_some() {
+            return Err(self.refusal());
+        }
+        self.calls.borrow_mut().inserted.push((shape, at));
+        // A subtool of its own, so the object it holds belongs to a layer that
+        // was not there before. The double numbers them as the document does.
+        let layer = LayerKey(self.subtools.borrow().len() as u64 + 2);
+        self.subtools
+            .borrow_mut()
+            .push((layer, shape.label().to_string()));
+        let node = self.objects.len() as u32 + 1;
+        let mut object = an_object(node, shape, [0.0; 3]);
+        object.id = ObjectId { layer, node };
+        object.combine = combine;
+        object.parameters = parameters.to_vec();
+        self.objects.push(object.clone());
+        // The subtool is the selection, not the item inside it — the document
+        // answers the same way, and for the reason it records there.
+        self.selected = None;
+        Ok(clayspace_model::Inserted {
+            layer,
+            object: Some(object.id),
+        })
+    }
+
+    fn copy_subtool(
+        &mut self,
+        from: LayerKey,
+        _cell_size: f32,
+    ) -> Result<clayspace_model::Inserted, ModelError> {
+        if self.refuse.is_some() {
+            return Err(self.refusal());
+        }
+        self.calls.borrow_mut().copied.push(from);
+        let layer = LayerKey(self.subtools.borrow().len() as u64 + 2);
+        self.subtools.borrow_mut().push((layer, "Cópia".into()));
+        // No object row: a copy carries a baked volume rather than one of the
+        // offered shapes, which is what the document answers too.
+        Ok(clayspace_model::Inserted {
+            layer,
+            object: None,
+        })
+    }
+
+    fn copyable_subtools(&mut self) -> Vec<(LayerKey, String)> {
+        self.subtools.borrow().clone()
     }
 
     fn mesh_operands(&mut self) -> Vec<(LayerKey, String)> {
@@ -260,8 +329,12 @@ impl ObjectModel for FakeObjects {
         }
     }
 
-    fn pick_item(&mut self, _origin: [f32; 3], _direction: [f32; 3]) -> Option<ItemKind> {
-        self.hit
+    fn pick_item(
+        &mut self,
+        _origin: [f32; 3],
+        _direction: [f32; 3],
+    ) -> Option<(ItemKind, LayerKey)> {
+        self.hit.map(|kind| (kind, HIT_LAYER))
     }
 
     fn pick_object(&mut self, _origin: [f32; 3], _direction: [f32; 3]) -> Option<ObjectId> {
@@ -290,6 +363,164 @@ fn send(vm: &mut ObjectViewModel, command: Command) {
     vm.dispatch(&command, Representation::Sdf);
 }
 
+/// Puts the picked shape into the *active layer*, as an object.
+///
+/// Two commands rather than one, because the insert control now offers two
+/// destinations and its default is a subtool of its own. These are the rules
+/// for the other destination, so they say so rather than relying on whichever
+/// one happens to be the default.
+fn place(vm: &mut ObjectViewModel) {
+    send(vm, Command::SetInsertAs(InsertAs::Object));
+    send(vm, Command::InsertShape);
+}
+
+// -- the insert control ------------------------------------------------------
+
+/// The specification says inserting as a subtool is the default and placing
+/// into the active layer is the other choice. A default that has to be set is
+/// not one, so this presses the button with nothing set first.
+#[test]
+fn a_form_arrives_as_a_subtool_unless_the_other_destination_is_chosen() {
+    let (mut vm, calls) = viewmodel();
+    assert_eq!(*vm.insert_as().get(), InsertAs::Subtool);
+
+    send(&mut vm, Command::SetShape(Shape::Cylinder));
+    send(&mut vm, Command::InsertShape);
+
+    assert_eq!(
+        calls.borrow().inserted.len(),
+        1,
+        "the default destination did not make a subtool"
+    );
+    assert_eq!(calls.borrow().inserted[0].0, Shape::Cylinder);
+    assert!(
+        calls.borrow().placed.is_empty(),
+        "the form went into the active layer instead"
+    );
+}
+
+/// The other destination, and the one the old command always took.
+#[test]
+fn choosing_the_active_subtool_places_an_object_instead() {
+    let (mut vm, calls) = viewmodel();
+    send(&mut vm, Command::SetInsertAs(InsertAs::Object));
+    send(&mut vm, Command::InsertShape);
+
+    assert_eq!(calls.borrow().placed.len(), 1);
+    assert!(calls.borrow().inserted.is_empty());
+}
+
+/// A form put into the scene to be worked on its own is a whole subtool, so
+/// the manipulator addresses the subtool rather than the item inside it — which
+/// is what a sculptor's next gesture is for.
+#[test]
+fn an_inserted_subtool_gets_the_whole_subtool_manipulator() {
+    let (mut vm, _) = viewmodel();
+    send(&mut vm, Command::InsertShape);
+    let target = *vm.target().get();
+    assert!(
+        matches!(target, Some(GizmoTarget::Layer(_))),
+        "the manipulator sat on the item rather than on the subtool: {target:?}"
+    );
+    assert!(
+        vm.selected().get().is_none(),
+        "the item inside the new subtool was selected too, which hides the \
+         whole-subtool controls the sculptor needs to aim it"
+    );
+}
+
+/// A grid has no ordered list to put an item in, and that refuses the *object*
+/// destination only: the specification says inserting the same primitive as its
+/// own subtool remains available.
+#[test]
+fn a_grid_takes_a_subtool_even_though_it_refuses_an_object() {
+    let (mut vm, calls) = viewmodel();
+    vm.dispatch(&Command::InsertShape, Representation::Voxel);
+
+    assert_eq!(
+        calls.borrow().inserted.len(),
+        1,
+        "the grid refused a subtool it has no business refusing"
+    );
+    assert!(
+        vm.notice().get().is_none(),
+        "an insertion that worked left a refusal on screen: {:?}",
+        vm.notice().get()
+    );
+}
+
+/// A chosen mesh operand is a crossing into an ordered list, so it places
+/// whatever the destination chips say — there is no list in a layer that does
+/// not exist yet, and a picker that quietly did something else would be lying
+/// about what the button does.
+#[test]
+fn a_chosen_mesh_operand_is_placed_rather_than_made_a_subtool() {
+    let calls = Rc::new(RefCell::new(Calls::default()));
+    let model = FakeObjects::new(calls.clone());
+    let meshes = model.meshes.clone();
+    meshes.borrow_mut().push((LayerKey(7), "Parafuso".into()));
+    let mut vm = ObjectViewModel::new(Box::new(model));
+
+    send(&mut vm, Command::SetMeshOperand(Some(LayerKey(7))));
+    send(&mut vm, Command::InsertShape);
+
+    assert_eq!(calls.borrow().mesh_placed, vec![LayerKey(7)]);
+    assert!(calls.borrow().inserted.is_empty());
+}
+
+/// Copying reaches the model with the layer the control named, and leaves the
+/// manipulator on what arrived.
+#[test]
+fn copying_a_subtool_reaches_the_model_and_selects_the_copy() {
+    let (mut vm, calls) = viewmodel();
+    send(&mut vm, Command::InsertShape);
+    let source = calls.borrow().inserted.len();
+    assert_eq!(source, 1);
+    let original = match *vm.target().get() {
+        Some(GizmoTarget::Layer(key)) => key,
+        other => panic!("no subtool to copy: {other:?}"),
+    };
+
+    send(&mut vm, Command::CopySubtool(original));
+    assert_eq!(calls.borrow().copied, vec![original]);
+    assert!(
+        matches!(*vm.target().get(), Some(GizmoTarget::Layer(key)) if key != original),
+        "the manipulator stayed on the original rather than following the copy"
+    );
+}
+
+/// A refused copy says what the model said rather than failing silently, and
+/// leaves the manipulator where it was.
+#[test]
+fn a_refused_copy_says_what_the_model_said() {
+    const EMPTY: &str = "esta camada não tem extensão para copiar; está vazia";
+
+    let calls = Rc::new(RefCell::new(Calls::default()));
+    let mut model = FakeObjects::new(calls.clone());
+    model.refuse = Some(EMPTY);
+    let mut vm = ObjectViewModel::new(Box::new(model));
+
+    send(&mut vm, Command::CopySubtool(LayerKey(3)));
+    assert_eq!(vm.notice().get().as_deref(), Some(EMPTY));
+    assert!(vm.target().get().is_none());
+}
+
+/// The copy control reads the model rather than the layer stack, because
+/// "could be copied" is more than "is a layer".
+#[test]
+fn the_copy_control_is_refreshed_from_the_model() {
+    let (mut vm, _) = viewmodel();
+    assert!(vm.copyable().get().is_empty());
+
+    send(&mut vm, Command::InsertShape);
+    vm.refresh_operands();
+    assert_eq!(
+        vm.copyable().get().len(),
+        1,
+        "a subtool that just arrived is not offered for copying"
+    );
+}
+
 // -- the picker -------------------------------------------------------------
 
 #[test]
@@ -297,7 +528,7 @@ fn a_shape_places_with_the_numbers_the_picker_has() {
     let (mut vm, calls) = viewmodel();
     send(&mut vm, Command::SetShape(Shape::Cylinder));
     send(&mut vm, Command::SetShapeParameters(vec![0.4, 1.2]));
-    send(&mut vm, Command::PlaceShape);
+    place(&mut vm);
 
     let placed = &calls.borrow().placed;
     assert_eq!(placed.len(), 1);
@@ -331,7 +562,11 @@ fn a_size_out_of_range_is_brought_back_in() {
 #[test]
 fn placing_on_a_grid_says_why_it_cannot() {
     let (mut vm, calls) = viewmodel();
-    vm.dispatch(&Command::PlaceShape, Representation::Voxel);
+    vm.dispatch(
+        &Command::SetInsertAs(InsertAs::Object),
+        Representation::Voxel,
+    );
+    vm.dispatch(&Command::InsertShape, Representation::Voxel);
     assert!(
         vm.notice().get().is_some(),
         "a refusal must be stated rather than silent"
@@ -351,7 +586,7 @@ fn a_placement_the_model_refuses_says_what_it_said() {
     model.refuse = Some(LOCKED);
     let mut vm = ObjectViewModel::new(Box::new(model));
 
-    send(&mut vm, Command::PlaceShape);
+    place(&mut vm);
     assert_eq!(
         vm.notice().get().as_deref(),
         Some(LOCKED),
@@ -367,7 +602,7 @@ fn a_placement_the_model_refuses_says_what_it_said() {
 #[test]
 fn a_placed_shape_is_selected_and_the_manipulator_follows() {
     let (mut vm, _) = viewmodel();
-    send(&mut vm, Command::PlaceShape);
+    place(&mut vm);
     let id = vm.selected().get().expect("selected on arrival");
     assert_eq!(*vm.target().get(), Some(GizmoTarget::Object(id)));
 }
@@ -377,8 +612,8 @@ fn a_placed_shape_is_selected_and_the_manipulator_follows() {
 #[test]
 fn selecting_an_object_puts_the_manipulator_on_it() {
     let (mut vm, _) = viewmodel();
-    send(&mut vm, Command::PlaceShape);
-    send(&mut vm, Command::PlaceShape);
+    place(&mut vm);
+    place(&mut vm);
     let first = vm.objects().get()[0].id;
 
     send(&mut vm, Command::SelectObject(Some(first)));
@@ -389,7 +624,7 @@ fn selecting_an_object_puts_the_manipulator_on_it() {
 #[test]
 fn clearing_the_selection_takes_the_manipulator_away() {
     let (mut vm, _) = viewmodel();
-    send(&mut vm, Command::PlaceShape);
+    place(&mut vm);
     send(&mut vm, Command::SelectObject(None));
     assert_eq!(*vm.target().get(), None);
 }
@@ -397,7 +632,7 @@ fn clearing_the_selection_takes_the_manipulator_away() {
 #[test]
 fn removing_the_selected_object_takes_the_manipulator_with_it() {
     let (mut vm, calls) = viewmodel();
-    send(&mut vm, Command::PlaceShape);
+    place(&mut vm);
     send(&mut vm, Command::RemoveObject);
 
     assert_eq!(calls.borrow().removed.len(), 1);
@@ -411,7 +646,7 @@ fn the_list_is_watchable() {
     let mut watcher = Watcher::new();
     assert!(watcher.take_change(vm.objects()));
     assert!(!watcher.take_change(vm.objects()));
-    send(&mut vm, Command::PlaceShape);
+    place(&mut vm);
     assert!(
         watcher.take_change(vm.objects()),
         "a placement redraws the list"
@@ -423,7 +658,7 @@ fn the_list_is_watchable() {
 #[test]
 fn an_operation_reaches_the_selected_object() {
     let (mut vm, calls) = viewmodel();
-    send(&mut vm, Command::PlaceShape);
+    place(&mut vm);
     let subtract = CombineSettings {
         op: Combine::Subtract,
         ..CombineSettings::default()
@@ -446,7 +681,7 @@ fn the_operation_is_remembered_for_the_next_placement() {
         ..CombineSettings::default()
     };
     send(&mut vm, Command::SetObjectCombine(subtract));
-    send(&mut vm, Command::PlaceShape);
+    place(&mut vm);
 
     let object = vm.selected_object().expect("selected");
     assert_eq!(object.combine.op, Combine::Subtract);
@@ -457,7 +692,7 @@ fn the_operation_is_remembered_for_the_next_placement() {
 #[test]
 fn an_operation_that_needs_a_distance_cannot_be_given_none() {
     let (mut vm, calls) = viewmodel();
-    send(&mut vm, Command::PlaceShape);
+    place(&mut vm);
     send(
         &mut vm,
         Command::SetObjectCombine(CombineSettings {
@@ -477,7 +712,7 @@ fn an_operation_that_needs_a_distance_cannot_be_given_none() {
 fn exchanging_a_shape_keeps_the_object() {
     let (mut vm, _) = viewmodel();
     send(&mut vm, Command::SetShape(Shape::Box));
-    send(&mut vm, Command::PlaceShape);
+    place(&mut vm);
     let id = vm.selected().get().expect("selected");
 
     send(
@@ -494,7 +729,7 @@ fn exchanging_a_shape_keeps_the_object() {
 #[test]
 fn a_drag_is_one_gesture_however_many_frames_it_takes() {
     let (mut vm, calls) = viewmodel();
-    send(&mut vm, Command::PlaceShape);
+    place(&mut vm);
 
     send(
         &mut vm,
@@ -519,7 +754,7 @@ fn a_drag_is_one_gesture_however_many_frames_it_takes() {
 #[test]
 fn a_wandering_drag_lands_where_it_ends() {
     let (mut vm, calls) = viewmodel();
-    send(&mut vm, Command::PlaceShape);
+    place(&mut vm);
     send(
         &mut vm,
         Command::BeginGizmoDrag(GizmoHandle::Centre, [0.0; 3], [0.0, 0.0, 1.0]),
@@ -554,7 +789,7 @@ fn a_drag_with_nothing_selected_does_nothing() {
 #[test]
 fn scale_mode_offers_no_axis_handles_on_an_object() {
     let (mut vm, _) = viewmodel();
-    send(&mut vm, Command::PlaceShape);
+    place(&mut vm);
     send(&mut vm, Command::SetGizmoMode(GizmoMode::Scale));
     assert_eq!(vm.handles(), vec![GizmoHandle::Centre]);
 }
@@ -572,7 +807,7 @@ fn scale_mode_still_offers_axis_handles_on_a_cage() {
 #[test]
 fn move_and_rotate_offer_what_they_always_did() {
     let (mut vm, _) = viewmodel();
-    send(&mut vm, Command::PlaceShape);
+    place(&mut vm);
     for mode in [GizmoMode::Move, GizmoMode::Rotate] {
         send(&mut vm, Command::SetGizmoMode(mode));
         assert_eq!(vm.handles(), GizmoHandle::all_for(mode));
@@ -635,7 +870,7 @@ fn a_refused_drag_is_stated_rather_than_silent() {
 fn a_shape_lands_where_the_pointer_is() {
     let (mut vm, _) = viewmodel();
     vm.set_placement_point(Some([0.4, 1.2, -0.3]));
-    send(&mut vm, Command::PlaceShape);
+    place(&mut vm);
 
     let object = vm.selected_object().expect("placed");
     assert_eq!(object.position, [0.4, 1.2, -0.3]);
@@ -644,7 +879,7 @@ fn a_shape_lands_where_the_pointer_is() {
 #[test]
 fn a_placement_with_nowhere_stated_lands_at_the_origin() {
     let (mut vm, _) = viewmodel();
-    send(&mut vm, Command::PlaceShape);
+    place(&mut vm);
     let object = vm.selected_object().expect("placed");
     assert_eq!(object.position, [0.0; 3]);
 }
@@ -687,7 +922,7 @@ fn placing_with_a_mesh_chosen_places_the_mesh() {
     vm.refresh_operands();
 
     send(&mut vm, Command::SetMeshOperand(Some(LayerKey(4))));
-    send(&mut vm, Command::PlaceShape);
+    place(&mut vm);
 
     assert_eq!(calls.borrow().mesh_placed, vec![LayerKey(4)]);
     assert!(
@@ -790,7 +1025,7 @@ fn a_drag_that_overruns_settles_when_the_pointer_comes_up() {
 #[test]
 fn a_drag_that_keeps_up_is_not_throttled() {
     let (mut vm, calls) = viewmodel();
-    send(&mut vm, Command::PlaceShape);
+    place(&mut vm);
     send(
         &mut vm,
         Command::BeginGizmoDrag(GizmoHandle::Centre, [0.0; 3], [0.0, 0.0, 1.0]),
@@ -828,7 +1063,9 @@ fn a_press_on_a_stroke_says_why_it_carries_no_manipulator() {
 
     assert_eq!(
         vm.pick_at([0.0, 4.0, 0.0], [0.0, -1.0, 0.0]),
-        Picked::NotTransformable
+        Picked::NotTransformable(HIT_LAYER),
+        "a stroke names the subtool it was laid on, which is what the press \
+         goes on to activate"
     );
     assert_eq!(
         vm.notice().get().as_deref(),

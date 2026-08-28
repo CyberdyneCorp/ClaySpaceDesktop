@@ -230,16 +230,33 @@ impl SculptLayerCost {
 pub struct Scene {
     pub nodes: Vec<SceneNode>,
     pub layers: Vec<LayerSummary>,
-    /// Which layer edits go to.
+    /// Which layer edits go to, and which one is selected.
+    ///
+    /// One field and not two. There used to be a `selected` beside it, set by
+    /// the viewport pick, while `active` was set by the stack row — two
+    /// mutations of one idea, and they drifted the moment a click resolved to a
+    /// layer the stack had not chosen. The spec settles it: "there is one
+    /// active layer, not a picked one and a sculpted one".
     pub active: Option<LayerKey>,
-    /// What a click last selected.
-    pub selected: Option<LayerKey>,
+    /// Which layer is being shown alone, while one is.
+    ///
+    /// Apart from `active` because they are different questions and the spec
+    /// keeps them apart: soloing a layer shows it alone without making it the
+    /// thing a brush lands on. The stack reads this to say which row's solo is
+    /// engaged, since the visibility flags alone cannot tell a solo from a
+    /// sculptor who hid three layers by hand.
+    pub soloed: Option<LayerKey>,
 }
 
 impl Scene {
     pub fn active_layer(&self) -> Option<&LayerSummary> {
         let key = self.active?;
         self.layers.iter().find(|layer| layer.key == key)
+    }
+
+    /// Whether this layer is the one being shown alone.
+    pub fn is_soloed(&self, key: LayerKey) -> bool {
+        self.soloed == Some(key)
     }
 
     pub fn layer(&self, key: LayerKey) -> Option<&LayerSummary> {
@@ -275,6 +292,26 @@ pub trait SceneModel {
 
     fn set_active_layer(&mut self, key: LayerKey) -> Result<(), crate::ModelError>;
     fn set_layer_visible(&mut self, key: LayerKey, visible: bool) -> Result<(), crate::ModelError>;
+
+    /// Shows one layer alone, or releases the solo and puts back the
+    /// visibility every layer had before it.
+    ///
+    /// The state to be in rather than a toggle. A toggle is answered from what
+    /// the caller believes is shown, and the interface and the document
+    /// disagreeing about that is exactly how a solo is left engaged over a
+    /// scene that is no longer soloed.
+    ///
+    /// Solo is a viewing convenience: it does not change which layer is active
+    /// and it adds nothing the sculptor has to undo.
+    ///
+    /// Provided, so a double with no visibility of its own says it has none
+    /// rather than pretending to have soloed something.
+    fn set_solo(&mut self, key: Option<LayerKey>) -> Result<(), crate::ModelError> {
+        let _ = key;
+        Err(crate::ModelError::engine(
+            "mostrar uma camada sozinha precisa de um documento",
+        ))
+    }
     fn set_layer_protection(
         &mut self,
         key: LayerKey,
@@ -306,8 +343,17 @@ pub trait SceneModel {
     /// Moves a layer to a position in the stack, which is its evaluation order.
     fn move_layer(&mut self, key: LayerKey, index: usize) -> Result<(), crate::ModelError>;
 
-    /// What a click at a ray selects, honouring ghost and lock.
-    fn select_at(&mut self, origin: [f32; 3], direction: [f32; 3]) -> Option<LayerKey>;
+    /// Which layer a ray meets, honouring ghost and lock.
+    ///
+    /// A question and not a mutation: the caller activates what it answers by
+    /// issuing `SelectLayer`, so the viewport and the stack row reach
+    /// [`SceneModel::set_active_layer`] by the same command. Two pickers
+    /// writing activation is how the picked layer and the sculpted one came to
+    /// disagree.
+    ///
+    /// `&mut self` because the attributed raycast compiles the document, which
+    /// is not a `&self` operation however much it reads like one.
+    fn layer_at(&mut self, origin: [f32; 3], direction: [f32; 3]) -> Option<LayerKey>;
 
     /// Places a whole layer. One undoable step, however many items it holds.
     fn set_layer_transform(
@@ -316,6 +362,21 @@ pub trait SceneModel {
         position: [f32; 3],
         scale: f32,
     ) -> Result<(), crate::ModelError>;
+
+    /// The box a layer's geometry occupies, where the engine can say.
+    ///
+    /// A fact about the document rather than about any widget: the interface
+    /// decides what to do with it — outline a subtool, or size a manipulator so
+    /// its arms reach past the form they sit in the middle of. `None` for a
+    /// layer holding nothing, and for one whose extent the engine does not
+    /// report.
+    ///
+    /// Provided, so a double that models no geometry answers "cannot say"
+    /// rather than inventing a box.
+    fn layer_bounds(&self, key: LayerKey) -> Option<([f32; 3], [f32; 3])> {
+        let _ = key;
+        None
+    }
 
     /// What a layer's field costs, for the consolidation flow.
     fn layer_cost(&self, key: LayerKey) -> Result<LayerCost, crate::ModelError>;
@@ -396,7 +457,7 @@ mod tests {
                 },
             ],
             active: Some(LayerKey(2)),
-            selected: None,
+            soloed: None,
         };
         assert_eq!(scene.active_layer().map(|l| l.name.as_str()), Some("B"));
         assert_eq!(scene.layer(LayerKey(1)).map(|l| l.intensity), Some(100));

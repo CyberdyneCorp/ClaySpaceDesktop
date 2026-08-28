@@ -128,6 +128,12 @@ impl LatticeViewModel {
                 }
                 self.refresh();
             }
+            // The model takes a standing cage down when the active subtool
+            // changes — it was sized to a form that is no longer the one being
+            // worked — so this has to look again rather than go on drawing
+            // control points around something else. The sculptor was already
+            // asked what became of it before the command was dispatched.
+            Command::SelectLayer(_) => self.refresh(),
             _ => {}
         }
     }
