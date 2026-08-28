@@ -16,10 +16,11 @@ pub mod backend;
 pub mod document;
 pub mod objects;
 mod reference;
+mod sculptors;
 
 pub use alpha::read_alpha;
 pub use backend::{BackendPolicy, Operation, SelectionReason, UnavailableBackend};
-pub use document::ClayDocument;
+pub use document::{CarriedSpan, ClayDocument};
 pub use reference::read_reference;
 
 pub use claycore;

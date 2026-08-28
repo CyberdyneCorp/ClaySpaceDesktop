@@ -72,6 +72,14 @@ impl SculptModel for SharedDocument {
         self.0.borrow_mut().apply_operation(operation)
     }
 
+    fn symmetry(&self) -> [bool; 3] {
+        self.0.borrow().symmetry()
+    }
+
+    fn set_symmetry(&mut self, symmetry: [bool; 3]) -> Result<(), ModelError> {
+        self.0.borrow_mut().set_symmetry(symmetry)
+    }
+
     fn set_combine(&mut self, combine: CombineSettings) {
         self.0.borrow_mut().set_combine(combine);
     }
@@ -130,6 +138,10 @@ impl SceneModel for SharedDocument {
         self.0.borrow_mut().set_layer_visible(key, visible)
     }
 
+    fn set_solo(&mut self, key: Option<LayerKey>) -> Result<(), ModelError> {
+        self.0.borrow_mut().set_solo(key)
+    }
+
     fn set_layer_protection(
         &mut self,
         key: LayerKey,
@@ -158,8 +170,8 @@ impl SceneModel for SharedDocument {
         self.0.borrow_mut().move_layer(key, index)
     }
 
-    fn select_at(&mut self, origin: [f32; 3], direction: [f32; 3]) -> Option<LayerKey> {
-        self.0.borrow_mut().select_at(origin, direction)
+    fn layer_at(&mut self, origin: [f32; 3], direction: [f32; 3]) -> Option<LayerKey> {
+        self.0.borrow_mut().layer_at(origin, direction)
     }
 
     fn set_layer_transform(
@@ -171,6 +183,10 @@ impl SceneModel for SharedDocument {
         self.0
             .borrow_mut()
             .set_layer_transform(key, position, scale)
+    }
+
+    fn layer_bounds(&self, key: LayerKey) -> Option<([f32; 3], [f32; 3])> {
+        self.0.borrow().layer_bounds(key)
     }
 
     fn layer_cost(&self, key: LayerKey) -> Result<LayerCost, ModelError> {
@@ -408,6 +424,88 @@ impl ObjectModel for SharedDocument {
             .place_object(shape, parameters, at, combine)
     }
 
+    // The six below are *provided* methods of `ObjectModel`, and forwarding
+    // them is not optional for the same reason `SculptModel::set_combine` is
+    // not: a default exists so a double that models one thing need not spell
+    // out answers it has none for, and this is not a double — it is the one
+    // document, so inheriting a default means quietly answering for it.
+    //
+    // The last three predate this change and were inherited, which is exactly
+    // what it looked like: the shapes picker in the running application listed
+    // no imported model to place, because `mesh_operands` answered with the
+    // empty default and the placement behind it could only ever have refused.
+    // Any provided method added to the trait belongs here too;
+    // `tests/shared_forwarding.rs` is what says so out loud.
+    fn insert_shape_subtool(
+        &mut self,
+        shape: clayspace_model::Shape,
+        parameters: &[f32],
+        at: [f32; 3],
+        combine: clayspace_model::CombineSettings,
+    ) -> Result<clayspace_model::Inserted, ModelError> {
+        self.0
+            .borrow_mut()
+            .insert_shape_subtool(shape, parameters, at, combine)
+    }
+
+    fn copy_subtool(
+        &mut self,
+        from: LayerKey,
+        cell_size: f32,
+    ) -> Result<clayspace_model::Inserted, ModelError> {
+        self.0.borrow_mut().copy_subtool(from, cell_size)
+    }
+
+    fn copyable_subtools(&mut self) -> Vec<(LayerKey, String)> {
+        self.0.borrow_mut().copyable_subtools()
+    }
+
+    fn boolean_operands(&mut self) -> Vec<(LayerKey, String)> {
+        self.0.borrow_mut().boolean_operands()
+    }
+
+    fn boolean_cell(&mut self, base: LayerKey, tool: LayerKey) -> Option<f32> {
+        self.0.borrow_mut().boolean_cell(base, tool)
+    }
+
+    fn boolean_cost(
+        &mut self,
+        settings: clayspace_model::BooleanSettings,
+    ) -> Option<clayspace_model::Cost> {
+        self.0.borrow_mut().boolean_cost(settings)
+    }
+
+    fn run_boolean(
+        &mut self,
+        settings: clayspace_model::BooleanSettings,
+    ) -> Result<clayspace_model::Inserted, ModelError> {
+        self.0.borrow_mut().run_boolean(settings)
+    }
+
+    fn mesh_operands(&mut self) -> Vec<(LayerKey, String)> {
+        self.0.borrow_mut().mesh_operands()
+    }
+
+    fn mesh_operand_cost(
+        &mut self,
+        from: LayerKey,
+        cell_size: f32,
+    ) -> Option<clayspace_model::Cost> {
+        self.0.borrow_mut().mesh_operand_cost(from, cell_size)
+    }
+
+    fn place_mesh_object(
+        &mut self,
+        from: LayerKey,
+        cell_size: f32,
+        at: [f32; 3],
+        combine: clayspace_model::CombineSettings,
+    ) -> Result<clayspace_model::ObjectId, ModelError> {
+        self.0
+            .borrow_mut()
+            .place_mesh_object(from, cell_size, at, combine)
+    }
+
     fn set_object_transform(
         &mut self,
         id: clayspace_model::ObjectId,
@@ -477,7 +575,7 @@ impl ObjectModel for SharedDocument {
         &mut self,
         origin: [f32; 3],
         direction: [f32; 3],
-    ) -> Option<clayspace_model::ItemKind> {
+    ) -> Option<(clayspace_model::ItemKind, clayspace_model::LayerKey)> {
         self.0.borrow_mut().pick_item(origin, direction)
     }
 }

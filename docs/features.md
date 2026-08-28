@@ -105,6 +105,32 @@ producing an error you cannot act on.
 Symmetry about X, Y and Z reaches all three representations, and by two
 different mechanisms because the representations are two different things.
 
+**Symmetry belongs to the subtool, not to the document.** The toggles read and
+write the *active* subtool's axes, and switching subtools restores that
+subtool's own setting rather than carrying the previous one's along. A new
+subtool starts with X on, which is what the design asks. One exception, and it
+is the rig's: a rig's own subtool starts with symmetry **off**, because a rig
+does its own mirroring (`add_zsphere` places the reflected node itself) and a
+layer mirror on top of that hangs a second arm off the first.
+
+The setting and the engine's mirror are two things, and the mirror is written
+by the stroke that wants it rather than by the toggle that asked for it.
+Pointing a layer mirror is an *edit* — measured, `clay_set_layer_mirror` takes
+the undo depth from 0 to 1 — so it belongs inside the gesture, where the
+ViewModel counts it and one undo spends it along with the rest. Written beside
+the gesture, it would sit on the engine's stack unaccounted, and the next undo
+would spend itself on the mirror and leave part of the stroke standing.
+
+A document reopened from disk records symmetry as **off** on every subtool, and
+so does a fresh subtool's record of what the engine has been told. The file
+does keep the mirror — measured, an item mirrored before a save is still
+mirrored after a reopen — but the ABI has no call that reads one back, so what
+is recorded here is an assumption either way. Off is the assumption that
+changes nothing: the first stroke that wants otherwise writes through, and
+writing the default over what was loaded would be worse, since a mirror applies
+to items added before the call as well as after and a form saved unmirrored
+would come back mirrored.
+
 On a **field**, through the layer's mirror — `clay_set_layer_mirror` reflects
 the layer's items, so both halves belong to one operation and undo together.
 That covers the brushes that *add* an item: Padrão, Inflar, Camada and Puxar.
@@ -233,12 +259,40 @@ protects the surface almost completely (measured, 1.0005 against 1.1400 for the
 same stroke unmasked), so a sculptor who cannot see the mask cannot tell a
 protected surface from a broken tool.
 
-A mask belongs to **no representation**. It is a world-addressed field the verbs
-consult, so it is painted the same way and honoured the same way on a field, a
-grid and a mesh. That was not true before: on a grid the tool fell through to
-the depositing arm and *added clay* where the sculptor asked to freeze a region,
-and on a mesh it was refused outright even though a mesh stroke had been handing
-the mask to the engine all along. `masking.rs` holds both.
+A mask belongs to **one subtool**, and to no representation. It is a
+world-addressed field the verbs consult, so it is painted the same way and
+honoured the same way on a field, a grid and a mesh — and it is the *active*
+subtool's mask that is presented and applied. Switching subtools neither
+discards the mask you painted nor applies it to the form you moved to; coming
+back finds it covering what it covered, and neither mask gates edits on the
+other subtool. `subtool_state.rs` holds that.
+
+Neither half was true before. Being of one subtool is new here; being of no
+representation was claimed and not kept — on a grid the tool fell through to the
+depositing arm and *added clay* where the sculptor asked to freeze a region, and
+on a mesh it was refused outright even though a mesh stroke had been handing the
+mask to the engine all along. `masking.rs` holds both of those.
+
+**A mask does not survive closing the document.** It is state the next stroke
+reads rather than geometry, and it is kept beside the document rather than in
+it — `clay_mask_create`, one per subtool, released with the layer.
+
+The engine has a better answer and this build cannot reach it.
+`clay_document_add_mask` attaches a mask *to a layer*, and
+`clay_document_save` writes it: measured, a mask covering 5,600 cells came back
+covering 5,600 after a save and a reopen, and asking a layer that was never
+painted on still answers `NOT_FOUND`. `claycore_mask_persistence.rs` is that
+measurement, kept so the day it stops being true is a failing test.
+
+What stands in the way is the borrow and not the engine. A document-owned mask
+is lent out of the document, and every masked verb in the wrapper takes the
+document *and* the mask together — `apply_stroke`, `relax_region`,
+`flatten_region`, `mask_extrude`, and a voxel grid borrowed out of the same
+document. The C side is built for exactly that pairing; Rust cannot hand a mask
+lent out of a document back into it. Reaching the engine's mask means giving
+those five entry points a form that takes the mask's *layer* rather than the
+mask — a redesign of `claycore`'s masking surface, not a wrapper — so it is
+named here rather than half-done.
 
 ### What the Máscaras menu does
 
@@ -660,8 +714,16 @@ The same pull forward on a 4×4×4 field cage takes its reach from 1.000 to
 
 ### A cage is a mode
 
-While one is up the layer is being *deformed*, and three things follow from
+While one is up the layer is being *deformed*, and four things follow from
 that:
+
+- **It does not follow you to another subtool.** A cage is sized to what one
+  form contains, and that box means nothing around another, so changing the
+  active subtool while one stands **resolves** it: an untouched cage is exactly
+  the identity and is taken down without asking, and a dragged one puts the
+  question — deform and switch, discard and switch, or stay here. The model
+  drops a cage that reaches the switch unresolved rather than re-drawing it
+  around a form it was never fitted to.
 
 - **The brushes are off.** A press that misses a control point orbits rather
   than sculpting. It used to fall through to the brush, so a slip while aiming
@@ -826,12 +888,12 @@ Dual contouring fits the vertex by least squares to hermite data and keeps a
 sharp corner sharp. Preserving them would be a change to the engine rather
 than to this application.
 
-## Placing shapes, and the booleans on them
+## Inserting a form, and the booleans on it
 
-*Escultura → Formas* offers fourteen shapes — box, sphere, cylinder, cone,
+*Arquivo → Formas* offers fourteen shapes — box, sphere, cylinder, cone,
 torus, capsule, ellipsoid, pyramid, rounded box, frame, rounded cylinder, hex
 and tri prisms, octahedron — each with the numbers it is actually measured by,
-which are different numbers for different shapes. **Colocar** puts one where
+which are different numbers for different shapes. **Inserir** puts one where
 the pointer is on the surface, or where the camera is looking when the pointer
 is off it. The two the engine calls unbounded — a plane and an infinite
 cylinder — are not offered: neither has an extent for a manipulator to sit on
@@ -842,6 +904,68 @@ and Interseção are what a placed shape is for, so they stand as a row above th
 full list of operations — the outline of both discs, the crescent one leaves,
 the lens where they overlap — and a sculptor does not open a list of thirteen
 to find "cut". The list keeps the rest: grooves, pipes, shells and the others.
+
+### As a subtool, or into the one being worked
+
+*Inserir como* is two chips and the panel's first control, because the choice
+comes before the shape. **Novo subtool** — the default — makes the form a
+layer of its own: active on arrival, so the next dab lands on it, and standing
+where the pointer was, with the layer's own middle on the form so the
+whole-subtool manipulator sits on what it addresses. **No subtool ativo** puts
+it into the active layer as an item, which is how the parts of one form are
+built.
+
+Both are wanted and guessing between them from context would be wrong half the
+time, so neither is inferred. An object needs an SDF layer's ordered list and a
+grid or a mesh has none — the panel says so beside the chips rather than
+refusing after the click, and the *subtool* destination stays available there,
+since nothing stops a new field layer standing beside a grid.
+
+The layer and the form in it are **one undo step**. They are two engine edits,
+and without the group one ⌘Z would take the form away and leave an empty
+subtool standing. Names are derived rather than asked for, and made unique:
+a voxel layer's grid is reachable only by name (ClayCore
+[#365](https://github.com/CyberdyneCorp/ClayCore/issues/365)), so two subtools
+sharing one shadow each other's grid and a stroke lands on the wrong one. Every
+route that creates a layer derives its name that way — the crossing included,
+which is the route that actually makes most voxel layers.
+
+### Two more sources
+
+**Importar malha como subtool** reads a file and stands it in the scene
+carrying its triangles — a mesh layer, sculptable with the fixed-topology
+brushes, movable with the manipulator, and active when it arrives.
+
+Movable is worth spelling out, because a carried mesh is the one representation
+the engine's own layer transform does not reach: a mesh layer contributes
+nothing to the field, so the tape has no item to move. The application applies
+the transform itself, in one place, to everything that crosses between the
+viewport and the mesh's own vertices — what is drawn, what a ray picks, the box
+the manipulator sizes itself to, the cage, and the mesh when it is an operand of
+a boolean. A mesh subtool therefore moves, turns and scales as a whole like any
+other, and sculpting it lands where it is drawn.
+
+**Copiar subtool** takes a subtool already in the scene and makes another. The
+word is *copiar* and not *instanciar* deliberately: the engine has no
+instancing (ClayCore
+[#364](https://github.com/CyberdyneCorp/ClayCore/issues/364)), so what this
+does is bake the source alone into a volume of its own — the other layers
+hidden around the sampling, exactly as the subtool boolean bakes its operands,
+and the visibility the sculptor set restored on every exit path including the
+one where the bake refuses. The consequence is the point: **sculpting the copy
+cannot reach the original.** A subtool with nothing in it is not offered, since
+copying it would produce an empty subtool with a name.
+
+The stack's add control asks the same kind of question: **+ Nova camada** makes
+the field layer it always made, and the list beside it makes a voxel layer
+directly, rather than by crossing one afterwards.
+
+Two entries and not three. A mesh layer is made by *carrying* a mesh and there
+is no call anywhere that makes an empty one, so the specification's offer of
+"SDF, voxel and mesh" is qualified — *where a mesh source is at hand* — and
+when a layer is created out of nothing there is none. That route is the import
+above, which makes its own layer. Asked for a mesh layer anyway, the document
+refuses by name and says where one comes from.
 
 **A placed shape stays live.** It is an item in the layer's ordered list, so
 select it a week later, move it, and the boolean follows: the hole is where the
@@ -859,6 +983,22 @@ press only looks for an object while the panel is open or one is already
 selected: a sculptor mid-stroke must not have a press become a selection
 because a cylinder happens to sit under the brush.
 
+**And the click makes that form's layer the one being sculpted.** A scene holds
+several forms — a layer each — and clicking one is how you say which of them
+you are working on: the next dab lands there, and the shelf offers that layer's
+representation. The same click that selects an object activates the layer it
+stands in, and a click on a form carrying no object activates the layer anyway
+while the press falls through to the brush. A **ghosted** layer is transparent
+to this, because the engine excludes ghosts from the attributed raycast: the
+layer *behind* the ghost is the one that becomes active. A **locked** layer is
+still pickable, so it activates and then refuses the dab with its reason —
+locked is not hidden and not ghosted, and the three say different things.
+
+There is one active layer and not two. Clicking a row in the layer stack and
+clicking geometry in the viewport reach the same command, so the selected
+subtool and the sculpted one cannot come to disagree; the scene tree and the
+stack both light the same row.
+
 A selected object is **outlined** in the viewport. A subtracting object is
 behind the surface — what you see of a bore is the hole — and without the box
 there is nothing to aim but a manipulator over a cavity.
@@ -866,6 +1006,32 @@ there is nothing to aim but a manipulator over a cavity.
 The starting form is a placed sphere and is listed as one. It always was;
 nothing but the absence of a selection model made it special. It can be
 selected, resized and deleted like anything else.
+
+### Which subtool is active, read off the viewport
+
+The stack lights the active row, and the viewport says the same thing, because
+a sculptor working on a form is looking at the form. Two mechanisms behind one
+look, and they are two because the engine offers no third.
+
+A subtool that **carries geometry** — a voxel grid, an imported or converted
+mesh — is drawn one layer at a time now rather than as one concatenated buffer,
+so the active one takes a warmer material and the rest stay plain clay. The tint
+is the accent's hue at full value mixed toward white: the accent as stored takes
+two thirds of the value out of the clay, which reads as a shadow rather than as
+a cue. It is a *material*, not a vertex colour, so an export carries no trace of
+it — `visual_active_subtool.rs` compares whole `v` lines to hold that, since OBJ
+writes vertex colour as three more numbers on the same line.
+
+A subtool made of **field** cannot be tinted. Every visible SDF layer meets in
+one merged surface, and splitting that per layer needs an attribution the engine
+does not offer — so an active field subtool is cued by its **bounds outline**,
+drawn like a selected object's box and dimmed against it: which subtool is
+active is standing state, and the box around a form just placed is the more
+urgent of the two.
+
+**Nothing is cued while one layer is visible on its own.** The point of the cue
+is to tell the active subtool from the *others*, and with none to be told from,
+a tint says only that the clay changed colour.
 
 ### The manipulator on an object
 
@@ -882,6 +1048,28 @@ keeps all three: it scales its own control points and carries no engine
 transform. Use the cage when you mean to stretch along one axis.
 
 A whole drag is **one undo step**, however many frames it took.
+
+### The manipulator on a whole subtool
+
+Under the layer stack, **Transformar camada** puts the same widget on the whole
+active layer: Mover, Girar and Escalar move, turn and uniformly scale
+everything the layer holds as one engine transform, and the drag is one undo
+step. Pressing the mode that is already in force puts the manipulator away.
+The control appears only where nothing smaller owns the widget — a cage that is
+up, a curve being authored and a selected object each already have it.
+
+Its arms follow the one rule every manipulator here follows now — a share of
+the camera's distance, so the widget is the same size to the hand at every zoom
+(see *The manipulator on an object*). It was sized to the subtool's own bounds
+once, because the widget was depth-tested and a fixed reach drew nothing on a
+form it sat in the middle of; the manipulator is drawn over the clay now, so
+that reason is gone, and a widget that grew with the subtool was off the screen
+at any zoom that showed the subtool's detail.
+
+The pivot is the layer's transform. For a subtool standing where its layer
+transform puts it that is its middle; a layer whose geometry was built
+off-centre inside it carries the widget at the layer's origin rather than at
+the form's, which is worth knowing before reaching for it.
 
 **The three modes are one row of chips wherever the widget can be worked** —
 under the object list, in the shapes panel beside the selected object, and in
@@ -920,6 +1108,39 @@ says so on the options bar rather than doing nothing, and the press stays the
 brush's: a press on the clay is a stroke, and taking that away to explain
 something would be the worse error.
 
+### Showing one subtool alone
+
+A layer row's own menu offers **Mostrar só esta**, which hides every other
+subtool, and **Mostrar todas**, which brings back the visibility each of them
+had — not "all visible": a subtool the sculptor had hidden before soloing is
+hidden again afterwards. Soloing a second subtool while one is already alone
+still restores the pattern that stood before the *first* solo. The entry says
+which of the two it will do, read from the scene rather than from the eyes in
+the stack, because a row's eye cannot tell a solo from someone who hid three
+layers by hand.
+
+**Solo changes nothing else.** It does not move the active subtool — a solo
+elsewhere hides the one the brush is pointed at, and the stroke is refused with
+that reason rather than landing where nobody can see it — and it adds nothing
+to the undo history: solo, release, ⌘Z takes back the last *edit*. That is not
+free. The engine has no journal pause: once undo is enabled every command is
+recorded, `SetLayerVisibleCmd` among them, and the merged SDF surface cannot
+drop a layer any way other than engine visibility. So the commands are made and
+then **stepped over** — undo hops the entries a solo left, the same way it
+already interleaves mesh gestures and crossings with the engine's own stack —
+and the history panel's depth is reported without them.
+
+The hide-and-restore is a primitive rather than solo's private business,
+because baking one subtool alone is the same operation: hide the others, run
+something, put the flags back. The restore owns the exit, including the failing
+one — an operation that refuses halfway leaves the sculptor's scene exactly as
+it was, and its own commands are not left for anyone to undo.
+
+**Saving while soloed writes the real pattern.** A solo is a way of looking at
+the document, not part of it, so the file gets the visibility the sculptor set,
+and the solo is put back around the write. A reopened or crash-recovered
+document shows what they set and is not soloed.
+
 ### When the clay is behind your hand
 
 A live boolean is re-evaluated on every frame of a drag. Measured on the
@@ -950,6 +1171,61 @@ at the same resolution.
 The mesh layer is left exactly as it was and stays sculptable with the sixteen
 fixed-topology brushes. What is placed is a sampled copy, and it behaves like
 any other placed object from then on.
+
+### A boolean between two subtools
+
+*Arquivo → Booleana entre subtools* — beside **Formas**, because it is the
+other half of putting forms in a scene — combines two whole forms into a third.
+Pick the two, pick **União**, **Subtração** or **Interseção**, read what it
+costs, and confirm. What arrives is a subtool like any other: active on
+arrival, sculptable, movable with the whole-subtool manipulator, and available
+as an operand again.
+
+**The panel names the two roles rather than numbering them.** *Base — o subtool
+que é cortado* and *Ferramenta — o subtool que corta*, because subtraction is
+not symmetric and "A menos B" is the whole of what is being chosen; with a
+subtraction set up the panel prints that sentence with the two names in it, and
+swapping them changes it.
+
+**It is a resolved boolean, not a live one, and the interface says so.** The
+engine composes the layers of a document by hard union
+(`clay/scene/tape.h`) — a live layer-level boolean is ClayCore
+[#321](https://github.com/CyberdyneCorp/ClayCore/issues/321), filed and open —
+so what this does is sample each operand into a volume and combine the two in a
+new layer. Moving an operand afterwards does not update the result.
+
+**Which is why the operands are kept.** They stay in the scene, hidden, and one
+⌘Z takes the whole operation back with them visible again exactly as they were.
+A sculptor who can still reach the cylinder can move it and run the boolean
+again; one whose cylinder was consumed cannot. *Consumir os operandos* removes
+them instead, and the panel says what that costs before it runs.
+
+**The cost is stated first, in the same vocabulary as the crossings**, because
+it is the same kind of crossing: the surface moves by half a cell, features
+thinner than a cell vanish, sharp edges become staircases at the cell size, and
+the parametric edit lists of both operands are spent. The resolution defaults
+to the finer of the two operands' own detail — a grid says what it is worked
+at — and is then the sculptor's to change, with the figures following the
+slider. **Nothing runs unconfirmed**, and until two different subtools are
+chosen there is nothing to press.
+
+**Every representation can be an operand**, with the crossing each one needs
+performed as part of the operation rather than demanded beforehand: a field is
+sampled out of the document with the rest of the scene hidden, a grid is read
+back through `clay_item_volume_from_voxels`, and a mesh takes the same crossing
+placing one as an operand pays. Both operands are sampled over **one** region —
+the pair's box, padded by the band — so that the two halves of the result sit on
+the same lattice and meet cell-for-cell at the join, and so that the cost stated
+beforehand is the cost of what was actually done. Outside the lattice a volume
+item reads as *outside*, which is what lets a grid operand — which has no region
+to be given — take part in an intersection at all.
+
+**A boolean that cannot be run says why, and names which subtool.** An empty
+operand, a ghosted or locked one, a pair whose region does not fit the
+document's memory budget, and an intersection of two forms that do not meet —
+which is nothing, so it is refused rather than made into an empty subtool. The
+scene is left exactly as it was in every one of those cases, the borrowed
+visibility included.
 
 ## Crossing between representations
 
@@ -1041,6 +1317,12 @@ which is what makes rigging feel like modelling rather than filling in a form.
   the pointer drifts, and the sphere slides away from the cursor.
 - Skin thickness is a multiplier over the authored radii, so the slider is
   reversible and never rewrites the rig.
+- **A rig belongs to the subtool that holds its nodes.** A document may carry
+  one per subtool: activating a subtool presents its rig as it was left, rigs
+  on other subtools are untouched by what you do to this one, and a subtool
+  carrying none says so rather than handing you a neighbour's. All of them are
+  read back when a document is reopened, so a scene with two rigs comes back
+  with two.
 - **Esfera negativa** makes a sphere cut into the rig rather than add to it —
   ZBrush's negative ZSphere, said out loud rather than made by pushing one
   inside its parent. The sign belongs to the node, so the membrane along its
@@ -1356,9 +1638,15 @@ the default and only a decisive loss moves the work.
   modified. This matters because the engine documents several verbs as
   legitimately able to change nothing — a sub-cell drag, a stamp that misses
   every cell — so a successful call is not evidence that anything happened.
-- Changing symmetry costs its own entry, because a layer's mirror is document
-  state. It is written only when it actually differs, so a run of strokes at
-  one setting costs nothing extra.
+- Changing symmetry costs its own entry, because a layer's mirror is state the
+  engine records. The entry lands inside the first stroke that uses the new
+  setting rather than beside the toggle, so one undo spends it with the rest of
+  that gesture; it is written only when it differs from what *that subtool* was
+  last told, so a run of strokes at one setting costs nothing extra.
+- Hiding or showing a layer by hand is an entry, and undoing one brings the
+  eye back with it. **Solo is not**: the entries it makes are hopped rather
+  than offered — see *Showing one subtool alone* for why they have to be made
+  at all.
 - Renaming a layer is one entry too, and the new name is **saved**: it goes
   into the document rather than being kept beside it, so a reopened file shows
   what the layer was called and not what it was created as. A blank name is
@@ -1460,6 +1748,12 @@ changes it, because that is where a person looks for it.
 Panels cannot be resized or collapsed and shortcuts are fixed. See
 [roadmap.md](roadmap.md).
 
+**A mask that survives closing the document.** The engine attaches one to a
+layer and writes it with the file; what stands in the way here is that a
+document-owned mask cannot be handed back into a call that also takes the
+document. The measurement and the shape of the fix are under
+[Masking](#masking).
+
 **The rest of the domain's vocabulary, in more than one language.** The brush
 names go through the string tables now. The other 62 label arms across 14 enums
 — `Combine`, `BlendProfile`, `ViewPresetKind`, `RefPlane`, `MaskOp`,
@@ -1504,12 +1798,23 @@ boolean, a blend or a deformer belonging to another layer until it is sampled
 onto a lattice, and paying that quantises the exact vertices and drops the edge
 loops, which is precisely what made it worth keeping as a mesh.
 
-What has changed is where a sculptor meets that. Choosing an imported model in
-the shapes panel places it as a boolean operand and states the crossing's costs
-first — the same figures the conversion panel states, because it is the same
-crossing. The mesh layer stays where it is and stays sculptable; what is placed
-is a sampled copy. So the *surface* still does not compose, and the model can
-be used as though it did, at a price that is shown before it is paid.
+It stays here, and the subtool boolean did not move it. A **mesh subtool is a
+legal operand** of *Booleana entre subtools* — the specification asks for the
+crossing each representation needs to be "performed as part of the operation
+rather than demanded of the sculptor beforehand", and it is: the layer's
+triangles are sampled into a volume inside the operation —
+`Document::mesh_layer_as_volume`, the same crossing that placing a mesh as an
+operand already pays — and what comes out is a field. So what changed is who
+performs the crossing and when, not whether one is performed. The vertices are
+still quantised, the edge loops are still dropped, and the mesh layer itself is
+left exactly as it was and stays sculptable.
+
+The same is true of the older route, which also stands: choosing an imported
+model in the shapes panel places it as a boolean operand and states the
+crossing's costs first — the same figures the conversion panel states, because
+it is the same crossing. So the *surface* still does not compose, in either
+place, and a model can be used as though it did, at a price that is shown
+before it is paid.
 
 **An alpha stamp on an SDF stroke.** Alphas reach a voxel grid and a mesh, each
 by its own route, and both are measured moving the surface. A field takes one as

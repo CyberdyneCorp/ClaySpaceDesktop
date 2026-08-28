@@ -78,6 +78,7 @@ fn a_cage_is_drawn_around_the_form() {
             selected: &[],
             gizmo: None,
             outline: None,
+            subtool_outline: None,
             handle: handle(&cage),
         },
     );
@@ -138,6 +139,7 @@ fn the_selected_point_is_told_apart_from_the_rest() {
                 // gizmo over them would be measuring its own pixels.
                 gizmo: None,
                 outline: None,
+                subtool_outline: None,
                 handle: handle(&cage),
             },
         );
@@ -194,6 +196,7 @@ fn dragging_the_cage_reaches_the_drawn_surface() {
             selected: &[],
             gizmo: None,
             outline: None,
+            subtool_outline: None,
             handle: 0.0,
         },
     );
@@ -249,6 +252,7 @@ fn each_manipulator_mode_draws_its_own_handles() {
                     hovered: None,
                 }),
                 outline: None,
+                subtool_outline: None,
                 handle: handle(&cage),
             },
         );
@@ -539,6 +543,7 @@ fn the_form_is_drawn_through_while_a_cage_is_up() {
                 selected: &[],
                 gizmo: None,
                 outline: None,
+                subtool_outline: None,
                 handle: handle(&cage),
             },
         );
@@ -649,6 +654,7 @@ fn the_outer_ring_is_drawn_and_faces_the_camera() {
                         per_axis_scale: true,
                     }),
                     outline: None,
+                    subtool_outline: None,
                     handle: handle(&cage),
                 },
             );
@@ -735,6 +741,7 @@ fn turning_a_face_visibly_turns_the_cage_on_screen() {
                     hovered: None,
                 }),
                 outline: None,
+                subtool_outline: None,
                 handle: handle(&cage),
             },
         );

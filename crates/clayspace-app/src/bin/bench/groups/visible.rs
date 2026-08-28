@@ -63,7 +63,7 @@ impl Screen {
     /// The one buffer a grid and a mesh are both drawn from.
     fn upload(&mut self, gpu: &Gpu, document: &mut ClayDocument) {
         let _ = document.mesh_revision();
-        let (positions, normals, colors, indices) = document.visible_mesh_geometry();
+        let (positions, normals, colors, indices, spans) = document.visible_mesh_geometry();
         let frozen = document.mask_at(&positions);
         let vertices: Vec<Vertex> = positions
             .into_iter()
@@ -77,6 +77,14 @@ impl Screen {
                 mask: frozen.as_ref().map_or(0.0, |weights| weights[at]),
             })
             .collect();
-        self.renderer.set_mesh_layers(gpu, &vertices, &indices);
+        let spans: Vec<clayspace_view::MeshSpan> = spans
+            .into_iter()
+            .map(|span| clayspace_view::MeshSpan {
+                layer: span.layer,
+                indices: span.indices,
+            })
+            .collect();
+        self.renderer
+            .set_mesh_layers(gpu, &vertices, &indices, &spans);
     }
 }

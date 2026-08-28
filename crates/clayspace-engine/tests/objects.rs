@@ -712,9 +712,19 @@ fn a_click_on_a_stroke_says_what_it_hit() {
         .expect("stroke");
 
     let down = ([0.0, 4.0, 0.0], [0.0, -1.0, 0.0]);
-    let kind = document
+    let (kind, layer) = document
         .pick_item(down.0, down.1)
         .expect("something was hit");
+    assert_eq!(
+        layer,
+        document
+            .scene()
+            .active_layer()
+            .expect("an active layer")
+            .key,
+        "the pick has to name the subtool it met, since that is the press's \
+         other question and there is only one raycast to answer both"
+    );
     assert!(
         matches!(kind, ItemKind::Stroke | ItemKind::Object),
         "a ray onto the worked form should attribute to something, got {kind:?}"

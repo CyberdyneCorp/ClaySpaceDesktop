@@ -13,7 +13,8 @@ use std::path::PathBuf;
 use clayspace_model::{
     ConversionSettings, CurveJoin, CurveProfile, ExportSettings, ExtrudeSettings, Falloff,
     GizmoHandle, GizmoMode, ImportSettings, LayerKey, Locale, MaskOp, RefPlane, ReferenceSettings,
-    SmoothBlur, StrokeModifiers, SurfaceOpacity, ToolKind, ViewPresetKind, VoxelDisplay,
+    Representation, SmoothBlur, StrokeModifiers, SurfaceOpacity, ToolKind, ViewPresetKind,
+    VoxelDisplay,
 };
 
 /// A change to the application or the document.
@@ -46,14 +47,51 @@ pub enum Command {
     SetShape(clayspace_model::Shape),
     /// The numbers for the shape the picker is set to.
     SetShapeParameters(Vec<f32>),
-    /// Puts the picked shape in the active layer, selected, combining the way
-    /// the options bar is set.
-    PlaceShape,
+    /// Puts the picked form into the scene, selected, combining the way the
+    /// options bar is set.
+    ///
+    /// Where it lands is [`Command::SetInsertAs`]'s business and not this
+    /// command's: one verb for "put the form I picked into the scene", so a
+    /// button and a shortcut that mean it cannot come to disagree about which
+    /// of the two destinations they meant.
+    InsertShape,
+    /// Whether the next insertion makes a subtool of its own or an object in
+    /// the active layer.
+    ///
+    /// The sculptor's choice rather than a guess from context: a form put into
+    /// the scene to be worked on its own is a subtool, a form put into the
+    /// layer being worked is a part of that form, and guessing between them
+    /// would be wrong half the time.
+    SetInsertAs(clayspace_model::InsertAs),
+    /// Asks for a mesh file and brings it in as a subtool of its own.
+    ///
+    /// Handled by the composition root, as every command that needs a file
+    /// dialog is: a ViewModel that could open one would be a ViewModel that
+    /// needs a window to test.
+    InsertMesh,
+    /// Copies a subtool already in the document into one of its own.
+    ///
+    /// A copy and not an instance. The engine composes layers by hard union
+    /// and has no instancing (ClayCore #364), so what this makes is the source
+    /// sampled into a volume of its own — which is why sculpting the copy
+    /// cannot reach the original, and why the word in the interface is
+    /// "copiar".
+    CopySubtool(LayerKey),
+    /// Opens or closes the panel that resolves a boolean between two subtools.
+    ToggleBoolean,
+    /// What that panel is set to: the two operands, the operation and the
+    /// resolution.
+    ///
+    /// Choosing changes nothing in the document — it states what the operation
+    /// would cost. `RunBoolean` is the consent.
+    SetBoolean(clayspace_model::BooleanSettings),
+    /// Resolves the boolean the panel is set to, as one undo step.
+    RunBoolean,
     /// Which mesh layer the picker would place as an operand, or none for one
     /// of the offered shapes.
     ///
     /// Choosing one states what the crossing costs; it does not run it.
-    /// Nothing reaches the document until `PlaceShape`.
+    /// Nothing reaches the document until `InsertShape`.
     SetMeshOperand(Option<clayspace_model::LayerKey>),
     /// Selects a placed object, or clears the selection. The manipulator
     /// follows it.
@@ -136,7 +174,18 @@ pub enum Command {
     // -- scene and layers -------------------------------------------------
     SelectLayer(LayerKey),
     SetLayerVisible(LayerKey, bool),
-    AddLayer,
+    /// Shows one subtool alone, or releases the solo with `None`.
+    ///
+    /// The state to be in rather than a toggle, so the stack row and any other
+    /// route to it cannot disagree about whether a solo is engaged.
+    SoloLayer(Option<LayerKey>),
+    /// Adds an empty layer carrying the chosen representation.
+    ///
+    /// Stated at creation rather than reached by a conversion afterwards: a
+    /// grid asked for after the fact costs a crossing, and the crossing is the
+    /// thing the sculptor was trying to avoid. SDF where nothing is chosen,
+    /// which is what a layer has always been.
+    AddLayer(Representation),
     RemoveLayer(LayerKey),
     /// Starts renaming a layer, with its current name in the field.
     ///
@@ -344,6 +393,21 @@ impl Command {
                 | Self::SelectObject(_)
                 | Self::SetShape(_)
                 | Self::SetShapeParameters(_)
+                // Saying where the *next* form would land changes nothing yet;
+                // inserting one is the entry.
+                | Self::SetInsertAs(_)
+                // Importing a mesh as a subtool does change the document, but
+                // it goes through the composition root's own path — dialog,
+                // then model — and marks the document itself, exactly as
+                // `RunImport` does. Routing it through the ordinary edit path
+                // as well would double the entry.
+                | Self::InsertMesh
+                // Opening the boolean panel and setting it change nothing:
+                // the whole point of stating a cost beforehand is that
+                // choosing is free. Running one is the edit, and it is not
+                // listed here.
+                | Self::ToggleBoolean
+                | Self::SetBoolean(_)
                 | Self::SetMeshOperand(_)
                 | Self::SetGizmoTarget(_)
                 | Self::ToggleLattice
@@ -397,6 +461,12 @@ impl Command {
                 // document; changing that layer does. Entering rigging is the
                 // same: it changes what the pointer means, not the surface.
                 | Self::SelectLayer(_)
+                // Solo is a way of looking at the scene. It writes visibility
+                // and the engine journals that, but the document is the
+                // sculpture and this changed none of it — a title bar saying
+                // "não salvo" because someone looked at one subtool alone
+                // would be reporting their attention as work.
+                | Self::SoloLayer(_)
                 | Self::ToggleArmatureEditing
                 | Self::SetArmatureMirror(_)
                 | Self::ToggleSkinPreview
@@ -419,7 +489,13 @@ impl Command {
             Self::ToggleShapes => "formas",
             Self::SetShape(_) => "forma",
             Self::SetShapeParameters(_) => "medidas da forma",
-            Self::PlaceShape => "colocar forma",
+            Self::InsertShape => "inserir forma",
+            Self::SetInsertAs(_) => "destino da inserção",
+            Self::InsertMesh => "inserir malha",
+            Self::CopySubtool(_) => "copiar subtool",
+            Self::ToggleBoolean => "painel de booleanas",
+            Self::SetBoolean(_) => "ajustes da booleana",
+            Self::RunBoolean => "booleana entre subtools",
             Self::SetMeshOperand(_) => "operando de malha",
             Self::SelectObject(_) => "selecionar objeto",
             Self::SetObjectShape(..) => "trocar forma",
@@ -456,7 +532,8 @@ impl Command {
             Self::SetBrushSmoothing(_) => "brush smoothing",
             Self::SelectLayer(_) => "select layer",
             Self::SetLayerVisible(..) => "layer visibility",
-            Self::AddLayer => "new layer",
+            Self::SoloLayer(_) => "solo layer",
+            Self::AddLayer(_) => "new layer",
             Self::RemoveLayer(_) => "remove layer",
             Self::BeginRenameLayer(_) => "rename layer",
             Self::EditLayerName(_) => "layer name",
@@ -620,11 +697,44 @@ mod tests {
         );
         for command in [
             Command::SetLayerVisible(clayspace_model::LayerKey(1), false),
-            Command::AddLayer,
+            Command::AddLayer(Representation::Sdf),
             Command::RemoveLayer(clayspace_model::LayerKey(1)),
         ] {
             assert!(command.touches_document(), "{} is an edit", command.label());
         }
+    }
+
+    /// Putting a form into the scene is an edit whichever destination it takes,
+    /// and saying which destination is not. The two used to be one command and
+    /// a hidden default; keeping them apart is what lets a control offer the
+    /// choice without the choice itself entering the history.
+    #[test]
+    fn inserting_a_form_is_an_edit_and_choosing_where_is_not() {
+        assert!(Command::InsertShape.touches_document());
+        assert!(Command::CopySubtool(clayspace_model::LayerKey(1)).touches_document());
+        assert!(
+            !Command::SetInsertAs(clayspace_model::InsertAs::Object).touches_document(),
+            "saying where the next form lands is not itself an edit"
+        );
+        assert!(
+            !Command::InsertMesh.touches_document(),
+            "the import marks the document on the composition root's own path; \
+             counting it here would double the entry"
+        );
+    }
+
+    /// Resolving a boolean is an edit; choosing what one would do is not.
+    /// The cost has to be readable while the sculptor decides, and a panel
+    /// that marked the document unsaved for being looked at would be
+    /// reporting their attention as work.
+    #[test]
+    fn running_a_boolean_is_an_edit_and_setting_one_up_is_not() {
+        assert!(Command::RunBoolean.touches_document());
+        assert!(!Command::ToggleBoolean.touches_document());
+        assert!(
+            !Command::SetBoolean(clayspace_model::BooleanSettings::default()).touches_document(),
+            "choosing the operands and the resolution must run nothing"
+        );
     }
 
     #[test]

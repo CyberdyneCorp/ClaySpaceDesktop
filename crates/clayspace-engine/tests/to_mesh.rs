@@ -59,7 +59,7 @@ fn a_field_crosses_into_a_mesh_layer() {
 
     // And it carries triangles, which is what makes it sculptable rather than
     // an empty row waiting for an import.
-    let (positions, _, _, indices) = document.visible_mesh_geometry();
+    let (positions, _, _, indices, _) = document.visible_mesh_geometry();
     assert!(
         indices.len() >= 3 && !positions.is_empty(),
         "the mesh layer offered the viewport {} indices",
@@ -110,7 +110,7 @@ fn the_mesh_is_the_source_layer_and_not_the_whole_document() {
         .convert_layer(Direction::SdfToMesh, 0.05, 0)
         .expect("the crossing was refused");
 
-    let (positions, _, _, _) = document.visible_mesh_geometry();
+    let (positions, _, _, _, _) = document.visible_mesh_geometry();
     let furthest = positions
         .iter()
         .map(|p| p[0])
@@ -144,7 +144,7 @@ fn a_grid_crosses_into_a_mesh_layer() {
     let layer = scene.layer(made).expect("the new layer");
     assert_eq!(layer.representation, Representation::Mesh);
 
-    let (positions, normals, _, indices) = document.visible_mesh_geometry();
+    let (positions, normals, _, indices, _) = document.visible_mesh_geometry();
     assert!(!indices.is_empty(), "the grid meshed to nothing");
     // Normals, because a mesh layer is lit by them. The rounded voxel mesher
     // carries none and would draw as a flat silhouette.
@@ -282,7 +282,7 @@ fn a_new_mesh_layer_changes_what_the_viewport_watches() {
         "crossing into a mesh left the viewport's number where it was, so the \
          layer it made is never uploaded and never drawn"
     );
-    let (positions, _, _, indices) = document.visible_mesh_geometry();
+    let (positions, _, _, indices, _) = document.visible_mesh_geometry();
     assert!(
         !indices.is_empty() && !positions.is_empty(),
         "there was nothing to upload in the first place"

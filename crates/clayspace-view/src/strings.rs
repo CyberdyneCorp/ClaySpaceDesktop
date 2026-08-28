@@ -45,6 +45,8 @@ pub struct Strings {
     pub extrude_side_names: [&'static str; clayspace_model::ExtrudeSide::ALL.len()],
     /// How a grid is drawn, in `VoxelDisplay::ALL` order.
     pub voxel_display_names: [&'static str; clayspace_model::VoxelDisplay::ALL.len()],
+    /// The manipulator's three modes, in `GizmoMode::ALL` order.
+    pub gizmo_mode_names: [&'static str; clayspace_model::GizmoMode::ALL.len()],
 
     /// What each shape the picker offers is called, in the order
     /// `Shape::ALL` presents them.
@@ -56,10 +58,32 @@ pub struct Strings {
     /// to a sculptor is showing them the inside of the file, which is what the
     /// first capture of this panel did.
     pub shape_parameter_names: [&'static str; clayspace_model::PARAMETER_KEYS.len()],
+    /// Where an inserted form lands, in `InsertAs::ALL` order — the subtool
+    /// first, because that is the default.
+    pub insert_as_names: [&'static str; clayspace_model::InsertAs::ALL.len()],
+    /// What a layer holds, in `Representation::ALL` order.
+    ///
+    /// `Representation::label` is the engine's own word ("SDF", "voxel") and
+    /// reads the same in every language; these are the words a sculptor is
+    /// offered when a new layer asks what it should be.
+    pub representation_names: [&'static str; clayspace_model::Representation::ALL.len()],
     /// The shapes panel, and what it does.
     pub action_shapes: &'static str,
     pub label_shape: &'static str,
-    pub action_place_shape: &'static str,
+    /// The heading over the two destinations an insertion can take.
+    pub label_insert_as: &'static str,
+    /// Putting the picked form into the scene.
+    pub action_insert: &'static str,
+    /// Bringing a mesh file in as a subtool of its own.
+    pub action_insert_mesh: &'static str,
+    /// Copying a subtool already in the scene.
+    pub action_copy_subtool: &'static str,
+    /// Why the word is "copy" and not "instance": the engine has no instancing
+    /// (ClayCore #364), so what arrives is independent and the sculptor should
+    /// know that before they sculpt on it.
+    pub hint_copy_subtool: &'static str,
+    /// What representation a new layer should carry.
+    pub label_new_layer_kind: &'static str,
     pub action_remove_object: &'static str,
     pub label_placed_objects: &'static str,
     /// The placed objects, as the section under the layers is headed.
@@ -92,8 +116,6 @@ pub struct Strings {
     pub hint_shapes: &'static str,
     pub hint_uniform_scale: &'static str,
     pub label_shapes_sdf_only: &'static str,
-    /// The manipulator's three modes, in `GizmoMode::ALL` order.
-    pub gizmo_mode_names: [&'static str; clayspace_model::GizmoMode::ALL.len()],
     /// The two deformations, in `DeformVerb::ALL` order.
     pub deform_verb_names: [&'static str; clayspace_model::DeformVerb::ALL.len()],
     /// The manipulator, as the row of its modes is headed.
@@ -147,10 +169,25 @@ pub struct Strings {
     pub status_cage_needs_a_field: &'static str,
     /// How to use the cage, where a person is when they need it.
     pub hint_cage: &'static str,
+    /// The heading of the question asked when the active subtool changes under
+    /// a cage that is still up.
+    pub cage_switch_title: &'static str,
+    /// Why the cage cannot come along, and what the sculptor has to decide.
+    pub cage_switch_question: &'static str,
+    /// Bend the form through the cage, then change subtool.
+    pub cage_switch_apply: &'static str,
+    /// Throw the cage away, then change subtool.
+    pub cage_switch_drop: &'static str,
+    /// Stay on this subtool and go on working the cage.
+    pub cage_switch_stay: &'static str,
     /// Shown while the manipulator is set to turn.
     pub hint_gizmo_rotate: &'static str,
     /// Why turning and scaling are refused on a selection of one.
     pub hint_gizmo_needs_two: &'static str,
+    /// The manipulator that acts on the whole active layer.
+    pub section_layer_transform: &'static str,
+    /// What that manipulator does, and how to put it away.
+    pub hint_layer_transform: &'static str,
     /// The mask section of the inspector.
     pub section_mask: &'static str,
     /// How far Expandir, Contrair and Suavizar máscara reach.
@@ -249,6 +286,12 @@ pub struct Strings {
     /// Renaming and removing a layer, from the row's own menu.
     pub action_rename_layer: &'static str,
     pub action_remove_layer: &'static str,
+    /// Showing one subtool on its own, and bringing the rest back.
+    ///
+    /// Two words rather than one that toggles: the entry says what the click
+    /// will do, and "solo" on a row that is already alone says neither.
+    pub action_solo_layer: &'static str,
+    pub action_release_solo: &'static str,
     /// Why a layer cannot be removed, shown on the disabled entry.
     pub layer_last_one: &'static str,
     pub label_spheres: &'static str,
@@ -282,6 +325,37 @@ pub struct Strings {
     pub convert_cells: &'static str,
     pub convert_run: &'static str,
     pub convert_none_here: &'static str,
+    // The boolean panel.
+    /// The three operations, in `BooleanOp::ALL` order.
+    pub boolean_op_names: [&'static str; clayspace_model::BooleanOp::ALL.len()],
+    /// Opening the panel, and the window's own title.
+    pub action_boolean: &'static str,
+    pub label_boolean_op: &'static str,
+    /// Which subtool is being cut, and which is doing the cutting.
+    ///
+    /// Two labels rather than "first" and "second", because subtraction is not
+    /// symmetric and naming the roles is the whole of what the sculptor is
+    /// choosing between.
+    pub label_boolean_base: &'static str,
+    pub label_boolean_tool: &'static str,
+    /// The word between the two names in the sentence a subtraction reads as.
+    pub boolean_minus: &'static str,
+    /// That the result is resolved rather than live, said before it runs.
+    pub boolean_resolved: &'static str,
+    /// What becomes of the operands, and why that is what makes it
+    /// recoverable.
+    pub boolean_keeps_operands: &'static str,
+    pub action_boolean_consume: &'static str,
+    pub hint_boolean_consume: &'static str,
+    pub action_boolean_run: &'static str,
+    /// Shown while the panel has no pair to run.
+    pub boolean_pick_two: &'static str,
+    /// What an operand picker shows before one is chosen.
+    ///
+    /// Its own string rather than [`Strings::boolean_pick_two`]: a picker
+    /// reading "choose two subtools" appears twice, and each of the two says
+    /// something about the pair rather than about itself.
+    pub boolean_pick_one: &'static str,
     /// Prefix for the active layer's representation in the viewport bar.
     pub representation_label: &'static str,
     /// Said when a layer change forced a different tool.
@@ -350,6 +424,7 @@ const PT_BR: Strings = Strings {
     blend_names: ["Dura", "Quadrática", "Cúbica", "Circular", "Chanfro"],
     extrude_side_names: ["Para fora", "Para dentro", "Centrado"],
     voxel_display_names: ["Voxels", "Suave"],
+    gizmo_mode_names: ["Mover", "Girar", "Escalar"],
     tool_names: [
         "Padrão",
         "Inflar",
@@ -430,9 +505,16 @@ const PT_BR: Strings = Strings {
         "Raio da borda",
         "Tamanho",
     ],
+    insert_as_names: ["Novo subtool", "No subtool ativo"],
+    representation_names: ["Campo (SDF)", "Voxels", "Malha"],
     action_shapes: "Formas",
     label_shape: "Forma",
-    action_place_shape: "Colocar",
+    label_insert_as: "Inserir como",
+    action_insert: "Inserir",
+    action_insert_mesh: "Importar malha como subtool…",
+    action_copy_subtool: "Copiar subtool",
+    hint_copy_subtool: "A cópia é independente: esculpir a cópia não muda o original.",
+    label_new_layer_kind: "Tipo",
     action_remove_object: "Remover objeto",
     label_placed_objects: "Objetos",
     section_objects: "OBJETOS",
@@ -454,7 +536,6 @@ const PT_BR: Strings = Strings {
     hint_shapes: "Coloque uma forma e mire-a com o manipulador.",
     hint_uniform_scale: "A escala é uniforme. Use a gaiola para esticar em um eixo só.",
     label_shapes_sdf_only: "Um objeto vive na lista ordenada de uma camada SDF.",
-    gizmo_mode_names: ["Mover", "Girar", "Escalar"],
     deform_verb_names: ["Afunilar", "Torcer"],
     label_manipulator: "Manipulador",
     hint_material: "Clique para trocar o material. Cada um é uma esfera iluminada; a forma é lida como ela.",
@@ -485,9 +566,18 @@ const PT_BR: Strings = Strings {
     status_cage_needs_a_field:
         "Uma camada de voxels não aceita uma gaiola. Converta-a para SDF ou malha primeiro.",
     hint_cage: "Arraste um ponto · Shift+clique soma à seleção · Deformar aplica",
+    cage_switch_title: "Gaiola em aberto",
+    cage_switch_question: "A gaiola foi ajustada a esta subferramenta e não \
+                           acompanha a troca. Deformar antes de trocar, ou descartá-la?",
+    cage_switch_apply: "Deformar e trocar",
+    cage_switch_drop: "Descartar e trocar",
+    cage_switch_stay: "Ficar aqui",
     hint_gizmo_rotate: "O anel externo gira no plano da tela · Ctrl trava em 15°",
     hint_gizmo_needs_two:
         "Girar e Escalar agem em torno do meio da seleção · escolha dois pontos ou mais",
+    section_layer_transform: "TRANSFORMAR CAMADA",
+    hint_layer_transform:
+        "Move, gira e escala a camada inteira · clique de novo para guardar o manipulador",
     section_mask: "MÁSCARA",
     label_mask_steps: "Passos",
     label_mask_cells: "Células congeladas",
@@ -564,6 +654,8 @@ const PT_BR: Strings = Strings {
     label_new_layer: "Nova camada",
     action_rename_layer: "Renomear",
     action_remove_layer: "Excluir",
+    action_solo_layer: "Mostrar só esta",
+    action_release_solo: "Mostrar todas",
     layer_last_one: "um documento guarda ao menos uma camada",
     label_spheres: "Esferas",
     label_skin: "Pele",
@@ -586,6 +678,19 @@ const PT_BR: Strings = Strings {
     convert_cells: "células",
     convert_run: "Converter",
     convert_none_here: "esta camada não tem para onde converter",
+    boolean_op_names: ["União", "Subtração", "Interseção"],
+    action_boolean: "Booleana entre subtools",
+    label_boolean_op: "Operação",
+    label_boolean_base: "Base — o subtool que é cortado",
+    label_boolean_tool: "Ferramenta — o subtool que corta",
+    boolean_minus: "menos",
+    boolean_resolved: "o resultado é resolvido, não ao vivo: mover um operando depois não o atualiza",
+    boolean_keeps_operands: "os operandos ficam na cena, ocultos, e uma desfeita traz tudo de volta",
+    action_boolean_consume: "Consumir os operandos",
+    hint_boolean_consume: "Os operandos são removidos em vez de ocultados. Sem eles, não há como refazer a operação.",
+    action_boolean_run: "Resolver booleana",
+    boolean_pick_two: "Escolha dois subtools diferentes.",
+    boolean_pick_one: "Escolher subtool",
     action_repair: "Reparar",
     repair_airtight: "estanque: nenhum vazio fechado",
     repair_voids: "vazios fechados",
@@ -651,6 +756,7 @@ const EN_US: Strings = Strings {
     blend_names: ["Hard", "Quadratic", "Cubic", "Circular", "Chamfer"],
     extrude_side_names: ["Outward", "Inward", "Centred"],
     voxel_display_names: ["Voxels", "Smooth"],
+    gizmo_mode_names: ["Move", "Turn", "Scale"],
     tool_names: [
         "Standard",
         "Inflate",
@@ -731,9 +837,16 @@ const EN_US: Strings = Strings {
         "Rim radius",
         "Size",
     ],
+    insert_as_names: ["New subtool", "Into the active subtool"],
+    representation_names: ["Field (SDF)", "Voxels", "Mesh"],
     action_shapes: "Shapes",
     label_shape: "Shape",
-    action_place_shape: "Place",
+    label_insert_as: "Insert as",
+    action_insert: "Insert",
+    action_insert_mesh: "Import mesh as a subtool…",
+    action_copy_subtool: "Copy subtool",
+    hint_copy_subtool: "A copy is independent: sculpting the copy does not change the original.",
+    label_new_layer_kind: "Kind",
     action_remove_object: "Remove object",
     label_placed_objects: "Objects",
     section_objects: "OBJECTS",
@@ -755,7 +868,6 @@ const EN_US: Strings = Strings {
     hint_shapes: "Place a shape, then aim it with the manipulator.",
     hint_uniform_scale: "Scale is uniform. Use the cage to stretch along one axis.",
     label_shapes_sdf_only: "An object lives in an SDF layer's ordered list.",
-    gizmo_mode_names: ["Move", "Turn", "Scale"],
     deform_verb_names: ["Taper", "Twist"],
     label_manipulator: "Manipulator",
     hint_material: "Click to cycle the material. Each is a lit sphere; the form reads the way it does.",
@@ -785,9 +897,18 @@ const EN_US: Strings = Strings {
     label_cage_divisions: "Points per axis",
     status_cage_needs_a_field: "A voxel layer takes no cage. Cross it to SDF or mesh first.",
     hint_cage: "Drag a point · Shift-click adds to the selection · Deform applies",
+    cage_switch_title: "A cage is still up",
+    cage_switch_question: "The cage was fitted to this subtool and does not follow \
+                           the switch. Deform first, or throw it away?",
+    cage_switch_apply: "Deform and switch",
+    cage_switch_drop: "Discard and switch",
+    cage_switch_stay: "Stay here",
     hint_gizmo_rotate: "The outer ring turns in the screen plane · Ctrl snaps to 15°",
     hint_gizmo_needs_two:
         "Turn and Scale act about the middle of the selection · pick two points or more",
+    section_layer_transform: "TRANSFORM LAYER",
+    hint_layer_transform:
+        "Moves, turns and scales the whole layer · click again to put the manipulator away",
     section_mask: "MASK",
     label_mask_steps: "Steps",
     label_mask_cells: "Frozen cells",
@@ -864,6 +985,8 @@ const EN_US: Strings = Strings {
     label_new_layer: "New layer",
     action_rename_layer: "Rename",
     action_remove_layer: "Delete",
+    action_solo_layer: "Show only this",
+    action_release_solo: "Show all",
     layer_last_one: "a document keeps at least one layer",
     label_spheres: "Spheres",
     label_skin: "Skin",
@@ -886,6 +1009,19 @@ const EN_US: Strings = Strings {
     convert_cells: "cells",
     convert_run: "Convert",
     convert_none_here: "this layer has nowhere to convert to",
+    boolean_op_names: ["Union", "Subtraction", "Intersection"],
+    action_boolean: "Boolean between subtools",
+    label_boolean_op: "Operation",
+    label_boolean_base: "Base — the subtool being cut",
+    label_boolean_tool: "Tool — the subtool doing the cutting",
+    boolean_minus: "minus",
+    boolean_resolved: "the result is resolved rather than live: moving an operand afterwards will not update it",
+    boolean_keeps_operands: "the operands stay in the scene, hidden, and one undo brings the whole thing back",
+    action_boolean_consume: "Consume the operands",
+    hint_boolean_consume: "The operands are removed rather than hidden. Without them there is no way to run it again.",
+    action_boolean_run: "Resolve boolean",
+    boolean_pick_two: "Choose two different subtools.",
+    boolean_pick_one: "Choose a subtool",
     action_repair: "Repair",
     repair_airtight: "airtight: no enclosed voids",
     repair_voids: "enclosed voids",
@@ -951,6 +1087,7 @@ const ES_419: Strings = Strings {
     blend_names: ["Dura", "Cuadrática", "Cúbica", "Circular", "Chaflán"],
     extrude_side_names: ["Hacia fuera", "Hacia dentro", "Centrado"],
     voxel_display_names: ["Vóxeles", "Suave"],
+    gizmo_mode_names: ["Mover", "Girar", "Escalar"],
     tool_names: [
         "Estándar",
         "Inflar",
@@ -1031,9 +1168,16 @@ const ES_419: Strings = Strings {
         "Radio del borde",
         "Tamaño",
     ],
+    insert_as_names: ["Nuevo subtool", "En el subtool activo"],
+    representation_names: ["Campo (SDF)", "Vóxeles", "Malla"],
     action_shapes: "Formas",
     label_shape: "Forma",
-    action_place_shape: "Colocar",
+    label_insert_as: "Insertar como",
+    action_insert: "Insertar",
+    action_insert_mesh: "Importar malla como subtool…",
+    action_copy_subtool: "Copiar subtool",
+    hint_copy_subtool: "La copia es independiente: esculpir la copia no cambia el original.",
+    label_new_layer_kind: "Tipo",
     action_remove_object: "Quitar objeto",
     label_placed_objects: "Objetos",
     section_objects: "OBJETOS",
@@ -1055,7 +1199,6 @@ const ES_419: Strings = Strings {
     hint_shapes: "Coloca una forma y apúntala con el manipulador.",
     hint_uniform_scale: "La escala es uniforme. Usa la jaula para estirar en un solo eje.",
     label_shapes_sdf_only: "Un objeto vive en la lista ordenada de una capa SDF.",
-    gizmo_mode_names: ["Mover", "Girar", "Escalar"],
     deform_verb_names: ["Estrechar", "Torcer"],
     label_manipulator: "Manipulador",
     hint_material: "Haz clic para cambiar el material. Cada uno es una esfera iluminada; la forma se lee como ella.",
@@ -1086,9 +1229,18 @@ const ES_419: Strings = Strings {
     status_cage_needs_a_field:
         "Uma camada de voxels não aceita uma gaiola. Converta-a para SDF ou malha primeiro.",
     hint_cage: "Arraste um ponto · Shift+clique soma à seleção · Deformar aplica",
+    cage_switch_title: "Hay una jaula abierta",
+    cage_switch_question: "La jaula se ajustó a esta subherramienta y no acompaña \
+                           el cambio. ¿Deformar antes de cambiar, o descartarla?",
+    cage_switch_apply: "Deformar y cambiar",
+    cage_switch_drop: "Descartar y cambiar",
+    cage_switch_stay: "Quedarme aquí",
     hint_gizmo_rotate: "El anillo exterior gira en el plano de la pantalla · Ctrl fija a 15°",
     hint_gizmo_needs_two:
         "Girar y Escalar actúan en torno al medio de la selección · elige dos puntos o más",
+    section_layer_transform: "TRANSFORMAR CAPA",
+    hint_layer_transform:
+        "Mueve, gira y escala la capa entera · pulse de nuevo para guardar el manipulador",
     section_mask: "MÁSCARA",
     label_mask_steps: "Passos",
     label_mask_cells: "Células congeladas",
@@ -1170,6 +1322,8 @@ const ES_419: Strings = Strings {
     label_new_layer: "Nueva capa",
     action_rename_layer: "Renombrar",
     action_remove_layer: "Eliminar",
+    action_solo_layer: "Mostrar solo esta",
+    action_release_solo: "Mostrar todas",
     layer_last_one: "un documento guarda al menos una capa",
     label_spheres: "Esferas",
     label_skin: "Piel",
@@ -1192,6 +1346,19 @@ const ES_419: Strings = Strings {
     convert_cells: "celdas",
     convert_run: "Convertir",
     convert_none_here: "esta capa no tiene a dónde convertirse",
+    boolean_op_names: ["Unión", "Sustracción", "Intersección"],
+    action_boolean: "Booleana entre subtools",
+    label_boolean_op: "Operación",
+    label_boolean_base: "Base — el subtool que se corta",
+    label_boolean_tool: "Herramienta — el subtool que corta",
+    boolean_minus: "menos",
+    boolean_resolved: "el resultado es resuelto, no en vivo: mover un operando después no lo actualiza",
+    boolean_keeps_operands: "los operandos quedan en la escena, ocultos, y un deshacer lo devuelve todo",
+    action_boolean_consume: "Consumir los operandos",
+    hint_boolean_consume: "Los operandos se quitan en vez de ocultarse. Sin ellos no hay manera de rehacer la operación.",
+    action_boolean_run: "Resolver booleana",
+    boolean_pick_two: "Elija dos subtools diferentes.",
+    boolean_pick_one: "Elegir subtool",
     action_repair: "Reparar",
     repair_airtight: "estanco: sin huecos cerrados",
     repair_voids: "huecos cerrados",
@@ -1406,6 +1573,33 @@ impl Strings {
         )
     }
 
+    /// Where an insertion would land, in this locale.
+    ///
+    /// By position in `InsertAs::ALL`, which is what makes a destination added
+    /// without a name a compile error rather than a Portuguese word on an
+    /// English screen.
+    pub fn insert_as_name(&self, destination: clayspace_model::InsertAs) -> &'static str {
+        Self::at(
+            &self.insert_as_names,
+            clayspace_model::InsertAs::ALL,
+            destination,
+        )
+    }
+
+    /// What this boolean operation is called, in this locale.
+    pub fn boolean_op(&self, op: clayspace_model::BooleanOp) -> &'static str {
+        Self::at(&self.boolean_op_names, clayspace_model::BooleanOp::ALL, op)
+    }
+
+    /// What a layer of this representation is called, in this locale.
+    pub fn representation_name(&self, what: clayspace_model::Representation) -> &'static str {
+        Self::at(
+            &self.representation_names,
+            clayspace_model::Representation::ALL,
+            what,
+        )
+    }
+
     pub fn voxel_display_name(&self, how: clayspace_model::VoxelDisplay) -> &'static str {
         Self::at(
             &self.voxel_display_names,
@@ -1431,11 +1625,28 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 159] {
+    pub fn all(&self) -> [&'static str; 185] {
         [
             self.action_shapes,
             self.label_shape,
-            self.action_place_shape,
+            self.action_insert,
+            self.label_insert_as,
+            self.action_insert_mesh,
+            self.action_copy_subtool,
+            self.hint_copy_subtool,
+            self.action_boolean,
+            self.label_boolean_op,
+            self.label_boolean_base,
+            self.label_boolean_tool,
+            self.boolean_minus,
+            self.boolean_resolved,
+            self.boolean_keeps_operands,
+            self.action_boolean_consume,
+            self.hint_boolean_consume,
+            self.action_boolean_run,
+            self.boolean_pick_two,
+            self.boolean_pick_one,
+            self.label_new_layer_kind,
             self.action_remove_object,
             self.label_placed_objects,
             self.section_objects,
@@ -1477,8 +1688,15 @@ impl Strings {
             self.label_cage_divisions,
             self.status_cage_needs_a_field,
             self.hint_cage,
+            self.cage_switch_title,
+            self.cage_switch_question,
+            self.cage_switch_apply,
+            self.cage_switch_drop,
+            self.cage_switch_stay,
             self.hint_gizmo_rotate,
             self.hint_gizmo_needs_two,
+            self.section_layer_transform,
+            self.hint_layer_transform,
             self.action_paint_mask,
             self.section_mask,
             self.label_mask_steps,
@@ -1553,6 +1771,8 @@ impl Strings {
             self.label_new_layer,
             self.action_rename_layer,
             self.action_remove_layer,
+            self.action_solo_layer,
+            self.action_release_solo,
             self.layer_last_one,
             self.label_spheres,
             self.label_skin,
@@ -1631,6 +1851,69 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The destinations and the representations are two more vocabularies held
+    /// by position, and the failure they can have is the shape shelf's: a
+    /// control drawn from `InsertAs`'s or `Representation`'s own word would
+    /// read in one language whatever the menu says. `Representation::label` is
+    /// the engine's — "SDF", "voxel" — and was never a word for a sculptor.
+    #[test]
+    fn the_insert_control_speaks_every_language() {
+        for locale in Locale::ALL {
+            let strings = Strings::for_locale(locale);
+            for destination in clayspace_model::InsertAs::ALL {
+                assert!(
+                    !strings.insert_as_name(destination).is_empty(),
+                    "{destination:?} has no name in {}",
+                    locale.label()
+                );
+            }
+            for representation in clayspace_model::Representation::ALL {
+                assert!(
+                    !strings.representation_name(representation).is_empty(),
+                    "{representation:?} has no name in {}",
+                    locale.label()
+                );
+            }
+        }
+
+        let english = Strings::for_locale(Locale::EnUs);
+        let portuguese = Strings::for_locale(Locale::PtBr);
+        assert!(
+            clayspace_model::InsertAs::ALL.iter().all(|destination| {
+                english.insert_as_name(*destination) != portuguese.insert_as_name(*destination)
+            }),
+            "a destination reads the same in both, so one table was copied"
+        );
+    }
+
+    /// A fourth vocabulary held by position, and the one whose failure would
+    /// be quietest: three operations named from `BooleanOp::label` would read
+    /// in Portuguese whatever the rest of the panel says.
+    #[test]
+    fn the_boolean_operations_speak_every_language() {
+        for locale in Locale::ALL {
+            let strings = Strings::for_locale(locale);
+            let mut seen = std::collections::BTreeSet::new();
+            for op in clayspace_model::BooleanOp::ALL {
+                let name = strings.boolean_op(op);
+                assert!(!name.is_empty(), "{op:?} has no name in {}", locale.label());
+                assert!(
+                    seen.insert(name),
+                    "{} names two operations {name:?}",
+                    locale.label()
+                );
+            }
+        }
+        let english = Strings::for_locale(Locale::EnUs);
+        let portuguese = Strings::for_locale(Locale::PtBr);
+        assert!(
+            clayspace_model::BooleanOp::ALL
+                .iter()
+                .all(|op| english.boolean_op(*op) != portuguese.boolean_op(*op)),
+            "an operation reads the same in both, so one table was copied"
+        );
     }
 
     #[test]

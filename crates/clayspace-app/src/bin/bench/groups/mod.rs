@@ -18,6 +18,7 @@ pub mod objects;
 pub mod operations;
 pub mod render;
 pub mod startup;
+pub mod subtool;
 pub mod tape;
 pub mod visible;
 pub mod warmup;

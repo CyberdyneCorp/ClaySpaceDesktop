@@ -25,12 +25,13 @@ struct FakeScene {
     calls: Rc<RefCell<Calls>>,
     layers: Vec<LayerSummary>,
     active: Option<LayerKey>,
-    selected: Option<LayerKey>,
     /// What the next raycast reports.
     hit: Option<LayerKey>,
     /// Set to refuse the next operation, as a locked layer or a last layer
     /// would.
     refuse: Option<&'static str>,
+    /// Which layer is shown alone, and what the rest were before it was.
+    solo: Option<(LayerKey, Vec<(LayerKey, bool)>)>,
 }
 
 impl FakeScene {
@@ -48,9 +49,9 @@ impl FakeScene {
             calls,
             layers: vec![layer(1, "Base"), layer(2, "Detalhe")],
             active: Some(LayerKey(1)),
-            selected: None,
             hit: Some(LayerKey(2)),
             refuse: None,
+            solo: None,
         }
     }
 
@@ -82,7 +83,7 @@ impl SceneModel for FakeScene {
                 .collect(),
             layers: self.layers.clone(),
             active: self.active,
-            selected: self.selected,
+            soloed: self.solo.as_ref().map(|(key, _)| *key),
         }
     }
 
@@ -90,7 +91,6 @@ impl SceneModel for FakeScene {
         self.guard()?;
         self.calls.borrow_mut().activated.push(key);
         self.active = Some(key);
-        self.selected = Some(key);
         Ok(())
     }
 
@@ -98,6 +98,34 @@ impl SceneModel for FakeScene {
         self.guard()?;
         if let Some(index) = self.index(key) {
             self.layers[index].visible = visible;
+        }
+        Ok(())
+    }
+
+    fn set_solo(&mut self, key: Option<LayerKey>) -> Result<(), ModelError> {
+        self.guard()?;
+        let was: Vec<(LayerKey, bool)> = match self.solo.take() {
+            Some((_, was)) => was,
+            None => self
+                .layers
+                .iter()
+                .map(|layer| (layer.key, layer.visible))
+                .collect(),
+        };
+        match key {
+            Some(alone) => {
+                for layer in &mut self.layers {
+                    layer.visible = layer.key == alone;
+                }
+                self.solo = Some((alone, was));
+            }
+            None => {
+                for (key, visible) in was {
+                    if let Some(index) = self.index(key) {
+                        self.layers[index].visible = visible;
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -150,9 +178,6 @@ impl SceneModel for FakeScene {
         }
         self.calls.borrow_mut().removed.push(key);
         self.layers.retain(|layer| layer.key != key);
-        if self.selected == Some(key) {
-            self.selected = None;
-        }
         Ok(())
     }
 
@@ -166,9 +191,8 @@ impl SceneModel for FakeScene {
         Ok(())
     }
 
-    fn select_at(&mut self, _origin: [f32; 3], _direction: [f32; 3]) -> Option<LayerKey> {
-        self.selected = self.hit;
-        self.selected
+    fn layer_at(&mut self, _origin: [f32; 3], _direction: [f32; 3]) -> Option<LayerKey> {
+        self.hit
     }
 
     fn set_layer_transform(
@@ -228,21 +252,45 @@ fn selecting_a_layer_makes_it_active() {
 }
 
 #[test]
-fn a_click_selects_what_the_ray_met() {
-    let (mut vm, _) = fixture();
-    let selected = vm.select_at([0.0, 0.0, -1.0], [0.0, 0.0, 1.0]);
-    assert_eq!(selected, Some(LayerKey(2)));
-    assert_eq!(vm.scene().get().selected, Some(LayerKey(2)));
+fn a_click_names_the_layer_the_ray_met() {
+    let (mut vm, calls) = fixture();
+    let hit = vm.layer_at([0.0, 0.0, -1.0], [0.0, 0.0, 1.0]);
+    assert_eq!(hit, Some(LayerKey(2)));
+    assert_eq!(
+        vm.scene().get().active,
+        Some(LayerKey(1)),
+        "the pick activated on its own; activation belongs to SelectLayer"
+    );
+    assert!(
+        calls.borrow().activated.is_empty(),
+        "a pick that answers must not also mutate"
+    );
 }
 
 #[test]
-fn a_click_on_nothing_clears_the_selection() {
+fn the_pick_and_the_stack_reach_the_same_activation() {
+    let (mut vm, calls) = fixture();
+    let hit = vm
+        .layer_at([0.0, 0.0, -1.0], [0.0, 0.0, 1.0])
+        .expect("a hit");
+    vm.dispatch(&Command::SelectLayer(hit)).expect("activate");
+
+    assert_eq!(calls.borrow().activated, vec![LayerKey(2)]);
+    assert_eq!(vm.scene().get().active, Some(LayerKey(2)));
+}
+
+/// This is only half of "clicking empty space clears the selection": it says
+/// what the ray answered, and the *clearing* is the object selection's, which
+/// this ViewModel does not hold. The rule that does it is
+/// `clayspace_app::input::selection_after`, tested beside `activation` — it
+/// used to sit in the event loop where nothing could reach it.
+#[test]
+fn a_click_on_nothing_names_no_layer() {
     let (mut vm, _) = fixture_with(|model| model.hit = None);
-    vm.select_at([0.0, 0.0, -1.0], [0.0, 0.0, 1.0]);
     assert_eq!(
-        vm.scene().get().selected,
+        vm.layer_at([0.0, 0.0, -1.0], [0.0, 0.0, 1.0]),
         None,
-        "a ray that met nothing left the selection on the previous target"
+        "a ray that met nothing named a layer anyway"
     );
 }
 
@@ -251,8 +299,10 @@ fn a_click_on_nothing_clears_the_selection() {
 #[test]
 fn a_new_layer_becomes_active_and_is_named_distinctly() {
     let (mut vm, calls) = fixture();
-    vm.dispatch(&Command::AddLayer).expect("add");
-    vm.dispatch(&Command::AddLayer).expect("add again");
+    vm.dispatch(&Command::AddLayer(Representation::Sdf))
+        .expect("add");
+    vm.dispatch(&Command::AddLayer(Representation::Sdf))
+        .expect("add again");
 
     let names = calls.borrow().added.clone();
     assert_eq!(names.len(), 2);
@@ -261,6 +311,48 @@ fn a_new_layer_becomes_active_and_is_named_distinctly() {
         "two new layers were given the same name"
     );
     assert_eq!(vm.scene().get().layers.len(), 4);
+}
+
+/// The specification: "the user adds a layer and chooses voxel — the new layer
+/// is voxel-backed and the voxel tools are available on it without a
+/// conversion step".
+///
+/// Every `Command::AddLayer` in the whole test tree passed `Representation::Sdf`
+/// and the one test over the command inspected only the names, so nothing at
+/// any level said what representation a chosen one produced.
+#[test]
+fn a_voxel_subtool_is_created_directly() {
+    let (mut vm, _) = fixture();
+    vm.dispatch(&Command::AddLayer(Representation::Voxel))
+        .expect("add a grid");
+
+    let scene = vm.scene().get();
+    let arrived = scene
+        .active_layer()
+        .expect("the new layer is the active one");
+    assert_eq!(
+        arrived.representation,
+        Representation::Voxel,
+        "the choice was carried as far as the command and dropped after it"
+    );
+}
+
+/// And the other half of the requirement: "the user adds a layer without
+/// engaging the choice — an SDF layer is created, as before".
+#[test]
+fn the_default_stays_what_it_was() {
+    let (mut vm, _) = fixture();
+    vm.dispatch(&Command::AddLayer(Representation::Sdf))
+        .expect("add");
+
+    let scene = vm.scene().get();
+    assert_eq!(
+        scene
+            .active_layer()
+            .expect("the new layer is the active one")
+            .representation,
+        Representation::Sdf
+    );
 }
 
 #[test]
@@ -327,6 +419,54 @@ fn renaming_shows_immediately() {
     assert_eq!(
         vm.scene().get().layer(LayerKey(1)).map(|l| l.name.clone()),
         Some("Forma_principal".to_string())
+    );
+}
+
+#[test]
+fn soloing_shows_one_layer_and_releasing_brings_the_rest_back() {
+    let (mut vm, calls) = fixture();
+    vm.dispatch(&Command::SetLayerVisible(LayerKey(2), false))
+        .expect("hide one by hand");
+    let before: Vec<bool> = vm
+        .scene()
+        .get()
+        .layers
+        .iter()
+        .map(|layer| layer.visible)
+        .collect();
+
+    vm.dispatch(&Command::SoloLayer(Some(LayerKey(2))))
+        .expect("solo");
+    let scene = vm.scene().get();
+    assert_eq!(scene.soloed, Some(LayerKey(2)));
+    assert!(scene.is_soloed(LayerKey(2)) && !scene.is_soloed(LayerKey(1)));
+    assert_eq!(
+        scene.layers.iter().map(|l| l.visible).collect::<Vec<_>>(),
+        vec![false, true],
+    );
+
+    vm.dispatch(&Command::SoloLayer(None)).expect("release");
+    let scene = vm.scene().get();
+    assert_eq!(scene.soloed, None);
+    assert_eq!(
+        scene.layers.iter().map(|l| l.visible).collect::<Vec<_>>(),
+        before,
+        "releasing the solo did not put the sculptor's own pattern back"
+    );
+    assert!(
+        calls.borrow().activated.is_empty(),
+        "solo changed which layer is active; it is a viewing convenience"
+    );
+}
+
+#[test]
+fn a_refused_solo_is_stated_rather_than_swallowed() {
+    let (mut vm, _) = fixture_with(|model| model.refuse = Some("bloqueada"));
+    vm.dispatch(&Command::SoloLayer(Some(LayerKey(1))))
+        .expect_err("the model refused");
+    assert!(
+        vm.refusal().get().is_some(),
+        "the reason a solo was refused must reach the interface"
     );
 }
 

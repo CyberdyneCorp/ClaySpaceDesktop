@@ -11,7 +11,7 @@
 //! no business remembering that a pointer is down.
 
 use clayspace_model::{
-    CombineSettings, GizmoDrag, GizmoHandle, GizmoMode, GizmoTarget, ItemKind, ObjectId,
+    CombineSettings, GizmoDrag, GizmoHandle, GizmoMode, GizmoTarget, InsertAs, ItemKind, ObjectId,
     ObjectModel, Representation, SceneObject, Shape, Transform,
 };
 
@@ -35,10 +35,30 @@ pub const ITEM_NOT_TRANSFORMABLE: &str = "item-not-transformable";
 pub enum Picked {
     /// A placed object, for the composition root to select.
     Object(ObjectId),
-    /// A stroke, an applied curve or a rig's skin. The notice says so.
-    NotTransformable,
+    /// A stroke, an applied curve or a rig's skin, and the subtool it belongs
+    /// to. The notice says why it carries no manipulator.
+    ///
+    /// The layer travels with it because a press does two things at once: it
+    /// selects, and it makes what was hit the sculpt target. Both answers come
+    /// out of one attributed raycast, and asking for the second separately cost
+    /// another one on every press including the start of every stroke.
+    NotTransformable(clayspace_model::LayerKey),
     /// Empty space.
     Nothing,
+}
+
+impl Picked {
+    /// The subtool the press landed on, where it landed on one.
+    ///
+    /// What activation is decided from — see `clayspace_app::input::activation`
+    /// — and the reason this enum carries a layer at all.
+    pub fn layer(self) -> Option<clayspace_model::LayerKey> {
+        match self {
+            Self::Object(id) => Some(id.layer),
+            Self::NotTransformable(key) => Some(key),
+            Self::Nothing => None,
+        }
+    }
 }
 
 pub struct ObjectViewModel {
@@ -66,6 +86,16 @@ pub struct ObjectViewModel {
     /// What the manipulator is acting on.
     target: Observable<Option<GizmoTarget>>,
     mode: Observable<GizmoMode>,
+    /// Where the next insertion lands: a subtool of its own, or an object in
+    /// the active layer.
+    ///
+    /// Its own state rather than derived from the active layer's
+    /// representation, because both are legal on a field and the specification
+    /// makes it the sculptor's choice. A subtool by default, which is what a
+    /// sculptor putting a form into a scene almost always means.
+    insert_as: Observable<InsertAs>,
+    /// The subtools a copy could be made from, and what they are called.
+    copyable: Observable<Vec<(clayspace_model::LayerKey, String)>>,
     /// The mesh layer a placement would sample, when the picker is set to one
     /// rather than to a shape.
     mesh_operand: Observable<Option<clayspace_model::LayerKey>>,
@@ -120,6 +150,8 @@ impl ObjectViewModel {
             combine: Observable::new(CombineSettings::default()),
             target: Observable::new(None),
             mode: Observable::new(GizmoMode::default()),
+            insert_as: Observable::new(InsertAs::default()),
+            copyable: Observable::new(Vec::new()),
             mesh_operand: Observable::new(None),
             mesh_operands: Observable::new(Vec::new()),
             mesh_cost: Observable::new(None),
@@ -186,34 +218,50 @@ impl ObjectViewModel {
     ///
     /// The second raycast is only paid when the first says there is an object
     /// to identify, and only on a press: `object.pick.ms` in the recorded
-    /// baseline is 0.09 ms.
+    /// baseline is 0.09 ms. There is no third: the layer comes back from
+    /// `pick_item` with the kind, since the raycast that answered one
+    /// attributed the other.
     pub fn pick_at(&mut self, origin: [f32; 3], direction: [f32; 3]) -> Picked {
         match self.model.pick_item(origin, direction) {
             None => {
                 self.notice.set_if_changed(None);
                 Picked::Nothing
             }
-            Some(ItemKind::Object) => match self.model.pick_object(origin, direction) {
-                Some(id) => {
-                    self.notice.set_if_changed(None);
-                    Picked::Object(id)
+            Some((ItemKind::Object, layer)) => {
+                match self.model.pick_object(origin, direction) {
+                    Some(id) => {
+                        self.notice.set_if_changed(None);
+                        Picked::Object(id)
+                    }
+                    // The table says the node was placed and the ray no longer
+                    // finds it. Nothing to select, and nothing worth saying —
+                    // but the clearing still has to happen, or a sentence an
+                    // earlier press raised outlives a press that found nothing,
+                    // which is the one arm of this match that used to let it
+                    // through. The layer is still the answer to the other
+                    // question the press asks.
+                    None => {
+                        self.notice.set_if_changed(None);
+                        Picked::NotTransformable(layer)
+                    }
                 }
-                // The table says the node was placed and the ray no longer
-                // finds it. Nothing to select, and nothing worth saying — but
-                // the clearing still has to happen, or a sentence an earlier
-                // press raised outlives a press that found nothing, which is
-                // the one arm of this match that used to let it through.
-                None => {
-                    self.notice.set_if_changed(None);
-                    Picked::Nothing
-                }
-            },
-            Some(_) => {
+            }
+            Some((_, layer)) => {
                 self.notice
                     .set_if_changed(Some(ITEM_NOT_TRANSFORMABLE.to_string()));
-                Picked::NotTransformable
+                Picked::NotTransformable(layer)
             }
         }
+    }
+
+    /// Where the next insertion would land.
+    pub fn insert_as(&self) -> &Observable<InsertAs> {
+        &self.insert_as
+    }
+
+    /// The subtools a copy could be made from.
+    pub fn copyable(&self) -> &Observable<Vec<(clayspace_model::LayerKey, String)>> {
+        &self.copyable
     }
 
     pub fn mesh_operand(&self) -> &Observable<Option<clayspace_model::LayerKey>> {
@@ -332,7 +380,11 @@ impl ObjectViewModel {
                 let shape = *self.shape.get();
                 self.parameters.set_if_changed(shape.sanitised(values));
             }
-            Command::PlaceShape => self.place(representation),
+            Command::InsertShape => self.insert(representation),
+            Command::SetInsertAs(destination) => {
+                self.insert_as.set_if_changed(*destination);
+            }
+            Command::CopySubtool(from) => self.copy(*from),
             Command::SetMeshOperand(from) => {
                 self.mesh_operand.set(*from);
                 // The costs, computed now rather than when the button is
@@ -405,6 +457,67 @@ impl ObjectViewModel {
             }
         }
         self.mesh_operands.set_if_changed(operands);
+        // The stack the copy control reads, refreshed on the same beat: a
+        // subtool that has gone must not stay on offer, and one that has just
+        // arrived should be copyable at once.
+        let copyable = self.model.copyable_subtools();
+        self.copyable.set_if_changed(copyable);
+    }
+
+    /// Puts the picked form into the scene, where the destination says.
+    fn insert(&mut self, representation: Representation) {
+        // A chosen mesh operand is a crossing *into an ordered list*, and a
+        // layer that does not exist yet has none: placing it is what choosing
+        // it meant. Bringing a mesh in as a subtool is `Command::InsertMesh`,
+        // which reads a file rather than resampling a layer already here.
+        let destination = match *self.mesh_operand.get() {
+            Some(_) => InsertAs::Object,
+            None => *self.insert_as.get(),
+        };
+        match destination {
+            InsertAs::Subtool => self.insert_as_subtool(),
+            InsertAs::Object => self.place(representation),
+        }
+        self.refresh();
+    }
+
+    /// A subtool of its own: a layer created and filled as one undo step.
+    ///
+    /// Available whatever the active layer holds, which is the whole point of
+    /// the choice — a grid and a mesh have no ordered list to take an object,
+    /// but nothing stops a field subtool standing beside them.
+    fn insert_as_subtool(&mut self) {
+        let (shape, parameters, combine) = (
+            *self.shape.get(),
+            self.parameters.get().clone(),
+            *self.combine.get(),
+        );
+        let at = self.placement.unwrap_or([0.0; 3]);
+        match self
+            .model
+            .insert_shape_subtool(shape, &parameters, at, combine)
+        {
+            Ok(inserted) => {
+                self.notice.set_if_changed(None);
+                // The manipulator on the whole subtool rather than on the item
+                // inside it: what arrived is a form to stand somewhere, and the
+                // sculptor's next gesture is aiming it.
+                self.target.set(Some(GizmoTarget::Layer(inserted.layer)));
+            }
+            Err(e) => self.notice.set(Some(e.to_string())),
+        }
+    }
+
+    /// An honest copy of a subtool already in the scene.
+    fn copy(&mut self, from: clayspace_model::LayerKey) {
+        match self.model.copy_subtool(from, Self::OPERAND_CELL) {
+            Ok(inserted) => {
+                self.notice.set_if_changed(None);
+                self.target.set(Some(GizmoTarget::Layer(inserted.layer)));
+            }
+            Err(e) => self.notice.set(Some(e.to_string())),
+        }
+        self.refresh();
     }
 
     fn place(&mut self, representation: Representation) {
@@ -437,7 +550,6 @@ impl ObjectViewModel {
             }
             Err(e) => self.notice.set(Some(e.to_string())),
         }
-        self.refresh();
     }
 
     fn begin(&mut self, handle: GizmoHandle, anchor: [f32; 3], view_axis: [f32; 3]) {

@@ -488,6 +488,14 @@ fn extrudar_pulls_a_wall_off_a_grid() {
         layers + 1,
         "extruding a grid made no layer"
     );
+    // Measured with the new row active, because a pick answers from the active
+    // subtool when that subtool is a grid — `pick_active_grid` reads the cells
+    // and knows nothing of a field beside them. Extrudar leaves the sculptor
+    // on the grid they masked, so the wall has to be asked about where it is.
+    let extrusion = document.scene().layers.last().expect("the new row").key;
+    document
+        .set_active_layer(extrusion)
+        .expect("activate the extrusion");
     let after =
         SculptModel::pick(&document, [0.0, 0.0, 4.0], [0.0, 0.0, -1.0]).expect("surface")[2];
     assert!(

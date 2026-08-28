@@ -94,6 +94,7 @@ fn a_selected_object_is_outlined_where_it_stands() {
             selected: &[],
             gizmo: None,
             outline: None,
+            subtool_outline: None,
             handle: 0.0,
         },
     );
@@ -114,6 +115,7 @@ fn a_selected_object_is_outlined_where_it_stands() {
                 per_axis_scale: false,
             }),
             outline: Some(outline_of(object)),
+            subtool_outline: None,
             handle: 0.0,
         },
     );
@@ -153,6 +155,7 @@ fn the_manipulator_is_seen_through_the_form_it_sits_in() {
                 selected: &[],
                 gizmo: None,
                 outline: None,
+                subtool_outline: None,
                 handle: 0.0,
             },
         );
@@ -177,6 +180,7 @@ fn the_manipulator_is_seen_through_the_form_it_sits_in() {
                 per_axis_scale: false,
             }),
             outline: None,
+            subtool_outline: None,
             handle: 0.0,
         },
     );
@@ -225,6 +229,7 @@ fn scale_mode_draws_fewer_handles_on_an_object_than_on_a_cage() {
                     per_axis_scale,
                 }),
                 outline: None,
+                subtool_outline: None,
                 handle: 0.0,
             },
         );
@@ -262,6 +267,7 @@ fn the_manipulator_moves_the_object_it_is_on() {
                 selected: &[],
                 gizmo: None,
                 outline: None,
+                subtool_outline: None,
                 handle: 0.0,
             },
         );

@@ -369,6 +369,40 @@ pub const OBJECT_VERBS: crate::Verbs = crate::Verbs {
     mesh: None,
 };
 
+/// Where a form put into the scene goes.
+///
+/// Two destinations because there are two, and guessing between them from
+/// context would be wrong half the time: a form put into the scene to be worked
+/// on its own is a subtool, and a form put into the layer being worked is a
+/// part of that form. The specification says the sculptor chooses, and that a
+/// subtool is the default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InsertAs {
+    /// A layer of its own, active on arrival.
+    #[default]
+    Subtool,
+    /// An item in the active layer's ordered list.
+    Object,
+}
+
+impl InsertAs {
+    /// Both destinations, in the order the control offers them: the default
+    /// first.
+    pub const ALL: [InsertAs; 2] = [Self::Subtool, Self::Object];
+}
+
+/// What an insertion left in the scene.
+///
+/// The layer always, the item only sometimes: a copied subtool carries a baked
+/// volume and an imported one carries triangles, and neither is an object a
+/// manipulator can be put on by node. The layer is, which is why it is the
+/// field that is never absent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Inserted {
+    pub layer: crate::LayerKey,
+    pub object: Option<ObjectId>,
+}
+
 /// What a manipulator is acting on.
 ///
 /// The four things that carry a transform, as against the cage's control
@@ -461,6 +495,117 @@ pub trait ObjectModel {
     /// panel has no business knowing that.
     fn mesh_operands(&mut self) -> Vec<(crate::LayerKey, String)> {
         Vec::new()
+    }
+
+    /// Puts a shape into the scene as a subtool of its own.
+    ///
+    /// Not [`ObjectModel::place_object`] with a layer made first: the layer and
+    /// the shape are one thing the sculptor asked for, so they are one undo
+    /// step, and the subtool is the sculpt target when it returns. The name is
+    /// derived rather than given, because a voxel layer's grid is reachable
+    /// only by name (ClayCore #365) and an insertion that collided would shadow
+    /// another subtool's grid.
+    ///
+    /// Available whatever the active layer holds. That is the whole difference
+    /// from placing: a grid and a mesh have no ordered list to put an item in,
+    /// but nothing stops a new field layer standing beside them.
+    fn insert_shape_subtool(
+        &mut self,
+        shape: Shape,
+        parameters: &[f32],
+        at: [f32; 3],
+        combine: crate::CombineSettings,
+    ) -> Result<Inserted, crate::ModelError> {
+        let _ = (shape, parameters, at, combine);
+        Err(self.no_objects_here())
+    }
+
+    /// Copies a subtool already in the document into one of its own.
+    ///
+    /// A *copy*, and the word is chosen: the source is sampled at `cell_size`
+    /// into a volume of its own, so sculpting the copy cannot reach the
+    /// original. An instance would be cheaper and would share the field, which
+    /// is the upstream ask (ClayCore #364); until it lands, saying "instance"
+    /// would name something this cannot do.
+    fn copy_subtool(
+        &mut self,
+        from: crate::LayerKey,
+        cell_size: f32,
+    ) -> Result<Inserted, crate::ModelError> {
+        let _ = (from, cell_size);
+        Err(self.no_objects_here())
+    }
+
+    /// The subtools a copy could be made from, and what they are called.
+    ///
+    /// Asked of the model rather than filtered from the layer stack by the
+    /// interface, for the reason [`ObjectModel::mesh_operands`] is: "could be
+    /// copied" is more than "is a layer" — an empty one has nothing to sample
+    /// and the copy would be an empty subtool.
+    fn copyable_subtools(&mut self) -> Vec<(crate::LayerKey, String)> {
+        Vec::new()
+    }
+
+    /// The subtools a boolean could be run between, and what they are called.
+    ///
+    /// Wider than [`ObjectModel::copyable_subtools`] in one direction and
+    /// narrower in another. A *mesh* subtool belongs here — the specification
+    /// says every representation can be an operand, "with the crossing each one
+    /// needs performed as part of the operation rather than demanded of the
+    /// sculptor beforehand" — and an empty subtool does not, since it would
+    /// only ever be refused.
+    ///
+    /// A ghosted or locked subtool *is* offered, which is the one place this
+    /// departs from "a control that can only refuse is worse than one that is
+    /// not there": it is still a form standing in the scene, leaving it out of
+    /// the list would read as having lost it, and the specification asks for a
+    /// refusal that names it rather than for its absence.
+    fn boolean_operands(&mut self) -> Vec<(crate::LayerKey, String)> {
+        Vec::new()
+    }
+
+    /// The resolution a boolean between these two would default to.
+    ///
+    /// From the operands' own detail rather than a fixed constant, as the
+    /// specification asks: a pair of grids sculpted at a fine cell should not
+    /// be resampled at the application's starting one. `None` where either is
+    /// not a layer this document holds.
+    fn boolean_cell(&mut self, base: crate::LayerKey, tool: crate::LayerKey) -> Option<f32> {
+        let _ = (base, tool);
+        None
+    }
+
+    /// What a boolean between the chosen pair would cost, at the chosen
+    /// resolution.
+    ///
+    /// The conversion panel's own figures for the same kind of crossing —
+    /// surface movement of half a cell, features thinner than a cell, the cell
+    /// count over the region the pair occupies — because it *is* that
+    /// crossing: the result is sampled onto a lattice rather than kept as an
+    /// edit list. [`ObjectModel::mesh_operand_cost`] is the precedent, and this
+    /// follows it rather than inventing a second vocabulary.
+    ///
+    /// `None` where the panel has no pair to price yet.
+    fn boolean_cost(&mut self, settings: crate::BooleanSettings) -> Option<crate::Cost> {
+        let _ = settings;
+        None
+    }
+
+    /// Resolves a boolean between two subtools into a subtool of its own.
+    ///
+    /// One undo step, however many engine edits the two bakes and the new
+    /// layer took. The operands are kept and hidden unless the settings say to
+    /// consume them, and the result is the active subtool when this returns —
+    /// an ordinary one, with nothing special about it afterwards.
+    ///
+    /// Never called without the cost having been shown and accepted: "it SHALL
+    /// NOT run a boolean the sculptor has not confirmed".
+    fn run_boolean(
+        &mut self,
+        settings: crate::BooleanSettings,
+    ) -> Result<Inserted, crate::ModelError> {
+        let _ = settings;
+        Err(self.no_objects_here())
     }
 
     /// Places a shape in the active layer and selects it.
@@ -568,13 +713,24 @@ pub trait ObjectModel {
         None
     }
 
-    /// What a ray meets, whether or not it can be transformed.
+    /// What a ray meets, whether or not it can be transformed, and the layer
+    /// it belongs to.
     ///
     /// The difference from [`ObjectModel::pick_object`] is the whole of task
     /// 4.7: a click on a sculpting stroke has to *say* that a stroke cannot be
     /// transformed, and a `None` from `pick_object` cannot tell that apart
     /// from a click on nothing at all.
-    fn pick_item(&mut self, origin: [f32; 3], direction: [f32; 3]) -> Option<ItemKind> {
+    ///
+    /// The layer comes back with it because the attributed raycast that answers
+    /// this already knows it, and the press that asks needs both: what was hit,
+    /// and which subtool to make the sculpt target. Asked separately, the
+    /// composition root paid a second attributed raycast on every press
+    /// including the start of every stroke.
+    fn pick_item(
+        &mut self,
+        origin: [f32; 3],
+        direction: [f32; 3],
+    ) -> Option<(ItemKind, crate::LayerKey)> {
         let _ = (origin, direction);
         None
     }
@@ -612,6 +768,43 @@ mod tests {
         assert!(nothing.objects().is_empty());
         assert!(nothing.selected_object().is_none());
         assert!(nothing.pick_object([0.0; 3], [0.0, 0.0, 1.0]).is_none());
+        assert!(
+            nothing
+                .insert_shape_subtool(
+                    Shape::Sphere,
+                    &Shape::Sphere.defaults(),
+                    [0.0; 3],
+                    crate::CombineSettings::default()
+                )
+                .is_err(),
+            "a model with no objects must refuse an insertion rather than \
+             answering with a subtool it did not make"
+        );
+        assert!(nothing.copy_subtool(crate::LayerKey(1), 0.02).is_err());
+        assert!(nothing.copyable_subtools().is_empty());
+        assert!(nothing.boolean_operands().is_empty());
+        assert!(nothing
+            .boolean_cell(crate::LayerKey(1), crate::LayerKey(2))
+            .is_none());
+        assert!(nothing
+            .boolean_cost(crate::BooleanSettings::default())
+            .is_none());
+        assert!(
+            nothing
+                .run_boolean(crate::BooleanSettings::default())
+                .is_err(),
+            "a model with no objects must refuse a boolean rather than \
+             answering with a subtool it did not make"
+        );
+    }
+
+    /// The specification says inserting as a subtool is the default, and this
+    /// is where that is decided rather than at each control that offers it.
+    #[test]
+    fn a_form_arrives_as_a_subtool_unless_the_sculptor_says_otherwise() {
+        assert_eq!(InsertAs::default(), InsertAs::Subtool);
+        assert_eq!(InsertAs::ALL[0], InsertAs::Subtool);
+        assert_eq!(InsertAs::ALL.len(), 2);
     }
 
     #[test]

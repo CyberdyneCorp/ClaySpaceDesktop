@@ -50,6 +50,26 @@ fn sculpted() -> ClayDocument {
     document
 }
 
+/// Held for as long as a test is driving an accelerated backend.
+///
+/// The accelerated device the engine builds is one per *process*, not one per
+/// document: `clay_eval_points` on a Vulkan backend reaches the same
+/// `VulkanBackend` however many handles the caller holds. Two of the tests
+/// below dispatching at once faults inside the driver — `libnvidia-glcore`,
+/// under `VulkanBackend::dispatch` — about one run in four, and giving each
+/// test its own document does not help. Only these three tests name a backend
+/// explicitly, so the serialization belongs here rather than in the engine
+/// wrapper, which would slow every caller for a hazard none of the others
+/// reach.
+fn one_at_a_time_on_the_device() -> std::sync::MutexGuard<'static, ()> {
+    static DEVICE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // A test that fails while holding this poisons it, and the next test's own
+    // assertions are what should report — not a panic about the lock.
+    DEVICE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// A lattice of sample points across the document.
 fn probes() -> Vec<[f32; 3]> {
     let mut points = Vec::new();
@@ -69,6 +89,7 @@ fn probes() -> Vec<[f32; 3]> {
 
 #[test]
 fn every_registered_backend_evaluates_the_same_field() {
+    let _device = one_at_a_time_on_the_device();
     let document = sculpted();
     let Ok(available) = claycore::backends() else {
         return;
@@ -112,6 +133,7 @@ fn the_document_saves_byte_identically_whatever_ran() {
     // Saving takes no backend, so this asserts that stays true: the document
     // is an edit list, and a file that varied with the machine's acceleration
     // would make every other guarantee here untestable.
+    let _device = one_at_a_time_on_the_device();
     let mut document = sculpted();
     let Ok(available) = claycore::backends() else {
         return;
@@ -156,6 +178,7 @@ fn an_export_is_the_same_geometry_whatever_ran() {
     // turned out to be float printing rather than different geometry, and is
     // recorded in `export_determinism.rs`. Vertex and index counts are the
     // claim actually being made here.
+    let _device = one_at_a_time_on_the_device();
     let document = sculpted();
     let Ok(available) = claycore::backends() else {
         return;

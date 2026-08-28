@@ -295,7 +295,16 @@ impl SculptViewModel {
             Command::ToggleShapes
             | Command::SetShape(_)
             | Command::SetShapeParameters(_)
-            | Command::PlaceShape
+            | Command::InsertShape
+            | Command::SetInsertAs(_)
+            | Command::InsertMesh
+            | Command::CopySubtool(_)
+            // A boolean between two subtools is the boolean ViewModel's, and
+            // it is a decision about two whole forms rather than an edit under
+            // the pointer.
+            | Command::ToggleBoolean
+            | Command::SetBoolean(_)
+            | Command::RunBoolean
             | Command::SetMeshOperand(_)
             | Command::SelectObject(_)
             | Command::SetObjectShape(..)
@@ -358,7 +367,10 @@ impl SculptViewModel {
             | Command::RunDeform
             | Command::SculptLayer(_)
             | Command::SetLayerVisible(..)
-            | Command::AddLayer
+            // Solo shows a subtool alone without making it the one a brush
+            // lands on, so nothing this ViewModel holds follows it.
+            | Command::SoloLayer(_)
+            | Command::AddLayer(_)
             | Command::RemoveLayer(_)
             | Command::BeginRenameLayer(_)
             | Command::EditLayerName(_)
@@ -377,7 +389,15 @@ impl SculptViewModel {
                     Axis::Y => 1,
                     Axis::Z => 2,
                 };
-                self.symmetry.update(|axes| axes[index] = !axes[index]);
+                let mut axes = *self.symmetry.get();
+                axes[index] = !axes[index];
+                // Written through to the model, because symmetry belongs to
+                // the subtool rather than to the session: the mirror the
+                // engine keeps is per layer, and this is what puts the
+                // sculptor's answer where switching away and back will find
+                // it again.
+                self.model.set_symmetry(axes)?;
+                self.symmetry.set(axes);
             }
 
             Command::BeginStroke {
@@ -513,6 +533,10 @@ impl SculptViewModel {
     /// the one that leaves a sculptor wondering what they pressed. The status
     /// line says what happened instead.
     fn follow_the_active_layer(&mut self) {
+        // The incoming subtool's own mirror, not the one left behind on the
+        // outgoing one. Turning symmetry off to work one ear said nothing
+        // about the subtool beside it.
+        self.symmetry.set_if_changed(self.model.symmetry());
         let representation = self.model.active_representation();
         let tool = *self.tool.get();
         if !tool.exists_on(representation) {
@@ -547,6 +571,16 @@ impl SculptViewModel {
     /// `SelectLayer` passing through here, so the shelf and the brush would
     /// otherwise still belong to the layer the sculptor converted *from*.
     pub fn refresh_after_conversion(&mut self) {
+        self.follow_the_active_layer();
+    }
+
+    /// The same, after the whole document underneath was replaced.
+    ///
+    /// Opening a file changes every per-subtool setting at once and no
+    /// `SelectLayer` announces it, so the symmetry toggles would go on showing
+    /// the closed document's — which, since a layer mirror cannot be read back
+    /// out of a file, is the one thing the options bar must not claim.
+    pub fn refresh_after_open(&mut self) {
         self.follow_the_active_layer();
     }
 

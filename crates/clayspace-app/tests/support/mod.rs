@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use clayspace_engine::claycore::{self, Document, Mesh, VertexLayout};
 use clayspace_engine::ClayDocument;
 use clayspace_model::SculptModel;
-use clayspace_view::{Camera, Gpu, GpuMesh, Image, OffscreenTarget, Renderer, Vertex};
+use clayspace_view::{Camera, Gpu, GpuMesh, Image, MeshSpan, OffscreenTarget, Renderer, Vertex};
 
 /// Where captured frames are written.
 pub fn output_dir() -> PathBuf {
@@ -272,7 +272,17 @@ pub fn framed(document: &ClayDocument) -> Camera {
 /// meant a reader of any single file could not tell it was the shared path,
 /// and a change to the vertex layout had to find all six.
 pub fn viewport_geometry(document: &mut ClayDocument) -> (Vec<Vertex>, Vec<u32>) {
-    let (positions, normals, colors, indices) = document.visible_mesh_geometry();
+    let (vertices, indices, _) = viewport_layers(document);
+    (vertices, indices)
+}
+
+/// The same buffer, with the spans that say whose triangles each run of it is.
+///
+/// Still one path: `viewport_geometry` is this with the spans dropped, so a
+/// test that does not care which subtool a triangle came from does not have to
+/// say so, and neither of them can drift from what the application uploads.
+pub fn viewport_layers(document: &mut ClayDocument) -> (Vec<Vertex>, Vec<u32>, Vec<MeshSpan>) {
+    let (positions, normals, colors, indices, spans) = document.visible_mesh_geometry();
     let vertices = positions
         .into_iter()
         .zip(normals)
@@ -284,7 +294,14 @@ pub fn viewport_geometry(document: &mut ClayDocument) -> (Vec<Vertex>, Vec<u32>)
             mask: 0.0,
         })
         .collect();
-    (vertices, indices)
+    let spans = spans
+        .into_iter()
+        .map(|span| MeshSpan {
+            layer: span.layer,
+            indices: span.indices,
+        })
+        .collect();
+    (vertices, indices, spans)
 }
 
 // -- fixtures ---------------------------------------------------------------
