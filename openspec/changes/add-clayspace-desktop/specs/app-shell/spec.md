@@ -3,6 +3,23 @@
 ### Requirement: The window is organized into fixed functional regions
 The application window SHALL present: a menu bar; a tool rail along the leading edge; a tool options bar under the menu bar carrying the active tool's primary parameters; a left region holding the scene tree, the layer stack and sculpting settings; a central viewport; a right region holding material, geometry, resolution and brush-control inspectors; a brush shelf along the trailing edge of the window; and a status area.
 
+The tool rail SHALL offer, as icon buttons with their name and shortcut on
+hover, the controls a sculptor reaches for between strokes: mask painting,
+frame, polyframe, the reference images, the shapes panel, the deformation
+cage, the curve, the deformations, undo and redo. Each SHALL dispatch the
+same command as its menu entry under the same enabled conditions, and SHALL
+show its on/off state where it has one.
+
+#### Scenario: A panel is opened from the rail
+- **WHEN** the shapes button on the rail is clicked
+- **THEN** the same command the Escultura → Formas menu entry dispatches is
+  emitted, and the button reads as on while the panel is open
+
+#### Scenario: The rail greys what the menu greys
+- **WHEN** the active layer cannot be caged
+- **THEN** the rail's cage button is disabled with the same reason the menu
+  entry carries
+
 The tool options bar SHALL be headed by the active brush — its mark, its name
 and a one-line description — separated from the brush's parameters by a rule,
 and the head SHALL change with the active brush. Where the window is narrower

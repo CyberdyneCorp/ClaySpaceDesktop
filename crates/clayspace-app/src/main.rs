@@ -2759,6 +2759,10 @@ impl App {
                     egui::ScrollArea::horizontal()
                         .show(ui, |ui| shell::brush_shelf(ui, &state, &mut queue));
                 });
+            egui::SidePanel::left("rail")
+                .exact_width(region::RAIL)
+                .resizable(false)
+                .show(ctx, |ui| shell::tool_rail(ui, &state, &mut queue));
             egui::SidePanel::left("left")
                 .exact_width(region::LEFT)
                 .show(ctx, |ui| {

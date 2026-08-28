@@ -1248,6 +1248,17 @@ status area with a memory meter, the active backend and the working unit.
 The **accent marks the active brush and nothing else**. Layer selection is
 indicated by surface tone and weight; a test asserts the accent's coverage
 stays about constant as the active tool changes, so it cannot quietly spread.
+**The tool rail on the leading edge** — the region the design named and the
+first build left empty — holds, as icons with their word and key on hover:
+mask painting; frame, polyframe and the reference images; the shapes panel,
+the deformation cage, the curve and the deformations; undo and redo. Every
+button dispatches the command its menu entry does under the same conditions —
+the cage is grey with the reason on it where the layer cannot be caged, undo
+is grey where there is nothing to undo — so the two cannot disagree. It exists
+because the menus were the *only* way to the shapes panel, the cage, the
+deformations, the references and the curve, and a panel three menus deep is a
+panel a new sculptor never opens.
+
 **The options bar is headed by the brush it belongs to.** The active brush's
 ball and mark, its name, and what it does in one line stand at the head of the
 bar before a hairline rule and the sliders — ZBrush's arrangement, so a glance

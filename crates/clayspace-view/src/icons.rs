@@ -45,10 +45,21 @@ pub enum Icon {
     /// that turns along it.
     Taper,
     Twist,
+    /// The tool rail's buttons: what the pointer does, what the view shows,
+    /// which panels are up, and the two steps of history.
+    MaskPaint,
+    Frame,
+    Polyframe,
+    Shapes,
+    Cage,
+    Reference,
+    Curve,
+    Undo,
+    Redo,
 }
 
 impl Icon {
-    pub const ALL: [Icon; 16] = [
+    pub const ALL: [Icon; 25] = [
         Self::Visible,
         Self::Hidden,
         Self::Locked,
@@ -65,6 +76,15 @@ impl Icon {
         Self::Intersect,
         Self::Taper,
         Self::Twist,
+        Self::MaskPaint,
+        Self::Frame,
+        Self::Polyframe,
+        Self::Shapes,
+        Self::Cage,
+        Self::Reference,
+        Self::Curve,
+        Self::Undo,
+        Self::Redo,
     ];
 
     /// What a screen reader or a tooltip says.
@@ -89,6 +109,15 @@ impl Icon {
             Self::Intersect => "interseção",
             Self::Taper => "afunilar",
             Self::Twist => "torcer",
+            Self::MaskPaint => "pintar máscara",
+            Self::Frame => "enquadrar",
+            Self::Polyframe => "malha",
+            Self::Shapes => "formas",
+            Self::Cage => "gaiola",
+            Self::Reference => "referência",
+            Self::Curve => "curva",
+            Self::Undo => "desfazer",
+            Self::Redo => "refazer",
         }
     }
 }
@@ -273,6 +302,142 @@ pub fn paint(painter: &egui::Painter, rect: egui::Rect, icon: Icon, tint: egui::
                     .collect();
                 painter.add(egui::Shape::line(points, stroke));
             }
+        }
+        Icon::MaskPaint => {
+            // The shelf's mask mark, boxed: a frozen region, hatched.
+            let half = unit * 0.62;
+            painter.rect_stroke(
+                egui::Rect::from_center_size(centre, egui::vec2(half * 2.0, half * 2.0)),
+                egui::epaint::CornerRadius::same(1),
+                stroke,
+                egui::StrokeKind::Middle,
+            );
+            for i in 0..3 {
+                let x = -half + (i as f32 + 0.5) * half * 0.66;
+                painter.line_segment(
+                    [
+                        centre + egui::vec2(x, half),
+                        centre + egui::vec2(x + half * 0.9, half * 0.1),
+                    ],
+                    stroke,
+                );
+            }
+        }
+        Icon::Frame => {
+            // Four corners, and nothing between them: what framing does.
+            let reach = unit * 0.7;
+            let arm = unit * 0.36;
+            for (sx, sy) in [(-1.0f32, -1.0f32), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+                let corner = centre + egui::vec2(sx * reach, sy * reach);
+                painter.line_segment([corner, corner - egui::vec2(sx * arm, 0.0)], stroke);
+                painter.line_segment([corner, corner - egui::vec2(0.0, sy * arm)], stroke);
+            }
+        }
+        Icon::Polyframe => {
+            // A face split in two: the edges a mesh is drawn with.
+            let (a, b, c) = (
+                centre + egui::vec2(-unit * 0.7, unit * 0.55),
+                centre + egui::vec2(unit * 0.7, unit * 0.55),
+                centre + egui::vec2(0.0, -unit * 0.65),
+            );
+            painter.add(egui::Shape::closed_line(vec![a, b, c], stroke));
+            painter.line_segment([c, (a + b.to_vec2()) / 2.0], stroke);
+        }
+        Icon::Shapes => {
+            // A cube, seen from a corner: six sides around, three edges in.
+            let radius = unit * 0.72;
+            let at = |degrees: f32| {
+                let a = degrees.to_radians();
+                centre + egui::vec2(a.cos(), a.sin()) * radius
+            };
+            let hexagon: Vec<egui::Pos2> = (0..6).map(|i| at(30.0 + 60.0 * i as f32)).collect();
+            painter.add(egui::Shape::closed_line(hexagon, stroke));
+            for degrees in [90.0, 210.0, 330.0] {
+                painter.line_segment([centre, at(degrees)], stroke);
+            }
+        }
+        Icon::Cage => {
+            // A box divided into nine: the cage's control points at the
+            // crossings.
+            let half = unit * 0.65;
+            painter.rect_stroke(
+                egui::Rect::from_center_size(centre, egui::vec2(half * 2.0, half * 2.0)),
+                egui::epaint::CornerRadius::same(1),
+                stroke,
+                egui::StrokeKind::Middle,
+            );
+            for third in [-1.0f32, 1.0] {
+                let at = third * half / 3.0;
+                painter.line_segment(
+                    [
+                        centre + egui::vec2(at, -half),
+                        centre + egui::vec2(at, half),
+                    ],
+                    stroke,
+                );
+                painter.line_segment(
+                    [
+                        centre + egui::vec2(-half, at),
+                        centre + egui::vec2(half, at),
+                    ],
+                    stroke,
+                );
+            }
+        }
+        Icon::Reference => {
+            // A picture: its frame, and a hill in it.
+            let (w, h) = (unit * 0.72, unit * 0.55);
+            painter.rect_stroke(
+                egui::Rect::from_center_size(centre, egui::vec2(w * 2.0, h * 2.0)),
+                egui::epaint::CornerRadius::same(1),
+                stroke,
+                egui::StrokeKind::Middle,
+            );
+            painter.add(egui::Shape::line(
+                vec![
+                    centre + egui::vec2(-w * 0.85, h * 0.7),
+                    centre + egui::vec2(-w * 0.25, -h * 0.25),
+                    centre + egui::vec2(w * 0.1, h * 0.2),
+                    centre + egui::vec2(w * 0.4, -h * 0.1),
+                    centre + egui::vec2(w * 0.85, h * 0.7),
+                ],
+                stroke,
+            ));
+        }
+        Icon::Curve => {
+            // An S through two points: what is placed, and what is swept.
+            let points: Vec<egui::Pos2> = (0..=16)
+                .map(|step| {
+                    let t = step as f32 / 16.0;
+                    let x = (t - 0.5) * unit * 1.3;
+                    let y = -(t * std::f32::consts::TAU).sin() * unit * 0.45;
+                    centre + egui::vec2(x, y)
+                })
+                .collect();
+            let (first, last) = (points[0], points[16]);
+            painter.add(egui::Shape::line(points, stroke));
+            painter.circle_filled(first, unit * 0.14, tint);
+            painter.circle_filled(last, unit * 0.14, tint);
+        }
+        Icon::Undo | Icon::Redo => {
+            // An arc over the top with its head at the end it goes back to.
+            use std::f32::consts::PI;
+            let (from, to) = if icon == Icon::Undo {
+                (2.0 * PI - 0.25, PI + 0.3)
+            } else {
+                (PI + 0.25, 2.0 * PI - 0.3)
+            };
+            let radius = unit * 0.6;
+            let middle = centre + egui::vec2(0.0, unit * 0.15);
+            let points: Vec<egui::Pos2> = (0..=20)
+                .map(|step| {
+                    let a = from + (to - from) * step as f32 / 20.0;
+                    middle + egui::vec2(a.cos(), a.sin()) * radius
+                })
+                .collect();
+            let (before, end) = (points[18], points[20]);
+            painter.add(egui::Shape::line(points, stroke));
+            arrow(painter, before, end, unit * 0.45, stroke);
         }
     }
 }
