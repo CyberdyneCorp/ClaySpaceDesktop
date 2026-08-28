@@ -9,10 +9,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use clayspace_model::{
-    Combine, CombineSettings, GizmoHandle, GizmoMode, GizmoTarget, LayerKey, ModelError, ObjectId,
-    ObjectModel, Representation, SceneObject, Shape, Transform,
+    Combine, CombineSettings, GizmoHandle, GizmoMode, GizmoTarget, ItemKind, LayerKey, ModelError,
+    ObjectId, ObjectModel, Representation, SceneObject, Shape, Transform,
 };
-use clayspace_vm::{Command, ObjectViewModel, Watcher};
+use clayspace_vm::{Command, ObjectViewModel, Picked, Watcher, ITEM_NOT_TRANSFORMABLE};
 
 #[derive(Debug, Default)]
 struct Calls {
@@ -38,6 +38,9 @@ struct FakeObjects {
     refuse: Option<&'static str>,
     /// Set to make every transform overrun the frame, as a heavy form does.
     slow: bool,
+    /// What a ray meets. `None` is empty space, which is the answer the
+    /// interface must not confuse with an item it cannot move.
+    hit: Option<ItemKind>,
 }
 
 impl FakeObjects {
@@ -49,6 +52,7 @@ impl FakeObjects {
             selected: None,
             refuse: None,
             slow: false,
+            hit: None,
         }
     }
 
@@ -254,6 +258,17 @@ impl ObjectModel for FakeObjects {
             ),
             _ => Ok(()),
         }
+    }
+
+    fn pick_item(&mut self, _origin: [f32; 3], _direction: [f32; 3]) -> Option<ItemKind> {
+        self.hit
+    }
+
+    fn pick_object(&mut self, _origin: [f32; 3], _direction: [f32; 3]) -> Option<ObjectId> {
+        if self.hit != Some(ItemKind::Object) {
+            return None;
+        }
+        self.objects.first().map(|object| object.id)
     }
 
     fn begin_target_drag(&mut self, _target: GizmoTarget) {
@@ -794,4 +809,97 @@ fn a_drag_that_keeps_up_is_not_throttled() {
         4,
         "a surface that keeps up should be evaluated every frame"
     );
+}
+
+// -- what a press met -------------------------------------------------------
+
+/// A press that meets a stroke says so.
+///
+/// The requirement is that the manipulator does not act on a stroke and that
+/// "an attempt to select one for transformation SHALL say so rather than doing
+/// nothing". `pick_object` answers `None` for a stroke and for empty space
+/// alike, so the ViewModel asks the question that can tell them apart.
+#[test]
+fn a_press_on_a_stroke_says_why_it_carries_no_manipulator() {
+    let calls = Rc::new(RefCell::new(Calls::default()));
+    let mut model = FakeObjects::new(calls.clone());
+    model.hit = Some(ItemKind::Stroke);
+    let mut vm = ObjectViewModel::new(Box::new(model));
+
+    assert_eq!(
+        vm.pick_at([0.0, 4.0, 0.0], [0.0, -1.0, 0.0]),
+        Picked::NotTransformable
+    );
+    assert_eq!(
+        vm.notice().get().as_deref(),
+        Some(ITEM_NOT_TRANSFORMABLE),
+        "a stroke that cannot be picked up must be said out loud"
+    );
+    assert_eq!(
+        *vm.target().get(),
+        None,
+        "and no manipulator appears over it"
+    );
+}
+
+/// A press that meets a placed object selects it and says nothing: the
+/// manipulator arriving is the answer.
+#[test]
+fn a_press_on_an_object_leaves_no_notice() {
+    let calls = Rc::new(RefCell::new(Calls::default()));
+    let mut model = FakeObjects::new(calls.clone());
+    model.objects.push(an_object(1, Shape::Box, [0.0; 3]));
+    let id = model.objects[0].id;
+    model.hit = Some(ItemKind::Object);
+    let mut vm = ObjectViewModel::new(Box::new(model));
+
+    assert_eq!(
+        vm.pick_at([0.0, 4.0, 0.0], [0.0, -1.0, 0.0]),
+        Picked::Object(id)
+    );
+    assert!(
+        vm.notice().get().is_none(),
+        "nothing was refused, so nothing is said"
+    );
+}
+
+/// And a press that meets nothing is neither. It belongs to whatever is behind
+/// the objects — orbiting, or the brush.
+#[test]
+fn a_press_on_nothing_says_nothing() {
+    let (mut vm, _) = viewmodel();
+    assert_eq!(
+        vm.pick_at([9.0, 9.0, 9.0], [0.0, 1.0, 0.0]),
+        Picked::Nothing
+    );
+    assert!(vm.notice().get().is_none());
+}
+
+/// Every refusal reaches the notice, not just the ones the panel greys out.
+///
+/// Re-shaping, re-combining and removing all went through `report`, whose
+/// whole purpose is to carry a refusal to the status area — and for as long as
+/// nothing read the notice, all three failed in silence.
+#[test]
+fn a_refused_re_op_or_removal_is_stated_rather_than_silent() {
+    for command in [
+        Command::SetObjectShape(Shape::Sphere, vec![0.3]),
+        Command::SetObjectCombine(CombineSettings::default()),
+        Command::RemoveObject,
+    ] {
+        let calls = Rc::new(RefCell::new(Calls::default()));
+        let mut model = FakeObjects::new(calls.clone());
+        model.objects.push(an_object(1, Shape::Box, [0.0; 3]));
+        model.selected = Some(model.objects[0].id);
+        model.refuse = Some("esta camada está bloqueada");
+        let mut vm = ObjectViewModel::new(Box::new(model));
+        vm.refresh();
+
+        send(&mut vm, command.clone());
+        assert_eq!(
+            vm.notice().get().as_deref(),
+            Some("esta camada está bloqueada"),
+            "a refused object edit must name what is wrong"
+        );
+    }
 }

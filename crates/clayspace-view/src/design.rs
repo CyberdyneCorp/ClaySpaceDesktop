@@ -95,7 +95,8 @@ pub fn dim(linear: [f32; 3], amount: f32) -> egui::Color32 {
 /// The named colours the interface draws with.
 ///
 /// A closed set: a component reaching past these is the drift the style budget
-/// exists to prevent, and `no_literal_colors` in the shell tests says so.
+/// exists to prevent, and `no_literal_colors` below says so by reading the
+/// crate's own source.
 pub struct Tokens;
 
 impl Tokens {
@@ -215,6 +216,72 @@ mod tests {
             "the shell draws {drawn} domain labels, down from \
              {LABELS_STILL_DRAWN} — lower `LABELS_STILL_DRAWN` to {drawn} so \
              the ratchet holds the ground that was just taken"
+        );
+    }
+
+    /// What a component writes above a `Color32::from_*` that shades a colour
+    /// it was handed rather than inventing one. Spelled out once so the
+    /// marker and the test cannot drift apart.
+    const DERIVED: &str = "derived from a token";
+
+    /// Every colour on screen comes from a named token.
+    ///
+    /// The design-system requirement as a test rather than as prose. It has to
+    /// read the source, because that is where the drift is: a hand-mixed grey
+    /// looks like a token in a capture and stops looking like one the day the
+    /// token moves, so no rendered frame can catch it.
+    ///
+    /// `design.rs` and `palette.rs` are where colours are made and are
+    /// therefore exempt. Everywhere else may shade a colour it was *given* —
+    /// the material previews light their sphere from the upper left — and says
+    /// so on the line above.
+    #[test]
+    fn no_literal_colors() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut offenders = Vec::new();
+        for entry in std::fs::read_dir(&src).expect("the crate's own source") {
+            let path = entry.expect("entry").path();
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_owned();
+            if path.extension().is_none_or(|ext| ext != "rs")
+                || name == "design.rs"
+                || name == "palette.rs"
+            {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("read the source");
+            let lines: Vec<&str> = text.lines().collect();
+            for (at, line) in lines.iter().enumerate() {
+                // Both halves of "written down": a constructor call, and a
+                // named constant. Matching only `from_` left `Color32::RED`
+                // and its siblings walking through a test whose own paragraph
+                // above says every colour comes from a token — verified by
+                // mutation, an inserted `Color32::RED` kept this green.
+                let written_down = line.contains("Color32::from_")
+                    || line
+                        .split("Color32::")
+                        .skip(1)
+                        .any(|rest| rest.starts_with(|c: char| c.is_ascii_uppercase()));
+                if !written_down {
+                    continue;
+                }
+                let derived = at
+                    .checked_sub(1)
+                    .is_some_and(|above| lines[above].contains(DERIVED));
+                if !derived {
+                    offenders.push(format!("{name}:{}", at + 1));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "a colour was written down rather than taken from a token, at {}; \
+             add it to `Tokens`, or mark the line \"{DERIVED}\" if it shades \
+             one it was given",
+            offenders.join(", ")
         );
     }
 

@@ -803,7 +803,8 @@ impl ClayDocument {
         // Bracketed, because a crossing is several engine edits — the layer,
         // then whatever fills it — and a sculptor asked for one thing. Without
         // the group, undo took back the filling and left the empty layer
-        // standing, which is the shape `a_conversion_is_one_undo_step` caught.
+        // standing, which is the shape `a_crossing_is_taken_back_by_undo` in
+        // `clayspace-engine/tests/conversion.rs` caught.
         self.document
             .begin_undo_group()
             .map_err(ModelError::engine)?;

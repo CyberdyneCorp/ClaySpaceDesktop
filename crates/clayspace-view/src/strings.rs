@@ -250,6 +250,9 @@ pub struct Strings {
     pub representation_label: &'static str,
     /// Said when a layer change forced a different tool.
     pub tool_substituted: &'static str,
+    /// Said when a press in the viewport meets something that carries no
+    /// manipulator — a stroke, an applied curve, a rig's skin.
+    pub item_not_transformable: &'static str,
     pub action_undo: &'static str,
     pub action_redo: &'static str,
     pub action_frame_all: &'static str,
@@ -491,6 +494,7 @@ const PT_BR: Strings = Strings {
     shelf_no_tools: "Nenhuma ferramenta para esta representação ainda",
     representation_label: "Representação",
     tool_substituted: "ferramenta trocada: esta camada não tem essa",
+    item_not_transformable: "um traço, uma curva aplicada ou a pele de um esqueleto não se transforma: só uma forma colocada tem manipulador",
     action_convert: "Converter",
     label_convert_to: "Converter para",
     label_cell_size: "Tamanho da célula",
@@ -749,6 +753,7 @@ const EN_US: Strings = Strings {
     shelf_no_tools: "No tools for this representation yet",
     representation_label: "Representation",
     tool_substituted: "tool changed: this layer has no verb for that one",
+    item_not_transformable: "a stroke, an applied curve or a rig's skin cannot be transformed: only a placed shape carries a manipulator",
     action_convert: "Convert",
     label_convert_to: "Convert to",
     label_cell_size: "Cell size",
@@ -1013,6 +1018,7 @@ const ES_419: Strings = Strings {
     shelf_no_tools: "Todavía no hay herramientas para esta representación",
     representation_label: "Representación",
     tool_substituted: "herramienta cambiada: esta capa no tiene ese verbo",
+    item_not_transformable: "un trazo, una curva aplicada o la piel de un esqueleto no se transforma: solo una forma colocada tiene manipulador",
     action_convert: "Convertir",
     label_convert_to: "Convertir a",
     label_cell_size: "Tamaño de celda",
@@ -1176,7 +1182,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 146] {
+    pub fn all(&self) -> [&'static str; 147] {
         [
             self.action_shapes,
             self.label_shape,
@@ -1186,6 +1192,7 @@ impl Strings {
             self.label_no_placed_objects,
             self.label_object_scale,
             self.label_shapes_sdf_only,
+            self.item_not_transformable,
             self.menu_file,
             self.menu_edit,
             self.menu_view,

@@ -1736,20 +1736,26 @@ impl App {
     /// Selects the object under the pointer, if a placed one is there.
     ///
     /// Returns whether the press was taken. A press that meets a stroke or
-    /// empty space is left to fall through to orbiting, so a form can be
-    /// turned to look at without losing what is selected.
+    /// empty space is left to fall through to sculpting or orbiting, so a form
+    /// can be worked on and turned to look at without losing what is selected.
+    ///
+    /// A stroke is not taken either. The specification asks for a stroke to be
+    /// *said* about — "an attempt to select one for transformation SHALL say
+    /// so rather than doing nothing" — and not for the press: a press on the
+    /// clay is a stroke, and taking that away from the brush to explain
+    /// something would be the worse error. The ViewModel has raised the
+    /// sentence by the time this returns.
     fn pick_object_at(&mut self, point: egui::Pos2) -> bool {
-        use clayspace_model::ObjectModel;
-
         let Some((origin, direction)) = self.ray_at(point) else {
             return false;
         };
-        let mut document = self.document.clone();
-        let Some(id) = document.pick_object(origin, direction) else {
-            return false;
-        };
-        self.apply_now(Command::SelectObject(Some(id)));
-        true
+        match self.objects.pick_at(origin, direction) {
+            clayspace_vm::Picked::Object(id) => {
+                self.apply_now(Command::SelectObject(Some(id)));
+                true
+            }
+            clayspace_vm::Picked::NotTransformable | clayspace_vm::Picked::Nothing => false,
+        }
     }
 
     /// Begins a rig gesture, if the press landed on a sphere.
@@ -2118,6 +2124,15 @@ impl App {
         if let (Some(point), Some(button), true) =
             (input.pointer, input.pressed, input.over_viewport)
         {
+            // Cleared here, at the top of a press, rather than when one turns
+            // into a stroke. A press on a stroke *is* a press on the clay, so
+            // clearing it on `Drag::Sculpt` cleared it on the very press that
+            // raised it and the sentence never reached the screen — which is
+            // the case `object-transform` names ("WHEN the user picks a
+            // sculpting stroke in the viewport"). Clearing here keeps what a
+            // press said until the next press, so it is read once and does not
+            // stand over the session that follows.
+            self.objects.clear_notice();
             // Rigging takes the primary button first, and only where it lands
             // on a sphere: everywhere else the camera keeps working, so a rig
             // can be turned to look at without leaving the mode.
@@ -2670,12 +2685,16 @@ impl App {
             // A refused reference joins them, and ahead of both: it is the
             // most recent explicit action, and a PNG that will not load is a
             // sentence naming what is wrong with *that* file.
+            // An object refusal was the same Observable nobody read: a
+            // re-shape, a re-combine, a removal and a refused transform each
+            // wrote one and none of them reached the screen.
             tool_status: self
                 .references
                 .notice()
                 .get()
                 .as_deref()
                 .or(self.mask.notice().get().as_deref())
+                .or(self.objects.notice().get().as_deref())
                 .or(self.sculpt.tool_status().get().as_deref()),
             symmetry: *self.sculpt.symmetry().get(),
             scene: &scene,

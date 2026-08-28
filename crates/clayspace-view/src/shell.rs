@@ -792,10 +792,10 @@ pub fn options_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
             // The ViewModel carries no locale, so a status it raises itself
             // arrives as a marker and is localised here. An engine refusal is
             // already a sentence and passes through as one.
-            let reason = if reason == clayspace_vm::TOOL_SUBSTITUTED {
-                state.strings.tool_substituted
-            } else {
-                reason
+            let reason = match reason {
+                clayspace_vm::TOOL_SUBSTITUTED => state.strings.tool_substituted,
+                clayspace_vm::ITEM_NOT_TRANSFORMABLE => state.strings.item_not_transformable,
+                sentence => sentence,
             };
             ui.add_space(space::SECTION);
             ui.label(
@@ -2733,6 +2733,8 @@ fn paint_sphere(ui: &egui::Ui, rect: egui::Rect, tint: egui::Color32, active: bo
         let t = step as f32 / STEPS as f32;
         let offset = egui::vec2(-radius * 0.22 * t, -radius * 0.22 * t);
         let shade = 0.55 + 0.45 * (1.0 - t);
+        // Darkening toward the rim, not choosing a colour: the tint arrives
+        // derived from a token.
         let color = egui::Color32::from_rgb(
             (tint.r() as f32 * shade) as u8,
             (tint.g() as f32 * shade) as u8,
