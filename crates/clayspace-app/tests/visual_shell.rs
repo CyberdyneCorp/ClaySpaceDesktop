@@ -258,6 +258,10 @@ fn build_shell(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQ
         .show(ctx, |ui| {
             egui::ScrollArea::horizontal().show(ui, |ui| shell::brush_shelf(ui, state, queue));
         });
+    egui::SidePanel::left("rail")
+        .exact_width(region::RAIL)
+        .resizable(false)
+        .show(ctx, |ui| shell::tool_rail(ui, state, queue));
     egui::SidePanel::left("left")
         .exact_width(region::LEFT)
         .show(ctx, |ui| {
@@ -649,6 +653,75 @@ fn the_options_bar_is_headed_by_the_active_brush() {
         changed > 100,
         "switching from Standard to Move changed {changed} pixels at the head \
          of the options bar; the bar does not say which brush it belongs to"
+    );
+}
+
+/// The rail reaches what the menus reach, through the same commands.
+///
+/// The shapes panel, the cage, the deformations, the references and the
+/// curve were three menus deep and nowhere else. Every rail button is found
+/// by its word, one is clicked, and the command it emits is the menu's.
+#[test]
+fn the_tool_rail_reaches_what_the_menus_reach() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let set = state(strings, &scene, &materials, &report);
+
+    let ctx = probe_shell(&set);
+    let mut rail_buttons = Vec::new();
+    for label in [
+        strings.action_paint_mask,
+        strings.action_frame_all,
+        strings.action_polyframe,
+        strings.action_references,
+        strings.action_shapes,
+        strings.action_cage,
+        strings.action_curve,
+        strings.action_deform,
+        strings.action_undo,
+        strings.action_redo,
+    ] {
+        let rect = ctx
+            .memory(|memory| memory.data.get_temp::<egui::Rect>(shell::chip_id(label)))
+            .unwrap_or_else(|| panic!("the rail has no {label:?} button"));
+        assert!(
+            rect.right() <= region::RAIL + 1.0,
+            "{label:?} is not on the rail: {rect:?}"
+        );
+        rail_buttons.push(rect);
+    }
+    // Ten buttons in one column, none overlapping another.
+    for (i, a) in rail_buttons.iter().enumerate() {
+        for b in &rail_buttons[i + 1..] {
+            assert!(!a.intersects(*b), "two rail buttons overlap: {a:?} {b:?}");
+        }
+    }
+
+    let shapes = ctx
+        .memory(|memory| {
+            memory
+                .data
+                .get_temp::<egui::Rect>(shell::chip_id(strings.action_shapes))
+        })
+        .expect("the shapes button")
+        .center();
+    capture_shell_after(
+        &harness,
+        &set,
+        "69-tool-rail",
+        &[left_click(shapes)],
+        |queue| {
+            assert_eq!(
+                queue.commands(),
+                [Command::ToggleShapes],
+                "the rail's shapes button did not open the shapes panel"
+            );
+        },
     );
 }
 

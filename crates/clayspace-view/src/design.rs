@@ -46,6 +46,8 @@ pub mod size {
     pub const BADGE: f32 = 42.0;
     /// Icon side, in a list row.
     pub const ICON: f32 = 16.0;
+    /// A button on the tool rail: the rail's width less a margin a side.
+    pub const RAIL_BUTTON: f32 = 34.0;
     /// Icon side on a chip, where it stands for the whole control rather
     /// than annotating a row, and where two discs at sixteen pixels were a
     /// smudge. As tall as the control's own padding allows.
