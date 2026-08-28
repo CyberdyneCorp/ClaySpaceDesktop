@@ -7,7 +7,7 @@ through its C ABI. macOS and Linux.
 **Six changes: `add-clayspace-desktop` at 107 of 109 tasks,
 `make-representations-first-class` and `place-and-transform-objects` complete,
 `benchmark-every-operation` at 45 of 46, `upgrade-engine-0-52-2` at 12 of 13,
-and `subtools` at 36 of 38.** The first delivered four of five milestones and
+and `subtools` at 37 of 38.** The first delivered four of five milestones and
 all but closed the fifth — sculpt, mask, rig with ZSpheres, import and export
 meshes, save, reopen, and recover work a crash took. The second made SDF, voxel
 and mesh first-class alongside each other: each with its own vocabulary,
@@ -38,6 +38,16 @@ figures were added to that file from a later whole run on the same machine, at
 value every future run is judged against, and the comparison that run made
 against the baseline reported no regression in any of the other 125 figures. So
 the rest of the file still holds the drift history it had.
+
+Three figures have been spliced in the same way since, from a whole run at 0.07
+load per core: `subtool.activate.mesh.mean` and `.p95`, which went from 159.7
+and 169.6 ms to a lookup when the document started holding a mesh sculptor per
+subtool rather than one; and `convert.mesh_to_voxel.ms`, which the file used to
+carry as a *skip* — "the source layer states no bounds to convert within" —
+because a mesh layer answered no bounds and every crossing out of one was
+refused as unbounded. It runs, so it is measured rather than excused. The
+comparison that run made found nothing else moved by more than 1.19x, inside
+the 1.5 tolerance.
 
 There is a baseline per platform, and `just bench-compare` picks by `os()` —
 comparing a Linux run

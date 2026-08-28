@@ -14,14 +14,14 @@ it. `benchmark-every-operation` stands at **45 of 46** — the table went from
 one brush to every brush, operation, conversion and bake.
 `upgrade-engine-0-52-2` stands at **12 of 13**, and both remainders are the
 same task: re-recording the macOS baseline, which needs a macOS machine.
-`subtools` stands at **36 of 38**: a scene is now a list of separate forms,
+`subtools` stands at **37 of 38**: a scene is now a list of separate forms,
 each activated by clicking it, each with its own mask, symmetry and rig, each
-movable whole, and any two of them resolvable into a third by a boolean. Two
-remainders: the per-layer mask reaching the engine's own — see *What is
-blocked, and what is not* — and activation on a carried mesh subtool, which
-holds the interface thread for 160 ms against a 16 ms bound and has no shipped
-mitigation. See *What is slow and why* for both what bounds it and what would
-remove it.
+movable whole, and any two of them resolvable into a third by a boolean.
+Switching onto a carried mesh subtool used to hold the interface thread for
+160 ms against a 16 ms bound; the document holds a sculptor per mesh now
+instead of one, and it is 0.00 ms — the last open budget in the suite, closed.
+One remainder: the per-layer mask reaching the engine's own — see *What is
+blocked, and what is not*.
 
 Engine pinned at ClayCore **0.52.2**, at the tag rather than at `main` — the
 tag is a release, `main` is where they are still working. On the reference
@@ -103,8 +103,8 @@ meshed. ClayCore 0.30.0 added `clay_brick_cache_mesh_lod` (#93) and 3.9 closed
 on it — see *Level of detail, as delivered*. What is left on the list is
 waiting on a decision rather than on an engine.
 
-Six upstream findings are open, and none of them blocks anything. Four carry
-numbers, and two of those were filed from the subtools work.
+Seven upstream findings are open, and none of them blocks anything. Five carry
+numbers, and three of those were filed from the subtools work.
 
 [#321](https://github.com/CyberdyneCorp/ClayCore/issues/321) — **a layer carries
 no combine operation.** The document composes its layers by hard union
@@ -145,6 +145,18 @@ where two layers come to share a name. Until it lands, every insertion derives a
 unique default name — `unique_layer_name`, which the mesh import and the stack's
 add control go through as well, since a collision made after the fact shadows a
 grid just as surely. Filed from this work.
+
+[#368](https://github.com/CyberdyneCorp/ClayCore/issues/368) — **a mesh
+sculptor cannot be built off the interface thread.** `clay_mesh_sculptor_create`
+is a weld and an adjacency pass — 160 ms over the reference form's 296,216
+triangles — and a mesh layer has no other route to its surface, since the pick
+that follows an activation is answered by `clay_mesh_sculptor_raycast`. Holding
+a sculptor per mesh took the *repeated* cost out; what is left is the first weld
+of each mesh, and it has nowhere to go on this side. The call resolves its mesh
+through a mutable path into the document and the ABI's only threading contract
+is the brick cache's, so the ask is either that contract extended to this call
+or a split between an off-thread adjacency build and a cheap adopt. Filed from
+this work. See *Subtools: what switching costs*.
 
 **`clay_item_set_gate` is accepted and inert.** The entry point that would make
 a mask protect a surface from an *operation* rather than only from a brush — the
@@ -565,51 +577,54 @@ suite:
 | figure | cost | what it is |
 |---|---|---|
 | `subtool.activate.sdf` | **0.00 ms** | making a field subtool the sculpt target |
-| `subtool.activate.mesh` | **160 ms** mean, 170 ms p95 | making a *carried mesh* subtool the sculpt target |
+| `subtool.activate.mesh` | **0.00 ms** | making a *carried mesh* subtool the sculpt target, once its mesh has been welded |
 | `subtool.solo` | 14 ms mean, 21 ms p95 | showing one subtool alone and putting the scene back |
 | `subtool.solo_undo` | 203 ms | a ⌘Z after a released solo, against the 87 ms an undo costs alone |
 | `subtool.copy` | 4.3 s | one subtool sampled into a subtool of its own |
 | `subtool.boolean` | 10.2 s | two operands sampled and combined into a third subtool |
 
-**Activation on a mesh subtool is the one that misses a stated bound.** The
-specification says no engine operation may block the interface thread for more
-than 16 ms, and this is 160. All of it is `MeshSculptor::for_layer` — a weld and
-an adjacency pass over the layer's 296,216 triangles — which the application
-pays when a mesh layer becomes the one being worked on. It is the only figure in
-the suite reported over its budget, and it is reported rather than enforced,
-which is what `--enforce-budgets` being off by default is for.
+**Activation on a mesh subtool was the one figure that missed a stated bound,
+and it no longer does.** The specification says no engine operation may block
+the interface thread for more than 16 ms; this was 160, all of it
+`MeshSculptor::for_layer` — a weld and an adjacency pass over the layer's
+296,216 triangles — paid whenever a mesh layer became the one being worked on.
 
-Two things bound it. It is **zero on a field**, which is what most of a document
-holds; and with a single carried mesh in the scene the sculptor stays built, so
-a document like that pays this once and not once per click. The figure above
-alternates between *two* mesh subtools on purpose: the cache holds one layer at
-a time, so a second carried mesh evicts the first and every switch pays again.
-That is the worst case, and it is the one a scene of subtools invites.
+What made it a *repeated* cost was that the document held one sculptor. A
+second carried mesh evicted the first, so going back and forth between two mesh
+subtools — the arrangement a scene of subtools invites, and the one the figure
+measures on purpose — paid the pass on every switch. The document holds several
+now, bounded and least recently used first
+(`clayspace-engine/src/sculptors.rs`), and a switch onto a mesh already welded
+once is a lookup: **0.00 ms against the 16 ms bound**.
 
-The design's stated fallback was to arm the sculptor lazily on the first dab
-instead of on activation. **Measured, that does not work**, and the measurement
-is the two tests that fail when the arming is removed:
-`the_pointer_finds_an_imported_mesh` and `the_mesh_reports_what_its_queries_cost`
-in `clayspace-engine/tests/mesh_sculpting.rs`. A pick against a mesh layer is
-answered by the sculptor's own raycast; the interface places a stroke where the
-pick reported and sends nothing where it reported nothing; so with no sculptor
-there is no pick, with no pick there is no first dab, and the layer is
-unsculptable through the pointer. That deadlock is what the arming was added to
-fix. Arming inside the pick instead would pay the same 160 ms on the first
-pointer *motion* after a switch — the same cost, attached to a gesture the
-sculptor did not make.
+Holding more than one buys back that cost and introduces one bug class in
+exchange — a sculptor outliving the mesh it was built over. The engine refuses
+rather than reads freed storage, since its handle "remembers what it was built
+over and every call checks that the answer has not changed", so the failure
+this side would see is a brush that quietly stops working rather than a crash.
+The sculptor for a layer is dropped when the layer is removed, and when
+reconciliation finds one that left the scene or came back into it;
+`clayspace-engine/tests/mesh_sculptor_cache.rs` holds the outcomes.
 
-What would actually remove it is holding a sculptor for more than one layer:
-`mesh_sculptor` is one `Option<(LayerKey, MeshSculptor)>`, which was right when
-a document had one thing to sculpt and is what makes switching between two mesh
-subtools pay every time. That is a change to the mesh-sculpting surface rather
-than to activation, and it is not made here.
+**What is left is the first weld of a given mesh**, once per mesh per session —
+about 165 ms, and after reopening a document it is paid on the first click on
+each mesh subtool. That one is inherent rather than unfixed. It cannot move to
+the first dab: with no sculptor a mesh layer answers no pick, the interface
+sends no stroke where the pick reported nothing, so the first dab never
+arrives — measured, and held by `the_pointer_finds_an_imported_mesh` and
+`the_mesh_reports_what_its_queries_cost` in
+`clayspace-engine/tests/mesh_sculpting.rs`, which fail the moment the arming
+comes out. It cannot move to document open either: opening the two-mesh
+document above costs 44.8 ms, and warming its sculptors there would make it
+about 395 ms — a nine-fold regression on open, paid whether or not the sculptor
+is ever used, to save a one-time cost on a click.
 
-So this bound is **still breached**, and the task that would have fixed it is
-left unticked in the change's own tasks.md rather than standing over a figure
-nobody moved. It is the one open budget in the suite. Two presses reach it now
-rather than one — the stack row and, since subtools, a click on the form in the
-viewport — which raises how often it is paid without changing what it costs.
+Where it could go is a worker thread, and that is an engine question rather
+than a host one: `clay_mesh_sculptor_create` resolves its mesh through a
+mutable path into the document, and the ABI's only threading contract is the
+brick cache's. Asked upstream as
+[#368](https://github.com/CyberdyneCorp/ClayCore/issues/368), which quotes that
+contract as the shape the answer could take.
 
 **A boolean is two of a copy, and a copy is one sampling.** 4.3 s for one
 operand at the brick cache's 0.02 cell over the reference form's box; 10.2 s for

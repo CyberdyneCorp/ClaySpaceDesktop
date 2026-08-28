@@ -477,8 +477,9 @@ pub struct ClayDocument {
     /// One at a time rather than one per layer: the adjacency is the expensive
     /// part and a sculptor is only useful for the layer under the pointer, so
     /// holding every mesh layer's would pay for meshes nobody is touching.
-    /// Built on the first stroke against a layer and dropped when the active
-    /// mesh layer changes.
+    /// The mesh sculptors built so far, bounded and least recently used
+    /// first — see [`crate::sculptors`] for why there is more than one.
+    ///
     /// In a cell because a *pick* needs it and a pick is a question.
     ///
     /// The sculptor answers a raycast from its own tree and may refit it while
@@ -487,7 +488,7 @@ pub struct ClayDocument {
     /// borrow would be the tail wagging the dog. Casting the borrow away was
     /// the other option and `forbid(unsafe_code)` refused it, correctly: the
     /// C call takes a non-const sculptor because it really may write.
-    mesh_sculptor: std::cell::RefCell<Option<(LayerKey, claycore::MeshSculptor)>>,
+    mesh_sculptors: std::cell::RefCell<crate::sculptors::Sculptors>,
     /// Mesh gestures, newest last, and the redo side of the same.
     ///
     /// A second history beside the engine's, which the design deferred and
@@ -659,7 +660,7 @@ impl ClayDocument {
             live_generation: 0,
             meshed_chunks: 0,
             surface_brick_count: 0,
-            mesh_sculptor: std::cell::RefCell::new(None),
+            mesh_sculptors: std::cell::RefCell::default(),
             mesh_undo: Vec::new(),
             mesh_redo: Vec::new(),
             crossing_undo: Vec::new(),
@@ -2807,8 +2808,8 @@ impl ClayDocument {
             .filter(|(layer, _)| *layer == key)
             .map(|(_, deltas)| deltas);
         let moved = {
-            let mut held = self.mesh_sculptor.borrow_mut();
-            let Some((_, sculptor)) = held.as_mut() else {
+            let mut held = self.mesh_sculptors.borrow_mut();
+            let Some(sculptor) = held.get_mut(key) else {
                 return Ok(EditOutcome::NOTHING);
             };
             if let Some(previous) = &previous {
@@ -2983,16 +2984,15 @@ impl ClayDocument {
             ),
             None => (origin, direction),
         };
-        let mut held = self.mesh_sculptor.borrow_mut();
-        let (built_for, sculptor) = held.as_mut()?;
-        if *built_for != key {
+        let mut held = self.mesh_sculptors.borrow_mut();
+        let Some(sculptor) = held.get_mut(key) else {
             // Not built yet, and a pick cannot build it — that costs an
             // adjacency pass and a pick happens every frame the pointer moves.
             // The first stroke builds it; until then the pointer finds nothing
             // on this layer, which reads as the cursor not settling rather
             // than as a wrong answer.
             return None;
-        }
+        };
         sculptor
             .raycast(origin, direction)
             .ok()
@@ -3567,11 +3567,9 @@ impl ClayDocument {
     /// `None` where the active layer is not a sculpted mesh.
     pub fn mesh_quality(&self) -> Option<f32> {
         let key = self.active_layer().key;
-        let mut held = self.mesh_sculptor.borrow_mut();
-        let (built_for, sculptor) = held.as_mut()?;
-        (*built_for == key)
-            .then(|| sculptor.quality().ok())
-            .flatten()
+        let mut held = self.mesh_sculptors.borrow_mut();
+        held.get_mut(key)
+            .and_then(|sculptor| sculptor.quality().ok())
     }
 
     /// The engine's own undo depth, which is what the two histories order by.
@@ -3618,8 +3616,8 @@ impl ClayDocument {
         };
         self.ensure_mesh_sculptor(gesture.layer, &engine_name)?;
         {
-            let mut held = self.mesh_sculptor.borrow_mut();
-            let Some((_, sculptor)) = held.as_mut() else {
+            let mut held = self.mesh_sculptors.borrow_mut();
+            let Some(sculptor) = held.get_mut(gesture.layer) else {
                 return Ok(false);
             };
             gesture
@@ -3649,8 +3647,8 @@ impl ClayDocument {
         };
         self.ensure_mesh_sculptor(gesture.layer, &engine_name)?;
         {
-            let mut held = self.mesh_sculptor.borrow_mut();
-            let Some((_, sculptor)) = held.as_mut() else {
+            let mut held = self.mesh_sculptors.borrow_mut();
+            let Some(sculptor) = held.get_mut(gesture.layer) else {
                 return Ok(false);
             };
             gesture.deltas.apply(sculptor).map_err(ModelError::engine)?;
@@ -3664,11 +3662,12 @@ impl ClayDocument {
 
     /// Builds the sculptor for a mesh layer, or keeps the one already built.
     ///
-    /// Rebuilt when the layer changes: a sculptor holds adjacency for the mesh
-    /// it was given, so carrying one across layers would move the wrong
-    /// vertices.
+    /// Kept *per layer*: a sculptor holds adjacency for the mesh it was given,
+    /// so one is never carried across layers — but several are held at once,
+    /// which is what makes going back to a mesh subtool a lookup rather than
+    /// the weld again. See [`crate::sculptors`].
     fn ensure_mesh_sculptor(&mut self, key: LayerKey, engine_name: &str) -> Result<(), ModelError> {
-        if matches!(self.mesh_sculptor.borrow().as_ref(), Some((held, _)) if *held == key) {
+        if self.mesh_sculptors.borrow().holds(key) {
             return Ok(());
         }
         // Relative to the bounding-box diagonal: vertices closer than this are
@@ -3677,7 +3676,7 @@ impl ClayDocument {
         const WELD: f32 = 1e-4;
         let sculptor = claycore::MeshSculptor::for_layer(&mut self.document, engine_name, WELD)
             .map_err(ModelError::engine)?;
-        *self.mesh_sculptor.borrow_mut() = Some((key, sculptor));
+        self.mesh_sculptors.borrow_mut().insert(key, sculptor);
         Ok(())
     }
 
@@ -4055,8 +4054,8 @@ impl SculptModel for ClayDocument {
         // thing a user did.
         let mut deltas = claycore::MeshDeltas::new().map_err(ModelError::engine)?;
         let moved = {
-            let mut held = self.mesh_sculptor.borrow_mut();
-            let Some((_, sculptor)) = held.as_mut() else {
+            let mut held = self.mesh_sculptors.borrow_mut();
+            let Some(sculptor) = held.get_mut(key) else {
                 return Ok(EditOutcome::NOTHING);
             };
             let moved = match operation {
@@ -4891,6 +4890,12 @@ impl SceneModel for ClayDocument {
         });
 
         self.document.remove_layer(id).map_err(ModelError::engine)?;
+        // The mesh a sculptor was built over has just left the document, and
+        // the engine answers every call on one of those with a refusal. A
+        // removal history brings back is rebuilt from the geometry it comes
+        // back with, which is why this is dropped rather than retired
+        // alongside the row.
+        self.mesh_sculptors.borrow_mut().forget(key);
         let retired = self.layers.remove(index);
         // Kept, because a removal is undoable and everything this side knows
         // about the layer is not — see `retired`.
@@ -5302,7 +5307,7 @@ impl ClayDocument {
             live_generation: 0,
             meshed_chunks: 0,
             surface_brick_count: 0,
-            mesh_sculptor: std::cell::RefCell::new(None),
+            mesh_sculptors: std::cell::RefCell::default(),
             mesh_undo: Vec::new(),
             mesh_redo: Vec::new(),
             crossing_undo: Vec::new(),
@@ -6318,8 +6323,8 @@ impl ClayDocument {
             .filter(|(layer, _)| *layer == cage.layer)
             .map(|(_, deltas)| deltas);
         let moved = {
-            let mut held = self.mesh_sculptor.borrow_mut();
-            let Some((_, sculptor)) = held.as_mut() else {
+            let mut held = self.mesh_sculptors.borrow_mut();
+            let Some(sculptor) = held.get_mut(cage.layer) else {
                 return Ok(());
             };
             if let Some(previous) = &previous {
@@ -6492,13 +6497,17 @@ impl ClayDocument {
 
     /// Takes back whatever a preview is showing, leaving the form as it was.
     fn discard_cage_preview(&mut self) {
-        let Some((_, deltas)) = self.live_mesh.take() else {
+        let Some((layer, deltas)) = self.live_mesh.take() else {
             return;
         };
         let reverted = {
-            let mut held = self.mesh_sculptor.borrow_mut();
-            match held.as_mut() {
-                Some((_, sculptor)) => deltas.revert(sculptor),
+            // Against the sculptor for the layer the preview was laid on. The
+            // single slot this replaced was whatever had last been built, so a
+            // preview outliving a switch reverted its offsets into another
+            // subtool's vertices.
+            let mut held = self.mesh_sculptors.borrow_mut();
+            match held.get_mut(layer) {
+                Some(sculptor) => deltas.revert(sculptor),
                 None => Ok(()),
             }
         };
@@ -6950,7 +6959,17 @@ impl ClayDocument {
             // were gone, every `PlacedObject` row was still filed under a key
             // that no longer existed, and the whole-subtool manipulator drew at
             // the origin while the engine held the real transform.
-            if let Some(mut known) = kept.remove(id).or_else(|| self.retired.remove(id)) {
+            if let Some(mut known) = kept.remove(id).or_else(|| {
+                self.retired.remove(id).inspect(|back| {
+                    // Coming back is the one path where a key that is still
+                    // ours has geometry we did not watch arrive: the engine
+                    // rebuilds the layer's mesh from the redo stack, and a
+                    // sculptor held over the old one would answer "the mesh
+                    // this sculptor was built over is no longer in its
+                    // document" for the rest of the session.
+                    self.mesh_sculptors.borrow_mut().forget(back.key);
+                })
+            }) {
                 // Visibility is the one fact about a surviving layer that
                 // history moves under it. `SetLayerVisibleCmd` is journaled
                 // like everything else and the engine reverts it exactly, but
@@ -7003,6 +7022,13 @@ impl ClayDocument {
         // than being dropped: a step forward over the removal takes it away
         // again, and a step back brings it once more to the same layer it was.
         self.retired.extend(kept);
+        // A sculptor outlives an undo that left its layer alone — which is
+        // what keeps taking back a mesh stroke from paying the weld again —
+        // but not one that took the layer out of the scene.
+        let standing: Vec<LayerKey> = self.layers.iter().map(|layer| layer.key).collect();
+        self.mesh_sculptors
+            .borrow_mut()
+            .retain(|key| standing.contains(&key));
         // The layer that was active, if it is still there; otherwise the last
         // one, which is where a removal leaves you in every panel of this kind.
         self.active = active_id

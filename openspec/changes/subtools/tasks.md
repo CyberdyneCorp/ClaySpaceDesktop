@@ -301,36 +301,49 @@
         move being `brush.mesh.nudge.p95` at +20 % against a 2.0 tolerance — so
         re-recording would have moved 125 recorded values to hide nothing.
         README says so beside the conditions
-- [ ] 8.2 If activation misses the interaction budget on mesh subtools, arm
+- [x] 8.2 If activation misses the interaction budget on mesh subtools, arm
       the sculptor lazily on the first dab
-      - **Left undone, and the budget is still breached.** Activation on a mesh
-        subtool takes 159.7 ms mean / 169.6 p95 against the 16 ms
+      - **Fixed, though not by the mitigation this task names.** Activation on
+        a mesh subtool was 159.7 ms mean / 169.6 p95 against the 16 ms
         `performance-budgets` allows an engine operation to hold the interface
-        thread, and this change makes that operation fire on a viewport click
-        as well as on a stack-row click. The fallback this task names was tried
-        and does not work, no other mitigation shipped, and `report_budgets`
-        only fails the run when `--enforce-budgets` is passed — so nothing in
-        the gate goes red over it. The box stays unticked rather than standing
-        over an unfixed breach, and docs/roadmap.md carries what would remove
-        it
-      - The measurement that the fallback does not work is two tests that fail
-        the moment `arm_mesh_sculptor` comes out of `set_active_layer` —
-        `the_pointer_finds_an_imported_mesh` and
+        thread, and this change made that operation fire on a viewport click as
+        well as on a stack-row click. It is **0.00 ms** now, measured on the
+        same fixture at the same load
+      - What made it a *repeated* cost was the document holding one sculptor:
+        a second carried mesh evicted the first, so alternating between two
+        mesh subtools paid the weld and the adjacency pass every time. The
+        document holds several now — `clayspace-engine/src/sculptors.rs`, an
+        LRU bounded by count, with the reasoning for a count rather than bytes
+        stated there — and a switch onto a mesh welded once is a lookup
+      - The lazy-arming fallback this task names was tried and does not work,
+        which is why it is not what shipped: a pick against a mesh layer is
+        answered by the sculptor's own raycast, the interface sends no stroke
+        where the pick reported nothing, so with no sculptor the "first dab"
+        can never arrive. `the_pointer_finds_an_imported_mesh` and
         `the_mesh_reports_what_its_queries_cost` in
-        `clayspace-engine/tests/mesh_sculpting.rs`
-      - The deadlock those tests record is why: a pick against a mesh layer is
-        answered by the sculptor's own raycast, the interface places a stroke
-        where the pick reported and sends nothing where it reported nothing, so
-        with no sculptor there is no pick, and with no pick the "first dab" this
-        task would arm on can never arrive. Arming inside the pick instead pays
-        the same 159.7 ms on the first pointer *motion* after a switch — the
-        same cost, moved off a deliberate click and onto a gesture the sculptor
-        did not make
-      - What would remove it is holding a sculptor for more than one layer:
-        `mesh_sculptor` is one `Option<(LayerKey, MeshSculptor)>`, which was
-        right when a document had one thing to sculpt. That is a change to the
-        mesh-sculpting surface rather than to activation, and it is recorded in
-        docs/roadmap.md rather than made here
+        `clayspace-engine/tests/mesh_sculpting.rs` fail the moment the arming
+        comes out
+      - Holding several introduces one bug class in exchange — a sculptor
+        outliving the mesh it was built over, which the engine answers with a
+        refusal rather than a read of freed storage. Dropped on removal and on
+        the reconciliation that finds a layer gone or brought back;
+        `clayspace-engine/tests/mesh_sculptor_cache.rs` holds the outcomes, and
+        six unit tests in `sculptors.rs` hold the eviction policy itself. The
+        eviction on the *restore* path is a guard rather than a fix and says so
+        in both places: measured, the restored layer keeps the same mesh behind
+        its handle, so the test passes with that call taken out
+      - Found alongside: `discard_cage_preview` reverted its offsets into
+        whichever sculptor was held rather than the layer the preview was laid
+        on. Reachable only with more than one mesh subtool, which is what this
+        change made ordinary; it is keyed by layer now
+      - **What is left is the first weld of a given mesh** — once per mesh per
+        session, about 165 ms, and after a reopen it is paid on the first click
+        on each mesh subtool. It cannot move to the first dab (above), and not
+        to document open either: open costs 44.8 ms and warming two sculptors
+        there would make it about 395 ms, paid whether or not they are used.
+        Where it could go is a worker thread, which is an engine question —
+        asked upstream as
+        [#368](https://github.com/CyberdyneCorp/ClayCore/issues/368)
 - [x] 8.3 Update README "What it does today", docs/features.md and
       docs/roadmap.md (upstream asks now ClayCore #321, #210, #364, #365);
       cognitive-complexity pass over touched functions against the frontend

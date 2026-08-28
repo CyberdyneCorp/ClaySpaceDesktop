@@ -89,6 +89,7 @@
     "brush.voxel.raspar.p95": 33.5852,
     "brush.voxel.suavizar.ms": 37.2781,
     "convert.mesh_to_sdf.ms": 6780.4153,
+    "convert.mesh_to_voxel.ms": 1350.8910,
     "convert.sdf_to_mesh.ms": 321.5731,
     "convert.sdf_to_voxel.ms": 430.6346,
     "convert.voxel_to_mesh.ms": 14.4861,
@@ -137,8 +138,8 @@
     "op.voxel.refine.ms": 6.4462,
     "startup.backend_discovery": 0.0051,
     "startup.to_first_document": 11.4495,
-    "subtool.activate.mesh.mean": 159.7106,
-    "subtool.activate.mesh.p95": 169.5924,
+    "subtool.activate.mesh.mean": 0.0001,
+    "subtool.activate.mesh.p95": 0.0001,
     "subtool.activate.sdf.mean": 0.0003,
     "subtool.activate.sdf.p95": 0.0005,
     "subtool.boolean.ms": 10198.2153,
@@ -151,7 +152,6 @@
     "tape.growth": 1.4607
   },
   "skipped": {
-    "brush.sdf.trim": "no gesture this harness can synthesise",
-    "convert.mesh_to_voxel": "the source layer states no bounds to convert within"
+    "brush.sdf.trim": "no gesture this harness can synthesise"
   }
 }

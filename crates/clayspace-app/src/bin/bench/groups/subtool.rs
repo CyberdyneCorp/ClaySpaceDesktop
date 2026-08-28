@@ -9,22 +9,32 @@
 //! block the interface thread for more than 16 ms", and activation is an engine
 //! operation on a click, with no busy cursor in front of it.
 //!
-//! It misses, by ten times, and the figure is reported over budget rather than
-//! silently. The design's stated fallback — arm the sculptor on the first dab
-//! instead of on activation — was tried and does not work: with no sculptor a
-//! mesh layer answers no pick, the interface sends no stroke where the pick
-//! reported nothing, and so the first dab never arrives.
+//! It used to miss by ten times, at 159.7 ms mean and 169.6 p95, because the
+//! document held **one** sculptor: a second carried mesh evicted the first, so
+//! every switch between two mesh subtools paid the pass again. The document
+//! holds several now — `clayspace-engine/src/sculptors.rs` — and a switch onto
+//! a mesh already welded once is a lookup.
+//!
+//! The design's other stated fallback, arming on the first dab rather than on
+//! activation, was tried and does not work: with no sculptor a mesh layer
+//! answers no pick, the interface sends no stroke where the pick reported
+//! nothing, and so the first dab never arrives.
 //! `the_pointer_finds_an_imported_mesh` in
 //! `clayspace-engine/tests/mesh_sculpting.rs` is that deadlock, and it fails
-//! the moment the arming comes out. docs/roadmap.md carries the whole reading,
-//! and what would actually remove the cost.
+//! the moment the arming comes out.
 //!
-//! The sculptor is cached, one layer at a time, so a fixture that switched
-//! between a mesh subtool and a field one would pay for the pass once and
-//! measure nothing afterwards. The fixture here holds **two** mesh subtools and
-//! alternates between them, which evicts the cache on every switch — the worst
-//! case, and a real one: going back and forth between two carried meshes is
-//! what a sculptor does with them.
+//! The fixture holds **two** mesh subtools and alternates between them, which
+//! is what defeated the single slot and is what a sculptor actually does with
+//! two carried meshes. It is kept exactly as it was, because a figure that
+//! only holds while one mesh is in the scene is not the one with the promise
+//! attached: this is the arrangement that used to pay, and it is the
+//! arrangement that has to stay under budget.
+//!
+//! What the figure does **not** cover is the first weld of a given mesh. That
+//! is paid once, when a mesh subtool is first worked on in a session, and it
+//! is inherent — a mesh cannot be picked or sculpted before its adjacency
+//! exists, and the ABI offers no way to build it off the interface thread.
+//! docs/roadmap.md carries that reading.
 //!
 //! The screen is deliberately outside the clock for activation, and only for
 //! activation. Choosing a subtool moves no geometry — the active one is drawn
@@ -124,8 +134,9 @@ fn switches(gpu: &Gpu, policy: &BackendPolicy) -> Result<(Vec<f64>, Vec<f64>), S
     let mut onto_mesh = Vec::new();
     let mut onto_field = Vec::new();
     for step in 0..Record::Repeatable.samples() {
-        // Alternated, so no switch onto a mesh finds that mesh's sculptor
-        // already built.
+        // Alternated, which is what a single held sculptor could not survive:
+        // each switch onto one mesh evicted the other's. It is the pattern the
+        // budget is stated against, so it stays the pattern measured.
         let mesh = if step % 2 == 0 { first } else { second };
         onto_mesh.push(switch(&mut document, mesh)?);
         onto_field.push(switch(&mut document, field)?);
