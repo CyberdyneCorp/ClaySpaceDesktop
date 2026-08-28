@@ -289,7 +289,7 @@ fn numeric(ui: &mut egui::Ui, text: impl Into<String>) {
 
 /// A toggle chip: a small button that reads as selected or not.
 ///
-/// Handed back as a `Button` rather than added here, because one of the five
+/// Handed back as a `Button` rather than added here, because one of the three
 /// places that draw a row of these adds it disabled with the reason on it.
 /// `unselected` is what an off chip fills with, which is the surface behind it
 /// — the ground under the viewport bar, a panel everywhere else.
@@ -365,6 +365,76 @@ fn icon_chip(
     ui.ctx()
         .memory_mut(|memory| memory.data.insert_temp(chip_id(label), rect));
     response
+}
+
+/// One bar as wide as the row, divided among a set of choices.
+///
+/// Four edge profiles as four chips wrapped in English and Spanish, and a
+/// word standing alone on a second line reads as a second setting. A bar that
+/// is *given* the row's width cannot wrap: each word takes what it measures
+/// plus a tight pad, and whatever the row has left over is dealt out evenly,
+/// so the four sit flush with the controls above and below them in every
+/// locale. The chosen cell is lifted from a track the tone of the ground, as a
+/// slider's knob is from its own; the rest are quiet until hovered. Each cell
+/// is recorded under `chip_id` of its word, so a test can find it. Hands back
+/// the choice that was clicked, when it was not already the current one.
+fn segmented<T: Copy + PartialEq>(
+    ui: &mut egui::Ui,
+    choices: &[T],
+    name: impl Fn(T) -> &'static str,
+    current: T,
+) -> Option<T> {
+    let font = egui::FontId::proportional(type_scale::LABEL);
+    let galleys: Vec<_> = choices
+        .iter()
+        .map(|&choice| {
+            ui.painter()
+                .layout_no_wrap(name(choice).to_owned(), font.clone(), Tokens::text())
+        })
+        .collect();
+    let fitted: f32 = galleys
+        .iter()
+        .map(|galley| galley.size().x + 2.0 * space::TIGHT)
+        .sum();
+    // A panel narrowed below what the words need gets a row that overruns it
+    // rather than words squeezed into cells they do not fit, because a
+    // clipped word is at least still a word.
+    let width = ui.available_width().max(fitted);
+    let slack = (width - fitted) / choices.len() as f32;
+    let (track, _) = ui.allocate_exact_size(egui::vec2(width, size::CONTROL), egui::Sense::hover());
+    ui.painter()
+        .rect_filled(track, size::RADIUS, Tokens::ground());
+
+    let mut left = track.min.x;
+    let mut clicked = None;
+    for (&choice, galley) in choices.iter().zip(galleys) {
+        let cell = egui::Rect::from_min_size(
+            egui::pos2(left, track.min.y),
+            egui::vec2(galley.size().x + 2.0 * space::TIGHT + slack, track.height()),
+        );
+        left = cell.max.x;
+        let word = name(choice);
+        let response = ui.interact(cell, ui.id().with(word), egui::Sense::click());
+        let on = choice == current;
+        let lit = on || response.hovered();
+        if lit {
+            ui.painter()
+                .rect_filled(cell.shrink(space::HAIR), size::RADIUS, Tokens::raised());
+        }
+        let tint = if lit {
+            Tokens::text()
+        } else {
+            Tokens::text_dim()
+        };
+        ui.painter()
+            .galley(cell.center() - galley.size() * 0.5, galley, tint);
+        ui.ctx()
+            .memory_mut(|memory| memory.data.insert_temp(chip_id(word), cell));
+        if response.clicked() && !on {
+            clicked = Some(choice);
+        }
+    }
+    clicked
 }
 
 /// The icon a manipulator mode wears, the same shape the viewport draws for it.
@@ -2761,17 +2831,14 @@ pub fn right_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
             .size(type_scale::LABEL)
             .color(Tokens::text_dim()),
     );
-    ui.horizontal_wrapped(|ui| {
-        for falloff in Falloff::ALL {
-            let on = state.brush.shaping.falloff == falloff;
-            if ui
-                .add(chip(s.falloff_name(falloff), on, Tokens::panel()))
-                .clicked()
-            {
-                queue.push(Command::SetBrushFalloff(falloff));
-            }
-        }
-    });
+    if let Some(falloff) = segmented(
+        ui,
+        &Falloff::ALL,
+        |falloff| s.falloff_name(falloff),
+        state.brush.shaping.falloff,
+    ) {
+        queue.push(Command::SetBrushFalloff(falloff));
+    }
 
     let mut accumulate = state.brush.shaping.accumulate;
     if ui.checkbox(&mut accumulate, s.label_accumulate).changed() {

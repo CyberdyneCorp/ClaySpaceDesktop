@@ -2270,3 +2270,90 @@ fn choosing_a_mesh_operand_states_what_the_crossing_costs() {
          not being stated"
     );
 }
+
+/// Brings the brush controls onto the screen.
+///
+/// The fixture's rig and mask fill the right panel to the fold, and the row
+/// below them is what a test of that row has to be able to see.
+fn without_the_rig_and_mask(state: &mut ShellState<'_>) {
+    state.armature.exists = false;
+    state.mask.present = false;
+}
+
+#[test]
+fn the_edge_profiles_share_one_row_in_every_locale() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let panel_left = SHELL_WIDTH as f32 - region::RIGHT;
+
+    for locale in Locale::ALL {
+        let strings = Strings::for_locale(locale);
+        let mut state = state(strings, &scene, &materials, &report);
+        without_the_rig_and_mask(&mut state);
+        let ctx = probe_shell(&state);
+
+        // Four words in a row, by their localized names: the English and
+        // Spanish sets wrapped their fourth onto a second line, which read as
+        // a second setting.
+        let cells: Vec<_> = clayspace_model::Falloff::ALL
+            .map(|falloff| {
+                let name = strings.falloff_name(falloff);
+                let rect = ctx
+                    .memory(|memory| memory.data.get_temp::<egui::Rect>(shell::chip_id(name)))
+                    .unwrap_or_else(|| {
+                        panic!("{}: the right panel drew no {name:?} chip", locale.label())
+                    });
+                (falloff, rect)
+            })
+            .to_vec();
+        let top = cells[0].1.top();
+        for (falloff, rect) in &cells {
+            assert!(
+                (rect.top() - top).abs() < 0.5,
+                "{}: {falloff:?} wrapped onto another line",
+                locale.label()
+            );
+            assert!(
+                rect.left() >= panel_left && rect.right() <= SHELL_WIDTH as f32,
+                "{}: {falloff:?} at {rect:?} leaves the right panel",
+                locale.label()
+            );
+        }
+
+        let name = format!("70-edge-chips-{:?}", locale).to_lowercase();
+        capture_shell(&harness, &state, &name);
+
+        // Still wired: choosing a profile that is not the current one asks
+        // for it, and nothing else.
+        let (other, rect) = cells
+            .iter()
+            .find(|(falloff, _)| *falloff != state.brush.shaping.falloff)
+            .expect("a profile other than the current one");
+        capture_shell_after(
+            &harness,
+            &state,
+            &format!("{name}-chosen"),
+            &[left_click(rect.center())],
+            |queue| {
+                let chosen: Vec<_> = queue
+                    .commands()
+                    .iter()
+                    .filter_map(|command| match command {
+                        Command::SetBrushFalloff(falloff) => Some(*falloff),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    chosen,
+                    [*other],
+                    "{}: clicking {other:?} did not choose it",
+                    locale.label()
+                );
+            },
+        );
+    }
+}
