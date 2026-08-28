@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use clayspace_app::{SessionStore, SharedDocument};
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{BrushSettings, GestureSample, Recovery, SculptModel, ToolKind};
-use clayspace_vm::DocumentViewModel;
+use clayspace_vm::{DocumentViewModel, UNTITLED};
 
 /// A store in a directory of its own, removed when the test ends.
 struct Scratch(SessionStore);
@@ -61,7 +61,7 @@ fn work_lost_to_a_crash_comes_back() {
     let store = &scratch.0;
     store.begin_session();
 
-    let mut vm = DocumentViewModel::new(Box::new(document.clone()), "Sem título");
+    let mut vm = DocumentViewModel::new(Box::new(document.clone()), UNTITLED);
     sculpt(&mut document);
     vm.touched();
     let raised = document
@@ -81,7 +81,7 @@ fn work_lost_to_a_crash_comes_back() {
     let Some(next) = fresh() else {
         return;
     };
-    let mut next_vm = DocumentViewModel::new(Box::new(next.clone()), "Sem título");
+    let mut next_vm = DocumentViewModel::new(Box::new(next.clone()), UNTITLED);
     let path = store.recovery().path().map(PathBuf::from).expect("a path");
     next_vm.recover(&path, "Recuperado").expect("recover");
 
@@ -110,7 +110,7 @@ fn a_clean_exit_leaves_the_next_run_silent() {
     let store = &scratch.0;
     store.begin_session();
 
-    let mut vm = DocumentViewModel::new(Box::new(document.clone()), "Sem título");
+    let mut vm = DocumentViewModel::new(Box::new(document.clone()), UNTITLED);
     sculpt(&mut document);
     vm.touched();
     vm.autosave_to(&store.autosave_path()).expect("autosave");
@@ -137,7 +137,7 @@ fn an_autosave_is_only_written_where_there_is_work_to_lose() {
     store.begin_session();
     let policy = clayspace_model::AutosavePolicy::default();
 
-    let mut vm = DocumentViewModel::new(Box::new(document.clone()), "Sem título");
+    let mut vm = DocumentViewModel::new(Box::new(document.clone()), UNTITLED);
     assert!(
         !policy.is_due(policy.every, *vm.modified().get()),
         "a fresh document was autosaved"

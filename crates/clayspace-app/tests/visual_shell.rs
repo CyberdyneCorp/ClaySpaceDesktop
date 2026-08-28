@@ -296,8 +296,6 @@ fn build_shell(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQ
     shell::import_window(ctx, state, queue);
     shell::export_window(ctx, state, queue);
     shell::reference_window(ctx, state, queue);
-    shell::shapes_window(ctx, state, queue);
-    shell::boolean_window(ctx, state, queue);
     shell::deform_window(ctx, state, queue);
 }
 
@@ -306,22 +304,44 @@ fn build_shell(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQ
 /// Two passes for the same reason the capture takes two: a scroll area and an
 /// area both measure before they place anything.
 fn probe_shell(state: &ShellState<'_>) -> egui::Context {
+    probe_shell_after(state, &[])
+}
+
+/// The same, with pointer events delivered first — one entry per frame, as
+/// `capture_shell_after` takes them — so a test can ask where things went
+/// once the interface has been driven somewhere.
+fn probe_shell_after(state: &ShellState<'_>, frames: &[Vec<egui::Event>]) -> egui::Context {
     let ctx = egui::Context::default();
     shell::apply_theme(&ctx);
     let mut queue = CommandQueue::new();
     for _ in 0..2 {
-        let _ = ctx.run(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(SHELL_WIDTH as f32, SHELL_HEIGHT as f32),
-                )),
-                ..Default::default()
-            },
-            |ctx| build_shell(ctx, state, &mut queue),
-        );
+        run_shell_frame(&ctx, state, &mut queue, Vec::new());
+    }
+    for events in frames {
+        run_shell_frame(&ctx, state, &mut queue, events.clone());
+        run_shell_frame(&ctx, state, &mut queue, Vec::new());
     }
     ctx
+}
+
+/// One frame of the shell on `ctx`, with `events` delivered to it.
+fn run_shell_frame(
+    ctx: &egui::Context,
+    state: &ShellState<'_>,
+    queue: &mut CommandQueue,
+    events: Vec<egui::Event>,
+) {
+    let _ = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(SHELL_WIDTH as f32, SHELL_HEIGHT as f32),
+            )),
+            events,
+            ..Default::default()
+        },
+        |ctx| build_shell(ctx, state, queue),
+    );
 }
 
 /// Draws the whole shell into one egui frame and returns the captured image.
@@ -691,6 +711,7 @@ fn the_tool_rail_reaches_what_the_menus_reach() {
         strings.action_polyframe,
         strings.action_references,
         strings.action_shapes,
+        strings.action_boolean,
         strings.action_cage,
         strings.action_curve,
         strings.action_deform,
@@ -706,7 +727,7 @@ fn the_tool_rail_reaches_what_the_menus_reach() {
         );
         rail_buttons.push(rect);
     }
-    // Ten buttons in one column, none overlapping another.
+    // Eleven buttons in one column, none overlapping another.
     for (i, a) in rail_buttons.iter().enumerate() {
         for b in &rail_buttons[i + 1..] {
             assert!(!a.intersects(*b), "two rail buttons overlap: {a:?} {b:?}");
@@ -2198,7 +2219,21 @@ fn a_selected_object_offers_the_manipulators_three_modes() {
     set.selected_object = Some(placed[0].id);
 
     let turn = strings.gizmo_mode_name(clayspace_model::GizmoMode::Rotate);
-    let chip = probe_shell(&set)
+    let probe = probe_shell(&set);
+    // All three inside the left panel. The third ran off its edge once: the
+    // chips were wrapped in an enabled-scope, and a wrapped row places a
+    // child scope at its cursor without the wrap.
+    for mode in clayspace_model::GizmoMode::ALL {
+        let name = strings.gizmo_mode_name(mode);
+        let rect = probe
+            .memory(|memory| memory.data.get_temp::<egui::Rect>(shell::chip_id(name)))
+            .unwrap_or_else(|| panic!("the object list drew no {name:?} chip"));
+        assert!(
+            rect.right() <= region::RAIL + region::LEFT,
+            "{name:?} at {rect:?} runs off the left panel"
+        );
+    }
+    let chip = probe
         .memory(|memory| memory.data.get_temp::<egui::Rect>(shell::chip_id(turn)))
         .unwrap_or_else(|| panic!("the object list drew no {turn:?} chip"))
         .center();
@@ -2555,6 +2590,77 @@ fn the_insert_control_stays_reachable_over_a_grid() {
     );
 }
 
+/// The shapes and boolean panels were windows floating over the viewport, and
+/// the viewport is where the form a shape is placed into, or cut from, stands:
+/// each hid the very thing it was being used on. Both are sections of the
+/// right panel now, beside the sculpt rather than over it, and each can still
+/// be put away from its own heading as the window could from its title bar.
+#[test]
+fn the_placing_sections_stand_in_the_right_panel_and_close_from_their_heading() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let operands = two_operands();
+
+    // One at a time, as the rail opens them: the two together run past the
+    // panel's fold, and a section under the fold is scrolled to, not clicked.
+    let sections = [
+        (
+            strings.section_shapes,
+            Command::ToggleShapes,
+            "shell-shapes-docked",
+        ),
+        (
+            strings.section_boolean,
+            Command::ToggleBoolean,
+            "shell-boolean-docked",
+        ),
+    ];
+    for (section, command, capture) in &sections {
+        let mut set = state(strings, &scene, &materials, &report);
+        set.show_shapes = *command == Command::ToggleShapes;
+        set.show_boolean = *command == Command::ToggleBoolean;
+        set.boolean_operands = &operands;
+        let close = probe_shell(&set)
+            .memory(|memory| memory.data.get_temp::<egui::Rect>(shell::close_id(section)))
+            .unwrap_or_else(|| panic!("no {section:?} section was drawn"));
+        assert!(
+            close.left() >= SHELL_WIDTH as f32 - region::RIGHT,
+            "{section:?} does not stand in the right panel: {close:?}"
+        );
+        capture_shell_after(
+            &harness,
+            &set,
+            capture,
+            &[left_click(close.center())],
+            |queue| {
+                assert_eq!(
+                    queue.commands(),
+                    std::slice::from_ref(command),
+                    "closing {section:?} from its heading did not put it away. \
+                     See target/visual/{capture}.png"
+                );
+            },
+        );
+    }
+
+    // Put away, a section leaves nothing behind — not a heading over nothing,
+    // and not a close mark for a click to land on.
+    let closed = state(strings, &scene, &materials, &report);
+    let ctx = probe_shell(&closed);
+    for (section, _, _) in sections {
+        assert!(
+            ctx.memory(|memory| memory.data.get_temp::<egui::Rect>(shell::close_id(section)))
+                .is_none(),
+            "{section:?} is drawn while its panel is closed"
+        );
+    }
+}
+
 /// Where a whole-subtool manipulator chip is, asked of the interface that drew
 /// it. `None` where the section is not drawn at all.
 fn layer_transform_chip(
@@ -2751,5 +2857,294 @@ fn the_new_layer_control_makes_a_field_layer_by_default_and_offers_a_grid() {
         "the voxel entry is wired to nothing, so \"a voxel subtool is created \
          directly\" is a control that only looks like one: {:?}",
         queue.commands()
+    );
+}
+
+/// The lightest channel value inside a rect, which for a word on a dark
+/// ground is the tone of its ink.
+///
+/// The capture is one pixel per logical unit, so the rect indexes the image
+/// directly. Shrunk by a hair so a lifted cell's edge does not count for it.
+fn brightest(image: &clayspace_view::Image, rect: egui::Rect) -> u8 {
+    let rect = rect.shrink(2.0);
+    let (x0, y0) = (rect.left().max(0.0) as u32, rect.top().max(0.0) as u32);
+    let x1 = (rect.right() as u32).min(image.width);
+    let y1 = (rect.bottom() as u32).min(image.height);
+    (y0..y1)
+        .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+        .flat_map(|(x, y)| {
+            let [r, g, b, _] = image.pixel(x, y);
+            [r, g, b]
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// The pixels that differ between two captures inside one rect.
+///
+/// The capture is one pixel per logical unit, so the rect indexes the images
+/// directly.
+fn differing_pixels_in(
+    a: &clayspace_view::Image,
+    b: &clayspace_view::Image,
+    rect: egui::Rect,
+) -> usize {
+    let (x0, y0) = (rect.left().max(0.0) as u32, rect.top().max(0.0) as u32);
+    let x1 = (rect.right() as u32).min(a.width).min(b.width);
+    let y1 = (rect.bottom() as u32).min(a.height).min(b.height);
+    (y0..y1)
+        .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+        .filter(|&(x, y)| a.pixel(x, y) != b.pixel(x, y))
+        .count()
+}
+
+/// The untitled document is named in the interface's language.
+///
+/// The document ViewModel names a fresh document with one fixed marker and
+/// knows no locale, so the menu bar read "Sem título" on an English or Spanish
+/// build. The two captures share every state but the language; the document
+/// label, on the menu bar's trailing edge, is where they must differ — and the
+/// English one must be pixel-identical to the same state named with the
+/// English word directly, so what is drawn is the translation and not the
+/// marker.
+#[test]
+fn the_untitled_document_is_named_in_the_interfaces_language() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let untitled = |strings: &'static Strings, name: &'static str| {
+        let mut state = state(strings, &scene, &materials, &report);
+        state.document_name = name;
+        // Unsaved is translated on its own; the name has to carry the test.
+        state.modified = false;
+        state
+    };
+    let english = Strings::for_locale(Locale::EnUs);
+    let portuguese = Strings::for_locale(Locale::PtBr);
+
+    let en = capture_shell(
+        &harness,
+        &untitled(english, clayspace_vm::UNTITLED),
+        "71-untitled-en",
+    );
+    let pt = capture_shell(
+        &harness,
+        &untitled(portuguese, clayspace_vm::UNTITLED),
+        "71-untitled-pt",
+    );
+    let spelled = capture_shell(
+        &harness,
+        &untitled(english, english.document_untitled),
+        "71-untitled-en-spelled",
+    );
+
+    let label = egui::Rect::from_min_max(
+        egui::pos2(SHELL_WIDTH as f32 / 2.0, 0.0),
+        egui::pos2(SHELL_WIDTH as f32, region::MENU_BAR),
+    );
+    assert!(
+        differing_pixels_in(&en, &pt, label) > 0,
+        "the document label reads the same in English and Portuguese, so the untitled marker is drawn untranslated"
+    );
+    assert_eq!(
+        differing_pixels_in(&en, &spelled, label),
+        0,
+        "the English label with the marker differs from the one with the English word"
+    );
+}
+
+/// Brings the brush controls onto the screen.
+///
+/// The fixture's rig and mask fill the right panel to the fold, and the row
+/// below them is what a test of that row has to be able to see.
+fn without_the_rig_and_mask(state: &mut ShellState<'_>) {
+    state.armature.exists = false;
+    state.mask.present = false;
+}
+
+#[test]
+fn the_edge_profiles_share_one_row_in_every_locale() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let panel_left = SHELL_WIDTH as f32 - region::RIGHT;
+
+    for locale in Locale::ALL {
+        let strings = Strings::for_locale(locale);
+        let mut state = state(strings, &scene, &materials, &report);
+        without_the_rig_and_mask(&mut state);
+        let ctx = probe_shell(&state);
+
+        // Four words in a row, by their localized names: the English and
+        // Spanish sets wrapped their fourth onto a second line, which read as
+        // a second setting.
+        let cells: Vec<_> = clayspace_model::Falloff::ALL
+            .map(|falloff| {
+                let name = strings.falloff_name(falloff);
+                let rect = ctx
+                    .memory(|memory| memory.data.get_temp::<egui::Rect>(shell::chip_id(name)))
+                    .unwrap_or_else(|| {
+                        panic!("{}: the right panel drew no {name:?} chip", locale.label())
+                    });
+                (falloff, rect)
+            })
+            .to_vec();
+        let top = cells[0].1.top();
+        for (falloff, rect) in &cells {
+            assert!(
+                (rect.top() - top).abs() < 0.5,
+                "{}: {falloff:?} wrapped onto another line",
+                locale.label()
+            );
+            assert!(
+                rect.left() >= panel_left && rect.right() <= SHELL_WIDTH as f32,
+                "{}: {falloff:?} at {rect:?} leaves the right panel",
+                locale.label()
+            );
+        }
+
+        let name = format!("70-edge-chips-{:?}", locale).to_lowercase();
+        let image = capture_shell(&harness, &state, &name);
+
+        // The current profile is the one lifted cell; the others are quiet.
+        // A galley laid out in one tone and painted with another keeps the
+        // first unless the paint overrides it, and the three quiet words once
+        // came out at the full tone of the chosen one without any assertion
+        // noticing.
+        let current = cells
+            .iter()
+            .find(|(falloff, _)| *falloff == state.brush.shaping.falloff)
+            .map(|(_, rect)| brightest(&image, *rect))
+            .expect("the current profile among the cells");
+        for (falloff, rect) in &cells {
+            if *falloff == state.brush.shaping.falloff {
+                continue;
+            }
+            let quiet = brightest(&image, *rect);
+            assert!(
+                quiet + 12 <= current,
+                "{}: {falloff:?} peaks at {quiet}, as loud as the chosen \
+                 {:?} at {current}; an unchosen profile is dim",
+                locale.label(),
+                state.brush.shaping.falloff
+            );
+        }
+
+        // Still wired: choosing a profile that is not the current one asks
+        // for it, and nothing else.
+        let (other, rect) = cells
+            .iter()
+            .find(|(falloff, _)| *falloff != state.brush.shaping.falloff)
+            .expect("a profile other than the current one");
+        capture_shell_after(
+            &harness,
+            &state,
+            &format!("{name}-chosen"),
+            &[left_click(rect.center())],
+            |queue| {
+                let chosen: Vec<_> = queue
+                    .commands()
+                    .iter()
+                    .filter_map(|command| match command {
+                        Command::SetBrushFalloff(falloff) => Some(*falloff),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    chosen,
+                    [*other],
+                    "{}: clicking {other:?} did not choose it",
+                    locale.label()
+                );
+            },
+        );
+    }
+}
+
+/// Where the right panel's inspectors stand, between the bars above and below.
+fn right_panel_rect() -> egui::Rect {
+    egui::Rect::from_min_max(
+        egui::pos2(
+            SHELL_WIDTH as f32 - region::RIGHT,
+            region::MENU_BAR + region::OPTIONS_BAR,
+        ),
+        egui::pos2(
+            SHELL_WIDTH as f32,
+            SHELL_HEIGHT as f32 - region::STATUS - region::SHELF,
+        ),
+    )
+}
+
+/// A section folds from its heading, and folding is nothing the document hears.
+///
+/// The right panel carries ten sections and a sculptor working the last of
+/// them scrolls past the rest every time. This is the fold that spares them:
+/// the heading row is the control, the body goes away, and — because a fold is
+/// interface state and not document state — no command leaves the view for it.
+#[test]
+fn a_section_folds_from_its_heading_and_emits_nothing() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let set = state(strings, &scene, &materials, &report);
+
+    let heading = shell_rect(
+        &probe_shell(&set),
+        shell::heading_id(strings.section_geometry),
+    )
+    .unwrap_or_else(|| panic!("no {:?} heading was drawn", strings.section_geometry));
+    assert!(
+        heading.left() >= SHELL_WIDTH as f32 - region::RIGHT,
+        "{:?} does not stand in the right panel: {heading:?}",
+        strings.section_geometry
+    );
+
+    let open = capture_shell(&harness, &set, "72-fold-open");
+    let fold = left_click(heading.center());
+    let closed = capture_shell_after(
+        &harness,
+        &set,
+        "72-fold-closed",
+        std::slice::from_ref(&fold),
+        |queue| {
+            assert!(
+                queue.is_empty(),
+                "folding a section emitted {:?}; a fold is view state and no \
+             command's business. See target/visual/72-fold-closed.png",
+                queue.commands()
+            );
+        },
+    );
+
+    let differing = differing_pixels_in(&open, &closed, right_panel_rect());
+    assert!(
+        differing > 0,
+        "clicking the {:?} heading changed nothing in the right panel. See \
+         target/visual/72-fold-open.png and 72-fold-closed.png",
+        strings.section_geometry
+    );
+
+    // The body is gone, not merely covered. A readout writes its row down
+    // every frame it is drawn and the slot is never cleared, so the question
+    // is asked of a frame drawn after the fold with the slot wiped first.
+    let ctx = probe_shell_after(&set, &[fold]);
+    let polygons = shell::readout_id(strings.label_polygons);
+    ctx.data_mut(|data| data.remove::<egui::Rect>(polygons));
+    run_shell_frame(&ctx, &set, &mut CommandQueue::new(), Vec::new());
+    assert!(
+        shell_rect(&ctx, polygons).is_none(),
+        "the {:?} row is still drawn under a folded heading",
+        strings.label_polygons
     );
 }

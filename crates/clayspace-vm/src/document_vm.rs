@@ -10,6 +10,14 @@ use clayspace_model::{DocumentModel, ModelError, OpenError};
 
 use crate::observable::Observable;
 
+/// What a document with no path is called, as the ViewModel stores it.
+///
+/// A marker rather than a word: the ViewModel knows no locale, so the View
+/// compares the name it is handed against this and draws the sculptor's own
+/// word for it. Saved into nothing — a name only becomes a file stem when a
+/// path is chosen, and then it is the path's.
+pub const UNTITLED: &str = "Sem título";
+
 /// Whether unsaved work would be lost, and what to do about it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Guard {

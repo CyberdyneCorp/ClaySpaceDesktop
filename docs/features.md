@@ -890,7 +890,8 @@ than to this application.
 
 ## Inserting a form, and the booleans on it
 
-*Arquivo → Formas* offers fourteen shapes — box, sphere, cylinder, cone,
+The rail's **Formas** button, or *Arquivo → Formas*, opens a section of the
+right region offering fourteen shapes — box, sphere, cylinder, cone,
 torus, capsule, ellipsoid, pyramid, rounded box, frame, rounded cylinder, hex
 and tri prisms, octahedron — each with the numbers it is actually measured by,
 which are different numbers for different shapes. **Inserir** puts one where
@@ -898,6 +899,17 @@ the pointer is on the surface, or where the camera is looking when the pointer
 is off it. The two the engine calls unbounded — a plane and an infinite
 cylinder — are not offered: neither has an extent for a manipulator to sit on
 or a bound for the cache to work from.
+
+**The shapes are a section of the right region, not a window.** They were a
+window floating over the viewport, and the viewport is where the form a shape
+is being placed into stands, so the panel hid the very thing the shape was
+being aimed at. Docked under the material, the picker and the sculpt are side
+by side while a shape is placed and turned; the section is put away from the
+`×` on its own heading, as the window was from its title bar, or from the rail
+button or menu entry that opened it, each of which pushes the same command. Its
+combo boxes take the panel's width rather than the fixed width the window gave
+them, and the selected object's three combine chips wrap where Interseção does
+not fit the panel's row.
 
 **The three booleans are chips, with the two discs on them.** Unir, Subtrair
 and Interseção are what a placed shape is for, so they stand as a row above the
@@ -1179,7 +1191,9 @@ other half of putting forms in a scene — combines two whole forms into a third
 Pick the two, pick **União**, **Subtração** or **Interseção**, read what it
 costs, and confirm. What arrives is a subtool like any other: active on
 arrival, sculptable, movable with the whole-subtool manipulator, and available
-as an operand again.
+as an operand again. It stands in the right region under the shapes, for the
+same reason the shapes do: a window over the viewport covered the two forms
+being cut from one another. The rail reaches it beside **Formas**.
 
 **The panel names the two roles rather than numbering them.** *Base — o subtool
 que é cortado* and *Ferramenta — o subtool que corta*, because subtraction is
@@ -1509,6 +1523,15 @@ languages; the shell's untranslated-label ratchet (`LABELS_STILL_DRAWN`) stands
 at ten, all of them identifiers — SDF, mm, a mesh's own name — rather than
 words.
 
+**The untitled document is named in the interface's language.** A fresh
+document is "Sem título" to the document ViewModel, which knows no locale, so
+that Portuguese reached the menu bar's document label and the file name the
+save and export dialogs offered on an English or Spanish build. The ViewModel
+still stores and resets to that one marker — it is `clayspace_vm::UNTITLED`
+now, spelled out nowhere else — and the shell translates it where the name is
+shown: **Sem título**, **Untitled**, **Sin título**. A name that came from a
+file passes through untouched.
+
 The interface **opens in English**. That is not the design's own language and
 it is deliberate: it has to open in something a first-time reader can make
 sense of. A system language still wins over that default on a first run —
@@ -1544,16 +1567,18 @@ and viewport bars. See *Not built yet*.
 
 The regions from the design: a menu bar, a tool options bar, a left region with
 the scene tree, layer stack and sculpt settings, a central viewport, a right
-region with material, geometry and brush inspectors, a brush shelf, and a
-status area with a memory meter, the active backend and the working unit.
+region with material, geometry and brush inspectors — and, while either is up,
+the shapes and boolean sections — a brush shelf, and a status area with a
+memory meter, the active backend and the working unit.
 
 The **accent marks the active brush and nothing else**. Layer selection is
 indicated by surface tone and weight; a test asserts the accent's coverage
 stays about constant as the active tool changes, so it cannot quietly spread.
 **The tool rail on the leading edge** — the region the design named and the
 first build left empty — holds, as icons with their word and key on hover:
-mask painting; frame, polyframe and the reference images; the shapes panel,
-the deformation cage, the curve and the deformations; undo and redo. Every
+mask painting; frame, polyframe and the reference images; the shapes and
+boolean sections, the deformation cage, the curve and the deformations; undo
+and redo. Every
 button dispatches the command its menu entry does under the same conditions —
 the cage is grey with the reason on it where the layer cannot be caged, undo
 is grey where there is nothing to undo — so the two cannot disagree. It exists
@@ -1580,6 +1605,35 @@ way under the pointer — so the active brush is carried by tone as well as by
 hue, which is what a colour-blind sculptor reads, and the shelf follows the
 "quiet until addressed" rule in the one place it did not. The sections of a
 panel are separated by a hairline rule in the separator tone, never by a box.
+
+**Every section folds from its heading.** The right region carries up to ten
+sections and the left has grown too, so the heading row is a control: a click
+puts the body away and a second brings it back, with a chevron at the row's
+trailing end — faint at rest, lit under the pointer — saying which way it
+stands. A fold is interface state and not document state: it is kept in the
+interface's own memory keyed by the heading's word, enters no history, emits no
+command, and is forgotten when the application closes, so every section opens
+shown. The two placing sections keep their `×` instead, which puts them away
+altogether.
+
+**The shapes and the boolean are docked, not floated.** Both were windows over
+the viewport, and the viewport is where the form a shape is placed into, or cut
+from, stands: each covered the thing it was being used on. They are sections
+of the right region now, under the material and above the geometry, drawn
+while their toggle holds and put away from the `×` on their heading, the rail
+button or the menu entry — all of which push the same command, so a test that
+finds the close mark by its section's word and clicks it sees the section gone
+on the next frame. *Inserting a form* says what the two sections hold.
+
+**The four edge profiles are one segmented row.** Dura, Linear, Suave and
+Gaussiana were four chips that wrapped in English and Spanish, leaving Gaussian
+alone on a second line that read as a second setting. The row is now a bar
+given the width of its row, so it cannot wrap: each word takes what it measures
+plus a tight pad and the rest is dealt out evenly, the chosen cell lifted from
+a ground-toned track the way a slider's knob is, the others dim until hovered.
+A test asserts, in every locale, that the four cells share one top inside the
+right panel, that the unchosen ink sits clearly below the chosen, and that a
+click still sets the falloff.
 
 Contrast floors are enforced as tests, not intentions: 4.5:1 for text, 3:1 for
 indicators that carry state. Where the quiet-until-addressed rule would fall

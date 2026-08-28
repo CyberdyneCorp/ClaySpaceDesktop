@@ -211,6 +211,9 @@ pub struct Strings {
     pub section_layers: &'static str,
     pub section_sculpt_settings: &'static str,
     pub section_material: &'static str,
+    /// The docked shapes and boolean sections of the right region.
+    pub section_shapes: &'static str,
+    pub section_boolean: &'static str,
     pub section_geometry: &'static str,
     pub section_resolution: &'static str,
     pub section_brush_controls: &'static str,
@@ -399,6 +402,8 @@ pub struct Strings {
     pub hint_units: &'static str,
     pub state_unsaved: &'static str,
     pub state_nothing_changed: &'static str,
+    /// What a document that has never been saved is called.
+    pub document_untitled: &'static str,
 }
 
 /// The Portuguese strings, which the design specifies.
@@ -592,6 +597,8 @@ const PT_BR: Strings = Strings {
     section_layers: "CAMADAS",
     section_sculpt_settings: "CONFIGURAÇÕES DE ESCULTURA",
     section_material: "MATERIAL",
+    section_shapes: "FORMAS",
+    section_boolean: "BOOLEANA",
     section_geometry: "GEOMETRIA",
     section_resolution: "RESOLUÇÃO",
     section_brush_controls: "CONTROLES DE PINCEL",
@@ -730,6 +737,7 @@ const PT_BR: Strings = Strings {
     hint_units: "Toque para trocar a unidade. Só muda a leitura; nada é redimensionado.",
     state_unsaved: "não salvo",
     state_nothing_changed: "nada mudou",
+    document_untitled: "Sem título",
 };
 
 /// The English strings.
@@ -922,6 +930,8 @@ const EN_US: Strings = Strings {
     section_layers: "LAYERS",
     section_sculpt_settings: "SCULPT SETTINGS",
     section_material: "MATERIAL",
+    section_shapes: "SHAPES",
+    section_boolean: "BOOLEAN",
     section_geometry: "GEOMETRY",
     section_resolution: "RESOLUTION",
     section_brush_controls: "BRUSH CONTROLS",
@@ -1060,6 +1070,7 @@ const EN_US: Strings = Strings {
     hint_units: "Click to change the unit. It changes the reading only; nothing is rescaled.",
     state_unsaved: "unsaved",
     state_nothing_changed: "nothing changed",
+    document_untitled: "Untitled",
 };
 
 /// The Latin American Spanish strings.
@@ -1253,6 +1264,8 @@ const ES_419: Strings = Strings {
     section_layers: "CAPAS",
     section_sculpt_settings: "AJUSTES DE ESCULTURA",
     section_material: "MATERIAL",
+    section_shapes: "FORMAS",
+    section_boolean: "BOOLEANA",
     section_geometry: "GEOMETRÍA",
     section_resolution: "RESOLUCIÓN",
     section_brush_controls: "CONTROLES DE PINCEL",
@@ -1398,6 +1411,7 @@ const ES_419: Strings = Strings {
     hint_units: "Haz clic para cambiar la unidad. Solo cambia la lectura; no se reescala nada.",
     state_unsaved: "sin guardar",
     state_nothing_changed: "nada cambió",
+    document_untitled: "Sin título",
 };
 
 impl Strings {
@@ -1620,7 +1634,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 184] {
+    pub fn all(&self) -> [&'static str; 187] {
         [
             self.action_shapes,
             self.label_shape,
@@ -1707,6 +1721,8 @@ impl Strings {
             self.section_layers,
             self.section_sculpt_settings,
             self.section_material,
+            self.section_shapes,
+            self.section_boolean,
             self.section_geometry,
             self.section_resolution,
             self.section_brush_controls,
@@ -1806,6 +1822,7 @@ impl Strings {
             self.hint_units,
             self.state_unsaved,
             self.state_nothing_changed,
+            self.document_untitled,
         ]
     }
 }
@@ -1908,6 +1925,24 @@ mod tests {
                 .all(|op| english.boolean_op(*op) != portuguese.boolean_op(*op)),
             "an operation reads the same in both, so one table was copied"
         );
+    }
+
+    #[test]
+    fn the_untitled_document_is_named_in_every_language() {
+        // The ViewModel names a fresh document with one fixed marker and knows
+        // no locale, so "Sem título" reached the menu bar on every language
+        // until the View started translating it. The word has to differ from
+        // the Portuguese in each other table, or the mapping is a no-op.
+        let portuguese = Strings::for_locale(Locale::PtBr).document_untitled;
+        assert_eq!(portuguese, clayspace_vm::UNTITLED);
+        for locale in [Locale::EnUs, Locale::Es419] {
+            assert_ne!(
+                Strings::for_locale(locale).document_untitled,
+                portuguese,
+                "{} keeps the Portuguese untitled name",
+                locale.label()
+            );
+        }
     }
 
     #[test]
@@ -2150,6 +2185,8 @@ mod tests {
                 strings.section_layers,
                 strings.section_objects,
                 strings.section_material,
+                strings.section_shapes,
+                strings.section_boolean,
                 strings.section_geometry,
             ] {
                 assert_eq!(

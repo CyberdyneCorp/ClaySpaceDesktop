@@ -277,12 +277,91 @@ pub fn apply_theme(ctx: &egui::Context) {
     ctx.set_style(style);
 }
 
-/// A section heading: small, spaced, low contrast.
+/// The id a section's heading is recorded under, so a test can fold the
+/// section by its word rather than by a pixel.
+pub fn heading_id(section: &str) -> egui::Id {
+    egui::Id::new(("heading", section))
+}
+
+/// Where a section's fold is kept between frames.
+fn fold_id(section: &str) -> egui::Id {
+    egui::Id::new(("fold", section))
+}
+
+/// A section heading: small, spaced, low contrast. Hands back whether the
+/// section under it is open, and a caller draws the body only then.
 ///
 /// A hairline rule above it where something already stands above it, so the
 /// sections of a long panel read as sections rather than as one column of
 /// rows — by tone, as the design asks, and never by a box around them.
-fn heading(ui: &mut egui::Ui, text: &str) {
+///
+/// The whole row folds the section, with a chevron at its trailing end
+/// saying which way it stands. The right panel carries ten sections and the
+/// left has grown too; a sculptor working the brush controls should not have
+/// to scroll past a material and a rig every time. The fold is interface
+/// state and not document state: it lives in egui's own memory keyed by the
+/// heading's word, so it enters no undo history, emits no command, and is
+/// forgotten when the application closes — every section opens shown.
+#[must_use]
+fn heading(ui: &mut egui::Ui, text: &str) -> bool {
+    heading_rule(ui);
+    let fold = fold_id(text);
+    let was_open = ui.ctx().data(|data| data.get_temp(fold)).unwrap_or(true);
+    let response = heading_row(ui, text, was_open);
+    let open = if response.clicked() {
+        !was_open
+    } else {
+        was_open
+    };
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(fold, open);
+        data.insert_temp(heading_id(text), response.rect);
+    });
+    ui.add_space(space::TIGHT);
+    open
+}
+
+/// The row a folding heading is: its word at the leading edge, the chevron at
+/// the trailing one, and the whole width between them a place to click.
+///
+/// The chevron is faint at rest and lifts under the pointer, as every control
+/// here does; it is the one mark on the row that is not text, and drawn in
+/// the icon set so it reads as the tree's own collapse mark rather than a
+/// second kind.
+fn heading_row(ui: &mut egui::Ui, text: &str, open: bool) -> egui::Response {
+    let galley = ui.painter().layout_no_wrap(
+        text.to_owned(),
+        egui::FontId::proportional(type_scale::HEADING),
+        Tokens::text_faint(),
+    );
+    let height = galley.size().y.max(size::ICON);
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::click(),
+    );
+    let painter = ui.painter();
+    let text_at = egui::pos2(rect.left(), rect.center().y - galley.size().y * 0.5);
+    painter.galley(text_at, galley, Tokens::text_faint());
+    let tint = if response.hovered() {
+        Tokens::text()
+    } else {
+        Tokens::text_faint()
+    };
+    let chevron = egui::Rect::from_center_size(
+        egui::pos2(rect.right() - size::ICON * 0.5, rect.center().y),
+        egui::Vec2::splat(size::ICON),
+    );
+    let icon = if open {
+        Icon::Expanded
+    } else {
+        Icon::Collapsed
+    };
+    icons::paint(painter, chevron, icon, tint);
+    response
+}
+
+/// The rule a heading stands under, where something already stands above it.
+fn heading_rule(ui: &mut egui::Ui) {
     if ui.min_rect().height() > 0.0 {
         ui.add_space(space::SNUG);
         let (rule, _) =
@@ -290,12 +369,62 @@ fn heading(ui: &mut egui::Ui, text: &str) {
         ui.painter().rect_filled(rule, 0.0, Tokens::rule());
     }
     ui.add_space(space::ROOMY);
-    ui.label(
-        egui::RichText::new(text)
-            .size(type_scale::HEADING)
-            .color(Tokens::text_faint()),
-    );
+}
+
+/// A heading's word, set as the design sets every heading.
+fn heading_text(text: &str) -> egui::RichText {
+    egui::RichText::new(text)
+        .size(type_scale::HEADING)
+        .color(Tokens::text_faint())
+}
+
+/// The id a section's close control is recorded under, so a test can put the
+/// section away by its word rather than by a pixel.
+pub fn close_id(section: &str) -> egui::Id {
+    egui::Id::new(("close", section))
+}
+
+/// A heading with the means to put its section away. Hands back whether the
+/// sculptor just did.
+///
+/// For the two sections that stand where a window used to: a window is closed
+/// from its own title bar, and a section that could only be closed from the
+/// rail would have taken that with the window. The mark is quiet in the way
+/// every control here is — dim ink at rest, lifting under the pointer — and
+/// at the trailing end, so the word still reads as the other headings do.
+fn closable_heading(ui: &mut egui::Ui, text: &str) -> bool {
+    heading_rule(ui);
+    let closed = ui
+        .horizontal(|ui| {
+            ui.label(heading_text(text));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let (rect, response) = ui.allocate_exact_size(
+                    egui::vec2(size::CONTROL, size::CONTROL),
+                    egui::Sense::click(),
+                );
+                let tint = if response.hovered() {
+                    ui.painter()
+                        .rect_filled(rect, size::RADIUS, Tokens::raised());
+                    Tokens::text()
+                } else {
+                    Tokens::text_dim()
+                };
+                ui.painter().text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "×",
+                    egui::FontId::proportional(type_scale::BODY),
+                    tint,
+                );
+                ui.ctx()
+                    .memory_mut(|memory| memory.data.insert_temp(close_id(text), rect));
+                response.clicked()
+            })
+            .inner
+        })
+        .inner;
     ui.add_space(space::TIGHT);
+    closed
 }
 
 /// A numeric readout, set monospaced so digits do not reflow as they change.
@@ -310,7 +439,7 @@ fn numeric(ui: &mut egui::Ui, text: impl Into<String>) {
 
 /// A toggle chip: a small button that reads as selected or not.
 ///
-/// Handed back as a `Button` rather than added here, because one of the five
+/// Handed back as a `Button` rather than added here, because one of the three
 /// places that draw a row of these adds it disabled with the reason on it.
 /// `unselected` is what an off chip fills with, which is the surface behind it
 /// — the ground under the viewport bar, a panel everywhere else.
@@ -350,14 +479,23 @@ fn icon_chip(
     on: bool,
     unselected: egui::Color32,
 ) -> egui::Response {
-    icon_chip_recorded(ui, icon, label, on, unselected, true)
+    icon_chip_recorded(ui, icon, label, on, unselected, true, true)
 }
 
-/// The same, choosing whether the chip claims `chip_id(label)`.
+/// The same, choosing whether the chip claims `chip_id(label)` and whether
+/// it is enabled.
 ///
 /// Two rows can carry the same word — the object list's Girar and the layer
 /// transform's — and one memory slot cannot hold both. A caller with ids of
-/// its own passes `false` and leaves the slot to the row a test looks for.
+/// its own passes `record: false` and leaves the slot to the row a test looks
+/// for.
+///
+/// `enabled` is a parameter rather than `add_enabled_ui` around the call
+/// because that scope is a child ui, and a wrapped row places a child at its
+/// cursor without the wrap: the third mode chip in the object list ran off
+/// the panel while the same three chips wrapped everywhere they were drawn
+/// bare.
+#[allow(clippy::too_many_arguments)]
 fn icon_chip_recorded(
     ui: &mut egui::Ui,
     icon: Icon,
@@ -365,7 +503,9 @@ fn icon_chip_recorded(
     on: bool,
     unselected: egui::Color32,
     record: bool,
+    enabled: bool,
 ) -> egui::Response {
+    let enabled = enabled && ui.is_enabled();
     let padding = ui.spacing().button_padding;
     let font = egui::FontId::proportional(type_scale::LABEL);
     let galley = ui
@@ -374,15 +514,15 @@ fn icon_chip_recorded(
     let width = padding.x * 2.0 + size::CHIP_ICON + space::TIGHT + galley.size().x;
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(width, size::CONTROL), egui::Sense::click());
-    let lit = ui.is_enabled() && (on || response.hovered());
-    let tint = if !ui.is_enabled() {
+    let lit = enabled && (on || response.hovered());
+    let tint = if !enabled {
         Tokens::text_faint()
     } else if lit {
         Tokens::text()
     } else {
         Tokens::text_dim()
     };
-    let fill = if on || response.hovered() {
+    let fill = if enabled && (on || response.hovered()) {
         Tokens::raised()
     } else {
         unselected
@@ -398,12 +538,88 @@ fn icon_chip_recorded(
         icon_rect.max.x + space::TIGHT,
         rect.center().y - galley.size().y * 0.5,
     );
-    painter.galley(text_at, galley, tint);
+    // The galley was laid out in one tone and is painted in another: a plain
+    // `galley` keeps the colour it was laid out with and treats the tint as
+    // a fallback, so only the override actually dims a quiet chip.
+    painter.galley_with_override_text_color(text_at, galley, tint);
     if record {
         ui.ctx()
             .memory_mut(|memory| memory.data.insert_temp(chip_id(label), rect));
     }
     response
+}
+
+/// One bar as wide as the row, divided among a set of choices.
+///
+/// Four edge profiles as four chips wrapped in English and Spanish, and a
+/// word standing alone on a second line reads as a second setting. A bar that
+/// is *given* the row's width cannot wrap: each word takes what it measures
+/// plus a tight pad, and whatever the row has left over is dealt out evenly,
+/// so the four sit flush with the controls above and below them in every
+/// locale. The chosen cell is lifted from a track the tone of the ground, as a
+/// slider's knob is from its own; the rest are quiet until hovered. Each cell
+/// is recorded under `chip_id` of its word, so a test can find it. Hands back
+/// the choice that was clicked, when it was not already the current one.
+fn segmented<T: Copy + PartialEq>(
+    ui: &mut egui::Ui,
+    choices: &[T],
+    name: impl Fn(T) -> &'static str,
+    current: T,
+) -> Option<T> {
+    let font = egui::FontId::proportional(type_scale::LABEL);
+    let galleys: Vec<_> = choices
+        .iter()
+        .map(|&choice| {
+            ui.painter()
+                .layout_no_wrap(name(choice).to_owned(), font.clone(), Tokens::text())
+        })
+        .collect();
+    let fitted: f32 = galleys
+        .iter()
+        .map(|galley| galley.size().x + 2.0 * space::TIGHT)
+        .sum();
+    // A panel narrowed below what the words need gets a row that overruns it
+    // rather than words squeezed into cells they do not fit, because a
+    // clipped word is at least still a word.
+    let width = ui.available_width().max(fitted);
+    let slack = (width - fitted) / choices.len() as f32;
+    let (track, _) = ui.allocate_exact_size(egui::vec2(width, size::CONTROL), egui::Sense::hover());
+    ui.painter()
+        .rect_filled(track, size::RADIUS, Tokens::ground());
+
+    let mut left = track.min.x;
+    let mut clicked = None;
+    for (&choice, galley) in choices.iter().zip(galleys) {
+        let cell = egui::Rect::from_min_size(
+            egui::pos2(left, track.min.y),
+            egui::vec2(galley.size().x + 2.0 * space::TIGHT + slack, track.height()),
+        );
+        left = cell.max.x;
+        let word = name(choice);
+        let response = ui.interact(cell, ui.id().with(word), egui::Sense::click());
+        let on = choice == current;
+        let lit = on || response.hovered();
+        if lit {
+            ui.painter()
+                .rect_filled(cell.shrink(space::HAIR), size::RADIUS, Tokens::raised());
+        }
+        let tint = if lit {
+            Tokens::text()
+        } else {
+            Tokens::text_dim()
+        };
+        ui.painter().galley_with_override_text_color(
+            cell.center() - galley.size() * 0.5,
+            galley,
+            tint,
+        );
+        ui.ctx()
+            .memory_mut(|memory| memory.data.insert_temp(chip_id(word), cell));
+        if response.clicked() && !on {
+            clicked = Some(choice);
+        }
+    }
+    clicked
 }
 
 /// The icon a manipulator mode wears, the same shape the viewport draws for it.
@@ -435,18 +651,19 @@ fn gizmo_mode_row(
         for mode in GizmoMode::ALL {
             let on = current == mode;
             let usable = can_transform || mode == GizmoMode::Move;
-            let response = ui
-                .add_enabled_ui(usable, |ui| {
-                    icon_chip(
-                        ui,
-                        gizmo_mode_icon(mode),
-                        s.gizmo_mode_name(mode),
-                        on,
-                        Tokens::panel(),
-                    )
-                })
-                .inner
-                .on_disabled_hover_text(s.hint_gizmo_needs_two);
+            let response = icon_chip_recorded(
+                ui,
+                gizmo_mode_icon(mode),
+                s.gizmo_mode_name(mode),
+                on,
+                Tokens::panel(),
+                true,
+                usable,
+            );
+            if !usable {
+                response.on_hover_text(s.hint_gizmo_needs_two);
+                continue;
+            }
             if response.clicked() && !on {
                 queue.push(Command::SetGizmoMode(mode));
             }
@@ -454,9 +671,15 @@ fn gizmo_mode_row(
     });
 }
 
+/// The id a readout's row is recorded under, so a test can ask whether a
+/// value was drawn at all — which is what a folded section has to answer.
+pub fn readout_id(label: &str) -> egui::Id {
+    egui::Id::new(("readout", label))
+}
+
 /// A label and its value on one row.
 fn readout(ui: &mut egui::Ui, label: &str, value: impl Into<String>) {
-    ui.horizontal(|ui| {
+    let row = ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new(label)
                 .size(type_scale::LABEL)
@@ -465,6 +688,11 @@ fn readout(ui: &mut egui::Ui, label: &str, value: impl Into<String>) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             numeric(ui, value);
         });
+    });
+    ui.ctx().memory_mut(|memory| {
+        memory
+            .data
+            .insert_temp(readout_id(label), row.response.rect)
     });
 }
 
@@ -909,10 +1137,11 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
         // The document, on the trailing edge as the design places it.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(space::SNUG);
+            let name = document_display_name(state.strings, state.document_name);
             let title = if state.modified {
-                format!("{} • {}", state.document_name, state.strings.state_unsaved)
+                format!("{} • {}", name, state.strings.state_unsaved)
             } else {
-                state.document_name.to_string()
+                name.to_string()
             };
             ui.label(
                 egui::RichText::new(title)
@@ -921,6 +1150,20 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
             );
         });
     });
+}
+
+/// The document's name as the sculptor should read it.
+///
+/// A fresh document carries the ViewModel's untitled marker, which is fixed
+/// because the ViewModel knows no locale; this is where that marker becomes
+/// the word in the interface's language. A name that came from a file is the
+/// file's and passes through untouched.
+pub fn document_display_name<'a>(strings: &'a Strings, name: &'a str) -> &'a str {
+    if name == clayspace_vm::UNTITLED {
+        strings.document_untitled
+    } else {
+        name
+    }
 }
 
 /// The tool options bar: the active brush's primary parameters, always visible.
@@ -1280,7 +1523,9 @@ fn reference_plane(
     queue: &mut CommandQueue,
 ) {
     let settings = slot.settings;
-    heading(ui, s.ref_plane_name(plane));
+    if !heading(ui, s.ref_plane_name(plane)) {
+        return;
+    }
     ui.horizontal(|ui| match slot.name {
         Some(name) => {
             // Shown, and only then, because there is nothing to hide.
@@ -1518,9 +1763,17 @@ fn axis_control(ui: &mut egui::Ui, label: &str, axis: [f32; 3]) -> Option<[f32; 
 
 /// The scene tree and the layer stack.
 pub fn left_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
-    let s = state.strings;
+    scene_section(ui, state);
+    layers_section(ui, state, queue);
+    layer_transform_section(ui, state, queue);
+    sculpt_settings_section(ui, state, queue);
+}
 
-    heading(ui, s.section_scene);
+/// The scene tree: every node, indented by its depth, with whether it shows.
+fn scene_section(ui: &mut egui::Ui, state: &ShellState<'_>) {
+    if !heading(ui, state.strings.section_scene) {
+        return;
+    }
     for node in &state.scene.nodes {
         ui.horizontal(|ui| {
             ui.add_space(space::SNUG + node.depth as f32 * space::ROOMY);
@@ -1549,8 +1802,14 @@ pub fn left_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Command
             });
         });
     }
+}
 
-    heading(ui, s.section_layers);
+/// The layer stack, and what stands under it: the placed objects on a field,
+/// the recording control on a grid, and the control that adds a layer.
+fn layers_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    if !heading(ui, state.strings.section_layers) {
+        return;
+    }
     for layer in state.scene.layers.iter().rev() {
         layer_row(ui, state, layer, queue);
     }
@@ -1573,10 +1832,14 @@ pub fn left_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Command
 
     ui.add_space(space::SNUG);
     add_layer_control(ui, state, queue);
+}
 
-    layer_transform_section(ui, state, queue);
-
-    heading(ui, s.section_sculpt_settings);
+/// The settings a stroke is made under: which axes it mirrors across.
+fn sculpt_settings_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    if !heading(ui, s.section_sculpt_settings) {
+        return;
+    }
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new(s.label_symmetry)
@@ -1706,7 +1969,9 @@ fn layer_transform_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mu
     }
 
     let s = state.strings;
-    heading(ui, s.section_layer_transform);
+    if !heading(ui, s.section_layer_transform) {
+        return;
+    }
     let on_this_layer = state.gizmo_target == Some(clayspace_model::GizmoTarget::Layer(key));
     ui.horizontal_wrapped(|ui| {
         for mode in GizmoMode::ALL {
@@ -1721,6 +1986,7 @@ fn layer_transform_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mu
                 on,
                 Tokens::panel(),
                 false,
+                true,
             );
             // Recorded where a test can find it, for the reason `slider_id`
             // states: a control reached by pixel coordinate is a different
@@ -2187,46 +2453,11 @@ pub fn diagnostics_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &m
             ui.set_min_width(360.0);
             let d = state.diagnostics;
 
-            heading(ui, s.section_diagnostics);
-            readout(ui, "Aplicação", d.app_version.clone());
-            readout(ui, "Motor", d.engine_version.clone());
-            readout(ui, "Revisão", d.engine_revision.clone());
-            readout(ui, "Plataforma", d.platform.clone());
-
-            heading(ui, s.label_backend);
-            readout(ui, "Disponíveis", d.backends.join(", "));
-            readout(
-                ui,
-                "Ativo",
-                format!("{} — {}", d.active_backend, d.selection),
-            );
-            if let Some(renderer) = &d.renderer {
-                readout(ui, "Vídeo", renderer.clone());
+            if heading(ui, s.section_diagnostics) {
+                diagnostics_build(ui, d);
             }
-
-            // The stalls, which are what "it stutters" turns into. Listed even
-            // when there are none, for the same reason as the fallbacks below.
-            if d.stalls.is_empty() {
-                readout(ui, "Travamentos", "nenhum acima de um quadro");
-            } else {
-                for stall in &d.stalls {
-                    readout(ui, "Travamento", stall.clone());
-                }
-            }
-
-            // Fallbacks are listed even when there are none. Silence here reads
-            // as "the panel is broken" rather than as "nothing fell back", and
-            // a reader cannot tell the two apart.
-            if d.fallbacks.is_empty() {
-                readout(ui, "Alternativas", "nenhuma nesta sessão");
-            } else {
-                for fallback in &d.fallbacks {
-                    readout(
-                        ui,
-                        "Alternativa",
-                        format!("{} recusou {}", fallback.declined_by, fallback.operation),
-                    );
-                }
+            if heading(ui, s.label_backend) {
+                diagnostics_backend(ui, d);
             }
 
             ui.add_space(space::SNUG);
@@ -2248,6 +2479,52 @@ pub fn diagnostics_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &m
     // they emit the same command rather than each owning a copy of the state.
     if !open {
         queue.push(Command::ToggleDiagnostics);
+    }
+}
+
+/// What was built: the application, the engine and where they came from.
+fn diagnostics_build(ui: &mut egui::Ui, d: &Diagnostics) {
+    readout(ui, "Aplicação", d.app_version.clone());
+    readout(ui, "Motor", d.engine_version.clone());
+    readout(ui, "Revisão", d.engine_revision.clone());
+    readout(ui, "Plataforma", d.platform.clone());
+}
+
+/// What is running: the backends, the one chosen, and what went wrong on it.
+fn diagnostics_backend(ui: &mut egui::Ui, d: &Diagnostics) {
+    readout(ui, "Disponíveis", d.backends.join(", "));
+    readout(
+        ui,
+        "Ativo",
+        format!("{} — {}", d.active_backend, d.selection),
+    );
+    if let Some(renderer) = &d.renderer {
+        readout(ui, "Vídeo", renderer.clone());
+    }
+
+    // The stalls, which are what "it stutters" turns into. Listed even
+    // when there are none, for the same reason as the fallbacks below.
+    if d.stalls.is_empty() {
+        readout(ui, "Travamentos", "nenhum acima de um quadro");
+    } else {
+        for stall in &d.stalls {
+            readout(ui, "Travamento", stall.clone());
+        }
+    }
+
+    // Fallbacks are listed even when there are none. Silence here reads
+    // as "the panel is broken" rather than as "nothing fell back", and
+    // a reader cannot tell the two apart.
+    if d.fallbacks.is_empty() {
+        readout(ui, "Alternativas", "nenhuma nesta sessão");
+    } else {
+        for fallback in &d.fallbacks {
+            readout(
+                ui,
+                "Alternativa",
+                format!("{} recusou {}", fallback.declined_by, fallback.operation),
+            );
+        }
     }
 }
 
@@ -2511,36 +2788,30 @@ pub fn boolean_op_chip_id(op: clayspace_model::BooleanOp) -> egui::Id {
 /// Resolving a boolean between two subtools.
 ///
 /// Honest about being *resolved* rather than live, which is the whole of what
-/// this panel has to say beyond its four controls: the engine composes layers
-/// by hard union (ClayCore #321), so what comes out is baked, and the operands
-/// are kept because that is what makes the operation recoverable.
-pub fn boolean_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQueue) {
-    if !state.show_boolean {
-        return;
-    }
+/// this section has to say beyond its four controls: the engine composes
+/// layers by hard union (ClayCore #321), so what comes out is baked, and the
+/// operands are kept because that is what makes the operation recoverable.
+///
+/// A section of the right panel rather than a window, because a window floats
+/// over the viewport, and the viewport is where the two forms being cut from
+/// one another stand: it hid the very thing the operation was being set up
+/// on. Docked, the operands stay in view while the sentence about them is
+/// being composed. Closed from its own heading, as the window was from its
+/// title bar, or from the rail.
+fn boolean_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
     let s = state.strings;
-    let mut open = true;
-
-    egui::Window::new(s.action_boolean)
-        .open(&mut open)
-        .resizable(false)
-        .collapsible(false)
-        .show(ctx, |ui| {
-            ui.set_min_width(340.0);
-            boolean_operation(ui, state, queue);
-            ui.add_space(space::SNUG);
-            boolean_operands(ui, state, queue);
-            ui.add_space(space::SNUG);
-            boolean_resolution(ui, state, queue);
-            ui.add_space(space::ROOMY);
-            boolean_costs(ui, state);
-            ui.add_space(space::ROOMY);
-            boolean_confirm(ui, state, queue);
-        });
-
-    if !open {
+    if closable_heading(ui, s.section_boolean) {
         queue.push(Command::ToggleBoolean);
     }
+    boolean_operation(ui, state, queue);
+    ui.add_space(space::SNUG);
+    boolean_operands(ui, state, queue);
+    ui.add_space(space::SNUG);
+    boolean_resolution(ui, state, queue);
+    ui.add_space(space::ROOMY);
+    boolean_costs(ui, state);
+    ui.add_space(space::ROOMY);
+    boolean_confirm(ui, state, queue);
 }
 
 /// Which of the three operations.
@@ -2632,7 +2903,7 @@ fn boolean_operand_picker(
     );
     egui::ComboBox::from_id_salt(id)
         .selected_text(boolean_operand_name(state, chosen))
-        .width(300.0)
+        .width(ui.available_width())
         .show_ui(ui, |ui| {
             for (key, name) in state.boolean_operands {
                 if ui.selectable_label(chosen == Some(*key), name).clicked() {
@@ -2870,8 +3141,7 @@ pub fn export_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut Co
 
             // Before the write, not after. Every one of these is knowable now
             // and otherwise found out by opening the file somewhere else.
-            if !state.export_warnings.is_empty() {
-                heading(ui, s.section_warnings);
+            if !state.export_warnings.is_empty() && heading(ui, s.section_warnings) {
                 for warning in state.export_warnings {
                     ui.label(
                         egui::RichText::new(&warning.message)
@@ -2891,7 +3161,6 @@ pub fn export_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut Co
     }
 }
 
-/// Material, geometry, resolution and brush controls.
 /// The curve being placed: how thick, how its points join, what it sweeps.
 ///
 /// Only while one is up. Placing one is a menu entry, and a section that stood
@@ -2900,7 +3169,9 @@ pub fn export_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut Co
 fn curve_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
     use clayspace_model::{CurveJoin, CurveProfile};
     let s = state.strings;
-    heading(ui, s.section_curve);
+    if !heading(ui, s.section_curve) {
+        return;
+    }
 
     if let Some(value) = slider(ui, s.label_curve_radius, state.curve_radius, 0.01..=0.6, 3) {
         queue.push(Command::SetCurveRadius(value));
@@ -2967,7 +3238,9 @@ fn curve_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQ
 fn voxel_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
     use clayspace_model::{SmoothBlur, VoxelDisplay};
     let s = state.strings;
-    heading(ui, s.section_geometry);
+    if !heading(ui, s.section_geometry) {
+        return;
+    }
 
     ui.label(
         egui::RichText::new(s.label_voxel_display)
@@ -3019,7 +3292,9 @@ fn voxel_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQ
 /// it past the bottom of the panel.
 fn lattice_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
     let s = state.strings;
-    heading(ui, s.section_lattice);
+    if !heading(ui, s.section_lattice) {
+        return;
+    }
 
     // Uniform, because a cage a sculptor can reason about is a grid rather
     // than a lattice of three different resolutions — and because the one
@@ -3085,7 +3360,9 @@ fn lattice_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
 /// Limpar becomes usable.
 fn mask_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
     let s = state.strings;
-    heading(ui, s.section_mask);
+    if !heading(ui, s.section_mask) {
+        return;
+    }
     readout(ui, s.label_mask_cells, thousands(state.mask.painted_cells));
     if let Some(value) = slider(
         ui,
@@ -3136,10 +3413,48 @@ fn mask_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
     }
 }
 
+/// Material, geometry, resolution and brush controls.
 pub fn right_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
-    let s = state.strings;
+    material_section(ui, state, queue);
 
-    heading(ui, s.section_material);
+    // The two placing sections, where they stand beside the sculpt they act
+    // on rather than over it.
+    if state.show_shapes {
+        shapes_section(ui, state, queue);
+    }
+    if state.show_boolean {
+        boolean_section(ui, state, queue);
+    }
+
+    geometry_section(ui, state);
+    if state.armature.exists {
+        armature_section(ui, state, queue);
+    }
+
+    // A grid is boxes; whether it should *look* like boxes is a separate
+    // question, and the answer belongs beside the layer it is asked about.
+    if state.representation == Representation::Voxel {
+        voxel_section(ui, state, queue);
+    }
+    if state.curve.active {
+        curve_section(ui, state, queue);
+    }
+    if state.lattice.active {
+        lattice_section(ui, state, queue);
+    }
+    if state.mask.present {
+        mask_section(ui, state, queue);
+    }
+
+    brush_controls_section(ui, state, queue);
+}
+
+/// The material: its preview, its name, and how many there are to step through.
+fn material_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    if !heading(ui, s.section_material) {
+        return;
+    }
     ui.horizontal(|ui| {
         // The material preview: a shaded sphere, which is where the design
         // spends its skeuomorphic budget.
@@ -3163,8 +3478,14 @@ pub fn right_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
             );
         });
     });
+}
 
-    heading(ui, s.section_geometry);
+/// What the scene is made of, in numbers.
+fn geometry_section(ui: &mut egui::Ui, state: &ShellState<'_>) {
+    let s = state.strings;
+    if !heading(ui, s.section_geometry) {
+        return;
+    }
     // A count without its detail level reads as a smaller model, so where the
     // viewport is not showing full resolution the interface says so.
     if let Some(note) = s.detail_note(state.stats.detail) {
@@ -3178,56 +3499,50 @@ pub fn right_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
     readout(ui, s.label_vertices, thousands(state.stats.vertices));
     readout(ui, s.label_triangles, thousands(state.stats.triangles));
     readout(ui, s.label_objects, format!("{}", state.stats.objects));
+}
 
-    if state.armature.exists {
-        heading(ui, s.section_armature);
-        readout(ui, s.label_spheres, format!("{}", state.armature.spheres));
-        if let Some(value) = slider(ui, s.label_skin, state.armature.skin, 0.5..=3.0, 2) {
-            queue.push(Command::SetSkinThickness(value));
+/// The rig: how many spheres, how thick a skin, and the gestures while it is
+/// being edited.
+fn armature_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    if !heading(ui, s.section_armature) {
+        return;
+    }
+    readout(ui, s.label_spheres, format!("{}", state.armature.spheres));
+    if let Some(value) = slider(ui, s.label_skin, state.armature.skin, 0.5..=3.0, 2) {
+        queue.push(Command::SetSkinThickness(value));
+    }
+    let mut mirror = state.armature.mirror;
+    if ui.checkbox(&mut mirror, s.label_mirror_new).clicked() {
+        queue.push(Command::SetArmatureMirror(mirror));
+    }
+    if state.armature.editing {
+        // The gestures, where a person is when they need them. ZBrush
+        // teaches these by tutorial; one line costs nothing.
+        ui.label(
+            egui::RichText::new(s.hint_armature)
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+        );
+        if ui
+            .add_enabled(
+                state.armature.selection,
+                egui::Button::new(s.action_armature_remove),
+            )
+            .clicked()
+        {
+            queue.push(Command::RemoveZsphere);
         }
-        let mut mirror = state.armature.mirror;
-        if ui.checkbox(&mut mirror, s.label_mirror_new).clicked() {
-            queue.push(Command::SetArmatureMirror(mirror));
-        }
-        if state.armature.editing {
-            // The gestures, where a person is when they need them. ZBrush
-            // teaches these by tutorial; one line costs nothing.
-            ui.label(
-                egui::RichText::new(s.hint_armature)
-                    .size(type_scale::LABEL)
-                    .color(Tokens::text_dim()),
-            );
-            if ui
-                .add_enabled(
-                    state.armature.selection,
-                    egui::Button::new(s.action_armature_remove),
-                )
-                .clicked()
-            {
-                queue.push(Command::RemoveZsphere);
-            }
-        }
     }
+}
 
-    // A grid is boxes; whether it should *look* like boxes is a separate
-    // question, and the answer belongs beside the layer it is asked about.
-    if state.representation == Representation::Voxel {
-        voxel_section(ui, state, queue);
+/// How a stroke is shaped, beyond its size and strength: noise, edge,
+/// accumulation and smoothing.
+fn brush_controls_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    if !heading(ui, s.section_brush_controls) {
+        return;
     }
-
-    if state.curve.active {
-        curve_section(ui, state, queue);
-    }
-
-    if state.lattice.active {
-        lattice_section(ui, state, queue);
-    }
-
-    if state.mask.present {
-        mask_section(ui, state, queue);
-    }
-
-    heading(ui, s.section_brush_controls);
     if let Some(value) = slider(ui, s.label_noise, state.brush.shaping.noise, 0.0..=1.0, 2) {
         queue.push(Command::SetBrushNoise(value));
     }
@@ -3236,17 +3551,14 @@ pub fn right_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
             .size(type_scale::LABEL)
             .color(Tokens::text_dim()),
     );
-    ui.horizontal_wrapped(|ui| {
-        for falloff in Falloff::ALL {
-            let on = state.brush.shaping.falloff == falloff;
-            if ui
-                .add(chip(s.falloff_name(falloff), on, Tokens::panel()))
-                .clicked()
-            {
-                queue.push(Command::SetBrushFalloff(falloff));
-            }
-        }
-    });
+    if let Some(falloff) = segmented(
+        ui,
+        &Falloff::ALL,
+        |falloff| s.falloff_name(falloff),
+        state.brush.shaping.falloff,
+    ) {
+        queue.push(Command::SetBrushFalloff(falloff));
+    }
 
     let mut accumulate = state.brush.shaping.accumulate;
     if ui.checkbox(&mut accumulate, s.label_accumulate).changed() {
@@ -3461,6 +3773,14 @@ pub fn tool_rail(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQ
                 on: state.show_shapes,
                 enabled: true,
                 command: Command::ToggleShapes,
+            },
+            RailEntry {
+                icon: Icon::Union,
+                label: s.action_boolean,
+                tooltip: plain(s.action_boolean),
+                on: state.show_boolean,
+                enabled: true,
+                command: Command::ToggleBoolean,
             },
             RailEntry {
                 icon: Icon::Cage,
@@ -3763,63 +4083,58 @@ fn gigabytes(bytes: u64) -> String {
 
 /// The shapes a sculptor can put in the scene, and what the selected one is.
 ///
-/// One panel for both because they are one workflow: pick a shape, place it,
-/// aim it, and change how it meets what is under it. Splitting the picker from
-/// the properties would mean two windows open at once for a single operation.
-pub fn shapes_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQueue) {
-    if !state.show_shapes {
-        return;
-    }
+/// One section for both because they are one workflow: pick a shape, place
+/// it, aim it, and change how it meets what is under it. Splitting the picker
+/// from the properties would mean two places open at once for a single
+/// operation.
+///
+/// A section of the right panel rather than a window, because a window floats
+/// over the viewport, and the viewport is where the form a shape is being
+/// placed into stands: it hid the very thing the shape was being aimed at.
+/// Docked, the picker and the sculpt are side by side while a shape is placed
+/// and turned. Closed from its own heading, as the window was from its title
+/// bar, or from the rail.
+fn shapes_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
     let s = state.strings;
-    let mut open = true;
-
-    egui::Window::new(s.action_shapes)
-        .open(&mut open)
-        .resizable(false)
-        .collapsible(false)
-        .show(ctx, |ui| {
-            ui.set_min_width(300.0);
-            insert_destination(ui, state, queue);
-
-            ui.add_space(space::SNUG);
-            shape_picker(ui, state, queue);
-            // A shape's measurements only where a shape is what would be
-            // placed: a model is measured by itself, and offering a radius for
-            // one would be offering a control that does nothing.
-            if state.mesh_operand.is_none() {
-                ui.add_space(space::SNUG);
-                shape_measurements(ui, state, queue);
-            } else {
-                mesh_operand_cost(ui, state);
-            }
-
-            ui.add_space(space::SNUG);
-            if ui.button(s.action_insert).clicked() {
-                queue.push(Command::InsertShape);
-            }
-
-            ui.separator();
-            other_insert_sources(ui, state, queue);
-
-            if let Some(object) = state
-                .selected_object
-                .and_then(|id| state.objects.iter().find(|object| object.id == id))
-            {
-                ui.separator();
-                selected_object_controls(ui, state, object, queue);
-            }
-
-            ui.add_space(space::SNUG);
-            ui.label(
-                egui::RichText::new(s.hint_shapes)
-                    .size(type_scale::LABEL)
-                    .color(Tokens::text_dim()),
-            );
-        });
-
-    if !open {
+    if closable_heading(ui, s.section_shapes) {
         queue.push(Command::ToggleShapes);
     }
+    insert_destination(ui, state, queue);
+
+    ui.add_space(space::SNUG);
+    shape_picker(ui, state, queue);
+    // A shape's measurements only where a shape is what would be placed: a
+    // model is measured by itself, and offering a radius for one would be
+    // offering a control that does nothing.
+    if state.mesh_operand.is_none() {
+        ui.add_space(space::SNUG);
+        shape_measurements(ui, state, queue);
+    } else {
+        mesh_operand_cost(ui, state);
+    }
+
+    ui.add_space(space::SNUG);
+    if ui.button(s.action_insert).clicked() {
+        queue.push(Command::InsertShape);
+    }
+
+    ui.separator();
+    other_insert_sources(ui, state, queue);
+
+    if let Some(object) = state
+        .selected_object
+        .and_then(|id| state.objects.iter().find(|object| object.id == id))
+    {
+        ui.separator();
+        selected_object_controls(ui, state, object, queue);
+    }
+
+    ui.add_space(space::SNUG);
+    ui.label(
+        egui::RichText::new(s.hint_shapes)
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    );
 }
 
 /// The id one destination chip carries, so a test can press it by name.
@@ -3889,7 +4204,7 @@ fn other_insert_sources(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut C
     ui.add_space(space::TIGHT);
     egui::ComboBox::from_id_salt("copy-subtool")
         .selected_text(s.action_copy_subtool)
-        .width(280.0)
+        .width(ui.available_width())
         .show_ui(ui, |ui| {
             for (key, name) in state.copyable_subtools {
                 if ui.selectable_label(false, name).clicked() {
@@ -3925,7 +4240,7 @@ fn shape_picker(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
     };
     egui::ComboBox::from_id_salt("shape-picker")
         .selected_text(chosen)
-        .width(280.0)
+        .width(ui.available_width())
         .show_ui(ui, |ui| {
             for shape in clayspace_model::Shape::ALL {
                 let picked = state.mesh_operand.is_none() && shape == state.shape;
@@ -4017,8 +4332,10 @@ fn selected_object_controls(
     let settings = object.combine;
     // The three booleans first, as chips with the two discs on them: these
     // are what a placed shape is for, and a sculptor should not have to open
-    // a list of thirteen to find "cut". The list below keeps the rest.
-    ui.horizontal(|ui| {
+    // a list of thirteen to find "cut". The list below keeps the rest. Wrapped,
+    // because the row now stands in the panel rather than in a window sized to
+    // it, and Interseção does not fit beside the other two there.
+    ui.horizontal_wrapped(|ui| {
         for (op, icon) in [
             (Combine::Add, Icon::Union),
             (Combine::Subtract, Icon::Subtract),
@@ -4035,7 +4352,7 @@ fn selected_object_controls(
     });
     egui::ComboBox::from_id_salt("object-combine-op")
         .selected_text(s.combine_name(settings.op))
-        .width(280.0)
+        .width(ui.available_width())
         .show_ui(ui, |ui| {
             for op in Combine::offered_for_strokes() {
                 if ui
@@ -4054,7 +4371,7 @@ fn selected_object_controls(
     if settings.op.takes_a_blend() {
         egui::ComboBox::from_id_salt("object-combine-blend")
             .selected_text(s.blend_name(settings.blend))
-            .width(280.0)
+            .width(ui.available_width())
             .show_ui(ui, |ui| {
                 for blend in BlendProfile::ALL {
                     if ui
@@ -4139,7 +4456,9 @@ pub fn object_rows(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
     // A section like Scene and Layers above it, not a label: it is a list of
     // things in the scene, and it read as a stray caption between two
     // headings.
-    heading(ui, s.section_objects);
+    if !heading(ui, s.section_objects) {
+        return;
+    }
 
     if state.objects.is_empty() {
         ui.label(

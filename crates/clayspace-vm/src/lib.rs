@@ -34,7 +34,7 @@ pub use sculpt_vm::{LastAction, SculptViewModel, TOOL_SUBSTITUTED};
 pub use armature_vm::{ArmatureViewModel, Grab};
 pub use boolean_vm::BooleanViewModel;
 pub use curve_vm::CurveViewModel;
-pub use document_vm::{DocumentViewModel, Guard};
+pub use document_vm::{DocumentViewModel, Guard, UNTITLED};
 pub use lattice_vm::LatticeViewModel;
 pub use mask_vm::MaskViewModel;
 pub use reference_vm::ReferenceViewModel;
