@@ -127,6 +127,78 @@ fn a_selected_object_is_outlined_where_it_stands() {
     );
 }
 
+/// A manipulator sits on the middle of what it moves, which is inside it.
+///
+/// Depth-tested, the manipulator on a placed sphere was three arrow tips
+/// poking out of the form and nothing else to grab; on a small object inside
+/// a large one it was nothing at all. Scaffolding that the clay hides is not
+/// scaffolding, so this draws one wholly within the starting form and asks
+/// that it be seen.
+#[test]
+fn the_manipulator_is_seen_through_the_form_it_sits_in() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let Some((mut document, _)) = bored() else {
+        return;
+    };
+    let camera = Camera::default();
+    let gpu = harness.gpu.clone();
+    let geometry = meshed(&gpu, &mut document);
+
+    let bare = |harness: &mut Harness| {
+        harness.renderer.set_lattice(
+            &harness.gpu,
+            LatticeView {
+                points: &[],
+                edges: &[],
+                selected: &[],
+                gizmo: None,
+                outline: None,
+                subtool_outline: None,
+                handle: 0.0,
+            },
+        );
+        harness.capture(geometry.mesh(), &camera, false, "objects-manipulator-none")
+    };
+    let without = bare(&mut harness);
+
+    // Well inside the form: the starting form reaches past 0.5 in every
+    // direction from the origin, and this manipulator reaches 0.3.
+    harness.renderer.set_lattice(
+        &harness.gpu,
+        LatticeView {
+            points: &[],
+            edges: &[],
+            selected: &[],
+            gizmo: Some(GizmoView {
+                pivot: [0.0, 0.0, 0.0],
+                mode: GizmoMode::Move,
+                reach: 0.3,
+                hovered: None,
+                view_axis: [0.0, 0.0, 1.0],
+                per_axis_scale: false,
+            }),
+            outline: None,
+            subtool_outline: None,
+            handle: 0.0,
+        },
+    );
+    let with = harness.capture(
+        geometry.mesh(),
+        &camera,
+        false,
+        "objects-manipulator-inside",
+    );
+
+    let differing = support::differing_pixels(&without, &with);
+    assert!(
+        differing > 100,
+        "a manipulator inside the form changed {differing} pixels — it is \
+         hidden by the very surface it moves"
+    );
+}
+
 /// Scale mode draws one handle on an object and four on a cage, because the
 /// engine scales an object by one factor and a cage scales its own points.
 #[test]

@@ -41,8 +41,17 @@ pub mod size {
     pub const CONTROL: f32 = 22.0;
     /// A brush swatch in the shelf.
     pub const SWATCH: f32 = 54.0;
-    /// Icon side.
+    /// The active brush's ball at the head of the options bar: what the bar's
+    /// height leaves after its padding.
+    pub const BADGE: f32 = 42.0;
+    /// Icon side, in a list row.
     pub const ICON: f32 = 16.0;
+    /// A button on the tool rail: the rail's width less a margin a side.
+    pub const RAIL_BUTTON: f32 = 34.0;
+    /// Icon side on a chip, where it stands for the whole control rather
+    /// than annotating a row, and where two discs at sixteen pixels were a
+    /// smudge. As tall as the control's own padding allows.
+    pub const CHIP_ICON: f32 = 20.0;
     /// Corner radius. Small: the design is flat, and a large radius reads as
     /// a card rather than a surface.
     pub const RADIUS: f32 = 3.0;
@@ -149,6 +158,15 @@ impl Tokens {
     pub fn accent() -> egui::Color32 {
         color(palette::ACCENT)
     }
+
+    /// The tint that leaves an image as it is.
+    ///
+    /// Not a colour on screen: egui multiplies a drawn image by a tint, and
+    /// this is the one that changes nothing. Named here so the material
+    /// preview does not have to write a colour down to draw its own texture.
+    pub fn untinted() -> egui::Color32 {
+        egui::Color32::WHITE
+    }
 }
 
 /// Relative luminance of an sRGB colour, per WCAG.
@@ -197,7 +215,7 @@ mod tests {
     /// mistake this exists to stop repeating while the backlog is worked off.
     /// Fixing one is: add an array to `Strings` keyed off the enum's `::ALL`,
     /// fill all three locales, add an accessor, and call it here.
-    const LABELS_STILL_DRAWN: usize = 25;
+    const LABELS_STILL_DRAWN: usize = 10;
 
     #[test]
     fn the_shell_draws_no_new_untranslated_labels() {

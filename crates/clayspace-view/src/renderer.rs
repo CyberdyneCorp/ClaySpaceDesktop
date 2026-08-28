@@ -460,6 +460,21 @@ pub enum SymmetryAxis {
 pub struct Renderer {
     pipeline: wgpu::RenderPipeline,
     overlay_pipeline: wgpu::RenderPipeline,
+    /// The overlay's lines, drawn whatever is in front of them.
+    ///
+    /// The cage, the curve's control polygon, an object's outline and the
+    /// manipulator are scaffolding around the clay, and half of any of them
+    /// is behind the surface: a subtracting object stands *inside* the form,
+    /// and a manipulator sits on the middle of what it moves. Depth-tested,
+    /// the manipulator on a placed sphere was three arrow tips poking out of
+    /// it and nothing to grab — so this pipeline reads no depth at all, and
+    /// the scaffolding is always where the hand expects it.
+    scaffold_pipeline: wgpu::RenderPipeline,
+    /// The manipulator's solid parts — arrowheads, boxes — drawn the same
+    /// way: unlit vertex colour, no depth, but as triangles. An arrow drawn as
+    /// four lines back from its tip reads as a direction; a cone reads as a
+    /// handle, which is what ZBrush's and Blender's are.
+    scaffold_solid_pipeline: wgpu::RenderPipeline,
     /// The mesh layers' own edges, drawn over them.
     wire_pipeline: wgpu::RenderPipeline,
     /// Those edges, as a line list over `mesh_layers`' own vertices.
@@ -528,6 +543,8 @@ pub struct Renderer {
     armature_mesh: GpuMesh,
     /// The lattice cage's edges and control-point handles.
     lattice_mesh: GpuMesh,
+    /// The manipulator's solid handles, as triangles.
+    lattice_solid_mesh: GpuMesh,
     /// The translucent skin between the spheres, drawn while rigging.
     membrane_mesh: GpuMesh,
     membrane_pipeline: wgpu::RenderPipeline,
@@ -723,6 +740,28 @@ impl Renderer {
             wgpu::PrimitiveTopology::LineList,
             false,
         );
+        let scaffold_pipeline = make_pipeline_with_depth(
+            gpu,
+            &layout,
+            &shader,
+            format,
+            "overlay_vs",
+            "overlay_fs",
+            wgpu::PrimitiveTopology::LineList,
+            false,
+            wgpu::CompareFunction::Always,
+        );
+        let scaffold_solid_pipeline = make_pipeline_with_depth(
+            gpu,
+            &layout,
+            &shader,
+            format,
+            "overlay_vs",
+            "overlay_fs",
+            wgpu::PrimitiveTopology::TriangleList,
+            false,
+            wgpu::CompareFunction::Always,
+        );
 
         // The polyframe. The overlay's vertex stage — it is the same vertex
         // buffer, read the same way — with a fragment that draws ink rather
@@ -877,6 +916,8 @@ impl Renderer {
             surface_opacity: SurfaceOpacity::SOLID,
             pipeline,
             overlay_pipeline,
+            scaffold_pipeline,
+            scaffold_solid_pipeline,
             wire_pipeline,
             wire_indices: empty_buffer(gpu, "polyframe", wgpu::BufferUsages::INDEX),
             wire_index_count: 0,
@@ -907,6 +948,7 @@ impl Renderer {
             cursor_mesh: GpuMesh::new(gpu),
             armature_mesh: GpuMesh::new(gpu),
             lattice_mesh: GpuMesh::new(gpu),
+            lattice_solid_mesh: GpuMesh::new(gpu),
             membrane_mesh: GpuMesh::new(gpu),
             scene_viewport: None,
             gizmo_mesh: {
@@ -1043,8 +1085,11 @@ impl Renderer {
     /// scaffolding that is occluded by the thing it annotates is not
     /// scaffolding.
     pub fn set_lattice(&mut self, gpu: &Gpu, view: LatticeView<'_>) {
-        let (vertices, indices) = lattice_geometry(view);
-        self.lattice_mesh.upload(gpu, &vertices, &indices);
+        let geometry = lattice_geometry(view);
+        self.lattice_mesh
+            .upload(gpu, &geometry.lines.0, &geometry.lines.1);
+        self.lattice_solid_mesh
+            .upload(gpu, &geometry.solids.0, &geometry.solids.1);
     }
 
     /// Confines the scene to a rectangle of the frame, in physical pixels.
@@ -1404,14 +1449,26 @@ impl Renderer {
                 pass.draw_indexed(0..self.armature_mesh.index_count, 0, 0..1);
             }
 
+            // The scaffolding — cage, curve, outline, manipulator — over
+            // everything, whichever side of the surface it is on.
             if !self.lattice_mesh.is_empty() {
-                pass.set_pipeline(&self.overlay_pipeline);
+                pass.set_pipeline(&self.scaffold_pipeline);
                 pass.set_vertex_buffer(0, self.lattice_mesh.vertices.slice(..));
                 pass.set_index_buffer(
                     self.lattice_mesh.indices.slice(..),
                     wgpu::IndexFormat::Uint32,
                 );
                 pass.draw_indexed(0..self.lattice_mesh.index_count, 0, 0..1);
+            }
+            // The solid handles last, over the shafts they cap.
+            if !self.lattice_solid_mesh.is_empty() {
+                pass.set_pipeline(&self.scaffold_solid_pipeline);
+                pass.set_vertex_buffer(0, self.lattice_solid_mesh.vertices.slice(..));
+                pass.set_index_buffer(
+                    self.lattice_solid_mesh.indices.slice(..),
+                    wgpu::IndexFormat::Uint32,
+                );
+                pass.draw_indexed(0..self.lattice_solid_mesh.index_count, 0, 0..1);
             }
 
             // The navigation gizmo, in its own corner viewport so it keeps a
@@ -1685,6 +1742,35 @@ fn make_pipeline(
     topology: wgpu::PrimitiveTopology,
     cull: bool,
 ) -> wgpu::RenderPipeline {
+    make_pipeline_with_depth(
+        gpu,
+        layout,
+        shader,
+        format,
+        vs,
+        fs,
+        topology,
+        cull,
+        wgpu::CompareFunction::LessEqual,
+    )
+}
+
+/// The same, choosing what the depth test compares with.
+///
+/// `LessEqual` is the ordinary case: a thing behind the surface is hidden by
+/// it. `Always` is for scaffolding that has to be seen wherever it is.
+#[allow(clippy::too_many_arguments)]
+fn make_pipeline_with_depth(
+    gpu: &Gpu,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    format: wgpu::TextureFormat,
+    vs: &str,
+    fs: &str,
+    topology: wgpu::PrimitiveTopology,
+    cull: bool,
+    depth_compare: wgpu::CompareFunction,
+) -> wgpu::RenderPipeline {
     // Read from the same place the framebuffer reads it, so the two cannot
     // disagree — a pipeline whose sample count differs from its attachment's
     // is a validation error at draw time rather than at creation.
@@ -1717,7 +1803,7 @@ fn make_pipeline(
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: Framebuffer::DEPTH_FORMAT,
                 depth_write_enabled: cull,
-                depth_compare: wgpu::CompareFunction::LessEqual,
+                depth_compare,
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
@@ -1902,10 +1988,15 @@ fn overlay_geometry(overlays: Overlays, extent: f32) -> (Vec<Vertex>, Vec<u32>) 
         // scene furniture — but dimmed, since a reference overlay must not be
         // the brightest thing on screen. At 0.25 over an eight-by-eight grid
         // it was: the capture showed a bright orange wall with the sculpt
-        // behind it. Sparser and darker reads as "the mirror is here" without
-        // competing with the thing being sculpted.
-        let color = palette::dimmed(palette::ACCENT, 0.12);
-        let steps = 4;
+        // behind it. Four steps was still a lattice of orange across the
+        // form on a running build, with the camera inside the plane's extent.
+        // Two steps is the plane's outline and its two centre lines — the
+        // mirror's axis where it meets the floor, and its edge — which says
+        // "the mirror is here" and puts nothing across the clay. Six lines
+        // can afford a little more light than forty: still a fifth of the
+        // accent, nowhere near the active brush's ring.
+        let color = palette::dimmed(palette::ACCENT, 0.22);
+        let steps = 2;
         let step = extent * 2.0 / steps as f32;
         for i in 0..=steps {
             let t = -extent + i as f32 * step;
@@ -2096,9 +2187,32 @@ const AXIS_COLOURS: [[f32; 3]; 3] = [[0.85, 0.24, 0.24], [0.36, 0.76, 0.30], [0.
 /// meaning — an arrow slides, a ring turns, a box scales — because a person
 /// reaching for a handle is not reading a legend, and because the three
 /// colours are the one part of this a colour-blind sculptor cannot use.
-fn gizmo_geometry_for(view: GizmoView, segment: &mut impl FnMut(Vec3, Vec3, [f32; 3])) {
+fn gizmo_geometry_for(
+    view: GizmoView,
+    emit: &mut impl FnMut(Vec3, Vec3, [f32; 3]),
+    triangle: &mut impl FnMut(Vec3, Vec3, Vec3, [f32; 3]),
+) {
     const RING_SEGMENTS: usize = 40;
     let pivot = Vec3::from(view.pivot);
+
+    // Drawn heavier than the cage it stands on. A line is one pixel wide
+    // whatever the device, and a one-pixel manipulator over a shaded form is
+    // a thing to squint for; ZBrush's is a handle. Each stroke is laid down
+    // `HANDLE_WEIGHT` times, stepped *across itself in the screen plane* —
+    // perpendicular both to the stroke and to the eye — so it widens the same
+    // way from every angle, and a box's edges thicken rather than hatch.
+    let eye = normalized(Vec3::from(view.view_axis)).unwrap_or(Vec3::Z);
+    let step = view.reach * HANDLE_STEP;
+    let mut segment = |from: Vec3, to: Vec3, colour: [f32; 3]| {
+        // A stroke pointing straight at the eye has no across; any direction
+        // in the screen plane widens it as well as another.
+        let across = normalized(eye.cross(to - from)).unwrap_or_else(|| frame_about(eye).0);
+        for i in 0..HANDLE_WEIGHT {
+            let t = i as f32 - (HANDLE_WEIGHT - 1) as f32 * 0.5;
+            let offset = across * (t * step);
+            emit(from + offset, to + offset, colour);
+        }
+    };
     let lit = |handle: GizmoHandle, base: [f32; 3]| {
         if view.hovered == Some(handle) {
             [1.0, 0.85, 0.4]
@@ -2139,23 +2253,18 @@ fn gizmo_geometry_for(view: GizmoView, segment: &mut impl FnMut(Vec3, Vec3, [f32
             }
             mode => {
                 let tip = pivot + unit * view.reach;
-                segment(pivot, tip, colour);
                 if mode == GizmoMode::Move {
-                    // An arrowhead: four lines back from the tip, which reads
-                    // as a direction from any angle.
-                    let head = view.reach * 0.18;
-                    for corner in 0..4 {
-                        let (s, c) = (corner as f32 / 4.0 * std::f32::consts::TAU).sin_cos();
-                        segment(
-                            tip,
-                            tip - unit * head + (across * c + other * s) * head * 0.5,
-                            colour,
-                        );
-                    }
+                    // A cone at the tip: a handle, not a hint of one. The
+                    // shaft stops where the cone starts so it does not show
+                    // through the base.
+                    let head = view.reach * 0.2;
+                    segment(pivot, tip - unit * head, colour);
+                    cone(tip, unit, head, head * 0.4, colour, triangle);
                 } else {
                     // A box: what scales.
                     let box_size = view.reach * 0.08;
-                    cube(tip, box_size, colour, segment);
+                    segment(pivot, tip - unit * box_size, colour);
+                    solid_cube(tip, box_size, colour, triangle);
                 }
             }
         }
@@ -2165,11 +2274,10 @@ fn gizmo_geometry_for(view: GizmoView, segment: &mut impl FnMut(Vec3, Vec3, [f32
         .into_iter()
         .find(|handle| *handle == GizmoHandle::Centre)
     {
-        // A square facing no particular way, drawn on all three planes so it
-        // reads as a centre from any angle rather than vanishing edge-on.
+        // A solid block at the pivot, which reads as a centre from any angle.
         let colour = lit(handle, [0.82, 0.78, 0.42]);
-        let size = view.reach * 0.14;
-        cube(pivot, size, colour, segment);
+        let size = view.reach * 0.12;
+        solid_cube(pivot, size, colour, triangle);
     }
 
     if view.mode == GizmoMode::Rotate {
@@ -2194,6 +2302,11 @@ fn gizmo_geometry_for(view: GizmoView, segment: &mut impl FnMut(Vec3, Vec3, [f32
 
 /// How far out the outer ring sits, against an axis ring's reach.
 pub const VIEW_RING_REACH: f32 = 1.28;
+
+/// How many passes each manipulator stroke is drawn in.
+const HANDLE_WEIGHT: usize = 3;
+/// How far apart those passes sit, against the manipulator's reach.
+const HANDLE_STEP: f32 = 0.006;
 
 /// Not one of the three axis colours: the outer ring belongs to no axis, and
 /// borrowing red, green or blue would say it did.
@@ -2259,9 +2372,91 @@ fn outline_box(
     }
 }
 
-fn lattice_geometry(view: LatticeView<'_>) -> (Vec<Vertex>, Vec<u32>) {
+/// Where the solid handles are lit from, in world space.
+///
+/// The overlay shader draws vertex colour as it is, so what makes a cone read
+/// as a cone is baked here: each face is the handle's colour, darkened by how
+/// far it turns from this light. Upper left and toward the eye, as the
+/// material previews are lit — but fixed in the world, because the handles
+/// are world-aligned and a light that turned with the camera would flatten
+/// whichever face happened to face it.
+const HANDLE_LIGHT: Vec3 = Vec3::new(-0.4, 0.7, 0.6);
+
+/// One face's colour under `HANDLE_LIGHT`, never darker than a little over
+/// half, so the shadowed side of a red cone is still red.
+fn shaded(colour: [f32; 3], a: Vec3, b: Vec3, c: Vec3) -> [f32; 3] {
+    let normal = (b - a).cross(c - a);
+    let facing = normalized(normal)
+        .map(|n| n.dot(HANDLE_LIGHT.normalize()).abs())
+        .unwrap_or(0.0);
+    let light = 0.55 + 0.45 * facing;
+    [colour[0] * light, colour[1] * light, colour[2] * light]
+}
+
+/// A cone with its tip at `tip`, pointing along `axis`, `length` long and
+/// `radius` wide at the base, closed with a disc.
+fn cone(
+    tip: Vec3,
+    axis: Vec3,
+    length: f32,
+    radius: f32,
+    colour: [f32; 3],
+    triangle: &mut impl FnMut(Vec3, Vec3, Vec3, [f32; 3]),
+) {
+    const SEGMENTS: usize = 12;
+    let (across, other) = frame_about(axis);
+    let base = tip - axis * length;
+    let rim = |i: usize| {
+        let a = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+        base + (across * a.cos() + other * a.sin()) * radius
+    };
+    for i in 0..SEGMENTS {
+        let (p, q) = (rim(i), rim(i + 1));
+        triangle(tip, p, q, colour);
+        triangle(base, q, p, colour);
+    }
+}
+
+/// The six faces of a cube, two triangles each.
+fn solid_cube(
+    centre: Vec3,
+    size: f32,
+    colour: [f32; 3],
+    triangle: &mut impl FnMut(Vec3, Vec3, Vec3, [f32; 3]),
+) {
+    for axis in 0..3 {
+        let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+        for side in [-1.0f32, 1.0] {
+            let corner = |du: f32, dv: f32| {
+                let mut p = [0.0f32; 3];
+                p[axis] = side * size;
+                p[u] = du * size;
+                p[v] = dv * size;
+                centre + Vec3::from(p)
+            };
+            let (a, b, c, d) = (
+                corner(-1.0, -1.0),
+                corner(1.0, -1.0),
+                corner(1.0, 1.0),
+                corner(-1.0, 1.0),
+            );
+            triangle(a, b, c, colour);
+            triangle(a, c, d, colour);
+        }
+    }
+}
+
+/// What the cage overlay uploads: the lines, and the solid handles.
+struct LatticeGeometry {
+    lines: (Vec<Vertex>, Vec<u32>),
+    solids: (Vec<Vertex>, Vec<u32>),
+}
+
+fn lattice_geometry(view: LatticeView<'_>) -> LatticeGeometry {
     let mut vertices: Vec<Vertex> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
+    let mut solid_vertices: Vec<Vertex> = Vec::new();
+    let mut solid_indices: Vec<u32> = Vec::new();
 
     let mut segment = |from: Vec3, to: Vec3, color: [f32; 3]| {
         let base = vertices.len() as u32;
@@ -2275,6 +2470,19 @@ fn lattice_geometry(view: LatticeView<'_>) -> (Vec<Vertex>, Vec<u32>) {
         }
         indices.push(base);
         indices.push(base + 1);
+    };
+    let mut triangle = |a: Vec3, b: Vec3, c: Vec3, colour: [f32; 3]| {
+        let base = solid_vertices.len() as u32;
+        let color = shaded(colour, a, b, c);
+        for position in [a, b, c] {
+            solid_vertices.push(Vertex {
+                position: position.into(),
+                normal: [0.0, 1.0, 0.0],
+                color,
+                mask: 0.0,
+            });
+        }
+        solid_indices.extend_from_slice(&[base, base + 1, base + 2]);
     };
 
     // A selected object's box, quieter still than the cage: it says where a
@@ -2322,10 +2530,13 @@ fn lattice_geometry(view: LatticeView<'_>) -> (Vec<Vertex>, Vec<u32>) {
 
     // The manipulator last, so it draws over the cage it acts on.
     if let Some(gizmo) = view.gizmo {
-        gizmo_geometry_for(gizmo, &mut segment);
+        gizmo_geometry_for(gizmo, &mut segment, &mut triangle);
     }
 
-    (vertices, indices)
+    LatticeGeometry {
+        lines: (vertices, indices),
+        solids: (solid_vertices, solid_indices),
+    }
 }
 
 fn armature_geometry(view: ArmatureView<'_>) -> (Vec<Vertex>, Vec<u32>) {
@@ -2411,6 +2622,10 @@ fn armature_geometry(view: ArmatureView<'_>) -> (Vec<Vertex>, Vec<u32>) {
 
 /// How much of the frame's height the gizmo occupies.
 const GIZMO_FRACTION: f32 = 0.18;
+/// How many lines each half-axis of the navigation gizmo is drawn as.
+const GIZMO_BUNDLE: usize = 5;
+/// How far the copies sit from the axis, in the gizmo's own units.
+const GIZMO_ROD: f32 = 0.018;
 
 /// The three labelled axes, drawn as lines from the origin.
 ///
@@ -2426,23 +2641,39 @@ fn gizmo_geometry() -> (Vec<Vertex>, Vec<u32>) {
         (Vec3::Z, [0.28, 0.48, 0.88]),
     ];
 
+    // Each half-axis is a bundle of `GIZMO_BUNDLE` lines — the axis and four
+    // copies stepped a little along the other two axes — so it reads as a rod
+    // from every angle rather than as a hairline. A line is one pixel wide
+    // whatever the device; the manipulator thickens itself the same way.
+    let offsets = |direction: Vec3| -> [Vec3; GIZMO_BUNDLE] {
+        let (across, other) = frame_about(direction);
+        [
+            Vec3::ZERO,
+            across * GIZMO_ROD,
+            -across * GIZMO_ROD,
+            other * GIZMO_ROD,
+            -other * GIZMO_ROD,
+        ]
+    };
     for (direction, color) in axes {
         for (end, shade) in [(direction, 1.0f32), (-direction, 0.25)] {
-            let base = vertices.len() as u32;
             let tint = [color[0] * shade, color[1] * shade, color[2] * shade];
-            vertices.push(Vertex {
-                position: [0.0, 0.0, 0.0],
-                normal: [0.0, 1.0, 0.0],
-                color: tint,
-                mask: 0.0,
-            });
-            vertices.push(Vertex {
-                position: (end * 0.9).into(),
-                normal: [0.0, 1.0, 0.0],
-                color: tint,
-                mask: 0.0,
-            });
-            indices.extend_from_slice(&[base, base + 1]);
+            for offset in offsets(direction) {
+                let base = vertices.len() as u32;
+                vertices.push(Vertex {
+                    position: offset.into(),
+                    normal: [0.0, 1.0, 0.0],
+                    color: tint,
+                    mask: 0.0,
+                });
+                vertices.push(Vertex {
+                    position: (end * 0.9 + offset).into(),
+                    normal: [0.0, 1.0, 0.0],
+                    color: tint,
+                    mask: 0.0,
+                });
+                indices.extend_from_slice(&[base, base + 1]);
+            }
         }
     }
 
@@ -2713,25 +2944,73 @@ mod tests {
             .all(|v| v.position.iter().all(|c| c.is_finite())));
     }
 
+    fn manipulator(mode: GizmoMode) -> GizmoView {
+        GizmoView {
+            pivot: [0.0; 3],
+            mode,
+            reach: 1.0,
+            hovered: None,
+            view_axis: [0.0, 0.0, 1.0],
+            per_axis_scale: true,
+        }
+    }
+
+    fn handles(mode: GizmoMode) -> (usize, usize) {
+        let (mut lines, mut triangles) = (0usize, 0usize);
+        gizmo_geometry_for(
+            manipulator(mode),
+            &mut |_, _, _| lines += 1,
+            &mut |_, _, _, _| triangles += 1,
+        );
+        (lines, triangles)
+    }
+
+    #[test]
+    fn move_and_scale_handles_are_solid_and_rings_are_not() {
+        // An arrow is a cone and a box is a box: things with faces. A ring is
+        // a line, and putting a solid on it would be a fourth thing to grab.
+        let (_, move_solids) = handles(GizmoMode::Move);
+        let (_, scale_solids) = handles(GizmoMode::Scale);
+        let (rotate_lines, rotate_solids) = handles(GizmoMode::Rotate);
+        assert!(move_solids > 0, "the move arrows have no solid heads");
+        assert!(scale_solids > 0, "the scale boxes are not solid");
+        assert_eq!(rotate_solids, 0, "turning drew a solid handle");
+        assert!(rotate_lines > 0);
+    }
+
+    #[test]
+    fn a_solid_face_keeps_its_hue_in_shadow() {
+        // The shadowed side of a red cone is a darker red, not grey and not
+        // black: the light is baked as a factor with a floor.
+        let red = [0.85, 0.24, 0.24];
+        let dark = shaded(red, Vec3::ZERO, Vec3::X, Vec3::Y);
+        let lit = shaded(red, Vec3::ZERO, Vec3::Y, Vec3::X);
+        for face in [dark, lit] {
+            assert!(
+                face[0] > face[1] && face[0] > face[2],
+                "the face lost its hue"
+            );
+            assert!(face[0] >= red[0] * 0.55 - 1e-6, "darker than the floor");
+        }
+    }
+
     #[test]
     fn the_gizmo_draws_three_axes_in_both_directions() {
         let (vertices, indices) = gizmo_geometry();
-        // Three axes, positive and negative, two vertices each.
-        assert_eq!(vertices.len(), 12);
-        assert_eq!(indices.len(), 12);
+        // Six half-axes, each a bundle of lines, two vertices a line.
+        assert_eq!(vertices.len(), 6 * GIZMO_BUNDLE * 2);
+        assert_eq!(indices.len(), 6 * GIZMO_BUNDLE * 2);
 
         // Each axis must be distinguishable by hue, or the gizmo reports
-        // nothing a glance can read.
-        let hues: Vec<[f32; 3]> = vertices
-            .chunks_exact(2)
-            .step_by(2)
-            .map(|pair| pair[0].color)
+        // nothing a glance can read: three full-shade hues and three dimmed,
+        // six distinct colours over the whole bundle.
+        let mut hues: Vec<[u8; 3]> = vertices
+            .iter()
+            .map(|v| v.color.map(|c| (c * 255.0) as u8))
             .collect();
-        for (i, a) in hues.iter().enumerate() {
-            for b in hues.iter().skip(i + 1) {
-                assert_ne!(a, b, "two gizmo axes share a colour");
-            }
-        }
+        hues.sort();
+        hues.dedup();
+        assert_eq!(hues.len(), 6, "the gizmo's axes do not read as six colours");
     }
 
     #[test]

@@ -20,7 +20,9 @@ use clayspace_model::{
 use clayspace_vm::{Axis, Command, CommandQueue};
 
 use crate::design::{size, space, type_scale, Tokens};
+use crate::glyphs;
 use crate::icons::{self, Icon};
+use crate::matcap::MatCap;
 use crate::shortcuts::{Action, Shortcuts};
 use crate::strings::Locale;
 use crate::strings::Strings;
@@ -192,6 +194,10 @@ pub struct ShellState<'a> {
     /// Whether a mesh layer is drawn with its own edges over it.
     pub polyframe: bool,
     pub material: &'a str,
+    /// The material itself, for the preview to be painted from — the same
+    /// sphere image the viewport shades with, so the swatch is the material
+    /// and not a grey ball standing in for it.
+    pub matcap: MatCap,
     pub materials: &'a [&'a str],
 
     pub can_undo: bool,
@@ -272,7 +278,17 @@ pub fn apply_theme(ctx: &egui::Context) {
 }
 
 /// A section heading: small, spaced, low contrast.
+///
+/// A hairline rule above it where something already stands above it, so the
+/// sections of a long panel read as sections rather than as one column of
+/// rows — by tone, as the design asks, and never by a box around them.
 fn heading(ui: &mut egui::Ui, text: &str) {
+    if ui.min_rect().height() > 0.0 {
+        ui.add_space(space::SNUG);
+        let (rule, _) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
+        ui.painter().rect_filled(rule, 0.0, Tokens::rule());
+    }
     ui.add_space(space::ROOMY);
     ui.label(
         egui::RichText::new(text)
@@ -309,6 +325,133 @@ fn chip(label: &str, on: bool, unselected: egui::Color32) -> egui::Button<'stati
             }),
     )
     .fill(if on { Tokens::raised() } else { unselected })
+}
+
+/// The id a chip carrying an icon is recorded under, so a test can find it.
+///
+/// For the same reason `slider_id` exists: a test that reaches a control by
+/// pixel coordinate reaches a different control the next time a section lands
+/// above it.
+pub fn chip_id(name: &str) -> egui::Id {
+    egui::Id::new(("chip", name))
+}
+
+/// A toggle chip with an icon before its word.
+///
+/// The word alone is what the mode chips were, and Mover, Girar and Escalar
+/// are three words a sculptor has to read; an arrow, a ring and a box are
+/// three shapes they already know from the manipulator itself. The icon is
+/// drawn in the same set at the same weight as every other, and the chip
+/// fills, dims and lifts exactly as `chip` does.
+fn icon_chip(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    label: &str,
+    on: bool,
+    unselected: egui::Color32,
+) -> egui::Response {
+    icon_chip_recorded(ui, icon, label, on, unselected, true)
+}
+
+/// The same, choosing whether the chip claims `chip_id(label)`.
+///
+/// Two rows can carry the same word — the object list's Girar and the layer
+/// transform's — and one memory slot cannot hold both. A caller with ids of
+/// its own passes `false` and leaves the slot to the row a test looks for.
+fn icon_chip_recorded(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    label: &str,
+    on: bool,
+    unselected: egui::Color32,
+    record: bool,
+) -> egui::Response {
+    let padding = ui.spacing().button_padding;
+    let font = egui::FontId::proportional(type_scale::LABEL);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font, Tokens::text());
+    let width = padding.x * 2.0 + size::CHIP_ICON + space::TIGHT + galley.size().x;
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(width, size::CONTROL), egui::Sense::click());
+    let lit = ui.is_enabled() && (on || response.hovered());
+    let tint = if !ui.is_enabled() {
+        Tokens::text_faint()
+    } else if lit {
+        Tokens::text()
+    } else {
+        Tokens::text_dim()
+    };
+    let fill = if on || response.hovered() {
+        Tokens::raised()
+    } else {
+        unselected
+    };
+    let painter = ui.painter();
+    painter.rect_filled(rect, size::RADIUS, fill);
+    let icon_rect = egui::Rect::from_min_size(
+        rect.min + egui::vec2(padding.x, (rect.height() - size::CHIP_ICON) * 0.5),
+        egui::vec2(size::CHIP_ICON, size::CHIP_ICON),
+    );
+    icons::paint(painter, icon_rect, icon, tint);
+    let text_at = egui::pos2(
+        icon_rect.max.x + space::TIGHT,
+        rect.center().y - galley.size().y * 0.5,
+    );
+    painter.galley(text_at, galley, tint);
+    if record {
+        ui.ctx()
+            .memory_mut(|memory| memory.data.insert_temp(chip_id(label), rect));
+    }
+    response
+}
+
+/// The icon a manipulator mode wears, the same shape the viewport draws for it.
+fn gizmo_mode_icon(mode: GizmoMode) -> Icon {
+    match mode {
+        GizmoMode::Move => Icon::Move,
+        GizmoMode::Rotate => Icon::Turn,
+        GizmoMode::Scale => Icon::Scale,
+    }
+}
+
+/// The manipulator's three modes as one row of chips.
+///
+/// One row wherever the manipulator can be worked — the cage section, the
+/// object list, the shapes panel — so the sculptor meets the same three chips
+/// in the same order everywhere. `can_transform` is the cage's rule: turning
+/// and scaling act about the middle of the selection, and one point's middle
+/// is itself, so on a selection of one they are disabled with the reason on
+/// them rather than drawn live and inert.
+fn gizmo_mode_row(
+    ui: &mut egui::Ui,
+    state: &ShellState<'_>,
+    current: GizmoMode,
+    can_transform: bool,
+    queue: &mut CommandQueue,
+) {
+    let s = state.strings;
+    ui.horizontal_wrapped(|ui| {
+        for mode in GizmoMode::ALL {
+            let on = current == mode;
+            let usable = can_transform || mode == GizmoMode::Move;
+            let response = ui
+                .add_enabled_ui(usable, |ui| {
+                    icon_chip(
+                        ui,
+                        gizmo_mode_icon(mode),
+                        s.gizmo_mode_name(mode),
+                        on,
+                        Tokens::panel(),
+                    )
+                })
+                .inner
+                .on_disabled_hover_text(s.hint_gizmo_needs_two);
+            if response.clicked() && !on {
+                queue.push(Command::SetGizmoMode(mode));
+            }
+        }
+    });
 }
 
 /// A label and its value on one row.
@@ -403,6 +546,21 @@ fn chord_text(state: &ShellState<'_>, action: Action) -> String {
         .chord(action)
         .map(|chord| chord.label())
         .unwrap_or_default()
+}
+
+/// Says on hover which key does what this control does, where one is bound.
+///
+/// The menus already spell their chords; the chips a sculptor actually clicks
+/// did not, so the keys for the views and for symmetry were learnt from the
+/// README or not at all. Nothing is shown for an unbound action rather than
+/// an empty tooltip.
+fn with_chord(response: egui::Response, state: &ShellState<'_>, action: Action) -> egui::Response {
+    let chord = chord_text(state, action);
+    if chord.is_empty() {
+        response
+    } else {
+        response.on_hover_text(chord)
+    }
 }
 
 /// A menu item, labelled with the chord bound to the same action.
@@ -526,7 +684,7 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                         ViewPresetKind::Side => Action::ViewSide,
                         ViewPresetKind::Top => Action::ViewTop,
                     };
-                    if item(ui, state, preset.label(), action).clicked() {
+                    if item(ui, state, s.view_preset_name(preset), action).clicked() {
                         queue.push(Command::SetViewPreset(preset));
                         ui.close_menu();
                     }
@@ -699,8 +857,8 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                     // panel — and the two units it stands for, cells and
                     // passes, are not the same quantity.
                     let label = match op.amount() {
-                        Some(amount) => format!("{} · {amount}", op.label()),
-                        None => op.label().to_string(),
+                        Some(amount) => format!("{} · {amount}", s.mask_op_name(op)),
+                        None => s.mask_op_name(op).to_string(),
                     };
                     if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
                         queue.push(Command::ApplyMaskOp(op));
@@ -769,71 +927,138 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
 pub fn options_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
     let s = state.strings;
     ui.add_space(space::SNUG);
-    ui.horizontal(|ui| {
-        ui.add_space(space::PANEL);
-        ui.vertical(|ui| {
-            ui.set_width(180.0);
-            if let Some(value) = slider(ui, s.label_intensity, state.brush.intensity, 0.0..=1.0, 2)
-            {
-                queue.push(Command::SetBrushIntensity(value));
-            }
-        });
-        ui.add_space(space::SECTION);
-        ui.vertical(|ui| {
-            ui.set_width(180.0);
-            // The label carries the size on the model; the slider keeps
-            // editing engine units. A unit-aware slider whose range shifts
-            // under the pointer when the unit is switched is one nobody
-            // trusts, and the options bar has a fixed height that a second
-            // row would overflow.
-            let label = format!(
-                "{} · {}",
-                s.label_size,
-                state.units.format(state.brush.size)
-            );
-            if let Some(value) = slider(ui, &label, state.brush.size, 0.005..=1.0, 3) {
-                queue.push(Command::SetBrushSize(value));
-            }
-        });
-        ui.add_space(space::SECTION);
-        ui.vertical(|ui| {
-            ui.set_width(180.0);
-            if let Some(value) = slider(ui, s.label_flow, state.brush.flow, 0.01..=1.0, 2) {
-                queue.push(Command::SetBrushFlow(value));
-            }
-        });
+    // Scrolls sideways when the window is narrower than the bar, rather than
+    // cutting the last control off: a clipped Alpha is one nobody knows is
+    // there.
+    egui::ScrollArea::horizontal()
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.add_space(space::PANEL);
+                brush_badge(ui, state);
+                ui.add_space(space::ROOMY);
+                // A hairline between the brush and its settings, so the row reads
+                // as "this brush: these numbers" rather than as a run of sliders.
+                let (rule, _) =
+                    ui.allocate_exact_size(egui::vec2(1.0, size::BADGE), egui::Sense::hover());
+                ui.painter().rect_filled(rule, 0.0, Tokens::rule());
+                ui.add_space(space::ROOMY);
+                ui.vertical(|ui| {
+                    ui.set_width(OPTION_SLIDER_WIDTH);
+                    if let Some(value) =
+                        slider(ui, s.label_intensity, state.brush.intensity, 0.0..=1.0, 2)
+                    {
+                        queue.push(Command::SetBrushIntensity(value));
+                    }
+                });
+                ui.add_space(space::ROOMY);
+                ui.vertical(|ui| {
+                    ui.set_width(OPTION_SLIDER_WIDTH);
+                    // The label carries the size on the model; the slider keeps
+                    // editing engine units. A unit-aware slider whose range shifts
+                    // under the pointer when the unit is switched is one nobody
+                    // trusts, and the options bar has a fixed height that a second
+                    // row would overflow.
+                    let label = format!(
+                        "{} · {}",
+                        s.label_size,
+                        state.units.format(state.brush.size)
+                    );
+                    if let Some(value) = slider(ui, &label, state.brush.size, 0.005..=1.0, 3) {
+                        queue.push(Command::SetBrushSize(value));
+                    }
+                });
+                ui.add_space(space::ROOMY);
+                ui.vertical(|ui| {
+                    ui.set_width(OPTION_SLIDER_WIDTH);
+                    if let Some(value) = slider(ui, s.label_flow, state.brush.flow, 0.01..=1.0, 2) {
+                        queue.push(Command::SetBrushFlow(value));
+                    }
+                });
 
-        // The combine vocabulary is the SDF side's alone: cells are set or
-        // cleared and vertices are moved, so neither has a join to make. The
-        // controls are absent rather than greyed because there is no
-        // representation-independent meaning for them to be disabled *from*.
-        if state.representation == Representation::Sdf {
-            ui.add_space(space::SECTION);
-            combine_controls(ui, state, queue);
-        }
+                // The combine vocabulary is the SDF side's alone: cells are set or
+                // cleared and vertices are moved, so neither has a join to make. The
+                // controls are absent rather than greyed because there is no
+                // representation-independent meaning for them to be disabled *from*.
+                if state.representation == Representation::Sdf {
+                    ui.add_space(space::SECTION);
+                    combine_controls(ui, state, queue);
+                }
 
-        ui.add_space(space::SECTION);
-        alpha_control(ui, state, queue);
+                ui.add_space(space::SECTION);
+                alpha_control(ui, state, queue);
 
-        // Why the tool cannot be used, where the user is looking when they try.
-        if let Some(reason) = state.tool_status {
-            // The ViewModel carries no locale, so a status it raises itself
-            // arrives as a marker and is localised here. An engine refusal is
-            // already a sentence and passes through as one.
-            let reason = match reason {
-                clayspace_vm::TOOL_SUBSTITUTED => state.strings.tool_substituted,
-                clayspace_vm::ITEM_NOT_TRANSFORMABLE => state.strings.item_not_transformable,
-                sentence => sentence,
-            };
-            ui.add_space(space::SECTION);
-            ui.label(
-                egui::RichText::new(reason)
+                // Why the tool cannot be used, where the user is looking when they try.
+                if let Some(reason) = state.tool_status {
+                    // The ViewModel carries no locale, so a status it raises itself
+                    // arrives as a marker and is localised here. An engine refusal is
+                    // already a sentence and passes through as one.
+                    let reason = match reason {
+                        clayspace_vm::TOOL_SUBSTITUTED => state.strings.tool_substituted,
+                        clayspace_vm::ITEM_NOT_TRANSFORMABLE => {
+                            state.strings.item_not_transformable
+                        }
+                        sentence => sentence,
+                    };
+                    ui.add_space(space::SECTION);
+                    ui.label(
+                        egui::RichText::new(reason)
+                            .size(type_scale::LABEL)
+                            .color(Tokens::accent()),
+                    );
+                }
+            });
+        });
+}
+
+/// The id the options bar's brush badge is recorded under, for tests.
+pub fn brush_badge_id() -> egui::Id {
+    egui::Id::new("options-brush-badge")
+}
+
+/// The active brush at the head of its own settings.
+///
+/// ZBrush puts the brush where its numbers are, and a sculptor glancing at
+/// the bar sees *which* brush the intensity belongs to without looking down
+/// at the shelf. The same ball and the same mark the shelf draws, its name
+/// beside it, and what it does in one line under the name — the sentence the
+/// shelf only gives on hover, here where there is room for it.
+fn brush_badge(ui: &mut egui::Ui, state: &ShellState<'_>) {
+    let s = state.strings;
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(size::BADGE, size::BADGE), egui::Sense::hover());
+    paint_sphere(ui, rect, Tokens::text_dim(), false);
+    glyphs::paint(ui.painter(), rect, state.tool, Tokens::ground());
+    ui.ctx()
+        .memory_mut(|memory| memory.data.insert_temp(brush_badge_id(), rect));
+    ui.add_space(space::TIGHT);
+    ui.vertical(|ui| {
+        ui.set_width(BADGE_TEXT_WIDTH);
+        ui.add_space(space::TIGHT);
+        ui.label(
+            egui::RichText::new(s.tool(state.tool))
+                .size(type_scale::BODY)
+                .color(Tokens::text()),
+        );
+        let hint = s.tool_hint(state.tool);
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(hint)
                     .size(type_scale::LABEL)
-                    .color(Tokens::accent()),
-            );
-        }
+                    .color(Tokens::text_dim()),
+            )
+            .truncate(),
+        )
+        .on_hover_text(hint);
     });
 }
+
+/// How wide the badge's name and sentence may run before the sentence is cut.
+const BADGE_TEXT_WIDTH: f32 = 132.0;
+
+/// One of the bar's three sliders. Sized so the bar fits the design's 1280
+/// with the badge at its head; below that the bar scrolls.
+const OPTION_SLIDER_WIDTH: f32 = 150.0;
 
 /// The combine operation, its join profile, and how wide the join reaches.
 ///
@@ -845,7 +1070,7 @@ fn combine_controls(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comma
     let settings = state.combine;
 
     ui.vertical(|ui| {
-        ui.set_width(150.0);
+        ui.set_width(130.0);
         ui.label(
             egui::RichText::new(s.label_combine)
                 .size(type_scale::LABEL)
@@ -853,7 +1078,7 @@ fn combine_controls(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comma
         );
         egui::ComboBox::from_id_salt("combine-op")
             .selected_text(state.strings.combine_name(settings.op))
-            .width(150.0)
+            .width(130.0)
             .show_ui(ui, |ui| {
                 for op in Combine::offered_for_strokes() {
                     if ui
@@ -877,7 +1102,7 @@ fn combine_controls(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comma
 
     ui.add_space(space::SNUG);
     ui.vertical(|ui| {
-        ui.set_width(140.0);
+        ui.set_width(120.0);
         ui.label(
             egui::RichText::new(s.label_blend)
                 .size(type_scale::LABEL)
@@ -885,7 +1110,7 @@ fn combine_controls(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comma
         );
         egui::ComboBox::from_id_salt("combine-blend")
             .selected_text(state.strings.blend_name(settings.blend))
-            .width(140.0)
+            .width(120.0)
             .show_ui(ui, |ui| {
                 for blend in BlendProfile::ALL {
                     if ui
@@ -901,7 +1126,7 @@ fn combine_controls(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comma
 
     ui.add_space(space::SNUG);
     ui.vertical(|ui| {
-        ui.set_width(150.0);
+        ui.set_width(130.0);
         // The same number means the amplitude a stroke displaces by for the
         // relief family and the width of the join for every other operation,
         // so the label follows the operation rather than being fixed.
@@ -930,7 +1155,7 @@ fn alpha_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQ
     let support = AlphaSupport::of(state.representation, state.combine.op);
 
     ui.vertical(|ui| {
-        ui.set_width(210.0);
+        ui.set_width(180.0);
         ui.label(
             egui::RichText::new(s.label_alpha)
                 .size(type_scale::LABEL)
@@ -938,11 +1163,19 @@ fn alpha_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQ
         );
 
         if !support.accepted() {
-            ui.label(
-                egui::RichText::new(support.to_string())
-                    .size(type_scale::LABEL)
-                    .color(Tokens::text_dim()),
-            );
+            // Cut to the bar's width, with the whole sentence on hover. The
+            // reason is a paragraph, and the bar is one row: drawn whole it
+            // ran under the panel beside it and was read by nobody.
+            let sentence = support.to_string();
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(&sentence)
+                        .size(type_scale::LABEL)
+                        .color(Tokens::text_dim()),
+                )
+                .truncate(),
+            )
+            .on_hover_text(sentence);
             return;
         }
 
@@ -1047,7 +1280,7 @@ fn reference_plane(
     queue: &mut CommandQueue,
 ) {
     let settings = slot.settings;
-    heading(ui, plane.label());
+    heading(ui, s.ref_plane_name(plane));
     ui.horizontal(|ui| match slot.name {
         Some(name) => {
             // Shown, and only then, because there is nothing to hide.
@@ -1170,13 +1403,25 @@ pub fn deform_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut Co
                 return;
             }
 
-            for verb in DeformVerb::ALL {
-                let chosen = settings.verb == verb;
-                if ui.radio(chosen, verb.label()).clicked() && !chosen {
-                    settings.verb = verb;
-                    queue.push(Command::SetDeform(settings));
+            // The two deformations as chips with their shape on them, the
+            // way the manipulator's modes are: what a deformation does is a
+            // picture before it is a word.
+            ui.horizontal(|ui| {
+                for verb in DeformVerb::ALL {
+                    let chosen = settings.verb == verb;
+                    let icon = match verb {
+                        DeformVerb::Taper => Icon::Taper,
+                        DeformVerb::Twist => Icon::Twist,
+                    };
+                    if icon_chip(ui, icon, s.deform_verb_name(verb), chosen, Tokens::panel())
+                        .clicked()
+                        && !chosen
+                    {
+                        settings.verb = verb;
+                        queue.push(Command::SetDeform(settings));
+                    }
                 }
-            }
+            });
 
             ui.add_space(space::SNUG);
             if let Some(axis) = axis_control(ui, s.label_axis, settings.axis) {
@@ -1238,7 +1483,7 @@ pub fn deform_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut Co
             }
 
             ui.add_space(space::SECTION);
-            if ui.button(settings.verb.label()).clicked() {
+            if ui.button(s.deform_verb_name(settings.verb)).clicked() {
                 queue.push(Command::RunDeform);
             }
         });
@@ -1340,7 +1585,18 @@ pub fn left_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Command
         );
         for (index, axis) in Axis::ALL.iter().enumerate() {
             let on = state.symmetry[index];
-            if ui.add(chip(axis.label(), on, Tokens::panel())).clicked() {
+            let action = match axis {
+                Axis::X => Action::SymmetryX,
+                Axis::Y => Action::SymmetryY,
+                Axis::Z => Action::SymmetryZ,
+            };
+            if with_chord(
+                ui.add(chip(axis.label(), on, Tokens::panel())),
+                state,
+                action,
+            )
+            .clicked()
+            {
                 queue.push(Command::ToggleSymmetry(*axis));
             }
         }
@@ -1455,7 +1711,17 @@ fn layer_transform_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mu
     ui.horizontal_wrapped(|ui| {
         for mode in GizmoMode::ALL {
             let on = on_this_layer && state.gizmo_mode == mode;
-            let response = ui.add(chip(s.gizmo_mode_name(mode), on, Tokens::panel()));
+            // The same icon chips every other mode row draws — an arrow, a
+            // ring, a box — so the widget on a whole subtool reads as the one
+            // widget it is.
+            let response = icon_chip_recorded(
+                ui,
+                gizmo_mode_icon(mode),
+                s.gizmo_mode_name(mode),
+                on,
+                Tokens::panel(),
+                false,
+            );
             // Recorded where a test can find it, for the reason `slider_id`
             // states: a control reached by pixel coordinate is a different
             // control the next time a section lands above it.
@@ -2648,7 +2914,7 @@ fn curve_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQ
     ui.horizontal_wrapped(|ui| {
         for join in CurveJoin::ALL {
             if ui
-                .selectable_label(state.curve.join == join, join.label())
+                .selectable_label(state.curve.join == join, s.curve_join_name(join))
                 .clicked()
             {
                 queue.push(Command::SetCurveJoin(join));
@@ -2664,7 +2930,10 @@ fn curve_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQ
     ui.horizontal_wrapped(|ui| {
         for profile in CurveProfile::ALL {
             if ui
-                .selectable_label(state.curve.profile == profile, profile.label())
+                .selectable_label(
+                    state.curve.profile == profile,
+                    s.curve_profile_name(profile),
+                )
                 .clicked()
             {
                 queue.push(Command::SetCurveProfile(profile));
@@ -2776,18 +3045,7 @@ fn lattice_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
     // inert, which is how they were: the rings appeared, the drag ran, and
     // nothing moved.
     let can_transform = state.lattice.can_transform();
-    ui.horizontal_wrapped(|ui| {
-        for mode in clayspace_model::GizmoMode::ALL {
-            let on = state.lattice.mode == mode;
-            let usable = can_transform || mode == GizmoMode::Move;
-            let response = ui
-                .add_enabled(usable, chip(s.gizmo_mode_name(mode), on, Tokens::panel()))
-                .on_disabled_hover_text(s.hint_gizmo_needs_two);
-            if response.clicked() {
-                queue.push(Command::SetGizmoMode(mode));
-            }
-        }
-    });
+    gizmo_mode_row(ui, state, state.lattice.mode, can_transform, queue);
     if !can_transform {
         ui.label(
             egui::RichText::new(s.hint_gizmo_needs_two)
@@ -2887,8 +3145,8 @@ pub fn right_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
         // spends its skeuomorphic budget.
         let (rect, response) =
             ui.allocate_exact_size(egui::vec2(size::SWATCH, size::SWATCH), egui::Sense::click());
-        paint_sphere(ui, rect, Tokens::text_dim(), false);
-        if response.clicked() {
+        paint_matcap(ui, rect, state.matcap);
+        if response.on_hover_text(s.hint_material).clicked() {
             queue.push(Command::NextMaterial);
         }
         ui.add_space(space::SNUG);
@@ -2909,7 +3167,7 @@ pub fn right_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
     heading(ui, s.section_geometry);
     // A count without its detail level reads as a smaller model, so where the
     // viewport is not showing full resolution the interface says so.
-    if let Some(note) = state.stats.detail.note() {
+    if let Some(note) = s.detail_note(state.stats.detail) {
         ui.label(
             egui::RichText::new(note)
                 .size(type_scale::LABEL)
@@ -2981,7 +3239,10 @@ pub fn right_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
     ui.horizontal_wrapped(|ui| {
         for falloff in Falloff::ALL {
             let on = state.brush.shaping.falloff == falloff;
-            if ui.add(chip(falloff.label(), on, Tokens::panel())).clicked() {
+            if ui
+                .add(chip(s.falloff_name(falloff), on, Tokens::panel()))
+                .clicked()
+            {
                 queue.push(Command::SetBrushFalloff(falloff));
             }
         }
@@ -3028,12 +3289,23 @@ pub fn brush_shelf(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
         ui.add_space(space::PANEL);
         for tool in tools {
             let active = state.tool == tool;
-            ui.vertical(|ui| {
+            // A backdrop under the active swatch and the one under the
+            // pointer, set before the swatch is drawn and filled after, once
+            // its extent is known. The active brush is then carried by tone
+            // as well as by the accent, which is what a colour-blind
+            // sculptor reads; and a swatch lifting under the pointer is the
+            // "quiet until addressed" rule in the one place it was missing.
+            let backdrop = ui.painter().add(egui::Shape::Noop);
+            let group = ui.vertical(|ui| {
                 let (rect, response) = ui.allocate_exact_size(
                     egui::vec2(size::SWATCH, size::SWATCH),
                     egui::Sense::click(),
                 );
                 paint_sphere(ui, rect, Tokens::text_dim(), active);
+                // The brush's mark, in the ground's ink: dark on the lit clay,
+                // the way a mark pressed into a ball reads. Not the accent,
+                // which stays on the active brush alone.
+                glyphs::paint(ui.painter(), rect, tool, Tokens::ground());
                 ui.label(
                     egui::RichText::new(state.strings.tool(tool))
                         .size(type_scale::LABEL)
@@ -3044,13 +3316,232 @@ pub fn brush_shelf(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
                             Tokens::text_dim()
                         }),
                 );
+                // The name and what the brush does, for a hand that hovers.
+                // ZBrush teaches its brushes by tooltip; one sentence costs
+                // nothing and saves a stroke and an undo.
+                let response = response.on_hover_text(format!(
+                    "{}\n{}",
+                    state.strings.tool(tool),
+                    state.strings.tool_hint(tool)
+                ));
                 if response.clicked() {
                     queue.push(Command::SelectTool(tool));
                 }
+                response.hovered()
             });
+            if active || group.inner {
+                ui.painter().set(
+                    backdrop,
+                    egui::Shape::rect_filled(
+                        group.response.rect.expand(space::TIGHT),
+                        size::RADIUS,
+                        Tokens::raised(),
+                    ),
+                );
+            }
             ui.add_space(space::SNUG);
         }
     });
+}
+
+/// One button on the rail: an icon, lit when its state is on.
+///
+/// The tooltip is the whole of its label — the rail is icons alone, so the
+/// word lives on hover — with the key that does the same thing where one is
+/// bound. Recorded under `chip_id(label)` so a test can find it by the word
+/// rather than by the pixel.
+fn rail_button(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    label: &str,
+    tooltip: String,
+    on: bool,
+    enabled: bool,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(size::RAIL_BUTTON, size::RAIL_BUTTON),
+        egui::Sense::click(),
+    );
+    let tint = if !enabled {
+        Tokens::text_faint()
+    } else if on || response.hovered() {
+        Tokens::text()
+    } else {
+        Tokens::text_dim()
+    };
+    if enabled && (on || response.hovered()) {
+        ui.painter()
+            .rect_filled(rect, size::RADIUS, Tokens::raised());
+    }
+    let icon_rect =
+        egui::Rect::from_center_size(rect.center(), egui::vec2(size::CHIP_ICON, size::CHIP_ICON));
+    icons::paint(ui.painter(), icon_rect, icon, tint);
+    ui.ctx()
+        .memory_mut(|memory| memory.data.insert_temp(chip_id(label), rect));
+    response.on_hover_text(tooltip)
+}
+
+/// A label and its chord, for a rail tooltip.
+fn labelled_chord(state: &ShellState<'_>, label: &str, action: Action) -> String {
+    let chord = chord_text(state, action);
+    if chord.is_empty() {
+        label.to_owned()
+    } else {
+        format!("{label}  ·  {chord}")
+    }
+}
+
+/// One entry on the rail: what it shows, what it says, and what it does.
+struct RailEntry {
+    icon: Icon,
+    label: &'static str,
+    tooltip: String,
+    on: bool,
+    enabled: bool,
+    command: Command,
+}
+
+/// The tool rail, on the leading edge as the design places it.
+///
+/// Every button dispatches the command its menu entry does, under the same
+/// conditions, so the two cannot disagree; the rail exists because the menus
+/// were the *only* way to the shapes panel, the cage, the deformations, the
+/// references and the curve, and a panel three menus deep is a panel a new
+/// sculptor never opens. ZBrush keeps these on its shelves for the same
+/// reason. Grouped by what they are: what the pointer does, what the view
+/// shows, which panels and modes are up, and history.
+pub fn tool_rail(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    let cageable = clayspace_model::can_be_caged(state.representation);
+    let plain = |label: &'static str| label.to_owned();
+    let groups: [Vec<RailEntry>; 4] = [
+        // What the pointer does: sculpt, or paint the mask. On while the
+        // mask brush is in hand, which is what the key toggles.
+        vec![RailEntry {
+            icon: Icon::MaskPaint,
+            label: s.action_paint_mask,
+            tooltip: labelled_chord(state, s.action_paint_mask, Action::ToggleMaskPainting),
+            on: state.tool == ToolKind::Mascara,
+            enabled: true,
+            command: Command::ToggleMaskPainting,
+        }],
+        // What the view shows.
+        vec![
+            RailEntry {
+                icon: Icon::Frame,
+                label: s.action_frame_all,
+                tooltip: labelled_chord(state, s.action_frame_all, Action::FrameAll),
+                on: false,
+                enabled: true,
+                command: Command::FrameAll,
+            },
+            RailEntry {
+                icon: Icon::Polyframe,
+                label: s.action_polyframe,
+                tooltip: labelled_chord(state, s.action_polyframe, Action::TogglePolyframe),
+                on: state.polyframe,
+                enabled: true,
+                command: Command::TogglePolyframe,
+            },
+            RailEntry {
+                icon: Icon::Reference,
+                label: s.action_references,
+                tooltip: plain(s.action_references),
+                on: state.show_references,
+                enabled: true,
+                command: Command::ToggleReferences,
+            },
+        ],
+        // The panels and the modes: what is placed rather than brushed.
+        vec![
+            RailEntry {
+                icon: Icon::Shapes,
+                label: s.action_shapes,
+                tooltip: plain(s.action_shapes),
+                on: state.show_shapes,
+                enabled: true,
+                command: Command::ToggleShapes,
+            },
+            RailEntry {
+                icon: Icon::Cage,
+                label: s.action_cage,
+                // Grey with the reason on it, as the menu has it.
+                tooltip: if cageable {
+                    plain(s.action_cage)
+                } else {
+                    format!("{}\n{}", s.action_cage, s.status_cage_needs_a_field)
+                },
+                on: state.lattice.active,
+                enabled: cageable,
+                command: Command::ToggleLattice,
+            },
+            RailEntry {
+                icon: Icon::Curve,
+                label: s.action_curve,
+                tooltip: plain(s.action_curve),
+                on: state.curve.active,
+                enabled: true,
+                command: Command::ToggleCurve,
+            },
+            RailEntry {
+                icon: Icon::Taper,
+                label: s.action_deform,
+                tooltip: plain(s.action_deform),
+                on: state.show_deform,
+                enabled: true,
+                command: Command::ToggleDeform,
+            },
+        ],
+        // History, greyed exactly as the Edit menu greys it.
+        vec![
+            RailEntry {
+                icon: Icon::Undo,
+                label: s.action_undo,
+                tooltip: labelled_chord(state, s.action_undo, Action::Undo),
+                on: false,
+                enabled: state.can_undo,
+                command: Command::Undo,
+            },
+            RailEntry {
+                icon: Icon::Redo,
+                label: s.action_redo,
+                tooltip: labelled_chord(state, s.action_redo, Action::Redo),
+                on: false,
+                enabled: state.can_redo,
+                command: Command::Redo,
+            },
+        ],
+    ];
+
+    ui.vertical_centered(|ui| {
+        ui.add_space(space::SNUG);
+        for (index, group) in groups.into_iter().enumerate() {
+            if index > 0 {
+                rail_rule(ui);
+            }
+            for entry in group {
+                let response = rail_button(
+                    ui,
+                    entry.icon,
+                    entry.label,
+                    entry.tooltip,
+                    entry.on,
+                    entry.enabled,
+                );
+                if response.clicked() && entry.enabled {
+                    queue.push(entry.command);
+                }
+            }
+        }
+    });
+}
+
+/// A short hairline between the rail's groups.
+fn rail_rule(ui: &mut egui::Ui) {
+    ui.add_space(space::SNUG);
+    let (rule, _) = ui.allocate_exact_size(egui::vec2(size::CHIP_ICON, 1.0), egui::Sense::hover());
+    ui.painter().rect_filled(rule, 0.0, Tokens::rule());
+    ui.add_space(space::SNUG);
 }
 
 /// The status area: document, memory, backend and units.
@@ -3132,7 +3623,23 @@ pub fn viewport_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comma
         ui.add_space(space::PANEL);
         for preset in ViewPresetKind::ALL {
             let on = state.view_preset == preset;
-            if ui.add(chip(preset.label(), on, Tokens::ground())).clicked() {
+            let action = match preset {
+                ViewPresetKind::Perspective => Action::ViewPerspective,
+                ViewPresetKind::Front => Action::ViewFront,
+                ViewPresetKind::Side => Action::ViewSide,
+                ViewPresetKind::Top => Action::ViewTop,
+            };
+            if with_chord(
+                ui.add(chip(
+                    state.strings.view_preset_name(preset),
+                    on,
+                    Tokens::ground(),
+                )),
+                state,
+                action,
+            )
+            .clicked()
+            {
                 queue.push(Command::SetViewPreset(preset));
             }
         }
@@ -3165,6 +3672,43 @@ fn representation_tag(representation: Representation) -> &'static str {
         Representation::Voxel => "VOX",
         Representation::Mesh => "MSH",
     }
+}
+
+/// Paints the material itself on a ball.
+///
+/// The MatCap *is* a picture of a lit sphere, so the preview is that picture:
+/// the same recipe the viewport shades with, cut out of its square and cached
+/// as a texture the first time each material is shown. Terracotta reads warm,
+/// Polido reads shiny, and switching materials is seen before it is read.
+fn paint_matcap(ui: &egui::Ui, rect: egui::Rect, matcap: MatCap) {
+    const SIDE: u32 = 96;
+    let ctx = ui.ctx();
+    let key = egui::Id::new(("matcap-swatch", format!("{matcap:?}")));
+    let texture = ctx
+        .data(|data| data.get_temp::<egui::TextureHandle>(key))
+        .unwrap_or_else(|| {
+            let image = egui::ColorImage::from_rgba_unmultiplied(
+                [SIDE as usize, SIDE as usize],
+                &matcap.swatch(SIDE),
+            );
+            let handle = ctx.load_texture(
+                format!("matcap swatch {matcap:?}"),
+                image,
+                egui::TextureOptions::LINEAR,
+            );
+            ctx.data_mut(|data| data.insert_temp(key, handle.clone()));
+            handle
+        });
+    // The same diameter `paint_sphere` gives the brush swatches, so the two
+    // kinds of ball on screen are one size.
+    let side = rect.width().min(rect.height()) * 0.84;
+    let square = egui::Rect::from_center_size(rect.center(), egui::vec2(side, side));
+    ui.painter().image(
+        texture.id(),
+        square,
+        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+        Tokens::untinted(),
+    );
 }
 
 /// Paints a shaded sphere: the one place the design spends skeuomorphism.
@@ -3471,12 +4015,33 @@ fn selected_object_controls(
     // rather than the next gesture. An operation is a property of the object
     // and stays editable for as long as it does.
     let settings = object.combine;
+    // The three booleans first, as chips with the two discs on them: these
+    // are what a placed shape is for, and a sculptor should not have to open
+    // a list of thirteen to find "cut". The list below keeps the rest.
+    ui.horizontal(|ui| {
+        for (op, icon) in [
+            (Combine::Add, Icon::Union),
+            (Combine::Subtract, Icon::Subtract),
+            (Combine::Intersect, Icon::Intersect),
+        ] {
+            let on = settings.op == op;
+            if icon_chip(ui, icon, s.combine_name(op), on, Tokens::panel()).clicked() && !on {
+                queue.push(Command::SetObjectCombine(CombineSettings {
+                    op,
+                    ..settings
+                }));
+            }
+        }
+    });
     egui::ComboBox::from_id_salt("object-combine-op")
-        .selected_text(settings.op.label())
+        .selected_text(s.combine_name(settings.op))
         .width(280.0)
         .show_ui(ui, |ui| {
             for op in Combine::offered_for_strokes() {
-                if ui.selectable_label(op == settings.op, op.label()).clicked() && op != settings.op
+                if ui
+                    .selectable_label(op == settings.op, s.combine_name(op))
+                    .clicked()
+                    && op != settings.op
                 {
                     queue.push(Command::SetObjectCombine(CombineSettings {
                         op,
@@ -3488,12 +4053,12 @@ fn selected_object_controls(
 
     if settings.op.takes_a_blend() {
         egui::ComboBox::from_id_salt("object-combine-blend")
-            .selected_text(settings.blend.label())
+            .selected_text(s.blend_name(settings.blend))
             .width(280.0)
             .show_ui(ui, |ui| {
                 for blend in BlendProfile::ALL {
                     if ui
-                        .selectable_label(blend == settings.blend, blend.label())
+                        .selectable_label(blend == settings.blend, s.blend_name(blend))
                         .clicked()
                         && blend != settings.blend
                     {
@@ -3523,6 +4088,16 @@ fn selected_object_controls(
             }));
         }
     }
+
+    // How the manipulator on it behaves. Here and under the object list, so
+    // the mode can be changed from whichever of the two is open.
+    ui.add_space(space::SNUG);
+    ui.label(
+        egui::RichText::new(s.label_manipulator)
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    );
+    gizmo_mode_row(ui, state, state.gizmo_mode, true, queue);
 
     ui.add_space(space::SNUG);
     ui.label(
@@ -3561,11 +4136,10 @@ fn object_name(state: &ShellState<'_>, object: &clayspace_model::SceneObject) ->
 /// objecthood is recorded rather than inferred from what a layer contains.
 pub fn object_rows(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
     let s = state.strings;
-    ui.label(
-        egui::RichText::new(s.label_placed_objects)
-            .size(type_scale::LABEL)
-            .color(Tokens::text_dim()),
-    );
+    // A section like Scene and Layers above it, not a label: it is a list of
+    // things in the scene, and it read as a stray caption between two
+    // headings.
+    heading(ui, s.section_objects);
 
     if state.objects.is_empty() {
         ui.label(
@@ -3583,7 +4157,7 @@ pub fn object_rows(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
         let label = format!(
             "{} · {}",
             object_name(state, object),
-            object.combine.op.label()
+            s.combine_name(object.combine.op)
         );
         if ui.selectable_label(chosen, label).clicked() {
             // Clicking the selected row clears it, so the manipulator can be
@@ -3591,6 +4165,14 @@ pub fn object_rows(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
             let next = (!chosen).then_some(object.id);
             queue.push(Command::SelectObject(next));
         }
+    }
+
+    // The manipulator's modes, while something is selected for it to act on.
+    // Until this row existed the modes could only be changed with a cage up,
+    // so an object's manipulator moved and did nothing else.
+    if state.selected_object.is_some() {
+        ui.add_space(space::TIGHT);
+        gizmo_mode_row(ui, state, state.gizmo_mode, true, queue);
     }
 }
 

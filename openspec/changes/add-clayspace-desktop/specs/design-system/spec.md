@@ -51,6 +51,10 @@ The interface SHALL hold to the stated style ratio: predominantly minimal flat s
 - **WHEN** brush swatches and material previews are rendered
 - **THEN** they are shaded three-dimensional spheres that read as physical objects, which is the intended location of the skeuomorphic budget
 
+#### Scenario: The material preview shows the material
+- **WHEN** the active material changes
+- **THEN** the preview sphere is shaded with that material's own MatCap, so the swatch and the viewport agree
+
 ### Requirement: Controls are quiet until addressed
 Controls SHALL present at low contrast when inactive and gain contrast on hover, focus and while being adjusted. The interface SHALL NOT compete with the sculpt for attention while the user is not addressing it.
 
@@ -75,6 +79,21 @@ Tool and panel icons SHALL come from one line-based set sharing stroke weight, c
 #### Scenario: Icons share weight
 - **WHEN** icons from the tool rail, the toolbar and the brush shelf are displayed together
 - **THEN** their stroke weight and optical size match
+
+### Requirement: Every brush swatch carries a mark of its own
+Each brush swatch on the shelf SHALL carry a drawn mark depicting the brush's
+effect on a surface, distinct from every other brush's mark, drawn from the
+same line-based set at one stroke weight and contained within the swatch.
+Hovering a swatch SHALL show the brush's name and one sentence saying what it
+does, in the interface's language. The mark SHALL NOT use the accent.
+
+#### Scenario: Two brushes are told apart without their labels
+- **WHEN** the shelf is displayed with the labels covered
+- **THEN** no two swatches show the same mark
+
+#### Scenario: A swatch explains itself on hover
+- **WHEN** the pointer rests on a swatch
+- **THEN** the brush's name and a one-sentence description appear, translated to the interface's locale
 
 ### Requirement: Interface text meets a stated contrast floor
 Text and essential interface indicators SHALL meet at least a 4.5:1 contrast ratio against their background, and non-text indicators essential to understanding state SHALL meet at least 3:1. Where the quiet-until-addressed rule would fall below these floors, the floor SHALL win.

@@ -26,6 +26,9 @@ pub struct Strings {
     /// places that are not the interface: history entries, engine refusals and
     /// the diagnostics report.
     pub tool_names: [&'static str; clayspace_model::ToolKind::ALL.len()],
+    /// What each brush does, in one sentence, in the order of
+    /// [`ToolKind::ALL`]. Shown under the name when a swatch is hovered.
+    pub tool_hints: [&'static str; clayspace_model::ToolKind::ALL.len()],
     /// Every combine operation, in `Combine::ALL` order.
     ///
     /// Here for the same reason `tool_names` is here, and it should have
@@ -83,11 +86,42 @@ pub struct Strings {
     pub label_new_layer_kind: &'static str,
     pub action_remove_object: &'static str,
     pub label_placed_objects: &'static str,
+    /// The placed objects, as the section under the layers is headed.
+    pub section_objects: &'static str,
+    /// The four views, in `ViewPresetKind::ALL` order. They were drawn from
+    /// the domain's `label()`, so an English screen read Perspectiva,
+    /// Frontal, Lateral, Superior under its viewport.
+    pub view_preset_names: [&'static str; clayspace_model::ViewPresetKind::ALL.len()],
+    /// The brush edge profiles, in `Falloff::ALL` order.
+    pub falloff_names: [&'static str; clayspace_model::Falloff::ALL.len()],
+    /// The reference planes, in `RefPlane::ALL` order.
+    pub ref_plane_names: [&'static str; clayspace_model::RefPlane::ALL.len()],
+    /// How a curve's points join, in `CurveJoin::ALL` order.
+    pub curve_join_names: [&'static str; clayspace_model::CurveJoin::ALL.len()],
+    /// A curve's cross-section, in `CurveProfile::ALL` order.
+    pub curve_profile_names: [&'static str; clayspace_model::CurveProfile::ALL.len()],
+    /// The mask operations. Named fields rather than an array, because
+    /// `MaskOp` carries an amount and has no `ALL` to index by.
+    pub mask_op_invert: &'static str,
+    pub mask_op_clear: &'static str,
+    pub mask_op_expand: &'static str,
+    pub mask_op_contract: &'static str,
+    pub mask_op_smooth: &'static str,
+    pub mask_op_complement: &'static str,
+    /// What the geometry panel says when the counts are not the whole story.
+    pub detail_reduced: &'static str,
+    pub detail_pending: &'static str,
     pub label_no_placed_objects: &'static str,
     pub label_object_scale: &'static str,
     pub hint_shapes: &'static str,
     pub hint_uniform_scale: &'static str,
     pub label_shapes_sdf_only: &'static str,
+    /// The two deformations, in `DeformVerb::ALL` order.
+    pub deform_verb_names: [&'static str; clayspace_model::DeformVerb::ALL.len()],
+    /// The manipulator, as the row of its modes is headed.
+    pub label_manipulator: &'static str,
+    /// What clicking the material preview does.
+    pub hint_material: &'static str,
     /// Which language this table is. Carried with the words rather than beside
     /// them, so the language menu's tick and the words on screen cannot
     /// disagree about what the interface is in.
@@ -411,6 +445,28 @@ const PT_BR: Strings = Strings {
         "Borrar",
         "Apagar",
     ],
+    tool_hints: [
+        "Empurra a superfície para fora ao longo da normal — o pincel do dia a dia",
+        "Infla a superfície para fora; intensidade negativa a encolhe",
+        "Alisa relevos e ruído numa superfície uniforme",
+        "Arrasta a superfície com o traço, como puxar argila",
+        "Junta a superfície em direção ao centro do traço",
+        "Rebaixa os pontos altos até um plano e os alisa",
+        "Aplana a superfície sem preencher os pontos baixos",
+        "Preenche cavidades e vincos estreitos",
+        "Levanta um degrau de altura fixa que não se acumula",
+        "Pinta uma máscara; a área mascarada ignora todos os outros pincéis",
+        "Puxa um tentáculo da superfície, afinando até a ponta",
+        "Pole: aplana a superfície em facetas lisas",
+        "Uniformiza o espaçamento dos vértices sem perder a forma",
+        "Desliza a pele da superfície de lado, mantendo o interior",
+        "Desenhe uma forma na tela para cortar a peça de lado a lado",
+        "Acumula argila em placas achatadas, como se adiciona à mão",
+        "Pinça um vinco marcado ao longo do traço",
+        "Pinta cor na superfície sem movê-la",
+        "Borra a cor existente ao longo do traço",
+        "Remove material sob o pincel",
+    ],
     shape_names: [
         "Caixa",
         "Esfera",
@@ -459,11 +515,28 @@ const PT_BR: Strings = Strings {
     label_new_layer_kind: "Tipo",
     action_remove_object: "Remover objeto",
     label_placed_objects: "Objetos",
+    section_objects: "OBJETOS",
+    view_preset_names: ["Perspectiva", "Frontal", "Lateral", "Superior"],
+    falloff_names: ["Dura", "Linear", "Suave", "Gaussiana"],
+    ref_plane_names: ["Frontal", "Lateral", "Superior"],
+    curve_join_names: ["Cantos", "Pelos pontos", "Arredondado"],
+    curve_profile_names: ["Círculo", "Quadrado", "Hexágono", "Triângulo"],
+    mask_op_invert: "Inverter",
+    mask_op_clear: "Limpar",
+    mask_op_expand: "Expandir",
+    mask_op_contract: "Contrair",
+    mask_op_smooth: "Suavizar máscara",
+    mask_op_complement: "Complemento delimitado",
+    detail_reduced: "detalhe reduzido",
+    detail_pending: "ainda não gerado",
     label_no_placed_objects: "nenhum objeto colocado",
     label_object_scale: "Tamanho",
     hint_shapes: "Coloque uma forma e mire-a com o manipulador.",
     hint_uniform_scale: "A escala é uniforme. Use a gaiola para esticar em um eixo só.",
     label_shapes_sdf_only: "Um objeto vive na lista ordenada de uma camada SDF.",
+    deform_verb_names: ["Afunilar", "Torcer"],
+    label_manipulator: "Manipulador",
+    hint_material: "Clique para trocar o material. Cada um é uma esfera iluminada; a forma é lida como ela.",
     locale: Locale::PtBr,
     menu_file: "Arquivo",
     menu_edit: "Editar",
@@ -703,6 +776,28 @@ const EN_US: Strings = Strings {
         "Smear",
         "Erase",
     ],
+    tool_hints: [
+        "Pushes the surface out along its normal — the everyday brush",
+        "Swells the surface outward; a negative intensity shrinks it",
+        "Relaxes bumps and noise into an even surface",
+        "Drags the surface with the stroke, like pulling clay",
+        "Gathers the surface toward the centre of the stroke",
+        "Flattens high points down to a plane and smooths them",
+        "Planes the surface flat without filling low spots",
+        "Fills narrow pockets and creases",
+        "Raises a step of fixed height that does not build up on itself",
+        "Paints a mask; masked areas ignore every other brush",
+        "Pulls a tendril out of the surface, tapering to the tip",
+        "Polishes: planes the surface into smooth facets",
+        "Evens out vertex spacing without losing the form",
+        "Slides the surface skin sideways, leaving the interior",
+        "Draw a shape on the screen to cut straight through the form",
+        "Builds up clay in flat pats, the way it is added by hand",
+        "Pinches a sharp crease along the stroke",
+        "Paints colour onto the surface without moving it",
+        "Smears existing colour along the stroke",
+        "Removes material under the brush",
+    ],
     shape_names: [
         "Box",
         "Sphere",
@@ -751,11 +846,28 @@ const EN_US: Strings = Strings {
     label_new_layer_kind: "Kind",
     action_remove_object: "Remove object",
     label_placed_objects: "Objects",
+    section_objects: "OBJECTS",
+    view_preset_names: ["Perspective", "Front", "Side", "Top"],
+    falloff_names: ["Hard", "Linear", "Smooth", "Gaussian"],
+    ref_plane_names: ["Front", "Side", "Top"],
+    curve_join_names: ["Corners", "Through the points", "Rounded"],
+    curve_profile_names: ["Circle", "Square", "Hexagon", "Triangle"],
+    mask_op_invert: "Invert",
+    mask_op_clear: "Clear",
+    mask_op_expand: "Expand",
+    mask_op_contract: "Contract",
+    mask_op_smooth: "Smooth mask",
+    mask_op_complement: "Bounded complement",
+    detail_reduced: "reduced detail",
+    detail_pending: "not generated yet",
     label_no_placed_objects: "nothing placed yet",
     label_object_scale: "Size",
     hint_shapes: "Place a shape, then aim it with the manipulator.",
     hint_uniform_scale: "Scale is uniform. Use the cage to stretch along one axis.",
     label_shapes_sdf_only: "An object lives in an SDF layer's ordered list.",
+    deform_verb_names: ["Taper", "Twist"],
+    label_manipulator: "Manipulator",
+    hint_material: "Click to cycle the material. Each is a lit sphere; the form reads the way it does.",
     locale: Locale::EnUs,
     menu_file: "File",
     menu_edit: "Edit",
@@ -994,6 +1106,28 @@ const ES_419: Strings = Strings {
         "Difuminar",
         "Borrar",
     ],
+    tool_hints: [
+        "Empuja la superficie hacia fuera a lo largo de la normal — el pincel de cada día",
+        "Infla la superficie hacia fuera; una intensidad negativa la encoge",
+        "Alisa relieves y ruido en una superficie uniforme",
+        "Arrastra la superficie con el trazo, como tirar de la arcilla",
+        "Junta la superficie hacia el centro del trazo",
+        "Rebaja los puntos altos hasta un plano y los alisa",
+        "Aplana la superficie sin rellenar los puntos bajos",
+        "Rellena cavidades y pliegues estrechos",
+        "Levanta un escalón de altura fija que no se acumula",
+        "Pinta una máscara; la zona enmascarada ignora todos los demás pinceles",
+        "Tira de un tentáculo desde la superficie, afinándolo hasta la punta",
+        "Pule: aplana la superficie en facetas lisas",
+        "Uniformiza la separación de los vértices sin perder la forma",
+        "Desliza la piel de la superficie de lado, dejando el interior",
+        "Dibuja una forma en pantalla para cortar la pieza de lado a lado",
+        "Acumula arcilla en placas planas, como se añade a mano",
+        "Pellizca un pliegue marcado a lo largo del trazo",
+        "Pinta color sobre la superficie sin moverla",
+        "Difumina el color existente a lo largo del trazo",
+        "Elimina material bajo el pincel",
+    ],
     shape_names: [
         "Caja",
         "Esfera",
@@ -1042,11 +1176,28 @@ const ES_419: Strings = Strings {
     label_new_layer_kind: "Tipo",
     action_remove_object: "Quitar objeto",
     label_placed_objects: "Objetos",
+    section_objects: "OBJETOS",
+    view_preset_names: ["Perspectiva", "Frontal", "Lateral", "Superior"],
+    falloff_names: ["Dura", "Lineal", "Suave", "Gaussiana"],
+    ref_plane_names: ["Frontal", "Lateral", "Superior"],
+    curve_join_names: ["Esquinas", "Por los puntos", "Redondeado"],
+    curve_profile_names: ["Círculo", "Cuadrado", "Hexágono", "Triángulo"],
+    mask_op_invert: "Invertir",
+    mask_op_clear: "Limpiar",
+    mask_op_expand: "Expandir",
+    mask_op_contract: "Contraer",
+    mask_op_smooth: "Suavizar máscara",
+    mask_op_complement: "Complemento delimitado",
+    detail_reduced: "detalle reducido",
+    detail_pending: "aún no generado",
     label_no_placed_objects: "nada colocado aún",
     label_object_scale: "Tamaño",
     hint_shapes: "Coloca una forma y apúntala con el manipulador.",
     hint_uniform_scale: "La escala es uniforme. Usa la jaula para estirar en un solo eje.",
     label_shapes_sdf_only: "Un objeto vive en la lista ordenada de una capa SDF.",
+    deform_verb_names: ["Estrechar", "Torcer"],
+    label_manipulator: "Manipulador",
+    hint_material: "Haz clic para cambiar el material. Cada uno es una esfera iluminada; la forma se lee como ella.",
     locale: Locale::Es419,
     menu_file: "Archivo",
     menu_edit: "Editar",
@@ -1308,6 +1459,16 @@ impl Strings {
         &self.tool_names
     }
 
+    /// What a brush does, in one sentence, in this language.
+    pub fn tool_hint(&self, tool: clayspace_model::ToolKind) -> &'static str {
+        Self::at(&self.tool_hints, clayspace_model::ToolKind::ALL, tool)
+    }
+
+    /// Every brush hint, for a test that checks the whole set at once.
+    pub fn tool_hints(&self) -> &[&'static str] {
+        &self.tool_hints
+    }
+
     /// The name for one combine operation, in this locale.
     ///
     /// By position in `Combine::ALL`, which is what makes a new operation
@@ -1315,6 +1476,84 @@ impl Strings {
     /// English screen.
     pub fn combine_name(&self, op: clayspace_model::Combine) -> &'static str {
         Self::at(&self.combine_names, clayspace_model::Combine::ALL, op)
+    }
+
+    /// The name for one of the four views, in this locale.
+    pub fn view_preset_name(&self, preset: clayspace_model::ViewPresetKind) -> &'static str {
+        Self::at(
+            &self.view_preset_names,
+            clayspace_model::ViewPresetKind::ALL,
+            preset,
+        )
+    }
+
+    /// The name for a brush edge profile, in this locale.
+    pub fn falloff_name(&self, falloff: clayspace_model::Falloff) -> &'static str {
+        Self::at(&self.falloff_names, clayspace_model::Falloff::ALL, falloff)
+    }
+
+    /// The name for a reference plane, in this locale.
+    pub fn ref_plane_name(&self, plane: clayspace_model::RefPlane) -> &'static str {
+        Self::at(&self.ref_plane_names, clayspace_model::RefPlane::ALL, plane)
+    }
+
+    /// The name for a way of joining a curve's points, in this locale.
+    pub fn curve_join_name(&self, join: clayspace_model::CurveJoin) -> &'static str {
+        Self::at(
+            &self.curve_join_names,
+            clayspace_model::CurveJoin::ALL,
+            join,
+        )
+    }
+
+    /// The name for a curve's cross-section, in this locale.
+    pub fn curve_profile_name(&self, profile: clayspace_model::CurveProfile) -> &'static str {
+        Self::at(
+            &self.curve_profile_names,
+            clayspace_model::CurveProfile::ALL,
+            profile,
+        )
+    }
+
+    /// The name for a mask operation, in this locale, without its amount.
+    pub fn mask_op_name(&self, op: clayspace_model::MaskOp) -> &'static str {
+        use clayspace_model::MaskOp;
+        match op {
+            MaskOp::Invert => self.mask_op_invert,
+            MaskOp::Clear => self.mask_op_clear,
+            MaskOp::Expand(_) => self.mask_op_expand,
+            MaskOp::Contract(_) => self.mask_op_contract,
+            MaskOp::Smooth(_) => self.mask_op_smooth,
+            MaskOp::InvertWithinBounds => self.mask_op_complement,
+        }
+    }
+
+    /// What the geometry panel notes about the counts, in this locale.
+    pub fn detail_note(&self, detail: clayspace_model::Detail) -> Option<&'static str> {
+        use clayspace_model::Detail;
+        match detail {
+            Detail::Full => None,
+            Detail::Reduced => Some(self.detail_reduced),
+            Detail::Pending => Some(self.detail_pending),
+        }
+    }
+
+    /// The name for one of the manipulator's modes, in this locale.
+    pub fn gizmo_mode_name(&self, mode: clayspace_model::GizmoMode) -> &'static str {
+        Self::at(
+            &self.gizmo_mode_names,
+            clayspace_model::GizmoMode::ALL,
+            mode,
+        )
+    }
+
+    /// The name for one deformation, in this locale.
+    pub fn deform_verb_name(&self, verb: clayspace_model::DeformVerb) -> &'static str {
+        Self::at(
+            &self.deform_verb_names,
+            clayspace_model::DeformVerb::ALL,
+            verb,
+        )
     }
 
     pub fn blend_name(&self, blend: clayspace_model::BlendProfile) -> &'static str {
@@ -1326,18 +1565,6 @@ impl Strings {
             &self.extrude_side_names,
             clayspace_model::ExtrudeSide::ALL,
             side,
-        )
-    }
-
-    /// What the manipulator's mode is called.
-    ///
-    /// `GizmoMode::label` is the domain's own word for it and reads in
-    /// Portuguese on every locale; this is the one the interface draws.
-    pub fn gizmo_mode_name(&self, mode: clayspace_model::GizmoMode) -> &'static str {
-        Self::at(
-            &self.gizmo_mode_names,
-            clayspace_model::GizmoMode::ALL,
-            mode,
         )
     }
 
@@ -1393,7 +1620,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 173] {
+    pub fn all(&self) -> [&'static str; 184] {
         [
             self.action_shapes,
             self.label_shape,
@@ -1417,9 +1644,20 @@ impl Strings {
             self.label_new_layer_kind,
             self.action_remove_object,
             self.label_placed_objects,
+            self.section_objects,
+            self.mask_op_invert,
+            self.mask_op_clear,
+            self.mask_op_expand,
+            self.mask_op_contract,
+            self.mask_op_smooth,
+            self.mask_op_complement,
+            self.detail_reduced,
+            self.detail_pending,
             self.label_no_placed_objects,
             self.label_object_scale,
             self.label_shapes_sdf_only,
+            self.label_manipulator,
+            self.hint_material,
             self.item_not_transformable,
             self.menu_file,
             self.menu_edit,
@@ -1740,6 +1978,98 @@ mod tests {
     }
 
     #[test]
+    fn every_brush_says_what_it_does_in_every_language() {
+        // The swatch shows a name and a mark; the hint is the sentence that
+        // says what the mark means, so it has to exist and be its own.
+        use clayspace_model::ToolKind;
+        for locale in Locale::ALL {
+            let strings = Strings::for_locale(locale);
+            let hints = strings.tool_hints();
+            for (index, tool) in ToolKind::ALL.iter().enumerate() {
+                let hint = strings.tool_hint(*tool);
+                assert!(
+                    !hint.is_empty(),
+                    "{tool:?} says nothing in {}",
+                    locale.label()
+                );
+                assert!(
+                    hint.len() <= 90,
+                    "{tool:?}'s hint in {} is a paragraph, not a sentence",
+                    locale.label()
+                );
+                assert!(
+                    !hints[..index].contains(&hint),
+                    "{tool:?} shares its hint with another brush in {}",
+                    locale.label()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_brush_hints_are_translated_rather_than_copied() {
+        for (first, second) in [
+            (Locale::EnUs, Locale::PtBr),
+            (Locale::EnUs, Locale::Es419),
+            (Locale::PtBr, Locale::Es419),
+        ] {
+            let a = Strings::for_locale(first).tool_hints();
+            let b = Strings::for_locale(second).tool_hints();
+            let same = a.iter().zip(b.iter()).filter(|(x, y)| x == y).count();
+            assert_eq!(
+                same,
+                0,
+                "{same} brush hints are the same in {} and {}",
+                first.label(),
+                second.label()
+            );
+        }
+    }
+
+    #[test]
+    fn what_the_live_screen_showed_in_portuguese_is_translated() {
+        // Seen on a running English build: Perspectiva under the viewport,
+        // Dura and Suave on the edge chips, "ainda não gerado" in the geometry
+        // panel. Every one of these tables must differ from the Portuguese.
+        let en = Strings::for_locale(Locale::EnUs);
+        let pt = Strings::for_locale(Locale::PtBr);
+        let same = |a: &[&str], b: &[&str]| a.iter().zip(b).filter(|(x, y)| x == y).count();
+        assert_eq!(same(&en.view_preset_names, &pt.view_preset_names), 0);
+        assert!(
+            same(&en.falloff_names, &pt.falloff_names) <= 1,
+            "only Linear may coincide"
+        );
+        assert_eq!(same(&en.ref_plane_names, &pt.ref_plane_names), 0);
+        assert_eq!(same(&en.curve_join_names, &pt.curve_join_names), 0);
+        assert_eq!(same(&en.curve_profile_names, &pt.curve_profile_names), 0);
+        assert_ne!(en.detail_pending, pt.detail_pending);
+        assert_ne!(en.mask_op_invert, pt.mask_op_invert);
+        assert_eq!(en.detail_note(clayspace_model::Detail::Full), None);
+    }
+
+    #[test]
+    fn the_manipulator_and_the_deformations_are_named_in_english() {
+        // Both were drawn from the domain's `label()`, so an English screen
+        // read Mover, Girar, Escalar, Afunilar and Torcer.
+        let english = Strings::for_locale(Locale::EnUs);
+        let portuguese = Strings::for_locale(Locale::PtBr);
+        for mode in clayspace_model::GizmoMode::ALL {
+            assert_ne!(
+                english.gizmo_mode_name(mode),
+                portuguese.gizmo_mode_name(mode),
+                "{mode:?} is not translated"
+            );
+        }
+        for verb in clayspace_model::DeformVerb::ALL {
+            assert_ne!(
+                english.deform_verb_name(verb),
+                portuguese.deform_verb_name(verb),
+                "{verb:?} is not translated"
+            );
+        }
+    }
+
+    #[test]
     fn the_brush_names_are_translated_rather_than_copied() {
         // Portuguese and Spanish are close enough that a copied vocabulary
         // would pass unnoticed, and English is where a missed one shows.
@@ -1818,6 +2148,7 @@ mod tests {
             for heading in [
                 strings.section_scene,
                 strings.section_layers,
+                strings.section_objects,
                 strings.section_material,
                 strings.section_geometry,
             ] {

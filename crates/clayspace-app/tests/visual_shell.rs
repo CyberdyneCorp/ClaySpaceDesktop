@@ -217,6 +217,7 @@ fn state<'a>(
         },
         view_preset: ViewPresetKind::Perspective,
         material: "MatCap Cinza 01",
+        matcap: clayspace_view::MatCap::default(),
         materials,
         can_undo: true,
         can_redo: false,
@@ -267,6 +268,10 @@ fn build_shell(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQ
         .show(ctx, |ui| {
             egui::ScrollArea::horizontal().show(ui, |ui| shell::brush_shelf(ui, state, queue));
         });
+    egui::SidePanel::left("rail")
+        .exact_width(region::RAIL)
+        .resizable(false)
+        .show(ctx, |ui| shell::tool_rail(ui, state, queue));
     egui::SidePanel::left("left")
         .exact_width(region::LEFT)
         .show(ctx, |ui| {
@@ -293,6 +298,7 @@ fn build_shell(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQ
     shell::reference_window(ctx, state, queue);
     shell::shapes_window(ctx, state, queue);
     shell::boolean_window(ctx, state, queue);
+    shell::deform_window(ctx, state, queue);
 }
 
 /// Runs the shell without capturing it, so a test can ask where a widget went.
@@ -614,6 +620,119 @@ fn the_active_tool_is_the_only_thing_wearing_the_accent() {
     assert!(
         moved > 200,
         "changing the active tool moved only {moved} pixels in the brush shelf"
+    );
+}
+
+/// The options bar names the brush its numbers belong to, and changes with it.
+#[test]
+fn the_options_bar_is_headed_by_the_active_brush() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let mut first = state(strings, &scene, &materials, &report);
+    first.tool = ToolKind::Padrao;
+    let a = capture_shell(&harness, &first, "68-options-standard");
+    let mut second = state(strings, &scene, &materials, &report);
+    second.tool = ToolKind::Mover;
+    let b = capture_shell(&harness, &second, "68-options-move");
+
+    // The badge is where the interface says it is, inside the options bar.
+    let badge = probe_shell(&first)
+        .memory(|memory| memory.data.get_temp::<egui::Rect>(shell::brush_badge_id()))
+        .expect("the options bar drew no brush badge");
+    assert!(
+        badge.top() >= region::MENU_BAR && badge.bottom() <= region::MENU_BAR + region::OPTIONS_BAR,
+        "the brush badge is not in the options bar: {badge:?}"
+    );
+
+    // And changing the brush changes the head of the bar: the mark and the
+    // name both. Measured over the badge's own rectangle, widened to the text.
+    let changed = support::differing_pixels_within(
+        &a,
+        &b,
+        badge.left() as u32,
+        badge.top() as u32,
+        (badge.right() + 200.0) as u32,
+        badge.bottom() as u32,
+    );
+    assert!(
+        changed > 100,
+        "switching from Standard to Move changed {changed} pixels at the head \
+         of the options bar; the bar does not say which brush it belongs to"
+    );
+}
+
+/// The rail reaches what the menus reach, through the same commands.
+///
+/// The shapes panel, the cage, the deformations, the references and the
+/// curve were three menus deep and nowhere else. Every rail button is found
+/// by its word, one is clicked, and the command it emits is the menu's.
+#[test]
+fn the_tool_rail_reaches_what_the_menus_reach() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let set = state(strings, &scene, &materials, &report);
+
+    let ctx = probe_shell(&set);
+    let mut rail_buttons = Vec::new();
+    for label in [
+        strings.action_paint_mask,
+        strings.action_frame_all,
+        strings.action_polyframe,
+        strings.action_references,
+        strings.action_shapes,
+        strings.action_cage,
+        strings.action_curve,
+        strings.action_deform,
+        strings.action_undo,
+        strings.action_redo,
+    ] {
+        let rect = ctx
+            .memory(|memory| memory.data.get_temp::<egui::Rect>(shell::chip_id(label)))
+            .unwrap_or_else(|| panic!("the rail has no {label:?} button"));
+        assert!(
+            rect.right() <= region::RAIL + 1.0,
+            "{label:?} is not on the rail: {rect:?}"
+        );
+        rail_buttons.push(rect);
+    }
+    // Ten buttons in one column, none overlapping another.
+    for (i, a) in rail_buttons.iter().enumerate() {
+        for b in &rail_buttons[i + 1..] {
+            assert!(!a.intersects(*b), "two rail buttons overlap: {a:?} {b:?}");
+        }
+    }
+
+    let shapes = ctx
+        .memory(|memory| {
+            memory
+                .data
+                .get_temp::<egui::Rect>(shell::chip_id(strings.action_shapes))
+        })
+        .expect("the shapes button")
+        .center();
+    capture_shell_after(
+        &harness,
+        &set,
+        "69-tool-rail",
+        &[left_click(shapes)],
+        |queue| {
+            assert_eq!(
+                queue.commands(),
+                [Command::ToggleShapes],
+                "the rail's shapes button did not open the shapes panel"
+            );
+        },
     );
 }
 
@@ -2044,6 +2163,123 @@ fn the_placed_objects_are_listed_where_the_layers_are() {
     assert!(
         !queue.commands().is_empty() || queue.commands().is_empty(),
         "the panel ran"
+    );
+}
+
+/// An object's manipulator had one mode: the chips that change it were drawn
+/// only with a cage up, so a placed shape could be moved and neither turned
+/// nor scaled from the interface. They stand under the object list now, and
+/// they are wired — a chip that drew and did nothing would look the same.
+#[test]
+fn a_selected_object_offers_the_manipulators_three_modes() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let placed = [clayspace_model::SceneObject {
+        id: clayspace_model::ObjectId {
+            layer: clayspace_model::LayerKey(1),
+            node: 2,
+        },
+        source: clayspace_model::ObjectSource::Shape(clayspace_model::Shape::Box),
+        parameters: clayspace_model::Shape::Box.defaults(),
+        combine: clayspace_model::CombineSettings::default(),
+        position: [0.0; 3],
+        rotation_axis: [0.0, 1.0, 0.0],
+        rotation_angle: 0.0,
+        scale: 1.0,
+    }];
+
+    let mut set = state(strings, &scene, &materials, &report);
+    set.objects = &placed;
+    set.selected_object = Some(placed[0].id);
+
+    let turn = strings.gizmo_mode_name(clayspace_model::GizmoMode::Rotate);
+    let chip = probe_shell(&set)
+        .memory(|memory| memory.data.get_temp::<egui::Rect>(shell::chip_id(turn)))
+        .unwrap_or_else(|| panic!("the object list drew no {turn:?} chip"))
+        .center();
+    capture_shell_after(
+        &harness,
+        &set,
+        "shell-object-manipulator-modes",
+        &[left_click(chip)],
+        |queue| {
+            assert_eq!(
+                queue.commands(),
+                [Command::SetGizmoMode(clayspace_model::GizmoMode::Rotate)],
+                "clicking {turn:?} did not set the manipulator to turn. \
+                 See target/visual/shell-object-manipulator-modes.png"
+            );
+        },
+    );
+
+    // With nothing selected there is nothing for the widget to act on, and
+    // the row is absent rather than drawn and inert.
+    set.selected_object = None;
+    assert!(
+        probe_shell(&set)
+            .memory(|memory| memory.data.get_temp::<egui::Rect>(shell::chip_id(turn)))
+            .is_none(),
+        "the manipulator's modes are offered with no object selected"
+    );
+}
+
+/// The deformation panel names its two verbs as chips with their shape on
+/// them, in the interface's language. Captured because it never was: the
+/// panel was drawn from the domain's own Portuguese on every locale.
+#[test]
+fn the_deform_panel_offers_its_two_verbs_as_chips() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let mut open = state(strings, &scene, &materials, &report);
+    open.representation = clayspace_model::Representation::Mesh;
+    open.show_deform = true;
+    let shown = capture_shell(&harness, &open, "shell-deform");
+    let mut closed = state(strings, &scene, &materials, &report);
+    closed.representation = clayspace_model::Representation::Mesh;
+    let hidden = capture_shell(&harness, &closed, "shell-deform-closed");
+    assert!(
+        shown.mean_difference(&hidden) > 0.002,
+        "the deform panel changed nothing on screen"
+    );
+
+    // Both verbs are there, under their English names, and the one not
+    // chosen is wired: clicking it changes the setting.
+    let twist = strings.deform_verb_name(clayspace_model::DeformVerb::Twist);
+    let chip = probe_shell(&open)
+        .memory(|memory| memory.data.get_temp::<egui::Rect>(shell::chip_id(twist)))
+        .unwrap_or_else(|| panic!("the deform panel drew no {twist:?} chip"))
+        .center();
+    capture_shell_after(
+        &harness,
+        &open,
+        "shell-deform-twist",
+        &[left_click(chip)],
+        |queue| {
+            let verbs: Vec<_> = queue
+                .commands()
+                .iter()
+                .filter_map(|command| match command {
+                    Command::SetDeform(settings) => Some(settings.verb),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                verbs,
+                [clayspace_model::DeformVerb::Twist],
+                "clicking {twist:?} did not choose it"
+            );
+        },
     );
 }
 

@@ -48,6 +48,17 @@ one.
 not a drag across the surface, and the interface refuses a stroke for it rather
 than doing something adjacent to what the label says.
 
+**Every swatch carries a mark saying what the brush does.** Twenty identical
+grey balls told apart by the word under each is a shelf the eye has to read
+one by one; ZBrush's is read by shape first. Each mark is a picture of the
+effect on a surface — a hump for Standard, a swollen ring for Inflate, ripples
+dying to a line for Smooth, a hatch for Mask, a planed-off hump for Scrape, a
+tendril for Snake Hook — drawn with one pen at one weight, in the ground's ink
+on the lit clay, so the set reads as a set. They are drawn rather than shipped,
+which is what lets a test say every brush has a mark of its own and none leaves
+its swatch. Hovering a swatch names the brush and says in one sentence what it
+does, in the interface's language.
+
 **The shelf holds what the active layer's representation has.** Which tool
 reaches which representation is a declared table rather than a rule written per
 tool, and the shelf, the availability check and the tests all read it — so the
@@ -560,6 +571,9 @@ are deduplicated before they are drawn: they are translucent, and an edge
 emitted once per triangle would be blended twice, making the interior read
 heavier than the silhouette.
 
+**Taper and twist are chips with their shape on them** — a section that
+narrows, a band that turns — in the interface's language rather than the
+domain's Portuguese, which is what the panel read in every locale before.
 **Taper, twist and a lattice cage** reach a mesh layer too, as operations on
 the form rather than brushes: no centre, no radius, no falloff. There is
 deliberately no bend — its map folds distinct points onto the same place past a
@@ -885,6 +899,12 @@ is off it. The two the engine calls unbounded — a plane and an infinite
 cylinder — are not offered: neither has an extent for a manipulator to sit on
 or a bound for the cache to work from.
 
+**The three booleans are chips, with the two discs on them.** Unir, Subtrair
+and Interseção are what a placed shape is for, so they stand as a row above the
+full list of operations — the outline of both discs, the crescent one leaves,
+the lens where they overlap — and a sculptor does not open a list of thirteen
+to find "cut". The list keeps the rest: grooves, pipes, shells and the others.
+
 ### As a subtool, or into the one being worked
 
 *Inserir como* is two chips and the panel's first control, because the choice
@@ -1038,17 +1058,48 @@ step. Pressing the mode that is already in force puts the manipulator away.
 The control appears only where nothing smaller owns the widget — a cage that is
 up, a curve being authored and a selected object each already have it.
 
-Its arms are sized to the subtool rather than fixed. A widget on a *form's*
-middle is inside that form and depth-tested against it, so the fixed reach a
-placed object uses drew nothing at all on a subtool it sat in the middle of —
-three modes apart captured the same picture. On a layer the reach is taken from
-the layer's own bounds, the way the cage's is taken from the box it was built
-around.
+Its arms follow the one rule every manipulator here follows now — a share of
+the camera's distance, so the widget is the same size to the hand at every zoom
+(see *The manipulator on an object*). It was sized to the subtool's own bounds
+once, because the widget was depth-tested and a fixed reach drew nothing on a
+form it sat in the middle of; the manipulator is drawn over the clay now, so
+that reason is gone, and a widget that grew with the subtool was off the screen
+at any zoom that showed the subtool's detail.
 
 The pivot is the layer's transform. For a subtool standing where its layer
 transform puts it that is its middle; a layer whose geometry was built
 off-centre inside it carries the widget at the layer's origin rather than at
 the form's, which is worth knowing before reaching for it.
+
+**The three modes are one row of chips wherever the widget can be worked** —
+under the object list, in the shapes panel beside the selected object, and in
+the cage section — each chip carrying the shape its handle has in the viewport:
+an arrow for Mover, a ring for Girar, a box for Escalar. Until that row stood
+under the object list, the modes could only be changed with a cage up, so an
+object's manipulator moved and did nothing else. The row is absent with
+nothing selected, rather than drawn and inert.
+
+**The widget is drawn over the clay, not in it.** A manipulator sits on the
+middle of what it moves, and the middle of a placed sphere is inside the
+sphere; depth-tested, it was three arrow tips poking out of the form and
+nothing to grab, and on a small object inside a large one it was nothing at
+all. The cage, the curve's control polygon, an object's outline and the
+manipulator are all scaffolding around the clay, and scaffolding the clay hides
+is not scaffolding — so the overlay reads no depth, and every handle is where
+the hand expects it whichever side of the surface it is on. The strokes are laid
+down three deep, stepped across themselves in the screen plane, so a handle is
+a handle and not a one-pixel hairline over a shaded form — and the parts a
+hand actually grabs are solid: a cone caps each move arrow, a block sits at
+each scale handle and at the pivot, each face shaded from a fixed upper-left
+light so it reads as a thing with sides. Rings stay lines; a solid on a ring
+would be a fourth thing to grab.
+
+**It is the same size to the hand at every zoom.** The arms are a share of the
+distance to the camera's target rather than a length in the scene — the rule
+ZBrush, Maya and Blender all follow. A fixed length left the screen when the
+sculptor zoomed in and shrank to a speck when they zoomed out. The drawing and
+the hit test read one function, so the handle drawn and the handle grabbed
+cannot come apart.
 
 A sculpting stroke is not a target. A stroke is a gesture that has finished,
 and picking one back up is a different question — which of its samples is being
@@ -1302,6 +1353,15 @@ sits inside a torso — and picking the far one makes a chest impossible to grab
 
 ## Viewport
 
+**The symmetry plane is an outline, not a lattice.** Drawn as a grid across
+the mirror plane it was a wall of orange lines over the form on a running
+build, whatever the dimming, because the camera sits inside the plane's extent.
+It is six lines now — the plane's edge and its two centre lines, the mirror's
+axis where it meets the floor — at a fifth of the accent: it says where the
+mirror is and puts nothing across the clay. The navigation gizmo in the corner
+draws each half-axis as a bundle of five lines, so it reads as a rod rather
+than a hairline.
+
 ### Zooming
 
 The wheel zooms **at what is under the pointer** and stops a little short of
@@ -1438,6 +1498,17 @@ translations: **Português (Brasil)**, **English (US)** and **Español
 menu has — a reader who cannot read the current interface can still find their
 own. The choice is written to the session directory, so it survives a restart.
 
+**What a running English build still said in Portuguese is translated.** A
+screenshot of the live application, not a capture, showed Perspectiva, Frontal,
+Lateral and Superior under the viewport, Dura and Suave on the edge chips, and
+"ainda não gerado" in the geometry panel: each was drawn from the domain's own
+`label()` rather than from the string table. The four views, the four edge
+profiles, the three reference planes, the curve's joins and profiles, the six
+mask operations and the two detail notes are in the table now, in all three
+languages; the shell's untranslated-label ratchet (`LABELS_STILL_DRAWN`) stands
+at ten, all of them identifiers — SDF, mm, a mesh's own name — rather than
+words.
+
 The interface **opens in English**. That is not the design's own language and
 it is deliberate: it has to open in something a first-time reader can make
 sense of. A system language still wins over that default on a first run —
@@ -1479,6 +1550,36 @@ status area with a memory meter, the active backend and the working unit.
 The **accent marks the active brush and nothing else**. Layer selection is
 indicated by surface tone and weight; a test asserts the accent's coverage
 stays about constant as the active tool changes, so it cannot quietly spread.
+**The tool rail on the leading edge** — the region the design named and the
+first build left empty — holds, as icons with their word and key on hover:
+mask painting; frame, polyframe and the reference images; the shapes panel,
+the deformation cage, the curve and the deformations; undo and redo. Every
+button dispatches the command its menu entry does under the same conditions —
+the cage is grey with the reason on it where the layer cannot be caged, undo
+is grey where there is nothing to undo — so the two cannot disagree. It exists
+because the menus were the *only* way to the shapes panel, the cage, the
+deformations, the references and the curve, and a panel three menus deep is a
+panel a new sculptor never opens.
+
+**The options bar is headed by the brush it belongs to.** The active brush's
+ball and mark, its name, and what it does in one line stand at the head of the
+bar before a hairline rule and the sliders — ZBrush's arrangement, so a glance
+at the bar says *which* brush the intensity is for without looking down at the
+shelf. Sized so the bar fits the design's 1280 with the badge in place; below
+that it scrolls sideways rather than cutting the last control off.
+
+The **material preview is the material**: the MatCap is a picture of a lit
+sphere, so the swatch shows that picture — the same recipe the viewport shades
+with, cut out of its square — and Terracota reads warm and Polido reads shiny
+before either is read. Clicking it cycles the materials, and says so on hover.
+The view chips and the symmetry chips name their key on hover, so `1`–`4` and
+`X` `Y` `Z` are learnt where they are used rather than from this page.
+
+The active swatch also stands on a raised backdrop, and a swatch lifts the same
+way under the pointer — so the active brush is carried by tone as well as by
+hue, which is what a colour-blind sculptor reads, and the shelf follows the
+"quiet until addressed" rule in the one place it did not. The sections of a
+panel are separated by a hairline rule in the separator tone, never by a box.
 
 Contrast floors are enforced as tests, not intentions: 4.5:1 for text, 3:1 for
 indicators that carry state. Where the quiet-until-addressed rule would fall

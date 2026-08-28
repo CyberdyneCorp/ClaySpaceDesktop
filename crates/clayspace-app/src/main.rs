@@ -1851,39 +1851,36 @@ impl App {
 
     /// How long the manipulator's arms are on a placed object, in world units.
     ///
-    /// Fixed rather than taken from the object's own size, unlike the cage's,
-    /// which scales with the box it was built around. An object may be a
-    /// hundredth of the form or twice it, and a manipulator that shrank with a
-    /// small one would be unusable exactly when precision matters most.
-    const OBJECT_GIZMO_REACH: f32 = 0.45;
-
-    /// How far a manipulator on a *whole subtool* reaches, against that
-    /// subtool's longest side.
+    /// A share of the camera's distance rather than a length, so the widget is
+    /// the same size *to the hand* whether the sculptor is looking at the whole
+    /// form or has zoomed into a pore — which is how ZBrush's, Maya's and
+    /// Blender's all behave, and what a fixed length was not: zoomed in, its
+    /// arms left the screen; zoomed out, it was a speck. Not taken from the
+    /// object's own size either, unlike the cage's, which scales with the box
+    /// it was built around: an object may be a hundredth of the form or twice
+    /// it, and a manipulator that shrank with a small one would be unusable
+    /// exactly when precision matters most.
     ///
-    /// More than half, because half is exactly the surface. A subtool's
-    /// manipulator sits on the middle of the form, which is *inside* it, and
-    /// the widget is depth-tested against the clay — measured, the fixed 0.45
-    /// arms on a subtool of radius 0.7 drew nothing at all, three modes apart
-    /// captured the same picture, and the control read as broken.
-    const SUBTOOL_GIZMO_REACH: f32 = 0.7;
+    /// The drawing and the hit test both read this, so the handle drawn and
+    /// the handle grabbed cannot come apart.
+    fn object_gizmo_reach(camera: &Camera) -> f32 {
+        (camera.distance * Self::OBJECT_GIZMO_FRACTION).max(1e-3)
+    }
 
-    /// How long the manipulator's arms are on whatever it is on.
+    /// The manipulator's arm as a share of the distance to the camera's
+    /// target. At the default distance this is the 0.45 the widget always had.
+    const OBJECT_GIZMO_FRACTION: f32 = 0.11;
+
+    /// How long the manipulator's arms are on whatever is selected.
     ///
-    /// Fixed on a placed object, for the reason `OBJECT_GIZMO_REACH` states, and
-    /// taken from the subtool's own size on a whole layer — the way the cage's
-    /// is taken from the box it was built around. The floor keeps a manipulator
-    /// on an empty or tiny subtool grabbable.
+    /// One rule for a placed object and a whole subtool alike: a share of the
+    /// camera's distance, so the widget is the same size to the hand whether
+    /// the sculptor is looking at the whole scene or has zoomed into a pore —
+    /// see `object_gizmo_reach`. It was sized to the subtool's own box once,
+    /// which left the widget on a small subtool a speck and the one on a
+    /// large subtool off the screen at any zoom that showed its detail.
     fn gizmo_reach(&self) -> f32 {
-        let Some(clayspace_model::GizmoTarget::Layer(key)) = *self.objects.target().get() else {
-            return Self::OBJECT_GIZMO_REACH;
-        };
-        let Some((min, max)) = self.scene.layer_bounds(key) else {
-            return Self::OBJECT_GIZMO_REACH;
-        };
-        let span = (0..3)
-            .map(|axis| max[axis] - min[axis])
-            .fold(0.0f32, f32::max);
-        (span * Self::SUBTOOL_GIZMO_REACH).max(Self::OBJECT_GIZMO_REACH)
+        Self::object_gizmo_reach(&self.camera)
     }
 
     /// Whether a press on the clay should look for an object rather than
@@ -2980,6 +2977,11 @@ impl App {
             view_preset: *self.sculpt.view_preset().get(),
             polyframe: *self.sculpt.polyframe().get(),
             material,
+            matcap: self
+                .graphics
+                .as_ref()
+                .map(|g| g.renderer.matcap())
+                .unwrap_or_default(),
             materials: &materials,
             can_undo: history.can_undo,
             can_redo: history.can_redo,
@@ -3014,6 +3016,10 @@ impl App {
                     egui::ScrollArea::horizontal()
                         .show(ui, |ui| shell::brush_shelf(ui, &state, &mut queue));
                 });
+            egui::SidePanel::left("rail")
+                .exact_width(region::RAIL)
+                .resizable(false)
+                .show(ctx, |ui| shell::tool_rail(ui, &state, &mut queue));
             egui::SidePanel::left("left")
                 .exact_width(region::LEFT)
                 .show(ctx, |ui| {

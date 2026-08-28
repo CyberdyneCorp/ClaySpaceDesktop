@@ -13,6 +13,7 @@
 
 pub mod camera;
 pub mod design;
+pub mod glyphs;
 pub mod gpu;
 pub mod icons;
 pub mod layout;
