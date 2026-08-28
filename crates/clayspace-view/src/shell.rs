@@ -881,71 +881,138 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
 pub fn options_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
     let s = state.strings;
     ui.add_space(space::SNUG);
-    ui.horizontal(|ui| {
-        ui.add_space(space::PANEL);
-        ui.vertical(|ui| {
-            ui.set_width(180.0);
-            if let Some(value) = slider(ui, s.label_intensity, state.brush.intensity, 0.0..=1.0, 2)
-            {
-                queue.push(Command::SetBrushIntensity(value));
-            }
-        });
-        ui.add_space(space::SECTION);
-        ui.vertical(|ui| {
-            ui.set_width(180.0);
-            // The label carries the size on the model; the slider keeps
-            // editing engine units. A unit-aware slider whose range shifts
-            // under the pointer when the unit is switched is one nobody
-            // trusts, and the options bar has a fixed height that a second
-            // row would overflow.
-            let label = format!(
-                "{} · {}",
-                s.label_size,
-                state.units.format(state.brush.size)
-            );
-            if let Some(value) = slider(ui, &label, state.brush.size, 0.005..=1.0, 3) {
-                queue.push(Command::SetBrushSize(value));
-            }
-        });
-        ui.add_space(space::SECTION);
-        ui.vertical(|ui| {
-            ui.set_width(180.0);
-            if let Some(value) = slider(ui, s.label_flow, state.brush.flow, 0.01..=1.0, 2) {
-                queue.push(Command::SetBrushFlow(value));
-            }
-        });
+    // Scrolls sideways when the window is narrower than the bar, rather than
+    // cutting the last control off: a clipped Alpha is one nobody knows is
+    // there.
+    egui::ScrollArea::horizontal()
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.add_space(space::PANEL);
+                brush_badge(ui, state);
+                ui.add_space(space::ROOMY);
+                // A hairline between the brush and its settings, so the row reads
+                // as "this brush: these numbers" rather than as a run of sliders.
+                let (rule, _) =
+                    ui.allocate_exact_size(egui::vec2(1.0, size::BADGE), egui::Sense::hover());
+                ui.painter().rect_filled(rule, 0.0, Tokens::rule());
+                ui.add_space(space::ROOMY);
+                ui.vertical(|ui| {
+                    ui.set_width(OPTION_SLIDER_WIDTH);
+                    if let Some(value) =
+                        slider(ui, s.label_intensity, state.brush.intensity, 0.0..=1.0, 2)
+                    {
+                        queue.push(Command::SetBrushIntensity(value));
+                    }
+                });
+                ui.add_space(space::ROOMY);
+                ui.vertical(|ui| {
+                    ui.set_width(OPTION_SLIDER_WIDTH);
+                    // The label carries the size on the model; the slider keeps
+                    // editing engine units. A unit-aware slider whose range shifts
+                    // under the pointer when the unit is switched is one nobody
+                    // trusts, and the options bar has a fixed height that a second
+                    // row would overflow.
+                    let label = format!(
+                        "{} · {}",
+                        s.label_size,
+                        state.units.format(state.brush.size)
+                    );
+                    if let Some(value) = slider(ui, &label, state.brush.size, 0.005..=1.0, 3) {
+                        queue.push(Command::SetBrushSize(value));
+                    }
+                });
+                ui.add_space(space::ROOMY);
+                ui.vertical(|ui| {
+                    ui.set_width(OPTION_SLIDER_WIDTH);
+                    if let Some(value) = slider(ui, s.label_flow, state.brush.flow, 0.01..=1.0, 2) {
+                        queue.push(Command::SetBrushFlow(value));
+                    }
+                });
 
-        // The combine vocabulary is the SDF side's alone: cells are set or
-        // cleared and vertices are moved, so neither has a join to make. The
-        // controls are absent rather than greyed because there is no
-        // representation-independent meaning for them to be disabled *from*.
-        if state.representation == Representation::Sdf {
-            ui.add_space(space::SECTION);
-            combine_controls(ui, state, queue);
-        }
+                // The combine vocabulary is the SDF side's alone: cells are set or
+                // cleared and vertices are moved, so neither has a join to make. The
+                // controls are absent rather than greyed because there is no
+                // representation-independent meaning for them to be disabled *from*.
+                if state.representation == Representation::Sdf {
+                    ui.add_space(space::SECTION);
+                    combine_controls(ui, state, queue);
+                }
 
-        ui.add_space(space::SECTION);
-        alpha_control(ui, state, queue);
+                ui.add_space(space::SECTION);
+                alpha_control(ui, state, queue);
 
-        // Why the tool cannot be used, where the user is looking when they try.
-        if let Some(reason) = state.tool_status {
-            // The ViewModel carries no locale, so a status it raises itself
-            // arrives as a marker and is localised here. An engine refusal is
-            // already a sentence and passes through as one.
-            let reason = match reason {
-                clayspace_vm::TOOL_SUBSTITUTED => state.strings.tool_substituted,
-                clayspace_vm::ITEM_NOT_TRANSFORMABLE => state.strings.item_not_transformable,
-                sentence => sentence,
-            };
-            ui.add_space(space::SECTION);
-            ui.label(
-                egui::RichText::new(reason)
+                // Why the tool cannot be used, where the user is looking when they try.
+                if let Some(reason) = state.tool_status {
+                    // The ViewModel carries no locale, so a status it raises itself
+                    // arrives as a marker and is localised here. An engine refusal is
+                    // already a sentence and passes through as one.
+                    let reason = match reason {
+                        clayspace_vm::TOOL_SUBSTITUTED => state.strings.tool_substituted,
+                        clayspace_vm::ITEM_NOT_TRANSFORMABLE => {
+                            state.strings.item_not_transformable
+                        }
+                        sentence => sentence,
+                    };
+                    ui.add_space(space::SECTION);
+                    ui.label(
+                        egui::RichText::new(reason)
+                            .size(type_scale::LABEL)
+                            .color(Tokens::accent()),
+                    );
+                }
+            });
+        });
+}
+
+/// The id the options bar's brush badge is recorded under, for tests.
+pub fn brush_badge_id() -> egui::Id {
+    egui::Id::new("options-brush-badge")
+}
+
+/// The active brush at the head of its own settings.
+///
+/// ZBrush puts the brush where its numbers are, and a sculptor glancing at
+/// the bar sees *which* brush the intensity belongs to without looking down
+/// at the shelf. The same ball and the same mark the shelf draws, its name
+/// beside it, and what it does in one line under the name — the sentence the
+/// shelf only gives on hover, here where there is room for it.
+fn brush_badge(ui: &mut egui::Ui, state: &ShellState<'_>) {
+    let s = state.strings;
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(size::BADGE, size::BADGE), egui::Sense::hover());
+    paint_sphere(ui, rect, Tokens::text_dim(), false);
+    glyphs::paint(ui.painter(), rect, state.tool, Tokens::ground());
+    ui.ctx()
+        .memory_mut(|memory| memory.data.insert_temp(brush_badge_id(), rect));
+    ui.add_space(space::TIGHT);
+    ui.vertical(|ui| {
+        ui.set_width(BADGE_TEXT_WIDTH);
+        ui.add_space(space::TIGHT);
+        ui.label(
+            egui::RichText::new(s.tool(state.tool))
+                .size(type_scale::BODY)
+                .color(Tokens::text()),
+        );
+        let hint = s.tool_hint(state.tool);
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(hint)
                     .size(type_scale::LABEL)
-                    .color(Tokens::accent()),
-            );
-        }
+                    .color(Tokens::text_dim()),
+            )
+            .truncate(),
+        )
+        .on_hover_text(hint);
     });
 }
+
+/// How wide the badge's name and sentence may run before the sentence is cut.
+const BADGE_TEXT_WIDTH: f32 = 132.0;
+
+/// One of the bar's three sliders. Sized so the bar fits the design's 1280
+/// with the badge at its head; below that the bar scrolls.
+const OPTION_SLIDER_WIDTH: f32 = 150.0;
 
 /// The combine operation, its join profile, and how wide the join reaches.
 ///
@@ -957,7 +1024,7 @@ fn combine_controls(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comma
     let settings = state.combine;
 
     ui.vertical(|ui| {
-        ui.set_width(150.0);
+        ui.set_width(130.0);
         ui.label(
             egui::RichText::new(s.label_combine)
                 .size(type_scale::LABEL)
@@ -965,7 +1032,7 @@ fn combine_controls(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comma
         );
         egui::ComboBox::from_id_salt("combine-op")
             .selected_text(state.strings.combine_name(settings.op))
-            .width(150.0)
+            .width(130.0)
             .show_ui(ui, |ui| {
                 for op in Combine::offered_for_strokes() {
                     if ui
@@ -989,7 +1056,7 @@ fn combine_controls(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comma
 
     ui.add_space(space::SNUG);
     ui.vertical(|ui| {
-        ui.set_width(140.0);
+        ui.set_width(120.0);
         ui.label(
             egui::RichText::new(s.label_blend)
                 .size(type_scale::LABEL)
@@ -997,7 +1064,7 @@ fn combine_controls(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comma
         );
         egui::ComboBox::from_id_salt("combine-blend")
             .selected_text(state.strings.blend_name(settings.blend))
-            .width(140.0)
+            .width(120.0)
             .show_ui(ui, |ui| {
                 for blend in BlendProfile::ALL {
                     if ui
@@ -1013,7 +1080,7 @@ fn combine_controls(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comma
 
     ui.add_space(space::SNUG);
     ui.vertical(|ui| {
-        ui.set_width(150.0);
+        ui.set_width(130.0);
         // The same number means the amplitude a stroke displaces by for the
         // relief family and the width of the join for every other operation,
         // so the label follows the operation rather than being fixed.
@@ -1042,7 +1109,7 @@ fn alpha_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQ
     let support = AlphaSupport::of(state.representation, state.combine.op);
 
     ui.vertical(|ui| {
-        ui.set_width(210.0);
+        ui.set_width(180.0);
         ui.label(
             egui::RichText::new(s.label_alpha)
                 .size(type_scale::LABEL)
