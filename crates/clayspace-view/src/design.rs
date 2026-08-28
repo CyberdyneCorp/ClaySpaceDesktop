@@ -41,6 +41,9 @@ pub mod size {
     pub const CONTROL: f32 = 22.0;
     /// A brush swatch in the shelf.
     pub const SWATCH: f32 = 54.0;
+    /// The active brush's ball at the head of the options bar: what the bar's
+    /// height leaves after its padding.
+    pub const BADGE: f32 = 42.0;
     /// Icon side, in a list row.
     pub const ICON: f32 = 16.0;
     /// Icon side on a chip, where it stands for the whole control rather

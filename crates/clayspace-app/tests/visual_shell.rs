@@ -608,6 +608,50 @@ fn the_active_tool_is_the_only_thing_wearing_the_accent() {
     );
 }
 
+/// The options bar names the brush its numbers belong to, and changes with it.
+#[test]
+fn the_options_bar_is_headed_by_the_active_brush() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let mut first = state(strings, &scene, &materials, &report);
+    first.tool = ToolKind::Padrao;
+    let a = capture_shell(&harness, &first, "68-options-standard");
+    let mut second = state(strings, &scene, &materials, &report);
+    second.tool = ToolKind::Mover;
+    let b = capture_shell(&harness, &second, "68-options-move");
+
+    // The badge is where the interface says it is, inside the options bar.
+    let badge = probe_shell(&first)
+        .memory(|memory| memory.data.get_temp::<egui::Rect>(shell::brush_badge_id()))
+        .expect("the options bar drew no brush badge");
+    assert!(
+        badge.top() >= region::MENU_BAR && badge.bottom() <= region::MENU_BAR + region::OPTIONS_BAR,
+        "the brush badge is not in the options bar: {badge:?}"
+    );
+
+    // And changing the brush changes the head of the bar: the mark and the
+    // name both. Measured over the badge's own rectangle, widened to the text.
+    let changed = support::differing_pixels_within(
+        &a,
+        &b,
+        badge.left() as u32,
+        badge.top() as u32,
+        (badge.right() + 200.0) as u32,
+        badge.bottom() as u32,
+    );
+    assert!(
+        changed > 100,
+        "switching from Standard to Move changed {changed} pixels at the head \
+         of the options bar; the bar does not say which brush it belongs to"
+    );
+}
+
 #[test]
 fn the_diagnostics_window_carries_what_an_issue_needs() {
     // Captured because this is the one panel whose job is to be *read* by

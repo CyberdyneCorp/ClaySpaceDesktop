@@ -1248,6 +1248,13 @@ status area with a memory meter, the active backend and the working unit.
 The **accent marks the active brush and nothing else**. Layer selection is
 indicated by surface tone and weight; a test asserts the accent's coverage
 stays about constant as the active tool changes, so it cannot quietly spread.
+**The options bar is headed by the brush it belongs to.** The active brush's
+ball and mark, its name, and what it does in one line stand at the head of the
+bar before a hairline rule and the sliders — ZBrush's arrangement, so a glance
+at the bar says *which* brush the intensity is for without looking down at the
+shelf. Sized so the bar fits the design's 1280 with the badge in place; below
+that it scrolls sideways rather than cutting the last control off.
+
 The **material preview is the material**: the MatCap is a picture of a lit
 sphere, so the swatch shows that picture — the same recipe the viewport shades
 with, cut out of its square — and Terracota reads warm and Polido reads shiny

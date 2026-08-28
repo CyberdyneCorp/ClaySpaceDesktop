@@ -3,6 +3,15 @@
 ### Requirement: The window is organized into fixed functional regions
 The application window SHALL present: a menu bar; a tool rail along the leading edge; a tool options bar under the menu bar carrying the active tool's primary parameters; a left region holding the scene tree, the layer stack and sculpting settings; a central viewport; a right region holding material, geometry, resolution and brush-control inspectors; a brush shelf along the trailing edge of the window; and a status area.
 
+The tool options bar SHALL be headed by the active brush — its mark, its name
+and a one-line description — separated from the brush's parameters by a rule,
+and the head SHALL change with the active brush. Where the window is narrower
+than the bar, the bar SHALL scroll rather than clip its last control.
+
+#### Scenario: The options bar names its brush
+- **WHEN** the active brush changes from Standard to Move
+- **THEN** the head of the options bar shows Move's mark and name
+
 #### Scenario: Regions are present on first run
 - **WHEN** the application starts with no stored layout
 - **THEN** every region is present and populated at its default size
