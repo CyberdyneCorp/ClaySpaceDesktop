@@ -51,6 +51,10 @@ The interface SHALL hold to the stated style ratio: predominantly minimal flat s
 - **WHEN** brush swatches and material previews are rendered
 - **THEN** they are shaded three-dimensional spheres that read as physical objects, which is the intended location of the skeuomorphic budget
 
+#### Scenario: The material preview shows the material
+- **WHEN** the active material changes
+- **THEN** the preview sphere is shaded with that material's own MatCap, so the swatch and the viewport agree
+
 ### Requirement: Controls are quiet until addressed
 Controls SHALL present at low contrast when inactive and gain contrast on hover, focus and while being adjusted. The interface SHALL NOT compete with the sculpt for attention while the user is not addressing it.
 

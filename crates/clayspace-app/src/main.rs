@@ -2720,6 +2720,11 @@ impl App {
             view_preset: *self.sculpt.view_preset().get(),
             polyframe: *self.sculpt.polyframe().get(),
             material,
+            matcap: self
+                .graphics
+                .as_ref()
+                .map(|g| g.renderer.matcap())
+                .unwrap_or_default(),
             materials: &materials,
             can_undo: history.can_undo,
             can_redo: history.can_redo,

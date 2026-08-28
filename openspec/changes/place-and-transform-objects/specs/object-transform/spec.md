@@ -50,8 +50,9 @@ The manipulator, the deformation cage, a curve's control polygon and a
 selected object's outline SHALL be drawn over the sculpted surface regardless
 of depth: a handle that lies behind or inside the form SHALL be as visible as
 one in front of it. The manipulator's handles SHALL be drawn heavier than a
-single device pixel, and its arms SHALL keep a constant size on screen as the
-camera moves toward or away from what it acts on. The size drawn and the size
+single device pixel, its arrowheads, scale boxes and pivot SHALL be solid
+shaded bodies rather than line hints, and its arms SHALL keep a constant size
+on screen as the camera moves toward or away from what it acts on. The size drawn and the size
 hit-tested SHALL come from one definition.
 
 #### Scenario: A manipulator inside the form

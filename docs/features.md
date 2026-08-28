@@ -900,7 +900,11 @@ manipulator are all scaffolding around the clay, and scaffolding the clay hides
 is not scaffolding — so the overlay reads no depth, and every handle is where
 the hand expects it whichever side of the surface it is on. The strokes are laid
 down three deep, stepped across themselves in the screen plane, so a handle is
-a handle and not a one-pixel hairline over a shaded form.
+a handle and not a one-pixel hairline over a shaded form — and the parts a
+hand actually grabs are solid: a cone caps each move arrow, a block sits at
+each scale handle and at the pivot, each face shaded from a fixed upper-left
+light so it reads as a thing with sides. Rings stay lines; a solid on a ring
+would be a fourth thing to grab.
 
 **It is the same size to the hand at every zoom.** The arms are a share of the
 distance to the camera's target rather than a length in the scene — the rule
@@ -1244,6 +1248,13 @@ status area with a memory meter, the active backend and the working unit.
 The **accent marks the active brush and nothing else**. Layer selection is
 indicated by surface tone and weight; a test asserts the accent's coverage
 stays about constant as the active tool changes, so it cannot quietly spread.
+The **material preview is the material**: the MatCap is a picture of a lit
+sphere, so the swatch shows that picture — the same recipe the viewport shades
+with, cut out of its square — and Terracota reads warm and Polido reads shiny
+before either is read. Clicking it cycles the materials, and says so on hover.
+The view chips and the symmetry chips name their key on hover, so `1`–`4` and
+`X` `Y` `Z` are learnt where they are used rather than from this page.
+
 The active swatch also stands on a raised backdrop, and a swatch lifts the same
 way under the pointer — so the active brush is carried by tone as well as by
 hue, which is what a colour-blind sculptor reads, and the shelf follows the

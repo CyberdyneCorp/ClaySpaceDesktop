@@ -22,6 +22,7 @@ use clayspace_vm::{Axis, Command, CommandQueue};
 use crate::design::{size, space, type_scale, Tokens};
 use crate::glyphs;
 use crate::icons::{self, Icon};
+use crate::matcap::MatCap;
 use crate::shortcuts::{Action, Shortcuts};
 use crate::strings::Locale;
 use crate::strings::Strings;
@@ -172,6 +173,10 @@ pub struct ShellState<'a> {
     /// Whether a mesh layer is drawn with its own edges over it.
     pub polyframe: bool,
     pub material: &'a str,
+    /// The material itself, for the preview to be painted from — the same
+    /// sphere image the viewport shades with, so the swatch is the material
+    /// and not a grey ball standing in for it.
+    pub matcap: MatCap,
     pub materials: &'a [&'a str],
 
     pub can_undo: bool,
@@ -502,6 +507,21 @@ fn chord_text(state: &ShellState<'_>, action: Action) -> String {
         .chord(action)
         .map(|chord| chord.label())
         .unwrap_or_default()
+}
+
+/// Says on hover which key does what this control does, where one is bound.
+///
+/// The menus already spell their chords; the chips a sculptor actually clicks
+/// did not, so the keys for the views and for symmetry were learnt from the
+/// README or not at all. Nothing is shown for an unbound action rather than
+/// an empty tooltip.
+fn with_chord(response: egui::Response, state: &ShellState<'_>, action: Action) -> egui::Response {
+    let chord = chord_text(state, action);
+    if chord.is_empty() {
+        response
+    } else {
+        response.on_hover_text(chord)
+    }
 }
 
 /// A menu item, labelled with the chord bound to the same action.
@@ -1450,7 +1470,18 @@ pub fn left_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Command
         );
         for (index, axis) in Axis::ALL.iter().enumerate() {
             let on = state.symmetry[index];
-            if ui.add(chip(axis.label(), on, Tokens::panel())).clicked() {
+            let action = match axis {
+                Axis::X => Action::SymmetryX,
+                Axis::Y => Action::SymmetryY,
+                Axis::Z => Action::SymmetryZ,
+            };
+            if with_chord(
+                ui.add(chip(axis.label(), on, Tokens::panel())),
+                state,
+                action,
+            )
+            .clicked()
+            {
                 queue.push(Command::ToggleSymmetry(*axis));
             }
         }
@@ -2569,8 +2600,8 @@ pub fn right_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
         // spends its skeuomorphic budget.
         let (rect, response) =
             ui.allocate_exact_size(egui::vec2(size::SWATCH, size::SWATCH), egui::Sense::click());
-        paint_sphere(ui, rect, Tokens::text_dim(), false);
-        if response.clicked() {
+        paint_matcap(ui, rect, state.matcap);
+        if response.on_hover_text(s.hint_material).clicked() {
             queue.push(Command::NextMaterial);
         }
         ui.add_space(space::SNUG);
@@ -2844,7 +2875,19 @@ pub fn viewport_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comma
         ui.add_space(space::PANEL);
         for preset in ViewPresetKind::ALL {
             let on = state.view_preset == preset;
-            if ui.add(chip(preset.label(), on, Tokens::ground())).clicked() {
+            let action = match preset {
+                ViewPresetKind::Perspective => Action::ViewPerspective,
+                ViewPresetKind::Front => Action::ViewFront,
+                ViewPresetKind::Side => Action::ViewSide,
+                ViewPresetKind::Top => Action::ViewTop,
+            };
+            if with_chord(
+                ui.add(chip(preset.label(), on, Tokens::ground())),
+                state,
+                action,
+            )
+            .clicked()
+            {
                 queue.push(Command::SetViewPreset(preset));
             }
         }
@@ -2877,6 +2920,43 @@ fn representation_tag(representation: Representation) -> &'static str {
         Representation::Voxel => "VOX",
         Representation::Mesh => "MSH",
     }
+}
+
+/// Paints the material itself on a ball.
+///
+/// The MatCap *is* a picture of a lit sphere, so the preview is that picture:
+/// the same recipe the viewport shades with, cut out of its square and cached
+/// as a texture the first time each material is shown. Terracotta reads warm,
+/// Polido reads shiny, and switching materials is seen before it is read.
+fn paint_matcap(ui: &egui::Ui, rect: egui::Rect, matcap: MatCap) {
+    const SIDE: u32 = 96;
+    let ctx = ui.ctx();
+    let key = egui::Id::new(("matcap-swatch", format!("{matcap:?}")));
+    let texture = ctx
+        .data(|data| data.get_temp::<egui::TextureHandle>(key))
+        .unwrap_or_else(|| {
+            let image = egui::ColorImage::from_rgba_unmultiplied(
+                [SIDE as usize, SIDE as usize],
+                &matcap.swatch(SIDE),
+            );
+            let handle = ctx.load_texture(
+                format!("matcap swatch {matcap:?}"),
+                image,
+                egui::TextureOptions::LINEAR,
+            );
+            ctx.data_mut(|data| data.insert_temp(key, handle.clone()));
+            handle
+        });
+    // The same diameter `paint_sphere` gives the brush swatches, so the two
+    // kinds of ball on screen are one size.
+    let side = rect.width().min(rect.height()) * 0.84;
+    let square = egui::Rect::from_center_size(rect.center(), egui::vec2(side, side));
+    ui.painter().image(
+        texture.id(),
+        square,
+        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+        Tokens::untinted(),
+    );
 }
 
 /// Paints a shaded sphere: the one place the design spends skeuomorphism.

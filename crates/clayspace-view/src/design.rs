@@ -153,6 +153,15 @@ impl Tokens {
     pub fn accent() -> egui::Color32 {
         color(palette::ACCENT)
     }
+
+    /// The tint that leaves an image as it is.
+    ///
+    /// Not a colour on screen: egui multiplies a drawn image by a tint, and
+    /// this is the one that changes nothing. Named here so the material
+    /// preview does not have to write a colour down to draw its own texture.
+    pub fn untinted() -> egui::Color32 {
+        egui::Color32::WHITE
+    }
 }
 
 /// Relative luminance of an sRGB colour, per WCAG.

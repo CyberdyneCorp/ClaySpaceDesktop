@@ -73,6 +73,8 @@ pub struct Strings {
     pub deform_verb_names: [&'static str; clayspace_model::DeformVerb::ALL.len()],
     /// The manipulator, as the row of its modes is headed.
     pub label_manipulator: &'static str,
+    /// What clicking the material preview does.
+    pub hint_material: &'static str,
     /// Which language this table is. Carried with the words rather than beside
     /// them, so the language menu's tick and the words on screen cannot
     /// disagree about what the interface is in.
@@ -414,6 +416,7 @@ const PT_BR: Strings = Strings {
     gizmo_mode_names: ["Mover", "Girar", "Escalar"],
     deform_verb_names: ["Afunilar", "Torcer"],
     label_manipulator: "Manipulador",
+    hint_material: "Clique para trocar o material. Cada um é uma esfera iluminada; a forma é lida como ela.",
     locale: Locale::PtBr,
     menu_file: "Arquivo",
     menu_edit: "Editar",
@@ -699,6 +702,7 @@ const EN_US: Strings = Strings {
     gizmo_mode_names: ["Move", "Turn", "Scale"],
     deform_verb_names: ["Taper", "Twist"],
     label_manipulator: "Manipulator",
+    hint_material: "Click to cycle the material. Each is a lit sphere; the form reads the way it does.",
     locale: Locale::EnUs,
     menu_file: "File",
     menu_edit: "Edit",
@@ -983,6 +987,7 @@ const ES_419: Strings = Strings {
     gizmo_mode_names: ["Mover", "Girar", "Escalar"],
     deform_verb_names: ["Estrechar", "Torcer"],
     label_manipulator: "Manipulador",
+    hint_material: "Haz clic para cambiar el material. Cada uno es una esfera iluminada; la forma se lee como ella.",
     locale: Locale::Es419,
     menu_file: "Archivo",
     menu_edit: "Editar",
@@ -1294,7 +1299,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 148] {
+    pub fn all(&self) -> [&'static str; 149] {
         [
             self.action_shapes,
             self.label_shape,
@@ -1305,6 +1310,7 @@ impl Strings {
             self.label_object_scale,
             self.label_shapes_sdf_only,
             self.label_manipulator,
+            self.hint_material,
             self.item_not_transformable,
             self.menu_file,
             self.menu_edit,
