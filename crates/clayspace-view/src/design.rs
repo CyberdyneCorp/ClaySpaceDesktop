@@ -41,8 +41,12 @@ pub mod size {
     pub const CONTROL: f32 = 22.0;
     /// A brush swatch in the shelf.
     pub const SWATCH: f32 = 54.0;
-    /// Icon side.
+    /// Icon side, in a list row.
     pub const ICON: f32 = 16.0;
+    /// Icon side on a chip, where it stands for the whole control rather
+    /// than annotating a row, and where two discs at sixteen pixels were a
+    /// smudge. As tall as the control's own padding allows.
+    pub const CHIP_ICON: f32 = 20.0;
     /// Corner radius. Small: the design is flat, and a large radius reads as
     /// a card rather than a surface.
     pub const RADIUS: f32 = 3.0;
@@ -197,7 +201,7 @@ mod tests {
     /// mistake this exists to stop repeating while the backlog is worked off.
     /// Fixing one is: add an array to `Strings` keyed off the enum's `::ALL`,
     /// fill all three locales, add an accessor, and call it here.
-    const LABELS_STILL_DRAWN: usize = 26;
+    const LABELS_STILL_DRAWN: usize = 18;
 
     #[test]
     fn the_shell_draws_no_new_untranslated_labels() {

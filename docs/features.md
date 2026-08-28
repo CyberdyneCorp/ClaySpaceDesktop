@@ -517,6 +517,9 @@ are deduplicated before they are drawn: they are translucent, and an edge
 emitted once per triangle would be blended twice, making the interior read
 heavier than the silhouette.
 
+**Taper and twist are chips with their shape on them** — a section that
+narrows, a band that turns — in the interface's language rather than the
+domain's Portuguese, which is what the panel read in every locale before.
 **Taper, twist and a lattice cage** reach a mesh layer too, as operations on
 the form rather than brushes: no centre, no radius, no falloff. There is
 deliberately no bend — its map folds distinct points onto the same place past a
@@ -834,6 +837,12 @@ is off it. The two the engine calls unbounded — a plane and an infinite
 cylinder — are not offered: neither has an extent for a manipulator to sit on
 or a bound for the cache to work from.
 
+**The three booleans are chips, with the two discs on them.** Unir, Subtrair
+and Interseção are what a placed shape is for, so they stand as a row above the
+full list of operations — the outline of both discs, the crescent one leaves,
+the lens where they overlap — and a sculptor does not open a list of thirteen
+to find "cut". The list keeps the rest: grooves, pipes, shells and the others.
+
 **A placed shape stays live.** It is an item in the layer's ordered list, so
 select it a week later, move it, and the boolean follows: the hole is where the
 cylinder now is. Its operation is a property of *it* rather than of the gesture
@@ -873,6 +882,14 @@ keeps all three: it scales its own control points and carries no engine
 transform. Use the cage when you mean to stretch along one axis.
 
 A whole drag is **one undo step**, however many frames it took.
+
+**The three modes are one row of chips wherever the widget can be worked** —
+under the object list, in the shapes panel beside the selected object, and in
+the cage section — each chip carrying the shape its handle has in the viewport:
+an arrow for Mover, a ring for Girar, a box for Escalar. Until that row stood
+under the object list, the modes could only be changed with a cage up, so an
+object's manipulator moved and did nothing else. The row is absent with
+nothing selected, rather than drawn and inert.
 
 **The widget is drawn over the clay, not in it.** A manipulator sits on the
 middle of what it moves, and the middle of a placed sphere is inside the

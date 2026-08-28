@@ -16,6 +16,16 @@ handle SHALL constrain the drag to that axis, and a drag SHALL be resolved from
 where it started rather than accumulated across frames — the same rules the
 cage's manipulator already holds.
 
+The three modes SHALL be offered as one row of controls wherever a selection
+the manipulator acts on exists — beside the object list, in the shapes panel,
+and in the cage section — each carrying the shape of its handle, and the row
+SHALL be absent when nothing is selected.
+
+#### Scenario: The mode is changed with only an object selected
+- **WHEN** a placed object is selected and no cage is up
+- **THEN** the interface offers move, turn and scale, and choosing turn puts
+  the manipulator in turn mode
+
 #### Scenario: A placed object is moved along one axis
 - **WHEN** the user drags a placed object's vertical axis handle
 - **THEN** the object moves only vertically, and the surface it combines with

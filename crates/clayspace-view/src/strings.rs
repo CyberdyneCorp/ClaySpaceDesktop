@@ -67,6 +67,12 @@ pub struct Strings {
     pub hint_shapes: &'static str,
     pub hint_uniform_scale: &'static str,
     pub label_shapes_sdf_only: &'static str,
+    /// The manipulator's three modes, in `GizmoMode::ALL` order.
+    pub gizmo_mode_names: [&'static str; clayspace_model::GizmoMode::ALL.len()],
+    /// The two deformations, in `DeformVerb::ALL` order.
+    pub deform_verb_names: [&'static str; clayspace_model::DeformVerb::ALL.len()],
+    /// The manipulator, as the row of its modes is headed.
+    pub label_manipulator: &'static str,
     /// Which language this table is. Carried with the words rather than beside
     /// them, so the language menu's tick and the words on screen cannot
     /// disagree about what the interface is in.
@@ -405,6 +411,9 @@ const PT_BR: Strings = Strings {
     hint_shapes: "Coloque uma forma e mire-a com o manipulador.",
     hint_uniform_scale: "A escala é uniforme. Use a gaiola para esticar em um eixo só.",
     label_shapes_sdf_only: "Um objeto vive na lista ordenada de uma camada SDF.",
+    gizmo_mode_names: ["Mover", "Girar", "Escalar"],
+    deform_verb_names: ["Afunilar", "Torcer"],
+    label_manipulator: "Manipulador",
     locale: Locale::PtBr,
     menu_file: "Arquivo",
     menu_edit: "Editar",
@@ -687,6 +696,9 @@ const EN_US: Strings = Strings {
     hint_shapes: "Place a shape, then aim it with the manipulator.",
     hint_uniform_scale: "Scale is uniform. Use the cage to stretch along one axis.",
     label_shapes_sdf_only: "An object lives in an SDF layer's ordered list.",
+    gizmo_mode_names: ["Move", "Turn", "Scale"],
+    deform_verb_names: ["Taper", "Twist"],
+    label_manipulator: "Manipulator",
     locale: Locale::EnUs,
     menu_file: "File",
     menu_edit: "Edit",
@@ -968,6 +980,9 @@ const ES_419: Strings = Strings {
     hint_shapes: "Coloca una forma y apúntala con el manipulador.",
     hint_uniform_scale: "La escala es uniforme. Usa la jaula para estirar en un solo eje.",
     label_shapes_sdf_only: "Un objeto vive en la lista ordenada de una capa SDF.",
+    gizmo_mode_names: ["Mover", "Girar", "Escalar"],
+    deform_verb_names: ["Estrechar", "Torcer"],
+    label_manipulator: "Manipulador",
     locale: Locale::Es419,
     menu_file: "Archivo",
     menu_edit: "Editar",
@@ -1224,6 +1239,24 @@ impl Strings {
         Self::at(&self.combine_names, clayspace_model::Combine::ALL, op)
     }
 
+    /// The name for one of the manipulator's modes, in this locale.
+    pub fn gizmo_mode_name(&self, mode: clayspace_model::GizmoMode) -> &'static str {
+        Self::at(
+            &self.gizmo_mode_names,
+            clayspace_model::GizmoMode::ALL,
+            mode,
+        )
+    }
+
+    /// The name for one deformation, in this locale.
+    pub fn deform_verb_name(&self, verb: clayspace_model::DeformVerb) -> &'static str {
+        Self::at(
+            &self.deform_verb_names,
+            clayspace_model::DeformVerb::ALL,
+            verb,
+        )
+    }
+
     pub fn blend_name(&self, blend: clayspace_model::BlendProfile) -> &'static str {
         Self::at(&self.blend_names, clayspace_model::BlendProfile::ALL, blend)
     }
@@ -1261,7 +1294,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 147] {
+    pub fn all(&self) -> [&'static str; 148] {
         [
             self.action_shapes,
             self.label_shape,
@@ -1271,6 +1304,7 @@ impl Strings {
             self.label_no_placed_objects,
             self.label_object_scale,
             self.label_shapes_sdf_only,
+            self.label_manipulator,
             self.item_not_transformable,
             self.menu_file,
             self.menu_edit,
@@ -1563,6 +1597,28 @@ mod tests {
                 "{same} brush hints are the same in {} and {}",
                 first.label(),
                 second.label()
+            );
+        }
+    }
+
+    #[test]
+    fn the_manipulator_and_the_deformations_are_named_in_english() {
+        // Both were drawn from the domain's `label()`, so an English screen
+        // read Mover, Girar, Escalar, Afunilar and Torcer.
+        let english = Strings::for_locale(Locale::EnUs);
+        let portuguese = Strings::for_locale(Locale::PtBr);
+        for mode in clayspace_model::GizmoMode::ALL {
+            assert_ne!(
+                english.gizmo_mode_name(mode),
+                portuguese.gizmo_mode_name(mode),
+                "{mode:?} is not translated"
+            );
+        }
+        for verb in clayspace_model::DeformVerb::ALL {
+            assert_ne!(
+                english.deform_verb_name(verb),
+                portuguese.deform_verb_name(verb),
+                "{verb:?} is not translated"
             );
         }
     }
