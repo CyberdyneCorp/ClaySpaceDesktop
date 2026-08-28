@@ -1244,6 +1244,11 @@ status area with a memory meter, the active backend and the working unit.
 The **accent marks the active brush and nothing else**. Layer selection is
 indicated by surface tone and weight; a test asserts the accent's coverage
 stays about constant as the active tool changes, so it cannot quietly spread.
+The active swatch also stands on a raised backdrop, and a swatch lifts the same
+way under the pointer — so the active brush is carried by tone as well as by
+hue, which is what a colour-blind sculptor reads, and the shelf follows the
+"quiet until addressed" rule in the one place it did not. The sections of a
+panel are separated by a hairline rule in the separator tone, never by a box.
 
 Contrast floors are enforced as tests, not intentions: 4.5:1 for text, 3:1 for
 indicators that carry state. Where the quiet-until-addressed rule would fall

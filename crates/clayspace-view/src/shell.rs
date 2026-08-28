@@ -252,7 +252,17 @@ pub fn apply_theme(ctx: &egui::Context) {
 }
 
 /// A section heading: small, spaced, low contrast.
+///
+/// A hairline rule above it where something already stands above it, so the
+/// sections of a long panel read as sections rather than as one column of
+/// rows — by tone, as the design asks, and never by a box around them.
 fn heading(ui: &mut egui::Ui, text: &str) {
+    if ui.min_rect().height() > 0.0 {
+        ui.add_space(space::SNUG);
+        let (rule, _) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
+        ui.painter().rect_filled(rule, 0.0, Tokens::rule());
+    }
     ui.add_space(space::ROOMY);
     ui.label(
         egui::RichText::new(text)
@@ -2700,7 +2710,14 @@ pub fn brush_shelf(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
         ui.add_space(space::PANEL);
         for tool in tools {
             let active = state.tool == tool;
-            ui.vertical(|ui| {
+            // A backdrop under the active swatch and the one under the
+            // pointer, set before the swatch is drawn and filled after, once
+            // its extent is known. The active brush is then carried by tone
+            // as well as by the accent, which is what a colour-blind
+            // sculptor reads; and a swatch lifting under the pointer is the
+            // "quiet until addressed" rule in the one place it was missing.
+            let backdrop = ui.painter().add(egui::Shape::Noop);
+            let group = ui.vertical(|ui| {
                 let (rect, response) = ui.allocate_exact_size(
                     egui::vec2(size::SWATCH, size::SWATCH),
                     egui::Sense::click(),
@@ -2731,7 +2748,18 @@ pub fn brush_shelf(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
                 if response.clicked() {
                     queue.push(Command::SelectTool(tool));
                 }
+                response.hovered()
             });
+            if active || group.inner {
+                ui.painter().set(
+                    backdrop,
+                    egui::Shape::rect_filled(
+                        group.response.rect.expand(space::TIGHT),
+                        size::RADIUS,
+                        Tokens::raised(),
+                    ),
+                );
+            }
             ui.add_space(space::SNUG);
         }
     });
