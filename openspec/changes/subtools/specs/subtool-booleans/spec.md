@@ -16,6 +16,12 @@ The order of the two operands SHALL be stated in the interface, because
 subtraction is not symmetric and "A minus B" is the whole of what the sculptor
 is choosing.
 
+The boolean SHALL be set up in a section of the right region, beside the
+shapes, rather than in a window over the viewport, because the viewport holds
+the two forms being cut from one another. The section SHALL open from the tool
+rail's boolean button or its menu entry and SHALL close from a control on its
+own heading, each dispatching the same command.
+
 #### Scenario: A cylinder cuts a sphere
 - **WHEN** the sculptor subtracts a cylinder subtool from a sphere subtool
 - **THEN** a new subtool holds the sphere with a cylindrical bore through it,
@@ -26,6 +32,11 @@ is choosing.
   of a second boolean
 - **THEN** each of those works exactly as it does on a subtool that was never
   a result
+
+#### Scenario: The boolean is set up beside the viewport
+- **WHEN** the boolean section is open
+- **THEN** it is drawn in the right region, and the two operand subtools stay
+  visible in the viewport while they are chosen
 
 #### Scenario: Which operand is subtracted from which is stated
 - **WHEN** the sculptor sets up a subtraction between two subtools

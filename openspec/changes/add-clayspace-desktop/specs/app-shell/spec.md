@@ -13,8 +13,8 @@ show its on/off state where it has one.
 
 #### Scenario: A panel is opened from the rail
 - **WHEN** the shapes button on the rail is clicked
-- **THEN** the same command the Escultura → Formas menu entry dispatches is
-  emitted, and the button reads as on while the panel is open
+- **THEN** the same command the Arquivo → Formas menu entry dispatches is
+  emitted, and the button reads as on while the section is open
 
 The shapes and the boolean SHALL be sections of the right region rather than
 windows over the viewport, because the viewport holds the form a shape is
@@ -47,6 +47,24 @@ than the bar, the bar SHALL scroll rather than clip its last control.
 #### Scenario: The viewport takes the remaining space
 - **WHEN** the window is resized
 - **THEN** the panel regions keep their widths and the viewport absorbs the difference
+
+### Requirement: Panel sections fold from their headings
+Every section of the left and right regions SHALL fold from its heading: a
+click on the heading row hides the section's body, a second shows it again,
+and a chevron at the row's trailing end SHALL say which way the section
+stands. The fold SHALL be interface state rather than document state — it
+SHALL enter no history, dispatch no command and SHALL NOT be persisted — and
+every section SHALL open shown. The shapes and boolean sections, which have a
+close control instead, are exempt.
+
+#### Scenario: A section is folded and unfolded
+- **WHEN** the GEOMETRY heading is clicked
+- **THEN** the geometry section's readouts are no longer drawn, the command
+  queue is unchanged, and a second click on the heading draws them again
+
+#### Scenario: A fold does not outlive the session
+- **WHEN** a section is folded and the application is restarted
+- **THEN** the section opens shown
 
 ### Requirement: Panels can be resized, collapsed and restored
 The user SHALL be able to resize and collapse each panel region and restore the default layout in one action. Layout SHALL persist across sessions.
@@ -108,6 +126,12 @@ All user-facing text SHALL be externalized into resource files with no literal u
 #### Scenario: No literal user-facing strings
 - **WHEN** the source is inspected for user-facing text
 - **THEN** every such string is resolved from a resource file
+
+#### Scenario: The untitled document is named in the interface's language
+- **WHEN** a fresh document is shown in the menu bar, or offered as a file
+  name by the save or export dialog, in any shipped locale
+- **THEN** its name is that locale's word for an untitled document, while a
+  name that came from a file passes through untouched
 
 #### Scenario: An untranslated locale falls back
 - **WHEN** the system locale has no shipped translation

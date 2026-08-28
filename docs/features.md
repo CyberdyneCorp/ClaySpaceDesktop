@@ -890,7 +890,8 @@ than to this application.
 
 ## Inserting a form, and the booleans on it
 
-*Arquivo → Formas* offers fourteen shapes — box, sphere, cylinder, cone,
+The rail's **Formas** button, or *Arquivo → Formas*, opens a section of the
+right region offering fourteen shapes — box, sphere, cylinder, cone,
 torus, capsule, ellipsoid, pyramid, rounded box, frame, rounded cylinder, hex
 and tri prisms, octahedron — each with the numbers it is actually measured by,
 which are different numbers for different shapes. **Inserir** puts one where
@@ -904,7 +905,11 @@ window floating over the viewport, and the viewport is where the form a shape
 is being placed into stands, so the panel hid the very thing the shape was
 being aimed at. Docked under the material, the picker and the sculpt are side
 by side while a shape is placed and turned; the section is put away from the
-`×` on its own heading, as the window was from its title bar, or from the rail.
+`×` on its own heading, as the window was from its title bar, or from the rail
+button or menu entry that opened it, each of which pushes the same command. Its
+combo boxes take the panel's width rather than the fixed width the window gave
+them, and the selected object's three combine chips wrap where Interseção does
+not fit the panel's row.
 
 **The three booleans are chips, with the two discs on them.** Unir, Subtrair
 and Interseção are what a placed shape is for, so they stand as a row above the
@@ -1562,8 +1567,9 @@ and viewport bars. See *Not built yet*.
 
 The regions from the design: a menu bar, a tool options bar, a left region with
 the scene tree, layer stack and sculpt settings, a central viewport, a right
-region with material, geometry and brush inspectors, a brush shelf, and a
-status area with a memory meter, the active backend and the working unit.
+region with material, geometry and brush inspectors — and, while either is up,
+the shapes and boolean sections — a brush shelf, and a status area with a
+memory meter, the active backend and the working unit.
 
 The **accent marks the active brush and nothing else**. Layer selection is
 indicated by surface tone and weight; a test asserts the accent's coverage
@@ -1609,6 +1615,25 @@ interface's own memory keyed by the heading's word, enters no history, emits no
 command, and is forgotten when the application closes, so every section opens
 shown. The two placing sections keep their `×` instead, which puts them away
 altogether.
+
+**The shapes and the boolean are docked, not floated.** Both were windows over
+the viewport, and the viewport is where the form a shape is placed into, or cut
+from, stands: each covered the thing it was being used on. They are sections
+of the right region now, under the material and above the geometry, drawn
+while their toggle holds and put away from the `×` on their heading, the rail
+button or the menu entry — all of which push the same command, so a test that
+finds the close mark by its section's word and clicks it sees the section gone
+on the next frame. *Inserting a form* says what the two sections hold.
+
+**The four edge profiles are one segmented row.** Dura, Linear, Suave and
+Gaussiana were four chips that wrapped in English and Spanish, leaving Gaussian
+alone on a second line that read as a second setting. The row is now a bar
+given the width of its row, so it cannot wrap: each word takes what it measures
+plus a tight pad and the rest is dealt out evenly, the chosen cell lifted from
+a ground-toned track the way a slider's knob is, the others dim until hovered.
+A test asserts, in every locale, that the four cells share one top inside the
+right panel, that the unchosen ink sits clearly below the chosen, and that a
+click still sets the falloff.
 
 Contrast floors are enforced as tests, not intentions: 4.5:1 for text, 3:1 for
 indicators that carry state. Where the quiet-until-addressed rule would fall

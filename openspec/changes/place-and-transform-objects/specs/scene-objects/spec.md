@@ -11,6 +11,12 @@ The application SHALL offer the engine's bounded primitives and place the
 chosen one into the active SDF layer as an object, at a stated position and
 size, selected on arrival.
 
+The shapes SHALL be offered in a section of the right region rather than in a
+window over the viewport, because the viewport holds the surface the shape is
+placed onto; the section SHALL open from the tool rail's shapes button or its
+menu entry and SHALL close from a control on its own heading, each dispatching
+the same command.
+
 An unbounded primitive SHALL NOT be offered. The engine names two — a plane and
 an infinite cylinder — and neither has an extent to draw a manipulator around
 or bounds for the brick cache to work from, so offering one would be offering a
@@ -20,6 +26,10 @@ control whose result cannot be shown.
 - **WHEN** the user chooses the cylinder and places it
 - **THEN** the layer holds a cylinder at the chosen position, it is the current
   selection, and the viewport shows it combined with the surface
+
+#### Scenario: The picker stands beside the viewport
+- **WHEN** the shapes section is open
+- **THEN** it is drawn in the right region and the viewport is not covered by it
 
 #### Scenario: The list is what the engine can bound
 - **WHEN** the primitive list is presented
