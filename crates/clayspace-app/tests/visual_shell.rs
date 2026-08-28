@@ -1298,6 +1298,24 @@ fn row_centre(state: &ShellState<'_>, key: LayerKey) -> egui::Pos2 {
 /// a context menu is dark chrome over dark chrome, so most of its pixels
 /// differ by less than a level and counting only the loud ones took the menu
 /// from over 400 pixels to 359.
+/// The pixels that differ between two captures inside one rect.
+///
+/// The capture is one pixel per logical unit, so the rect indexes the images
+/// directly.
+fn differing_pixels_in(
+    a: &clayspace_view::Image,
+    b: &clayspace_view::Image,
+    rect: egui::Rect,
+) -> usize {
+    let (x0, y0) = (rect.left().max(0.0) as u32, rect.top().max(0.0) as u32);
+    let x1 = (rect.right() as u32).min(a.width).min(b.width);
+    let y1 = (rect.bottom() as u32).min(a.height).min(b.height);
+    (y0..y1)
+        .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+        .filter(|&(x, y)| a.pixel(x, y) != b.pixel(x, y))
+        .count()
+}
+
 fn differing_pixels(a: &clayspace_view::Image, b: &clayspace_view::Image) -> usize {
     let mut n = 0;
     for y in 0..a.height.min(b.height) {
@@ -1784,6 +1802,65 @@ fn every_table_knows_which_language_it_is() {
             Strings::for_locale(locale).locale
         );
     }
+}
+
+/// The untitled document is named in the interface's language.
+///
+/// The document ViewModel names a fresh document with one fixed marker and
+/// knows no locale, so the menu bar read "Sem título" on an English or Spanish
+/// build. The two captures share every state but the language; the document
+/// label, on the menu bar's trailing edge, is where they must differ — and the
+/// English one must be pixel-identical to the same state named with the
+/// English word directly, so what is drawn is the translation and not the
+/// marker.
+#[test]
+fn the_untitled_document_is_named_in_the_interfaces_language() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let untitled = |strings: &'static Strings, name: &'static str| {
+        let mut state = state(strings, &scene, &materials, &report);
+        state.document_name = name;
+        // Unsaved is translated on its own; the name has to carry the test.
+        state.modified = false;
+        state
+    };
+    let english = Strings::for_locale(Locale::EnUs);
+    let portuguese = Strings::for_locale(Locale::PtBr);
+
+    let en = capture_shell(
+        &harness,
+        &untitled(english, clayspace_vm::UNTITLED),
+        "71-untitled-en",
+    );
+    let pt = capture_shell(
+        &harness,
+        &untitled(portuguese, clayspace_vm::UNTITLED),
+        "71-untitled-pt",
+    );
+    let spelled = capture_shell(
+        &harness,
+        &untitled(english, english.document_untitled),
+        "71-untitled-en-spelled",
+    );
+
+    let label = egui::Rect::from_min_max(
+        egui::pos2(SHELL_WIDTH as f32 / 2.0, 0.0),
+        egui::pos2(SHELL_WIDTH as f32, region::MENU_BAR),
+    );
+    assert!(
+        differing_pixels_in(&en, &pt, label) > 0,
+        "the document label reads the same in English and Portuguese, so the untitled marker is drawn untranslated"
+    );
+    assert_eq!(
+        differing_pixels_in(&en, &spelled, label),
+        0,
+        "the English label with the marker differs from the one with the English word"
+    );
 }
 
 #[test]

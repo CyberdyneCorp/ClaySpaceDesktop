@@ -28,7 +28,7 @@ use clayspace_view::{
 use clayspace_vm::{
     ArmatureViewModel, Axis, Command, CommandQueue, CurveViewModel, DocumentViewModel, Grab, Guard,
     LatticeViewModel, MaskViewModel, ObjectViewModel, ReferenceViewModel, SceneViewModel,
-    SculptViewModel,
+    SculptViewModel, UNTITLED,
 };
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -305,7 +305,7 @@ impl App {
     fn new(document: SharedDocument, policy: BackendPolicy) -> Self {
         let sculpt = SculptViewModel::new(Box::new(document.clone()));
         let scene = SceneViewModel::new(Box::new(document.clone()));
-        let document_vm = DocumentViewModel::new(Box::new(document.clone()), "Sem título");
+        let document_vm = DocumentViewModel::new(Box::new(document.clone()), UNTITLED);
         let mask = MaskViewModel::new(Box::new(document.clone()));
         let lattice = LatticeViewModel::new(Box::new(document.clone()));
         let objects = ObjectViewModel::new(Box::new(document.clone()));
@@ -498,7 +498,7 @@ impl App {
             _ => rfd::FileDialog::new()
                 .set_title("Salvar escultura")
                 .add_filter("ClaySpace", &["clayspace"])
-                .set_file_name(format!("{}.clayspace", self.document_vm.name().get()))
+                .set_file_name(format!("{}.clayspace", self.document_display_name()))
                 .save_file(),
         };
         let Some(path) = path else {
@@ -759,7 +759,7 @@ impl App {
         let Some(path) = rfd::FileDialog::new()
             .set_title("Exportar malha")
             .add_filter("Malhas", &writable)
-            .set_file_name(format!("{}.obj", self.document_vm.name().get()))
+            .set_file_name(format!("{}.obj", self.document_display_name()))
             .save_file()
         else {
             return;
@@ -1806,6 +1806,14 @@ impl App {
         let at = self.on_rig_plane(point).unwrap_or(centre);
         self.armature.press(grab, at);
         true
+    }
+
+    /// The document's name in the interface's language, for the file dialogs.
+    ///
+    /// The same translation the menu bar applies, so a fresh document is
+    /// offered as "Untitled.clayspace" rather than the ViewModel's marker.
+    fn document_display_name(&self) -> &str {
+        shell::document_display_name(self.strings, self.document_vm.name().get())
     }
 
     /// This build and this machine, as the window shows it.

@@ -939,10 +939,11 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
         // The document, on the trailing edge as the design places it.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(space::SNUG);
+            let name = document_display_name(state.strings, state.document_name);
             let title = if state.modified {
-                format!("{} • {}", state.document_name, state.strings.state_unsaved)
+                format!("{} • {}", name, state.strings.state_unsaved)
             } else {
-                state.document_name.to_string()
+                name.to_string()
             };
             ui.label(
                 egui::RichText::new(title)
@@ -951,6 +952,20 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
             );
         });
     });
+}
+
+/// The document's name as the sculptor should read it.
+///
+/// A fresh document carries the ViewModel's untitled marker, which is fixed
+/// because the ViewModel knows no locale; this is where that marker becomes
+/// the word in the interface's language. A name that came from a file is the
+/// file's and passes through untouched.
+pub fn document_display_name<'a>(strings: &'a Strings, name: &'a str) -> &'a str {
+    if name == clayspace_vm::UNTITLED {
+        strings.document_untitled
+    } else {
+        name
+    }
 }
 
 /// The tool options bar: the active brush's primary parameters, always visible.

@@ -325,6 +325,8 @@ pub struct Strings {
     pub hint_units: &'static str,
     pub state_unsaved: &'static str,
     pub state_nothing_changed: &'static str,
+    /// What a document that has never been saved is called.
+    pub document_untitled: &'static str,
 }
 
 /// The Portuguese strings, which the design specifies.
@@ -625,6 +627,7 @@ const PT_BR: Strings = Strings {
     hint_units: "Toque para trocar a unidade. Só muda a leitura; nada é redimensionado.",
     state_unsaved: "não salvo",
     state_nothing_changed: "nada mudou",
+    document_untitled: "Sem título",
 };
 
 /// The English strings.
@@ -924,6 +927,7 @@ const EN_US: Strings = Strings {
     hint_units: "Click to change the unit. It changes the reading only; nothing is rescaled.",
     state_unsaved: "unsaved",
     state_nothing_changed: "nothing changed",
+    document_untitled: "Untitled",
 };
 
 /// The Latin American Spanish strings.
@@ -1231,6 +1235,7 @@ const ES_419: Strings = Strings {
     hint_units: "Haz clic para cambiar la unidad. Solo cambia la lectura; no se reescala nada.",
     state_unsaved: "sin guardar",
     state_nothing_changed: "nada cambió",
+    document_untitled: "Sin título",
 };
 
 impl Strings {
@@ -1426,7 +1431,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 158] {
+    pub fn all(&self) -> [&'static str; 159] {
         [
             self.action_shapes,
             self.label_shape,
@@ -1586,6 +1591,7 @@ impl Strings {
             self.hint_units,
             self.state_unsaved,
             self.state_nothing_changed,
+            self.document_untitled,
         ]
     }
 }
@@ -1624,6 +1630,24 @@ mod tests {
                     second.label()
                 );
             }
+        }
+    }
+
+    #[test]
+    fn the_untitled_document_is_named_in_every_language() {
+        // The ViewModel names a fresh document with one fixed marker and knows
+        // no locale, so "Sem título" reached the menu bar on every language
+        // until the View started translating it. The word has to differ from
+        // the Portuguese in each other table, or the mapping is a no-op.
+        let portuguese = Strings::for_locale(Locale::PtBr).document_untitled;
+        assert_eq!(portuguese, clayspace_vm::UNTITLED);
+        for locale in [Locale::EnUs, Locale::Es419] {
+            assert_ne!(
+                Strings::for_locale(locale).document_untitled,
+                portuguese,
+                "{} keeps the Portuguese untitled name",
+                locale.label()
+            );
         }
     }
 
