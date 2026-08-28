@@ -48,6 +48,17 @@ one.
 not a drag across the surface, and the interface refuses a stroke for it rather
 than doing something adjacent to what the label says.
 
+**Every swatch carries a mark saying what the brush does.** Twenty identical
+grey balls told apart by the word under each is a shelf the eye has to read
+one by one; ZBrush's is read by shape first. Each mark is a picture of the
+effect on a surface — a hump for Standard, a swollen ring for Inflate, ripples
+dying to a line for Smooth, a hatch for Mask, a planed-off hump for Scrape, a
+tendril for Snake Hook — drawn with one pen at one weight, in the ground's ink
+on the lit clay, so the set reads as a set. They are drawn rather than shipped,
+which is what lets a test say every brush has a mark of its own and none leaves
+its swatch. Hovering a swatch names the brush and says in one sentence what it
+does, in the interface's language.
+
 **The shelf holds what the active layer's representation has.** Which tool
 reaches which representation is a declared table rather than a rule written per
 tool, and the shelf, the availability check and the tests all read it — so the

@@ -26,6 +26,9 @@ pub struct Strings {
     /// places that are not the interface: history entries, engine refusals and
     /// the diagnostics report.
     pub tool_names: [&'static str; clayspace_model::ToolKind::ALL.len()],
+    /// What each brush does, in one sentence, in the order of
+    /// [`ToolKind::ALL`]. Shown under the name when a swatch is hovered.
+    pub tool_hints: [&'static str; clayspace_model::ToolKind::ALL.len()],
     /// Every combine operation, in `Combine::ALL` order.
     ///
     /// Here for the same reason `tool_names` is here, and it should have
@@ -334,6 +337,28 @@ const PT_BR: Strings = Strings {
         "Borrar",
         "Apagar",
     ],
+    tool_hints: [
+        "Empurra a superfície para fora ao longo da normal — o pincel do dia a dia",
+        "Infla a superfície para fora; intensidade negativa a encolhe",
+        "Alisa relevos e ruído numa superfície uniforme",
+        "Arrasta a superfície com o traço, como puxar argila",
+        "Junta a superfície em direção ao centro do traço",
+        "Rebaixa os pontos altos até um plano e os alisa",
+        "Aplana a superfície sem preencher os pontos baixos",
+        "Preenche cavidades e vincos estreitos",
+        "Levanta um degrau de altura fixa que não se acumula",
+        "Pinta uma máscara; a área mascarada ignora todos os outros pincéis",
+        "Puxa um tentáculo da superfície, afinando até a ponta",
+        "Pole: aplana a superfície em facetas lisas",
+        "Uniformiza o espaçamento dos vértices sem perder a forma",
+        "Desliza a pele da superfície de lado, mantendo o interior",
+        "Desenhe uma forma na tela para cortar a peça de lado a lado",
+        "Acumula argila em placas achatadas, como se adiciona à mão",
+        "Pinça um vinco marcado ao longo do traço",
+        "Pinta cor na superfície sem movê-la",
+        "Borra a cor existente ao longo do traço",
+        "Remove material sob o pincel",
+    ],
     shape_names: [
         "Caixa",
         "Esfera",
@@ -594,6 +619,28 @@ const EN_US: Strings = Strings {
         "Smear",
         "Erase",
     ],
+    tool_hints: [
+        "Pushes the surface out along its normal — the everyday brush",
+        "Swells the surface outward; a negative intensity shrinks it",
+        "Relaxes bumps and noise into an even surface",
+        "Drags the surface with the stroke, like pulling clay",
+        "Gathers the surface toward the centre of the stroke",
+        "Flattens high points down to a plane and smooths them",
+        "Planes the surface flat without filling low spots",
+        "Fills narrow pockets and creases",
+        "Raises a step of fixed height that does not build up on itself",
+        "Paints a mask; masked areas ignore every other brush",
+        "Pulls a tendril out of the surface, tapering to the tip",
+        "Polishes: planes the surface into smooth facets",
+        "Evens out vertex spacing without losing the form",
+        "Slides the surface skin sideways, leaving the interior",
+        "Draw a shape on the screen to cut straight through the form",
+        "Builds up clay in flat pats, the way it is added by hand",
+        "Pinches a sharp crease along the stroke",
+        "Paints colour onto the surface without moving it",
+        "Smears existing colour along the stroke",
+        "Removes material under the brush",
+    ],
     shape_names: [
         "Box",
         "Sphere",
@@ -852,6 +899,28 @@ const ES_419: Strings = Strings {
         "Pintar",
         "Difuminar",
         "Borrar",
+    ],
+    tool_hints: [
+        "Empuja la superficie hacia fuera a lo largo de la normal — el pincel de cada día",
+        "Infla la superficie hacia fuera; una intensidad negativa la encoge",
+        "Alisa relieves y ruido en una superficie uniforme",
+        "Arrastra la superficie con el trazo, como tirar de la arcilla",
+        "Junta la superficie hacia el centro del trazo",
+        "Rebaja los puntos altos hasta un plano y los alisa",
+        "Aplana la superficie sin rellenar los puntos bajos",
+        "Rellena cavidades y pliegues estrechos",
+        "Levanta un escalón de altura fija que no se acumula",
+        "Pinta una máscara; la zona enmascarada ignora todos los demás pinceles",
+        "Tira de un tentáculo desde la superficie, afinándolo hasta la punta",
+        "Pule: aplana la superficie en facetas lisas",
+        "Uniformiza la separación de los vértices sin perder la forma",
+        "Desliza la piel de la superficie de lado, dejando el interior",
+        "Dibuja una forma en pantalla para cortar la pieza de lado a lado",
+        "Acumula arcilla en placas planas, como se añade a mano",
+        "Pellizca un pliegue marcado a lo largo del trazo",
+        "Pinta color sobre la superficie sin moverla",
+        "Difumina el color existente a lo largo del trazo",
+        "Elimina material bajo el pincel",
     ],
     shape_names: [
         "Caja",
@@ -1134,6 +1203,16 @@ impl Strings {
     /// Every brush name, for a test that checks the whole vocabulary at once.
     pub fn tool_names(&self) -> &[&'static str] {
         &self.tool_names
+    }
+
+    /// What a brush does, in one sentence, in this language.
+    pub fn tool_hint(&self, tool: clayspace_model::ToolKind) -> &'static str {
+        Self::at(&self.tool_hints, clayspace_model::ToolKind::ALL, tool)
+    }
+
+    /// Every brush hint, for a test that checks the whole set at once.
+    pub fn tool_hints(&self) -> &[&'static str] {
+        &self.tool_hints
     }
 
     /// The name for one combine operation, in this locale.
@@ -1436,6 +1515,55 @@ mod tests {
                     strings.tool(tool)
                 );
             }
+        }
+    }
+
+    #[test]
+    fn every_brush_says_what_it_does_in_every_language() {
+        // The swatch shows a name and a mark; the hint is the sentence that
+        // says what the mark means, so it has to exist and be its own.
+        use clayspace_model::ToolKind;
+        for locale in Locale::ALL {
+            let strings = Strings::for_locale(locale);
+            let hints = strings.tool_hints();
+            for (index, tool) in ToolKind::ALL.iter().enumerate() {
+                let hint = strings.tool_hint(*tool);
+                assert!(
+                    !hint.is_empty(),
+                    "{tool:?} says nothing in {}",
+                    locale.label()
+                );
+                assert!(
+                    hint.len() <= 90,
+                    "{tool:?}'s hint in {} is a paragraph, not a sentence",
+                    locale.label()
+                );
+                assert!(
+                    !hints[..index].contains(&hint),
+                    "{tool:?} shares its hint with another brush in {}",
+                    locale.label()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_brush_hints_are_translated_rather_than_copied() {
+        for (first, second) in [
+            (Locale::EnUs, Locale::PtBr),
+            (Locale::EnUs, Locale::Es419),
+            (Locale::PtBr, Locale::Es419),
+        ] {
+            let a = Strings::for_locale(first).tool_hints();
+            let b = Strings::for_locale(second).tool_hints();
+            let same = a.iter().zip(b.iter()).filter(|(x, y)| x == y).count();
+            assert_eq!(
+                same,
+                0,
+                "{same} brush hints are the same in {} and {}",
+                first.label(),
+                second.label()
+            );
         }
     }
 

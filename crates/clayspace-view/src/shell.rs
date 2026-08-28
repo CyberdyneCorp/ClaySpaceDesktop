@@ -20,6 +20,7 @@ use clayspace_model::{
 use clayspace_vm::{Axis, Command, CommandQueue};
 
 use crate::design::{size, space, type_scale, Tokens};
+use crate::glyphs;
 use crate::icons::{self, Icon};
 use crate::shortcuts::{Action, Shortcuts};
 use crate::strings::Locale;
@@ -2587,6 +2588,10 @@ pub fn brush_shelf(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
                     egui::Sense::click(),
                 );
                 paint_sphere(ui, rect, Tokens::text_dim(), active);
+                // The brush's mark, in the ground's ink: dark on the lit clay,
+                // the way a mark pressed into a ball reads. Not the accent,
+                // which stays on the active brush alone.
+                glyphs::paint(ui.painter(), rect, tool, Tokens::ground());
                 ui.label(
                     egui::RichText::new(state.strings.tool(tool))
                         .size(type_scale::LABEL)
@@ -2597,6 +2602,14 @@ pub fn brush_shelf(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
                             Tokens::text_dim()
                         }),
                 );
+                // The name and what the brush does, for a hand that hovers.
+                // ZBrush teaches its brushes by tooltip; one sentence costs
+                // nothing and saves a stroke and an undo.
+                let response = response.on_hover_text(format!(
+                    "{}\n{}",
+                    state.strings.tool(tool),
+                    state.strings.tool_hint(tool)
+                ));
                 if response.clicked() {
                     queue.push(Command::SelectTool(tool));
                 }
