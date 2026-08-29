@@ -7,10 +7,17 @@
 //!
 //! 1. **The surface moves while the gesture is being made**, and the document
 //!    does not — no nodes, no history, nothing to undo until it commits.
-//! 2. **What was previewed is what is committed.** The preview is drawn from a
-//!    lattice of the transaction's own, relabelled into a cache rather than
-//!    resampled onto the document's, and this is what holds that relabelling
-//!    to being exact rather than merely close.
+//! 2. **The result lands where the preview showed it.** Not by the same
+//!    arithmetic: the preview relaxes the transaction's retained volume
+//!    cumulatively per dab, and the stroke is laid down by the bake that was
+//!    always used — see `ClayDocument::close_live_gesture` for why the
+//!    transaction's own commit is not taken. So the claim held here is
+//!    agreement within a tolerance, and the tolerance is stated.
+//!
+//! What *is* exact is the preview itself: it is drawn from a lattice of the
+//! transaction's own, relabelled into a cache rather than resampled onto the
+//! document's, so the samples the mesher sees are the samples the engine
+//! computed.
 
 use clayspace_engine::claycore;
 use clayspace_engine::{BackendPolicy, ClayDocument};
@@ -119,7 +126,7 @@ fn a_smoothing_gesture_shows_itself_before_the_document_changes() {
 }
 
 #[test]
-fn what_the_preview_showed_is_what_the_commit_installs() {
+fn the_stroke_lands_where_the_preview_showed_it() {
     let mut document = sphere();
     document.open_live_gesture(ToolKind::Suavizar, STARTING_SYMMETRY);
     for step in 0..6 {
@@ -141,11 +148,18 @@ fn what_the_preview_showed_is_what_the_commit_installs() {
     // Compared as reach rather than vertex for vertex: the two are meshed from
     // lattices offset from each other, so a vertex of one has no partner in
     // the other. What has to agree is where the surface is.
+    //
+    // A hundredth of a unit on a form of radius one — the two are different
+    // computations of the same smoothing, so this is the distance a sculptor
+    // would have to be able to see for the preview to be lying. Measured on
+    // the roughened reference surface the two land 0.09 apart in roughness,
+    // 5.74 against 5.83, which is the same statement in the other units.
     let (shown, kept) = (reach_along_x(&previewed), reach_along_x(&installed));
     assert!(
         (shown - kept).abs() < 0.01,
-        "the surface moved when the gesture was installed: previewed {shown}, \
-         committed {kept} — the preview showed something the commit did not"
+        "the surface moved when the gesture was laid down: previewed {shown}, \
+         committed {kept} — far enough that the preview was showing something \
+         else"
     );
 }
 

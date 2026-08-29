@@ -720,6 +720,19 @@ surface by less than a cell per pass and the cache's cell is 0.02.
 
 ## Known costs and escape routes
 
+**The live Smooth's commit is not used, and that is a decision to revisit.**
+`clay_sdf_smooth_commit` installs the working volume as the layer's one item,
+so every stroke would consolidate the whole subtool. It measures worse on
+Metal than on CPU or Vulkan — 7.82 roughness against a ceiling of 6.00, where
+the same stroke leaves 5.74 here, with Planar and Polir identical across both
+platforms as the control (ClayCore#379) — and it is heavy everywhere, since it
+discards the edit list and re-samples the subtool at the cache's cell size. So
+the transaction draws the preview and the stroke is laid down by the bake that
+was always used. The cost is that the two are different computations of the
+same smoothing; measured, they land 0.09 apart in roughness. If #379 is
+answered, taking the commit would make the preview exact and is worth
+re-measuring then.
+
 **A live smoothing gesture costs 186 ms when the pointer goes down.** That is
 the transaction sampling the whole layer once, and it is the trade the design
 makes rather than an inefficiency: it is what makes every dab afterwards cost

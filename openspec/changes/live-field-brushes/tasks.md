@@ -38,4 +38,10 @@
 - [x] 4.4 A second field subtool falls back to the held gesture
 - [x] 4.5 Through the pointer, not just the document: a stroke shows itself
   before it ends
-- [x] 4.6 The full suite, fmt, clippy, layering, openspec and packaging
+- [x] 4.6 A stamping drag on a mesh builds up rather than replacing itself,
+  and is still one undo — the fault forwarding the gesture hooks uncovered
+- [x] 4.7 A structural check that every *provided* method of every model trait
+  is forwarded, so this class of fault cannot be reintroduced by omission
+- [x] 4.8 The roughened-surface gate reproduces the old numbers exactly, on
+  every backend — the transaction drives the preview and not the edit
+- [x] 4.9 The full suite, fmt, clippy, layering, openspec and packaging
