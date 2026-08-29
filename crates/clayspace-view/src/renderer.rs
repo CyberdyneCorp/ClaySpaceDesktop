@@ -3021,6 +3021,42 @@ mod tests {
         (lines, triangles)
     }
 
+    /// Every segment and triangle the manipulator emits, in order.
+    fn drawn(mode: GizmoMode, per_axis_scale: bool) -> (Vec<String>, Vec<String>) {
+        let (mut lines, mut triangles) = (Vec::new(), Vec::new());
+        gizmo_geometry_for(
+            manipulator(mode, per_axis_scale),
+            &mut |from, to, colour| lines.push(format!("{from:?}{to:?}{colour:?}")),
+            &mut |a, b, c, colour| triangles.push(format!("{a:?}{b:?}{c:?}{colour:?}")),
+        );
+        (lines, triangles)
+    }
+
+    #[test]
+    fn the_manipulator_is_the_same_geometry_in_every_mode() {
+        // The exact form of "one widget, every operation": not a count, and
+        // not a picture — the same segments and the same triangles, in the
+        // same order, whichever mode is in force. The mode chooses what the
+        // centre and a press on the clay do, and nothing that is drawn.
+        //
+        // Asserted here rather than by comparing captures because a capture
+        // also asserts that the renderer is bit-deterministic from frame to
+        // frame, which is not true on every device: macOS returned a mean
+        // difference of 0.019 between two frames of identical geometry where
+        // Linux returned zero, and a test that cannot tell that from a real
+        // change is not testing what it says.
+        for per_axis_scale in [false, true] {
+            let reference = drawn(GizmoMode::Move, per_axis_scale);
+            for mode in GizmoMode::ALL {
+                assert_eq!(
+                    drawn(mode, per_axis_scale),
+                    reference,
+                    "{mode:?} draws a different widget (per-axis scale: {per_axis_scale})"
+                );
+            }
+        }
+    }
+
     #[test]
     fn the_manipulator_carries_every_operation_whatever_the_mode() {
         // One widget: arrows with solid heads, rings of lines and the centre

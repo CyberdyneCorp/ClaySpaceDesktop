@@ -200,9 +200,19 @@ fn the_manipulator_on_a_subtool_is_one_widget_in_every_mode() {
     let turning = shot(&mut harness, GizmoMode::Rotate, "subtools-manipulator-turn");
     let scaling = shot(&mut harness, GizmoMode::Scale, "subtools-manipulator-scale");
 
-    // Something is drawn — a manipulator buried inside the form it sits on
-    // would draw nothing over it — and it is the same something in every
-    // mode.
+    // Something is drawn in every mode — a manipulator buried inside the form
+    // it sits on would draw nothing over it, which is how the old per-mode
+    // widgets were found to be invisible on a subtool.
+    //
+    // That the three are *one* widget is asserted where it is exact: on the
+    // geometry, by `the_manipulator_is_the_same_geometry_in_every_mode` in
+    // clayspace-view, which compares the segments and triangles each mode
+    // emits without a GPU. Comparing these three pictures for equality would
+    // assert something else as well — that the renderer is bit-deterministic
+    // from frame to frame — and that is not true on every device: macOS
+    // returned a mean difference of 0.019 between two frames of identical
+    // geometry where Linux returned zero, and CI failed on the difference
+    // between two frames rather than on anything about the widget.
     let bare = {
         harness.renderer.set_lattice(
             &harness.gpu,
@@ -218,16 +228,17 @@ fn the_manipulator_on_a_subtool_is_one_widget_in_every_mode() {
         );
         harness.capture(geometry.mesh(), &camera, false, "subtools-manipulator-none")
     };
-    assert!(
-        moving.mean_difference(&bare) > 0.001,
-        "the manipulator drew nothing over the subtool"
-    );
-    assert!(
-        moving.mean_difference(&turning) < 1e-4 && turning.mean_difference(&scaling) < 1e-4,
-        "the widget changes with the mode: move/turn {}, turn/scale {}",
-        moving.mean_difference(&turning),
-        turning.mean_difference(&scaling)
-    );
+    for (mode, image) in [
+        ("Mover", &moving),
+        ("Girar", &turning),
+        ("Escalar", &scaling),
+    ] {
+        let drawn = image.mean_difference(&bare);
+        assert!(
+            drawn > 0.001,
+            "{mode} drew nothing over the subtool ({drawn})"
+        );
+    }
 }
 
 /// Moving a whole subtool has to move what is drawn, on the viewport's own
