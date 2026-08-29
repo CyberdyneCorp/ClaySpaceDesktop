@@ -1101,6 +1101,31 @@ The refill takes the union of the layer's bounds before and after now, the way
 a moved object's already did. `visual_subtools` moves a subtool on the
 viewport's incremental path and holds the picture to what a rebuild draws.
 
+**Scale is uniform until the engine can carry three factors.** ZBrush's gizmo
+scales per axis; here the axis boxes are absent in scale mode because
+`clay_layer_set_transform` and the node transform take one `scale`, and an axis
+handle would measure a stretch the engine cannot apply. Filed as ClayCore
+[#373](https://github.com/CyberdyneCorp/ClayCore/issues/373); the handles come
+back when it lands.
+
+**A centre scale is metered from one arm's length.** A scale is a ratio of
+distances from the pivot, and a press on the centre handle starts a hair from
+it, so the ratio ran away in the first frame. The gesture is measured as if it
+had started one arm out: pulling outward by an arm doubles the form, pushing
+inward by an arm halves it — how ZBrush's scale reads, and what a hand can
+meter. The refusal or substitution sentence stands in the viewport bar now,
+beside the view chips; at the tail of the options bar it was past the right
+edge at 1280 and read by nobody.
+
+**One scale gesture is at most tenfold**, either way. The factor is a ratio
+of distances from the pivot, and a press on the centre handle starts a hair
+from it, so one pull to the edge of the screen was a hundred times — a form the
+field's cache cannot track and nothing a hand meant. Ten times a drag is still
+a big move; more is another drag. And where the cache still refuses the region
+a transform would need, the transform is **put back** and the refusal shown,
+rather than the field standing where the picture cannot follow: the manipulator
+keeps following the hand, the clay stays at the last size the cache accepted.
+
 And the viewport re-meshes on every frame of a manipulator drag on clay. The
 drag's commands are not document edits in the ViewModel's accounting — they
 were filed beside the cage's, whose drag moves control points and not the
@@ -1402,6 +1427,19 @@ axis where it meets the floor — at a fifth of the accent: it says where the
 mirror is and puts nothing across the clay. The navigation gizmo in the corner
 draws each half-axis as a bundle of five lines, so it reads as a rod rather
 than a hairline.
+
+**A surface the device cannot hold is drawn coarser, not fatally.** A subtool
+scaled up a few times is ten million vertices at the field's fixed resolution.
+The renderer asked for the downlevel default of 256 MB per buffer, so the
+vertex buffer for that surface was a validation error in `create_buffer`, and
+wgpu's default handler ends the process on one — a scale gesture closed the
+application. The device is asked for the adapter's own ceiling now (gigabytes
+on a desktop), a validation error is reported rather than fatal, and a layout
+that would still not fit is refused with the picture left as it was and the
+viewport dropped to the coarse level, which the geometry panel says
+(*detalhe reduzido*). A brick with nothing in it comes back from the engine as
+a mesh with no attributes, which the shading pass used to report as a failure
+every frame; it is read as empty.
 
 ### Zooming
 
