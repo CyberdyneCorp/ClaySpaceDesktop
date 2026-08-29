@@ -23,7 +23,7 @@ instead of one, and it is 0.00 ms — the last open budget in the suite, closed.
 One remainder: the per-layer mask reaching the engine's own — see *What is
 blocked, and what is not*.
 
-Engine pinned at ClayCore **0.52.2**, at the tag rather than at `main` — the
+Engine pinned at ClayCore **0.60.0**, at the tag rather than at `main` — the
 tag is a release, `main` is where they are still working. On the reference
 scene a dab is 2.1 ms median against a 50 ms budget and startup to first
 document is 11.4 ms, recorded against 0.52.2 on Linux x86_64. The macOS
@@ -172,18 +172,25 @@ interface that would not be kept. `claycore/tests/mask_gate.rs` is a tripwire
 written to fail when the engine honours it, and names `stroke_sdf` as where the
 call goes back.
 
-**A placed node's transform, parameters and operation can be set and never
-read** — [#317](https://github.com/CyberdyneCorp/ClayCore/issues/317), which
-upstream **closed as completed on 2026-08-26** and which is nonetheless still
-true of the engine this build links. Checked against the pinned 0.52.2 header,
-`vendor/ClayCore/bindings/c/clay.h`: it declares `clay_layer_node_prim`,
-`clay_layer_node_count`, `clay_layer_node_at` and `clay_layer_children`, and it
-declares none of `clay_layer_node_transform`, `clay_layer_node_params` or
-`clay_layer_node_op_blend` — the three readers the issue asked for. So the gap
-below stands exactly as it stood, and `clayspace_engine::objects`'s sidecar
-table stays. It comes out in a follow-up change when the pin moves to a release
-that carries the readers, and `clayspace-app/tests/claycore_repros.rs` is what
-will say the day that is true.
+**A placed node's transform, parameters and operation could be set and never
+read** — [#317](https://github.com/CyberdyneCorp/ClayCore/issues/317), and as
+of the 0.60.0 pin they can be read: `clay_layer_node_transform`,
+`clay_layer_node_transform_nonuniform`, `clay_layer_node_params` and
+`clay_layer_node_op_blend` are all declared in
+`vendor/ClayCore/bindings/c/clay.h` and generated into `claycore-sys`. So the
+gap below is closed in the engine and still open here — the sidecar table in
+`clayspace_engine::objects` is now a workaround for a limitation that no
+longer exists, and comes out in its own change, minus a colour column: colour
+stays write-only, deliberately, and the release says so.
+
+`clayspace-app/tests/claycore_repros.rs` was supposed to be what said the day
+this became true, and it did not: its
+`a_placed_node_reports_its_primitive_and_nothing_else` asserts what *can* be
+read and never that the readers are absent, so it passes on both sides of the
+change. A tripwire that cannot fail is worth knowing about; the two in
+`crates/claycore/tests` — `mask_gate.rs` and `alpha_deformer.rs` — are written
+the other way and both still hold, so the mask gate is still accepted and
+still does not protect.
 
 `clay_layer_set_transform`, `clay_layer_set_prim` and
 `clay_layer_set_op_blend` write them; nothing reads any of them back. What can
@@ -296,9 +303,9 @@ with no constructor, which is what a cheap duplicate waits on; and
 reachable only by name. Each costs latency or a cheaper implementation and none
 of them blocks anything — see *What is blocked, and what is not*. Every other
 issue filed from this work has been released, and
-[#317](https://github.com/CyberdyneCorp/ClayCore/issues/317) is the one that
-was released and does not help yet: closed upstream on 2026-08-26, and the
-readers it promised are not in the 0.52.2 header this build links.
+[#317](https://github.com/CyberdyneCorp/ClayCore/issues/317) is released and
+now linked: the readers it promised arrived with the 0.60.0 pin and the
+sidecar they retire is still here, which is a change of its own.
 
 ## What is left
 
@@ -657,8 +664,18 @@ and engine produced it. Budget breaches are printed but not enforced without
 `--enforce-budgets`: the specification gates on a change *raising* latency, and
 a gate that is red the day it is installed is one people learn to ignore.
 
-The Linux baseline was last re-recorded when the engine pin moved, since the
-undo behaviour and the SDF move brush both changed under it: engine 0.52.2,
+The Linux baseline reads engine 0.52.2 and the pin is at 0.60.0. It was left
+there deliberately when the pin moved: everything that moved across that
+upgrade moved *downward* — a dab's p95 1.88x, solo's p95 1.61x, the locality
+dab 1.40x, undo 1.13x, over two full runs — and re-recording would spend a
+baseline whose only purpose is to catch the next thing that goes up. Two runs
+rather than one because the first reported a 53% regression on a live boolean
+drag that the second put back inside the spread; the machine was shared during
+the first. A filtered `bench-only` run is not evidence either way: asked for
+the dab group alone it reports a median of 5.56 ms where the full run reports
+1.62, which is the reason the recipe refuses to record a baseline from one.
+
+The figures below are that baseline's own conditions: engine 0.52.2,
 CUDA, 1280×800, at 0.13 load per core, with a dab median of 2.10 ms against a
 50 ms budget and a locality key ratio of 0.75 against a budget of 2. The macOS
 baseline still reads engine 0.29.1 and cannot be re-recorded from here — it
