@@ -1101,6 +1101,13 @@ The refill takes the union of the layer's bounds before and after now, the way
 a moved object's already did. `visual_subtools` moves a subtool on the
 viewport's incremental path and holds the picture to what a rebuild draws.
 
+**Scale is uniform until the engine can carry three factors.** ZBrush's gizmo
+scales per axis; here the axis boxes are absent in scale mode because
+`clay_layer_set_transform` and the node transform take one `scale`, and an axis
+handle would measure a stretch the engine cannot apply. Filed as ClayCore
+[#373](https://github.com/CyberdyneCorp/ClayCore/issues/373); the handles come
+back when it lands.
+
 **A centre scale is metered from one arm's length.** A scale is a ratio of
 distances from the pivot, and a press on the centre handle starts a hair from
 it, so the ratio ran away in the first frame. The gesture is measured as if it
