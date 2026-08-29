@@ -2096,7 +2096,22 @@ impl ClayDocument {
             }
         };
 
-        let mut stamp = Item::sphere(brush.sanitized().size).map_err(ModelError::engine)?;
+        // The engine's own equivalence table binds Padrão and Inflar to the
+        // same op on a field — relief moves the surface along its own normal,
+        // which is what both do — so the two came out identical: the same
+        // stamp, the same amplitude, the same rim. What tells them apart in
+        // ZBrush is the profile. Standard raises a ridge that follows the
+        // falloff; Inflate swells the whole footprint, broader and lower at
+        // the rim. So Inflar takes a wider region with a wider rim and asks
+        // for a little less lift — the swell — and Padrão keeps the standard
+        // clay mapping, k = rounding = radius: the ridge.
+        let size = brush.sanitized().size;
+        let (region, lift) = if tool == ToolKind::Inflar {
+            (size * Self::INFLATE_REACH, Self::INFLATE_LIFT)
+        } else {
+            (size, 1.0)
+        };
+        let mut stamp = Item::sphere(region).map_err(ModelError::engine)?;
         stamp
             .set_op(engine_op(combine.op))
             .map_err(ModelError::engine)?;
@@ -2113,10 +2128,10 @@ impl ClayDocument {
         // from there. For every other op it is the width of the join, and the
         // sculptor's own zero means a hard one.
         let distance = if combine.op.displaces_along_the_normal() {
-            if combine.radius > 0.0 {
+            lift * if combine.radius > 0.0 {
                 combine.radius
             } else {
-                brush.sanitized().size
+                size
             }
         } else {
             combine.radius
@@ -2128,9 +2143,7 @@ impl ClayDocument {
         // all. Measured, going from zero to the brush radius tripled the
         // displacement — leaving it at zero was throwing away most of the
         // brush as well as its soft edge.
-        stamp
-            .set_rounding(brush.sanitized().size)
-            .map_err(ModelError::engine)?;
+        stamp.set_rounding(region).map_err(ModelError::engine)?;
 
         // No alpha here, and `alpha_for` is what says so rather than a
         // condition repeated at this call site. A field takes one as a
@@ -2168,6 +2181,29 @@ impl ClayDocument {
             dirty_bricks: self.dirty.len(),
         })
     }
+
+    /// How much wider than the brush Inflar's region and rim are, against
+    /// Padrão's. Wide enough that the swell reads as a swell beside the
+    /// ridge, not so wide that a stroke reaches things the sculptor did not
+    /// brush.
+    const INFLATE_REACH: f32 = 1.35;
+    /// How much of the standard lift Inflar asks for.
+    ///
+    /// Measured rather than chosen, on the starting form with a 0.25 brush,
+    /// as the peak height above the sphere and the footprint area a raycast
+    /// grid finds above it:
+    ///
+    ///   binding                       peak    footprint   height/width
+    ///   Padrão, k = rounding = r     +0.180      1179        0.0053
+    ///   Inflar at 0.8 of the lift    +0.238      1939        0.0054
+    ///   Inflar at 0.32 of the lift   +0.173      1772        0.0041
+    ///
+    /// The middle row is why this is not 0.8: a wider region under buildup
+    /// accumulation lifts each point through more stamps, so the mark came
+    /// out wider *and* taller — the same ridge drawn with a bigger brush,
+    /// which is not what Inflate means. At 0.32 the footprint is half again
+    /// as wide as Padrão's at a fifth less slope: a swell rather than a ridge.
+    const INFLATE_LIFT: f32 = 0.32;
 
     /// The Move brush: a drag rather than a stamp.
     ///

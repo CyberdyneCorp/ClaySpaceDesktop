@@ -24,7 +24,7 @@ one.
 | Tool | Engine verb | Layers | What it does |
 |---|---|---|---|
 | Padrão | `clay_layer_apply_stroke` with relief | all three | Displaces the surface along its normal |
-| Inflar | `clay_voxel_sculpt_inflate` / relief | all three | Dilates; a negative amount erodes |
+| Inflar | `clay_voxel_sculpt_inflate` / relief, wider and softer | all three | Swells the footprint; a negative amount erodes. On a field it is relief like Padrão — the engine binds both to it — with a region and rim 1.35× the brush and 0.32 of the lift, so it swells where Padrão ridges |
 | Suavizar | `clay_item_volume_relax` / `clay_voxel_sculpt_smooth` | all three | Relaxes the surface. Bakes on the field side |
 | Mover | `clay_layer_move_surface` | SDF, mesh | Drags the assembled surface. Buds rather than stretches |
 | Pinçar | `clay_voxel_sculpt_pinch` | voxel, mesh | Moves surface cells toward the brush centre |
@@ -43,6 +43,36 @@ one.
 | Pintar | `clay_voxel_paint_brush` / `clay_mesh_sculptor_stamp` (PAINT) | voxel, mesh | Writes colour rather than moving the surface — see *Not built yet* for what it currently has to paint with |
 | Borrar | `clay_mesh_sculptor_stamp` (SMEAR) | mesh | Drags the surface sideways without carrying it away |
 | Apagar | `clay_voxel_erase_brush` | voxel | Removes cells |
+
+**Padrão and Inflar are two marks on a field.** ClayCore's own equivalence
+table binds both to `Op::Relief` — relief moves the accumulated surface along
+its own normal, which is what either does — and the application passed the same
+stamp for either, so two brushes on the shelf drew one thing. What tells them
+apart in ZBrush is the profile: Standard raises a ridge that follows the
+falloff, Inflate swells the whole footprint, broader and lower at the rim. So
+Inflar's region and rim are 1.35× the brush and it asks for 0.32 of the lift;
+Padrão keeps the engine's standard clay mapping, k = rounding = radius.
+
+The 0.32 is measured, not chosen. Raycasting a grid at the mark on the starting
+form with a 0.25 brush, as peak height above the sphere and footprint area:
+
+| binding | peak | footprint | height ÷ width |
+|---|---|---|---|
+| Padrão, k = rounding = r | +0.180 | 1179 | 0.0053 |
+| Inflar at 0.8 of the lift | +0.238 | 1939 | 0.0054 |
+| Inflar at 0.32 of the lift | +0.173 | 1772 | 0.0041 |
+
+The middle row is the trap: a wider region under buildup accumulation lifts each
+point through more stamps, so the first attempt came out wider **and taller** —
+the same ridge drawn with a bigger brush, which is not what Inflate means.
+`visual_sdf_symmetry` asserts the *shape* — half again the footprint at a fifth
+less slope — rather than counting pixels, which a merely bigger mark would pass.
+
+They stay closer here than in ZBrush, and that is the engine's design rather
+than a setting: relief is the only op that moves an existing surface along its
+own normal, so both brushes are relief and only the profile can differ. A true
+per-stroke inflate — offsetting the field inside the region — would need a
+verb ClayCore does not expose.
 
 **Trim is not a stroke tool.** Its gesture is a shape drawn on the view frame,
 not a drag across the surface, and the interface refuses a stroke for it rather

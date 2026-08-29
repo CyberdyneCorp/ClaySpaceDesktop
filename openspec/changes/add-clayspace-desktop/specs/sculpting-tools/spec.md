@@ -3,11 +3,16 @@
 ### Requirement: Every tool maps to a documented engine verb
 Each sculpting tool the interface presents SHALL correspond to a documented ClayCore verb reached through the C ABI. The application SHALL NOT present a tool that has no engine counterpart, and SHALL NOT bind a label to a verb whose behavior differs from what the label states.
 
-The bound vocabulary SHALL be: Padrão (relief along a stroke), Inflar (relief / voxel inflate), Suavizar and Relaxar (field relax / voxel smooth), Mover (move brush), Puxar (snakehook), Pinçar (magnify negative / voxel pinch), Magnify (magnify positive), Raspar (voxel scrape), Planar and Polir (flatten in cut-only mode), Preencher (fill cavities), Nudge (voxel smudge), Camada (clamped-accumulation stroke preset), Máscara (mask stroke), and Trim (cut tool).
+The bound vocabulary SHALL be: Padrão (relief along a stroke), Inflar (relief with a region and rim wider than Padrão's and less lift, so it swells where Padrão ridges / voxel inflate), Suavizar and Relaxar (field relax / voxel smooth), Mover (move brush), Puxar (snakehook), Pinçar (magnify negative / voxel pinch), Magnify (magnify positive), Raspar (voxel scrape), Planar and Polir (flatten in cut-only mode), Preencher (fill cavities), Nudge (voxel smudge), Camada (clamped-accumulation stroke preset), Máscara (mask stroke), and Trim (cut tool).
 
 #### Scenario: A tool's label matches its verb
 - **WHEN** the user selects Planar and applies it to a surface
 - **THEN** the engine's flatten operation runs in cut-only mode, planing without filling, as the label states
+
+#### Scenario: Padrão and Inflar leave different marks on a field
+- **WHEN** the same stroke is made on an SDF layer with Padrão and with Inflar
+- **THEN** the two surfaces differ: Padrão's mark is a ridge following the
+  falloff, Inflar's a broader swelling of the footprint
 
 #### Scenario: No orphan tools
 - **WHEN** the tool registry is enumerated
