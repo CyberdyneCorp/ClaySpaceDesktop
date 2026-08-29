@@ -154,10 +154,11 @@ fn the_manipulator_sits_on_a_whole_subtools_middle() {
     );
 }
 
-/// Each of the three modes draws a different widget, so a sculptor can tell
-/// which one is in force without reading the panel.
+/// One widget in every mode, standing on the subtool: ZBrush's Gizmo 3D,
+/// where the handle grabbed chooses the operation. Three modes drew three
+/// widgets once, and the chips became a step to take before every move.
 #[test]
-fn each_manipulator_mode_draws_a_different_widget_on_a_subtool() {
+fn the_manipulator_on_a_subtool_is_one_widget_in_every_mode() {
     let Some(mut harness) = Harness::new() else {
         return;
     };
@@ -199,14 +200,33 @@ fn each_manipulator_mode_draws_a_different_widget_on_a_subtool() {
     let turning = shot(&mut harness, GizmoMode::Rotate, "subtools-manipulator-turn");
     let scaling = shot(&mut harness, GizmoMode::Scale, "subtools-manipulator-scale");
 
+    // Something is drawn — a manipulator buried inside the form it sits on
+    // would draw nothing over it — and it is the same something in every
+    // mode.
+    let bare = {
+        harness.renderer.set_lattice(
+            &harness.gpu,
+            LatticeView {
+                points: &[],
+                edges: &[],
+                selected: &[],
+                gizmo: None,
+                outline: None,
+                subtool_outline: None,
+                handle: 0.0,
+            },
+        );
+        harness.capture(geometry.mesh(), &camera, false, "subtools-manipulator-none")
+    };
     assert!(
-        moving.mean_difference(&turning) > 0.001,
-        "moving and turning drew the same widget; a manipulator buried inside \
-         the form it sits on looks exactly like this"
+        moving.mean_difference(&bare) > 0.001,
+        "the manipulator drew nothing over the subtool"
     );
     assert!(
-        turning.mean_difference(&scaling) > 0.001,
-        "turning and scaling drew the same widget"
+        moving.mean_difference(&turning) < 1e-4 && turning.mean_difference(&scaling) < 1e-4,
+        "the widget changes with the mode: move/turn {}, turn/scale {}",
+        moving.mean_difference(&turning),
+        turning.mean_difference(&scaling)
     );
 }
 
