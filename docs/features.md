@@ -1402,6 +1402,14 @@ undone at all, which stopped being true when crossing undo landed and would
 have been the worst place to be out of date, standing as it does beside a
 control that removes a layer.
 
+**And where each carried layer stands.** A layer transform moves no vertex in
+the engine and touches no grid — the placement is applied on the way out, as
+the carried mesh is read — so the number sat still while a whole mesh subtool
+was being dragged: the manipulator moved and the form did not, and a mesh
+subtool could not be transformed from the application at all. The field side
+has no such gate; its surface is re-meshed from the bricks the move dirtied,
+which is why this only ever showed on a mesh or a grid.
+
 **A layer the viewport has to draw changes the number it watches.** The
 carried layers — meshes and grids — are uploaded only when `mesh_revision`
 changes, and adding a mesh layer moves no vertex and touches no grid. So a

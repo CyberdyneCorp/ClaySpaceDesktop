@@ -26,8 +26,8 @@
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
-    BrushSettings, Combine, CombineSettings, Direction, GestureSample, Representation, SculptModel,
-    ToolKind, Verbs,
+    BrushSettings, Combine, CombineSettings, Direction, GestureSample, GizmoTarget, ObjectModel,
+    Representation, SceneModel, SculptModel, ToolKind, Transform, Verbs,
 };
 
 /// Where the arc's two ends sit, in the plane it is drawn in.
@@ -432,5 +432,58 @@ fn a_drag_is_seen_while_it_happens_and_undone_all_at_once() {
         worst < 1e-4,
         "one undo left the mesh {worst} from where the drag started, so a \
          segment was banked on its own"
+    );
+}
+
+/// Moving a whole mesh subtool has to move what the viewport draws.
+///
+/// The transform reaches the drawn vertices — `append_mesh_layer` places them
+/// — but only when the viewport re-reads the carried layers, and it re-reads
+/// them only when `mesh_revision` changes. A layer transform moved no vertex
+/// in the engine and touched no grid, so the number sat still and the carried
+/// mesh was never uploaded again: the manipulator moved, the form did not,
+/// and a mesh subtool could not be transformed from the application at all.
+#[test]
+fn moving_a_mesh_subtool_changes_what_the_viewport_watches() {
+    let mut doc = horseshoe();
+    let key = doc.scene().active.expect("the mesh layer");
+    assert_eq!(
+        doc.scene().layers[doc
+            .scene()
+            .layers
+            .iter()
+            .position(|layer| layer.key == key)
+            .expect("its row")]
+        .representation,
+        Representation::Mesh,
+        "the crossing did not leave a mesh layer active"
+    );
+
+    let before_revision = doc.mesh_revision();
+    let (before, ..) = doc.visible_mesh_geometry();
+    let first = *before.first().expect("a vertex to watch");
+
+    let target = GizmoTarget::Layer(key);
+    let at = doc.target_transform(target).expect("a layer transform");
+    doc.set_target_transform(
+        target,
+        Transform {
+            position: [at.position[0] + 5.0, at.position[1], at.position[2]],
+            ..at
+        },
+    )
+    .expect("place the mesh subtool");
+
+    let (after, ..) = doc.visible_mesh_geometry();
+    let moved = after.first().expect("a vertex to watch")[0] - first[0];
+    assert!(
+        (moved - 5.0).abs() < 1e-3,
+        "the transform did not reach the drawn vertices: the first moved by {moved}"
+    );
+    assert_ne!(
+        doc.mesh_revision(),
+        before_revision,
+        "the number the viewport re-uploads on did not change, so the moved \
+         mesh is never drawn where it now is"
     );
 }

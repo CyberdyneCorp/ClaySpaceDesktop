@@ -3617,13 +3617,29 @@ impl ClayDocument {
         // empty viewport with 62,576 vertices sitting unuploaded. The first
         // stroke moved a vertex, changed the number the old way, and the mesh
         // appeared — which is exactly how it was reported.
+        //
+        // And where each stands. A layer transform moves no vertex in the
+        // engine and touches no grid — the placement is applied on the way
+        // out, in `append_mesh_layer` — so without this the number sat still
+        // while a whole mesh subtool was being dragged: the manipulator moved,
+        // the form did not, and a mesh subtool could not be transformed from
+        // the application at all. The field side has no such gate; its surface
+        // is re-meshed from the bricks the move dirtied.
         let carried = self
             .layers
             .iter()
             .filter(|layer| layer.representation != Representation::Sdf)
             .fold(0xcbf2_9ce4_8422_2325u64, |hash, layer| {
                 let shown = u64::from(layer.visible && layer.carries_geometry);
-                (hash ^ (layer.key.0 << 1 | shown)).wrapping_mul(0x1000_0000_01b3)
+                let hash = (hash ^ (layer.key.0 << 1 | shown)).wrapping_mul(0x1000_0000_01b3);
+                let at = layer.transform;
+                at.position
+                    .into_iter()
+                    .chain(at.rotation_axis)
+                    .chain([at.rotation_angle, at.scale])
+                    .fold(hash, |hash, number| {
+                        (hash ^ u64::from(number.to_bits())).wrapping_mul(0x1000_0000_01b3)
+                    })
             });
 
         let names: Vec<String> = self
