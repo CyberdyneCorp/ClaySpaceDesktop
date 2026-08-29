@@ -493,6 +493,28 @@ impl App {
             Ok(_) => self.sculpt.acknowledge_remesh(),
             Err(e) => eprintln!("the surface could not be re-meshed: {e}"),
         }
+        self.coarsen_if_over_budget();
+    }
+
+    /// Drops to the coarse level when the full surface is more than the
+    /// device can hold, so a subtool scaled up a few times is drawn coarser
+    /// rather than not at all — or, as it was, rather than ending the
+    /// session in a buffer-size validation panic.
+    fn coarsen_if_over_budget(&mut self) {
+        let Some(graphics) = self.graphics.as_mut() else {
+            return;
+        };
+        if !graphics.geometry.over_budget() || graphics.geometry.detail() == Detail::Reduced {
+            return;
+        }
+        let gpu = graphics.gpu.clone();
+        if let Err(e) = self.document.with(|document| {
+            graphics
+                .geometry
+                .set_detail(&gpu, document, Detail::Reduced)
+        }) {
+            eprintln!("o nível de detalhe não pôde ser trocado: {e}");
+        }
     }
 
     /// Saves, asking for a path when there is not one yet.
@@ -993,6 +1015,17 @@ impl App {
         let wanted = self
             .detail_policy
             .decide(current, distance / extent, bricks);
+        // Whatever the distance says, a surface the device cannot hold at full
+        // resolution stays coarse.
+        let wanted = if self
+            .graphics
+            .as_ref()
+            .is_some_and(|graphics| graphics.geometry.over_budget())
+        {
+            Detail::Reduced
+        } else {
+            wanted
+        };
 
         // Switching level is a full re-mesh, so it says so — but only when it
         // is actually switching. `set_detail` answers most calls by returning

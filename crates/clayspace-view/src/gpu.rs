@@ -59,19 +59,33 @@ impl Gpu {
             .await
             .ok_or(GpuError::NoAdapter)?;
 
+        // The buffer ceiling the adapter actually has, not the downlevel
+        // default of 256 MB: a subtool scaled up a few times is a surface of
+        // ten million vertices at the field's fixed resolution, and the
+        // default ceiling turned that into a validation panic in
+        // `create_buffer`. A desktop adapter allows gigabytes; ask for them.
+        let limits = wgpu::Limits {
+            max_buffer_size: adapter.limits().max_buffer_size,
+            ..wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits())
+        };
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: Some("clayspace"),
                     required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::downlevel_defaults()
-                        .using_resolution(adapter.limits()),
+                    required_limits: limits,
                     memory_hints: wgpu::MemoryHints::Performance,
                 },
                 None,
             )
             .await
             .map_err(|e| GpuError::NoDevice(e.to_string()))?;
+        // A validation error is reported, not fatal. wgpu's default handler
+        // panics the process, which turned an oversized buffer into a lost
+        // session; a frame drawn wrong is recoverable, a crash is not.
+        device.on_uncaptured_error(Box::new(|error| {
+            eprintln!("graphics error: {error}");
+        }));
 
         Ok(Self {
             adapter: Arc::new(adapter),
@@ -80,6 +94,24 @@ impl Gpu {
             instance,
         })
     }
+
+    /// The largest buffer this device will be asked for, in bytes.
+    ///
+    /// The device's own ceiling, capped at [`Gpu::BUFFER_CAP`]. Past the
+    /// device's limit `create_buffer` is a validation error; past what the
+    /// card actually has it is an allocation failure the adapter reports as
+    /// "unlimited" until it fails — this machine's says `u64::MAX`. Either
+    /// way a geometry over the figure is refused here and drawn coarser
+    /// rather than attempted.
+    pub fn max_buffer_size(&self) -> u64 {
+        self.device.limits().max_buffer_size.min(Self::BUFFER_CAP)
+    }
+
+    /// Two gibibytes: more than any surface this application should be
+    /// drawing at full detail, and under what a desktop card can allocate in
+    /// one piece. A surface past it is a scaled-up subtool, and the coarse
+    /// level is the right picture of one.
+    pub const BUFFER_CAP: u64 = 2 << 30;
 
     /// The instance this device came from.
     ///

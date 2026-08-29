@@ -225,8 +225,9 @@ impl GizmoDrag {
         };
         // Never through zero. A scale that could pass through it turns the
         // form inside out on a drag that overshot, and there is no way back
-        // but undo.
-        let factor = factor.clamp(MIN_SCALE, MAX_SCALE);
+        // but undo. And never past `GESTURE_FACTOR` in one pull, for the
+        // reason `factor` gives.
+        let factor = factor.clamp(1.0 / GESTURE_FACTOR, GESTURE_FACTOR);
         let offset = sub(point, self.pivot);
         match self.axis() {
             Some(axis) => std::array::from_fn(|i| {
@@ -344,7 +345,13 @@ impl GizmoDrag {
         if was < 1e-6 {
             return 1.0;
         }
-        (length(sub(to, self.pivot)) / was).clamp(MIN_SCALE, MAX_SCALE)
+        // Bounded per gesture as well as in total. The factor is a ratio of
+        // distances from the pivot, and a press on the centre handle starts a
+        // hair from it — so one pull to the edge of the screen was a hundred
+        // times, which is a form the field's cache cannot track and nothing
+        // a hand meant. Ten times a drag is still a big move; more is another
+        // drag.
+        (length(sub(to, self.pivot)) / was).clamp(1.0 / GESTURE_FACTOR, GESTURE_FACTOR)
     }
 }
 
@@ -499,6 +506,8 @@ pub fn snapped(angle: f32) -> f32 {
 /// the thousands.
 pub const MIN_SCALE: f32 = 0.01;
 pub const MAX_SCALE: f32 = 100.0;
+/// The most one scale gesture may multiply or divide by.
+pub const GESTURE_FACTOR: f32 = 10.0;
 
 /// A unit vector, or `None` where there is no direction to have.
 fn normalize(v: [f32; 3]) -> Option<[f32; 3]> {
@@ -640,6 +649,26 @@ mod tests {
         assert!(
             close(scaled, [5.0, 1.0, 1.0]),
             "a uniform scale of two about (1,1,1) put (3,1,1) at {scaled:?}"
+        );
+    }
+
+    #[test]
+    fn one_gesture_scales_at_most_tenfold() {
+        // Pressed a hair from the pivot and pulled to the edge of the world:
+        // the old ratio was a hundred, which no hand meant and the field's
+        // cache could not track.
+        let drag = drag(GizmoMode::Scale, GizmoHandle::Centre, [0.05, 0.0, 0.0]);
+        let scaled = drag.apply([1.0, 0.0, 0.0], [50.0, 0.0, 0.0], false);
+        assert!(
+            (scaled[0] - GESTURE_FACTOR).abs() < 1e-4,
+            "one gesture scaled by {}; the cap is {GESTURE_FACTOR}",
+            scaled[0]
+        );
+        let shrunk = drag.apply([1.0, 0.0, 0.0], [0.0001, 0.0, 0.0], false);
+        assert!(
+            (shrunk[0] - 1.0 / GESTURE_FACTOR).abs() < 1e-4,
+            "one gesture shrank to {}; the floor is 1/{GESTURE_FACTOR}",
+            shrunk[0]
         );
     }
 

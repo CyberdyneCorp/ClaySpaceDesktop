@@ -59,6 +59,17 @@ picture matches a rebuild.
   away from the arrows
 - **THEN** the form slides with the pointer and no stroke is made
 
+#### Scenario: One scale gesture is bounded
+- **WHEN** the user presses the centre handle a hair from the pivot and drags to
+  the edge of the viewport
+- **THEN** the form is scaled by at most ten times in that gesture
+
+#### Scenario: A transform the cache cannot track is not applied
+- **WHEN** a whole subtool is scaled to a size whose surface region the brick
+  cache refuses to track
+- **THEN** the layer keeps the last transform the cache accepted, the refusal
+  is reported, and the drawn surface stays consistent with the field
+
 #### Scenario: The old position is not left behind
 - **WHEN** a whole subtool is moved by its manipulator and the viewport re-meshes
   incrementally
