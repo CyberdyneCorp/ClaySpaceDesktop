@@ -116,6 +116,12 @@ pub struct SculptViewModel {
     gesture_entries: usize,
     /// Entries the call being recorded produced, as counted from the model.
     pending_entries: usize,
+    /// Whether the gesture in progress is being shown as it is made.
+    ///
+    /// A live gesture writes nothing to the document until it closes, so its
+    /// segments record no history and the count that an undo spends is the
+    /// commit's alone.
+    live: bool,
 }
 
 impl SculptViewModel {
@@ -155,6 +161,7 @@ impl SculptViewModel {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             gesture_entries: 0,
+            live: false,
             pending_entries: 1,
         };
         vm.refresh_tool_status();
@@ -412,7 +419,12 @@ impl SculptViewModel {
                 // chosen — letting go of the key returns to it — so this is a
                 // substitution rather than a selection.
                 self.modifiers = modifiers;
-                let tool_is_region = self.holds_the_whole_gesture(self.stroking_tool());
+                // Asked before the segmentation is decided, because the answer
+                // is what decides it: a gesture the model can show while it is
+                // made is sent in segments rather than held.
+                let tool = self.stroking_tool();
+                self.live = self.model.open_live_gesture(tool, *self.symmetry.get());
+                let tool_is_region = self.holds_the_whole_gesture(tool);
                 // The model is told a gesture is open, so a dragging verb on a
                 // mesh can preview it — take back what the last segment did and
                 // lay the whole gesture down again from its anchor — instead of
@@ -454,6 +466,12 @@ impl SculptViewModel {
                 // leave the sculptor with half a stroke they explicitly said
                 // they did not want.
                 self.stroke = None;
+                // A live gesture wrote nothing, so it is dropped rather than
+                // reverted — and dropped before the revert below, which would
+                // otherwise spend history belonging to whatever came before.
+                if std::mem::take(&mut self.live) {
+                    self.gesture_entries += self.model.discard_live_gesture();
+                }
                 // Closed before the revert, so the preview it was holding is
                 // banked and then taken back with everything else rather than
                 // being left on the surface.
@@ -641,7 +659,11 @@ impl SculptViewModel {
         // arrived only when the pointer came up, which is half of why Suavizar
         // read as doing nothing: the other half was that it was clamped and
         // barely smoothed at all.
-        tool.is_region_based() && self.model.active_representation() != Representation::Mesh
+        // And not while the model is showing the gesture as it is made: a
+        // live gesture is exactly one that no longer has to be held.
+        !self.live
+            && tool.is_region_based()
+            && self.model.active_representation() != Representation::Mesh
     }
 
     /// How far a stroke travels before a segment is sent, in stamps.
@@ -780,13 +802,25 @@ impl SculptViewModel {
         // undoable only one segment at a time.
         let applied = self.apply_segment();
         self.stroke = None;
+        // Installed before the count is banked: the commit is the only thing
+        // a live gesture writes, so its entries are the ones an undo spends.
+        let closed = self.close_live_gesture();
         // The gesture is over: what was previewed becomes the edit, and one
         // undo takes the whole drag back however many segments drew it.
         self.model.end_gesture();
         // And the keys that were held with it stop meaning anything.
         self.modifiers = clayspace_model::StrokeModifiers::default();
         self.close_gesture();
-        applied
+        applied.and(closed)
+    }
+
+    /// Installs what a live gesture previewed, banking what it recorded.
+    fn close_live_gesture(&mut self) -> Result<(), ModelError> {
+        if !std::mem::take(&mut self.live) {
+            return Ok(());
+        }
+        self.gesture_entries += self.model.close_live_gesture()?;
+        Ok(())
     }
 
     /// Reverts everything the gesture in progress has applied.
@@ -862,7 +896,11 @@ impl SculptViewModel {
         }
         self.pending_remesh
             .update(|pending| *pending += outcome.dirty_bricks);
-        let entries = std::mem::replace(&mut self.pending_entries, 1).max(1);
+        // A live segment writes nothing to the document, so the floor of one
+        // that every other edit needs would invent an entry per dab and an
+        // undo would then spend history the gesture never wrote.
+        let counted = std::mem::replace(&mut self.pending_entries, 1);
+        let entries = if self.live { counted } else { counted.max(1) };
         if self.stroke.is_some() {
             // Part of a gesture in progress; it is banked when the gesture
             // closes so the whole thing undoes together.

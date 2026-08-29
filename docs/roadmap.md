@@ -292,9 +292,13 @@ shape a mesh layer has always had. The next step is a per-chunk slot layout in
 that buffer, which is what `SurfaceGeometry` already does for the field side;
 it is not owed until a document holds a grid past about two million triangles.
 
-**Four numbered upstream issues are open:**
+**Five numbered upstream issues are open:**
 [#210](https://github.com/CyberdyneCorp/ClayCore/issues/210), an undo that
 cannot say what it changed;
+[#378](https://github.com/CyberdyneCorp/ClayCore/issues/378), a live brush
+preview that cannot be composed with the rest of the document — which is why a
+live Suavizar opens only where the layer being smoothed is the only visible
+field subtool, and falls back to the held gesture otherwise;
 [#321](https://github.com/CyberdyneCorp/ClayCore/issues/321), a layer with no
 combine operation, which is what a live subtool boolean waits on;
 [#364](https://github.com/CyberdyneCorp/ClayCore/issues/364), instance layers
@@ -715,6 +719,25 @@ a matter of character: Suavizar and Relaxar are subtle, because relax moves the
 surface by less than a cell per pass and the cache's cell is 0.02.
 
 ## Known costs and escape routes
+
+**A live smoothing gesture costs 186 ms when the pointer goes down.** That is
+the transaction sampling the whole layer once, and it is the trade the design
+makes rather than an inefficiency: it is what makes every dab afterwards cost
+what it touches (~5 ms) instead of re-baking the layer. The escape route, if it
+is ever felt as a stall on a heavier model, is to sample coarser than the brick
+cache draws at — which would cost resolution at the commit, so it is not taken
+while the number sits where it does. `clayspace-engine`'s `live` module holds
+the measurements.
+
+**Move still leaves one grab per segment.** Measured, a ten-segment drag leaves
+a deformer chain of ten where `clay_sdf_move_*` would leave one, and a long
+session's chains are what the complexity policy eventually collapses. The
+transaction is wrapped and tested (`claycore/tests/live_transactions.rs`) and
+deliberately not adopted: it writes nothing to the document until it commits
+and, unlike Smooth, hands over no samples a host can draw — only grab
+parameters to reproduce. Taking it would cost Move the live picture it already
+has, which is the wrong trade. It becomes takeable if ClayCore grows a preview
+for Move that a host can draw, or a forward point warp for a grab.
 
 **~~The mesh upload is a full memcpy.~~ Taken.** It was 2.7 ms and grew with
 the model rather than with the edit. Each key now owns a span of both buffers

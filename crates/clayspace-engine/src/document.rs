@@ -423,6 +423,21 @@ pub struct ClayDocument {
     /// the number the viewport watches would sit still while the drag was
     /// visibly moving the surface.
     live_generation: u64,
+    /// The live field gesture in progress, and the surface it is drawing.
+    ///
+    /// While this is set the viewport meshes the *preview's* cache instead of
+    /// the document's, because the document deliberately has not changed yet.
+    live_smooth: Option<crate::live::LiveSmooth>,
+    /// History entries opening the live gesture recorded before it began.
+    live_opening_entries: usize,
+    /// Bumped whenever the surface the viewport should mesh from changes
+    /// identity — a live gesture opening, committing or being abandoned.
+    ///
+    /// The two caches do not share a key space: a preview key and a document
+    /// key of the same coordinate name different bricks. So the viewport
+    /// cannot patch its way from one to the other and has to lay the surface
+    /// out again, which is what watching this number tells it to do.
+    surface_epoch: u64,
     /// Triangles and vertices the *carried* layers handed the viewport.
     ///
     /// Kept apart from `stats` because the two are recorded at different
@@ -667,6 +682,9 @@ impl ClayDocument {
             live_mesh: None,
             previewing: false,
             live_generation: 0,
+            live_smooth: None,
+            live_opening_entries: 0,
+            surface_epoch: 0,
             meshed_chunks: 0,
             surface_brick_count: 0,
             mesh_sculptors: std::cell::RefCell::default(),
@@ -848,6 +866,19 @@ impl ClayDocument {
         &self.cache
     }
 
+    /// The cache the viewport meshes, and where its lattice sits in the world.
+    ///
+    /// The document's own, and a live gesture's preview while one is drawing.
+    /// The offset is what puts a relabelled preview lattice back under the
+    /// sculptor's pointer — see `crate::live` for why the preview has a
+    /// lattice of its own rather than sharing this one.
+    pub fn drawn_cache(&self) -> (&BrickCache, [f32; 3]) {
+        match self.live_surface() {
+            Some(live) => (live.cache, live.offset),
+            None => (&self.cache, [0.0; 3]),
+        }
+    }
+
     /// Keys dirtied since the last call, cleared as they are handed over.
     ///
     /// The viewport meshes exactly these and patches their ranges, which is
@@ -861,7 +892,13 @@ impl ClayDocument {
     }
 
     pub fn take_dirty_keys(&mut self) -> Vec<BrickKey> {
-        std::mem::take(&mut self.dirty)
+        // The preview's, while one is up: the document's own cache is not the
+        // surface being drawn, and its dirty set is empty anyway because a
+        // live gesture writes nothing to the document.
+        match self.live_smooth.as_mut() {
+            Some(live) => live.take_dirty(),
+            None => std::mem::take(&mut self.dirty),
+        }
     }
 
     pub fn policy(&self) -> &BackendPolicy {
@@ -2113,6 +2150,9 @@ impl ClayDocument {
                 // not a series of stamps.
                 ToolKind::Mover => self.move_surface_stroke(brush, &reflected)?,
                 // Bake-and-relax over the region the stroke covered.
+                ToolKind::Suavizar | ToolKind::Relaxar if self.live_smooth.is_some() => {
+                    self.live_relax_dab(brush, &reflected)?
+                }
                 ToolKind::Suavizar | ToolKind::Relaxar => self.relax_stroke(brush, &reflected)?,
                 // Bake-and-flatten, cut-only.
                 _ => self.flatten_stroke(brush, &reflected)?,
@@ -2515,6 +2555,186 @@ impl ClayDocument {
         Ok(EditOutcome {
             changed: true,
             dirty_bricks: self.dirty.len(),
+        })
+    }
+
+    // -- the live half of the region tools ---------------------------------
+
+    /// Whether a region gesture would be shown while it is being made.
+    ///
+    /// Two conditions, and the second is the interesting one. The layer has to
+    /// be a field the sculptor may edit — the transaction refuses a protected
+    /// one — and it has to be the **only visible field subtool**.
+    ///
+    /// That second condition is not a limitation of the preview but of what
+    /// the preview is *of*. The brick cache holds the hard union of every
+    /// visible SDF layer and the engine attributes no brick to the layer it
+    /// came from, while a transaction previews one layer alone. With a second
+    /// field subtool in the document there is no way to compose the two
+    /// without evaluating the rest of the document per frame, which costs more
+    /// than the preview saves. So the gesture falls back to what it did
+    /// before — held whole, applied when the pointer comes up — which is
+    /// correct, just not live. Filed upstream as ClayCore#378.
+    fn live_smooth_is_possible(&self) -> bool {
+        let active = self.active_layer();
+        if active.representation != Representation::Sdf || !active.protection.is_editable() {
+            return false;
+        }
+        self.layers
+            .iter()
+            .filter(|layer| layer.visible && layer.representation == Representation::Sdf)
+            .count()
+            == 1
+    }
+
+    /// Opens a live gesture for a tool that would otherwise be held whole.
+    ///
+    /// Reports whether it is open, which is what tells the ViewModel to send
+    /// segments as they are made instead of holding the whole stroke.
+    pub fn open_live_gesture(&mut self, tool: ToolKind, symmetry: [bool; 3]) -> bool {
+        // Two of the four region tools, because the transaction is a *relax*:
+        // Planar and Polir flatten, which is a different verb with no live
+        // form in this release, and they stay held.
+        if !matches!(tool, ToolKind::Suavizar | ToolKind::Relaxar) {
+            return false;
+        }
+        if self.live_smooth.is_some() || !self.live_smooth_is_possible() {
+            return false;
+        }
+        // Before the transaction opens, never during it. `baked_stroke` points
+        // the mirror on every segment, and the first segment of a gesture that
+        // changed it would be an edit to the layer the transaction is holding
+        // — which the commit then refuses, correctly, as a preview computed
+        // against a document that has since moved.
+        let before = self.engine_undo_depth();
+        if self.point_the_mirror(symmetry).is_err() {
+            return false;
+        }
+        // Pointing it is an edit of its own, and one this gesture caused. It is
+        // counted here so that closing or abandoning the gesture spends it —
+        // the held path counts it inside its first segment, and a symmetry
+        // change that outlived the stroke that asked for it would be a
+        // difference between the two paths a sculptor could feel.
+        let opening = self.engine_undo_depth().saturating_sub(before);
+        let (id, key) = {
+            let active = self.active_layer();
+            (active.id, active.key)
+        };
+        match crate::live::LiveSmooth::begin(&mut self.document, id, key, Self::BRICK_CONFIG) {
+            Ok(live) => {
+                self.live_smooth = Some(live);
+                self.live_opening_entries = opening;
+                self.surface_epoch = self.surface_epoch.wrapping_add(1);
+                true
+            }
+            // A refusal is not an error the sculptor should see: the gesture
+            // simply goes down the path it took before there was a live one.
+            Err(_) => false,
+        }
+    }
+
+    /// Ends the live gesture, installing what it previewed.
+    ///
+    /// Returns how many history entries the commit recorded, so a gesture that
+    /// is abandoned afterwards knows how much to take back.
+    pub fn close_live_gesture(&mut self) -> Result<usize, ModelError> {
+        let Some(mut live) = self.live_smooth.take() else {
+            return Ok(0);
+        };
+        self.surface_epoch = self.surface_epoch.wrapping_add(1);
+        let opening = std::mem::take(&mut self.live_opening_entries);
+        // A gesture that moved no sample installs nothing. Committing it would
+        // still collapse the layer to one volume and put an entry in the
+        // history for a stroke that did not land.
+        if !live.changed() {
+            return Ok(opening);
+        }
+        let layer = self
+            .layers
+            .iter()
+            .find(|layer| layer.key == live.layer())
+            .map(|layer| layer.id);
+        let before = self.engine_undo_depth();
+        live.commit()?;
+        let recorded = opening + self.engine_undo_depth().saturating_sub(before);
+        // The commit replaced the layer's items with the volume the dabs were
+        // applied to, so every brick the layer reaches is stale.
+        if let Some(layer) = layer {
+            self.refill(layer, &[])?;
+        }
+        self.refresh_stats();
+        Ok(recorded)
+    }
+
+    /// Abandons the live gesture. The document was never touched, so there is
+    /// nothing to take back — only the preview to stop drawing.
+    /// Returns the entries the *opening* recorded, which an abandoned gesture
+    /// still has to take back: the preview wrote nothing, but pointing the
+    /// layer's mirror did.
+    pub fn discard_live_gesture(&mut self) -> usize {
+        if self.live_smooth.take().is_none() {
+            return 0;
+        }
+        self.surface_epoch = self.surface_epoch.wrapping_add(1);
+        std::mem::take(&mut self.live_opening_entries)
+    }
+
+    pub fn live_gesture_is_open(&self) -> bool {
+        self.live_smooth.is_some()
+    }
+
+    /// Whether a gesture is open and being previewed rather than banked.
+    ///
+    /// Public for the same reason `live_gesture_is_open` is: the hooks that
+    /// set it are *provided* trait methods, so a model that forgets to forward
+    /// them compiles and silently answers for a document that cannot preview
+    /// anything. It is only observable from outside if something can ask.
+    pub fn is_previewing(&self) -> bool {
+        self.previewing
+    }
+
+    /// The surface the viewport should mesh, while a live gesture is drawing
+    /// one.
+    pub fn live_surface(&self) -> Option<crate::LiveSurface<'_>> {
+        self.live_smooth.as_ref().and_then(|live| live.surface())
+    }
+
+    /// Which surface the viewport's stored geometry belongs to.
+    pub fn surface_epoch(&self) -> u64 {
+        self.surface_epoch
+    }
+
+    /// One live dab of the smoothing brush, relaxing the retained volume.
+    ///
+    /// The region and the falloff are `relax_stroke`'s, so the live gesture
+    /// and the one it replaces smooth the same clay by the same amount — see
+    /// the measurements there for why one pass at the brush's own radius is
+    /// what this asks for.
+    fn live_relax_dab(
+        &mut self,
+        brush: BrushSettings,
+        samples: &[GestureSample],
+    ) -> Result<EditOutcome, ModelError> {
+        let brush = brush.sanitized();
+        let Some(last) = samples.last() else {
+            return Ok(EditOutcome::NOTHING);
+        };
+        let mask = Self::active_mask_field(&self.layers, self.active);
+        let Some(live) = self.live_smooth.as_mut() else {
+            return Ok(EditOutcome::NOTHING);
+        };
+        let dirty_bricks = live.dab(claycore::RelaxParams {
+            strength: brush.intensity,
+            radius_cells: 1,
+            iterations: 2,
+            centre: last.position,
+            region_radius: brush.size,
+            falloff: brush.size * 0.5,
+            mask,
+        })?;
+        Ok(EditOutcome {
+            changed: true,
+            dirty_bricks,
         })
     }
 
@@ -4380,6 +4600,18 @@ impl SculptModel for ClayDocument {
         self.previewing = true;
     }
 
+    fn open_live_gesture(&mut self, tool: ToolKind, symmetry: [bool; 3]) -> bool {
+        ClayDocument::open_live_gesture(self, tool, symmetry)
+    }
+
+    fn close_live_gesture(&mut self) -> Result<usize, ModelError> {
+        ClayDocument::close_live_gesture(self)
+    }
+
+    fn discard_live_gesture(&mut self) -> usize {
+        ClayDocument::discard_live_gesture(self)
+    }
+
     fn end_gesture(&mut self) {
         self.previewing = false;
         // The tendril is finished; the next pull is its own.
@@ -5439,6 +5671,9 @@ impl ClayDocument {
             live_mesh: None,
             previewing: false,
             live_generation: 0,
+            live_smooth: None,
+            live_opening_entries: 0,
+            surface_epoch: 0,
             meshed_chunks: 0,
             surface_brick_count: 0,
             mesh_sculptors: std::cell::RefCell::default(),

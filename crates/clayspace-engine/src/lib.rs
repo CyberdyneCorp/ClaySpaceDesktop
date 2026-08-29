@@ -14,6 +14,7 @@
 pub mod alpha;
 pub mod backend;
 pub mod document;
+mod live;
 pub mod objects;
 mod reference;
 mod sculptors;
@@ -21,6 +22,7 @@ mod sculptors;
 pub use alpha::read_alpha;
 pub use backend::{BackendPolicy, Operation, SelectionReason, UnavailableBackend};
 pub use document::{CarriedSpan, ClayDocument};
+pub use live::LiveSurface;
 pub use reference::read_reference;
 
 pub use claycore;
