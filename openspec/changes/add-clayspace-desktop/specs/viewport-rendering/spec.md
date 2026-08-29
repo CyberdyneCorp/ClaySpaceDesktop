@@ -110,6 +110,25 @@ The viewport SHALL use the brick cache's LOD mip levels for regions far from the
 - **WHEN** the camera moves close to a region previously displayed at a reduced LOD
 - **THEN** that region is displayed at full resolution without requiring an edit or a manual refresh
 
+### Requirement: A surface the device cannot hold is drawn coarser, not fatally
+The renderer SHALL request the adapter's own buffer ceiling, SHALL report a
+graphics validation error rather than terminate on one, and where a surface at
+the level being drawn would still exceed the device's largest buffer SHALL
+refuse the layout, keep what is on screen, and drop to the coarse level of
+detail until the surface fits again. An engine mesh carrying no vertices SHALL
+be read as empty rather than reported as a failed copy.
+
+#### Scenario: A subtool is scaled past what the device can draw at full detail
+- **WHEN** a whole subtool is scaled up until its full-resolution surface is
+  larger than the device's largest buffer
+- **THEN** the application keeps running, the surface is drawn at the coarse
+  level, and the geometry panel says the detail is reduced
+
+#### Scenario: A reservation past the ceiling is refused
+- **WHEN** the renderer is asked to reserve more vertices than the device's
+  ceiling holds
+- **THEN** the reservation is refused and the existing buffers are unchanged
+
 ### Requirement: Rendering device loss is recovered, not fatal
 If the WebGPU device is lost, the application SHALL recreate it and its resources and resume rendering, SHALL NOT lose the open document, and SHALL inform the user that rendering was reset.
 

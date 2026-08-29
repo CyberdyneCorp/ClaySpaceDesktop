@@ -7267,6 +7267,24 @@ impl ClayDocument {
 
     /// Refills what an object edit reached, or the layer where it reached too
     /// far to say.
+    /// Writes a layer's transform to the engine, scale floored so a form can
+    /// never be scaled to nothing.
+    fn write_layer_transform(
+        &mut self,
+        id: LayerId,
+        transform: clayspace_model::Transform,
+    ) -> Result<(), ModelError> {
+        self.document
+            .set_layer_transform(
+                id,
+                transform.position,
+                transform.rotation_axis,
+                transform.rotation_angle,
+                transform.scale.max(1e-4),
+            )
+            .map_err(ModelError::engine)
+    }
+
     fn refill_bound(
         &mut self,
         layer: LayerId,
@@ -7364,6 +7382,7 @@ impl ClayDocument {
         // with holes in it beside the first. The object path had learnt the
         // same lesson (`set_object_transform`); this is the layer's turn.
         let before = self.layer_bounds(key);
+        let previous = self.layers[index].transform;
         // Inside a gesture the group is already open and the stack was already
         // recorded at its start; snapshotting per frame would key thirty states
         // to one undo depth and keep only the last. The object table takes the
@@ -7372,23 +7391,25 @@ impl ClayDocument {
         if !gesturing {
             self.remember_layers();
         }
-        self.document
-            .set_layer_transform(
-                id,
-                transform.position,
-                transform.rotation_axis,
-                transform.rotation_angle,
-                transform.scale.max(1e-4),
-            )
-            .map_err(ModelError::engine)?;
+        self.write_layer_transform(id, transform)?;
         self.layers[index].transform = transform;
-        if !gesturing {
-            self.remember_layers();
-        }
         let after = self.layer_bounds(key);
         // Both extents; the whole layer where either is unknown, because a
         // layer transform moves everything the layer holds.
-        self.refill_bound(id, union(before, after))
+        if let Err(refused) = self.refill_bound(id, union(before, after)) {
+            // The cache would not track the region — a subtool scaled past
+            // what it can hold — so the field must not stay where the picture
+            // cannot follow it. Put the transform back and say why; the
+            // manipulator keeps following the hand and the clay stays at the
+            // last size the cache accepted.
+            self.write_layer_transform(id, previous)?;
+            self.layers[index].transform = previous;
+            return Err(refused);
+        }
+        if !gesturing {
+            self.remember_layers();
+        }
+        Ok(())
     }
 
     /// Where a carried mesh layer stands, when that is anywhere but the

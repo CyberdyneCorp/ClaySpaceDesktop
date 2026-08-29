@@ -70,6 +70,10 @@ pub struct SurfaceGeometry {
     mesh: GpuMesh,
     /// Set when the keys have changed but the GPU buffer has not been rebuilt.
     dirty: bool,
+    /// Set when the surface at the level being drawn would not fit the
+    /// device's largest buffer, so the last layout was refused and what is on
+    /// screen is stale. The composition root reads it and drops a level.
+    over_budget: bool,
     /// Which keys changed since the last upload, so only those are written.
     touched: std::collections::HashSet<BrickKey>,
     /// Where each key's geometry sits in the GPU buffers.
@@ -198,7 +202,14 @@ impl SurfaceGeometry {
             pending_keys: HashMap::new(),
             detail: Detail::Full,
             requested: Detail::Full,
+            over_budget: false,
         }
+    }
+
+    /// Whether the surface, at the level being drawn, is more than the device
+    /// can hold — the cue to draw it coarser.
+    pub fn over_budget(&self) -> bool {
+        self.over_budget
     }
 
     pub fn mesh(&self) -> &GpuMesh {
@@ -620,15 +631,37 @@ impl SurfaceGeometry {
     fn lay_out(&mut self, gpu: &Gpu) {
         let vertices_needed = self.vertex_count() + self.keys.len() * 64;
         let indices_needed = self.triangle_count() * 3 + self.keys.len() * 64;
-        self.mesh.reserve(
-            gpu,
-            (vertices_needed * 2).max(1024),
-            (indices_needed * 2).max(1024),
-        );
-        self.layout = SlotMap::new(
-            (vertices_needed * 2).max(1024) as u32,
-            (indices_needed * 2).max(1024) as u32,
-        );
+        // Twice the need where the device allows it, so the strokes after a
+        // rebuild stay incremental; the bare need where it does not. A surface
+        // that fits neither is refused whole rather than attempted: a subtool
+        // scaled up a few times is ten million vertices at the field's fixed
+        // resolution, and `create_buffer` past the device's ceiling used to end
+        // the session. What is on screen stays stale and `over_budget` says
+        // so, and the composition root drops to the coarse level.
+        let Some((vertex_slots, index_slots)) = [2usize, 1]
+            .into_iter()
+            .map(|headroom| {
+                (
+                    (vertices_needed * headroom).max(1024),
+                    (indices_needed * headroom).max(1024),
+                )
+            })
+            .find(|(vertices, indices)| GpuMesh::fits(gpu, *vertices, *indices))
+        else {
+            eprintln!(
+                "a surface of {} vertices is more than the graphics device can hold at this \
+                 level of detail",
+                self.vertex_count()
+            );
+            self.over_budget = true;
+            return;
+        };
+        self.over_budget = false;
+        if !self.mesh.reserve(gpu, vertex_slots, index_slots) {
+            self.over_budget = true;
+            return;
+        }
+        self.layout = SlotMap::new(vertex_slots as u32, index_slots as u32);
         self.bounds = None;
         self.touched.clear();
         self.prune_duplicates();
@@ -1155,6 +1188,13 @@ fn sample_mask(document: &ClayDocument, vertices: &mut [Vertex]) {
 /// Reads an engine mesh into the renderer's vertex layout in one pass.
 fn read_mesh(mesh: &Mesh) -> Result<(Vec<Vertex>, Vec<u32>), ClayError> {
     let count = mesh.vertex_count();
+    // A brick with no surface in it comes back as a mesh with no attributes at
+    // all, and the engine refuses a layout naming positions on it — "the
+    // layout names positions, which this mesh does not carry" — which is not
+    // a failure to mesh, it is nothing to mesh.
+    if count == 0 {
+        return Ok((Vec::new(), Vec::new()));
+    }
     let mut bytes = vec![0u8; count * Vertex::STRIDE];
 
     let has_colors = mesh.colors().is_some();

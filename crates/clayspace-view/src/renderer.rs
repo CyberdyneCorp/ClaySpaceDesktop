@@ -150,8 +150,29 @@ impl GpuMesh {
         }
     }
 
+    /// Whether buffers for this many vertices and indices are within what the
+    /// device will create.
+    pub fn fits(gpu: &Gpu, vertices: usize, indices: usize) -> bool {
+        let ceiling = gpu.max_buffer_size();
+        // Saturating, because the question is asked with counts a device
+        // reporting a ceiling in the exabytes makes wrap in release builds.
+        (vertices as u64).saturating_mul(Vertex::STRIDE as u64) <= ceiling
+            && (indices as u64).saturating_mul(4) <= ceiling
+    }
+
     /// Replaces the whole mesh.
+    ///
+    /// Refused, and left as it was, where the device could not hold it: an
+    /// oversized `create_buffer` is a validation error, and a mesh drawn stale
+    /// is better than a session lost.
     pub fn upload(&mut self, gpu: &Gpu, vertices: &[Vertex], indices: &[u32]) {
+        if !Self::fits(gpu, vertices.len(), indices.len()) {
+            eprintln!(
+                "a mesh of {} vertices is more than the graphics device can hold; it was not drawn",
+                vertices.len()
+            );
+            return;
+        }
         if vertices.len() > self.vertex_capacity {
             self.vertices = gpu.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("vertices"),
@@ -188,7 +209,15 @@ impl GpuMesh {
     /// The incremental path needs the addresses to exist before it knows what
     /// goes in them, which `upload` cannot offer — it sizes the buffers to the
     /// data it is given.
-    pub fn reserve(&mut self, gpu: &Gpu, vertices: usize, indices: usize) {
+    ///
+    /// Returns whether it did. A reservation the device cannot hold is refused
+    /// with the buffers left as they were, so the caller can draw coarser
+    /// instead of the process ending in a validation panic.
+    #[must_use]
+    pub fn reserve(&mut self, gpu: &Gpu, vertices: usize, indices: usize) -> bool {
+        if !Self::fits(gpu, vertices, indices) {
+            return false;
+        }
         self.vertices = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("vertices"),
             size: (vertices * Vertex::STRIDE).max(4) as u64,
@@ -204,6 +233,7 @@ impl GpuMesh {
         self.vertex_capacity = vertices;
         self.index_capacity = indices;
         self.index_count = 0;
+        true
     }
 
     /// Overwrites one contiguous run of vertices, leaving the rest alone.
