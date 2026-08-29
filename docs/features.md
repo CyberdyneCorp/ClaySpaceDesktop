@@ -1083,6 +1083,33 @@ transform puts it that is its middle; a layer whose geometry was built
 off-centre inside it carries the widget at the layer's origin rather than at
 the form's, which is worth knowing before reaching for it.
 
+**Choosing a mode is entering a mode.** While the whole-subtool manipulator is
+up, a press on the clay that misses a handle is the mode's free gesture — the
+centre's, which slides in the view plane or scales uniformly, or the outer
+ring's, which turns in the screen plane — and not a stroke; the arrows are for
+the constrained gesture, the form itself is the free one, as in ZBrush. The
+brush ring is not drawn meanwhile, since it would promise the wrong thing. Off
+the form a press still orbits, so the model can be turned to look at without
+leaving the mode; pressing the chip already in force leaves it.
+
+**A moved subtool is re-meshed where it was as well as where it is.** The
+refill after a layer transform marked only the bricks the layer now occupies,
+so the surface it had just made stood where it had been: the arrow was
+dragged, nothing moved on screen, and the next stroke re-meshed a handful of
+bricks around the pointer into a second form with holes in it beside the first.
+The refill takes the union of the layer's bounds before and after now, the way
+a moved object's already did. `visual_subtools` moves a subtool on the
+viewport's incremental path and holds the picture to what a rebuild draws.
+
+And the viewport re-meshes on every frame of a manipulator drag on clay. The
+drag's commands are not document edits in the ViewModel's accounting — they
+were filed beside the cage's, whose drag moves control points and not the
+surface — so nothing asked the viewport to look again: the field moved under a
+picture that did not, and a stroke aimed by a ray through the moved field
+landed beside the drawn form. A drag on a placed object or a whole subtool now
+re-meshes what it dirtied as it goes, and marks the document unsaved once, when
+the gesture ends.
+
 **The three modes are one row of chips wherever the widget can be worked** —
 under the object list, in the shapes panel beside the selected object, and in
 the cage section — each chip carrying the shape its handle has in the viewport:

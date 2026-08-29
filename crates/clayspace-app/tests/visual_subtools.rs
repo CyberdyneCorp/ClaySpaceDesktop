@@ -209,3 +209,66 @@ fn each_manipulator_mode_draws_a_different_widget_on_a_subtool() {
         "turning and scaling drew the same widget"
     );
 }
+
+/// Moving a whole subtool has to move what is drawn, on the viewport's own
+/// incremental path.
+///
+/// It did not. The engine applied the layer transform and the surface stayed
+/// where it was, because the refill marked the bricks the layer now occupies
+/// and never the ones it had just left — so a sculptor dragged the arrow,
+/// saw nothing move, and the next stroke re-meshed a handful of bricks around
+/// the pointer: a second sphere with holes in it beside the first.
+#[test]
+fn moving_a_whole_subtool_moves_the_drawn_surface() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let Some((mut document, second)) = two_subtools() else {
+        return;
+    };
+    let gpu = harness.gpu.clone();
+    let mut geometry = meshed(&gpu, &mut document);
+    // Framed once, before the move, so the two captures are of one view.
+    let camera = support::framed(&document);
+    let before = harness.capture(geometry.mesh(), &camera, false, "subtools-move-before");
+
+    let target = GizmoTarget::Layer(second);
+    let at = document
+        .target_transform(target)
+        .expect("a layer carries a transform");
+    // Halfway back toward the first form: a move the frame still holds.
+    let moved = clayspace_model::Transform {
+        position: [APART * 0.5, 0.0, 0.0],
+        ..at
+    };
+    document.begin_target_drag(target);
+    document
+        .set_target_transform(target, moved)
+        .expect("a layer can be placed");
+    document.end_target_drag();
+
+    // The viewport's path — the dirty bricks, not a rebuild.
+    geometry
+        .sync(&gpu, &mut document)
+        .expect("re-mesh what the move dirtied");
+    let after = harness.capture(geometry.mesh(), &camera, false, "subtools-move-after");
+    assert!(
+        after.mean_difference(&before) > 0.01,
+        "the subtool was moved and the drawn surface did not change"
+    );
+
+    // And what was drawn incrementally is what a rebuild draws: no stale
+    // bricks left where the form was, none missing where it is. The bound is
+    // loose enough for the incremental path's own speckle — a few hundred
+    // pixels of per-brick residue the rebuild does not have, which
+    // `features.md` lists as known-degraded — and two orders of magnitude
+    // under what the stale form measured (about ten).
+    let truth = meshed(&gpu, &mut document);
+    let rebuilt = harness.capture(truth.mesh(), &camera, false, "subtools-move-rebuilt");
+    assert!(
+        after.mean_difference(&rebuilt) < 0.5,
+        "the incremental re-mesh after a move differs from a rebuild by {}: \
+         bricks the layer left were not refilled",
+        after.mean_difference(&rebuilt)
+    );
+}
