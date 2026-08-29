@@ -457,8 +457,10 @@ pub struct GizmoView {
     /// a thumbnail and one on a bust want the same size to the hand, and the
     /// model's units do not know which it is.
     pub reach: f32,
-    /// The handle under the pointer or being dragged, drawn brighter.
-    pub hovered: Option<GizmoHandle>,
+    /// The handle under the pointer or being dragged, drawn brighter — with
+    /// the operation it is performing, since one widget carries all three and
+    /// an axis has an arrow, a ring and perhaps a box.
+    pub hovered: Option<(GizmoMode, GizmoHandle)>,
     /// The direction from the pivot to the eye.
     ///
     /// What the outer ring lies perpendicular to, and what it turns about.
@@ -2243,25 +2245,37 @@ fn gizmo_geometry_for(
             emit(from + offset, to + offset, colour);
         }
     };
-    let lit = |handle: GizmoHandle, base: [f32; 3]| {
-        if view.hovered == Some(handle) {
+    let lit = |operation: GizmoMode, handle: GizmoHandle, base: [f32; 3]| {
+        if view.hovered == Some((operation, handle)) {
             [1.0, 0.85, 0.4]
         } else {
             base
         }
     };
-
-    // Nothing per axis in scale mode where the target has one factor: an
-    // axis box that could be grabbed and would do the same thing as the centre
-    // is worse than no box at all.
-    let axes = if view.mode == GizmoMode::Scale && !view.per_axis_scale {
-        0
-    } else {
-        3
+    let ring = |centre: Vec3,
+                across: Vec3,
+                other: Vec3,
+                radius: f32,
+                colour: [f32; 3],
+                segment: &mut dyn FnMut(Vec3, Vec3, [f32; 3])| {
+        for step in 0..RING_SEGMENTS {
+            let angle = |at: usize| at as f32 / RING_SEGMENTS as f32 * std::f32::consts::TAU;
+            let at = |a: f32| centre + (across * a.cos() + other * a.sin()) * radius;
+            segment(at(angle(step)), at(angle(step + 1)), colour);
+        }
     };
-    for index in 0..axes {
-        let handle = GizmoHandle::Axis(index);
-        let colour = lit(handle, AXIS_COLOURS[index]);
+
+    // One widget, every operation: ZBrush's Gizmo 3D. Along each axis an
+    // arrow that slides, a ring that turns and — where a stretch can be
+    // applied per axis — a box that scales, so the operation is chosen by the
+    // handle grabbed rather than by a mode set first. Three modes drew three
+    // different widgets once, and the chips became a step a sculptor had to
+    // take before every move.
+    for (operation, handle) in GizmoHandle::combined(view.per_axis_scale) {
+        let Some(index) = handle.axis_index() else {
+            continue;
+        };
+        let colour = lit(operation, handle, AXIS_COLOURS[index]);
         let mut unit = Vec3::ZERO;
         unit[index] = 1.0;
         let (u, v) = ((index + 1) % 3, (index + 2) % 3);
@@ -2269,66 +2283,78 @@ fn gizmo_geometry_for(
         across[u] = 1.0;
         let mut other = Vec3::ZERO;
         other[v] = 1.0;
-
-        match view.mode {
-            GizmoMode::Rotate => {
-                // A ring in the plane perpendicular to the axis: what turns
-                // about it.
-                for step in 0..RING_SEGMENTS {
-                    let angle =
-                        |at: usize| at as f32 / RING_SEGMENTS as f32 * std::f32::consts::TAU;
-                    let at = |a: f32| pivot + (across * a.cos() + other * a.sin()) * view.reach;
-                    segment(at(angle(step)), at(angle(step + 1)), colour);
-                }
-            }
-            mode => {
+        match operation {
+            GizmoMode::Move => {
+                // A cone at the tip: a handle, not a hint of one. The shaft
+                // stops where the cone starts so it does not show through the
+                // base.
                 let tip = pivot + unit * view.reach;
-                if mode == GizmoMode::Move {
-                    // A cone at the tip: a handle, not a hint of one. The
-                    // shaft stops where the cone starts so it does not show
-                    // through the base.
-                    let head = view.reach * 0.2;
-                    segment(pivot, tip - unit * head, colour);
-                    cone(tip, unit, head, head * 0.4, colour, triangle);
-                } else {
-                    // A box: what scales.
-                    let box_size = view.reach * 0.08;
-                    segment(pivot, tip - unit * box_size, colour);
-                    solid_cube(tip, box_size, colour, triangle);
-                }
+                let head = view.reach * 0.2;
+                segment(pivot, tip - unit * head, colour);
+                cone(tip, unit, head, head * 0.4, colour, triangle);
+            }
+            GizmoMode::Rotate => {
+                // A ring in the plane perpendicular to the axis, inside the
+                // arrows' reach so the two are told apart by radius as well as
+                // by shape.
+                ring(
+                    pivot,
+                    across,
+                    other,
+                    view.reach * RING_REACH,
+                    colour,
+                    &mut segment,
+                );
+            }
+            GizmoMode::Scale => {
+                // A box on the shaft, short of the ring.
+                let at = pivot + unit * (view.reach * SCALE_BOX_REACH);
+                solid_cube(at, view.reach * 0.07, colour, triangle);
             }
         }
     }
 
-    if let Some(handle) = GizmoHandle::all_for(view.mode)
-        .into_iter()
-        .find(|handle| *handle == GizmoHandle::Centre)
-    {
-        // A solid block at the pivot, which reads as a centre from any angle.
-        let colour = lit(handle, [0.82, 0.78, 0.42]);
-        let size = view.reach * 0.12;
-        solid_cube(pivot, size, colour, triangle);
-    }
+    // The centre: a solid block at the pivot, which reads as a centre from
+    // any angle. What it does is the mode's — a slide, or a uniform scale.
+    let centre_operation = GizmoHandle::centre_operation(view.mode);
+    let colour = lit(centre_operation, GizmoHandle::Centre, CENTRE_COLOUR);
+    solid_cube(pivot, view.reach * 0.12, colour, triangle);
 
-    if view.mode == GizmoMode::Rotate {
-        // The outer ring: ZBrush's, and the one a sculptor reaches for most.
-        // Outside the three axis rings rather than among them, at
-        // `VIEW_RING_REACH` — a ring the same size as the others would be a
-        // fourth thing to tell apart at the same radius, and the whole point of
-        // this one is that it is the easy target.
-        let Some(axis) = normalized(Vec3::from(view.view_axis)) else {
-            return;
-        };
-        let (across, other) = frame_about(axis);
-        let colour = lit(GizmoHandle::View, VIEW_RING_COLOUR);
-        let reach = view.reach * VIEW_RING_REACH;
-        for step in 0..RING_SEGMENTS {
-            let angle = |at: usize| at as f32 / RING_SEGMENTS as f32 * std::f32::consts::TAU;
-            let at = |a: f32| pivot + (across * a.cos() + other * a.sin()) * reach;
-            segment(at(angle(step)), at(angle(step + 1)), colour);
-        }
+    // The outer ring: ZBrush's, and the one a sculptor reaches for most.
+    // Outside the arrows at `VIEW_RING_REACH` — among the axis rings it would
+    // be a fourth thing to tell apart at the same radius, and the whole point
+    // of this one is that it is the easy target. And the four corner brackets
+    // that frame it in the screen plane: they say "this is the widget's
+    // extent" and are grabbed by nothing.
+    let (across, other) = frame_about(eye);
+    let colour = lit(GizmoMode::Rotate, GizmoHandle::View, VIEW_RING_COLOUR);
+    ring(
+        pivot,
+        across,
+        other,
+        view.reach * VIEW_RING_REACH,
+        colour,
+        &mut segment,
+    );
+    let half = view.reach * BRACKET_REACH;
+    let arm = view.reach * 0.22;
+    for (sx, sy) in [(-1.0f32, -1.0f32), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+        let corner = pivot + (across * sx + other * sy) * half;
+        segment(corner, corner - across * (sx * arm), BRACKET_COLOUR);
+        segment(corner, corner - other * (sy * arm), BRACKET_COLOUR);
     }
 }
+
+/// How far out the axis rings sit, against the arrows' reach.
+pub const RING_REACH: f32 = 0.8;
+/// Where a per-axis scale box sits along its arrow, against the reach.
+pub const SCALE_BOX_REACH: f32 = 0.55;
+/// Half the side of the corner-bracket square, against the reach.
+pub const BRACKET_REACH: f32 = 1.42;
+/// The centre block's colour: not an axis colour, and not the outer ring's.
+const CENTRE_COLOUR: [f32; 3] = [0.82, 0.78, 0.42];
+/// The brackets, quiet: they frame the widget and are not a handle.
+const BRACKET_COLOUR: [f32; 3] = [0.55, 0.55, 0.58];
 
 /// How far out the outer ring sits, against an axis ring's reach.
 pub const VIEW_RING_REACH: f32 = 1.28;
@@ -2974,21 +3000,21 @@ mod tests {
             .all(|v| v.position.iter().all(|c| c.is_finite())));
     }
 
-    fn manipulator(mode: GizmoMode) -> GizmoView {
+    fn manipulator(mode: GizmoMode, per_axis_scale: bool) -> GizmoView {
         GizmoView {
             pivot: [0.0; 3],
             mode,
             reach: 1.0,
             hovered: None,
             view_axis: [0.0, 0.0, 1.0],
-            per_axis_scale: true,
+            per_axis_scale,
         }
     }
 
-    fn handles(mode: GizmoMode) -> (usize, usize) {
+    fn handles(mode: GizmoMode, per_axis_scale: bool) -> (usize, usize) {
         let (mut lines, mut triangles) = (0usize, 0usize);
         gizmo_geometry_for(
-            manipulator(mode),
+            manipulator(mode, per_axis_scale),
             &mut |_, _, _| lines += 1,
             &mut |_, _, _, _| triangles += 1,
         );
@@ -2996,16 +3022,31 @@ mod tests {
     }
 
     #[test]
-    fn move_and_scale_handles_are_solid_and_rings_are_not() {
-        // An arrow is a cone and a box is a box: things with faces. A ring is
-        // a line, and putting a solid on it would be a fourth thing to grab.
-        let (_, move_solids) = handles(GizmoMode::Move);
-        let (_, scale_solids) = handles(GizmoMode::Scale);
-        let (rotate_lines, rotate_solids) = handles(GizmoMode::Rotate);
-        assert!(move_solids > 0, "the move arrows have no solid heads");
-        assert!(scale_solids > 0, "the scale boxes are not solid");
-        assert_eq!(rotate_solids, 0, "turning drew a solid handle");
-        assert!(rotate_lines > 0);
+    fn the_manipulator_carries_every_operation_whatever_the_mode() {
+        // One widget: arrows with solid heads, rings of lines and the centre
+        // block, in every mode. The mode chooses what the centre does, not
+        // what is drawn.
+        let mut pictures = Vec::new();
+        for mode in GizmoMode::ALL {
+            let (lines, solids) = handles(mode, false);
+            assert!(solids > 0, "{mode:?} drew no solid handle");
+            assert!(lines > 0, "{mode:?} drew no ring");
+            pictures.push((lines, solids));
+        }
+        assert!(
+            pictures.windows(2).all(|pair| pair[0] == pair[1]),
+            "the modes draw different widgets: {pictures:?}"
+        );
+    }
+
+    #[test]
+    fn scale_boxes_are_drawn_only_where_a_stretch_can_be_applied() {
+        let (_, uniform) = handles(GizmoMode::Scale, false);
+        let (_, per_axis) = handles(GizmoMode::Scale, true);
+        assert!(
+            per_axis > uniform,
+            "a per-axis target drew no more solids ({per_axis}) than a uniform one ({uniform})"
+        );
     }
 
     #[test]
@@ -3120,5 +3161,9 @@ mod tests {
         // three axis rings it would be a fourth thing to tell apart at the same
         // radius.
         const { assert!(VIEW_RING_REACH > 1.0) };
+        // And the axis rings sit inside the arrows, the boxes inside the
+        // rings, the brackets outside everything.
+        const { assert!(RING_REACH < 1.0 && SCALE_BOX_REACH < RING_REACH) };
+        const { assert!(BRACKET_REACH > VIEW_RING_REACH) };
     }
 }

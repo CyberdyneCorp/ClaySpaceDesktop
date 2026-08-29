@@ -748,15 +748,33 @@ one at a time needs no widget, and turning a whole face of the cage cannot be
 done without one.
 
 It sits on the **middle of the selection**, not on the last point picked, so
-adding a point moves the widget to where the selection is. One widget with
-three modes — **Mover**, **Girar**, **Escalar**, chosen in the GAIOLA section —
-which is what ZBrush and Maya both settled on: the hand stays where it is and
-the mode is what changes.
+adding a point moves the widget to where the selection is.
+
+**One widget carries every operation** — ZBrush's Gizmo 3D. Along each axis an
+arrow that slides, a ring that turns and, on a cage, a box that scales; the
+outer ring that turns in the screen plane; the centre block; and four corner
+brackets framing the widget's extent. The operation is chosen by the handle
+grabbed, not by a mode set first: three modes drew three different widgets
+once, and the chips became a step a sculptor had to take before every move.
+The **Mover / Girar / Escalar** chips still exist, for the two gestures no
+handle names — what the centre block does (a slide in the view plane, or a
+uniform scale) and what a press on the clay does while a whole subtool's
+widget is up — and they follow the last handle grabbed, so they say what the
+last gesture did and what the next press on the clay will do.
 
 Shapes rather than colours alone carry the meaning: an arrow slides, a ring
 turns, a box scales. A person reaching for a handle is not reading a legend,
 and the three axis colours are the one part of this a colour-blind sculptor
-cannot use.
+cannot use. The rings sit inside the arrows' reach and the boxes inside the
+rings, so the three are told apart by radius as well as by shape; the outer
+ring stays outside everything at 1.28 of the reach, and the picture and the
+hit test read the same constants.
+
+**The widget stands over the whole form.** Its arms reach past the target's
+own box — an object's outline, a subtool's bounds — with a floor at the
+screen-constant size a small target needs and a ceiling that keeps it on screen
+when the camera is close, so it encloses what it moves rather than sitting as a
+mark in the form's middle.
 
 - An **axis** drag is constrained to that axis. Pulling the green arrow means
   "up", not "up and a little sideways because my hand drifted".

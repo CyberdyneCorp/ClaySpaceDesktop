@@ -101,6 +101,8 @@ fn system_language() -> String {
 /// is taken to be.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct GizmoGesture {
+    /// What the gesture does: the operation of the handle that was grabbed.
+    mode: clayspace_model::GizmoMode,
     handle: clayspace_model::GizmoHandle,
     /// The plane the drag runs on, as an anchor and a normal.
     plane: ([f32; 3], [f32; 3]),
@@ -164,6 +166,13 @@ struct App {
     cage_plane: Option<([f32; 3], [f32; 3])>,
     /// The manipulator handle in hand, and the plane its drag runs on.
     gizmo_drag: Option<GizmoGesture>,
+    /// How big the manipulator's target was when it was taken up: the target
+    /// and half its widest extent. Measured once per selection rather than
+    /// every frame, because the engine's bounds of a turned layer are a
+    /// conservative box around the turn, and a widget sized from them swelled
+    /// as the hand turned the form — and a widget that changes size under the
+    /// hand mid-gesture is the wrong widget however right its size.
+    gizmo_fit: Option<(clayspace_model::GizmoTarget, f32)>,
     armature: ArmatureViewModel,
     policy: BackendPolicy,
 
@@ -381,6 +390,7 @@ impl App {
             curve_drag: None,
             cage_plane: None,
             gizmo_drag: None,
+            gizmo_fit: None,
             armature,
             policy,
             camera: Camera::default(),
@@ -1519,12 +1529,18 @@ impl App {
         let Some(ray) = self.ray_at(point) else {
             return false;
         };
-        let Some(handle) =
+        let Some((operation, handle)) =
             Self::handle_under(mode, per_axis_scale, pivot, reach, ray, &self.camera)
         else {
             return false;
         };
-        self.start_gizmo_drag(ray, pivot, mode, handle, reach)
+        // The handle chose the operation. The interface's mode follows it, so
+        // the chips say what the last gesture did and what the next press on
+        // the clay will do — one widget, and no step to take before a move.
+        if operation != mode {
+            self.handle(Command::SetGizmoMode(operation));
+        }
+        self.start_gizmo_drag(ray, pivot, operation, handle, reach)
     }
 
     /// Whether the manipulator is on something made of clay — a placed object
@@ -1560,6 +1576,8 @@ impl App {
         let Some(pivot) = self.objects.pivot() else {
             return false;
         };
+        // The mode's free gesture: the outer ring's turn, or the centre's
+        // slide or uniform scale.
         let mode = *self.objects.mode().get();
         let handle = match mode {
             clayspace_model::GizmoMode::Rotate => clayspace_model::GizmoHandle::View,
@@ -1601,6 +1619,7 @@ impl App {
         };
         let (anchor, shift) = Self::metered_anchor(mode, handle, pivot, pressed, reach, view_axis);
         self.gizmo_drag = Some(GizmoGesture {
+            mode,
             handle,
             plane: (pivot, normal),
             shift,
@@ -1670,70 +1689,102 @@ impl App {
         reach: f32,
         ray: ([f32; 3], [f32; 3]),
         camera: &Camera,
-    ) -> Option<clayspace_model::GizmoHandle> {
-        use clayspace_model::GizmoHandle;
+    ) -> Option<(clayspace_model::GizmoMode, clayspace_model::GizmoHandle)> {
+        use clayspace_model::{GizmoHandle, GizmoMode};
         let slack = reach * Self::GIZMO_GRAB;
-        let mut best: Option<(GizmoHandle, f32)> = None;
-        let mut consider = |handle: GizmoHandle, at: [f32; 3], radius: f32| {
+        // A cell rather than a plain local, because the outer ring is tested
+        // only if nothing nearer was hit, and that question is asked while
+        // the closure that answers it is still in scope.
+        let best: std::cell::Cell<Option<((GizmoMode, GizmoHandle), f32)>> =
+            std::cell::Cell::new(None);
+        let mut consider = |what: (GizmoMode, GizmoHandle), at: [f32; 3], radius: f32| {
             if let Some(along) = Self::ray_hits(ray, at, radius) {
-                if best.is_none_or(|(_, closest)| along < closest) {
-                    best = Some((handle, along));
+                if best.get().is_none_or(|(_, closest)| along < closest) {
+                    best.set(Some((what, along)));
                 }
             }
         };
-
-        // What is drawn and what can be grabbed have to be the same set: on a
-        // target the engine scales by one factor there are no axis boxes on
-        // screen, so there must be none to press either.
-        let axes = if mode == clayspace_model::GizmoMode::Scale && !per_axis_scale {
-            0
-        } else {
-            3
-        };
-        for index in 0..axes {
-            let handle = GizmoHandle::Axis(index);
-            let Some(axis) = handle.axis() else { continue };
-            if mode == clayspace_model::GizmoMode::Rotate {
-                // A ring is grabbed anywhere along it, so several points
-                // around it are tested rather than one — a ring tested only at
-                // its four cardinal points is a ring with four handles.
-                let steps = clayspace_model::ring_samples(reach, slack);
+        let ring =
+            |radius: f32,
+             across: [f32; 3],
+             other: [f32; 3],
+             what: (GizmoMode, GizmoHandle),
+             consider: &mut dyn FnMut((GizmoMode, GizmoHandle), [f32; 3], f32)| {
+                // A ring is grabbed anywhere along it, so several points around
+                // it are tested rather than one — a ring tested only at its four
+                // cardinal points is a ring with four handles.
+                let steps = clayspace_model::ring_samples(radius, slack);
                 for step in 0..steps {
                     let angle = step as f32 / steps as f32 * std::f32::consts::TAU;
-                    let (u, v) = ((index + 1) % 3, (index + 2) % 3);
-                    let mut at = pivot;
-                    at[u] += angle.cos() * reach;
-                    at[v] += angle.sin() * reach;
-                    consider(handle, at, slack);
+                    let at = std::array::from_fn(|i| {
+                        pivot[i] + (across[i] * angle.cos() + other[i] * angle.sin()) * radius
+                    });
+                    consider(what, at, slack);
                 }
+            };
+
+        // What is drawn and what can be grabbed have to be the same set, and
+        // `GizmoHandle::combined` is that set: an arrow's tip, a ring anywhere
+        // along it, a box on the shaft where the target scales per axis. The
+        // radii are the renderer's own constants, so the picture and the hit
+        // test cannot come apart.
+        for (operation, handle) in GizmoHandle::combined(per_axis_scale) {
+            let Some(index) = handle.axis_index() else {
                 continue;
+            };
+            let Some(axis) = handle.axis() else {
+                continue;
+            };
+            match operation {
+                GizmoMode::Move => {
+                    // The tip, where the cone is and where a person aims.
+                    let tip = std::array::from_fn(|i| pivot[i] + axis[i] * reach);
+                    consider((operation, handle), tip, slack);
+                }
+                GizmoMode::Scale => {
+                    let at = std::array::from_fn(|i| {
+                        pivot[i] + axis[i] * reach * clayspace_view::SCALE_BOX_REACH
+                    });
+                    consider((operation, handle), at, slack);
+                }
+                GizmoMode::Rotate => {
+                    let (u, v) = ((index + 1) % 3, (index + 2) % 3);
+                    let mut across = [0.0f32; 3];
+                    across[u] = 1.0;
+                    let mut other = [0.0f32; 3];
+                    other[v] = 1.0;
+                    ring(
+                        reach * clayspace_view::RING_REACH,
+                        across,
+                        other,
+                        (operation, handle),
+                        &mut consider,
+                    );
+                }
             }
-            // The tip, which is where the arrowhead or the box is and where a
-            // person aims. Grabbing the shaft anywhere along it would take
-            // presses meant for the control points it passes over.
-            let tip = std::array::from_fn(|i| pivot[i] + axis[i] * reach);
-            consider(handle, tip, slack);
         }
-        if mode != clayspace_model::GizmoMode::Rotate {
-            consider(GizmoHandle::Centre, pivot, slack);
-        } else {
-            // The outer ring, tested the way the axis rings are and at the
-            // radius it is drawn at. Last, so a press where it crosses an axis
-            // ring goes to the axis: the outer one is the easy target
-            // everywhere else, and it should not steal the hard ones.
+        // The centre does what the mode says: slides, or scales uniformly.
+        consider(
+            (GizmoHandle::centre_operation(mode), GizmoHandle::Centre),
+            pivot,
+            slack,
+        );
+        // The outer ring, tested the way the axis rings are and at the radius
+        // it is drawn at. Only where nothing else was hit, so a press where it
+        // crosses an arrow or a ring goes to that: the outer one is the easy
+        // target everywhere else, and it should not steal the hard ones.
+        if best.get().is_none() {
             let axis = Self::toward_eye(camera, pivot);
             let (across, other) = clayspace_view::frame_about(axis.into());
-            let reach = reach * clayspace_view::VIEW_RING_REACH;
-            let steps = clayspace_model::ring_samples(reach, slack);
-            for step in 0..steps {
-                let angle = step as f32 / steps as f32 * std::f32::consts::TAU;
-                let at = std::array::from_fn(|i| {
-                    pivot[i] + (across[i] * angle.cos() + other[i] * angle.sin()) * reach
-                });
-                consider(GizmoHandle::View, at, slack);
-            }
+            ring(
+                reach * clayspace_view::VIEW_RING_REACH,
+                across.into(),
+                other.into(),
+                (GizmoMode::Rotate, GizmoHandle::View),
+                &mut consider,
+            );
         }
-        best.map(|(handle, _)| handle)
+        best.into_inner().map(|(what, _)| what)
     }
 
     /// How far along a ray a sphere is hit, if it is.
@@ -1905,7 +1956,9 @@ impl App {
                 pivot,
                 mode: object_mode,
                 reach: object_reach,
-                hovered: self.gizmo_drag.map(|gesture| gesture.handle),
+                hovered: self
+                    .gizmo_drag
+                    .map(|gesture| (gesture.mode, gesture.handle)),
                 view_axis: Self::toward_eye(&camera, pivot),
                 // One scale factor, so one handle for it.
                 per_axis_scale: false,
@@ -1936,7 +1989,9 @@ impl App {
                     pivot,
                     mode: cage.mode,
                     reach: handle * Self::GIZMO_REACH,
-                    hovered: self.gizmo_drag.map(|gesture| gesture.handle),
+                    hovered: self
+                        .gizmo_drag
+                        .map(|gesture| (gesture.mode, gesture.handle)),
                     view_axis: Self::toward_eye(&camera, pivot),
                     // A cage scales its own control points.
                     per_axis_scale: true,
@@ -2026,9 +2081,58 @@ impl App {
     /// see `object_gizmo_reach`. It was sized to the subtool's own box once,
     /// which left the widget on a small subtool a speck and the one on a
     /// large subtool off the screen at any zoom that showed its detail.
-    fn gizmo_reach(&self) -> f32 {
-        Self::object_gizmo_reach(&self.camera)
+    fn gizmo_reach(&mut self) -> f32 {
+        let floor = Self::object_gizmo_reach(&self.camera);
+        // Over the whole form, as ZBrush's gizmo stands over the tool: the
+        // arrows reach past the target's own box, so the widget encloses what
+        // it moves rather than sitting as a mark in its middle. Never smaller
+        // than the screen-constant floor — a small target keeps a usable
+        // widget — and never so large it leaves the screen on a form the
+        // camera is inside of.
+        let half = self.target_half_extent();
+        (half * Self::ENCLOSING_REACH)
+            .max(floor)
+            .min(self.camera.distance * Self::REACH_CEILING)
     }
+
+    /// Half the widest extent of the manipulator's target, measured when the
+    /// target was taken up and held until another is — see `gizmo_fit`.
+    fn target_half_extent(&mut self) -> f32 {
+        let Some(target) = *self.objects.target().get() else {
+            self.gizmo_fit = None;
+            return 0.0;
+        };
+        if let Some((fitted, half)) = self.gizmo_fit {
+            if fitted == target {
+                return half;
+            }
+        }
+        let half = self
+            .target_bounds()
+            .map(|(min, max)| {
+                (0..3)
+                    .map(|i| (max[i] - min[i]) * 0.5)
+                    .fold(0.0f32, f32::max)
+            })
+            .unwrap_or(0.0);
+        self.gizmo_fit = Some((target, half));
+        half
+    }
+
+    /// The box around whatever the manipulator is on, for sizing it.
+    fn target_bounds(&self) -> Option<([f32; 3], [f32; 3])> {
+        match *self.objects.target().get() {
+            Some(clayspace_model::GizmoTarget::Layer(key)) => self.scene.layer_bounds(key),
+            Some(clayspace_model::GizmoTarget::Object(_)) => self.selected_outline(),
+            _ => None,
+        }
+    }
+
+    /// How far past the target's half-extent the arrows reach.
+    const ENCLOSING_REACH: f32 = 1.1;
+    /// The most of the camera distance the arrows may span, so the widget on
+    /// a form the camera is close to stays on screen.
+    const REACH_CEILING: f32 = 0.45;
 
     /// Whether a press on the clay should look for an object rather than
     /// starting a stroke.
