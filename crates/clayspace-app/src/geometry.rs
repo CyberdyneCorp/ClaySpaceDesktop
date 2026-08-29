@@ -115,6 +115,12 @@ pub struct SurfaceGeometry {
     /// needs the originals — recomputing them by warping backwards would
     /// accumulate the error of two approximations instead of none.
     cage_rest: HashMap<BrickKey, Vec<[f32; 3]>>,
+    /// Which surface the stored geometry belongs to.
+    ///
+    /// A live gesture draws from a cache of its own whose keys name different
+    /// bricks, so the store cannot be patched across the swap and is laid out
+    /// again when this stops matching the document's.
+    surface_epoch: u64,
     /// The level the stored geometry was meshed at.
     ///
     /// Distinct from `requested` because a coarse surface is not always
@@ -187,6 +193,7 @@ impl SurfaceGeometry {
     pub fn new(gpu: &Gpu) -> Self {
         Self {
             cage_rest: HashMap::new(),
+            surface_epoch: 0,
             keys: HashMap::new(),
             mesh: GpuMesh::new(gpu),
             dirty: false,
@@ -252,6 +259,15 @@ impl SurfaceGeometry {
         if self.detail == Detail::Reduced {
             self.rebuild_at(gpu, document, Detail::Full)?;
         }
+        // The surface swapped identity: a live gesture opened, installed what
+        // it previewed, or was abandoned. A preview key and a document key of
+        // the same coordinate name different bricks, so there is nothing to
+        // patch and the whole surface is laid out again — once per gesture, at
+        // each end of it.
+        if self.surface_epoch != document.surface_epoch() {
+            self.surface_epoch = document.surface_epoch();
+            self.rebuild_at(gpu, document, Detail::Full)?;
+        }
         let dirty = document.take_dirty_keys();
         if dirty.is_empty() {
             return Ok(None);
@@ -306,10 +322,16 @@ impl SurfaceGeometry {
         // segment at a time by `refine_within` on frames that are not
         // sculpting. See [`Shading`] for the measurements.
         self.remesh(document, &meshed, Some(&replace), Shading::Fast, 0)?;
-        for key in &meshed {
-            *self.pending_keys.entry(*key).or_insert(0) += 1;
+        // No gradient owed on a preview: the debt is paid by re-meshing the
+        // same keys through the document, and while a live gesture is drawing
+        // there is no document behind those keys. The gesture's end lays the
+        // surface out again at full shading, which settles it.
+        if !document.live_gesture_is_open() {
+            for key in &meshed {
+                *self.pending_keys.entry(*key).or_insert(0) += 1;
+            }
+            self.pending_shading.push_back(meshed.clone());
         }
-        self.pending_shading.push_back(meshed.clone());
         let mesh_time = started.elapsed();
 
         let started = std::time::Instant::now();
@@ -344,7 +366,7 @@ impl SurfaceGeometry {
         document: &ClayDocument,
         dirty: &[BrickKey],
     ) -> Result<Vec<BrickKey>, ClayError> {
-        let states = document.cache().states(dirty)?;
+        let states = document.drawn_cache().0.states(dirty)?;
         Ok(dirty
             .iter()
             .zip(states)
@@ -374,7 +396,12 @@ impl SurfaceGeometry {
         // No document at level 1, which skips compiling a tape the coarse
         // mesh cannot use anyway: the level refuses gradient normals and
         // colours, and face normals come from the triangles.
-        let doc = (lod == 0).then(|| document.document());
+        // And no document while a live gesture is drawing: the preview's
+        // lattice is not the document's field, so attributing colours or
+        // gradient normals through the document would shade the previewed
+        // surface with the one it is standing in for.
+        let (cache, offset) = document.drawn_cache();
+        let doc = (lod == 0 && !document.live_gesture_is_open()).then(|| document.document());
         // Nothing requested means nothing meshed — *not* what the same words
         // mean one layer down. An empty key list is how the C ABI spells "every
         // surface brick", which is right for an export and catastrophic here:
@@ -389,7 +416,7 @@ impl SurfaceGeometry {
         let (mesh, ranges) = if keys.is_empty() {
             (None, Vec::new())
         } else {
-            let (mesh, ranges) = document.cache().mesh_lod(
+            let (mesh, ranges) = cache.mesh_lod(
                 doc,
                 BrickMeshParams {
                     gradient_normals: shading.gradient(),
@@ -409,6 +436,17 @@ impl SurfaceGeometry {
             Some(mesh) => read_mesh(mesh)?,
             None => (Vec::new(), Vec::new()),
         };
+        // The preview lattice is the cache's lattice in a world translated by
+        // its own origin, so the translation is undone here — on the vertices
+        // and nowhere else, which is what keeps every reader of this geometry
+        // (bounds, picking, the mask below) working in one space.
+        if offset != [0.0; 3] {
+            for vertex in &mut vertices {
+                for (axis, by) in offset.iter().enumerate() {
+                    vertex.position[axis] += by;
+                }
+            }
+        }
         // The frozen region, on the vertices this re-mesh just produced.
         //
         // Only these, which is the dirty subset: a dab that re-meshes twenty
@@ -1037,7 +1075,15 @@ impl SurfaceGeometry {
         document: &ClayDocument,
         detail: Detail,
     ) -> Result<(Vec<BrickKey>, i32, Shading), ClayError> {
-        if detail == Detail::Reduced {
+        // Face-shaded while a live gesture is drawing the surface: the
+        // preview's cache has no document behind it to evaluate a gradient
+        // through, and the gesture's end lays the surface out again anyway.
+        let live = document.live_gesture_is_open();
+        // And never coarse. A mip belongs to the cache that built it, and the
+        // preview's has none — asking the document for coarse keys and then
+        // meshing them out of the preview would name a level that was never
+        // built there.
+        if detail == Detail::Reduced && !live {
             let coarse = document.drawable_coarse_keys()?;
             if !coarse.is_empty() {
                 // Level 1 refuses gradient normals rather than downgrading
@@ -1045,7 +1091,8 @@ impl SurfaceGeometry {
                 return Ok((coarse, 1, Shading::Fast));
             }
         }
-        Ok((document.cache().surface_bricks()?, 0, Shading::Full))
+        let shading = if live { Shading::Fast } else { Shading::Full };
+        Ok((document.drawn_cache().0.surface_bricks()?, 0, shading))
     }
 
     /// Rebuilds every key from scratch at `detail`.
