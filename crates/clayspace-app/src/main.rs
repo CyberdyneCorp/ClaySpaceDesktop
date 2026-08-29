@@ -1475,6 +1475,64 @@ impl App {
         else {
             return false;
         };
+        self.start_gizmo_drag(ray, pivot, mode, handle)
+    }
+
+    /// Whether the manipulator is on something made of clay — a placed object
+    /// or a whole subtool — rather than on a cage's points or a curve's.
+    fn manipulating_the_clay(&self) -> bool {
+        !self.lattice.state().get().active
+            && matches!(
+                *self.objects.target().get(),
+                Some(clayspace_model::GizmoTarget::Object(_))
+                    | Some(clayspace_model::GizmoTarget::Layer(_))
+            )
+    }
+
+    /// Whether a whole subtool's manipulator is up — the transform *mode*.
+    fn layer_manipulator_up(&self) -> bool {
+        matches!(
+            *self.objects.target().get(),
+            Some(clayspace_model::GizmoTarget::Layer(_))
+        )
+    }
+
+    /// A press on the clay while a whole subtool's manipulator is up.
+    ///
+    /// The handle a press on the form stands for is the mode's free one: the
+    /// centre, which slides in the view plane or scales uniformly, or the
+    /// outer ring, which turns in the screen plane. What ZBrush does with a
+    /// drag on the canvas in gizmo mode, and what `input::press_transforms`
+    /// decides the press means.
+    fn begin_free_transform(&mut self, point: egui::Pos2) -> bool {
+        if self.lattice.state().get().active {
+            return false;
+        }
+        let Some(pivot) = self.objects.pivot() else {
+            return false;
+        };
+        let mode = *self.objects.mode().get();
+        let handle = match mode {
+            clayspace_model::GizmoMode::Rotate => clayspace_model::GizmoHandle::View,
+            clayspace_model::GizmoMode::Move | clayspace_model::GizmoMode::Scale => {
+                clayspace_model::GizmoHandle::Centre
+            }
+        };
+        let Some(ray) = self.ray_at(point) else {
+            return false;
+        };
+        self.start_gizmo_drag(ray, pivot, mode, handle)
+    }
+
+    /// Opens a manipulator gesture on `handle`, from wherever `ray` meets the
+    /// plane that handle drags on.
+    fn start_gizmo_drag(
+        &mut self,
+        ray: ([f32; 3], [f32; 3]),
+        pivot: [f32; 3],
+        mode: clayspace_model::GizmoMode,
+        handle: clayspace_model::GizmoHandle,
+    ) -> bool {
         // The plane the drag runs on, which the *mode* decides: a slide needs
         // a plane containing its axis and a turn needs the ring's own plane,
         // which is perpendicular to it. One answer for both is how two of the
@@ -2165,6 +2223,11 @@ impl App {
     /// The rings to draw: the pointer's, plus one for every place symmetry
     /// will also deposit the dab.
     fn cursors(&self) -> Vec<BrushCursor> {
+        // No brush ring in the transform mode: a press on the clay moves it
+        // then, and a ring promising a stroke would promise the wrong thing.
+        if self.layer_manipulator_up() {
+            return Vec::new();
+        }
         let Some((position, normal)) = self.hover else {
             return Vec::new();
         };
@@ -2372,6 +2435,18 @@ impl App {
                 && !on_curve
                 && button == egui::PointerButton::Primary
                 && self.begin_gizmo_drag(point);
+            // A press on the clay while a whole subtool's manipulator is up is
+            // the mode's free gesture, not a stroke: the rule and its reasons
+            // are `input::press_transforms`.
+            let transformed = !rigged
+                && !on_curve
+                && !manipulated
+                && button == egui::PointerButton::Primary
+                && clayspace_app::input::press_transforms(
+                    self.layer_manipulator_up() && self.pick_at(point).is_some(),
+                    self.layer_manipulator_up(),
+                )
+                && self.begin_free_transform(point);
             // And both before the surface is asked about, because a control
             // point sits *outside* the form: a press on a corner handle would
             // otherwise find the clay behind it and start a stroke on the
@@ -2379,6 +2454,7 @@ impl App {
             let caged = !rigged
                 && !on_curve
                 && !manipulated
+                && !transformed
                 && button == egui::PointerButton::Primary
                 && self.begin_cage_drag(point, input.smooth_modifier);
             // Last of the four. It always runs now, because a press on
@@ -2391,19 +2467,21 @@ impl App {
             let picked_object = !rigged
                 && !on_curve
                 && !manipulated
+                && !transformed
                 && !caged
                 && button == egui::PointerButton::Primary
                 && self.pick_object_at(point);
             let on_surface = !rigged
                 && !on_curve
                 && !manipulated
+                && !transformed
                 && !caged
                 && !picked_object
                 && self.pick_at(point).is_some();
             let started = match button {
                 _ if rigged => Drag::Rig,
                 _ if on_curve => Drag::Curve,
-                _ if manipulated => Drag::Gizmo,
+                _ if manipulated || transformed => Drag::Gizmo,
                 _ if caged => Drag::Cage,
                 egui::PointerButton::Middle => Drag::Pan,
                 egui::PointerButton::Secondary => Drag::Orbit,
@@ -2805,6 +2883,24 @@ impl App {
             // inferred inside the document ViewModel, which never sees a
             // sculpting command and would have to guess.
             self.document_vm.touched();
+        }
+        // A manipulator drag on a placed object or a whole subtool moves the
+        // clay, and its commands are not in `touches_document`: they were
+        // listed beside the cage's, whose drag moves control points and not
+        // the surface. Left there, the field moved under a picture that did
+        // not — the arrow was dragged and nothing happened on screen, and the
+        // next stroke, aimed by a ray through the moved field, landed beside
+        // the drawn form. So the surface is re-meshed on every frame of such a
+        // drag here, and the document is marked unsaved once, when it ends.
+        if matches!(command, Command::DragGizmo(..) | Command::EndGizmoDrag)
+            && self.manipulating_the_clay()
+        {
+            self.edited_this_frame = true;
+            self.sync_geometry();
+            if matches!(command, Command::EndGizmoDrag) {
+                self.scene.refresh();
+                self.document_vm.touched();
+            }
         }
         // The coarse levels, which cannot be built mid-stroke: dirtying any
         // child drops its mip. Not the gesture's shading — that is owed to

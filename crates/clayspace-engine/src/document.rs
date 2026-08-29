@@ -7357,6 +7357,13 @@ impl ClayDocument {
     ) -> Result<(), ModelError> {
         let index = self.index_of(key)?;
         let id = self.layers[index].id;
+        // Where it was, before it stops being there. Refilling only where the
+        // layer now stands left the surface it used to make standing where it
+        // had been: the arrow was dragged, nothing moved, and the next stroke
+        // re-meshed a handful of bricks around the pointer into a second form
+        // with holes in it beside the first. The object path had learnt the
+        // same lesson (`set_object_transform`); this is the layer's turn.
+        let before = self.layer_bounds(key);
         // Inside a gesture the group is already open and the stack was already
         // recorded at its start; snapshotting per frame would key thirty states
         // to one undo depth and keep only the last. The object table takes the
@@ -7378,9 +7385,10 @@ impl ClayDocument {
         if !gesturing {
             self.remember_layers();
         }
-        // The layer, because a layer transform moves everything it holds and
-        // there is no smaller bound to take.
-        self.refill(id, &[])
+        let after = self.layer_bounds(key);
+        // Both extents; the whole layer where either is unknown, because a
+        // layer transform moves everything the layer holds.
+        self.refill_bound(id, union(before, after))
     }
 
     /// Where a carried mesh layer stands, when that is anywhere but the
