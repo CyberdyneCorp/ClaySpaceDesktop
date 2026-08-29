@@ -136,6 +136,21 @@ pub fn press_sculpts(on_surface: bool, orbit_modifier: bool, caged: bool) -> boo
     on_surface && !orbit_modifier && !caged
 }
 
+/// Whether a press on the clay transforms the whole subtool rather than
+/// sculpting it.
+///
+/// Choosing Mover, Girar or Escalar under the layer stack is a mode, as it is
+/// in ZBrush: while the manipulator on a whole subtool is up, a press on the
+/// form that misses a handle moves, turns or scales the form — the arrows are
+/// for a constrained gesture, the clay itself is the free one. A press that
+/// sculpted instead was the worst of both: the sculptor dragged the arrow, saw
+/// nothing move, and tried the clay, which left a stroke on a form that was
+/// about to move out from under it. Off the form the press still orbits, so
+/// the model can be turned to look at without leaving the mode.
+pub fn press_transforms(on_surface: bool, layer_manipulator_up: bool) -> bool {
+    on_surface && layer_manipulator_up
+}
+
 /// What a press in the viewport resolved to.
 ///
 /// Three answers, in the order the subtools design resolves them, because a
@@ -399,7 +414,17 @@ mod drag_tests {
 
 #[cfg(test)]
 mod press_tests {
-    use super::{notches, press_sculpts};
+    use super::{notches, press_sculpts, press_transforms};
+
+    #[test]
+    fn a_press_on_the_clay_transforms_while_the_layer_manipulator_is_up() {
+        assert!(press_transforms(true, true));
+        // Off the form the camera keeps working, so the mode can be looked
+        // around in.
+        assert!(!press_transforms(false, true));
+        // Without the manipulator the clay is the brush's.
+        assert!(!press_transforms(true, false));
+    }
 
     #[test]
     fn a_press_on_the_surface_sculpts_and_one_off_it_orbits() {

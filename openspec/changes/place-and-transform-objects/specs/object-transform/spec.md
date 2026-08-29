@@ -45,6 +45,26 @@ SHALL be absent when nothing is selected.
   dragged
 - **THEN** every control point moves together and the swept form follows
 
+### Requirement: A whole-subtool transform is a mode, and moves what is drawn
+While the manipulator on a whole subtool is up, a primary press on that
+subtool's surface that lands on no handle SHALL perform the mode's free gesture
+— a view-plane move, a screen-plane turn, or a uniform scale — rather than a
+sculpting stroke, and the brush cursor SHALL NOT be drawn. A press off the
+surface SHALL still orbit. After a layer transform, the drawn surface SHALL be
+re-meshed both where the layer was and where it is, so that the incremental
+picture matches a rebuild.
+
+#### Scenario: A press on the clay moves the subtool
+- **WHEN** Mover is chosen for the whole layer and the user drags on the form
+  away from the arrows
+- **THEN** the form slides with the pointer and no stroke is made
+
+#### Scenario: The old position is not left behind
+- **WHEN** a whole subtool is moved by its manipulator and the viewport re-meshes
+  incrementally
+- **THEN** no surface remains where the subtool stood, and the result matches a
+  full rebuild
+
 ### Requirement: The manipulator is seen wherever it stands
 The manipulator, the deformation cage, a curve's control polygon and a
 selected object's outline SHALL be drawn over the sculpted surface regardless
