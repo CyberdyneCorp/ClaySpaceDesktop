@@ -32,10 +32,10 @@
 //! computed.
 
 use claycore::{
-    BrickCache, BrickConfig, BrickKey, BrickSubmit, Document, LayerId, RelaxParams, SculptBudget,
-    SculptPolicy, SmoothTransaction,
+    BrickCache, BrickConfig, BrickKey, BrickSubmit, Document, LayerId, RelaxParams, SculptPolicy,
+    SmoothTransaction,
 };
-use clayspace_model::{LayerKey, ModelError};
+use clayspace_model::ModelError;
 
 /// The surface the viewport draws while a live gesture is running.
 pub struct LiveSurface<'a> {
@@ -56,14 +56,8 @@ pub(crate) struct LiveSmooth {
     /// Learned from the first delta rather than assumed: every brick reports
     /// its own origin, and they all agree on this one.
     offset: Option<[f32; 3]>,
-    /// Which layer the gesture belongs to, so a subtool switch cannot commit
-    /// it onto the wrong one.
-    layer: LayerKey,
     /// Preview keys the viewport has not drawn yet.
     dirty: Vec<BrickKey>,
-    /// Whether any dab has moved a sample, so a gesture that touched nothing
-    /// commits nothing.
-    changed: bool,
     brick_span: f32,
     config: BrickConfig,
 }
@@ -73,7 +67,6 @@ impl LiveSmooth {
     pub(crate) fn begin(
         document: &mut Document,
         layer: LayerId,
-        key: LayerKey,
         config: BrickConfig,
     ) -> Result<Self, ModelError> {
         let transaction =
@@ -84,9 +77,7 @@ impl LiveSmooth {
             transaction,
             cache,
             offset: None,
-            layer: key,
             dirty: Vec::new(),
-            changed: false,
             brick_span: config.voxel_size * config.dim as f32,
             config,
         };
@@ -125,14 +116,6 @@ impl LiveSmooth {
         Ok(())
     }
 
-    pub(crate) fn layer(&self) -> LayerKey {
-        self.layer
-    }
-
-    pub(crate) fn changed(&self) -> bool {
-        self.changed
-    }
-
     /// The surface to draw.
     ///
     /// `None` only before the preview has a lattice to be drawn in, which
@@ -150,11 +133,9 @@ impl LiveSmooth {
 
     /// One dab, and the preview it leaves behind.
     pub(crate) fn dab(&mut self, params: RelaxParams<'_>) -> Result<usize, ModelError> {
-        let dirty = self
-            .transaction
+        self.transaction
             .update(params)
             .map_err(ModelError::engine)?;
-        self.changed |= dirty.changed;
         self.absorb()
     }
 
@@ -290,10 +271,5 @@ impl LiveSmooth {
 
     fn samples_per_brick(&self) -> usize {
         (self.config.dim as usize).pow(3)
-    }
-
-    /// Installs the gesture as one undo step.
-    pub(crate) fn commit(&mut self) -> Result<SculptBudget, ModelError> {
-        self.transaction.commit().map_err(ModelError::engine)
     }
 }

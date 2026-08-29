@@ -13,10 +13,33 @@ adds a `Op::Replace` volume per segment and the surface crumbles.
 affordable shape available: baking the layer again per dab costs the
 consolidation pass, 313 ms on ClayCore's reference iPad and 186 ms here.
 
-ClayCore 0.60.0 removes the reason. `clay_sdf_smooth_begin/update/commit`
-samples the layer **once**, relaxes its own retained volume per dab, and
-installs that volume at commit. Between begin and commit the document does not
-change at all.
+ClayCore 0.60.0 removes the reason. `clay_sdf_smooth_begin/update` samples the
+layer **once** and relaxes its own retained volume per dab, touching nothing in
+the document. That is what the preview is made of.
+
+**Its commit is not taken.** `clay_sdf_smooth_commit` installs the working
+volume as the layer's one item — it consolidates the whole subtool, on every
+stroke. On this machine that measures slightly better than the bake it would
+replace (roughness 5.74 against 5.83 on the reference roughened surface); on
+the Metal runner it measures **7.82 against a ceiling of 6.00**, moving 2458
+pixels where the same stroke moves 205 here. Planar and Polir, baked the old
+way, are identical across both platforms, so it is the consolidation and not
+the measurement. Filed as
+[ClayCore#379](https://github.com/CyberdyneCorp/ClayCore/issues/379).
+
+Even where it measures well it is a heavy thing to do on every stroke: it
+discards the layer's edit list and re-samples the whole subtool at the cache's
+cell size, so repeated smoothing compounds the resampling. So the transaction
+draws the preview and the stroke is laid down by the bake that was always used
+— which reproduces the old numbers **exactly**, 5.83 and 188 pixels, on every
+backend.
+
+The cost is that the preview and the result are not the same arithmetic: the
+preview relaxes cumulatively per dab, the bake makes one pass over the whole
+gesture. Measured, they land 0.09 apart in roughness and under a hundredth of a
+unit apart in where the surface stands on a form of radius one. The spec asks
+for agreement within a stated tolerance rather than identity, because identity
+is not what is delivered.
 
 ## Drawing what has not been written down
 
@@ -61,6 +84,31 @@ Three alternatives were measured and rejected:
 
 The 186 ms is a pointer-down cost and it is the trade the design makes: the
 whole finite layer once, so that every dab afterwards costs what it touches.
+
+## Why no test caught it, and what now does
+
+Two gaps, and each hid the other. Only two tests ever opened a gesture, and
+both stroked with a *dragging* verb — `visual_snakehook` with Puxar,
+`mesh_move` with Mover — which is precisely the case where taking the last
+segment back is right. And the tests that drag a *stamping* brush go through
+`SharedDocument`, which never forwarded `begin_gesture`, so the branch was
+unreachable from the only place that would have exercised it.
+
+`shared_forwarding.rs` exists for exactly this class of fault. It could not
+catch this one because it is a hand-written list, which is the same shape as
+the mistake it guards against. It now also reads the traits, finds every method
+with a body, and requires the shared document to name it — and that found
+**four more**, all implemented on the document and all answered by the trait's
+inert default in the running application:
+
+| | what it meant |
+|---|---|
+| `set_alpha`, `alpha_name` | a loaded alpha stamp was swallowed, and the options bar reported no stamp in use |
+| `apply_sculpt_layer_op`, `sculpt_layer_cost` | recording passes on a voxel layer always refused, and its cost always read as nothing |
+
+All four are forwarded here. Three provided methods are *derived* — their
+default is written in terms of other trait methods and reaches the document
+through those — and are listed in the check with the reason.
 
 ## What this does not do
 

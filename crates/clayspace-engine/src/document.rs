@@ -430,6 +430,13 @@ pub struct ClayDocument {
     live_smooth: Option<crate::live::LiveSmooth>,
     /// History entries opening the live gesture recorded before it began.
     live_opening_entries: usize,
+    /// The gesture the preview has been showing, kept so that closing it can
+    /// lay the stroke down the way every smoothing stroke was laid down
+    /// before there was a preview.
+    ///
+    /// See [`ClayDocument::close_live_gesture`] for why the transaction's own
+    /// commit is not used.
+    live_gesture: Option<(ToolKind, BrushSettings, [bool; 3], Vec<GestureSample>)>,
     /// Bumped whenever the surface the viewport should mesh from changes
     /// identity — a live gesture opening, committing or being abandoned.
     ///
@@ -684,6 +691,7 @@ impl ClayDocument {
             live_generation: 0,
             live_smooth: None,
             live_opening_entries: 0,
+            live_gesture: None,
             surface_epoch: 0,
             meshed_chunks: 0,
             surface_brick_count: 0,
@@ -2136,6 +2144,13 @@ impl ClayDocument {
         // The mirror is still pointed where the sculptor asked, because these
         // verbs share a layer with the ones it does reach.
         self.point_the_mirror(symmetry)?;
+        // Kept whole and unreflected, because the commit reflects it again.
+        if self.live_smooth.is_some() && matches!(tool, ToolKind::Suavizar | ToolKind::Relaxar) {
+            self.live_gesture
+                .get_or_insert_with(|| (tool, brush, symmetry, Vec::new()))
+                .3
+                .extend_from_slice(samples);
+        }
         let mut outcome = EditOutcome::NOTHING;
         for mirror in mirrors(symmetry) {
             let reflected: Vec<GestureSample> = samples
@@ -2616,11 +2631,8 @@ impl ClayDocument {
         // change that outlived the stroke that asked for it would be a
         // difference between the two paths a sculptor could feel.
         let opening = self.engine_undo_depth().saturating_sub(before);
-        let (id, key) = {
-            let active = self.active_layer();
-            (active.id, active.key)
-        };
-        match crate::live::LiveSmooth::begin(&mut self.document, id, key, Self::BRICK_CONFIG) {
+        let id = self.active_layer().id;
+        match crate::live::LiveSmooth::begin(&mut self.document, id, Self::BRICK_CONFIG) {
             Ok(live) => {
                 self.live_smooth = Some(live);
                 self.live_opening_entries = opening;
@@ -2638,30 +2650,46 @@ impl ClayDocument {
     /// Returns how many history entries the commit recorded, so a gesture that
     /// is abandoned afterwards knows how much to take back.
     pub fn close_live_gesture(&mut self) -> Result<usize, ModelError> {
-        let Some(mut live) = self.live_smooth.take() else {
+        let Some(live) = self.live_smooth.take() else {
             return Ok(0);
         };
         self.surface_epoch = self.surface_epoch.wrapping_add(1);
         let opening = std::mem::take(&mut self.live_opening_entries);
-        // A gesture that moved no sample installs nothing. Committing it would
-        // still collapse the layer to one volume and put an entry in the
-        // history for a stroke that did not land.
-        if !live.changed() {
+        let gesture = self.live_gesture.take();
+        // Dropped rather than committed, and that is the decision this method
+        // exists to record.
+        //
+        // `clay_sdf_smooth_commit` installs the working volume as the layer's
+        // ONE item — it consolidates the whole subtool, every stroke. On this
+        // machine that measures slightly *better* than the bake it replaces
+        // (roughness 5.74 against 5.83 on the reference roughened surface),
+        // and on the Metal runner it measures 7.82 against a ceiling of 6.00,
+        // moving 2458 pixels where the same stroke moves 205 here: the whole
+        // surface shifts. Planar and Polir, which are baked the old way, are
+        // identical on both platforms, so it is the consolidation and not the
+        // measurement. Filed upstream as ClayCore#379.
+        //
+        // Even where it measures well it is a heavy thing to do on every
+        // stroke: it discards the layer's edit list and re-samples the whole
+        // subtool at the cache's cell size, so repeated smoothing compounds
+        // the resampling. So the preview is what the transaction is used for,
+        // and the stroke is laid down by the path that was always used.
+        //
+        // The cost is that the preview and the result are not the same
+        // arithmetic: the preview relaxes cumulatively per dab, the bake makes
+        // one pass over the whole gesture. Measured on the same surface they
+        // land within 0.09 of each other in roughness, which is the difference
+        // between 5.74 and 5.83 — visible in numbers, not on the clay.
+        drop(live);
+        let Some((tool, brush, symmetry, samples)) = gesture else {
+            return Ok(opening);
+        };
+        if samples.is_empty() {
             return Ok(opening);
         }
-        let layer = self
-            .layers
-            .iter()
-            .find(|layer| layer.key == live.layer())
-            .map(|layer| layer.id);
         let before = self.engine_undo_depth();
-        live.commit()?;
+        self.baked_stroke(tool, brush, &samples, symmetry)?;
         let recorded = opening + self.engine_undo_depth().saturating_sub(before);
-        // The commit replaced the layer's items with the volume the dabs were
-        // applied to, so every brick the layer reaches is stale.
-        if let Some(layer) = layer {
-            self.refill(layer, &[])?;
-        }
         self.refresh_stats();
         Ok(recorded)
     }
@@ -2676,6 +2704,7 @@ impl ClayDocument {
             return 0;
         }
         self.surface_epoch = self.surface_epoch.wrapping_add(1);
+        self.live_gesture = None;
         std::mem::take(&mut self.live_opening_entries)
     }
 
@@ -3129,16 +3158,37 @@ impl ClayDocument {
 
         // Recorded per gesture, because that is the unit a sculptor thinks in
         // and the unit `mesh-sculpting` specifies: one gesture, one undo.
-        let mut deltas = claycore::MeshDeltas::new().map_err(ModelError::engine)?;
-        // What the last segment of this gesture did, taken back before the
-        // whole gesture is laid down again from its anchor. Without this a
-        // preview would stack segment on segment, which is the crease the
-        // whole-gesture delivery exists to avoid.
-        let previous = self
+        //
+        // How the last segment is dealt with depends on how the next one
+        // arrives, and the two have to agree. A **dragging** verb is laid down
+        // again from its anchor on every segment — `replays_from_the_anchor`
+        // in the ViewModel — so what the last one did is taken back first, or
+        // the preview stacks segment on segment. A **stamping** verb is sent
+        // only the samples the model has not seen, so there is nothing to take
+        // back: reverting anyway erases the stroke as fast as it is drawn and
+        // leaves a drag with only its final dab, which reads as a brush that
+        // needs clicking rather than dragging.
+        //
+        // Continuing the record rather than starting one is what keeps a
+        // stamping drag to a single undo: `MeshDeltas` coalesces, so a stroke
+        // passing over the same vertex forty times still records where it
+        // started, once.
+        let held = self
             .live_mesh
             .take()
             .filter(|(layer, _)| *layer == key)
             .map(|(_, deltas)| deltas);
+        let (mut deltas, previous) = match held {
+            Some(held) if tool.is_path_driven() => (
+                claycore::MeshDeltas::new().map_err(ModelError::engine)?,
+                Some(held),
+            ),
+            Some(held) => (held, None),
+            None => (
+                claycore::MeshDeltas::new().map_err(ModelError::engine)?,
+                None,
+            ),
+        };
         let moved = {
             let mut held = self.mesh_sculptors.borrow_mut();
             let Some(sculptor) = held.get_mut(key) else {
@@ -5673,6 +5723,7 @@ impl ClayDocument {
             live_generation: 0,
             live_smooth: None,
             live_opening_entries: 0,
+            live_gesture: None,
             surface_epoch: 0,
             meshed_chunks: 0,
             surface_brick_count: 0,

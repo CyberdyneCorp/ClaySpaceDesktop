@@ -265,3 +265,47 @@ fn the_snapshot_path_hands_over_a_volume_the_caller_owns() {
         "the snapshot did not carry the form it was taken of"
     );
 }
+
+#[test]
+fn the_smooth_commit_installs_the_layer_as_one_volume() {
+    // The half of the smooth transaction the application does not use, run
+    // here because nothing else runs it — and asserted on the consequence
+    // that is the reason it is not used: committing replaces everything the
+    // layer held with a single resampled volume, whatever the stroke touched.
+    //
+    // On a layer of four stamps that is four items becoming one. Measured
+    // through the visual gate it is also 7.82 roughness against 5.74 on one
+    // backend (ClayCore#379), which is why the application previews with the
+    // transaction and lays the stroke down with the bake it always used.
+    let (mut doc, layer) = sphere();
+    for at in [-0.6f32, -0.2, 0.2, 0.6] {
+        let mut stamp = Item::sphere(0.3).expect("stamp");
+        stamp.set_position([at, 0.9, 0.0]).expect("place it");
+        doc.add_item(layer, &stamp).expect("add");
+    }
+    assert_eq!(
+        doc.field_report(layer, 0.0).expect("report").item_count,
+        5,
+        "the fixture did not build the edit list this is about"
+    );
+
+    let mut tx = SmoothTransaction::begin(&mut doc, layer, SculptPolicy::at(0.05)).expect("begin");
+    tx.update(RelaxParams {
+        strength: 1.0,
+        radius_cells: 1,
+        iterations: 2,
+        centre: [0.6, 0.9, 0.0],
+        region_radius: 0.25,
+        falloff: 0.12,
+        mask: None,
+    })
+    .expect("one dab, in one place");
+    tx.commit().expect("commit");
+
+    assert_eq!(
+        doc.field_report(layer, 0.0).expect("report").item_count,
+        1,
+        "the commit was supposed to collapse the layer to the working volume; \
+         if it no longer does, the reason for not using it may have gone"
+    );
+}
