@@ -1379,6 +1379,29 @@ What comes out is dense and uniform, with no edge loop following anything — it
 sculpts, and it is the input a retopology pass replaces rather than the output
 one produces.
 
+**A crossing adds a layer, or replaces the one it read.** Adding is the
+default because it cannot lose work: the source stays, and a sculptor who
+dislikes the result removes the layer it made. **Substituir a camada** is what
+a sculptor means by converting *this* layer — the source leaves as the result
+arrives and the result takes its row in the stack, rather than leaving a pile
+of supplanted originals nobody meant to keep.
+
+Either way it is **one undo**. The result keeps its derived name — `Forma ·
+voxel` rather than `Forma` — because that name says what the layer now holds,
+and because a voxel grid is reachable only by name (ClayCore
+[#365](https://github.com/CyberdyneCorp/ClayCore/issues/365)): handing the
+result the source's name would put two layers through one grid for as long as
+an undo kept both in the document.
+
+The removal and the reorder are engine entries of their own — a group does not
+swallow them — so the crossing records how many it left and steps over all of
+them together, and the depth the interface reports discounts the extras. That
+is the same shape the solo entries already have: a sculptor made one crossing
+and has one thing to take back. The panel used to say a crossing could not be
+undone at all, which stopped being true when crossing undo landed and would
+have been the worst place to be out of date, standing as it does beside a
+control that removes a layer.
+
 **A layer the viewport has to draw changes the number it watches.** The
 carried layers — meshes and grids — are uploaded only when `mesh_revision`
 changes, and adding a mesh layer moves no vertex and touches no grid. So a

@@ -2678,12 +2678,37 @@ pub fn convert_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut C
                         .color(Tokens::text_dim()),
                 );
             }
-            // The one the specification asks for by name: a sculptor must not
-            // discover after the fact that the crossing cannot be undone.
+            // What the crossing costs in history, where a sculptor decides
+            // whether to make one. It used to say a crossing could not be
+            // undone; it can, and saying otherwise beside a control that
+            // removes a layer would be the worst place to be out of date.
             ui.label(
-                egui::RichText::new(s.convert_not_undoable)
+                egui::RichText::new(s.convert_undo_note)
                     .size(type_scale::LABEL)
-                    .color(Tokens::accent()),
+                    .color(Tokens::text_dim()),
+            );
+
+            ui.add_space(space::SNUG);
+            // Adding a layer is the default because it cannot lose work.
+            // Replacing is what a sculptor means by converting *this* layer,
+            // and it is one undo away either way.
+            let mut in_place = settings.in_place;
+            if ui
+                .checkbox(&mut in_place, s.convert_in_place)
+                .on_hover_text(s.convert_in_place_hint)
+                .changed()
+            {
+                queue.push(Command::SetConversion(
+                    clayspace_model::ConversionSettings {
+                        in_place,
+                        ..settings
+                    },
+                ));
+            }
+            ui.label(
+                egui::RichText::new(s.convert_in_place_hint)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
             );
 
             ui.add_space(space::SECTION);
