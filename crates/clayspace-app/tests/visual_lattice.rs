@@ -213,12 +213,12 @@ fn dragging_the_cage_reaches_the_drawn_surface() {
 // -- the manipulator ---------------------------------------------------------
 
 #[test]
-fn each_manipulator_mode_draws_its_own_handles() {
-    // Shapes rather than colours alone carry the meaning — an arrow slides, a
-    // ring turns, a box scales — because a person reaching for a handle is not
-    // reading a legend, and because the three axis colours are the one part of
-    // this a colour-blind sculptor cannot use. So the three modes have to be
-    // told apart by their picture.
+fn the_manipulator_is_one_widget_whatever_the_mode() {
+    // ZBrush's Gizmo 3D: arrows, rings, boxes and the outer ring on one
+    // widget, and the operation chosen by the handle grabbed. Three modes drew
+    // three different widgets once, and the chips became a step a sculptor
+    // had to take before every move. Shapes still carry the meaning — an arrow
+    // slides, a ring turns, a box scales — the three are simply all there.
     let Some(mut harness) = Harness::new() else {
         return;
     };
@@ -273,17 +273,16 @@ fn each_manipulator_mode_draws_its_own_handles() {
         );
     }
 
-    // And the three are different pictures, not one picture in three colours.
+    // And the three are one picture: the mode chooses what the centre and a
+    // press on the clay do, not which handles exist.
     for (a, b, names) in [
         (&move_, &rotate, "Mover and Girar"),
         (&rotate, &scale, "Girar and Escalar"),
-        (&move_, &scale, "Mover and Escalar"),
     ] {
         let apart = how_many_differ(a, b);
         assert!(
-            apart > 200,
-            "{names} differ by {apart} pixels, so the mode cannot be told from \
-             the widget"
+            apart < 50,
+            "{names} differ by {apart} pixels, so the widget changes with the mode"
         );
     }
 }
@@ -638,14 +637,14 @@ fn the_outer_ring_is_drawn_and_faces_the_camera() {
         let length = away.iter().map(|c| c * c).sum::<f32>().sqrt();
         let view_axis: [f32; 3] = std::array::from_fn(|i| away[i] / length);
 
-        let with = |harness: &mut Harness, mode: GizmoMode, capture: &str| {
+        let with = |harness: &mut Harness, gizmo: Option<GizmoMode>, capture: &str| {
             harness.renderer.set_lattice(
                 &harness.gpu,
                 LatticeView {
                     points: &cage.points,
                     edges: &edges,
                     selected: &selected,
-                    gizmo: Some(GizmoView {
+                    gizmo: gizmo.map(|mode| GizmoView {
                         view_axis,
                         pivot,
                         mode,
@@ -661,22 +660,19 @@ fn the_outer_ring_is_drawn_and_faces_the_camera() {
             harness.capture(&mesh, &camera, false, capture)
         };
 
-        // A rotate manipulator draws more than a move one: three rings and the
-        // outer one against three shafts and a centre.
-        let moving = with(
-            &mut harness,
-            GizmoMode::Move,
-            &format!("120-outer-move-{name}"),
-        );
+        // The widget carries the outer ring in every mode now, so it is held
+        // against the bare cage: a ring drawn edge-on from this camera would
+        // be a line and change almost nothing.
+        let bare = with(&mut harness, None, &format!("120-outer-bare-{name}"));
         let turning = with(
             &mut harness,
-            GizmoMode::Rotate,
+            Some(GizmoMode::Rotate),
             &format!("121-outer-rotate-{name}"),
         );
-        let changed = how_many_differ(&moving, &turning);
+        let changed = how_many_differ(&bare, &turning);
         assert!(
             changed > 500,
-            "the two modes drew nearly the same thing from {name} ({changed} \
+            "the manipulator drew nearly nothing over the cage from {name} ({changed} \
              pixels). See target/visual/121-outer-rotate-{name}.png"
         );
     }

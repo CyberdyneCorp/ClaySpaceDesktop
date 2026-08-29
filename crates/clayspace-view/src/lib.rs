@@ -35,7 +35,8 @@ pub use matcap::MatCap;
 pub use offscreen::{Image, OffscreenTarget};
 pub use renderer::{
     frame_about, mirrored_cursors, ArmatureView, BrushCursor, GizmoView, GpuMesh, LatticeView,
-    MeshSpan, Overlays, Reference, Renderer, SymmetryAxis, Vertex, VIEW_RING_REACH,
+    MeshSpan, Overlays, Reference, Renderer, SymmetryAxis, Vertex, RING_REACH, SCALE_BOX_REACH,
+    VIEW_RING_REACH,
 };
 pub use shell::{apply_theme, ArmatureState, ShellState};
 pub use shortcuts::{Action, Chord, Conflict, Key, Shortcuts};

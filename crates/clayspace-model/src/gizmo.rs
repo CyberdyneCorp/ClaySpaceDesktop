@@ -68,6 +68,14 @@ impl GizmoHandle {
         }
     }
 
+    /// Which axis this handle is on, where it is on one.
+    pub fn axis_index(self) -> Option<usize> {
+        match self {
+            Self::Axis(index) => Some(index),
+            Self::Centre | Self::View => None,
+        }
+    }
+
     /// The unit vector this handle works along, where the *world* gives it
     /// one.
     ///
@@ -100,6 +108,38 @@ impl GizmoHandle {
         match mode {
             GizmoMode::Scale => vec![Self::Centre],
             other => Self::all_for(other),
+        }
+    }
+
+    /// Every handle the combined manipulator carries, with the operation each
+    /// performs.
+    ///
+    /// ZBrush's Gizmo 3D: arrows, rings, boxes and the outer ring on one
+    /// widget, and the operation chosen by the handle grabbed rather than by a
+    /// mode set first. The centre is not listed: what it does is whichever of
+    /// move and scale the interface's mode names — see
+    /// [`GizmoHandle::centre_operation`]. The scale boxes are offered only
+    /// where a stretch can be applied per axis; on a target the engine scales
+    /// by one factor they would be three handles for one number.
+    pub fn combined(per_axis_scale: bool) -> Vec<(GizmoMode, GizmoHandle)> {
+        let mut all: Vec<(GizmoMode, GizmoHandle)> =
+            (0..3).map(|i| (GizmoMode::Move, Self::Axis(i))).collect();
+        all.extend((0..3).map(|i| (GizmoMode::Rotate, Self::Axis(i))));
+        if per_axis_scale {
+            all.extend((0..3).map(|i| (GizmoMode::Scale, Self::Axis(i))));
+        }
+        all.push((GizmoMode::Rotate, Self::View));
+        all
+    }
+
+    /// What the centre handle does under the interface's mode: a uniform
+    /// scale where scale is chosen, a slide in the view plane otherwise. A
+    /// turn has no centre gesture — the outer ring is that — so the centre
+    /// slides then too.
+    pub fn centre_operation(mode: GizmoMode) -> GizmoMode {
+        match mode {
+            GizmoMode::Scale => GizmoMode::Scale,
+            GizmoMode::Move | GizmoMode::Rotate => GizmoMode::Move,
         }
     }
 }
@@ -649,6 +689,50 @@ mod tests {
         assert!(
             close(scaled, [5.0, 1.0, 1.0]),
             "a uniform scale of two about (1,1,1) put (3,1,1) at {scaled:?}"
+        );
+    }
+
+    #[test]
+    fn the_combined_manipulator_carries_every_operation() {
+        // Three arrows, three rings and the outer ring on every target; three
+        // boxes only where a stretch can be applied per axis.
+        let uniform = GizmoHandle::combined(false);
+        let per_axis = GizmoHandle::combined(true);
+        assert_eq!(uniform.len(), 7);
+        assert_eq!(per_axis.len(), 10);
+        for mode in [GizmoMode::Move, GizmoMode::Rotate] {
+            for axis in 0..3 {
+                assert!(uniform.contains(&(mode, GizmoHandle::Axis(axis))));
+            }
+        }
+        assert!(!uniform.iter().any(|(mode, _)| *mode == GizmoMode::Scale));
+        assert_eq!(
+            per_axis
+                .iter()
+                .filter(|(mode, _)| *mode == GizmoMode::Scale)
+                .count(),
+            3
+        );
+        assert_eq!(
+            uniform
+                .iter()
+                .filter(|(_, handle)| *handle == GizmoHandle::View)
+                .count(),
+            1,
+            "one outer ring"
+        );
+        // The centre slides unless scale is asked for.
+        assert_eq!(
+            GizmoHandle::centre_operation(GizmoMode::Move),
+            GizmoMode::Move
+        );
+        assert_eq!(
+            GizmoHandle::centre_operation(GizmoMode::Rotate),
+            GizmoMode::Move
+        );
+        assert_eq!(
+            GizmoHandle::centre_operation(GizmoMode::Scale),
+            GizmoMode::Scale
         );
     }
 
