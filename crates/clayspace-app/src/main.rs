@@ -2861,7 +2861,13 @@ impl App {
         let outcome = self.busy(|app| {
             app.timed("converter", |app| {
                 app.document.with(|document| {
-                    document.convert_layer(settings.direction, settings.cell_size, settings.blur)
+                    let (direction, cell, blur) =
+                        (settings.direction, settings.cell_size, settings.blur);
+                    if settings.in_place {
+                        document.convert_layer_in_place(direction, cell, blur)
+                    } else {
+                        document.convert_layer(direction, cell, blur)
+                    }
                 })
             })
         });

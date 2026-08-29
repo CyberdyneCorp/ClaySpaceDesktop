@@ -131,6 +131,15 @@ pub struct ConversionSettings {
     /// 0 keeps the terracing and loses nothing; 1 is what an organic sculpt
     /// wants. Meaningless in the directions that do not read a grid.
     pub blur: i32,
+    /// Whether the crossing replaces the layer it read.
+    ///
+    /// Off by default, which is the crossing that cannot lose work: the
+    /// source stays and a sculptor who dislikes the result removes the layer
+    /// it made. On, the source leaves as the result arrives and the result
+    /// stands where it stood — which is what a sculptor means by converting
+    /// *this* layer, and what avoids a stack of supplanted originals nobody
+    /// meant to keep.
+    pub in_place: bool,
 }
 
 impl Default for ConversionSettings {
@@ -141,6 +150,7 @@ impl Default for ConversionSettings {
             // resolution the rest of the application already works at.
             cell_size: 0.02,
             blur: 1,
+            in_place: false,
         }
     }
 }

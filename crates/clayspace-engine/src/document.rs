@@ -292,6 +292,15 @@ struct Crossing {
     layer: LayerId,
     /// The engine's undo depth when this was recorded. See `mesh_undo`.
     engine_depth: usize,
+    /// How many engine entries the crossing left behind.
+    ///
+    /// One for an ordinary crossing. An in-place one also removes the layer
+    /// it read and moves the result into its row, and the engine records each
+    /// of those separately — a group does not swallow them. So the count is
+    /// measured rather than assumed, taken back together, and discounted from
+    /// the depth the interface reports: a sculptor made one crossing and has
+    /// one thing to undo.
+    steps: usize,
 }
 
 /// A layer shown alone, and what the rest looked like before it was.
@@ -1003,6 +1012,41 @@ impl ClayDocument {
         cell_size: f32,
         blur: i32,
     ) -> Result<LayerKey, ModelError> {
+        self.cross(direction, cell_size, blur, false)
+    }
+
+    /// The same crossing, with the source replaced by what it produced.
+    ///
+    /// The layer it read leaves as the result arrives, and the result takes
+    /// its place in the stack — what a sculptor means by converting *this*
+    /// layer, rather than gaining a second one beside the first.
+    ///
+    /// Still one undo. The removal happens inside the group the crossing
+    /// already opens, so the engine takes the filling and the removal back
+    /// together and the source comes back with it; a removal outside the
+    /// group would have needed two.
+    ///
+    /// The result keeps its derived name — `Forma · voxel` rather than
+    /// `Forma` — because that name says what the layer now holds, and because
+    /// a voxel grid is reachable only by name (ClayCore #365): handing the
+    /// result the source's name would put two layers through one grid for as
+    /// long as an undo kept both in the document.
+    pub fn convert_layer_in_place(
+        &mut self,
+        direction: Direction,
+        cell_size: f32,
+        blur: i32,
+    ) -> Result<LayerKey, ModelError> {
+        self.cross(direction, cell_size, blur, true)
+    }
+
+    fn cross(
+        &mut self,
+        direction: Direction,
+        cell_size: f32,
+        blur: i32,
+        in_place: bool,
+    ) -> Result<LayerKey, ModelError> {
         let source = self.active_layer();
         if source.representation != direction.from() {
             // Not a tool refusal — there is no tool here — so it is stated as
@@ -1033,11 +1077,15 @@ impl ClayDocument {
         // chunks were meshed from the wrong grid, and `rename_layer` refused to
         // untangle it because the name it would set was already taken.
         let name = self.unique_layer_name(&format!("{} · {}", source.name, direction.to().label()));
+        // Where the source stands, so the result can take its place, and its
+        // key, so it can be removed once the result is filled from it.
+        let (replacing, at) = (source.key, self.active);
         // Bracketed, because a crossing is several engine edits — the layer,
         // then whatever fills it — and a sculptor asked for one thing. Without
         // the group, undo took back the filling and left the empty layer
         // standing, which is the shape `a_crossing_is_taken_back_by_undo` in
         // `clayspace-engine/tests/conversion.rs` caught.
+        let depth_before = self.engine_undo_depth();
         self.document
             .begin_undo_group()
             .map_err(ModelError::engine)?;
@@ -1049,23 +1097,45 @@ impl ClayDocument {
             Direction::SdfToMesh => self.sdf_to_mesh(&name, cell_size),
             Direction::VoxelToMesh => self.voxels_to_mesh(&name),
         };
+        // The source leaves and the result takes its row here rather than
+        // after the group: it keeps the entries adjacent, which is what lets
+        // them be taken back together.
+        let replaced = match (in_place, &made) {
+            (true, Ok(made)) => self
+                .remove_layer(replacing)
+                .and_then(|()| self.move_layer(*made, at)),
+            _ => Ok(()),
+        };
         // Closed on the failing path too: a group left open swallows every
         // edit after it into one undo step, which is a worse bug than the one
         // that opened it.
         let closed = self.document.end_undo_group().map_err(ModelError::engine);
         let made = made?;
         closed?;
+        replaced?;
         // Recorded so undo takes the whole crossing back rather than emptying
         // the layer it just made. See `crossing_undo`.
-        if let Ok(at) = self.index_of(made) {
-            let layer = self.layers[at].id;
+        if let Ok(row) = self.index_of(made) {
+            let layer = self.layers[row].id;
+            let engine_depth = self.engine_undo_depth();
             self.crossing_undo.push(Crossing {
                 layer,
-                engine_depth: self.engine_undo_depth(),
+                engine_depth,
+                // Measured across the whole crossing rather than assumed to be
+                // one: an in-place crossing removes a layer and moves another,
+                // and neither goes into the group.
+                steps: engine_depth.saturating_sub(depth_before).max(1),
             });
             self.crossing_redo.clear();
         }
         Ok(made)
+    }
+
+    /// The engine entries the recorded crossings hold past their first: what
+    /// the depth must not count, since each crossing is one thing a sculptor
+    /// did.
+    fn crossing_entries(crossings: &[Crossing]) -> usize {
+        crossings.iter().map(|c| c.steps.saturating_sub(1)).sum()
     }
 
     /// Whether the newest crossing is more recent than the newest engine
@@ -1082,7 +1152,11 @@ impl ClayDocument {
         let Some(crossing) = self.crossing_undo.pop() else {
             return Ok(false);
         };
-        self.document.undo().map_err(ModelError::engine)?;
+        // Every entry the crossing left, so an in-place one gives back the
+        // layer it read as well as the filling it made.
+        for _ in 0..crossing.steps {
+            self.document.undo().map_err(ModelError::engine)?;
+        }
         self.suppressed.insert(crossing.layer);
         self.crossing_redo.push(crossing);
         self.after_crossing_history()
@@ -1093,7 +1167,9 @@ impl ClayDocument {
         let Some(crossing) = self.crossing_redo.pop() else {
             return Ok(false);
         };
-        self.document.redo().map_err(ModelError::engine)?;
+        for _ in 0..crossing.steps {
+            self.document.redo().map_err(ModelError::engine)?;
+        }
         self.suppressed.remove(&crossing.layer);
         self.crossing_undo.push(crossing);
         self.after_crossing_history()
@@ -2096,7 +2172,22 @@ impl ClayDocument {
             }
         };
 
-        let mut stamp = Item::sphere(brush.sanitized().size).map_err(ModelError::engine)?;
+        // The engine's own equivalence table binds Padrão and Inflar to the
+        // same op on a field — relief moves the surface along its own normal,
+        // which is what both do — so the two came out identical: the same
+        // stamp, the same amplitude, the same rim. What tells them apart in
+        // ZBrush is the profile. Standard raises a ridge that follows the
+        // falloff; Inflate swells the whole footprint, broader and lower at
+        // the rim. So Inflar takes a wider region with a wider rim and asks
+        // for a little less lift — the swell — and Padrão keeps the standard
+        // clay mapping, k = rounding = radius: the ridge.
+        let size = brush.sanitized().size;
+        let (region, lift) = if tool == ToolKind::Inflar {
+            (size * Self::INFLATE_REACH, Self::INFLATE_LIFT)
+        } else {
+            (size, 1.0)
+        };
+        let mut stamp = Item::sphere(region).map_err(ModelError::engine)?;
         stamp
             .set_op(engine_op(combine.op))
             .map_err(ModelError::engine)?;
@@ -2113,10 +2204,10 @@ impl ClayDocument {
         // from there. For every other op it is the width of the join, and the
         // sculptor's own zero means a hard one.
         let distance = if combine.op.displaces_along_the_normal() {
-            if combine.radius > 0.0 {
+            lift * if combine.radius > 0.0 {
                 combine.radius
             } else {
-                brush.sanitized().size
+                size
             }
         } else {
             combine.radius
@@ -2128,9 +2219,7 @@ impl ClayDocument {
         // all. Measured, going from zero to the brush radius tripled the
         // displacement — leaving it at zero was throwing away most of the
         // brush as well as its soft edge.
-        stamp
-            .set_rounding(brush.sanitized().size)
-            .map_err(ModelError::engine)?;
+        stamp.set_rounding(region).map_err(ModelError::engine)?;
 
         // No alpha here, and `alpha_for` is what says so rather than a
         // condition repeated at this call site. A field takes one as a
@@ -2168,6 +2257,29 @@ impl ClayDocument {
             dirty_bricks: self.dirty.len(),
         })
     }
+
+    /// How much wider than the brush Inflar's region and rim are, against
+    /// Padrão's. Wide enough that the swell reads as a swell beside the
+    /// ridge, not so wide that a stroke reaches things the sculptor did not
+    /// brush.
+    const INFLATE_REACH: f32 = 1.35;
+    /// How much of the standard lift Inflar asks for.
+    ///
+    /// Measured rather than chosen, on the starting form with a 0.25 brush,
+    /// as the peak height above the sphere and the footprint area a raycast
+    /// grid finds above it:
+    ///
+    ///   binding                       peak    footprint   height/width
+    ///   Padrão, k = rounding = r     +0.180      1179        0.0053
+    ///   Inflar at 0.8 of the lift    +0.238      1939        0.0054
+    ///   Inflar at 0.32 of the lift   +0.173      1772        0.0041
+    ///
+    /// The middle row is why this is not 0.8: a wider region under buildup
+    /// accumulation lifts each point through more stamps, so the mark came
+    /// out wider *and* taller — the same ridge drawn with a bigger brush,
+    /// which is not what Inflate means. At 0.32 the footprint is half again
+    /// as wide as Padrão's at a fifth less slope: a swell rather than a ridge.
+    const INFLATE_LIFT: f32 = 0.32;
 
     /// The Move brush: a drag rather than a stamp.
     ///
@@ -3505,13 +3617,29 @@ impl ClayDocument {
         // empty viewport with 62,576 vertices sitting unuploaded. The first
         // stroke moved a vertex, changed the number the old way, and the mesh
         // appeared — which is exactly how it was reported.
+        //
+        // And where each stands. A layer transform moves no vertex in the
+        // engine and touches no grid — the placement is applied on the way
+        // out, in `append_mesh_layer` — so without this the number sat still
+        // while a whole mesh subtool was being dragged: the manipulator moved,
+        // the form did not, and a mesh subtool could not be transformed from
+        // the application at all. The field side has no such gate; its surface
+        // is re-meshed from the bricks the move dirtied.
         let carried = self
             .layers
             .iter()
             .filter(|layer| layer.representation != Representation::Sdf)
             .fold(0xcbf2_9ce4_8422_2325u64, |hash, layer| {
                 let shown = u64::from(layer.visible && layer.carries_geometry);
-                (hash ^ (layer.key.0 << 1 | shown)).wrapping_mul(0x1000_0000_01b3)
+                let hash = (hash ^ (layer.key.0 << 1 | shown)).wrapping_mul(0x1000_0000_01b3);
+                let at = layer.transform;
+                at.position
+                    .into_iter()
+                    .chain(at.rotation_axis)
+                    .chain([at.rotation_angle, at.scale])
+                    .fold(hash, |hash, number| {
+                        (hash ^ u64::from(number.to_bits())).wrapping_mul(0x1000_0000_01b3)
+                    })
             });
 
         let names: Vec<String> = self
@@ -4203,10 +4331,16 @@ impl SculptModel for ClayDocument {
         // subtool on its own.
         let hopped = Self::visibility_entries(&self.visibility_undo);
         let hopped_forward = Self::visibility_entries(&self.visibility_redo);
+        // And what an in-place crossing spent past its one step, for the same
+        // reason: the sculptor made one crossing, not three edits.
+        let folded = Self::crossing_entries(&self.crossing_undo);
+        let folded_forward = Self::crossing_entries(&self.crossing_redo);
         match self.document.undo_state() {
             Ok(state) => {
-                let undo_depth = state.undo_depth.saturating_sub(hopped);
-                let redo_depth = state.redo_depth.saturating_sub(hopped_forward);
+                let undo_depth = state.undo_depth.saturating_sub(hopped + folded);
+                let redo_depth = state
+                    .redo_depth
+                    .saturating_sub(hopped_forward + folded_forward);
                 HistoryState {
                     can_undo: undo_depth > 0 || !self.mesh_undo.is_empty(),
                     can_redo: redo_depth > 0 || !self.mesh_redo.is_empty(),

@@ -46,36 +46,36 @@ direction discards it.
 - **WHEN** the user changes the cell size in the conversion
 - **THEN** the stated surface movement changes with it
 
-### Requirement: A conversion adds a layer rather than replacing one
+### Requirement: A conversion adds a layer, or replaces the one it read
 The application SHALL produce a new layer from a conversion and SHALL leave the
-source layer unchanged, so that a crossing can be reconsidered without redoing
-the work that led to it.
+source layer unchanged by default, so that a crossing can be reconsidered
+without redoing the work that led to it.
 
-A conversion SHALL NOT be undoable, and the application SHALL say so where it
-offers one: a crossing is taken back by removing the layer it added. The source
-layer surviving is what makes that sufficient.
+The application SHALL also offer a conversion **in place**: the source layer
+leaves as the result arrives, and the result takes the source's row in the
+stack. The interface SHALL state which of the two a crossing will do before it
+runs, and adding SHALL be the default, since it is the one that cannot lose
+work.
 
-This is the engine's shape rather than a choice. A conversion produces no undo
-entry — layer creation and rasterization are not recorded, and a voxel layer
-carries no history at all by construction — so there is nothing for undo to
-take back. Grouping the crossing's edits was tried and groups nothing. An
-application-side history entry could remove the layer on undo, and would put a
-second history beside the engine's for one operation, which is a larger claim
-than the operation is worth: removing a layer is already one click and already
-undoes nothing else.
+A crossing SHALL be one undo step either way, and the depth the interface
+reports SHALL count it as one. An in-place crossing leaves more than one engine
+entry — the removal and the reorder are recorded separately and an undo group
+does not swallow them — so the application SHALL record how many it left and
+step over all of them together.
 
-#### Scenario: The source survives
-- **WHEN** a conversion completes
+#### Scenario: The source survives a crossing that adds
+- **WHEN** a conversion completes without being asked to replace
 - **THEN** the source layer is still present with its content unchanged
 
-#### Scenario: A conversion is taken back by removing its layer
-- **WHEN** the user removes the layer a conversion produced
-- **THEN** the document holds what it held before the conversion
+#### Scenario: A crossing in place replaces the layer it read
+- **WHEN** a conversion is run in place
+- **THEN** the source layer is gone, the result stands in the row the source
+  held, and the stack is no taller than before
 
-#### Scenario: The interface does not offer undo for a crossing
-- **WHEN** the user is shown a conversion before running it
-- **THEN** the interface states that the crossing is not undoable and that the
-  source layer is what it is taken back with
+#### Scenario: One undo takes a crossing back
+- **WHEN** the user undoes once after a crossing
+- **THEN** the document holds what it held before it, including the source
+  layer where the crossing replaced one
 
 ### Requirement: A conversion that cannot succeed is refused with a reason
 The application SHALL refuse a conversion it cannot perform — an unbounded

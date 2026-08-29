@@ -24,7 +24,7 @@ one.
 | Tool | Engine verb | Layers | What it does |
 |---|---|---|---|
 | Padrão | `clay_layer_apply_stroke` with relief | all three | Displaces the surface along its normal |
-| Inflar | `clay_voxel_sculpt_inflate` / relief | all three | Dilates; a negative amount erodes |
+| Inflar | `clay_voxel_sculpt_inflate` / relief, wider and softer | all three | Swells the footprint; a negative amount erodes. On a field it is relief like Padrão — the engine binds both to it — with a region and rim 1.35× the brush and 0.32 of the lift, so it swells where Padrão ridges |
 | Suavizar | `clay_item_volume_relax` / `clay_voxel_sculpt_smooth` | all three | Relaxes the surface. Bakes on the field side |
 | Mover | `clay_layer_move_surface` | SDF, mesh | Drags the assembled surface. Buds rather than stretches |
 | Pinçar | `clay_voxel_sculpt_pinch` | voxel, mesh | Moves surface cells toward the brush centre |
@@ -43,6 +43,36 @@ one.
 | Pintar | `clay_voxel_paint_brush` / `clay_mesh_sculptor_stamp` (PAINT) | voxel, mesh | Writes colour rather than moving the surface — see *Not built yet* for what it currently has to paint with |
 | Borrar | `clay_mesh_sculptor_stamp` (SMEAR) | mesh | Drags the surface sideways without carrying it away |
 | Apagar | `clay_voxel_erase_brush` | voxel | Removes cells |
+
+**Padrão and Inflar are two marks on a field.** ClayCore's own equivalence
+table binds both to `Op::Relief` — relief moves the accumulated surface along
+its own normal, which is what either does — and the application passed the same
+stamp for either, so two brushes on the shelf drew one thing. What tells them
+apart in ZBrush is the profile: Standard raises a ridge that follows the
+falloff, Inflate swells the whole footprint, broader and lower at the rim. So
+Inflar's region and rim are 1.35× the brush and it asks for 0.32 of the lift;
+Padrão keeps the engine's standard clay mapping, k = rounding = radius.
+
+The 0.32 is measured, not chosen. Raycasting a grid at the mark on the starting
+form with a 0.25 brush, as peak height above the sphere and footprint area:
+
+| binding | peak | footprint | height ÷ width |
+|---|---|---|---|
+| Padrão, k = rounding = r | +0.180 | 1179 | 0.0053 |
+| Inflar at 0.8 of the lift | +0.238 | 1939 | 0.0054 |
+| Inflar at 0.32 of the lift | +0.173 | 1772 | 0.0041 |
+
+The middle row is the trap: a wider region under buildup accumulation lifts each
+point through more stamps, so the first attempt came out wider **and taller** —
+the same ridge drawn with a bigger brush, which is not what Inflate means.
+`visual_sdf_symmetry` asserts the *shape* — half again the footprint at a fifth
+less slope — rather than counting pixels, which a merely bigger mark would pass.
+
+They stay closer here than in ZBrush, and that is the engine's design rather
+than a setting: relief is the only op that moves an existing surface along its
+own normal, so both brushes are relief and only the profile can differ. A true
+per-stroke inflate — offsetting the field inside the region — would need a
+verb ClayCore does not expose.
 
 **Trim is not a stroke tool.** Its gesture is a shape drawn on the view frame,
 not a drag across the surface, and the interface refuses a stroke for it rather
@@ -1348,6 +1378,37 @@ more: **the topology is the sampling lattice's and nothing here re-flows it.**
 What comes out is dense and uniform, with no edge loop following anything — it
 sculpts, and it is the input a retopology pass replaces rather than the output
 one produces.
+
+**A crossing adds a layer, or replaces the one it read.** Adding is the
+default because it cannot lose work: the source stays, and a sculptor who
+dislikes the result removes the layer it made. **Substituir a camada** is what
+a sculptor means by converting *this* layer — the source leaves as the result
+arrives and the result takes its row in the stack, rather than leaving a pile
+of supplanted originals nobody meant to keep.
+
+Either way it is **one undo**. The result keeps its derived name — `Forma ·
+voxel` rather than `Forma` — because that name says what the layer now holds,
+and because a voxel grid is reachable only by name (ClayCore
+[#365](https://github.com/CyberdyneCorp/ClayCore/issues/365)): handing the
+result the source's name would put two layers through one grid for as long as
+an undo kept both in the document.
+
+The removal and the reorder are engine entries of their own — a group does not
+swallow them — so the crossing records how many it left and steps over all of
+them together, and the depth the interface reports discounts the extras. That
+is the same shape the solo entries already have: a sculptor made one crossing
+and has one thing to take back. The panel used to say a crossing could not be
+undone at all, which stopped being true when crossing undo landed and would
+have been the worst place to be out of date, standing as it does beside a
+control that removes a layer.
+
+**And where each carried layer stands.** A layer transform moves no vertex in
+the engine and touches no grid — the placement is applied on the way out, as
+the carried mesh is read — so the number sat still while a whole mesh subtool
+was being dragged: the manipulator moved and the form did not, and a mesh
+subtool could not be transformed from the application at all. The field side
+has no such gate; its surface is re-meshed from the bricks the move dirtied,
+which is why this only ever showed on a mesh or a grid.
 
 **A layer the viewport has to draw changes the number it watches.** The
 carried layers — meshes and grids — are uploaded only when `mesh_revision`

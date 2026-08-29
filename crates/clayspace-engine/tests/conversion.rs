@@ -79,6 +79,83 @@ fn a_conversion_adds_a_layer_and_leaves_the_source_alone() {
 /// The source layer surviving is what makes the removal sound, which is why
 /// `a_conversion_adds_a_layer_and_leaves_the_source_alone` is the test this
 /// one leans on.
+/// The crossing a sculptor means when they say "convert this layer": the
+/// source leaves, the result stands where it stood, and one undo puts it back.
+#[test]
+fn a_crossing_in_place_replaces_the_layer_it_read() {
+    let mut doc = document();
+    // A second layer, so the source is not the only one — a document keeps at
+    // least one — and so the result's position in the stack is a claim with
+    // something to be wrong about.
+    doc.add_layer("Outra", Representation::Sdf)
+        .expect("a layer");
+    let source = doc.scene().layers[0].key;
+    doc.set_active_layer(source).expect("select the source");
+    let before = doc.scene().layers.len();
+    let at = doc
+        .scene()
+        .layers
+        .iter()
+        .position(|layer| layer.key == source)
+        .expect("the source's row");
+    let depth_before = doc.history().depth;
+
+    let made = doc
+        .convert_layer_in_place(Direction::SdfToVoxel, CELL, 1)
+        .expect("rasterize the starting form in place");
+
+    let scene = doc.scene();
+    assert_eq!(
+        scene.layers.len(),
+        before,
+        "an in-place crossing should replace the layer it read, not add one"
+    );
+    assert!(
+        !scene.layers.iter().any(|layer| layer.key == source),
+        "the source it read is still in the stack"
+    );
+    let landed = scene
+        .layers
+        .iter()
+        .position(|layer| layer.key == made)
+        .expect("the result's row");
+    assert_eq!(
+        landed, at,
+        "the result stands at row {landed} where the source stood at row {at}"
+    );
+    assert_eq!(
+        scene.layers[landed].representation,
+        Representation::Voxel,
+        "the row that replaced the source does not hold the crossing's result"
+    );
+
+    // One step, and it takes the whole thing back: the removal inside the
+    // group is what makes that one undo rather than two.
+    assert_eq!(
+        doc.history().depth,
+        depth_before + 1,
+        "an in-place crossing should sit on the undo stack as exactly one step"
+    );
+    assert!(
+        SculptModel::undo(&mut doc).expect("undo"),
+        "undo reported nothing to take back after an in-place crossing"
+    );
+    let scene = doc.scene();
+    assert_eq!(
+        scene.layers.len(),
+        before,
+        "undo changed the stack's height"
+    );
+    assert!(
+        scene.layers.iter().any(|layer| layer.key == source),
+        "undo did not bring back the layer the crossing replaced"
+    );
+    assert!(
+        !scene.layers.iter().any(|layer| layer.key == made),
+        "undo left the layer the crossing made standing"
+    );
+}
+
 #[test]
 fn a_crossing_is_taken_back_by_undo() {
     let mut doc = document();

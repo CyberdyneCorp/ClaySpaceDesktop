@@ -934,6 +934,7 @@ fn the_conversion_panel_states_what_a_crossing_costs() {
             direction: clayspace_model::Direction::SdfToVoxel,
             cell_size: cell,
             blur: 1,
+            in_place: false,
         };
         open.conversion_cost = Some(clayspace_model::Cost::of(
             clayspace_model::Direction::SdfToVoxel,
@@ -1384,6 +1385,7 @@ fn the_conversion_panel_offers_a_crossing_into_a_mesh() {
         direction: clayspace_model::Direction::SdfToMesh,
         cell_size: 0.05,
         blur: 0,
+        in_place: false,
     };
     open.conversion_cost = Some(clayspace_model::Cost::of(
         clayspace_model::Direction::SdfToMesh,
@@ -1400,6 +1402,7 @@ fn the_conversion_panel_offers_a_crossing_into_a_mesh() {
         direction: clayspace_model::Direction::SdfToVoxel,
         cell_size: 0.05,
         blur: 0,
+        in_place: false,
     };
     voxels.conversion_cost = Some(clayspace_model::Cost::of(
         clayspace_model::Direction::SdfToVoxel,
