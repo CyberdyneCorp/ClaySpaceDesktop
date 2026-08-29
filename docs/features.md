@@ -1101,6 +1101,15 @@ The refill takes the union of the layer's bounds before and after now, the way
 a moved object's already did. `visual_subtools` moves a subtool on the
 viewport's incremental path and holds the picture to what a rebuild draws.
 
+**A centre scale is metered from one arm's length.** A scale is a ratio of
+distances from the pivot, and a press on the centre handle starts a hair from
+it, so the ratio ran away in the first frame. The gesture is measured as if it
+had started one arm out: pulling outward by an arm doubles the form, pushing
+inward by an arm halves it — how ZBrush's scale reads, and what a hand can
+meter. The refusal or substitution sentence stands in the viewport bar now,
+beside the view chips; at the tail of the options bar it was past the right
+edge at 1280 and read by nobody.
+
 **One scale gesture is at most tenfold**, either way. The factor is a ratio
 of distances from the pivot, and a press on the centre handle starts a hair
 from it, so one pull to the edge of the screen was a hundred times — a form the

@@ -97,9 +97,25 @@ fn system_language() -> String {
     String::new()
 }
 
-/// A manipulator drag: which handle, and the plane it runs on as an anchor
-/// and a normal.
-type GizmoGesture = (clayspace_model::GizmoHandle, ([f32; 3], [f32; 3]));
+/// A manipulator drag: which handle, the plane it runs on, and where the hand
+/// is taken to be.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct GizmoGesture {
+    handle: clayspace_model::GizmoHandle,
+    /// The plane the drag runs on, as an anchor and a normal.
+    plane: ([f32; 3], [f32; 3]),
+    /// Added to every pointer position on the plane before it is resolved.
+    ///
+    /// Zero for every handle but the centre in scale mode. A scale is a ratio
+    /// of distances from the pivot, and a press on the centre handle starts a
+    /// hair from it, so the ratio ran away in the first frame of the drag —
+    /// one pull to the edge of the screen was ten times, and refused by the
+    /// cache before it. The gesture is measured as if it had started one arm's
+    /// length from the pivot instead: pulling outward by an arm doubles the
+    /// form, pushing inward by an arm halves it, which is how ZBrush's scale
+    /// reads and what a hand can meter.
+    shift: [f32; 3],
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Drag {
@@ -1508,7 +1524,7 @@ impl App {
         else {
             return false;
         };
-        self.start_gizmo_drag(ray, pivot, mode, handle)
+        self.start_gizmo_drag(ray, pivot, mode, handle, reach)
     }
 
     /// Whether the manipulator is on something made of clay — a placed object
@@ -1554,7 +1570,8 @@ impl App {
         let Some(ray) = self.ray_at(point) else {
             return false;
         };
-        self.start_gizmo_drag(ray, pivot, mode, handle)
+        let reach = self.gizmo_reach();
+        self.start_gizmo_drag(ray, pivot, mode, handle, reach)
     }
 
     /// Opens a manipulator gesture on `handle`, from wherever `ray` meets the
@@ -1565,6 +1582,7 @@ impl App {
         pivot: [f32; 3],
         mode: clayspace_model::GizmoMode,
         handle: clayspace_model::GizmoHandle,
+        reach: f32,
     ) -> bool {
         // The plane the drag runs on, which the *mode* decides: a slide needs
         // a plane containing its axis and a turn needs the ring's own plane,
@@ -1578,12 +1596,48 @@ impl App {
         // does not twist the selection under a hand that has not moved.
         let view_axis = Self::toward_eye(&self.camera, pivot);
         let normal = clayspace_model::drag_plane(mode, handle, view_axis, facing);
-        let Some(anchor) = Self::on_plane(ray, pivot, normal) else {
+        let Some(pressed) = Self::on_plane(ray, pivot, normal) else {
             return false;
         };
-        self.gizmo_drag = Some((handle, (pivot, normal)));
+        let (anchor, shift) = Self::metered_anchor(mode, handle, pivot, pressed, reach, view_axis);
+        self.gizmo_drag = Some(GizmoGesture {
+            handle,
+            plane: (pivot, normal),
+            shift,
+        });
         self.handle(Command::BeginGizmoDrag(handle, anchor, view_axis));
         true
+    }
+
+    /// Where a scale gesture is taken to have started, and by how much every
+    /// later pointer position is moved to match — see [`GizmoGesture::shift`].
+    ///
+    /// Other handles start where they were pressed and shift nothing.
+    fn metered_anchor(
+        mode: clayspace_model::GizmoMode,
+        handle: clayspace_model::GizmoHandle,
+        pivot: [f32; 3],
+        pressed: [f32; 3],
+        reach: f32,
+        view_axis: [f32; 3],
+    ) -> ([f32; 3], [f32; 3]) {
+        use clayspace_model::{GizmoHandle, GizmoMode};
+        if mode != GizmoMode::Scale || handle != GizmoHandle::Centre {
+            return (pressed, [0.0; 3]);
+        }
+        let away: [f32; 3] = std::array::from_fn(|i| pressed[i] - pivot[i]);
+        let length = away.iter().map(|c| c * c).sum::<f32>().sqrt();
+        // A press dead on the pivot has no direction; take one across the
+        // view, which lies in the drag plane facing the eye.
+        let direction: [f32; 3] = if length > 1e-6 {
+            std::array::from_fn(|i| away[i] / length)
+        } else {
+            let (across, _) = clayspace_model::perpendicular_frame(view_axis);
+            across
+        };
+        let anchor: [f32; 3] = std::array::from_fn(|i| pivot[i] + direction[i] * reach);
+        let shift: [f32; 3] = std::array::from_fn(|i| anchor[i] - pressed[i]);
+        (anchor, shift)
     }
 
     /// The unit vector from a point to the camera.
@@ -1699,8 +1753,10 @@ impl App {
 
     /// Where a pointer ray meets the plane the manipulator drag runs on.
     fn on_gizmo_plane(&self, point: egui::Pos2) -> Option<[f32; 3]> {
-        let (_, (anchor, normal)) = self.gizmo_drag?;
-        Self::on_plane(self.ray_at(point)?, anchor, normal)
+        let gesture = self.gizmo_drag?;
+        let (anchor, normal) = gesture.plane;
+        let at = Self::on_plane(self.ray_at(point)?, anchor, normal)?;
+        Some(std::array::from_fn(|i| at[i] + gesture.shift[i]))
     }
 
     /// Where a pointer ray meets the plane a cage drag runs on.
@@ -1849,7 +1905,7 @@ impl App {
                 pivot,
                 mode: object_mode,
                 reach: object_reach,
-                hovered: self.gizmo_drag.map(|(handle, _)| handle),
+                hovered: self.gizmo_drag.map(|gesture| gesture.handle),
                 view_axis: Self::toward_eye(&camera, pivot),
                 // One scale factor, so one handle for it.
                 per_axis_scale: false,
@@ -1880,7 +1936,7 @@ impl App {
                     pivot,
                     mode: cage.mode,
                     reach: handle * Self::GIZMO_REACH,
-                    hovered: self.gizmo_drag.map(|(handle, _)| handle),
+                    hovered: self.gizmo_drag.map(|gesture| gesture.handle),
                     view_axis: Self::toward_eye(&camera, pivot),
                     // A cage scales its own control points.
                     per_axis_scale: true,

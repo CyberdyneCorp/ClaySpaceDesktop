@@ -1230,26 +1230,6 @@ pub fn options_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
 
                 ui.add_space(space::SECTION);
                 alpha_control(ui, state, queue);
-
-                // Why the tool cannot be used, where the user is looking when they try.
-                if let Some(reason) = state.tool_status {
-                    // The ViewModel carries no locale, so a status it raises itself
-                    // arrives as a marker and is localised here. An engine refusal is
-                    // already a sentence and passes through as one.
-                    let reason = match reason {
-                        clayspace_vm::TOOL_SUBSTITUTED => state.strings.tool_substituted,
-                        clayspace_vm::ITEM_NOT_TRANSFORMABLE => {
-                            state.strings.item_not_transformable
-                        }
-                        sentence => sentence,
-                    };
-                    ui.add_space(space::SECTION);
-                    ui.label(
-                        egui::RichText::new(reason)
-                            .size(type_scale::LABEL)
-                            .color(Tokens::accent()),
-                    );
-                }
             });
         });
 }
@@ -3977,6 +3957,30 @@ pub fn viewport_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comma
                 .size(type_scale::LABEL)
                 .color(Tokens::text_dim()),
             );
+            // Why the tool cannot be used, or what the last gesture was refused
+            // for, beside the viewport the sculptor is looking at. It stood at
+            // the tail of the options bar, past the right edge at the design's
+            // 1280, and was read by nobody.
+            if let Some(reason) = state.tool_status {
+                // The ViewModel carries no locale, so a status it raises itself
+                // arrives as a marker and is localised here. An engine refusal
+                // is already a sentence and passes through as one.
+                let reason = match reason {
+                    clayspace_vm::TOOL_SUBSTITUTED => state.strings.tool_substituted,
+                    clayspace_vm::ITEM_NOT_TRANSFORMABLE => state.strings.item_not_transformable,
+                    sentence => sentence,
+                };
+                ui.add_space(space::SECTION);
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(reason)
+                            .size(type_scale::LABEL)
+                            .color(Tokens::accent()),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text(reason);
+            }
         });
     });
 }
