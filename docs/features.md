@@ -1386,6 +1386,28 @@ which is nothing, so it is refused rather than made into an empty subtool. The
 scene is left exactly as it was in every one of those cases, the borrowed
 visibility included.
 
+## When a subtool has become costly to evaluate
+
+A chain of edits steepens the field it produces: each bake resamples what the
+last one left, until a ray march has to take many small steps and every dab
+pays for it. The engine measures that — it reports a *safe step scale*, which
+falls as the field steepens — and says when collapsing the layer into one
+volume is worth it. Measured here, a layer the engine advised on took a dab
+from **56 ms to 13 ms** once collapsed, and collapsing it took about six
+seconds.
+
+So the subtool panel says so, and offers the one thing that helps. It appears
+only while the engine is advising it, and nothing is collapsed until the
+sculptor asks: it costs seconds and it changes what the layer holds, which is
+not a decision to take on someone's behalf while they are working.
+
+**Asking is free and acting is not, and neither is estimating.** The advice
+costs **33 µs** on a 97-item layer; estimating what the collapsed layer would
+occupy costs **287 ms**. They used to be one call, which is most of why the
+advice never reached the screen — nothing could afford to ask on a refresh
+path. The scene carries the advice; the estimate is asked for where a sculptor
+is deciding.
+
 ## Crossing between representations
 
 ClayCore carries SDF, voxel and mesh side by side, and the intended workflow

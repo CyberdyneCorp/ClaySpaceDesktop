@@ -369,6 +369,65 @@ impl Document {
         Ok(redone != 0)
     }
 
+    /// Undoes the last entry, and says what it reached.
+    ///
+    /// The same step [`Self::undo`] takes, plus the world-space bound of what
+    /// it applied — which is the difference between re-meshing the region an
+    /// undo changed and re-meshing the whole layer. Without it the narrowest
+    /// region a host can name afterwards is the layer's own, measured here at
+    /// 1045 keys and 141 ms against the 18 keys and 3.6 ms of the dab being
+    /// taken back.
+    ///
+    /// The bound may be **looser** than what changed and never tighter, so it
+    /// is safe to dirty. The engine's warning is worth repeating: do not try
+    /// to work the region out by diffing the layer's nodes across the call
+    /// instead — "an undone move, resize or colour edit keeps its node id, the
+    /// diff sees nothing, and under-dirtying leaves stale bricks at a blend
+    /// seam".
+    pub fn undo_bound(&mut self) -> Result<Undone> {
+        self.step_bound(true)
+    }
+
+    /// Redoes the last undone entry, and says what it reached.
+    pub fn redo_bound(&mut self) -> Result<Undone> {
+        self.step_bound(false)
+    }
+
+    fn step_bound(&mut self, backwards: bool) -> Result<Undone> {
+        let mut moved = 0i32;
+        let (mut min, mut max) = ([0.0f32; 3], [0.0f32; 3]);
+        let (mut has_bounds, mut infinite) = (0i32, 0i32);
+        let (call, name): (unsafe extern "C" fn(_, _, _, _, _, _) -> _, _) = if backwards {
+            (sys::clay_document_undo_bound, "clay_document_undo_bound")
+        } else {
+            (sys::clay_document_redo_bound, "clay_document_redo_bound")
+        };
+        // SAFETY: a valid handle and five out-parameters, each valid for the
+        // writes the entry point makes; the two bound arrays are three floats
+        // as it requires.
+        check(
+            unsafe {
+                call(
+                    self.as_ptr(),
+                    &mut moved,
+                    min.as_mut_ptr(),
+                    max.as_mut_ptr(),
+                    &mut has_bounds,
+                    &mut infinite,
+                )
+            },
+            name,
+        )?;
+        Ok(Undone {
+            moved: moved != 0,
+            reached: match (has_bounds != 0, infinite != 0) {
+                (false, _) => Influence::Nothing,
+                (true, true) => Influence::Everything,
+                (true, false) => Influence::Box { min, max },
+            },
+        })
+    }
+
     /// Whether undo is on, and how deep each stack is.
     pub fn undo_state(&self) -> Result<UndoState> {
         let mut enabled = 0i32;
@@ -1179,6 +1238,18 @@ pub enum Influence {
     /// cylinder)" — so an ordinary cube placed with [`Op::Intersect`] answers
     /// this way, and it is a normal path rather than an edge case.
     Everything,
+}
+
+/// What a step through the history moved, and where.
+///
+/// `reached` is [`Influence::Nothing`] both for a step that had nothing to
+/// take back and for one that cannot change the field — the engine reports a
+/// rename that way — so `moved` is the one to ask about whether anything
+/// happened.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Undone {
+    pub moved: bool,
+    pub reached: Influence,
 }
 
 /// Whether undo is recording, and how much there is to undo or redo.

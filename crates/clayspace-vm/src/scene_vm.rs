@@ -63,6 +63,7 @@ impl SceneViewModel {
                 self.model.add_layer(&name, *representation).map(|_| ())
             }
             Command::RemoveLayer(key) => self.model.remove_layer(*key),
+            Command::OptimizeLayer(key) => self.model.consolidate_layer(*key),
             // Not this ViewModel's business.
             _ => return Ok(()),
         };

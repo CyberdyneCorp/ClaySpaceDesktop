@@ -141,16 +141,36 @@ fn undo_meshes_no_more_than_the_surface_holds() {
          something has stopped filtering it."
     );
 
-    // And the same for an ordinary edit, where the waste was a third.
+    // An undo costs what the edit costs.
+    //
+    // This used to read the other way round — a dab could not touch more than
+    // the undo's whole-layer bound — because the narrowest region nameable
+    // after an undo was the layer's own. `clay_document_undo_bound` reports
+    // the world box of what it applied, so the two are now the same
+    // neighbourhood. Measured on this fixture, before and after, moments
+    // apart:
+    //
+    //   dab                18 keys   0.76 ms edit   7.49 ms sync
+    //   undo, whole layer  1045      24.36          273.69
+    //   undo, bounded      18        0.94           8.63
+    //
+    // Four times the dab's keys rather than equality: the bound is documented
+    // as looser than what changed and never tighter, so it may take in a
+    // neighbour brick. Fifty-eight times is what it was.
     assert!(
-        edit_keys <= undo_keys,
-        "a dab meshed {edit_keys} keys and an undo of it {undo_keys}; the dab \
-         cannot have touched more than the undo's whole-layer bound"
+        undo_keys <= 4 * edit_keys.max(1),
+        "a dab meshed {edit_keys} keys and an undo of it {undo_keys}. An undo \
+         reverses one edit and should cost about what that edit cost — this is \
+         the whole-layer bound coming back"
     );
 
     // The other half of the defect: the incremental path cost nearly twice a
     // full rebuild of the same surface, so the fast path was the slow one.
     // A ratio rather than a budget — both are measured here, moments apart.
+    // Kept at the old bound rather than tightened to what a bounded undo now
+    // reaches (8.63 ms against an 866 ms rebuild, a fiftieth of the old
+    // headroom): this assertion is about the fast path never being the slow
+    // one, and it should keep saying that if the bound is ever lost.
     assert!(
         undo_sync.as_secs_f64() < 1.5 * rebuild.as_secs_f64(),
         "an undo's sync took {:.0} ms against {:.0} ms to rebuild the whole \

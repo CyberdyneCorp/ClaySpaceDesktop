@@ -64,8 +64,8 @@ pub use reference::{
     ReferenceSettings, RememberedReference,
 };
 pub use scene::{
-    LayerCost, LayerKey, LayerSummary, Protection, Scene, SceneModel, SceneNode, SculptLayer,
-    SculptLayerCost, SculptLayerOp,
+    FieldHealth, LayerCost, LayerKey, LayerSummary, Protection, Scene, SceneModel, SceneNode,
+    SculptLayer, SculptLayerCost, SculptLayerOp,
 };
 pub use sculpt::{
     Detail, EditOutcome, GestureSample, HistoryEntry, HistoryState, ModelError, SceneStats,
