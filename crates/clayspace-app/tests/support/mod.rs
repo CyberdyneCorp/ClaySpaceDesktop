@@ -175,6 +175,16 @@ impl Harness {
 /// manipulator standing over it. Those have no threshold to tune, and they
 /// separate the real regression — which moves the ratio to about one — from the
 /// device by orders of magnitude rather than by a level or two.
+///
+/// Which is *not* to say never assert zero. `visual_ao_quality`'s silhouette
+/// fixture asserts that no background pixel more than five from an outline
+/// darkens at all, and that assertion is sound where the three above were not.
+/// The difference is what is being claimed. Those three compared the same
+/// pixels across two renders and leaned on the device agreeing with itself;
+/// this one asks whether a *region* was touched, and the region is chosen so
+/// that no part of the pass can reach it — five pixels being the sum of the
+/// occlusion block, the upsample's support and the multisampled edge. A claim
+/// about reach can be exact. A claim about determinism cannot.
 pub const RENDER_NOISE: u8 = 32;
 
 /// How many pixels differ by more than [`RENDER_NOISE`].
