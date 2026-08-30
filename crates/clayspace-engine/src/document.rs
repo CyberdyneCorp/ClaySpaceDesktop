@@ -2284,13 +2284,14 @@ impl ClayDocument {
             )));
         };
         let layer = self.active_layer().id;
+        // The shared preset, then the two fields a named brush states for
+        // itself. Spacing is scaled rather than replaced so Fluxo still does
+        // something on a brush with a dense stroke of its own.
+        let shared = self.preset(brush, tool);
         let preset = StrokePreset {
-            spacing: (self.preset(brush, tool).spacing * recipe.spacing).clamp(0.05, 0.9),
-            accumulation: match recipe.accumulation {
-                Some(accumulation) => accumulation,
-                None => self.preset(brush, tool).accumulation,
-            },
-            ..self.preset(brush, tool)
+            spacing: (shared.spacing * recipe.spacing).clamp(0.05, 0.9),
+            accumulation: recipe.accumulation.unwrap_or(shared.accumulation),
+            ..shared
         };
         let stroke: Vec<claycore::StrokeSample> = samples
             .iter()

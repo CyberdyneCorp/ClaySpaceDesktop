@@ -453,15 +453,6 @@ pub enum MaskSource<'a> {
     Layer(LayerId),
 }
 
-impl<'a> From<Option<&'a MaskField>> for MaskSource<'a> {
-    fn from(mask: Option<&'a MaskField>) -> Self {
-        match mask {
-            Some(mask) => Self::Field(mask),
-            None => Self::None,
-        }
-    }
-}
-
 impl Document {
     /// The raw handle a source names, for one C call inside this crate.
     ///
@@ -472,18 +463,12 @@ impl Document {
         match source {
             MaskSource::None => std::ptr::null(),
             MaskSource::Field(mask) => mask.as_ptr() as *const _,
-            MaskSource::Layer(layer) => {
-                let mut raw = std::ptr::null_mut();
-                // SAFETY: a valid document handle and an out-parameter written
-                // only on success. The handle is BORROWED — it belongs to the
-                // layer — and is used for the single call this resolves for.
-                let found = unsafe { sys::clay_document_mask(self.as_ptr(), layer.0, &mut raw) };
-                if found == sys::clay_result::CLAY_OK {
-                    raw as *const _
-                } else {
-                    std::ptr::null()
-                }
-            }
+            // Through the one accessor, so "the layer carries no mask" is
+            // decided in a single place. The handle is BORROWED — it belongs
+            // to the layer — and is used for the one call this resolves for.
+            MaskSource::Layer(layer) => self
+                .raw_layer_mask(layer)
+                .map_or(std::ptr::null(), |raw| raw as *const _),
         }
     }
 

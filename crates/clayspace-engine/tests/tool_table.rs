@@ -123,11 +123,12 @@ const MESH_CELL: f32 = 0.05;
 
 /// The tools that legitimately change nothing on these fixtures.
 ///
-/// Both are colour verbs, and both are honest absences rather than dead
-/// bindings. Pintar paints the colour the material already carries unless a
-/// colour is chosen, and Borrar drags existing colour along the stroke — over
-/// a uniformly coloured form there is nothing to drag. `brush_colour.rs` is
-/// where the colour question is actually asked.
+/// Three, and each is an honest absence rather than a dead binding. Pintar
+/// paints the colour the material already carries unless a colour is chosen,
+/// and Borrar drags existing colour along the stroke — over a uniformly
+/// coloured form there is nothing to drag; `brush_colour.rs` is where the
+/// colour question is actually asked. Preencher closes pockets, and these
+/// fixtures have none; `voxel_tools.rs` gives it perforated material.
 fn changes_nothing_here(tool: ToolKind) -> bool {
     tool.writes_colour() || tool == ToolKind::Preencher
 }
