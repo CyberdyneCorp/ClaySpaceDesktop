@@ -139,6 +139,13 @@ impl MaskOp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct MaskState {
     /// Whether a mask exists at all.
+    ///
+    /// Distinct from freezing something, and the distinction earns its keep:
+    /// a mask belongs to a layer of the engine's document — which is what
+    /// makes it survive a save — and a document has no verb for detaching one,
+    /// so Limpar empties the mask rather than removing it. "There is no mask"
+    /// and "the mask is empty" are two different things to tell a sculptor,
+    /// and this is the field that tells them apart.
     pub present: bool,
     /// Cells with any value above zero.
     pub painted_cells: usize,
@@ -146,6 +153,10 @@ pub struct MaskState {
 
 impl MaskState {
     /// Whether anything is actually frozen.
+    ///
+    /// What the interface keys the mask panel on, rather than
+    /// [`MaskState::present`]: a panel offering to invert, expand and extrude
+    /// nothing is a row of controls that all refuse.
     pub fn is_active(self) -> bool {
         self.present && self.painted_cells > 0
     }

@@ -74,6 +74,12 @@ pub struct SculptViewModel {
     /// of the edit being made, and a sculptor who sets an operation and then
     /// changes brush expects to still be cutting.
     combine: Observable<clayspace_model::CombineSettings>,
+    /// What the colour brushes paint with, and the colours before it.
+    ///
+    /// Beside the combine operation and for the same reason: one value for the
+    /// session, not one per tool. `ToolKind::writes_colour` names who reads it,
+    /// which is also where the swatch is shown.
+    colour: Observable<clayspace_model::ColourState>,
     symmetry: Observable<[bool; 3]>,
     view_preset: Observable<ViewPresetKind>,
     grid: Observable<bool>,
@@ -143,6 +149,7 @@ impl SculptViewModel {
             // bar reading "X on" over a document with no mirror is a lie
             // before the user has touched anything.
             combine: Observable::new(clayspace_model::CombineSettings::for_strokes()),
+            colour: Observable::new(clayspace_model::ColourState::default()),
             symmetry: Observable::new([true, false, false]),
             view_preset: Observable::new(ViewPresetKind::Perspective),
             grid: Observable::new(true),
@@ -180,6 +187,10 @@ impl SculptViewModel {
 
     pub fn combine(&self) -> &Observable<clayspace_model::CombineSettings> {
         &self.combine
+    }
+
+    pub fn colour(&self) -> &Observable<clayspace_model::ColourState> {
+        &self.colour
     }
 
     pub fn symmetry(&self) -> &Observable<[bool; 3]> {
@@ -281,6 +292,15 @@ impl SculptViewModel {
                 let combine = combine.sanitized();
                 if self.combine.set_if_changed(combine) {
                     self.model.set_combine(combine);
+                }
+            }
+            Command::SetBrushColour(colour) => {
+                self.model.set_colour(colour);
+                self.colour.set_if_changed(self.model.colour_state());
+            }
+            Command::PickRecentColour(index) => {
+                if self.model.choose_recent_colour(index) {
+                    self.colour.set_if_changed(self.model.colour_state());
                 }
             }
             Command::SetBrushSize(size) => self.edit_brush(|b| b.size = size),
@@ -667,9 +687,13 @@ impl SculptViewModel {
         // barely smoothed at all.
         // And not while the model is showing the gesture as it is made: a
         // live gesture is exactly one that no longer has to be held.
+        // On a mesh they are none of those things, so the question is asked
+        // of the representation rather than of the tool alone —
+        // `ToolKind::holds_the_whole_gesture` carries the one case that
+        // depends on it, which is the drag on a grid.
         !self.live
-            && tool.is_region_based()
             && self.model.active_representation() != Representation::Mesh
+            && tool.holds_the_whole_gesture(self.model.active_representation())
     }
 
     /// How far a stroke travels before a segment is sent, in stamps.

@@ -271,18 +271,25 @@ fn extruding_without_a_mask_is_refused_readably() {
 /// looking for a mask they can already see the panel counting.
 #[test]
 fn extruding_a_mask_with_nothing_painted_in_it_says_which_of_the_two_it_is() {
+    // Built before the binding below shadows the constructor.
+    let fresh = document();
     let mut document = document();
     freeze(&mut document, [0.0, 0.0, 1.0]);
-    // Eroded away rather than cleared: Clear takes the mask itself down, and
-    // what is wanted here is a mask that exists and holds nothing.
-    while document.mask_state().painted_cells > 0 {
-        document
-            .apply_mask_op(MaskOp::Contract(16))
-            .expect("contract");
-    }
+    // Emptied, by whichever route empties it. Clear used to *remove* the mask
+    // — it was a handle beside the document and dropping it was the whole
+    // operation — and now that the mask belongs to the document's layer there
+    // is no verb for taking one away: Limpar empties it and it stays attached.
+    // Which is the point of this test rather than a complication for it: once
+    // a subtool has been masked, "the mask is empty" is the only one of the
+    // two answers it can give.
+    document.apply_mask_op(MaskOp::Clear).expect("clear");
     assert!(
         document.mask_state().present,
         "the mask went away instead of emptying"
+    );
+    assert!(
+        !document.mask_state().is_active(),
+        "the cleared mask still freezes something"
     );
 
     let empty = format!(
@@ -298,11 +305,12 @@ fn extruding_a_mask_with_nothing_painted_in_it_says_which_of_the_two_it_is() {
     );
 
     // And the two refusals are distinguishable, which is the whole point of
-    // there being two of them.
-    document.apply_mask_op(MaskOp::Clear).expect("clear");
+    // there being two of them. The other one is reached on a subtool nobody
+    // has painted a mask on, which is where it now lives.
+    let mut untouched = fresh;
     let missing = format!(
         "{}",
-        document
+        untouched
             .extrude_mask(ExtrudeSettings::default())
             .expect_err("extruding nothing succeeded")
     )

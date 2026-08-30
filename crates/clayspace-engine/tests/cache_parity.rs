@@ -249,7 +249,7 @@ fn the_engine_still_disagrees_about_jitter() {
             }],
             &preset,
             &stamp,
-            None,
+            claycore::MaskSource::None,
         )
         .expect("stroke");
     cache.mark_dirty_nodes(&doc, layer, &nodes).expect("mark");

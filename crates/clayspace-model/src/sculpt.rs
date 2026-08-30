@@ -216,6 +216,27 @@ pub trait SculptModel {
         crate::CombineSettings::for_strokes()
     }
 
+    /// The colour the colour brushes paint with, and the ones before it.
+    ///
+    /// Session state for the same reason the combine operation is: it is chosen
+    /// once and holds across strokes. Shared across tools rather than held in
+    /// [`crate::BrushSettings`], which is per tool *and* per representation —
+    /// four copies of one question. [`crate::ToolKind::writes_colour`] names
+    /// who reads it.
+    fn set_colour(&mut self, colour: crate::Colour) {
+        let _ = colour;
+    }
+
+    /// Picks the `index`th recent colour. `false` where there is none there.
+    fn choose_recent_colour(&mut self, index: usize) -> bool {
+        let _ = index;
+        false
+    }
+
+    fn colour_state(&self) -> crate::ColourState {
+        crate::ColourState::default()
+    }
+
     /// Loads or clears the alpha stamp every brush with `alpha` set uses.
     ///
     /// One stamp for the document rather than one per tool: a stamp is

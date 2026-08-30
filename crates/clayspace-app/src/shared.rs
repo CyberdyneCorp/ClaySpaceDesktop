@@ -88,6 +88,18 @@ impl SculptModel for SharedDocument {
         self.0.borrow().combine()
     }
 
+    fn set_colour(&mut self, colour: clayspace_model::Colour) {
+        self.0.borrow_mut().set_colour(colour);
+    }
+
+    fn choose_recent_colour(&mut self, index: usize) -> bool {
+        self.0.borrow_mut().choose_recent_colour(index)
+    }
+
+    fn colour_state(&self) -> clayspace_model::ColourState {
+        self.0.borrow().colour_state()
+    }
+
     fn apply_stroke(
         &mut self,
         tool: ToolKind,

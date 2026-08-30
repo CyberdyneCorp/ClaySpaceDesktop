@@ -120,7 +120,7 @@ fn subset_meshing_reproduces_whole_surface_meshing() {
                 ..Default::default()
             },
             &stamp(0.18),
-            None,
+            claycore::MaskSource::None,
         )
         .expect("stroke");
     cache.mark_dirty_nodes(&doc, layer, &nodes).expect("mark");
@@ -280,7 +280,7 @@ fn the_layer_mirror_reaches_the_far_side() {
             ..Default::default()
         },
         &stamp(0.18),
-        None,
+        claycore::MaskSource::None,
     )
     .expect("stroke");
 
@@ -350,7 +350,7 @@ fn a_jittered_stroke_reaches_a_cache_with_a_wide_enough_band() {
                 ..Default::default()
             },
             &stamp(0.18),
-            None,
+            claycore::MaskSource::None,
         )
         .expect("stroke");
     cache.mark_dirty_nodes(&doc, layer, &nodes).expect("mark");
@@ -404,7 +404,7 @@ fn op_add_honours_the_stroke_presets_strength() {
                 ..Default::default()
             },
             &item,
-            None,
+            claycore::MaskSource::None,
         )
         .expect("stroke");
         radius_along(&filled(&doc), [0.0, 0.0, 1.0]).expect("after") - before

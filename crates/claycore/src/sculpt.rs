@@ -72,6 +72,54 @@ impl MoveParams {
     }
 }
 
+/// A drag whose reach is measured **along the material** — ZBrush's Move
+/// Topological.
+///
+/// The distinction from [`MoveParams`] is not a falloff curve: `radius` here is
+/// a distance of *travel across the surface*, so it cannot step over a gap
+/// however narrow. The engine measured it on two fingers 0.32 apart joined only
+/// through a palm — a Euclidean drag at radius 0.5 pulls the far one and this
+/// does not, and raising the radius past the path through the palm brings it
+/// into reach. That is what makes the weight a distance and not a mask.
+///
+/// It **bakes**: the item's volume is re-sampled with the move applied, which
+/// is why it belongs with relax and flatten rather than with the deformer the
+/// Euclidean drag emits. The engine's own advice is to prefer
+/// [`Document::move_surface`] unless the form has parts close in space and far
+/// along the surface, because that one does not bake.
+#[derive(Debug, Clone, Copy)]
+pub struct TopologicalMoveParams {
+    /// A point on or near the surface — what a pick gives.
+    pub anchor: [f32; 3],
+    /// The reach, measured along the material. Must be positive.
+    pub radius: f32,
+    pub displacement: [f32; 3],
+    /// Falloff curve index across the region; 0 is linear.
+    pub ease: i32,
+}
+
+impl Default for TopologicalMoveParams {
+    fn default() -> Self {
+        Self {
+            anchor: [0.0; 3],
+            radius: 0.25,
+            displacement: [0.0; 3],
+            ease: 0,
+        }
+    }
+}
+
+impl TopologicalMoveParams {
+    pub(crate) fn to_raw(self) -> sys::clay_topological_move_params {
+        let mut raw = sys::clay_topological_move_params::sized();
+        raw.anchor = self.anchor;
+        raw.radius = self.radius;
+        raw.displacement = self.displacement;
+        raw.ease = self.ease;
+        raw
+    }
+}
+
 /// How a region is relaxed.
 ///
 /// A `region_radius` of zero relaxes everywhere, which is a filter rather than
@@ -243,14 +291,17 @@ impl Document {
         samples: &[StrokeSample],
         preset: &StrokePreset,
         item: &Item,
-        mask: Option<&MaskField>,
+        mask: crate::MaskSource<'_>,
     ) -> Result<Vec<NodeId>> {
         if samples.is_empty() {
             return Ok(Vec::new());
         }
         let flat = StrokeSample::flatten(samples);
         let raw_preset = preset.to_raw();
-        let mask_ptr = mask.map_or(std::ptr::null(), |m| m.as_ptr() as *const _);
+        // Resolved here rather than handed in, which is the whole of what
+        // `MaskSource` is for: this method holds the document mutably, so a
+        // caller could never have lent it one of the document's own masks.
+        let mask_ptr = self.mask_ptr(mask);
 
         // An upper bound: a masked stamp emits no node, so the stroke may
         // create fewer than this.
@@ -515,6 +566,28 @@ impl Item {
         check(
             unsafe { sys::clay_item_volume_relax(self.as_ptr(), &raw) },
             "clay_item_volume_relax",
+        )
+    }
+
+    /// Drags a sampled volume with the reach measured along the material —
+    /// Move Topological.
+    ///
+    /// Only valid on an item carrying a volume, the same as [`Item::relax`];
+    /// anything else is refused rather than ignored, which the engine is
+    /// explicit about.
+    ///
+    /// There is no document-sourced counterpart to this one — no
+    /// `clay_item_volume_move_topological_from` — so unlike relax and flatten
+    /// it is bake-then-move rather than move-while-sampling, and the band
+    /// accuracy note on [`Document::flatten_region`] applies: a drag further
+    /// than the band is placed against the bound rather than against the
+    /// surface. Sample with a band wide enough for the drag.
+    pub fn move_topological(&mut self, params: &TopologicalMoveParams) -> Result<()> {
+        let raw = params.to_raw();
+        // SAFETY: valid handle and a sized descriptor.
+        check(
+            unsafe { sys::clay_item_volume_move_topological(self.as_ptr(), &raw) },
+            "clay_item_volume_move_topological",
         )
     }
 

@@ -156,6 +156,14 @@ fn shortcuts() -> &'static clayspace_view::Shortcuts {
     SHORTCUTS.get_or_init(clayspace_view::Shortcuts::default)
 }
 
+/// The colour state the shell captures render against.
+///
+/// Shared for the same reason the shortcut table is: `ShellState` borrows it.
+fn colours() -> &'static clayspace_model::ColourState {
+    static COLOURS: std::sync::OnceLock<clayspace_model::ColourState> = std::sync::OnceLock::new();
+    COLOURS.get_or_init(clayspace_model::ColourState::default)
+}
+
 fn state<'a>(
     strings: &'a Strings,
     scene: &'a Scene,
@@ -163,6 +171,7 @@ fn state<'a>(
     diagnostics: &'a clayspace_model::Diagnostics,
 ) -> ShellState<'a> {
     ShellState {
+        colour: colours(),
         shortcuts: shortcuts(),
         representation: clayspace_model::Representation::Sdf,
         show_shapes: false,
@@ -710,6 +719,54 @@ fn the_options_bar_is_headed_by_the_active_brush() {
         changed > 100,
         "switching from Standard to Move changed {changed} pixels at the head \
          of the options bar; the bar does not say which brush it belongs to"
+    );
+}
+
+/// The colour swatch is offered for the tools that read a colour and for no
+/// others.
+///
+/// Two of the twenty-one write colour, so a swatch beside the other nineteen
+/// would be a control that does nothing — and until this change *every* one of
+/// them was that, because nothing in the application chose a colour at all.
+#[test]
+fn the_colour_swatch_is_shown_where_a_colour_is_read() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let mut without = state(strings, &scene, &materials, &report);
+    without.tool = ToolKind::Padrao;
+    without.representation = clayspace_model::Representation::Voxel;
+    let plain = capture_shell(&harness, &without, "69-options-no-colour");
+
+    let mut with = state(strings, &scene, &materials, &report);
+    with.tool = ToolKind::Pintar;
+    with.representation = clayspace_model::Representation::Voxel;
+    assert!(
+        with.tool.writes_colour(),
+        "the tool chosen for this capture does not read a colour"
+    );
+    let swatched = capture_shell(&harness, &with, "69-options-colour");
+
+    // The bar is wider with the swatch in it, which is the whole assertion:
+    // the badge changes with the tool either way, so the difference has to be
+    // measured *past* the controls both bars carry.
+    let changed = support::differing_pixels_within(
+        &plain,
+        &swatched,
+        520,
+        region::MENU_BAR as u32,
+        980,
+        (region::MENU_BAR + region::OPTIONS_BAR) as u32,
+    );
+    assert!(
+        changed > 200,
+        "choosing a colour tool changed {changed} pixels in the options bar's \
+         right-hand half; the swatch is not being offered"
     );
 }
 

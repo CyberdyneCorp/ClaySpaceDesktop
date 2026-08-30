@@ -1117,6 +1117,15 @@ impl std::fmt::Debug for VoxelField {
     }
 }
 
+/// A voxel layer's grid and that layer's own mask, borrowed together.
+///
+/// See [`Document::voxel_layer_masked`] for why the two come out as one thing.
+pub struct MaskedGrid<'doc> {
+    pub layer: LayerId,
+    pub grid: VoxelGridRef<'doc>,
+    pub mask: Option<crate::MaskLease<'doc>>,
+}
+
 /// A voxel grid the caller owns, released on drop.
 #[derive(Debug)]
 pub struct VoxelGrid {
@@ -1307,6 +1316,43 @@ impl Document {
             LayerId(layer),
             VoxelGridRef::from_raw(grid, "clay_document_voxel_layer")?,
         ))
+    }
+
+    /// The grid a named voxel layer carries, and that layer's own mask.
+    ///
+    /// Both out of one borrow, which is why this exists rather than two calls:
+    /// the grid comes out of `&mut self` and the mask out of `&self`, and a
+    /// caller holding the first cannot ask for the second. They are distinct
+    /// objects inside the document — a grid's cells and a mask's cells are not
+    /// the same storage — so lending both at once is sound, and it is exactly
+    /// the pairing every masked voxel verb takes.
+    ///
+    /// `mask` is `None` where the layer carries none, which freezes nothing.
+    pub fn voxel_layer_masked(&mut self, name: &str) -> Result<MaskedGrid<'_>> {
+        let c_name = crate::cstring(name, "clay_document_voxel_layer")?;
+        let mut layer: sys::clay_layer_id = Default::default();
+        let mut grid = std::ptr::null_mut();
+        // SAFETY: as `voxel_layer`.
+        check(
+            unsafe {
+                sys::clay_document_voxel_layer(
+                    self.as_ptr(),
+                    c_name.as_ptr(),
+                    &mut layer,
+                    &mut grid,
+                )
+            },
+            "clay_document_voxel_layer",
+        )?;
+        let layer = LayerId(layer);
+        // Read before the grid handle is wrapped, so the shared borrow this
+        // needs ends before the exclusive one begins.
+        let mask = self.layer_mask(layer);
+        Ok(MaskedGrid {
+            layer,
+            grid: VoxelGridRef::from_raw(grid, "clay_document_voxel_layer")?,
+            mask,
+        })
     }
 
     /// Borrows a voxel layer's grid for reading only.

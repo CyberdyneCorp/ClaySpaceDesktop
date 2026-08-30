@@ -105,6 +105,20 @@ drop; one lent by a document is a *different type*, lifetime-bound to it, with
 no destroy operation at all. The engine documents destroying a borrowed handle
 as an error; here it does not compile.
 
+**Identity, where a handle cannot be lent.** The C ABI's masked entry points
+take a document *and* one of that document's own masks, together. A wrapper
+that hands the mask out and then asks for the document mutably cannot be
+called — `&mut doc` and `&doc.mask` are the same borrow — so for a long while
+the only reachable masks were standalone ones the host made itself, which the
+document does not save. `MaskSource` names the mask's **layer** instead: the
+resolution happens inside `claycore`, where the two pointers coexist for the
+length of one C call and neither escapes. Where a *shared* borrow is enough,
+`Document::layer_mask` lends a `MaskLease` and the caller holds it beside
+another read of the same document; where two handles are wanted at once,
+`Document::voxel_layer_masked` produces both from one borrow. The rule the
+wrapper follows is that a borrowed handle never has to escape into a caller's
+mutation path for that caller to use it.
+
 **Errors.** Every `clay_result` becomes a `Result`, carrying the engine's
 thread-local detail message read *at the point of failure* — before another
 call can overwrite it.

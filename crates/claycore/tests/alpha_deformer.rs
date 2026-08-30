@@ -161,7 +161,13 @@ fn a_stroke_does_not_carry_the_chain() {
                 })
                 .collect();
             document
-                .apply_stroke(layer, &samples, &StrokePreset::default(), &item, None)
+                .apply_stroke(
+                    layer,
+                    &samples,
+                    &StrokePreset::default(),
+                    &item,
+                    claycore::MaskSource::None,
+                )
                 .expect("a stroke");
             spreads.push(spread(&document));
         }
