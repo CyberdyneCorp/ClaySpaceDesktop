@@ -61,13 +61,22 @@ fn packed() -> ClayDocument {
     document
 }
 
-/// How many vertices the grid draws on each side of the mirror plane.
-fn sides(document: &mut ClayDocument) -> (usize, usize) {
+/// What the grid draws on the far side of the mirror plane, exactly.
+///
+/// The vertex *positions* rather than their count, and that is the difference
+/// between a metric that works for every brush and one that works for most.
+/// A drag translates occupancy: it carries a lump across the far side without
+/// changing how many vertices are there, so counting them reads a mirrored
+/// Mover as having done nothing — measured, 266 against 267.
+fn far_side(document: &mut ClayDocument) -> Vec<[u32; 3]> {
     let (positions, ..) = document.visible_mesh_geometry();
-    (
-        positions.iter().filter(|v| v[0] > 0.05).count(),
-        positions.iter().filter(|v| v[0] < -0.05).count(),
-    )
+    let mut out: Vec<[u32; 3]> = positions
+        .iter()
+        .filter(|v| v[0] < -0.05)
+        .map(|v| v.map(f32::to_bits))
+        .collect();
+    out.sort_unstable();
+    out
 }
 
 fn indices(document: &mut ClayDocument) -> usize {
@@ -106,7 +115,7 @@ fn stroke(document: &mut ClayDocument, tool: ToolKind, invert: bool, symmetry: [
 /// Máscara paints the freeze, Pintar colours cells rather than moving them,
 /// and Preencher closes holes — which this slab has none of, and which
 /// `voxel_tools.rs` covers on material that does.
-const SHAPING: [ToolKind; 7] = [
+const SHAPING: [ToolKind; 9] = [
     ToolKind::Padrao,
     ToolKind::Inflar,
     ToolKind::Suavizar,
@@ -114,6 +123,9 @@ const SHAPING: [ToolKind; 7] = [
     ToolKind::Raspar,
     ToolKind::Camada,
     ToolKind::Nudge,
+    // Both bound to verbs the engine has had all along and nothing reached.
+    ToolKind::Planar,
+    ToolKind::Mover,
 ];
 
 /// The brushes with an opposite, and what holding the key means.
@@ -163,15 +175,18 @@ fn every_shaping_brush_changes_the_grid() {
 #[test]
 fn every_shaping_brush_mirrors_when_it_is_asked_to() {
     let mut base = packed();
-    let (_, rest) = sides(&mut base);
+    let rest = far_side(&mut base);
     for tool in SHAPING.iter().chain([ToolKind::Apagar].iter()) {
         let mut document = packed();
         stroke(&mut document, *tool, false, [true, false, false]);
-        let (_, there) = sides(&mut document);
+        let there = far_side(&mut document);
+        let moved =
+            there.len().abs_diff(rest.len()) + there.iter().filter(|v| !rest.contains(v)).count();
         assert!(
-            there.abs_diff(rest) > 5,
-            "{tool:?} with X symmetry left the far side at {there} vertices \
-             from {rest}"
+            moved > 5,
+            "{tool:?} with X symmetry moved {moved} of the far side's \
+             {} vertices",
+            rest.len()
         );
     }
 }
@@ -181,13 +196,13 @@ fn no_brush_mirrors_when_it_is_not_asked_to() {
     // The control. Without it the test above passes on a brush that reaches
     // both halves whatever it was told.
     let mut base = packed();
-    let (_, rest) = sides(&mut base);
+    let rest = far_side(&mut base);
     for tool in ToolKind::for_representation(Representation::Voxel) {
         let mut document = packed();
         stroke(&mut document, tool, false, [false; 3]);
-        let (_, there) = sides(&mut document);
         assert_eq!(
-            there, rest,
+            far_side(&mut document),
+            rest,
             "{tool:?} with symmetry off still reached the far side"
         );
     }
@@ -305,16 +320,18 @@ fn the_brushes_with_no_opposite_are_left_alone_by_the_key() {
 // -- the two that are not about geometry -------------------------------------
 
 #[test]
-fn painting_a_grid_is_honest_about_having_no_colour_to_paint_with() {
-    // Pintar colours cells that are already there, so a vertex count says
-    // nothing about it — and measured, it changes none of the 1848 vertex
-    // colours either. That is the documented gap rather than a broken
-    // binding: nothing in the application chooses a brush colour, so the
-    // palette holds one entry and the tool paints cells the colour they
-    // already are.
+fn painting_a_grid_with_the_colour_it_already_is_changes_nothing() {
+    // The half of the old gap that was never the binding's fault. Pintar
+    // colours cells that are already there, so a vertex *count* says nothing
+    // about it — and painting a cell the colour it already carries is not a
+    // change however the tool is wired.
     //
-    // What matters is that it says so. A tool reporting success while doing
-    // nothing is the kind that gets trusted.
+    // What matters is that it says so rather than reporting success. A tool
+    // that claims to have done something is the kind that gets trusted.
+    //
+    // The other half — that nothing in the application could choose any other
+    // colour — is closed: `brush_colour.rs` paints red and measures the
+    // pixels.
     let mut document = packed();
     let before: Vec<[f32; 3]> = document.visible_mesh_geometry().2;
     let changed = stroke(&mut document, ToolKind::Pintar, false, [false; 3]);
@@ -323,8 +340,7 @@ fn painting_a_grid_is_honest_about_having_no_colour_to_paint_with() {
     assert_eq!(
         before.iter().zip(&after).filter(|(a, b)| a != b).count(),
         0,
-        "there is a second colour in the palette after all, and this test is \
-         out of date"
+        "painting the clay tone onto clay changed a colour"
     );
     assert!(
         !changed,

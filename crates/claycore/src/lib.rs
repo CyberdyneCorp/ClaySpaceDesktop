@@ -65,7 +65,8 @@ pub use mesh_sculpt::{
 pub use pick::{Hit, Snapped};
 pub use reader::Reader;
 pub use sculpt::{
-    resolve_stroke, FlattenMode, FlattenParams, MoveParams, RelaxParams, VolumeParams,
+    resolve_stroke, FlattenMode, FlattenParams, MoveParams, RelaxParams, TopologicalMoveParams,
+    VolumeParams,
 };
 pub use voxel::{
     Cell, ChunkRange, RepairReport, VoxelField, VoxelGrid, VoxelGridRef, VoxelHit, VoxelReader,

@@ -156,6 +156,14 @@ fn shortcuts() -> &'static clayspace_view::Shortcuts {
     SHORTCUTS.get_or_init(clayspace_view::Shortcuts::default)
 }
 
+/// The colour state the shell captures render against.
+///
+/// Shared for the same reason the shortcut table is: `ShellState` borrows it.
+fn colours() -> &'static clayspace_model::ColourState {
+    static COLOURS: std::sync::OnceLock<clayspace_model::ColourState> = std::sync::OnceLock::new();
+    COLOURS.get_or_init(clayspace_model::ColourState::default)
+}
+
 fn state<'a>(
     strings: &'a Strings,
     scene: &'a Scene,
@@ -163,6 +171,7 @@ fn state<'a>(
     diagnostics: &'a clayspace_model::Diagnostics,
 ) -> ShellState<'a> {
     ShellState {
+        colour: colours(),
         shortcuts: shortcuts(),
         representation: clayspace_model::Representation::Sdf,
         show_shapes: false,

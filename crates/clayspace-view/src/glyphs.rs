@@ -42,6 +42,7 @@ pub fn tool_glyph(tool: ToolKind, rect: Rect, ink: Color32) -> Vec<Shape> {
         ToolKind::Inflar => inflate(&pen),
         ToolKind::Suavizar => smooth(&pen),
         ToolKind::Mover => move_(&pen),
+        ToolKind::MoverTopologico => move_topological(&pen),
         ToolKind::Pincar => pinch(&pen),
         ToolKind::Raspar => scrape(&pen),
         ToolKind::Planar => planar(&pen),
@@ -186,6 +187,22 @@ fn move_(pen: &Pen) -> Vec<Shape> {
     // A hump pulled sideways, and the pull.
     let mut out = vec![hump(pen, 0.45, None)];
     pen.arrow((-0.05, -0.62), (0.5, -0.62), &mut out);
+    out
+}
+
+/// The same hump and pull, over a *path* rather than a straight line.
+///
+/// What tells the two apart at swatch size is the second mark: an arc under
+/// the hump standing for the surface the reach is measured along, where the
+/// Euclidean drag has none. The arrow is the same, because the gesture is.
+fn move_topological(pen: &Pen) -> Vec<Shape> {
+    let mut out = vec![hump(pen, 0.45, None)];
+    pen.arrow((-0.05, -0.62), (0.5, -0.62), &mut out);
+    // The path the reach runs along: a shallow curve under the form, drawn as
+    // three segments rather than a spline, which is all the swatch resolves.
+    out.push(pen.segment((-0.72, 0.34), (-0.28, 0.5)));
+    out.push(pen.segment((-0.28, 0.5), (0.28, 0.5)));
+    out.push(pen.segment((0.28, 0.5), (0.72, 0.34)));
     out
 }
 

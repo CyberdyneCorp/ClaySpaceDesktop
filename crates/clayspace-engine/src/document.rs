@@ -613,8 +613,18 @@ pub struct ClayDocument {
     redo_room: usize,
     /// How the next SDF edit combines with what is under it.
     combine: CombineSettings,
+    /// What the colour brushes paint with, and the colours before it.
+    ///
+    /// One value for the document rather than one per tool or per layer: it is
+    /// what the sculptor is painting with now, and every colour brush picks up
+    /// the same one. See `clayspace_model::colour` for why it is not in
+    /// `BrushSettings`.
+    colour: clayspace_model::ColourState,
     /// The one alpha stamp loaded, which every brush with `alpha` set uses.
     alpha: Option<Alpha>,
+    /// The voxel drag being made, while one is. Opened by the first segment
+    /// and dropped when the gesture ends.
+    voxel_grab: Option<VoxelGrab>,
     /// Whether a pass is being recorded on the active grid.
     ///
     /// Mirrored here rather than read back per frame: the engine answers per
@@ -684,7 +694,9 @@ impl ClayDocument {
             cache,
             policy,
             combine: CombineSettings::for_strokes(),
+            colour: clayspace_model::ColourState::default(),
             alpha: None,
+            voxel_grab: None,
             recording_pass: false,
             dirty: Vec::new(),
             stats: SceneStats::default(),
@@ -2227,6 +2239,9 @@ impl ClayDocument {
                 // Drags the assembled surface: the gesture is a displacement,
                 // not a series of stamps.
                 ToolKind::Mover => self.move_surface_stroke(brush, &reflected)?,
+                // The same gesture with the reach measured through the
+                // material instead of through space.
+                ToolKind::MoverTopologico => self.topological_move_stroke(brush, &reflected)?,
                 // Bake-and-relax over the region the stroke covered.
                 ToolKind::Suavizar | ToolKind::Relaxar if self.live_smooth.is_some() => {
                     self.live_relax_dab(brush, &reflected)?
@@ -2252,8 +2267,26 @@ impl ClayDocument {
         symmetry: [bool; 3],
     ) -> Result<EditOutcome, ModelError> {
         self.point_the_mirror(symmetry)?;
+        // Every tool that reaches here combines a stamp with the surface.
+        // There is no catch-all arm: the one that was here mapped anything
+        // unlisted to `Op::Add`, which adds a *sphere* — so the planing tools
+        // deposited blobs and nothing said so. A tool with no mapping refuses.
+        let Some(recipe) = sdf_recipe(tool) else {
+            return Err(ModelError::engine(format!(
+                "{} has no mapping onto an SDF verb; it should not have been \
+                 offered on this layer",
+                tool.label()
+            )));
+        };
         let layer = self.active_layer().id;
-        let preset = self.preset(brush, tool);
+        let preset = StrokePreset {
+            spacing: (self.preset(brush, tool).spacing * recipe.spacing).clamp(0.05, 0.9),
+            accumulation: match recipe.accumulation {
+                Some(accumulation) => accumulation,
+                None => self.preset(brush, tool).accumulation,
+            },
+            ..self.preset(brush, tool)
+        };
         let stroke: Vec<claycore::StrokeSample> = samples
             .iter()
             .map(|s| claycore::StrokeSample {
@@ -2263,27 +2296,23 @@ impl ClayDocument {
             })
             .collect();
 
-        // Every tool that reaches here combines a stamp with the surface.
-        // There is no catch-all arm: the one that was here mapped anything
-        // unlisted to `Op::Add`, which adds a *sphere* — so the planing tools
-        // deposited blobs and nothing said so. A tool with no mapping refuses.
-        match tool {
-            ToolKind::Padrao | ToolKind::Camada | ToolKind::Inflar => {}
-            other => {
-                return Err(ModelError::engine(format!(
-                    "{} has no mapping onto an SDF verb; it should not have \
-                     been offered on this layer",
-                    other.label()
-                )))
-            }
-        }
         // Turned over where the modifier is held and the operation has an
         // opposite: Add becomes Subtract, Emboss becomes Engrave, Relief
         // becomes Incise. An operation with no opposite — Intersect, Replace,
         // a seam — is left as it is rather than quietly becoming some other
         // verb, which is what `inverted` answering `None` means.
         let combine = {
-            let settings = self.combine.sanitized();
+            let panel = self.combine.sanitized();
+            // A *named* brush sets its own operation and ignores the panel,
+            // the way Camada already forces clamped accumulation whatever
+            // Acumular says: Vinco is the incise and Argila is the relief, and
+            // a Vinco set to Subtrair would be a tool that is not Vinco. The
+            // three general strokes take what the panel is set to, because
+            // shaping them is what the panel is for.
+            let settings = match recipe.op {
+                Some(op) => clayspace_model::CombineSettings { op, ..panel },
+                None => panel,
+            };
             match brush.invert.then(|| settings.op.inverted()).flatten() {
                 Some(op) => clayspace_model::CombineSettings { op, ..settings },
                 None => settings,
@@ -2300,11 +2329,7 @@ impl ClayDocument {
         // for a little less lift — the swell — and Padrão keeps the standard
         // clay mapping, k = rounding = radius: the ridge.
         let size = brush.sanitized().size;
-        let (region, lift) = if tool == ToolKind::Inflar {
-            (size * Self::INFLATE_REACH, Self::INFLATE_LIFT)
-        } else {
-            (size, 1.0)
-        };
+        let (region, lift) = (size * recipe.reach, recipe.lift);
         let mut stamp = Item::sphere(region).map_err(ModelError::engine)?;
         stamp
             .set_op(engine_op(combine.op))
@@ -2398,6 +2423,61 @@ impl ClayDocument {
     /// which is not what Inflate means. At 0.32 the footprint is half again
     /// as wide as Padrão's at a fifth less slope: a swell rather than a ridge.
     const INFLATE_LIFT: f32 = 0.32;
+
+    /// Argila's footprint and stroke, against Padrão's.
+    ///
+    /// Clay is Standard with buildup on and a denser stroke — that is what
+    /// separates the two in ZBrush, and it is what separates them here rather
+    /// than a second engine verb. A little wider than Padrão because a pat of
+    /// clay is broader than a ridge, and less lift per stamp because buildup
+    /// adds them together: at Padrão's own lift a single pass already reaches
+    /// the engine's amplitude ceiling and a second adds nothing, which is a
+    /// bigger brush rather than a different one.
+    ///
+    /// Measured on the starting form with a 0.2 brush at three tenths
+    /// intensity, taking the surface height under the stroke:
+    ///
+    ///   passes   Argila   Camada
+    ///   one      1.0961    —
+    ///   two      1.1400   1.0455
+    ///
+    /// Which is the distinction the accumulation is for: a second pass of
+    /// Argila adds 0.044, and two passes of the clamped tool reach less than
+    /// one pass of the building one.
+    const CLAY_REACH: f32 = 1.15;
+    const CLAY_LIFT: f32 = 0.55;
+    /// Stamps closer together than Fluxo alone asks for: buildup is what makes
+    /// clay read as clay, and buildup needs overlap.
+    const CLAY_SPACING: f32 = 0.5;
+
+    /// Vinco's footprint and stroke.
+    ///
+    /// Narrow, because the line *is* the brush: the engine's note on incise
+    /// says "a thin region gives the line", and a crease at the full brush
+    /// radius is a gouge. Full lift, so the trough goes as deep as the brush
+    /// allows, and tight spacing so it is continuous rather than a row of pits.
+    ///
+    /// The number is measured rather than chosen. On the starting form with a
+    /// 0.2 brush, taking how far the surface has moved at each distance to the
+    /// side of the stroke — Padrão inverted in the last column, as the widest
+    /// cut the same brush can make:
+    ///
+    ///   aside   reach 0.35   reach 0.5   reach 0.6   reach 0.7   Padrão
+    ///   0.00      −0.020      −0.020      −0.100      −0.100     −0.100
+    ///   0.03      −0.027      −0.020      −0.045      −0.099     −0.099
+    ///   0.05      −0.004      −0.028      −0.044      −0.063     −0.099
+    ///   0.08       0.000       0.000      −0.001      −0.008     −0.073
+    ///   0.11       0.000       0.000       0.000       0.000     −0.026
+    ///   0.14       0.000       0.000       0.000       0.000      0.000
+    ///
+    /// Below 0.6 the trough is a fifth of the depth the same brush can cut —
+    /// one cell of the brick cache, which is a line nobody can see. At 0.7 it
+    /// is as deep and nearly as wide, which is a gouge with a crease's name.
+    /// At 0.6 it is the full depth in three fifths of the width, which is what
+    /// DamStandard is for.
+    const CREASE_REACH: f32 = 0.6;
+    const CREASE_LIFT: f32 = 1.0;
+    const CREASE_SPACING: f32 = 0.35;
 
     /// The Move brush: a drag rather than a stamp.
     ///
@@ -3001,6 +3081,91 @@ impl ClayDocument {
         })
     }
 
+    /// Move Topológico: a drag whose reach is measured along the material.
+    ///
+    /// Beside `flatten_stroke` and `relax_stroke` rather than beside
+    /// `move_surface_stroke`, and that placement is the whole design. The
+    /// Euclidean drag emits a warp per item and touches no samples; this one
+    /// **bakes** — the engine re-samples the volume with the move applied —
+    /// which is what lets it weigh a point by how far it is *through the clay*
+    /// rather than through the air. Two parts of a form close in space and far
+    /// along the surface therefore move independently, which is the whole
+    /// reason the verb exists and what a Euclidean drag at the same radius
+    /// cannot do.
+    ///
+    /// It costs a bake, so it is the tool to reach for when the cheap drag
+    /// pulls something it should not — which is the engine's own advice.
+    fn topological_move_stroke(
+        &mut self,
+        brush: BrushSettings,
+        samples: &[GestureSample],
+    ) -> Result<EditOutcome, ModelError> {
+        let brush = brush.sanitized();
+        let (first, last) = (samples[0], samples[samples.len() - 1]);
+        let displacement: [f32; 3] =
+            std::array::from_fn(|axis| last.position[axis] - first.position[axis]);
+        let travelled = displacement.iter().map(|d| d * d).sum::<f32>().sqrt();
+        // A drag under the resolution moves nothing, and reporting it as an
+        // edit would bake the whole region to record a gesture that did not
+        // land. The same floor `move_surface_stroke` uses.
+        if travelled < 1e-4 {
+            return Ok(EditOutcome::NOTHING);
+        }
+
+        let layer = self.active_layer().id;
+        let anchor = first.position;
+        // The ball the reach could walk within, from the anchor and from where
+        // the drag takes it. A shorter box would place the moved material
+        // against the volume's bound rather than against the surface, and a
+        // longer one costs accuracy elsewhere: everything inside the box is
+        // re-approximated at the bake's cell size, so measured on the starting
+        // form, padding the box by the drag's own length as well moved the
+        // surface on the *far side* of the sphere by 0.0015 where the box that
+        // covers exactly the drag's reach moves it by 0.0003.
+        let reach = brush.size.max(1e-3);
+        let mut min = [0.0f32; 3];
+        let mut max = [0.0f32; 3];
+        for axis in 0..3 {
+            let a = anchor[axis];
+            let b = a + displacement[axis];
+            min[axis] = a.min(b) - reach;
+            max[axis] = a.max(b) + reach;
+        }
+        let cell = Self::bake_cell_size(brush.size);
+        Self::grown_for_feather(&mut min, &mut max, cell);
+
+        // Baked first and moved second, because there is no
+        // `clay_item_volume_move_topological_from`: the verb takes an item
+        // carrying a volume. The band has to cover the drag, which is what the
+        // box above is sized for.
+        let mut volume = self
+            .document
+            .volume_from_region(Self::bake_volume(cell), min, max)
+            .map_err(ModelError::engine)?;
+        volume
+            .move_topological(&claycore::TopologicalMoveParams {
+                anchor,
+                radius: reach,
+                // Scaled by Intensidade, as every other brush is: the engine
+                // takes the displacement whole and has no strength of its own
+                // here, so this is where the slider has to act.
+                displacement: displacement.map(|axis| axis * brush.intensity),
+                ease: 0,
+            })
+            .map_err(ModelError::engine)?;
+
+        volume.set_op(Op::Replace).map_err(ModelError::engine)?;
+        let node = self
+            .document
+            .add_item(layer, &volume)
+            .map_err(ModelError::engine)?;
+        self.refill(layer, &[node])?;
+        Ok(EditOutcome {
+            changed: true,
+            dirty_bricks: self.dirty.len(),
+        })
+    }
+
     /// A stroke against a mesh layer's own vertices.
     ///
     /// The engine's fourth stroke consumer. What makes it unlike the other
@@ -3043,6 +3208,9 @@ impl ClayDocument {
         // gated on a combine operation, which is the SDF side's vocabulary.
         let alpha = self.alpha_for(brush, Combine::Relief).cloned();
         let alpha = alpha.as_ref();
+        // Read for the same reason, one line later: the sculptor borrows the
+        // document and this does not.
+        let chosen = self.colour.current().sanitized();
         // The shared preset, which is where a mesh stroke's radius and
         // strength have to come from: the engine states that
         // `clay_mesh_sculptor_apply_stroke` IGNORES the descriptor's radius
@@ -3196,7 +3364,18 @@ impl ClayDocument {
                 // Zero: the brush's own diameter.
                 extent: 0.0,
             }),
+            // What Paint blends toward. Left at the engine's white default
+            // before this, so the one brush whose whole job is colour had
+            // nothing to say: a white blend over a white mesh is a stroke that
+            // changes nothing. Smear reads no colour of its own — it drags the
+            // colour already there — so this is carried for both and read by
+            // one.
+            colour: chosen.rgb,
             smooth_iterations: Some(Self::SMOOTH_PASSES),
+            // Every field is named now that the colour is one of them, so
+            // there is no `..MeshStamp::default()` here: a field added
+            // upstream should fail this call rather than be filled in
+            // silently with an engine default nobody chose.
             // Flatten and Scrape mean "everything under this disc", and a
             // surface walk refuses to flatten across a groove — which is not
             // what either verb says.
@@ -3204,7 +3383,6 @@ impl ClayDocument {
                 verb,
                 claycore::MeshBrush::Flatten | claycore::MeshBrush::Scrape
             ),
-            ..claycore::MeshStamp::default()
         };
         let points: Vec<[f32; 5]> = samples
             .iter()
@@ -4170,10 +4348,22 @@ impl ClayDocument {
         }
     }
 
-    /// Applies a stroke to a voxel layer, using the tool's own verb.
-    fn stroke_voxel(
+    /// The Move brush on a grid: a drag, accumulated past the cell size.
+    ///
+    /// Its own route rather than an arm of `stroke_voxel`'s loop, for two
+    /// reasons that are really one. A drag is a single instruction over the
+    /// whole gesture — a stamp per sample would be a *series* of grabs each
+    /// anchored where the last stopped, which reaches nearly twice as far and
+    /// moves less. And it has to remember what it has already done between
+    /// segments, which the loop has nowhere to keep.
+    ///
+    /// The anchor is where the press landed. The displacement sent is the part
+    /// of the gesture the grid has *not* yet been moved by, quantised to whole
+    /// cells: `clay_voxel_sculpt_grab` rounds per axis, so anything smaller
+    /// rounds to nothing, and a slow drag fed raw deltas moves nothing at all
+    /// however far it travels.
+    fn voxel_grab_stroke(
         &mut self,
-        tool: ToolKind,
         brush: BrushSettings,
         samples: &[GestureSample],
         symmetry: [bool; 3],
@@ -4187,6 +4377,129 @@ impl ClayDocument {
                 .map_err(ModelError::engine)?;
             grid.voxel_size().map_err(ModelError::engine)?
         };
+        // A grid with no scale has no cell to accumulate past, so there is no
+        // displacement this can quantise. NaN answers false here too, which is
+        // the point of asking it this way round.
+        if voxel_size <= 0.0 || !voxel_size.is_finite() {
+            return Ok(EditOutcome::NOTHING);
+        }
+
+        // Opened by whichever segment arrives first, because the press itself
+        // does not reach here: a dragging tool needs two samples and the first
+        // segment is where it gets them.
+        let gesture = *self.voxel_grab.get_or_insert(VoxelGrab {
+            anchor: samples[0].position,
+            emitted: [0.0; 3],
+        });
+        let last = samples[samples.len() - 1].position;
+        // Whole cells, from the anchor, less what the grid has already been
+        // moved by. Rounded rather than truncated so the record matches what
+        // the engine does with the number: it rounds too, and a caller that
+        // truncated would lag the grid by up to a cell for the whole gesture.
+        let steps: [f32; 3] = std::array::from_fn(|axis| {
+            ((last[axis] - gesture.anchor[axis] - gesture.emitted[axis]) / voxel_size).round()
+        });
+        if steps.iter().all(|step| *step == 0.0) {
+            // Under a cell on every axis. Not an edit, and reporting one would
+            // put an entry in the history for a gesture that has not landed.
+            return Ok(EditOutcome::NOTHING);
+        }
+        let displacement: [f32; 3] = std::array::from_fn(|axis| steps[axis] * voxel_size);
+
+        let brush = brush.sanitized();
+        let Self {
+            document, layers, ..
+        } = self;
+        let mask = layers[index].mask.as_deref();
+        let params = BrushParams {
+            size: ((brush.size / voxel_size).round() as i32).clamp(1, 64),
+            shape: BrushShape::Sphere,
+            falloff: match brush.shaping.falloff {
+                clayspace_model::Falloff::Constant => Falloff::Constant,
+                clayspace_model::Falloff::Linear => Falloff::Linear,
+                clayspace_model::Falloff::Smooth => Falloff::Smooth,
+                clayspace_model::Falloff::Gaussian => Falloff::Gaussian,
+            },
+            strength: brush.intensity,
+            seed: 0,
+            mask,
+        };
+        let (_, mut grid) = document
+            .voxel_layer(&engine_name)
+            .map_err(ModelError::engine)?;
+        let before = grid.change_count().map_err(ModelError::engine)?;
+
+        for mirror in mirrors(symmetry) {
+            let at = mirror.point(gesture.anchor);
+            let cell = [
+                (at[0] / voxel_size).round() as i32,
+                (at[1] / voxel_size).round() as i32,
+                (at[2] / voxel_size).round() as i32,
+            ];
+            // Both the centre and the *direction*, which is the half that is
+            // easy to forget: reflecting the anchor alone drags the mirrored
+            // copy the same way in world space rather than as a reflection, so
+            // a drag away from the plane pulls one side out and pushes the
+            // other in.
+            grid.sculpt_grab(
+                cell,
+                &params,
+                mirror.vector(displacement),
+                // As on the other two representations: Mover does not carry
+                // the far side of a form along with the near one.
+                true,
+            )
+            .map_err(ModelError::engine)?;
+        }
+
+        let after = grid.change_count().map_err(ModelError::engine)?;
+        let _ = grid;
+        // Recorded whether or not the grid moved. The displacement was whole
+        // cells and it was sent; a drag over empty space changes nothing and
+        // must still not be sent twice.
+        if let Some(open) = self.voxel_grab.as_mut() {
+            for (emitted, sent) in open.emitted.iter_mut().zip(displacement) {
+                *emitted += sent;
+            }
+        }
+        if after == before {
+            return Ok(EditOutcome::NOTHING);
+        }
+
+        let key = self.active_layer().key;
+        self.refresh_sculpt_layers(key)?;
+        Ok(EditOutcome {
+            changed: true,
+            dirty_bricks: 1,
+        })
+    }
+
+    /// Applies a stroke to a voxel layer, using the tool's own verb.
+    fn stroke_voxel(
+        &mut self,
+        tool: ToolKind,
+        brush: BrushSettings,
+        samples: &[GestureSample],
+        symmetry: [bool; 3],
+    ) -> Result<EditOutcome, ModelError> {
+        // A drag is one instruction over the whole gesture rather than a stamp
+        // per sample, and its own state has to survive between segments, so it
+        // takes its own route rather than an arm in the loop below.
+        if tool == ToolKind::Mover {
+            return self.voxel_grab_stroke(brush, samples, symmetry);
+        }
+        let index = self.active;
+        let engine_name = self.layers[index].engine_name.clone();
+        let voxel_size = {
+            let (_, grid) = self
+                .document
+                .voxel_layer(&engine_name)
+                .map_err(ModelError::engine)?;
+            grid.voxel_size().map_err(ModelError::engine)?
+        };
+        // Read before the document is borrowed, for the same reason the alpha
+        // below is.
+        let chosen = self.colour.current();
         // Split the borrows by field: the layer list — which is where the
         // mask lives — and the document are disjoint, but `&self` for one and
         // `&mut self` for another is not.
@@ -4217,11 +4530,22 @@ impl ClayDocument {
 
         // Index 0 is the engine's empty slot, so a fresh grid has no colour to
         // deposit and every set would write emptiness.
+        //
+        // Two indices, because "put material here" and "put *this colour*
+        // here" are different instructions. A structural deposit keeps the
+        // neutral clay tone whatever the swatch says — a sculptor blocking out
+        // in red would otherwise find every dab red — and only the colour
+        // brush resolves the chosen colour.
         let material = if grid.palette_size().map_err(ModelError::engine)? > 1 {
             1
         } else {
-            grid.palette_add([0.78, 0.76, 0.73])
+            grid.palette_add(clayspace_model::Colour::CLAY.rgb)
                 .map_err(ModelError::engine)?
+        };
+        let painted = if tool.writes_colour() {
+            palette_entry(&mut grid, chosen)?
+        } else {
+            material
         };
 
         // Read before the loop: `alpha_for` borrows the document, and the
@@ -4302,6 +4626,23 @@ impl ClayDocument {
                     ToolKind::Raspar => {
                         grid.sculpt_scrape(cell, &params, mirror.vector([0.0, 1.0, 0.0]), 0.0)
                     }
+                    // Two-sided, which is what the grid's flatten is: material
+                    // above the plane goes *and* hollows below it fill. The
+                    // SDF and mesh sides of this tool are cut-only, and that
+                    // difference is stated in the tooltip rather than faked —
+                    // reproducing cut-only here would mean reading occupancy
+                    // back and reapplying it, which is voxel math this
+                    // application does not do.
+                    //
+                    // The same plane normal Raspar uses, and mirrored with the
+                    // stroke for the same reason: the engine takes a normal
+                    // rather than deriving one, and two verbs that plane the
+                    // same surface must not disagree about where the plane is.
+                    // No inverse bound: the engine defines none, and a
+                    // two-sided verb has no side to swap.
+                    ToolKind::Planar => {
+                        grid.sculpt_flatten(cell, &params, mirror.vector([0.0, 1.0, 0.0]), 0.0)
+                    }
                     // At full strength, whatever Intensidade says.
                     //
                     // Every voxel verb dithers its writes against a hash of the
@@ -4330,7 +4671,7 @@ impl ClayDocument {
                     // that was not already stored — unlike on a mesh, where the
                     // colour attribute is twelve bytes a vertex and is refused
                     // rather than created.
-                    ToolKind::Pintar => grid.paint_brush(cell, &params, material),
+                    ToolKind::Pintar => grid.paint_brush(cell, &params, painted),
                     // The one tool whose upright verb is the removal, so its
                     // opposite is the deposit rather than the other way round.
                     ToolKind::Apagar if brush.invert => grid.set_brush(cell, &params, material),
@@ -4427,6 +4768,7 @@ impl SculptModel for ClayDocument {
                 // The layer mirror cannot reach those, so their strokes are
                 // reflected instead — see `baked_stroke`.
                 ToolKind::Mover
+                | ToolKind::MoverTopologico
                 | ToolKind::Suavizar
                 | ToolKind::Relaxar
                 | ToolKind::Planar
@@ -4464,6 +4806,18 @@ impl SculptModel for ClayDocument {
 
     fn combine(&self) -> CombineSettings {
         self.combine
+    }
+
+    fn set_colour(&mut self, colour: clayspace_model::Colour) {
+        self.colour.choose(colour);
+    }
+
+    fn choose_recent_colour(&mut self, index: usize) -> bool {
+        self.colour.choose_recent(index)
+    }
+
+    fn colour_state(&self) -> clayspace_model::ColourState {
+        self.colour.clone()
     }
 
     fn set_alpha(&mut self, alpha: Option<Alpha>) {
@@ -4711,6 +5065,9 @@ impl SculptModel for ClayDocument {
 
     fn begin_gesture(&mut self) {
         self.previewing = true;
+        // A drag is anchored where the press landed, so the last one's anchor
+        // must not be lying around when the next one opens.
+        self.voxel_grab = None;
     }
 
     fn open_live_gesture(&mut self, tool: ToolKind, symmetry: [bool; 3]) -> bool {
@@ -4729,6 +5086,8 @@ impl SculptModel for ClayDocument {
         self.previewing = false;
         // The tendril is finished; the next pull is its own.
         self.live_hook = None;
+        // As is the drag.
+        self.voxel_grab = None;
         // What the preview was holding becomes the edit. One record for the
         // whole drag, because every segment replaced the last rather than
         // adding to it.
@@ -4818,6 +5177,53 @@ impl Cage {
         self.offsets
             .iter()
             .all(|offset| offset.iter().all(|axis| *axis == 0.0))
+    }
+}
+
+/// The palette index a colour paints with, adding an entry only where the grid
+/// has none close enough.
+///
+/// A grid stores indices; the colour lives in the palette. Resolving here
+/// rather than at the call site is what keeps the two questions "which colour"
+/// and "which slot" apart — the domain names a colour and the engine adapter
+/// finds the slot.
+///
+/// Matched within [`clayspace_model::ColourState::SAME`] rather than exactly.
+/// A colour wheel returns values a float apart as the pointer moves inside one
+/// pixel, so an exact match would add an entry per stroke and a palette of
+/// eight identical reds is a palette nobody can use. Two colours that round to
+/// the same `#RRGGBB` are one colour.
+///
+/// Index 0 is the empty slot and is skipped: painting with it would erase.
+///
+/// A full palette falls back to the nearest entry rather than failing the
+/// stroke. The engine caps a palette at 255, and "the closest colour you
+/// already have" is a degradation a sculptor can see and work around, where a
+/// refused stroke mid-gesture is not.
+fn palette_entry(
+    grid: &mut claycore::VoxelGridRef<'_>,
+    colour: clayspace_model::Colour,
+) -> Result<i32, ModelError> {
+    let colour = colour.sanitized();
+    let size = grid.palette_size().map_err(ModelError::engine)?;
+    let mut nearest = (f32::INFINITY, 1i32);
+    for index in 1..size as i32 {
+        let entry =
+            clayspace_model::Colour::new(grid.palette_color(index).map_err(ModelError::engine)?);
+        let apart = entry.distance(colour);
+        if apart <= clayspace_model::ColourState::SAME {
+            return Ok(index);
+        }
+        if apart < nearest.0 {
+            nearest = (apart, index);
+        }
+    }
+    match grid.palette_add(colour.rgb) {
+        Ok(index) => Ok(index),
+        // The palette is full. There is always a nearest entry to fall back
+        // on, because a full palette is not an empty one.
+        Err(_) if size > 1 => Ok(nearest.1),
+        Err(e) => Err(ModelError::engine(e)),
     }
 }
 
@@ -4977,6 +5383,27 @@ impl Mirror {
     }
 }
 
+/// A voxel drag in progress: where it was anchored, and how far the grid has
+/// actually been moved.
+///
+/// `emitted` is what the *grid* did rather than what the pointer asked for,
+/// which is the whole point of holding it. `clay_voxel_sculpt_grab` resamples
+/// occupancy nearest-cell and rounds per axis — the engine's own note says a
+/// drag fed raw pointer deltas "is dead until the caller accumulates them past
+/// the voxel size" — and unlike the SDF drag, which takes a *total*
+/// displacement from a fixed anchor and is idempotent, this one translates
+/// occupancy destructively: two calls compose. So the difference between what
+/// has been asked for and what has been done is the only thing that can be
+/// sent, and it is quantised to whole cells *before* it is recorded, or the
+/// record would drift from the grid by up to half a cell on every emission.
+#[derive(Debug, Clone, Copy)]
+struct VoxelGrab {
+    /// Where the press landed. Fixed for the gesture, so the region dragged is
+    /// the one that was under the pointer rather than one that chases it.
+    anchor: [f32; 3],
+    emitted: [f32; 3],
+}
+
 /// Every reflection a set of enabled axes calls for, the identity first.
 ///
 /// Two axes give four and three give eight: the full subset lattice, which is
@@ -5001,6 +5428,79 @@ fn mirrors(symmetry: [bool; 3]) -> Vec<Mirror> {
         );
     }
     out
+}
+
+/// What a named SDF brush *is*: an operation, an accumulation and a footprint.
+///
+/// Here rather than on `ToolKind` for the reason [`mesh_verb`] is: the domain
+/// names the verb as text and this is where the text becomes a call. The
+/// domain's table declares that Vinco reaches `CLAY_OP_INCISE` on a field;
+/// this is what incise means for that brush.
+///
+/// `None` for a tool with no SDF stamp mapping, which is what makes the
+/// refusal in `stroke_sdf` a lookup rather than a second list to keep in step.
+#[derive(Debug, Clone, Copy)]
+struct SdfRecipe {
+    /// The operation the tool *is*, or `None` to take the Combinar panel's.
+    ///
+    /// Set for the named brushes and clear for the three general strokes,
+    /// which is the same split ZBrush makes: Standard, Layer and Inflate are
+    /// shaped by their settings, and Clay and Crease are what they are.
+    op: Option<clayspace_model::Combine>,
+    /// The accumulation the tool *is*, or `None` to take the brush's Acumular.
+    accumulation: Option<claycore::Accumulation>,
+    /// The stamp's region and rim, as a multiple of the brush radius.
+    reach: f32,
+    /// How much of the standard lift the stamp asks for.
+    lift: f32,
+    /// What the tool does to the spacing the Flow slider asked for.
+    ///
+    /// A multiplier rather than a replacement, so Fluxo still does something
+    /// on a brush with a dense stroke of its own: a fixed spacing would be a
+    /// slider that moved and changed nothing.
+    spacing: f32,
+}
+
+fn sdf_recipe(tool: ToolKind) -> Option<SdfRecipe> {
+    let plain = SdfRecipe {
+        op: None,
+        accumulation: None,
+        reach: 1.0,
+        lift: 1.0,
+        spacing: 1.0,
+    };
+    Some(match tool {
+        // The general strokes: the panel shapes them.
+        ToolKind::Padrao | ToolKind::Camada => plain,
+        // Same op, different profile. See `INFLATE_REACH`/`INFLATE_LIFT` for
+        // the measurements behind the two numbers.
+        ToolKind::Inflar => SdfRecipe {
+            reach: ClayDocument::INFLATE_REACH,
+            lift: ClayDocument::INFLATE_LIFT,
+            ..plain
+        },
+        // ClayBuildup: relief along the stroke with buildup accumulation,
+        // which is exactly what the engine's equivalence table says Clay is.
+        // Not a new primitive named Clay — an item shaped like a pat would
+        // *add* a pat, where relief displaces the surface already there.
+        ToolKind::Argila => SdfRecipe {
+            op: Some(clayspace_model::Combine::Relief),
+            accumulation: Some(claycore::Accumulation::Buildup),
+            reach: ClayDocument::CLAY_REACH,
+            lift: ClayDocument::CLAY_LIFT,
+            spacing: ClayDocument::CLAY_SPACING,
+        },
+        // Crease / DamStandard: "a thin region gives the line", in the
+        // engine's own words. The narrow region is the whole brush.
+        ToolKind::Vinco => SdfRecipe {
+            op: Some(clayspace_model::Combine::Incise),
+            accumulation: Some(claycore::Accumulation::Buildup),
+            reach: ClayDocument::CREASE_REACH,
+            lift: ClayDocument::CREASE_LIFT,
+            spacing: ClayDocument::CREASE_SPACING,
+        },
+        _ => return None,
+    })
 }
 
 /// Which engine verb a tool invokes on a mesh layer.
@@ -5033,7 +5533,15 @@ fn mesh_verb(tool: ToolKind) -> Option<claycore::MeshBrush> {
         // No mesh binding: a mask stroke, a cavity fill and a frame-drawn cut
         // are not fixed-topology vertex verbs, and erasing a cell would change
         // a mesh's topology, which none of these sixteen may do.
-        ToolKind::Mascara | ToolKind::Preencher | ToolKind::Trim | ToolKind::Apagar => return None,
+        // And no mesh binding for the topological drag: it bakes a re-sampled
+        // volume, and a mesh's geodesic Grab is a different operation wearing
+        // a similar description. Inventing the mapping because one exists
+        // nearby is exactly what the table is for preventing.
+        ToolKind::Mascara
+        | ToolKind::Preencher
+        | ToolKind::Trim
+        | ToolKind::Apagar
+        | ToolKind::MoverTopologico => return None,
     })
 }
 
@@ -5817,7 +6325,9 @@ impl ClayDocument {
             cage_revision: 0,
             mask_revision: 0,
             combine: CombineSettings::for_strokes(),
+            colour: clayspace_model::ColourState::default(),
             alpha: None,
+            voxel_grab: None,
             recording_pass: false,
             next_key,
             skin: SkinSettings::default(),

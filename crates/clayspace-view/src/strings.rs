@@ -29,6 +29,11 @@ pub struct Strings {
     /// What each brush does, in one sentence, in the order of
     /// [`ToolKind::ALL`]. Shown under the name when a swatch is hovered.
     pub tool_hints: [&'static str; clayspace_model::ToolKind::ALL.len()],
+    /// What differs about a tool on one representation, where anything does.
+    ///
+    /// One per `ToolNote`, in that enum's own order, so a note added to the
+    /// domain stops this compiling until it has been worded.
+    pub tool_notes: [&'static str; clayspace_model::ToolNote::ALL.len()],
     /// Every combine operation, in `Combine::ALL` order.
     ///
     /// Here for the same reason `tool_names` is here, and it should have
@@ -232,6 +237,10 @@ pub struct Strings {
     pub label_blend: &'static str,
     /// The scalar stamp modulating a brush.
     pub label_alpha: &'static str,
+    /// The colour a colour brush paints with.
+    pub label_colour: &'static str,
+    /// The row of colours chosen just before this one.
+    pub label_recent_colours: &'static str,
     /// Loading one.
     pub action_load_alpha: &'static str,
     /// Dropping it.
@@ -450,6 +459,7 @@ const PT_BR: Strings = Strings {
         "Inflar",
         "Suavizar",
         "Mover",
+        "Mover Topológico",
         "Pinçar",
         "Raspar",
         "Planar",
@@ -472,6 +482,7 @@ const PT_BR: Strings = Strings {
         "Infla a superfície para fora; intensidade negativa a encolhe",
         "Alisa relevos e ruído numa superfície uniforme",
         "Arrasta a superfície com o traço, como puxar argila",
+        "Arrasta pela superfície: o alcance é medido ao longo do material, não pelo espaço",
         "Junta a superfície em direção ao centro do traço",
         "Rebaixa os pontos altos até um plano e os alisa",
         "Aplana a superfície sem preencher os pontos baixos",
@@ -489,6 +500,7 @@ const PT_BR: Strings = Strings {
         "Borra a cor existente ao longo do traço",
         "Remove material sob o pincel",
     ],
+    tool_notes: ["Numa grelha, aplanar é dos dois lados: o material acima do plano sai e as concavidades abaixo dele enchem"],
     shape_names: [
         "Caixa",
         "Esfera",
@@ -629,6 +641,8 @@ const PT_BR: Strings = Strings {
     label_combine: "Operação",
     label_blend: "Junção",
     label_alpha: "Alfa",
+    label_colour: "Cor",
+    label_recent_colours: "Recentes",
     action_load_alpha: "Carregar alfa…",
     action_clear_alpha: "Remover alfa",
     alpha_none: "nenhum alfa carregado",
@@ -793,6 +807,7 @@ const EN_US: Strings = Strings {
         "Inflate",
         "Smooth",
         "Move",
+        "Topological Move",
         "Pinch",
         "Scrape",
         "Planar",
@@ -815,6 +830,7 @@ const EN_US: Strings = Strings {
         "Swells the surface outward; a negative intensity shrinks it",
         "Relaxes bumps and noise into an even surface",
         "Drags the surface with the stroke, like pulling clay",
+        "Drags along the surface: the reach is measured through the material, not through space",
         "Gathers the surface toward the centre of the stroke",
         "Flattens high points down to a plane and smooths them",
         "Planes the surface flat without filling low spots",
@@ -832,6 +848,7 @@ const EN_US: Strings = Strings {
         "Smears existing colour along the stroke",
         "Removes material under the brush",
     ],
+    tool_notes: ["On a grid, flatten is two-sided: material above the plane goes and hollows below it fill"],
     shape_names: [
         "Box",
         "Sphere",
@@ -971,6 +988,8 @@ const EN_US: Strings = Strings {
     label_combine: "Operation",
     label_blend: "Join",
     label_alpha: "Alpha",
+    label_colour: "Colour",
+    label_recent_colours: "Recent",
     action_load_alpha: "Load alpha…",
     action_clear_alpha: "Clear alpha",
     alpha_none: "no alpha loaded",
@@ -1135,6 +1154,7 @@ const ES_419: Strings = Strings {
         "Inflar",
         "Suavizar",
         "Mover",
+        "Mover Topológico",
         "Pellizcar",
         "Raspar",
         "Aplanar",
@@ -1157,6 +1177,7 @@ const ES_419: Strings = Strings {
         "Infla la superficie hacia fuera; una intensidad negativa la encoge",
         "Alisa relieves y ruido en una superficie uniforme",
         "Arrastra la superficie con el trazo, como tirar de la arcilla",
+        "Arrastra por la superficie: el alcance se mide a lo largo del material, no por el espacio",
         "Junta la superficie hacia el centro del trazo",
         "Rebaja los puntos altos hasta un plano y los alisa",
         "Aplana la superficie sin rellenar los puntos bajos",
@@ -1174,6 +1195,7 @@ const ES_419: Strings = Strings {
         "Difumina el color existente a lo largo del trazo",
         "Elimina material bajo el pincel",
     ],
+    tool_notes: ["En una rejilla, aplanar es de dos lados: el material sobre el plano se va y los huecos bajo él se rellenan"],
     shape_names: [
         "Caja",
         "Esfera",
@@ -1317,6 +1339,8 @@ const ES_419: Strings = Strings {
     label_combine: "Operación",
     label_blend: "Unión",
     label_alpha: "Alfa",
+    label_colour: "Color",
+    label_recent_colours: "Recientes",
     action_load_alpha: "Cargar alfa…",
     action_clear_alpha: "Quitar alfa",
     alpha_none: "ningún alfa cargado",
@@ -1523,6 +1547,24 @@ impl Strings {
     }
 
     /// Every brush hint, for a test that checks the whole set at once.
+    /// What differs about a tool on this representation, where anything does.
+    pub fn tool_note(&self, note: clayspace_model::ToolNote) -> &'static str {
+        Self::at(&self.tool_notes, clayspace_model::ToolNote::ALL, note)
+    }
+
+    /// The tool's sentence, with that caveat after it where there is one.
+    pub fn tool_sentence(
+        &self,
+        tool: clayspace_model::ToolKind,
+        representation: clayspace_model::Representation,
+    ) -> String {
+        let hint = self.tool_hint(tool);
+        match tool.note_on(representation) {
+            Some(note) => format!("{hint}\n{}", self.tool_note(note)),
+            None => hint.to_string(),
+        }
+    }
+
     pub fn tool_hints(&self) -> &[&'static str] {
         &self.tool_hints
     }
@@ -1678,7 +1720,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 191] {
+    pub fn all(&self) -> [&'static str; 193] {
         [
             self.action_shapes,
             self.label_shape,
@@ -1779,6 +1821,8 @@ impl Strings {
             self.label_combine,
             self.label_blend,
             self.label_alpha,
+            self.label_colour,
+            self.label_recent_colours,
             self.action_load_alpha,
             self.action_clear_alpha,
             self.alpha_none,

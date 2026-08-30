@@ -289,6 +289,16 @@ pub enum ToolKind {
     Padrao,
     /// Drags the assembled surface. Buds rather than stretches.
     Mover,
+    /// The same drag, weighted by distance *along the material*.
+    ///
+    /// Its own tool rather than a modifier on [`ToolKind::Mover`]: the engine
+    /// documents the two as different operations with different reach — the
+    /// Euclidean drag is a deformer on each item it touches, this bakes a
+    /// re-sampled volume — and measured on two fingers 0.32 apart joined only
+    /// through a palm, a Euclidean drag at radius 0.5 pulls the far one and
+    /// this does not. A modifier that silently changed which algorithm runs
+    /// would hide that.
+    MoverTopologico,
     /// Relief on the SDF side; dilation on the voxel side.
     Inflar,
     /// Relax on the SDF side; a majority filter on the voxel side.
@@ -365,8 +375,30 @@ impl ToolKind {
     }
 
     pub fn is_path_driven(self) -> bool {
-        matches!(self, Self::Mover | Self::Puxar | Self::Nudge)
+        matches!(
+            self,
+            Self::Mover | Self::MoverTopologico | Self::Puxar | Self::Nudge
+        )
     }
+}
+
+/// A caveat about what a tool does on *one* representation in particular.
+///
+/// A tool's own sentence describes the intent, which is the same everywhere;
+/// this is for the cases where the engine's verb on one representation differs
+/// from the others in a way a sculptor will notice mid-stroke. Named here
+/// rather than written as interface text because *which pairs carry a caveat*
+/// is a fact about the engine's vocabulary, and the interface layer is not
+/// allowed to know it. The wording lives with the other strings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolNote {
+    /// A grid's flatten fills hollows below the plane as well as taking
+    /// material off above it, where the field and mesh verbs cut only.
+    VoxelPlanarIsTwoSided,
+}
+
+impl ToolNote {
+    pub const ALL: [ToolNote; 1] = [Self::VoxelPlanarIsTwoSided];
 }
 
 /// Why a tool cannot be used right now.
@@ -428,11 +460,12 @@ impl std::fmt::Display for Unavailable {
 
 impl ToolKind {
     /// Every tool, in the order the brush shelf presents them.
-    pub const ALL: [ToolKind; 20] = [
+    pub const ALL: [ToolKind; 21] = [
         Self::Padrao,
         Self::Inflar,
         Self::Suavizar,
         Self::Mover,
+        Self::MoverTopologico,
         Self::Pincar,
         Self::Raspar,
         Self::Planar,
@@ -456,6 +489,7 @@ impl ToolKind {
         match self {
             Self::Padrao => "Padrão",
             Self::Mover => "Mover",
+            Self::MoverTopologico => "Mover Topológico",
             Self::Inflar => "Inflar",
             Self::Suavizar => "Suavizar",
             Self::Mascara => "Máscara",
@@ -533,17 +567,34 @@ impl ToolKind {
             },
             Self::Mover => Verbs {
                 sdf: Some("clay_layer_move_surface"),
-                voxel: None,
+                voxel: Some("clay_voxel_sculpt_grab"),
                 mesh: Some("clay_mesh_sculptor_stamp (GRAB)"),
+            },
+            // SDF only, and that is the engine's answer rather than a
+            // shortcut. The verb bakes a re-sampled *volume*, which a grid has
+            // no equivalent of — its cells are the volume — and a mesh's
+            // geodesic Grab is a different thing wearing a similar
+            // description: it walks the surface to weight a stamp, where this
+            // re-samples a field with the move applied.
+            Self::MoverTopologico => Verbs {
+                sdf: Some("clay_item_volume_move_topological"),
+                voxel: None,
+                mesh: None,
             },
             Self::Puxar => Verbs {
                 sdf: Some("clay_item_set_curve_points (snakehook)"),
                 voxel: None,
                 mesh: Some("clay_mesh_sculptor_stamp (SNAKEHOOK)"),
             },
+            // Two-sided on a grid, cut-only on the other two, and the
+            // difference is the engine's rather than a compromise: the voxel
+            // verb fills hollows below the plane as well as taking material
+            // off above it, and faking cut-only would mean reading occupancy
+            // back and reapplying it — voxel math this application does not
+            // do. The tooltip says which one a sculptor is holding.
             Self::Planar => Verbs {
                 sdf: Some("clay_item_volume_flatten (cut-only)"),
-                voxel: None,
+                voxel: Some("clay_voxel_sculpt_flatten (two-sided)"),
                 mesh: Some("clay_mesh_sculptor_stamp (FLATTEN)"),
             },
             Self::Polir => Verbs {
@@ -576,13 +627,27 @@ impl ToolKind {
                 voxel: Some("clay_voxel_sculpt_pinch"),
                 mesh: Some("clay_mesh_sculptor_stamp (PINCH)"),
             },
+            // Relief with buildup, which is what ClayBuildup *is*: the
+            // engine's equivalence table maps Clay to relief along the stroke
+            // plus buildup accumulation, and the difference from Padrão is the
+            // accumulation and the spacing rather than another verb.
             Self::Argila => Verbs {
-                sdf: None,
+                sdf: Some("clay_layer_apply_stroke (CLAY_OP_RELIEF, buildup)"),
                 voxel: None,
                 mesh: Some("clay_mesh_sculptor_stamp (CLAY)"),
             },
+            // Incise, which the engine describes in the same sentence as the
+            // tool: "a thin region gives the line — Crease and DamStandard".
+            // Not a subtraction of spheres, which is what a Crease built out
+            // of the general vocabulary would be — incise exists precisely to
+            // displace the accumulated field inward without contributing a
+            // primitive.
+            //
+            // Voxel is left absent. The engine documents DamStandard there as
+            // a *recipe* rather than a verb, and a preset that borrows a name
+            // is not worth a shelf entry until somebody has looked at it.
             Self::Vinco => Verbs {
-                sdf: None,
+                sdf: Some("clay_layer_apply_stroke (CLAY_OP_INCISE)"),
                 voxel: None,
                 mesh: Some("clay_mesh_sculptor_stamp (CREASE)"),
             },
@@ -656,6 +721,20 @@ impl ToolKind {
             return Err(Unavailable::MissingAttribute { needs: "mesh" });
         }
         Ok(())
+    }
+
+    /// What differs about this tool on this representation, if anything.
+    ///
+    /// Empty for almost every pair, and that is the point: a caveat on every
+    /// row would be read by nobody. It is here for the one place where two
+    /// representations of the same artist intent behave differently enough to
+    /// surprise — and where faking agreement would mean doing arithmetic the
+    /// engine does not offer.
+    pub fn note_on(self, representation: Representation) -> Option<ToolNote> {
+        match (self, representation) {
+            (Self::Planar, Representation::Voxel) => Some(ToolNote::VoxelPlanarIsTwoSided),
+            _ => None,
+        }
     }
 
     /// Whether the tool writes vertex colour rather than moving the surface.
@@ -941,9 +1020,13 @@ mod tests {
 
     #[test]
     fn an_sdf_only_tool_is_refused_on_a_voxel_layer_with_a_reason() {
-        let error = ToolKind::Mover
+        // Mover used to be the example here and is now on all three, which is
+        // the kind of drift this file's tables exist to make visible. The
+        // topological drag takes its place: it bakes a re-sampled volume, and
+        // a grid's cells *are* its volume.
+        let error = ToolKind::MoverTopologico
             .availability(LayerState::editable(Representation::Voxel))
-            .expect_err("the move brush is field-side");
+            .expect_err("the topological drag is field-side");
         assert!(error.to_string().contains("SDF"), "{error}");
     }
 
@@ -1135,10 +1218,11 @@ mod tests {
              this count and `docs/features.md` together."
         );
         assert_eq!(
-            voxel, 11,
+            voxel, 13,
             "the voxel vocabulary has moved: {voxel} tools reach a voxel \
-             layer. Nine of them are sculpt verbs, of the engine's \
-             {ENGINE_VOXEL_SCULPT_VERBS}; the other two are the paint and \
+             layer. Eleven of them are sculpt verbs, of the engine's \
+             {ENGINE_VOXEL_SCULPT_VERBS} — Máscara is on the shelf and is a \
+             brush on none of the three — and the other two are the paint and \
              erase brushes, which are a different family. Update this count \
              and `docs/features.md` together."
         );

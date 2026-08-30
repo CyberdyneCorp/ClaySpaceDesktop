@@ -166,6 +166,11 @@ pub struct ShellState<'a> {
     /// The name and not the samples: the interface says which stamp is in use
     /// and has no business holding megabytes to do it.
     pub alpha: Option<&'a str>,
+    /// What the colour brushes paint with, and the colours before it.
+    ///
+    /// Borrowed rather than copied: the recent list is a `Vec`, and the shell
+    /// state is built afresh every frame.
+    pub colour: &'a clayspace_model::ColourState,
     /// The reference panel: whether it is open, and what is on each plane.
     pub show_references: bool,
     pub references: [ReferenceSlot<'a>; RefPlane::ALL.len()],
@@ -1260,6 +1265,17 @@ pub fn options_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
                     combine_controls(ui, state, queue);
                 }
 
+                // Shown only where it is read. Two of the twenty tools write
+                // colour, and a swatch beside a Standard brush would be a
+                // control that does nothing — `ToolKind::writes_colour` is the
+                // same question the engine adapter asks before resolving a
+                // palette entry, so the swatch appears exactly where the value
+                // is consumed.
+                if state.tool.writes_colour() {
+                    ui.add_space(space::SECTION);
+                    colour_control(ui, state, queue);
+                }
+
                 ui.add_space(space::SECTION);
                 alpha_control(ui, state, queue);
             });
@@ -1302,16 +1318,19 @@ fn brush_badge(ui: &mut egui::Ui, state: &ShellState<'_>) {
                 .size(type_scale::BODY)
                 .color(Tokens::text()),
         );
-        let hint = s.tool_hint(state.tool);
+        // The first line on the badge and the whole sentence on hover: the
+        // badge is one row, and a caveat drawn into it would push the numbers
+        // off the bar.
+        let sentence = s.tool_sentence(state.tool, state.representation);
         ui.add(
             egui::Label::new(
-                egui::RichText::new(hint)
+                egui::RichText::new(s.tool_hint(state.tool))
                     .size(type_scale::LABEL)
                     .color(Tokens::text_dim()),
             )
             .truncate(),
         )
-        .on_hover_text(hint);
+        .on_hover_text(sentence);
     });
 }
 
@@ -1402,6 +1421,101 @@ fn combine_controls(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comma
             queue.push(Command::SetCombine(CombineSettings { radius, ..settings }));
         }
     });
+}
+
+/// The colour a colour brush paints with, and the ones just before it.
+///
+/// A swatch and a row of recents rather than a full palette editor: the
+/// question a sculptor asks mid-pass is "back to the red I was using", and six
+/// squares answer it. Anything larger is a palette feature and belongs
+/// somewhere a stroke is not being made.
+fn colour_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    let current = state.colour.current();
+
+    ui.vertical(|ui| {
+        ui.set_width(COLOUR_CONTROL_WIDTH);
+        ui.label(
+            egui::RichText::new(s.label_colour)
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+        );
+        ui.horizontal(|ui| {
+            // egui edits in sRGB bytes; the engine's palettes and vertex
+            // colours are linear. Converting at the boundary rather than
+            // storing what the widget happens to hand back is what keeps the
+            // swatch and the painted cell the same colour.
+            // the sculptor's own colour
+            let mut edited = egui::Color32::from_rgb(
+                to_srgb_byte(current.rgb[0]),
+                to_srgb_byte(current.rgb[1]),
+                to_srgb_byte(current.rgb[2]),
+            );
+            if ui.color_edit_button_srgba(&mut edited).changed() {
+                queue.push(Command::SetBrushColour(clayspace_model::Colour::new([
+                    from_srgb_byte(edited.r()),
+                    from_srgb_byte(edited.g()),
+                    from_srgb_byte(edited.b()),
+                ])));
+            }
+            ui.label(
+                egui::RichText::new(current.hex())
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+        });
+
+        if state.colour.recent().is_empty() {
+            return;
+        }
+        ui.horizontal(|ui| {
+            for (index, colour) in state.colour.recent().iter().enumerate() {
+                let (rect, response) = ui.allocate_exact_size(
+                    egui::vec2(size::COLOUR_CHIP, size::COLOUR_CHIP),
+                    egui::Sense::click(),
+                );
+                ui.painter().rect_filled(
+                    rect,
+                    2.0,
+                    // the sculptor's own colour
+                    egui::Color32::from_rgb(
+                        to_srgb_byte(colour.rgb[0]),
+                        to_srgb_byte(colour.rgb[1]),
+                        to_srgb_byte(colour.rgb[2]),
+                    ),
+                );
+                if response.on_hover_text(colour.hex()).clicked() {
+                    queue.push(Command::PickRecentColour(index));
+                }
+            }
+        })
+        .response
+        .on_hover_text(s.label_recent_colours);
+    });
+}
+
+/// How wide the swatch, its hex and the recent row sit.
+const COLOUR_CONTROL_WIDTH: f32 = 150.0;
+
+/// Linear to an sRGB byte, and back. The engine stores linear and egui edits
+/// sRGB, so the two are converted at the one place they meet.
+fn to_srgb_byte(linear: f32) -> u8 {
+    let linear = linear.clamp(0.0, 1.0);
+    let encoded = if linear <= 0.003_130_8 {
+        linear * 12.92
+    } else {
+        1.055 * linear.powf(1.0 / 2.4) - 0.055
+    };
+    (encoded * 255.0).round() as u8
+}
+
+fn from_srgb_byte(byte: u8) -> f32 {
+    let encoded = f32::from(byte) / 255.0;
+    if encoded <= 0.040_45 {
+        encoded / 12.92
+    } else {
+        ((encoded + 0.055) / 1.055).powf(2.4)
+    }
 }
 
 /// The alpha stamp: which one is loaded, and whether this brush uses it.
@@ -3767,7 +3881,7 @@ pub fn brush_shelf(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
             let backdrop = ui.painter().add(egui::Shape::Noop);
             let group = ui.vertical(|ui| {
                 let (rect, response) = ui.allocate_exact_size(
-                    egui::vec2(size::SWATCH, size::SWATCH),
+                    egui::vec2(size::COLOUR_CHIP, size::COLOUR_CHIP),
                     egui::Sense::click(),
                 );
                 paint_sphere(ui, rect, Tokens::text_dim(), active);
@@ -3791,7 +3905,11 @@ pub fn brush_shelf(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
                 let response = response.on_hover_text(format!(
                     "{}\n{}",
                     state.strings.tool(tool),
-                    state.strings.tool_hint(tool)
+                    // The sentence *for this representation*: a tool whose
+                    // engine verb differs on the active layer says so here,
+                    // rather than describing one representation's behaviour to
+                    // a sculptor holding another.
+                    state.strings.tool_sentence(tool, state.representation)
                 ));
                 if response.clicked() {
                     queue.push(Command::SelectTool(tool));
