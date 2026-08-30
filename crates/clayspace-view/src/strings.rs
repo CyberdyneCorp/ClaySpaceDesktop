@@ -219,6 +219,8 @@ pub struct Strings {
     pub section_brush_controls: &'static str,
     pub section_armature: &'static str,
     pub section_diagnostics: &'static str,
+    /// The rendering section of the diagnostics report.
+    pub section_rendering: &'static str,
 
     // Labels
     pub label_intensity: &'static str,
@@ -608,6 +610,7 @@ const PT_BR: Strings = Strings {
     section_brush_controls: "CONTROLES DE PINCEL",
     section_armature: "ARMADURA",
     section_diagnostics: "DIAGNÓSTICO",
+    section_rendering: "RENDERIZAÇÃO",
 
     label_intensity: "Intensidade",
     label_size: "Tamanho",
@@ -943,6 +946,7 @@ const EN_US: Strings = Strings {
     section_brush_controls: "BRUSH CONTROLS",
     section_armature: "ARMATURE",
     section_diagnostics: "DIAGNOSTICS",
+    section_rendering: "RENDERING",
 
     label_intensity: "Intensity",
     label_size: "Size",
@@ -1282,6 +1286,7 @@ const ES_419: Strings = Strings {
     // from Blender.
     section_armature: "ESQUELETO",
     section_diagnostics: "DIAGNÓSTICO",
+    section_rendering: "RENDERIZAÇÃO",
 
     label_intensity: "Intensidad",
     label_size: "Tamaño",
@@ -1644,7 +1649,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 187] {
+    pub fn all(&self) -> [&'static str; 188] {
         [
             self.action_shapes,
             self.label_shape,
@@ -1738,6 +1743,7 @@ impl Strings {
             self.section_brush_controls,
             self.section_armature,
             self.section_diagnostics,
+            self.section_rendering,
             self.label_intensity,
             self.label_size,
             self.label_flow,

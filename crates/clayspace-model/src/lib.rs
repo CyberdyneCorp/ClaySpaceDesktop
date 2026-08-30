@@ -44,7 +44,7 @@ pub use conversion::{
 };
 pub use curve::{CurveJoin, CurveModel, CurvePoint, CurveProfile, CurveState, FEWEST_POINTS};
 pub use detail::DetailPolicy;
-pub use diagnostics::{Diagnostics, DiagnosticsModel, Fallback};
+pub use diagnostics::{AoDiagnostics, Diagnostics, DiagnosticsModel, Fallback, RenderDiagnostics};
 pub use document::{DocumentModel, OpenError};
 pub use exchange::{
     ExchangeModel, ExportMesher, ExportSettings, ExportWarning, Format, ImportAs, ImportSettings,

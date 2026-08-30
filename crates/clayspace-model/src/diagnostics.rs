@@ -21,7 +21,10 @@ pub struct Fallback {
 }
 
 /// Everything a bug report should carry.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// Not `Eq`: the rendering section carries GPU milliseconds, and two frame
+/// timings are never equal in the sense `Eq` promises.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Diagnostics {
     pub app_version: String,
     /// The engine's own version string.
@@ -55,6 +58,53 @@ pub struct Diagnostics {
     /// says and the least actionable, and this turns it into a name and a
     /// number.
     pub stalls: Vec<String>,
+
+    /// What the viewport is costing, once a frame has been drawn.
+    ///
+    /// Optional for the reason `renderer` is: the report is readable before
+    /// the window is, and one that could not be produced until the GPU was up
+    /// would be no use for diagnosing a GPU that did not come up.
+    pub render: Option<RenderDiagnostics>,
+}
+
+/// What the viewport drew, and what it cost.
+///
+/// The project measures its sculpting path carefully and measured its
+/// rendering path not at all, which made every claim about rendering cost an
+/// argument rather than a number. This is the number.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RenderDiagnostics {
+    /// The scene rectangle, in physical pixels — not the window's.
+    pub viewport: [u32; 2],
+    /// Samples per pixel the scene is drawn with.
+    pub samples: u32,
+    /// The occlusion pass's own resolution and settings, when it runs.
+    pub ao: Option<AoDiagnostics>,
+    /// GPU milliseconds per pass, in the order the passes run.
+    ///
+    /// Empty where the adapter has no timestamp queries, which is a different
+    /// thing from every pass costing nothing — [`Self::gpu_timing`] tells the
+    /// two apart.
+    pub gpu_passes: Vec<(String, f32)>,
+    /// Whether the adapter reports GPU time at all.
+    pub gpu_timing: bool,
+    pub draw_calls: u32,
+    /// Subtools the frustum test removed before they were drawn.
+    pub culled: u32,
+    pub triangles: u64,
+    /// Indices drawn as lines: the polyframe and the scaffolding.
+    pub lines: u64,
+    /// Bytes written to the device since the last report.
+    pub uploaded_bytes: u64,
+}
+
+/// How the occlusion pass is configured for the frame being reported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AoDiagnostics {
+    pub width: u32,
+    pub height: u32,
+    pub samples: u32,
+    pub temporal: bool,
 }
 
 impl Diagnostics {
@@ -100,6 +150,49 @@ impl Diagnostics {
                 );
             }
         }
+        if let Some(render) = &self.render {
+            line(
+                "viewport",
+                &format!(
+                    "{}x{} @ {}x MSAA",
+                    render.viewport[0], render.viewport[1], render.samples
+                ),
+            );
+            match &render.ao {
+                Some(ao) => line(
+                    "ao",
+                    &format!(
+                        "{}x{}, {} samples, temporal {}",
+                        ao.width,
+                        ao.height,
+                        ao.samples,
+                        if ao.temporal { "on" } else { "off" }
+                    ),
+                ),
+                None => line("ao", "off"),
+            }
+            line(
+                "geometry",
+                &format!(
+                    "{} draws ({} culled), {} triangles, {} lines, {} bytes uploaded",
+                    render.draw_calls,
+                    render.culled,
+                    render.triangles,
+                    render.lines,
+                    render.uploaded_bytes
+                ),
+            );
+            if render.gpu_timing {
+                for (pass, ms) in &render.gpu_passes {
+                    line(&format!("gpu {pass}"), &format!("{ms:.2} ms"));
+                }
+                if render.gpu_passes.is_empty() {
+                    line("gpu", "no frame measured yet");
+                }
+            } else {
+                line("gpu", "timestamps unavailable on this adapter");
+            }
+        }
         out
     }
 }
@@ -125,6 +218,7 @@ mod tests {
             fallbacks: Vec::new(),
             renderer: Some("Apple M3 Max (Metal)".into()),
             stalls: Vec::new(),
+            render: None,
         }
     }
 

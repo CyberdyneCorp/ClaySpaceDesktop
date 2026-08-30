@@ -71,8 +71,15 @@ pub struct Camera {
     pub preset: ViewPreset,
     /// Vertical field of view for the perspective projection, radians.
     pub fov_y: f32,
-    pub near: f32,
-    pub far: f32,
+    /// Roughly how big what is being looked at is, in world units.
+    ///
+    /// Not a framing decision — [`Camera::distance`] is that — but a depth
+    /// one: the far plane has to be past the back of the subject however close
+    /// the camera has come to its front, and the distance alone cannot say
+    /// where that is. Set by [`Camera::frame_bounds`], which is handed exactly
+    /// this, and left alone by orbiting, panning and zooming, none of which
+    /// change how big the subject is.
+    pub scene_radius: f32,
 }
 
 impl Default for Camera {
@@ -84,8 +91,7 @@ impl Default for Camera {
             pitch: 0.0,
             preset: ViewPreset::Perspective,
             fov_y: 45f32.to_radians(),
-            near: 0.01,
-            far: 1000.0,
+            scene_radius: 1.0,
         };
         camera.apply_preset(ViewPreset::Perspective);
         camera
@@ -125,26 +131,67 @@ impl Camera {
         view
     }
 
+    /// The near and far planes this camera should be drawn with.
+    ///
+    /// Derived rather than fixed. The pair used to be 0.01 and 1000 whatever
+    /// was on screen, which is two failures at once: a thumbnail-sized import
+    /// zoomed into is clipped away by a near plane larger than the model, and
+    /// a large one gets a depth buffer whose whole useful precision is spent
+    /// on the first hundredth of the range.
+    ///
+    /// The near plane tracks the viewing distance, so how close the camera can
+    /// come to a surface is the same at every scale. The far plane clears the
+    /// back of the subject from wherever the camera has got to, so zooming in
+    /// on the front of a form never clips its back away.
+    ///
+    /// Both change smoothly with the distance they are derived from, and
+    /// nothing on screen is a function of the depth *value* — the buffer is
+    /// compared, never displayed — so there is no popping to smooth away.
+    pub fn depth_range(&self) -> (f32, f32) {
+        // A thousandth of the way in. Under reversed-Z the cost of a small
+        // near plane is nearly nothing, which is the whole reason that
+        // convention is worth the trouble.
+        let near = (self.distance * 1e-3).clamp(1e-6, 0.1);
+        let far = (self.distance + self.scene_radius * 4.0).max(near * 1e3);
+        (near, far)
+    }
+
+    /// The projection, under the reversed-Z convention the viewport draws in.
+    ///
+    /// Reversed means the near plane maps to depth 1 and the far plane to 0.
+    /// Floating point has its precision concentrated near zero; a conventional
+    /// mapping spends that precision on the far plane, where nothing needs it,
+    /// and starves the near field, where a sculptor is working. Reversing the
+    /// range puts the two together and makes precision very nearly uniform
+    /// across the whole depth range.
+    ///
+    /// Obtained by handing glam the planes the other way round, which is
+    /// exactly what reversing the range is: `perspective_rh(fov, aspect, f, n)`
+    /// produces the matrix that sends `-n` to 1 and `-f` to 0. Writing the
+    /// sixteen entries out by hand instead would be the same matrix with more
+    /// ways to get a sign wrong; `the_depth_range_is_reversed` holds the claim.
     pub fn projection(&self, aspect: f32) -> Mat4 {
+        let (near, far) = self.depth_range();
         if self.preset.is_orthographic() {
             // Half-height is derived from the distance so that switching
             // projection keeps the subject the same size on screen.
             let half_height = self.distance * (self.fov_y * 0.5).tan();
             let half_width = half_height * aspect;
+            // Symmetric about the eye, so the subject is not clipped by a
+            // plane behind the camera when the view is turned; reversed by the
+            // same swap as the perspective case.
             #[allow(deprecated)]
             Mat4::orthographic_rh(
                 -half_width,
                 half_width,
                 -half_height,
                 half_height,
-                -self.far,
-                self.far,
+                far,
+                -far,
             )
         } else {
-            {
-                #[allow(deprecated)]
-                Mat4::perspective_rh(self.fov_y, aspect, self.near, self.far)
-            }
+            #[allow(deprecated)]
+            Mat4::perspective_rh(self.fov_y, aspect, far, near)
         }
     }
 
@@ -265,7 +312,7 @@ impl Camera {
         // a surface closer than that is clipped away, which looks exactly like
         // having gone through it.
         let gap = (focus - self.eye()).length();
-        let keep = (gap * Self::STANDOFF).max(self.near * 2.0);
+        let keep = (gap * Self::STANDOFF).max(self.depth_range().0 * 2.0);
         let room = (gap - keep).max(0.0);
         self.distance = wanted.max(self.distance - room);
 
@@ -289,8 +336,7 @@ impl Camera {
     pub fn frame_bounds(&mut self, min: Vec3, max: Vec3) {
         let size = max - min;
         if !size.is_finite() || size.max_element() <= 0.0 {
-            self.target = Vec3::ZERO;
-            self.distance = 4.0;
+            self.frame_default();
             return;
         }
         self.target = (min + max) * 0.5;
@@ -298,6 +344,11 @@ impl Camera {
         // vertical field of view with a margin.
         let radius = size.length() * 0.5;
         self.distance = (radius / (self.fov_y * 0.5).sin()).max(radius * 1.5) * 1.1;
+        // And remembered, because it is what the far plane is measured
+        // against: zooming in on the front of this form must not clip its
+        // back away, and the distance the camera has zoomed to cannot say
+        // where that back is.
+        self.scene_radius = radius;
     }
 
     /// The world-space ray through a point on screen.
@@ -330,6 +381,7 @@ impl Camera {
     pub fn frame_default(&mut self) {
         self.target = Vec3::ZERO;
         self.distance = 4.0;
+        self.scene_radius = 1.0;
     }
 }
 
@@ -734,6 +786,151 @@ mod zoom_tests {
             "the pivot snapped onto the surface, which swings the view on \
              every notch"
         );
+    }
+
+    /// The near plane maps to depth 1 and the far plane to 0.
+    ///
+    /// This is the whole claim of a reversed range, and it is one sign flip
+    /// away from a viewport that draws nothing: every pipeline compares
+    /// `GreaterEqual` and the buffer clears to zero, so a projection that
+    /// still ran the other way would fail the depth test everywhere.
+    #[test]
+    fn the_depth_range_is_reversed() {
+        let camera = Camera::default();
+        let (near, far) = camera.depth_range();
+        let projection = camera.projection(1.5);
+
+        // Points on the view axis at each plane. The camera looks down -z.
+        let depth_at = |distance: f32| {
+            let clip = projection * glam::Vec4::new(0.0, 0.0, -distance, 1.0);
+            clip.z / clip.w
+        };
+        assert!(
+            (depth_at(near) - 1.0).abs() < 1e-3,
+            "the near plane came out at {}, not 1",
+            depth_at(near)
+        );
+        assert!(
+            depth_at(far).abs() < 1e-3,
+            "the far plane came out at {}, not 0",
+            depth_at(far)
+        );
+        // And monotonic between them, or the depth test orders nothing.
+        let mid = depth_at((near + far) * 0.5);
+        assert!(
+            mid > 0.0 && mid < 1.0,
+            "a point between the planes came out at {mid}"
+        );
+        assert!(
+            depth_at(near * 4.0) > depth_at(far * 0.5),
+            "nearer must compare greater under a reversed range"
+        );
+    }
+
+    /// The orthographic presets reverse too, or switching to Front would draw
+    /// the back of the form in front of it.
+    #[test]
+    fn the_orthographic_presets_reverse_with_it() {
+        let mut camera = Camera::default();
+        camera.apply_preset(ViewPreset::Front);
+        let projection = camera.projection(1.5);
+        let depth_at = |distance: f32| {
+            let clip = projection * glam::Vec4::new(0.0, 0.0, -distance, 1.0);
+            clip.z / clip.w
+        };
+        assert!(
+            depth_at(1.0) > depth_at(10.0),
+            "nearer must compare greater under an orthographic reversed range too"
+        );
+    }
+
+    /// The occlusion passes reconstruct a view position from a depth and the
+    /// inverse of this matrix. If the two disagree the whole pass shades a
+    /// surface that is not where the sculpt is.
+    #[test]
+    fn the_projection_round_trips_through_its_inverse() {
+        for preset in ViewPreset::ALL {
+            let mut camera = Camera::default();
+            camera.apply_preset(preset);
+            let projection = camera.projection(16.0 / 9.0);
+            let inverse = projection.inverse();
+
+            for point in [
+                glam::Vec3::new(0.0, 0.0, -1.0),
+                glam::Vec3::new(0.7, -0.4, -2.5),
+                glam::Vec3::new(-1.2, 0.9, -8.0),
+            ] {
+                let clip = projection * point.extend(1.0);
+                let back = inverse * clip;
+                let back = back.truncate() / back.w;
+                assert!(
+                    (back - point).length() < 1e-2,
+                    "{preset:?}: {point} came back as {back}"
+                );
+            }
+        }
+    }
+
+    /// A form far smaller than the old fixed near plane of 0.01 has to be
+    /// drawable. It was not: the camera framed it at a distance under the near
+    /// plane, so the whole model sat in front of the clip and nothing showed.
+    #[test]
+    fn a_tiny_form_is_not_clipped_away_by_the_near_plane() {
+        let mut camera = Camera::default();
+        camera.frame_bounds(Vec3::splat(-0.002), Vec3::splat(0.002));
+        let (near, far) = camera.depth_range();
+        assert!(
+            near < camera.distance * 0.5,
+            "the near plane at {near} is half the {} the camera stands off",
+            camera.distance
+        );
+        assert!(
+            far > camera.distance + camera.scene_radius,
+            "the far plane at {far} is in front of the back of the form"
+        );
+    }
+
+    /// And a form far larger. The far plane has to clear its back from
+    /// wherever the camera has zoomed to, which the viewing distance alone
+    /// cannot say — zooming into the front of a bust must not clip the back of
+    /// its head away.
+    #[test]
+    fn the_far_plane_clears_the_back_of_a_form_zoomed_into() {
+        let mut camera = Camera::default();
+        camera.frame_bounds(Vec3::splat(-100.0), Vec3::splat(100.0));
+        let radius = camera.scene_radius;
+        // Right up against the front of it.
+        camera.distance = radius * 0.01;
+        let (near, far) = camera.depth_range();
+        assert!(
+            far > camera.distance + radius * 2.0,
+            "zoomed in to {}, the far plane at {far} clips the back of a form \
+             of radius {radius}",
+            camera.distance
+        );
+        assert!(near > 0.0 && near < far);
+    }
+
+    /// The range moves smoothly with the distance it is derived from. A near
+    /// plane that jumped would clip a surface in and out between two frames of
+    /// one continuous zoom.
+    #[test]
+    fn the_depth_range_does_not_jump_as_the_camera_moves() {
+        let mut camera = Camera::default();
+        camera.frame_bounds(Vec3::splat(-1.0), Vec3::splat(1.0));
+        let mut previous = camera.depth_range();
+        for _ in 0..40 {
+            camera.zoom(0.5);
+            let range = camera.depth_range();
+            let ratio = range.0 / previous.0;
+            assert!(
+                (0.5..2.0).contains(&ratio),
+                "the near plane went from {} to {} in one notch",
+                previous.0,
+                range.0
+            );
+            previous = range;
+        }
     }
 
     #[test]

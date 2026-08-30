@@ -136,6 +136,7 @@ fn measure_everything(policy: &BackendPolicy, run: &mut Run) {
     run.group("dab", |run| groups::dab::measure(policy, run));
     run.group("locality", |run| groups::locality::measure(policy, run));
     run.group("frame", |run| groups::render::measure(policy, run));
+    run.group("render", |run| groups::render::measure_passes(policy, run));
     run.group("memory", |run| groups::memory::measure(policy, run));
     run.group("tape", |run| groups::tape::measure(policy, run));
     run.group("brush", |run| groups::brushes::measure(policy, run));

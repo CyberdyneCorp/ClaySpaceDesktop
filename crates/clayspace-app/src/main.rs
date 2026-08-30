@@ -23,8 +23,9 @@ use clayspace_model::{
 };
 use clayspace_view::shell::{self, region, ArmatureState, ShellState};
 use clayspace_view::{
-    mirrored_cursors, Action, ArmatureView, BrushCursor, Camera, Gpu, GpuMesh, Locale, MatCap,
-    Overlays, Renderer, Shortcuts, Strings, SurfaceLoss, Vertex, ViewPreset, WindowSurface,
+    mirrored_cursors, Action, ArmatureView, BrushCursor, Camera, Gpu, GpuMesh, InteractionState,
+    Locale, MatCap, Overlays, QualityGovernor, Renderer, Shortcuts, Strings, SurfaceLoss, Vertex,
+    ViewPreset, ViewportProfile, WindowSurface,
 };
 use clayspace_vm::{
     ArmatureViewModel, Axis, BooleanViewModel, Command, CommandQueue, CurveViewModel,
@@ -208,6 +209,13 @@ struct App {
     graphics: Option<Graphics>,
 
     drag: Drag,
+    /// What each frame is worth spending on, and when that may rise.
+    ///
+    /// Here rather than in the renderer because what the pointer is doing is
+    /// this layer's knowledge: `drag` is right beside it, and a renderer that
+    /// worked the answer out for itself would be a second definition of "is
+    /// the user sculpting" for the two to disagree over.
+    quality: QualityGovernor,
     /// Where the pointer last met the surface, and the direction it arrived
     /// from.
     ///
@@ -404,6 +412,7 @@ impl App {
             window: None,
             graphics: None,
             drag: Drag::None,
+            quality: QualityGovernor::new(ViewportProfile::default()),
             hover: None,
             viewport: None,
             overlay_symmetry: [false; 3],
@@ -438,6 +447,29 @@ impl App {
             rig_plane: None,
             rig_depth_at_press: 0,
             strings: Strings::for_locale(locale),
+        }
+    }
+
+    /// Tells the quality governor what the pointer is doing, and the renderer
+    /// what the governor decided.
+    ///
+    /// Asks for another frame when the answer moved. Without that this
+    /// application, which draws on demand, would settle to its best quality
+    /// and never draw a frame at it — the rise happens between frames, so
+    /// nothing would ever show it.
+    fn settle_quality(&mut self, now: Instant) {
+        let state = InteractionState {
+            sculpting: matches!(
+                self.drag,
+                Drag::Sculpt | Drag::Rig | Drag::Cage | Drag::Gizmo | Drag::Curve
+            ),
+            camera_moving: matches!(self.drag, Drag::Orbit | Drag::Pan),
+        };
+        if self.quality.observe(state, now) {
+            self.request_redraw();
+        }
+        if let Some(graphics) = self.graphics.as_mut() {
+            graphics.renderer.set_quality(self.quality.quality());
         }
     }
 
@@ -1187,10 +1219,7 @@ impl App {
                 // can never name indices that a later rebuild moved.
                 let spans: Vec<clayspace_view::MeshSpan> = spans
                     .into_iter()
-                    .map(|span| clayspace_view::MeshSpan {
-                        layer: span.layer,
-                        indices: span.indices,
-                    })
+                    .map(|span| clayspace_view::MeshSpan::new(span.layer, span.indices))
                     .collect();
                 (vertices, indices, spans)
             });
@@ -2272,6 +2301,11 @@ impl App {
             .graphics
             .as_ref()
             .map(|graphics| graphics.gpu.adapter_description());
+        report.render = self.graphics.as_ref().map(|graphics| {
+            graphics
+                .renderer
+                .diagnostics(graphics.surface.framebuffer())
+        });
         report.stalls = self.stalls.lines();
         report
     }
@@ -3128,6 +3162,7 @@ impl App {
             return;
         }
         self.edited_this_frame = false;
+        self.settle_quality(frame_started);
 
         // The interface is built first, because it decides where the viewport
         // is and therefore what a pointer position means.
@@ -3453,9 +3488,9 @@ impl App {
         // Presentation, so it is pushed rather than stored: the ViewModel owns
         // whether the polyframe is on and the renderer owns whether it draws,
         // and reading it here each frame is what keeps them from drifting.
-        graphics
-            .renderer
-            .set_polyframe(*self.sculpt.polyframe().get());
+        let polyframe = *self.sculpt.polyframe().get();
+        let gpu = graphics.gpu.clone();
+        graphics.renderer.set_polyframe(&gpu, polyframe);
         graphics.renderer.render(
             &graphics.gpu,
             &view,

@@ -396,6 +396,7 @@ impl BackendPolicy {
                 .collect(),
             renderer: None,
             stalls: Vec::new(),
+            render: None,
         }
     }
 }

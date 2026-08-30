@@ -30,6 +30,11 @@ pub enum Skip {
     NoGestureForTool,
     /// The operation is not reachable on this representation.
     NotOnThisRepresentation,
+    /// The adapter has no timestamp queries, so per-pass GPU time cannot be
+    /// measured on it. The frame timings around it are still real.
+    NoGpuTimestamps,
+    /// The viewport being measured is larger than the device will allocate.
+    ViewportTooLarge,
     /// The source layer states no bounds, so a crossing that rasterizes into a
     /// region has nowhere to stop.
     ///
@@ -56,7 +61,10 @@ impl Skip {
     /// reason that appeared since the baseline was recorded is something
     /// breaking. See `compare::missing`.
     pub const fn is_the_machine(self) -> bool {
-        matches!(self, Self::NoHeadlessGpu | Self::NoBackends)
+        matches!(
+            self,
+            Self::NoHeadlessGpu | Self::NoBackends | Self::NoGpuTimestamps | Self::ViewportTooLarge
+        )
     }
 
     pub const fn reason(self) -> &'static str {
@@ -70,6 +78,8 @@ impl Skip {
             Self::CacheUnreadable => "the brick cache would not report its statistics",
             Self::NoGestureForTool => "no gesture this harness can synthesise",
             Self::NotOnThisRepresentation => "not reachable on this representation",
+            Self::NoGpuTimestamps => "the adapter reports no GPU timestamps",
+            Self::ViewportTooLarge => "the device will not allocate a target this large",
             Self::NoRegionToConvertInto => "the source layer states no bounds to convert within",
         }
     }

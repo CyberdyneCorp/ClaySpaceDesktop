@@ -13,6 +13,7 @@
 
 pub mod camera;
 pub mod design;
+pub mod frustum;
 pub mod glyphs;
 pub mod gpu;
 pub mod icons;
@@ -20,6 +21,8 @@ pub mod layout;
 pub mod matcap;
 pub mod offscreen;
 pub mod palette;
+pub mod profiler;
+pub mod quality;
 pub mod renderer;
 pub mod shell;
 pub mod shortcuts;
@@ -28,11 +31,17 @@ pub mod window;
 
 pub use camera::{Camera, ViewPreset};
 pub use design::{contrast, Tokens};
-pub use gpu::{Framebuffer, Gpu, GpuError};
+pub use frustum::Frustum;
+pub use gpu::{Framebuffer, Gpu, GpuError, MsaaQuality};
 pub use icons::Icon;
 pub use layout::{Layout, Panel};
 pub use matcap::MatCap;
 pub use offscreen::{Image, OffscreenTarget};
+pub use profiler::{GpuFrameTiming, GpuPass, GpuProfiler};
+pub use quality::{
+    InteractionState, QualityGovernor, ShadingMode, StudioMaterial, ViewportProfile,
+    ViewportQuality,
+};
 pub use renderer::{
     frame_about, mirrored_cursors, ArmatureView, BrushCursor, GizmoView, GpuMesh, LatticeView,
     MeshSpan, Overlays, Reference, Renderer, SymmetryAxis, Vertex, RING_REACH, SCALE_BOX_REACH,
