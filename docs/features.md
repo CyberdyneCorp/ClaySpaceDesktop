@@ -26,7 +26,7 @@ one.
 | Padrão | `clay_layer_apply_stroke` with relief | all three | Displaces the surface along its normal |
 | Inflar | `clay_voxel_sculpt_inflate` / relief, wider and softer | all three | Swells the footprint; a negative amount erodes. On a field it is relief like Padrão — the engine binds both to it — with a region and rim 1.35× the brush and 0.32 of the lift, so it swells where Padrão ridges |
 | Suavizar | `clay_sdf_smooth_*` / `clay_item_volume_relax` / `clay_voxel_sculpt_smooth` | all three | Relaxes the surface. Live on the field side, through a transaction |
-| Mover | `clay_layer_move_surface` | SDF, mesh | Drags the assembled surface. Buds rather than stretches |
+| Mover | `clay_sdf_move_*` / `clay_layer_move_surface` | SDF, mesh | Drags the assembled surface. Buds rather than stretches. Live on the field side, through a transaction |
 | Pinçar | `clay_voxel_sculpt_pinch` | voxel, mesh | Moves surface cells toward the brush centre |
 | Raspar | `clay_voxel_sculpt_scrape` | voxel, mesh | Flattens and smooths from one snapshot |
 | Planar | `clay_item_volume_flatten_from`, cut-only | SDF, mesh | Planes without filling, which keeps a facet crisp |
@@ -165,8 +165,8 @@ On a **field**, through the layer's mirror — `clay_set_layer_mirror` reflects
 the layer's items, so both halves belong to one operation and undo together.
 That covers the brushes that *add* an item: Padrão, Inflar, Camada and Puxar.
 
-The five that **bake** — Mover, Suavizar, Relaxar, Planar and Polir — rewrite
-the field rather than adding an item, and the mirror cannot reach them.
+The five that **rewrite the field** rather than adding an item — Mover,
+Suavizar, Relaxar, Planar and Polir — cannot be reached by the layer's mirror.
 Measured, a relax with X mirrored took the surface under the stroke from 1.1467
 to 1.1409 and left its reflection at **1.1467 exactly**. Their strokes are
 reflected instead, the way a mesh's and a grid's are.
@@ -554,6 +554,57 @@ the brick cache holds the hard union of every visible SDF layer and attributes
 no brick to the layer it came from, while a transaction previews one layer
 alone. With a second one in the document the gesture falls back to being held
 whole — correct, just not live.
+
+**Move is live too, and it is where the transaction pays most.** Mover does not
+bake; it warps. Each drag appends a `grab` to the deformer chain of every item
+it reaches, and the engine's Lipschitz bound for a chain is the **product** of
+its links — so a chain that grows costs the marcher geometrically, not
+linearly. Writing one grab per *segment*, as the application did through
+0.60.0, therefore made a drag cost the field as much as it was finely cut.
+Measured on the starting form, twelve drags of six segments each:
+
+| delivery | deformer chain | safe step scale |
+|---|---|---|
+| one grab per segment | 72 | 0.000608 |
+| one grab per gesture | 12 | 0.002456 |
+
+The second is what `clay_sdf_move_*` gives: the edit list is walked **once**
+when the pointer goes down, every frame after that costs only the items the
+drag moves, and the commit rebuilds one chain per item from what was captured
+at the anchor — so the gesture costs the same however many segments drew it,
+which is what `live_stroke::a_drag_shows_itself_and_costs_the_field_the_same_
+however_it_is_cut` holds. It also fixes a correctness bug on the way: an update
+takes the drag **measured from the anchor**, never an increment, where segments
+each anchored where the last one stopped and composed into a pull further than
+the gesture ever asked for.
+
+Unlike Smooth, this one does not care how many field subtools are visible,
+because its preview is not drawn from a lattice of its own.
+
+**Drawing a drag the document does not carry.** A Smooth transaction hands over
+sampled bricks; a Move transaction hands over no samples at all. ClayCore's C++
+class exposes a `preview_layer()` for exactly this and **the C ABI does not
+carry it**, so the application takes the other route the header invites — the
+resolved grabs, "so a host can reproduce the preview through machinery it
+already has". Once per segment: write the grabs the current total resolves to
+onto the layer, let the brick cache sample the dragged surface out of the
+document, and undo them again. What stays on screen is the cache, which keeps
+what it was last given until something marks those bricks dirty.
+
+Undoing inside the same segment is not tidiness. It is what makes the commit
+legal — a commit re-checks a stamp derived from the layer's **content** and
+refuses a layer that moved underneath it — and it is what keeps the history
+honest, since the ViewModel counts a live segment by the undo depth it left
+behind. A segment that kept its preview would be counted as having written it,
+and cancelling the drag would then spend one undo per segment against history
+the gesture never made.
+
+The mirror is the engine's here and not the application's. `baked_stroke`
+reflects a gesture and runs the verb once per image, because the layer mirror
+cannot reach the verbs that rewrite a field; `clay_sdf_move_*` states that it
+reflects the drag into every image the layer emits and resolves one grab per
+image, so the live path does **not** reflect it again. Measured, both routes
+pull each side by the same 0.1345 — `move_mirror.rs` holds both.
 
 It costs about 17 ms a move on a 140,774-vertex mesh, nearly all of it the
 stamp itself rather than the buffer it fills (1.2 ms). Dropping the surface

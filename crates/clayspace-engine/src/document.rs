@@ -431,6 +431,17 @@ pub struct ClayDocument {
     /// While this is set the viewport meshes the *preview's* cache instead of
     /// the document's, because the document deliberately has not changed yet.
     live_smooth: Option<crate::live::LiveSmooth>,
+    /// The Move drag in progress, when one is being previewed rather than
+    /// written per segment. See [`crate::live::LiveMove`] for what writing one
+    /// per segment costs the field.
+    live_move: Option<crate::live::LiveMove>,
+    /// A Move gesture that may be live but has no anchor yet.
+    ///
+    /// `open_live_gesture` is told the tool and the symmetry and not where the
+    /// pointer went down, and a drag is anchored there — so the refusals are
+    /// answered at pointer-down and the transaction begins on the first
+    /// segment, which is the first thing that carries a position.
+    live_move_armed: bool,
     /// History entries opening the live gesture recorded before it began.
     live_opening_entries: usize,
     /// The gesture the preview has been showing, kept so that closing it can
@@ -693,6 +704,8 @@ impl ClayDocument {
             previewing: false,
             live_generation: 0,
             live_smooth: None,
+            live_move: None,
+            live_move_armed: false,
             live_opening_entries: 0,
             live_gesture: None,
             surface_epoch: 0,
@@ -2214,6 +2227,14 @@ impl ClayDocument {
                 .3
                 .extend_from_slice(samples);
         }
+        // The live drag is not reflected here, and that is the engine's rule
+        // rather than an omission: `clay_sdf_move_*` reflects the drag into
+        // every image the layer emits of it — one grab per image, which
+        // `LiveMove::draw` writes — where the baked verbs below have to be
+        // reflected by hand because the layer mirror cannot reach them.
+        if tool == ToolKind::Mover && (self.live_move.is_some() || self.live_move_armed) {
+            return self.live_move_drag(brush, samples);
+        }
         let mut outcome = EditOutcome::NOTHING;
         for mirror in mirrors(symmetry) {
             let reflected: Vec<GestureSample> = samples
@@ -2460,6 +2481,91 @@ impl ClayDocument {
         })
     }
 
+    /// One segment of a live Move drag.
+    ///
+    /// Where [`Self::move_surface_stroke`] writes a grab per segment — and so
+    /// multiplies the layer's Lipschitz bound by one factor per segment — this
+    /// advances one transaction and redraws its preview. The document carries
+    /// no part of the drag until the pointer comes up; what the sculptor sees
+    /// is the brick cache, filled from a preview written and immediately taken
+    /// back.
+    fn live_move_drag(
+        &mut self,
+        brush: BrushSettings,
+        samples: &[GestureSample],
+    ) -> Result<EditOutcome, ModelError> {
+        let brush = brush.sanitized();
+        let Some(last) = samples.last() else {
+            return Ok(EditOutcome::NOTHING);
+        };
+
+        // The first segment is what carries the anchor, so it is what opens
+        // the transaction. `samples[0]` is the press: a drag is sent from the
+        // point the pointer went down, which is what `is_path_driven` means.
+        if self.live_move.is_none() {
+            self.live_move_armed = false;
+            let layer = self.active_layer().id;
+            let anchor = samples[0].position;
+            let live = crate::live::LiveMove::begin(
+                &mut self.document,
+                layer,
+                anchor,
+                claycore::MoveParams {
+                    radius: brush.size.max(1e-3),
+                    ease: 0,
+                    front_only: true,
+                },
+            )?;
+            self.live_move = Some(live);
+        }
+
+        let Some(live) = self.live_move.as_mut() else {
+            return Ok(EditOutcome::NOTHING);
+        };
+        // A drag under the resolution moves nothing, and redrawing a preview
+        // of nothing spends two document edits per pointer event to no effect.
+        let anchor = live.anchor();
+        let travelled = (0..3)
+            .map(|axis| (last.position[axis] - anchor[axis]).powi(2))
+            .sum::<f32>()
+            .sqrt();
+        if travelled < 1e-4 {
+            return Ok(EditOutcome::NOTHING);
+        }
+
+        // Draw, sample, take back — in that order and inside one segment, so
+        // the segment leaves the engine's undo depth exactly where it found it.
+        // See `LiveMove::settle` for what counting it otherwise would cost.
+        let region = live.drag(&mut self.document, last.position)?;
+        let filled = self.refill_preview(region);
+        let settled = self
+            .live_move
+            .as_mut()
+            .map(|live| live.settle(&mut self.document))
+            .unwrap_or(Ok(()));
+        // The preview comes off the layer even when the fill failed: leaving it
+        // there would fail the commit as well, turning one bad segment into a
+        // lost gesture.
+        filled.and(settled)?;
+        Ok(EditOutcome {
+            changed: true,
+            dirty_bricks: self.dirty.len(),
+        })
+    }
+
+    /// Re-fills the region a live Move preview reached.
+    ///
+    /// Nothing but this marks those bricks, which is what leaves the drag on
+    /// screen after the preview has been taken back off the document: a brick
+    /// keeps what it was last given until something asks for it again.
+    fn refill_preview(&mut self, region: Option<([f32; 3], [f32; 3])>) -> Result<(), ModelError> {
+        match region {
+            Some((min, max)) => self.refill_region(min, max),
+            // The engine reports no bounds when the drag reached nothing.
+            None => Ok(()),
+        }
+    }
+
     /// Snakehook: a tendril along the drawn path, adding material.
     fn snakehook_stroke(
         &mut self,
@@ -2665,11 +2771,52 @@ impl ClayDocument {
             == 1
     }
 
+    /// Whether a Move drag can be previewed on the active layer.
+    ///
+    /// Unlike [`Self::live_smooth_is_possible`] this does not care how many
+    /// field subtools are visible. A relax preview is drawn from a lattice of
+    /// the transaction's own, which holds one layer and cannot compose the
+    /// rest of the document; a Move preview is drawn from the document's *own*
+    /// brick cache, which already holds the union of every visible SDF layer.
+    /// The drag is written into the document to be sampled and taken back
+    /// again — see [`crate::live::LiveMove`] — so what the cache reads is the
+    /// whole scene with the drag in it.
+    fn live_move_is_possible(&self) -> bool {
+        let active = self.active_layer();
+        active.representation == Representation::Sdf && active.protection.is_editable()
+    }
+
+    /// Answers the refusals a Move drag can be refused for without a position,
+    /// and points the mirror while nothing is holding the layer.
+    fn arm_live_move(&mut self, symmetry: [bool; 3]) -> bool {
+        if self.live_move.is_some() || self.live_move_armed || !self.live_move_is_possible() {
+            return false;
+        }
+        // Before the transaction opens, never during it: a commit refuses a
+        // layer that changed since begin, and the mirror is such a change.
+        let before = self.engine_undo_depth();
+        if self.point_the_mirror(symmetry).is_err() {
+            return false;
+        }
+        self.live_move_armed = true;
+        self.live_opening_entries = self.engine_undo_depth().saturating_sub(before);
+        true
+    }
+
     /// Opens a live gesture for a tool that would otherwise be held whole.
     ///
     /// Reports whether it is open, which is what tells the ViewModel to send
     /// segments as they are made instead of holding the whole stroke.
     pub fn open_live_gesture(&mut self, tool: ToolKind, symmetry: [bool; 3]) -> bool {
+        // Move is the other verb the transaction was built for, and it opens
+        // by a different door: a drag is anchored where the pointer went down
+        // and `open_live_gesture` is not told where that is, so the transaction
+        // begins on the gesture's first segment. What happens here is the half
+        // that can happen without a position — the refusals, and pointing the
+        // mirror before anything is holding the layer.
+        if tool == ToolKind::Mover {
+            return self.arm_live_move(symmetry);
+        }
         // Two of the four region tools, because the transaction is a *relax*:
         // Planar and Polir flatten, which is a different verb with no live
         // form in this release, and they stay held.
@@ -2713,6 +2860,9 @@ impl ClayDocument {
     /// Returns how many history entries the commit recorded, so a gesture that
     /// is abandoned afterwards knows how much to take back.
     pub fn close_live_gesture(&mut self) -> Result<usize, ModelError> {
+        if self.live_move.is_some() || self.live_move_armed {
+            return self.close_live_move();
+        }
         let Some(live) = self.live_smooth.take() else {
             return Ok(0);
         };
@@ -2763,6 +2913,9 @@ impl ClayDocument {
     /// still has to take back: the preview wrote nothing, but pointing the
     /// layer's mirror did.
     pub fn discard_live_gesture(&mut self) -> usize {
+        if self.live_move.is_some() || self.live_move_armed {
+            return self.discard_live_move();
+        }
         if self.live_smooth.take().is_none() {
             return 0;
         }
@@ -2771,8 +2924,44 @@ impl ClayDocument {
         std::mem::take(&mut self.live_opening_entries)
     }
 
+    /// Installs the drag as one grab per item, and reports what it recorded.
+    fn close_live_move(&mut self) -> Result<usize, ModelError> {
+        self.live_move_armed = false;
+        let opening = std::mem::take(&mut self.live_opening_entries);
+        let Some(live) = self.live_move.take() else {
+            // Armed and never dragged: the press opened nothing, so only the
+            // mirror it pointed is owed back.
+            return Ok(opening);
+        };
+        self.surface_epoch = self.surface_epoch.wrapping_add(1);
+        let (recorded, region) = live.commit(&mut self.document)?;
+        // After the commit, so the bricks are filled from the document that
+        // now carries the drag rather than from the one that briefly did.
+        self.refill_preview(region)?;
+        self.refresh_stats();
+        Ok(opening + recorded)
+    }
+
+    /// Abandons the drag. The document never carried it, so only the preview
+    /// has to be taken off the screen.
+    fn discard_live_move(&mut self) -> usize {
+        self.live_move_armed = false;
+        let opening = std::mem::take(&mut self.live_opening_entries);
+        let Some(live) = self.live_move.take() else {
+            return opening;
+        };
+        self.surface_epoch = self.surface_epoch.wrapping_add(1);
+        // Both halves are best-effort: this is the path an error already took,
+        // and failing to clean up a preview must not replace the first error
+        // with a second one.
+        if let Ok(region) = live.cancel(&mut self.document) {
+            let _ = self.refill_preview(region);
+        }
+        opening
+    }
+
     pub fn live_gesture_is_open(&self) -> bool {
-        self.live_smooth.is_some()
+        self.live_smooth.is_some() || self.live_move.is_some()
     }
 
     /// Whether a gesture is open and being previewed rather than banked.
@@ -5792,6 +5981,8 @@ impl ClayDocument {
             previewing: false,
             live_generation: 0,
             live_smooth: None,
+            live_move: None,
+            live_move_armed: false,
             live_opening_entries: 0,
             live_gesture: None,
             surface_epoch: 0,

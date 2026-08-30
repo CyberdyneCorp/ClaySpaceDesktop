@@ -1,10 +1,15 @@
 //! The live brush transactions, and the facts the application builds on.
 //!
-//! Smooth is adopted (see `clayspace-engine`'s `live` module); Move is wrapped
-//! and measured but deliberately not adopted, so this file is the only thing
-//! that runs it. That matters here for the reason `abi_surface.rs` gives: this
-//! crate is the workspace's only `unsafe`, and a wrapper nothing calls is a
-//! SAFETY comment nobody has checked.
+//! Both are adopted — see `clayspace-engine`'s `live` module, and its
+//! `live_smooth.rs` and `live_move.rs` for what the application promises on
+//! top of them. What is asserted here is the engine's half: the facts those
+//! promises are built on, stated where they can be checked against an engine
+//! upgrade rather than inferred from a surface that looks wrong.
+//!
+//! Move was wrapped a release before it was adopted, and the measurement in
+//! `a_session_of_drags_steepens_by_the_drag_and_no_longer_by_the_segment` is
+//! why it then was: a drag written per segment multiplies the layer's
+//! Lipschitz bound once per segment.
 //!
 //! The assertions about the *preview's shape* are not decoration either. The
 //! application relabels the preview's bricks into a cache of its own lattice
@@ -307,5 +312,140 @@ fn the_smooth_commit_installs_the_layer_as_one_volume() {
         1,
         "the commit was supposed to collapse the layer to the working volume; \
          if it no longer does, the reason for not using it may have gone"
+    );
+}
+
+// -- what the application's live Move rests on ------------------------------
+
+#[test]
+fn a_preview_grab_can_be_drawn_and_taken_back_under_an_open_drag() {
+    // The application draws a Move drag by writing the transaction's resolved
+    // grabs onto the layer, sampling them into its brick cache and undoing
+    // them again — the C ABI carries no `preview_layer`, so this is the only
+    // door. Three things have to hold for that to be sound, and this asserts
+    // all three rather than trusting them.
+    let (mut doc, layer) = sphere();
+    doc.enable_undo()
+        .expect("undo, as an interactive host has it");
+    let resting = reach(&doc);
+
+    let mut tx = MoveTransaction::begin(&mut doc, layer, [1.0, 0.0, 0.0], drag_params(), None)
+        .expect("begin");
+    tx.update([0.2, 0.0, 0.0]).expect("update");
+    let drawn: Vec<_> = tx
+        .reached()
+        .expect("reached")
+        .into_iter()
+        .flat_map(|node| {
+            tx.grabs(node)
+                .expect("grabs")
+                .into_iter()
+                .map(move |grab| (node, grab))
+        })
+        .collect();
+    assert!(!drawn.is_empty(), "a drag on the surface reaches its item");
+
+    let before = doc.undo_state().expect("undo state").undo_depth;
+    for (node, grab) in &drawn {
+        doc.add_grab(layer, *node, *grab).expect("draw the preview");
+    }
+    let depth = doc.undo_state().expect("undo state").undo_depth;
+
+    // One: the drawn preview moves the surface, or there is nothing to look at.
+    let previewed = reach(&doc);
+    assert!(
+        previewed > resting + 1e-3,
+        "the preview left the surface at {previewed} where it rested at \
+         {resting}: writing the resolved grabs drew nothing"
+    );
+
+    // Two: it is undoable, and each grab is its own entry — the application
+    // spends exactly as many undos as it wrote.
+    assert_eq!(
+        depth - before,
+        drawn.len(),
+        "a drawn grab has to be one undo entry; the application takes its \
+         preview back by spending one per grab"
+    );
+    for _ in before..depth {
+        doc.undo().expect("take the preview back");
+    }
+    assert!(
+        (reach(&doc) - resting).abs() < 1e-4,
+        "undoing the preview did not put the surface back"
+    );
+
+    // Three: the commit still accepts the layer. It re-checks a stamp derived
+    // from the layer's CONTENT, and the whole design depends on that stamp
+    // coming back when the content does.
+    tx.commit()
+        .expect("a layer edited and restored is a layer that did not change");
+    assert_eq!(
+        chain(&doc, layer),
+        1,
+        "the commit writes the drag as one grab"
+    );
+    assert!(
+        (reach(&doc) - previewed).abs() < 1e-4,
+        "what the gesture previewed is not what its commit installed"
+    );
+}
+
+#[test]
+fn a_session_of_drags_steepens_by_the_drag_and_no_longer_by_the_segment() {
+    // The measurement behind adopting the transaction. A drag arrives in
+    // segments; the question is whether the field pays per segment or per
+    // gesture, because the deformer chain's Lipschitz bound MULTIPLIES.
+    const DRAGS: usize = 12;
+    const SEGMENTS: usize = 6;
+
+    let chain_after = |transactional: bool| {
+        let (mut doc, layer) = sphere();
+        for drag in 0..DRAGS {
+            let base = drag as f32 * 0.03;
+            if transactional {
+                let mut tx =
+                    MoveTransaction::begin(&mut doc, layer, [1.0, base, 0.0], drag_params(), None)
+                        .expect("begin");
+                for segment in 1..=SEGMENTS {
+                    tx.update([0.01 * segment as f32, 0.0, 0.0])
+                        .expect("update");
+                }
+                tx.commit().expect("commit");
+            } else {
+                // As the application dragged before: one call per segment,
+                // each re-anchored where the last one stopped.
+                for segment in 0..SEGMENTS {
+                    doc.move_surface(
+                        layer,
+                        [1.0, base + segment as f32 * 0.01, 0.0],
+                        [0.01, 0.0, 0.0],
+                        drag_params(),
+                    )
+                    .expect("segment");
+                }
+            }
+        }
+        let report = doc.field_report(layer, 0.5).expect("report");
+        (report.longest_deformer_chain, report.safe_step_scale)
+    };
+
+    let (segmented, segmented_step) = chain_after(false);
+    let (transactional, transactional_step) = chain_after(true);
+
+    assert_eq!(
+        segmented as usize,
+        DRAGS * SEGMENTS,
+        "the segmented drag is supposed to leave one grab per segment"
+    );
+    assert_eq!(
+        transactional as usize, DRAGS,
+        "a transactional drag leaves one grab per GESTURE, however many \
+         segments drew it"
+    );
+    assert!(
+        transactional_step > segmented_step * 3.0,
+        "the safe step scale should improve by roughly the segments-per-drag \
+         factor: {transactional_step} against {segmented_step}"
     );
 }
