@@ -1636,6 +1636,28 @@ impl Renderer {
         planes
     }
 
+    /// Draws a whole mesh with one pipeline, and nothing if it is empty.
+    ///
+    /// Ten of these blocks were written out in the frame, identical but for
+    /// which mesh and which pipeline — and one of them setting the wrong
+    /// buffer would draw the wrong geometry with the right state, which is a
+    /// picture that looks deliberate.
+    fn draw_mesh(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        mesh: &GpuMesh,
+        pipeline: &wgpu::RenderPipeline,
+        primitive: Primitive,
+    ) {
+        if mesh.is_empty() {
+            return;
+        }
+        pass.set_pipeline(pipeline);
+        pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+        pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+        self.draw_indexed(pass, 0..mesh.index_count, primitive);
+    }
+
     /// Makes a draw call and counts it.
     ///
     /// Every indexed draw in this renderer goes through here, so the count is
@@ -2072,19 +2094,12 @@ impl Renderer {
             pass.set_viewport(scene[0], scene[1], scene[2], scene[3], 0.0, 1.0);
             pass.set_bind_group(0, &self.bind_group, &[]);
 
-            if !self.overlay_mesh.is_empty() {
-                pass.set_pipeline(&self.overlay_pipeline);
-                pass.set_vertex_buffer(0, self.overlay_mesh.vertices.slice(..));
-                pass.set_index_buffer(
-                    self.overlay_mesh.indices.slice(..),
-                    wgpu::IndexFormat::Uint32,
-                );
-                self.draw_indexed(
-                    &mut pass,
-                    0..self.overlay_mesh.index_count,
-                    Primitive::Lines,
-                );
-            }
+            self.draw_mesh(
+                &mut pass,
+                &self.overlay_mesh,
+                &self.overlay_pipeline,
+                Primitive::Lines,
+            );
 
             // The references first, and writing no depth, so everything else
             // is drawn over them whichever side of them the camera is on.
@@ -2096,14 +2111,13 @@ impl Renderer {
             // is three planes at most, so it is a sort rather than the
             // order-independent machinery a scene full of glass would want.
             for (mesh, bind_group) in self.references_back_to_front(camera.eye()) {
-                if mesh.is_empty() {
-                    continue;
-                }
-                pass.set_pipeline(&self.reference_pipeline);
                 pass.set_bind_group(0, bind_group, &[]);
-                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                self.draw_indexed(&mut pass, 0..mesh.index_count, Primitive::Triangles);
+                self.draw_mesh(
+                    &mut pass,
+                    mesh,
+                    &self.reference_pipeline,
+                    Primitive::Triangles,
+                );
             }
             // Back to the scene's own bindings, which the loop above replaced.
             pass.set_bind_group(0, &self.bind_group, &[]);
@@ -2126,12 +2140,7 @@ impl Renderer {
                 pass.set_bind_group(1, &map.sampled, &[]);
             }
 
-            if !mesh.is_empty() {
-                pass.set_pipeline(surface);
-                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                self.draw_indexed(&mut pass, 0..mesh.index_count, Primitive::Triangles);
-            }
+            self.draw_mesh(&mut pass, mesh, surface, Primitive::Triangles);
 
             // The mesh layers, in the same pass and with the same pipeline, so
             // they take the same material, the same depth and the same
@@ -2162,46 +2171,29 @@ impl Renderer {
             // rather than lines: it is a ribbon a couple of pixels wide, so
             // that it has an edge for multisampling to resolve and reads the
             // same weight at any distance. See `overlays::Ribbon`.
-            if !self.cursor_mesh.is_empty() {
-                pass.set_pipeline(&self.cursor_pipeline);
-                pass.set_vertex_buffer(0, self.cursor_mesh.vertices.slice(..));
-                pass.set_index_buffer(
-                    self.cursor_mesh.indices.slice(..),
-                    wgpu::IndexFormat::Uint32,
-                );
-                self.draw_indexed(&mut pass, 0..self.cursor_mesh.index_count, Primitive::Lines);
-            }
+            self.draw_mesh(
+                &mut pass,
+                &self.cursor_mesh,
+                &self.cursor_pipeline,
+                Primitive::Lines,
+            );
 
             // The rig, over the surface it skins.
             // The membrane first: it is translucent and writes no depth, so
             // the spheres and links drawn after it read through rather than
             // being hidden by it.
-            if !self.membrane_mesh.is_empty() {
-                pass.set_pipeline(&self.membrane_pipeline);
-                pass.set_vertex_buffer(0, self.membrane_mesh.vertices.slice(..));
-                pass.set_index_buffer(
-                    self.membrane_mesh.indices.slice(..),
-                    wgpu::IndexFormat::Uint32,
-                );
-                self.draw_indexed(
-                    &mut pass,
-                    0..self.membrane_mesh.index_count,
-                    Primitive::Triangles,
-                );
-            }
-            if !self.armature_mesh.is_empty() {
-                pass.set_pipeline(&self.overlay_pipeline);
-                pass.set_vertex_buffer(0, self.armature_mesh.vertices.slice(..));
-                pass.set_index_buffer(
-                    self.armature_mesh.indices.slice(..),
-                    wgpu::IndexFormat::Uint32,
-                );
-                self.draw_indexed(
-                    &mut pass,
-                    0..self.armature_mesh.index_count,
-                    Primitive::Lines,
-                );
-            }
+            self.draw_mesh(
+                &mut pass,
+                &self.membrane_mesh,
+                &self.membrane_pipeline,
+                Primitive::Triangles,
+            );
+            self.draw_mesh(
+                &mut pass,
+                &self.armature_mesh,
+                &self.overlay_pipeline,
+                Primitive::Lines,
+            );
         }
 
         // The radius of everything drawn with depth: the surface and the mesh
@@ -2320,32 +2312,21 @@ impl Renderer {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        pass.set_pipeline(&map.pipeline);
         // Group 0 is in the pipeline's layout because the studio shader puts
         // the shadow bindings in group 1, and a layout has to describe every
         // group its bindings sit in. This pass reads nothing from it.
         pass.set_bind_group(0, &self.bind_group, &[]);
         pass.set_bind_group(1, &map.casting, &[]);
 
-        if !mesh.is_empty() {
-            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-            pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-            self.draw_indexed(&mut pass, 0..mesh.index_count, Primitive::Triangles);
-        }
-        if !self.mesh_layers.is_empty() {
-            pass.set_vertex_buffer(0, self.mesh_layers.vertices.slice(..));
-            pass.set_index_buffer(
-                self.mesh_layers.indices.slice(..),
-                wgpu::IndexFormat::Uint32,
-            );
-            // Every span, not the frustum-culled set: a subtool the *camera*
-            // cannot see can still stand between the light and one it can.
-            self.draw_indexed(
-                &mut pass,
-                0..self.mesh_layers.index_count,
-                Primitive::Triangles,
-            );
-        }
+        self.draw_mesh(&mut pass, mesh, &map.pipeline, Primitive::Triangles);
+        // Every span, not the frustum-culled set: a subtool the *camera*
+        // cannot see can still stand between the light and one it can.
+        self.draw_mesh(
+            &mut pass,
+            &self.mesh_layers,
+            &map.pipeline,
+            Primitive::Triangles,
+        );
     }
 
     /// Builds the passes' bind groups for this framebuffer, if they are not
@@ -2444,33 +2425,19 @@ impl Renderer {
         pass.set_viewport(scene[0], scene[1], scene[2], scene[3], 0.0, 1.0);
         pass.set_bind_group(0, &self.bind_group, &[]);
 
-        if !self.lattice_mesh.is_empty() {
-            pass.set_pipeline(&self.scaffold_pipeline);
-            pass.set_vertex_buffer(0, self.lattice_mesh.vertices.slice(..));
-            pass.set_index_buffer(
-                self.lattice_mesh.indices.slice(..),
-                wgpu::IndexFormat::Uint32,
-            );
-            self.draw_indexed(
-                &mut pass,
-                0..self.lattice_mesh.index_count,
-                Primitive::Lines,
-            );
-        }
+        self.draw_mesh(
+            &mut pass,
+            &self.lattice_mesh,
+            &self.scaffold_pipeline,
+            Primitive::Lines,
+        );
         // The solid handles last, over the shafts they cap.
-        if !self.lattice_solid_mesh.is_empty() {
-            pass.set_pipeline(&self.scaffold_solid_pipeline);
-            pass.set_vertex_buffer(0, self.lattice_solid_mesh.vertices.slice(..));
-            pass.set_index_buffer(
-                self.lattice_solid_mesh.indices.slice(..),
-                wgpu::IndexFormat::Uint32,
-            );
-            self.draw_indexed(
-                &mut pass,
-                0..self.lattice_solid_mesh.index_count,
-                Primitive::Triangles,
-            );
-        }
+        self.draw_mesh(
+            &mut pass,
+            &self.lattice_solid_mesh,
+            &self.scaffold_solid_pipeline,
+            Primitive::Triangles,
+        );
 
         // The navigation gizmo, in its own corner viewport so it keeps a fixed
         // size whatever the window does. It shares the camera's rotation and
@@ -2490,10 +2457,12 @@ impl Renderer {
                 1.0,
             );
             pass.set_bind_group(0, &self.gizmo_bind_group, &[]);
-            pass.set_pipeline(&self.scaffold_pipeline);
-            pass.set_vertex_buffer(0, self.gizmo_mesh.vertices.slice(..));
-            pass.set_index_buffer(self.gizmo_mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-            self.draw_indexed(&mut pass, 0..self.gizmo_mesh.index_count, Primitive::Lines);
+            self.draw_mesh(
+                &mut pass,
+                &self.gizmo_mesh,
+                &self.scaffold_pipeline,
+                Primitive::Lines,
+            );
         }
     }
 
