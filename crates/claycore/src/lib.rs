@@ -29,6 +29,7 @@ mod consolidate;
 mod descriptor;
 mod document;
 mod error;
+mod live;
 mod mask;
 mod mesh;
 mod mesh_sculpt;
@@ -41,7 +42,7 @@ pub use authoring::{Blend, Influence, LayerInfo, LayerRepresentation, Op, Protec
 pub use backend::{backends, compiled_backends, Backend};
 pub use brick::{
     BrickCache, BrickConfig, BrickKey, BrickMeshParams, BrickMeshRange, BrickRequest, BrickSamples,
-    BrickState, BrickStats,
+    BrickState, BrickStats, BrickSubmit,
 };
 pub use brush::{Accumulation, BrushParams, BrushShape, Falloff, StrokePreset, StrokeSample};
 pub use consolidate::{ConsolidationCost, ConsolidationParams, FieldReport};
@@ -49,6 +50,10 @@ pub use document::{
     prim, ArmatureEdit, Document, GizmoCage, Item, LayerId, NodeId, PointType, Primitive, Profile,
 };
 pub use error::{ClayError, ErrorKind, Result};
+pub use live::{
+    MoveTransaction, PreviewBrick, PreviewDelta, PreviewGrab, PreviewPending, SculptBudget,
+    SculptDirty, SculptPolicy, SmoothTransaction,
+};
 pub use mask::{ExtrudeSide, Mask, MaskExtrudeParams, MaskField, MaskRef};
 pub use mesh::{ImportBudget, Mesh, MeshLayerDesc, MeshParams, MeshValidity, Mesher, VertexLayout};
 pub use mesh_sculpt::{

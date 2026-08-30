@@ -205,6 +205,36 @@ impl std::fmt::Debug for BrickSamples {
     }
 }
 
+/// What became of one submitted brick. Only [`Self::Accepted`] changed the
+/// cache.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrickSubmit {
+    Accepted,
+    /// Re-dirtied while the request was in flight, or no longer tracked.
+    /// Expected, and not an error: drop the values and wait for the request
+    /// the next [`BrickCache::take_dirty`] hands over.
+    Stale,
+    /// Storing it would put the cache over its memory budget. Everything
+    /// already stored stays valid and the ceiling is never breached; the brick
+    /// simply stays unevaluated.
+    ///
+    /// Worth reading rather than discarding: a cache silently refusing every
+    /// brick looks exactly like a document with no surface in it.
+    BudgetExceeded,
+}
+
+impl BrickSubmit {
+    fn from_raw(raw: i32) -> Self {
+        match raw {
+            x if x == sys::clay_brick_submit::CLAY_BRICK_SUBMIT_STALE as i32 => Self::Stale,
+            x if x == sys::clay_brick_submit::CLAY_BRICK_SUBMIT_BUDGET_EXCEEDED as i32 => {
+                Self::BudgetExceeded
+            }
+            _ => Self::Accepted,
+        }
+    }
+}
+
 /// The engine's sparse, dirty-tracked view of a document's field.
 pub struct BrickCache {
     raw: NonNull<sys::clay_brick_cache>,
@@ -627,10 +657,39 @@ impl BrickCache {
             "clay_brick_cache_eval_requests",
         )?;
 
+        let outcomes = self.submit(requests, &values, colors.as_deref())?;
+        Ok(outcomes
+            .iter()
+            .filter(|o| **o == BrickSubmit::Accepted)
+            .count())
+    }
+
+    /// Stores samples the caller produced, instead of evaluating a document.
+    ///
+    /// This is [`Self::refill`] with the evaluation left to the caller, which
+    /// is what a live brush preview needs: the samples it draws come from a
+    /// transaction's working volume, and the document they would otherwise be
+    /// evaluated from is deliberately unchanged until the gesture commits.
+    ///
+    /// `values` is `dim^3` floats per request in the grids' own order, x
+    /// fastest — **no apron**, unlike what [`Self::read_bricks`] gives back —
+    /// and the length is checked exactly by the engine.
+    pub fn submit(
+        &mut self,
+        requests: &[BrickRequest],
+        values: &[f32],
+        colors: Option<&[f32]>,
+    ) -> Result<Vec<BrickSubmit>> {
+        if requests.is_empty() {
+            return Ok(Vec::new());
+        }
+        let raw: Vec<sys::clay_brick_request> = requests.iter().map(|r| r.0).collect();
         let mut results = vec![0i32; requests.len()];
-        let mut accepted = 0usize;
-        // SAFETY: the same buffers, now read by the engine, with matching
-        // capacities and an out-parameter per request.
+        // SAFETY: the request array and both sample buffers are passed with
+        // their own lengths, which the engine checks exactly against the
+        // configured brick volume; `results` has one slot per request, and the
+        // count of accepted ones is declined with a null — it is what this
+        // returns, per request, rather than as a total.
         check(
             unsafe {
                 sys::clay_brick_cache_submit(
@@ -639,15 +698,15 @@ impl BrickCache {
                     raw.len(),
                     values.as_ptr(),
                     values.len(),
-                    colors.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
-                    colors.as_ref().map_or(0, |c| c.len()),
+                    colors.map_or(std::ptr::null(), <[f32]>::as_ptr),
+                    colors.map_or(0, <[f32]>::len),
                     results.as_mut_ptr(),
-                    &mut accepted,
+                    std::ptr::null_mut(),
                 )
             },
             "clay_brick_cache_submit",
         )?;
-        Ok(accepted)
+        Ok(results.into_iter().map(BrickSubmit::from_raw).collect())
     }
 
     /// Refills everything currently dirty, in rounds of `batch`.

@@ -25,7 +25,7 @@ one.
 |---|---|---|---|
 | Padrão | `clay_layer_apply_stroke` with relief | all three | Displaces the surface along its normal |
 | Inflar | `clay_voxel_sculpt_inflate` / relief, wider and softer | all three | Swells the footprint; a negative amount erodes. On a field it is relief like Padrão — the engine binds both to it — with a region and rim 1.35× the brush and 0.32 of the lift, so it swells where Padrão ridges |
-| Suavizar | `clay_item_volume_relax` / `clay_voxel_sculpt_smooth` | all three | Relaxes the surface. Bakes on the field side |
+| Suavizar | `clay_sdf_smooth_*` / `clay_item_volume_relax` / `clay_voxel_sculpt_smooth` | all three | Relaxes the surface. Live on the field side, through a transaction |
 | Mover | `clay_layer_move_surface` | SDF, mesh | Drags the assembled surface. Buds rather than stretches |
 | Pinçar | `clay_voxel_sculpt_pinch` | voxel, mesh | Moves surface cells toward the brush centre |
 | Raspar | `clay_voxel_sculpt_scrape` | voxel, mesh | Flattens and smooths from one snapshot |
@@ -519,6 +519,42 @@ while on a mesh they are ordinary stamps over the vertices in reach. Held whole
 on a mesh, Suavizar arrived only when the pointer came up — which was half of
 why it read as doing nothing.
 
+**Smoothing is no longer held.** ClayCore 0.60.0's transaction samples the
+layer once when the pointer goes down and relaxes its own retained volume per
+dab, touching nothing in the document. So Suavizar and Relaxar show themselves
+while they are being made, and a stroke is still one action to undo. Measured
+on the starting form at the application's own 0.02 sampling: **186 ms** to open
+the gesture, **~5 ms** a dab.
+
+The transaction's own commit is *not* used. It installs the working volume as
+the layer's one item, consolidating the whole subtool on every stroke — heavy
+everywhere, since it discards the edit list and re-samples at the cache's cell
+size, and measurably damaging on Metal (roughness 7.82 against a ceiling of
+6.00, where the same stroke leaves 5.74 here; ClayCore#379). The stroke is laid
+down by the bake that was always used, which reproduces the old numbers exactly
+on every backend. The preview and the result are therefore different
+computations of the same smoothing, and they land 0.09 apart in roughness —
+close enough that the surface does not visibly move when the pointer comes up,
+and `live_smooth.rs` holds it to that.
+
+What the viewport draws in the meantime is the engine's own mesh of the
+transaction's own samples. The preview's lattice has an origin of its own — the
+layer's bounds, less the padding — which does not land on the brick cache's
+lattice and cannot be made to, since one padding cannot align three axes whose
+bounds have different remainders. So the preview is **relabelled rather than
+resampled**: it keeps a cache of its own, preview brick *K* is stored as that
+cache's brick *K*, and the constant translation between the two lattices is
+undone on the vertices. Nothing is interpolated, and
+`live_smooth::what_the_preview_showed_is_what_the_commit_installs` is what
+holds that to being exact rather than close.
+
+Two conditions, and the second is about what the preview is *of*. The layer has
+to be an editable field, and it has to be the **only visible field subtool**:
+the brick cache holds the hard union of every visible SDF layer and attributes
+no brick to the layer it came from, while a transaction previews one layer
+alone. With a second one in the document the gesture falls back to being held
+whole — correct, just not live.
+
 It costs about 17 ms a move on a 140,774-vertex mesh, nearly all of it the
 stamp itself rather than the buffer it fills (1.2 ms). Dropping the surface
 walk would take it to 12.8, and is not taken: with the single-stamp path the
@@ -526,6 +562,15 @@ walk is what makes Move topological, and `mesh_move.rs` fails without it. The mo
 segment did before laying the gesture down again, which is what keeps one drag
 to one undo: only the release banks anything, and a cancelled gesture takes its
 preview with it.
+
+**Only for the verbs that are delivered that way.** A stamping verb is sent
+just the samples the model has not seen, so it has nothing to take back, and
+taking the last segment back anyway erased the stroke as fast as it was drawn —
+a drag kept only its final dab and the brush read as one that has to be clicked.
+Its record is *continued* instead, which `MeshDeltas` is built for: it coalesces,
+so a stroke passing over the same vertex forty times still records where it
+started once, and the gesture is still one undo that puts every vertex back
+exactly.
 
 **The pointer finds it from the moment it becomes active.** A pick against a
 mesh layer is answered by the mesh sculptor's own raycast, and the sculptor was

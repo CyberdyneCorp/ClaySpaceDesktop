@@ -17,13 +17,25 @@ register only where available and are held to 1e-4 relative on distances
 against the CPU scalar reference. So this application never writes a backend
 abstraction — it writes a *policy* over one that already exists.
 
-**The kernel dialect targets MSL, CUDA C, OpenCL C and C++ — not WGSL.** The
-viewport therefore renders meshes the engine produced rather than evaluating
-the field in a shader. This is not a limitation worked around; it is the
+**There is one implementation of every distance function and operator, and it
+is the engine's.** The viewport renders meshes the engine produced rather than
+evaluating the field itself. This is not a limitation worked around; it is the
 protection against a specific bug ClayCore documents having already shipped
 once, where a hand-written Metal preview used a smooth-minimum of support `k`
 where the engine used `4k`, making every blend four times narrower than the
 real field.
+
+Two routes keep that promise, and the difference matters because only one of
+them is closed to us. Compiling ClayCore's kernels into our own shader is not
+available: the dialect targets MSL, CUDA C, OpenCL C and C++, and not WGSL.
+Uploading what the engine already computed *is* available in any shading
+language, and is the route ClayCore recommends for a host with no need for the
+field between samples — it was proposed from this repository as ClayCore #43
+and has been complete since ABI 0.25.0. So the rule above is about *whose
+arithmetic decides where the surface is*, not about which pixels we are allowed
+to draw. Anything the engine hands over already evaluated — a brick lattice, a
+mesh, a lattice displacement — is ours to draw, and a live brush preview is
+drawn that way rather than being withheld until the gesture ends.
 
 **The C ABI states its threading contract.** A document is safe to read from
 several threads at once; calls on one mutable handle are the host's to

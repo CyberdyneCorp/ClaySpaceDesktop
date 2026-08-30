@@ -57,6 +57,10 @@ descriptors! {
     sys::clay_field_report,
     sys::clay_consolidation_params,
     sys::clay_consolidation_cost,
+    sys::clay_sculpt_policy,
+    sys::clay_sculpt_dirty,
+    sys::clay_sculpt_budget,
+    sys::clay_sdf_preview_delta_info,
 }
 
 #[cfg(test)]
