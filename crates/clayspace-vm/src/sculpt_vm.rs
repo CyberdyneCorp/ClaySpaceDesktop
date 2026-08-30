@@ -504,6 +504,12 @@ impl SculptViewModel {
             | Command::SetSurfaceOpacity(_)
             | Command::FrameAll
             | Command::NextMaterial
+            // Shading, the cavity term and the studio rig's shadow are the
+            // renderer's own display state, like the material beside them: no
+            // ViewModel state changes, so there is nothing here to record.
+            | Command::ToggleShading
+            | Command::ToggleCavity
+            | Command::ToggleShadows
             | Command::NextDisplayUnit
             | Command::SetLocale(_)
             | Command::SetVoxelDisplay(..)

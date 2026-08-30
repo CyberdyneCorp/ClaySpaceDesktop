@@ -6,7 +6,6 @@
 
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
-use wgpu::util::DeviceExt;
 
 use crate::camera::Camera;
 use crate::frustum::Frustum;
@@ -16,6 +15,20 @@ use crate::palette;
 use crate::profiler::{GpuFrameTiming, GpuPass, GpuProfiler};
 use crate::quality::{ShadingMode, StudioMaterial, ViewportQuality};
 use clayspace_model::{GizmoHandle, GizmoMode, LayerKey, SurfaceOpacity};
+
+mod ao;
+mod overlays;
+mod pipelines;
+mod shadow;
+mod textures;
+
+use ao::*;
+pub use overlays::ScreenMetric;
+use overlays::*;
+pub use overlays::{frame_about, BRACKET_REACH, RING_REACH, SCALE_BOX_REACH, VIEW_RING_REACH};
+use pipelines::*;
+pub use textures::Reference;
+use textures::*;
 
 /// Which run of the carried buffer belongs to which subtool.
 ///
@@ -639,6 +652,11 @@ pub struct Renderer {
     /// Both bind textures the framebuffer owns, so their groups are built
     /// against a framebuffer rather than against the renderer — and rebuilt
     /// when it is, which is on resize and not per frame.
+    /// Anti-aliasing for a device that will not multisample. Run only there;
+    /// see `shaders/fxaa.wgsl`.
+    fxaa_pipeline: wgpu::RenderPipeline,
+    fxaa_layout: wgpu::BindGroupLayout,
+    fxaa_sampler: wgpu::Sampler,
     reduce_layout: wgpu::BindGroupLayout,
     ao_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
@@ -669,6 +687,15 @@ pub struct Renderer {
     /// knowledge, and a renderer that read it would be a second place where
     /// "is the user sculpting" is defined — see [`crate::quality`].
     quality: ViewportQuality,
+    /// Whether the post-process anti-aliasing runs, where there is one to run.
+    ///
+    /// A switch for the same reason occlusion has one: it is the only way to
+    /// see what it is doing, since the pass reads the frame's own colour and
+    /// there is nothing else to compare it against. It is also a real choice —
+    /// the filter works on the picture rather than on the geometry, so it can
+    /// mistake a fine sculpted crease for a stair-step and soften it, and a
+    /// sculptor who would rather have the stair-step should be able to say so.
+    antialias: bool,
     camera_buffer: wgpu::Buffer,
     material_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
@@ -716,6 +743,9 @@ pub struct Renderer {
     /// The translucent skin between the spheres, drawn while rigging.
     membrane_mesh: GpuMesh,
     membrane_pipeline: wgpu::RenderPipeline,
+    /// The brush cursor's ribbon: the overlay's vertex stage and colour, drawn
+    /// as triangles.
+    cursor_pipeline: wgpu::RenderPipeline,
     /// The reference images, one quad a plane, and the pipeline that draws
     /// them.
     reference_pipeline: wgpu::RenderPipeline,
@@ -729,6 +759,20 @@ pub struct Renderer {
     studio_ghost_pipeline: wgpu::RenderPipeline,
     shading: ShadingMode,
     studio_material: StudioMaterial,
+    /// The studio rig's shadow map, once the rig has been asked for.
+    ///
+    /// Lazily built for the reason the layout beside it is not: the layout is a
+    /// description and costs nothing, and the map is a 2048² depth texture that
+    /// a session which never leaves MatCap should not be paying for.
+    shadow: std::cell::RefCell<Option<shadow::ShadowMap>>,
+    /// Whether the studio rig casts. A setting for the same reason occlusion
+    /// is one: the map darkens the frame it is computed from, so the only way
+    /// to see what it is doing is the same frame without it.
+    shadows: bool,
+    shadow_layout: wgpu::BindGroupLayout,
+    /// The shader module the shadow pass's pipeline is built from, kept
+    /// because that pipeline is built later than everything else here.
+    shader: wgpu::ShaderModule,
     ghosted: bool,
     /// How opaque the surface is drawn, as the sculptor set it.
     ///
@@ -765,6 +809,15 @@ pub struct Renderer {
 /// Short of the whole way on purpose. The cue has to survive being looked past
 /// — a sculptor reads the silhouette, not the colour — so it is a warmth the
 /// eye picks up beside a neutral neighbour rather than a coat of paint.
+/// Where the studio rig's key light stands, in world space.
+///
+/// Stated here and in `matcap.wgsl`, which
+/// `the_shader_and_the_shadow_fit_agree_on_the_key_light` holds together. Two
+/// copies of one direction is exactly the arrangement that goes wrong
+/// silently: a shadow map fitted along one direction and sampled from a light
+/// pointing along another lands the shadow somewhere the form is not.
+const STUDIO_KEY_DIRECTION: [f32; 3] = [-0.42, 0.78, 0.47];
+
 const ACTIVE_TINT_STRENGTH: f32 = 0.45;
 
 /// The multiplier the active subtool's material is drawn with.
@@ -808,7 +861,7 @@ impl Renderer {
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("matcap"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("shaders/matcap.wgsl").into()),
+                source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/matcap.wgsl").into()),
             });
 
         let bind_group_layout =
@@ -934,6 +987,18 @@ impl Renderer {
                 bind_group_layouts: &[&bind_group_layout],
                 push_constant_ranges: &[],
             });
+        // The studio pipelines carry a second group, for the shadow map. Its
+        // *layout* is built eagerly because a pipeline's layout is part of the
+        // pipeline; the sixteen megabytes of depth behind it are not built
+        // until the studio rig is actually asked for.
+        let shadow_layout = shadow::ShadowMap::sample_layout(gpu);
+        let studio_layout = gpu
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("studio"),
+                bind_group_layouts: &[&bind_group_layout, &shadow_layout],
+                push_constant_ranges: &[],
+            });
 
         let pipeline = make_pipeline(
             gpu,
@@ -995,18 +1060,16 @@ impl Renderer {
         // copy of a three-hundred-line shader kept in step by hand.
         let samples = gpu.sample_count(format);
         let ao_source = if samples > 1 {
-            std::borrow::Cow::Borrowed(include_str!("shaders/ao.wgsl"))
+            shader_source(include_str!("../shaders/ao.wgsl"))
         } else {
-            std::borrow::Cow::Owned(
-                include_str!("shaders/ao.wgsl")
-                    .replace("texture_depth_multisampled_2d", "texture_depth_2d"),
-            )
+            shader_source(include_str!("../shaders/ao.wgsl"))
+                .replace("texture_depth_multisampled_2d", "texture_depth_2d")
         };
         let ao_shader = gpu
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("ao"),
-                source: wgpu::ShaderSource::Wgsl(ao_source),
+                source: wgpu::ShaderSource::Wgsl(ao_source.into()),
             });
 
         // Binding 1 is the scene's depth, 2 the reduction's output, 3 the
@@ -1093,12 +1156,84 @@ impl Renderer {
                 alpha: wgpu::BlendComponent::REPLACE,
             }),
         );
+        // Anti-aliasing for a device that will not multisample. Built
+        // unconditionally and run only where the framebuffer says the scene
+        // was drawn with one sample: a pipeline is cheap to hold and the
+        // alternative is deciding at draw time whether one exists.
+        let fxaa_shader = gpu
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("fxaa"),
+                source: wgpu::ShaderSource::Wgsl(
+                    shader_source(include_str!("../shaders/fxaa.wgsl")).into(),
+                ),
+            });
+        let fxaa_layout = gpu
+            .device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("fxaa"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+        let fxaa_pipeline = make_fullscreen_pipeline(
+            gpu,
+            &gpu.device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("fxaa"),
+                    bind_group_layouts: &[&fxaa_layout],
+                    push_constant_ranges: &[],
+                }),
+            &fxaa_shader,
+            "fxaa_fs",
+            format,
+            None,
+        );
+        // Filtered, and clamped: the kernel reaches a pixel either side of the
+        // frame's edge, and a wrapped read there would fold the far edge in.
+        let fxaa_sampler = gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("fxaa"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
         let ao_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("ao"),
             size: std::mem::size_of::<AoUniform>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+
+        // The brush cursor's ribbon: the overlay's vertex stage and colour,
+        // drawn as triangles because a line list is one pixel wide whatever
+        // the display, and has no coverage for multisampling to resolve.
+        let cursor_pipeline = make_pipeline(
+            gpu,
+            &layout,
+            &shader,
+            format,
+            "overlay_vs",
+            "overlay_fs",
+            PipelineState::transparent(wgpu::PrimitiveTopology::TriangleList),
+        );
 
         // Triangles, blended, and no depth write — so the spheres and links
         // behind the membrane still read through it.
@@ -1142,7 +1277,7 @@ impl Renderer {
             ),
             studio_pipeline: make_pipeline(
                 gpu,
-                &layout,
+                &studio_layout,
                 &shader,
                 format,
                 "vs_main",
@@ -1151,7 +1286,7 @@ impl Renderer {
             ),
             studio_ghost_pipeline: make_pipeline(
                 gpu,
-                &layout,
+                &studio_layout,
                 &shader,
                 format,
                 "vs_main",
@@ -1160,6 +1295,10 @@ impl Renderer {
             ),
             shading: ShadingMode::MatCap,
             studio_material: StudioMaterial::default(),
+            shadow: std::cell::RefCell::new(None),
+            shadows: true,
+            shadow_layout,
+            shader,
             references: std::collections::BTreeMap::new(),
             ghosted: false,
             surface_opacity: SurfaceOpacity::SOLID,
@@ -1176,9 +1315,13 @@ impl Renderer {
             polyframe: false,
             pending_edges: None,
             membrane_pipeline,
+            cursor_pipeline,
             reduce_pipeline,
             ao_pipeline,
             composite_pipeline,
+            fxaa_pipeline,
+            fxaa_layout,
+            fxaa_sampler,
             reduce_layout,
             ao_layout,
             composite_layout,
@@ -1191,6 +1334,7 @@ impl Renderer {
             // is a renderer drawing a still frame — a capture, a test, an
             // export preview. Nothing is being sculpted in any of those.
             quality: ViewportQuality::High,
+            antialias: true,
             camera_buffer,
             material_buffer,
             bind_group,
@@ -1268,11 +1412,16 @@ impl Renderer {
     /// Clearing rather than leaving the last position is the point: a ring
     /// hanging in space at an arbitrary depth tells the user the brush would
     /// land somewhere it would not.
-    pub fn set_cursors(&mut self, gpu: &Gpu, cursors: &[BrushCursor]) {
+    pub fn set_cursors(
+        &mut self,
+        gpu: &Gpu,
+        cursors: &[BrushCursor],
+        metric: overlays::ScreenMetric,
+    ) {
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
         for cursor in cursors {
-            let (ring, ring_indices) = cursor_geometry(*cursor);
+            let (ring, ring_indices) = cursor_geometry(*cursor, metric);
             let base = vertices.len() as u32;
             vertices.extend(ring);
             indices.extend(ring_indices.into_iter().map(|i| i + base));
@@ -1385,6 +1534,20 @@ impl Renderer {
         self.quality
     }
 
+    /// Whether silhouettes are smoothed after the fact on a device that will
+    /// not multisample.
+    ///
+    /// Does nothing where the device *does* multisample: there is no
+    /// post-process target there, and running both would be paying twice to
+    /// lose detail once.
+    pub fn set_antialias(&mut self, on: bool) {
+        self.antialias = on;
+    }
+
+    pub fn antialias(&self) -> bool {
+        self.antialias
+    }
+
     /// What the last measured frame cost the GPU, per pass.
     ///
     /// `None` on a device without timestamp queries, and until the first
@@ -1471,6 +1634,28 @@ impl Renderer {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         planes
+    }
+
+    /// Draws a whole mesh with one pipeline, and nothing if it is empty.
+    ///
+    /// Ten of these blocks were written out in the frame, identical but for
+    /// which mesh and which pipeline — and one of them setting the wrong
+    /// buffer would draw the wrong geometry with the right state, which is a
+    /// picture that looks deliberate.
+    fn draw_mesh(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        mesh: &GpuMesh,
+        pipeline: &wgpu::RenderPipeline,
+        primitive: Primitive,
+    ) {
+        if mesh.is_empty() {
+            return;
+        }
+        pass.set_pipeline(pipeline);
+        pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+        pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+        self.draw_indexed(pass, 0..mesh.index_count, primitive);
     }
 
     /// Makes a draw call and counts it.
@@ -1609,6 +1794,19 @@ impl Renderer {
 
     pub fn shading(&self) -> ShadingMode {
         self.shading
+    }
+
+    /// Whether the studio rig's key light casts a shadow.
+    ///
+    /// Ignored in MatCap mode, which never casts: its lighting is welded to
+    /// the camera, so a shadow from it would swing round the form as the view
+    /// moved.
+    pub fn set_shadows(&mut self, on: bool) {
+        self.shadows = on;
+    }
+
+    pub fn shadows(&self) -> bool {
+        self.shadows
     }
 
     /// What the studio rig treats the surface as. Ignored in MatCap mode.
@@ -1845,7 +2043,7 @@ impl Renderer {
         // Multisampled where the device allows it: the scene is drawn into the
         // framebuffer's own target and resolved into `target`, which is what
         // egui then paints the interface onto.
-        let (attachment, resolve_target) = framebuffer.attachment(target);
+        let (attachment, resolve_target) = framebuffer.attachment(target, self.antialias);
 
         // Collects what the previous frame reported before this one records
         // anything. Held across the whole frame so each pass can be given its
@@ -1862,6 +2060,14 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("viewport"),
             });
+
+        // The studio rig's shadow map, before anything is drawn with it. Only
+        // in Studio mode: MatCap's lighting is welded to the camera, so a
+        // shadow from it would swing round the form as the view moved, which
+        // is worse than none.
+        let form = union_bounds(mesh.bounds(), self.mesh_layers.bounds());
+        self.cast_shadows(gpu, &mut encoder, mesh, form);
+
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("viewport"),
@@ -1888,19 +2094,12 @@ impl Renderer {
             pass.set_viewport(scene[0], scene[1], scene[2], scene[3], 0.0, 1.0);
             pass.set_bind_group(0, &self.bind_group, &[]);
 
-            if !self.overlay_mesh.is_empty() {
-                pass.set_pipeline(&self.overlay_pipeline);
-                pass.set_vertex_buffer(0, self.overlay_mesh.vertices.slice(..));
-                pass.set_index_buffer(
-                    self.overlay_mesh.indices.slice(..),
-                    wgpu::IndexFormat::Uint32,
-                );
-                self.draw_indexed(
-                    &mut pass,
-                    0..self.overlay_mesh.index_count,
-                    Primitive::Lines,
-                );
-            }
+            self.draw_mesh(
+                &mut pass,
+                &self.overlay_mesh,
+                &self.overlay_pipeline,
+                Primitive::Lines,
+            );
 
             // The references first, and writing no depth, so everything else
             // is drawn over them whichever side of them the camera is on.
@@ -1912,14 +2111,13 @@ impl Renderer {
             // is three planes at most, so it is a sort rather than the
             // order-independent machinery a scene full of glass would want.
             for (mesh, bind_group) in self.references_back_to_front(camera.eye()) {
-                if mesh.is_empty() {
-                    continue;
-                }
-                pass.set_pipeline(&self.reference_pipeline);
                 pass.set_bind_group(0, bind_group, &[]);
-                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                self.draw_indexed(&mut pass, 0..mesh.index_count, Primitive::Triangles);
+                self.draw_mesh(
+                    &mut pass,
+                    mesh,
+                    &self.reference_pipeline,
+                    Primitive::Triangles,
+                );
             }
             // Back to the scene's own bindings, which the loop above replaced.
             pass.set_bind_group(0, &self.bind_group, &[]);
@@ -1934,13 +2132,15 @@ impl Renderer {
                 (ShadingMode::Studio, true) => &self.studio_pipeline,
                 (ShadingMode::Studio, false) => &self.studio_ghost_pipeline,
             };
-
-            if !mesh.is_empty() {
-                pass.set_pipeline(surface);
-                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                self.draw_indexed(&mut pass, 0..mesh.index_count, Primitive::Triangles);
+            // The studio pipelines carry a second group. It is bound once for
+            // the whole pass rather than per draw: every draw that uses those
+            // pipelines samples the same map.
+            let shadow = self.shadow.borrow();
+            if let (ShadingMode::Studio, Some(map)) = (self.shading, shadow.as_ref()) {
+                pass.set_bind_group(1, &map.sampled, &[]);
             }
+
+            self.draw_mesh(&mut pass, mesh, surface, Primitive::Triangles);
 
             // The mesh layers, in the same pass and with the same pipeline, so
             // they take the same material, the same depth and the same
@@ -1967,56 +2167,47 @@ impl Renderer {
                 }
             }
 
-            // The brush cursor, over the surface it will act on.
-            if !self.cursor_mesh.is_empty() {
-                pass.set_pipeline(&self.overlay_pipeline);
-                pass.set_vertex_buffer(0, self.cursor_mesh.vertices.slice(..));
-                pass.set_index_buffer(
-                    self.cursor_mesh.indices.slice(..),
-                    wgpu::IndexFormat::Uint32,
-                );
-                self.draw_indexed(&mut pass, 0..self.cursor_mesh.index_count, Primitive::Lines);
-            }
+            // The brush cursor, over the surface it will act on. Triangles
+            // rather than lines: it is a ribbon a couple of pixels wide, so
+            // that it has an edge for multisampling to resolve and reads the
+            // same weight at any distance. See `overlays::Ribbon`.
+            self.draw_mesh(
+                &mut pass,
+                &self.cursor_mesh,
+                &self.cursor_pipeline,
+                Primitive::Lines,
+            );
 
             // The rig, over the surface it skins.
             // The membrane first: it is translucent and writes no depth, so
             // the spheres and links drawn after it read through rather than
             // being hidden by it.
-            if !self.membrane_mesh.is_empty() {
-                pass.set_pipeline(&self.membrane_pipeline);
-                pass.set_vertex_buffer(0, self.membrane_mesh.vertices.slice(..));
-                pass.set_index_buffer(
-                    self.membrane_mesh.indices.slice(..),
-                    wgpu::IndexFormat::Uint32,
-                );
-                self.draw_indexed(
-                    &mut pass,
-                    0..self.membrane_mesh.index_count,
-                    Primitive::Triangles,
-                );
-            }
-            if !self.armature_mesh.is_empty() {
-                pass.set_pipeline(&self.overlay_pipeline);
-                pass.set_vertex_buffer(0, self.armature_mesh.vertices.slice(..));
-                pass.set_index_buffer(
-                    self.armature_mesh.indices.slice(..),
-                    wgpu::IndexFormat::Uint32,
-                );
-                self.draw_indexed(
-                    &mut pass,
-                    0..self.armature_mesh.index_count,
-                    Primitive::Lines,
-                );
-            }
+            self.draw_mesh(
+                &mut pass,
+                &self.membrane_mesh,
+                &self.membrane_pipeline,
+                Primitive::Triangles,
+            );
+            self.draw_mesh(
+                &mut pass,
+                &self.armature_mesh,
+                &self.overlay_pipeline,
+                Primitive::Lines,
+            );
         }
 
         // The radius of everything drawn with depth: the surface and the mesh
         // layers together, since either may be the only one present.
         let radius = form_radius(union_bounds(mesh.bounds(), self.mesh_layers.bounds()));
+        // Occlusion composites onto whatever the scene was drawn into, which
+        // is the caller's target unless a post-process pass has to read the
+        // scene back — a texture cannot be sampled and written by one pass.
+        let scene_view = framebuffer.scene_view(target, self.antialias);
+        self.ensure_resources(gpu, framebuffer);
         self.occlude(
             gpu,
             &mut encoder,
-            target,
+            scene_view,
             framebuffer,
             camera,
             aspect,
@@ -2024,6 +2215,12 @@ impl Renderer {
             radius,
             &mut profiler,
         );
+        // And the anti-aliasing, where the device would not multisample. It
+        // runs before the scaffolding rather than after, so a manipulator's
+        // lines — which are drawn at the resolution they are meant to be read
+        // at — are not softened by a filter that exists to hide stair-steps in
+        // the geometry.
+        self.smooth_silhouettes(&mut encoder, target, scene);
         profiler.resolve(&mut encoder);
 
         // The scaffolding, the manipulator and the orientation gizmo, after
@@ -2042,6 +2239,162 @@ impl Renderer {
 
         gpu.queue.submit(Some(encoder.finish()));
         profiler.after_submit();
+    }
+
+    /// Fills the studio rig's shadow map, in Studio mode.
+    ///
+    /// Nothing at all in MatCap mode — the map is not even allocated until the
+    /// rig is first asked for, because it is sixteen megabytes of depth for a
+    /// mode a session may never enter.
+    ///
+    /// Fitted to the form each frame rather than to a fixed volume. The map's
+    /// resolution *on the subject* is its side divided by the subject's
+    /// diameter, so a projection sized to the world rather than to the sculpt
+    /// spends most of its texels on empty space and the rest on a staircase.
+    fn cast_shadows(
+        &self,
+        gpu: &Gpu,
+        encoder: &mut wgpu::CommandEncoder,
+        mesh: &GpuMesh,
+        form: Option<(Vec3, Vec3)>,
+    ) {
+        if self.shading != ShadingMode::Studio {
+            return;
+        }
+        let mut held = self.shadow.borrow_mut();
+        let map = held.get_or_insert_with(|| {
+            shadow::ShadowMap::new(
+                gpu,
+                &self.shader,
+                &self.bind_group_layout,
+                &self.shadow_layout,
+            )
+        });
+
+        let (light_view_projection, offset) =
+            shadow::light_projection(form, Vec3::from(STUDIO_KEY_DIRECTION));
+        // The map has to exist whatever the setting says — the studio
+        // pipelines name it in their layout, and a group they declare and do
+        // not bind is a validation error rather than an unlit frame. What the
+        // setting decides is whether the pass runs and whether the shader
+        // believes what it finds.
+        let drawn = self.shadows && (!mesh.is_empty() || !self.mesh_layers.is_empty());
+        gpu.queue.write_buffer(
+            &map.uniform,
+            0,
+            bytemuck::bytes_of(&shadow::ShadowUniform {
+                light_view_projection: light_view_projection.to_cols_array_2d(),
+                params: [
+                    offset,
+                    shadow::SHADOW_SIZE as f32,
+                    // Nothing drawn is nothing to cast, and a map cleared to
+                    // the far plane shadows every fragment that reads it.
+                    if drawn { 1.0 } else { 0.0 },
+                    shadow::SHADOW_DEPTH,
+                ],
+            }),
+        );
+        if !drawn {
+            return;
+        }
+
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("studio shadow"),
+            color_attachments: &[],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &map.depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(DEPTH_CLEAR),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        // Group 0 is in the pipeline's layout because the studio shader puts
+        // the shadow bindings in group 1, and a layout has to describe every
+        // group its bindings sit in. This pass reads nothing from it.
+        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_bind_group(1, &map.casting, &[]);
+
+        self.draw_mesh(&mut pass, mesh, &map.pipeline, Primitive::Triangles);
+        // Every span, not the frustum-culled set: a subtool the *camera*
+        // cannot see can still stand between the light and one it can.
+        self.draw_mesh(
+            &mut pass,
+            &self.mesh_layers,
+            &map.pipeline,
+            Primitive::Triangles,
+        );
+    }
+
+    /// Builds the passes' bind groups for this framebuffer, if they are not
+    /// the ones already held.
+    ///
+    /// Once a frame, before anything that reads them, rather than inside
+    /// whichever pass happens to run first. Occlusion can be switched off and
+    /// the anti-aliasing cannot, so "whichever is first" is not a fixed
+    /// answer — the version that built them inside the occlusion pass left a
+    /// device that draws single-sampled with no anti-aliasing at all whenever
+    /// occlusion was off.
+    fn ensure_resources(&self, gpu: &Gpu, framebuffer: &Framebuffer) {
+        let mut cached = self.ao_resources.borrow_mut();
+        if cached
+            .as_ref()
+            .is_some_and(|held| held.framebuffer == framebuffer.id())
+        {
+            return;
+        }
+        *cached = Some(AoResources::new(
+            gpu,
+            framebuffer,
+            (&self.reduce_layout, &self.ao_layout, &self.composite_layout),
+            &self.ao_buffer,
+            (&self.fxaa_layout, &self.fxaa_sampler),
+        ));
+    }
+
+    /// Anti-aliases the scene into `target`, where the device would not
+    /// multisample it.
+    ///
+    /// Nothing at all where it would: four samples and a blur over the top is
+    /// paying twice to lose detail once, and the detail lost would be sculpted
+    /// crease mistaken for stair-step. See `shaders/fxaa.wgsl`.
+    fn smooth_silhouettes(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        scene: [f32; 4],
+    ) {
+        if !self.antialias {
+            return;
+        }
+        let cached = self.ao_resources.borrow();
+        let Some(bind_group) = cached.as_ref().and_then(|held| held.antialias.as_ref()) else {
+            return;
+        };
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("antialias"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    // Cleared rather than loaded: every pixel of the scene's
+                    // rectangle is written, and outside it the target has not
+                    // been drawn to at all.
+                    load: wgpu::LoadOp::Clear(self.background),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        pass.set_viewport(scene[0], scene[1], scene[2], scene[3], 0.0, 1.0);
+        pass.set_pipeline(&self.fxaa_pipeline);
+        pass.set_bind_group(0, bind_group, &[]);
+        self.draw_fullscreen(&mut pass);
     }
 
     /// The scaffolding, drawn on the finished frame rather than in it.
@@ -2072,33 +2425,19 @@ impl Renderer {
         pass.set_viewport(scene[0], scene[1], scene[2], scene[3], 0.0, 1.0);
         pass.set_bind_group(0, &self.bind_group, &[]);
 
-        if !self.lattice_mesh.is_empty() {
-            pass.set_pipeline(&self.scaffold_pipeline);
-            pass.set_vertex_buffer(0, self.lattice_mesh.vertices.slice(..));
-            pass.set_index_buffer(
-                self.lattice_mesh.indices.slice(..),
-                wgpu::IndexFormat::Uint32,
-            );
-            self.draw_indexed(
-                &mut pass,
-                0..self.lattice_mesh.index_count,
-                Primitive::Lines,
-            );
-        }
+        self.draw_mesh(
+            &mut pass,
+            &self.lattice_mesh,
+            &self.scaffold_pipeline,
+            Primitive::Lines,
+        );
         // The solid handles last, over the shafts they cap.
-        if !self.lattice_solid_mesh.is_empty() {
-            pass.set_pipeline(&self.scaffold_solid_pipeline);
-            pass.set_vertex_buffer(0, self.lattice_solid_mesh.vertices.slice(..));
-            pass.set_index_buffer(
-                self.lattice_solid_mesh.indices.slice(..),
-                wgpu::IndexFormat::Uint32,
-            );
-            self.draw_indexed(
-                &mut pass,
-                0..self.lattice_solid_mesh.index_count,
-                Primitive::Triangles,
-            );
-        }
+        self.draw_mesh(
+            &mut pass,
+            &self.lattice_solid_mesh,
+            &self.scaffold_solid_pipeline,
+            Primitive::Triangles,
+        );
 
         // The navigation gizmo, in its own corner viewport so it keeps a fixed
         // size whatever the window does. It shares the camera's rotation and
@@ -2118,10 +2457,12 @@ impl Renderer {
                 1.0,
             );
             pass.set_bind_group(0, &self.gizmo_bind_group, &[]);
-            pass.set_pipeline(&self.scaffold_pipeline);
-            pass.set_vertex_buffer(0, self.gizmo_mesh.vertices.slice(..));
-            pass.set_index_buffer(self.gizmo_mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-            self.draw_indexed(&mut pass, 0..self.gizmo_mesh.index_count, Primitive::Lines);
+            self.draw_mesh(
+                &mut pass,
+                &self.gizmo_mesh,
+                &self.scaffold_pipeline,
+                Primitive::Lines,
+            );
         }
     }
 
@@ -2141,7 +2482,7 @@ impl Renderer {
         &self,
         gpu: &Gpu,
         encoder: &mut wgpu::CommandEncoder,
-        target: &wgpu::TextureView,
+        scene_view: &wgpu::TextureView,
         framebuffer: &Framebuffer,
         camera: &Camera,
         aspect: f32,
@@ -2199,18 +2540,13 @@ impl Renderer {
                     0.0,
                     0.0,
                 ],
+                kernel: ao_kernel(self.quality.ao_samples() as usize),
             }),
         );
 
-        let mut cached = self.ao_resources.borrow_mut();
-        let resources = match cached.as_ref() {
-            Some(existing) if existing.framebuffer == framebuffer.id() => existing,
-            _ => cached.insert(AoResources::new(
-                gpu,
-                framebuffer,
-                (&self.reduce_layout, &self.ao_layout, &self.composite_layout),
-                &self.ao_buffer,
-            )),
+        let cached = self.ao_resources.borrow();
+        let Some(resources) = cached.as_ref() else {
+            return;
         };
 
         // The reduction and the kernel cover their whole target rather than
@@ -2266,7 +2602,7 @@ impl Renderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("occlusion composite"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
+                    view: scene_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         // Loaded, because this darkens the frame that is
@@ -2285,6 +2621,16 @@ impl Renderer {
             self.draw_fullscreen(&mut pass);
         }
     }
+}
+
+/// A shader source, with the shared definitions in front of it.
+///
+/// WGSL has no include. Two of the three shaders here draw a fullscreen
+/// triangle and had an identical copy of the twelve lines that do it, and the
+/// failure mode of two identical copies is that one of them is edited — so the
+/// copy that survives is prepended here instead. See `shaders/common.wgsl`.
+fn shader_source(body: &str) -> String {
+    format!("{}\n{body}", include_str!("../shaders/common.wgsl"))
 }
 
 /// The box the triangles in one index range occupy.
@@ -2383,1309 +2729,6 @@ fn make_bind_group(
     })
 }
 
-/// The occlusion passes' bind groups, and the framebuffer they read.
-///
-/// Held rather than built per frame. All three groups name texture views the
-/// framebuffer owns, and a framebuffer is replaced only when the viewport is
-/// resized — so rebuilding them every frame was three descriptor writes per
-/// frame to say the same thing. [`Framebuffer::id`] is what makes the
-/// staleness question answerable at all: wgpu gives a texture view no identity
-/// to compare.
-struct AoResources {
-    framebuffer: u64,
-    reduce: wgpu::BindGroup,
-    ao: wgpu::BindGroup,
-    composite: wgpu::BindGroup,
-}
-
-impl AoResources {
-    fn new(
-        gpu: &Gpu,
-        framebuffer: &Framebuffer,
-        layouts: (
-            &wgpu::BindGroupLayout,
-            &wgpu::BindGroupLayout,
-            &wgpu::BindGroupLayout,
-        ),
-        ao_buffer: &wgpu::Buffer,
-    ) -> Self {
-        let (reduce_layout, ao_layout, composite_layout) = layouts;
-        let uniform = wgpu::BindGroupEntry {
-            binding: 0,
-            resource: ao_buffer.as_entire_binding(),
-        };
-        let scene_depth = wgpu::BindGroupEntry {
-            binding: 1,
-            resource: wgpu::BindingResource::TextureView(framebuffer.depth_view()),
-        };
-        let reduced = wgpu::BindGroupEntry {
-            binding: 2,
-            resource: wgpu::BindingResource::TextureView(framebuffer.reduced_depth_view()),
-        };
-        let occlusion = wgpu::BindGroupEntry {
-            binding: 3,
-            resource: wgpu::BindingResource::TextureView(framebuffer.occlusion_view()),
-        };
-        Self {
-            framebuffer: framebuffer.id(),
-            reduce: gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("ao depth reduction"),
-                layout: reduce_layout,
-                entries: &[uniform.clone(), scene_depth.clone()],
-            }),
-            ao: gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("ao"),
-                layout: ao_layout,
-                entries: &[uniform.clone(), reduced.clone()],
-            }),
-            composite: gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("ao composite"),
-                layout: composite_layout,
-                entries: &[uniform, scene_depth, reduced, occlusion],
-            }),
-        }
-    }
-}
-
-/// What the occlusion pass needs to turn a depth buffer into a shadowing term.
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct AoUniform {
-    projection: [[f32; 4]; 4],
-    inverse_projection: [[f32; 4]; 4],
-    /// Where the scene sits in the target, in full-resolution pixels.
-    viewport: [f32; 4],
-    /// The occlusion target's size, then its reciprocal. Distinct from the
-    /// viewport because the kernel runs below display resolution.
-    ao_size: [f32; 4],
-    /// radius, intensity, bias, sample count.
-    params: [f32; 4],
-    /// Samples per scene pixel, display pixels per occlusion pixel, the
-    /// upsample's depth sharpness, and the depth nothing was drawn at.
-    reduce: [f32; 4],
-    /// Cavity strength, and the reach of its neighbourhood in view units.
-    /// Zero strength is the term switched off, which costs the composite a
-    /// branch and nothing else.
-    cavity: [f32; 4],
-}
-
-/// How far an occluder can be and still count, as a fraction of the radius of
-/// what is being drawn.
-///
-/// A world-space reach rather than a screen-space one, so a fold darkens by
-/// how deep it is rather than by how much of the window it happens to cover —
-/// and a *fraction* rather than an absolute figure, so the same form at any
-/// scale shades the same way. It was 0.08 view units, tuned against the
-/// reference form whose starting sphere has radius 1; expressed against that
-/// form's own radius the number is unchanged and every other model's is
-/// finally right. An imported mesh a hundredth of that size got no visible
-/// occlusion at all, and one a hundred times it got total occlusion, neither
-/// of which is a property of the shape.
-const AO_RADIUS_FRACTION: f32 = 0.08;
-/// How much of the surface's own colour full occlusion takes away.
-const AO_INTENSITY: f32 = 0.85;
-/// The depth difference below which an occluder is the surface itself, as a
-/// fraction of the radius.
-///
-/// Without it a flat surface occludes itself everywhere, from the difference
-/// between a sample's own depth and the depth of the pixel it projects to. A
-/// fraction for the reason the radius is one: the bias that stops a surface
-/// self-occluding at one scale lets it self-occlude at another. 0.05 of the
-/// radius is the 0.004 the reference form was tuned to.
-const AO_BIAS_FRACTION: f32 = 0.05;
-/// How sharply the upsample rejects a neighbour whose depth differs, per
-/// occlusion radius of difference.
-///
-/// The number that decides whether occlusion crosses a silhouette. Too low and
-/// the average runs over the edge, which is the halo the box blur produced;
-/// too high and the term degenerates to a nearest-neighbour lookup, which
-/// brings the kernel's noise back at display resolution.
-const AO_DEPTH_SHARPNESS: f32 = 4.0;
-
-/// The radius of what is being drawn, for the occlusion figures above.
-///
-/// Half the longest side of the box the geometry occupies: for the reference
-/// form, whose starting sphere spans −1 to 1, exactly 1 — which is what makes
-/// the fractions above the numbers the pass was already tuned to.
-///
-/// One is the fallback rather than zero. A frame with nothing in it has no
-/// scale to speak of, and a radius of zero would divide the depth sharpness by
-/// nothing.
-fn form_radius(bounds: Option<(Vec3, Vec3)>) -> f32 {
-    let Some((min, max)) = bounds else {
-        return 1.0;
-    };
-    let extent = (max - min).max_element() * 0.5;
-    if extent.is_finite() && extent > 1e-6 {
-        extent
-    } else {
-        1.0
-    }
-}
-
-/// A pipeline for a pass with no geometry and no depth.
-///
-/// Single-sampled whatever the scene is: both of these run over the *resolved*
-/// target, after the scene has been resolved into it.
-fn make_fullscreen_pipeline(
-    gpu: &Gpu,
-    layout: &wgpu::PipelineLayout,
-    shader: &wgpu::ShaderModule,
-    fs: &str,
-    format: wgpu::TextureFormat,
-    blend: Option<wgpu::BlendState>,
-) -> wgpu::RenderPipeline {
-    gpu.device
-        .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some(fs),
-            layout: Some(layout),
-            vertex: wgpu::VertexState {
-                module: shader,
-                entry_point: Some("fullscreen_vs"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: shader,
-                entry_point: Some(fs),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            multiview: None,
-            cache: None,
-        })
-}
-
-/// Which way depth runs, stated once.
-///
-/// Reversed: [`Camera::projection`] puts the *near* plane at 1 and the far
-/// plane at 0, so nearer is greater and the buffer clears to zero. Floating
-/// point crowds its precision near zero, and a conventional mapping spends
-/// that on the far plane where nothing needs it — reversing the range puts the
-/// precision where a sculptor is working, and makes it very nearly uniform
-/// across the whole range besides.
-///
-/// Named rather than written at each pipeline because the convention is one
-/// decision that eight pipelines, a clear value, a depth bias and three
-/// occlusion passes all have to agree with. They agreed by coincidence before
-/// this constant existed.
-const DEPTH_COMPARE: wgpu::CompareFunction = wgpu::CompareFunction::GreaterEqual;
-
-/// What the depth buffer is cleared to: the far plane under [`DEPTH_COMPARE`].
-const DEPTH_CLEAR: f32 = 0.0;
-
-/// The depth value nothing was drawn at, as the occlusion passes read it.
-///
-/// The same number as the clear, named separately because the two are
-/// different claims: one is what the pass writes before drawing, the other is
-/// what a later pass may conclude from finding it.
-const DEPTH_BACKGROUND: f32 = DEPTH_CLEAR;
-
-const NO_BIAS: wgpu::DepthBiasState = wgpu::DepthBiasState {
-    constant: 0,
-    slope_scale: 0.0,
-    clamp: 0.0,
-};
-
-/// The polyframe's bias, toward the camera under [`DEPTH_COMPARE`].
-///
-/// A wireframe shares its vertices with the triangles it outlines, so without
-/// one every line lands on exactly the same depth as the surface and the two
-/// flicker against each other pixel by pixel. The slope term is what keeps a
-/// steeply-angled triangle's edge from sinking into it.
-///
-/// Positive, because depth is reversed: toward the camera is *up* the range
-/// now, and the bias that used to be negative would now push the lines behind
-/// the surface they outline — which is the same flicker with an extra step.
-const WIRE_BIAS: wgpu::DepthBiasState = wgpu::DepthBiasState {
-    constant: 2,
-    slope_scale: 1.0,
-    clamp: 0.0,
-};
-
-/// Everything about a pipeline except which shader it runs.
-///
-/// One struct rather than the pair of booleans it replaces, because the pair
-/// lied: the old helper took a `cull` flag and spent it on back-face culling
-/// *and* on depth writing, so a surface that wanted one silently got the
-/// other. They are unrelated decisions — a ghost surface is culled and writes
-/// no depth, a scaffold line is unculled and writes none — and each has to be
-/// said out loud before reversed-Z and the transparent helpers start depending
-/// on it.
-#[derive(Debug, Clone, Copy)]
-struct PipelineState {
-    topology: wgpu::PrimitiveTopology,
-    cull_mode: Option<wgpu::Face>,
-    /// Whether this pipeline runs in a pass that has a depth buffer at all.
-    ///
-    /// The scaffolding does not. It is drawn after the occlusion composite,
-    /// into the resolved single-sampled target, precisely so that occlusion
-    /// does not darken it — and a pass over that target has neither the scene's
-    /// depth buffer, which is multisampled and cannot be attached to a
-    /// single-sampled pipeline, nor any use for one, since the scaffolding
-    /// compares `Always` regardless.
-    depth: bool,
-    /// Whether it is multisampled, which is to say whether it draws into the
-    /// scene's own target or into the resolved one.
-    multisampled: bool,
-    /// Whether what this pipeline draws becomes the depth everything after it
-    /// is tested against.
-    depth_write: bool,
-    depth_compare: wgpu::CompareFunction,
-    depth_bias: wgpu::DepthBiasState,
-    /// `None` is opaque. The solid surface returns alpha 1 and so looked the
-    /// same blended, but blending it told the driver the frame was one it
-    /// could not reject fragments in, for nothing.
-    blend: Option<wgpu::BlendState>,
-}
-
-impl PipelineState {
-    /// The solid sculpt: culled, writing depth, not blended.
-    fn opaque(topology: wgpu::PrimitiveTopology) -> Self {
-        Self {
-            topology,
-            cull_mode: Some(wgpu::Face::Back),
-            depth: true,
-            multisampled: true,
-            depth_write: true,
-            depth_compare: DEPTH_COMPARE,
-            depth_bias: NO_BIAS,
-            blend: None,
-        }
-    }
-
-    /// A helper drawn through: unculled, blended, and leaving the depth buffer
-    /// alone so what is behind it still reads.
-    fn transparent(topology: wgpu::PrimitiveTopology) -> Self {
-        Self {
-            topology,
-            cull_mode: None,
-            depth: true,
-            multisampled: true,
-            depth_write: false,
-            depth_compare: DEPTH_COMPARE,
-            depth_bias: NO_BIAS,
-            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-        }
-    }
-
-    /// Scaffolding — the cage, the manipulator, an object's outline — drawn
-    /// wherever it is, whatever stands in front of it.
-    ///
-    /// After the occlusion composite and into the resolved target, so it is
-    /// drawn *on* the frame rather than *in* it: a manipulator standing over an
-    /// occluded fold used to be darkened by that fold's occlusion, which made
-    /// the handle a person is aiming at dimmer exactly where the form is
-    /// deepest. It compares `Always` and writes no depth, so it has no use for
-    /// the depth buffer it is now separated from.
-    fn scaffold(topology: wgpu::PrimitiveTopology) -> Self {
-        Self {
-            depth: false,
-            multisampled: false,
-            depth_compare: wgpu::CompareFunction::Always,
-            ..Self::transparent(topology)
-        }
-    }
-
-    /// Ink over the surface it outlines.
-    fn wire() -> Self {
-        Self {
-            depth_bias: WIRE_BIAS,
-            ..Self::transparent(wgpu::PrimitiveTopology::LineList)
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn make_pipeline(
-    gpu: &Gpu,
-    layout: &wgpu::PipelineLayout,
-    shader: &wgpu::ShaderModule,
-    format: wgpu::TextureFormat,
-    vs: &str,
-    fs: &str,
-    state: PipelineState,
-) -> wgpu::RenderPipeline {
-    // Read from the same place the framebuffer reads it, so the two cannot
-    // disagree — a pipeline whose sample count differs from its attachment's
-    // is a validation error at draw time rather than at creation.
-    let samples = if state.multisampled {
-        gpu.sample_count(format)
-    } else {
-        1
-    };
-    gpu.device
-        .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some(fs),
-            layout: Some(layout),
-            vertex: wgpu::VertexState {
-                module: shader,
-                entry_point: Some(vs),
-                buffers: &[Vertex::layout()],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: shader,
-                entry_point: Some(fs),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: state.blend,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: state.topology,
-                cull_mode: state.cull_mode,
-                ..Default::default()
-            },
-            depth_stencil: state.depth.then(|| wgpu::DepthStencilState {
-                format: Framebuffer::DEPTH_FORMAT,
-                depth_write_enabled: state.depth_write,
-                depth_compare: state.depth_compare,
-                stencil: Default::default(),
-                bias: state.depth_bias,
-            }),
-            multisample: wgpu::MultisampleState {
-                count: samples,
-                ..Default::default()
-            },
-            multiview: None,
-            cache: None,
-        })
-}
-
-fn upload_matcap(gpu: &Gpu, matcap: MatCap) -> wgpu::TextureView {
-    const SIZE: u32 = 256;
-    // Every level rendered from the material's own recipe at that level's
-    // size, rather than the coarser levels being filtered down from the finest.
-    //
-    // Downsampling would be wrong twice over. The image is stored sRGB-encoded,
-    // so averaging its bytes averages in the wrong space and darkens every
-    // level; and a MatCap is a *function of the normal* sampled on a grid, so
-    // the honest coarse version is that function sampled coarsely — which the
-    // recipe can produce exactly. It costs a few hundred microseconds once per
-    // material change, which is a click.
-    //
-    // Why they are needed at all: a subtool far enough away that its normals
-    // vary by more than a texel between neighbouring pixels samples the
-    // material at random, and the shading sparkles as the camera moves. That
-    // is the case mipmaps exist for, and the texture had none.
-    let levels = SIZE.ilog2() + 1;
-    let mut pixels = Vec::new();
-    for level in 0..levels {
-        pixels.extend(matcap.generate((SIZE >> level).max(1)));
-    }
-    let texture = gpu.device.create_texture_with_data(
-        &gpu.queue,
-        &wgpu::TextureDescriptor {
-            label: Some("matcap"),
-            size: wgpu::Extent3d {
-                width: SIZE,
-                height: SIZE,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: levels,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        },
-        wgpu::util::TextureDataOrder::MipMajor,
-        &pixels,
-    );
-    texture.create_view(&wgpu::TextureViewDescriptor::default())
-}
-
-/// One reference image, as the viewport is given it.
-#[derive(Debug, Clone, Copy)]
-pub struct Reference<'a> {
-    /// RGBA, `width * height * 4` bytes.
-    pub pixels: &'a [u8],
-    pub width: u32,
-    pub height: u32,
-    /// Where the quad sits, bottom-left first and anticlockwise.
-    pub corners: [[f32; 3]; 4],
-    pub opacity: f32,
-}
-
-/// Puts a reference image on a texture, with a mip chain.
-///
-/// Unlike a MatCap there is no recipe to re-render a coarse level from: a
-/// reference is somebody's photograph. So the levels are filtered here, in
-/// *linear* colour — decoded, averaged, re-encoded. Averaging the sRGB bytes
-/// directly is the usual mistake and it darkens every level, which on a
-/// reference reads as the opacity dial being wrong at a distance.
-fn upload_reference(gpu: &Gpu, pixels: &[u8], width: u32, height: u32) -> wgpu::TextureView {
-    let chain = mip_chain(pixels, width, height);
-    let levels = chain.len() as u32;
-    let data: Vec<u8> = chain.concat();
-    let texture = gpu.device.create_texture_with_data(
-        &gpu.queue,
-        &wgpu::TextureDescriptor {
-            label: Some("reference"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: levels,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            // sRGB, like the matcap beside it: a photograph stored as sRGB and
-            // sampled as linear comes out washed out, which on a reference
-            // reads as the opacity being wrong.
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        },
-        wgpu::util::TextureDataOrder::MipMajor,
-        &data,
-    );
-    texture.create_view(&wgpu::TextureViewDescriptor::default())
-}
-
-/// An RGBA8 sRGB image and every mip level below it, each halved and rounded
-/// up, down to one texel.
-///
-/// Alpha is averaged directly and colour is averaged premultiplied by it, so a
-/// cut-out reference does not bleed the colour of its transparent texels into
-/// its edge as the levels get coarser.
-fn mip_chain(pixels: &[u8], width: u32, height: u32) -> Vec<Vec<u8>> {
-    let mut levels = vec![pixels.to_vec()];
-    let (mut w, mut h) = (width, height);
-    while w > 1 || h > 1 {
-        let source = levels.last().expect("the chain starts with level zero");
-        let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
-        let mut next = Vec::with_capacity((nw * nh * 4) as usize);
-        for y in 0..nh {
-            for x in 0..nw {
-                let mut colour = [0.0f32; 3];
-                let mut alpha = 0.0f32;
-                let mut taken = 0.0f32;
-                for dy in 0..2 {
-                    for dx in 0..2 {
-                        let (sx, sy) = ((x * 2 + dx).min(w - 1), (y * 2 + dy).min(h - 1));
-                        let at = ((sy * w + sx) * 4) as usize;
-                        let a = source[at + 3] as f32 / 255.0;
-                        for c in 0..3 {
-                            colour[c] += from_srgb8(source[at + c]) * a;
-                        }
-                        alpha += a;
-                        taken += 1.0;
-                    }
-                }
-                // Back out of the premultiply. Where the whole block was
-                // transparent there is no colour to recover and none to show.
-                let weight = if alpha > 0.0 { 1.0 / alpha } else { 0.0 };
-                next.extend_from_slice(&[
-                    to_srgb8(colour[0] * weight),
-                    to_srgb8(colour[1] * weight),
-                    to_srgb8(colour[2] * weight),
-                    (alpha / taken * 255.0 + 0.5) as u8,
-                ]);
-            }
-        }
-        levels.push(next);
-        (w, h) = (nw, nh);
-    }
-    levels
-}
-
-/// 8-bit sRGB to linear, for filtering that has to happen in linear colour.
-fn from_srgb8(value: u8) -> f32 {
-    let c = value as f32 / 255.0;
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
-}
-
-/// Linear back to 8-bit sRGB.
-fn to_srgb8(linear: f32) -> u8 {
-    let c = linear.clamp(0.0, 1.0);
-    let encoded = if c <= 0.0031308 {
-        c * 12.92
-    } else {
-        1.055 * c.powf(1.0 / 2.4) - 0.055
-    };
-    (encoded * 255.0 + 0.5) as u8
-}
-
-/// Builds the grid and symmetry-plane line geometry.
-///
-/// Overlays are drawn low-contrast and behind the sculpt in visual weight, and
-/// are excluded from every export — they exist only in this function.
-fn overlay_geometry(overlays: Overlays, extent: f32) -> (Vec<Vertex>, Vec<u32>) {
-    let mut vertices = Vec::new();
-    let mut indices = Vec::new();
-
-    let mut line = |a: Vec3, b: Vec3, color: [f32; 3]| {
-        let base = vertices.len() as u32;
-        vertices.push(Vertex {
-            position: a.into(),
-            normal: [0.0, 1.0, 0.0],
-            color,
-            mask: 0.0,
-        });
-        vertices.push(Vertex {
-            position: b.into(),
-            normal: [0.0, 1.0, 0.0],
-            color,
-            mask: 0.0,
-        });
-        indices.extend_from_slice(&[base, base + 1]);
-    };
-
-    if overlays.grid {
-        let steps = 20;
-        let step = extent * 2.0 / steps as f32;
-        // One and two steps up from the ground. Written in linear, because
-        // the target encodes: passing the design's hex values straight through
-        // renders them several times too bright.
-        let minor = palette::GRID_MINOR;
-        let axis = palette::GRID_AXIS;
-        for i in 0..=steps {
-            let t = -extent + i as f32 * step;
-            let color = if i == steps / 2 { axis } else { minor };
-            line(Vec3::new(t, 0.0, -extent), Vec3::new(t, 0.0, extent), color);
-            line(Vec3::new(-extent, 0.0, t), Vec3::new(extent, 0.0, t), color);
-        }
-    }
-
-    for axis in [SymmetryAxis::X, SymmetryAxis::Y, SymmetryAxis::Z] {
-        if !overlays.symmetry_planes[axis as usize] {
-            continue;
-        }
-        // The accent, because the symmetry plane is tool state rather than
-        // scene furniture — but dimmed, since a reference overlay must not be
-        // the brightest thing on screen. At 0.25 over an eight-by-eight grid
-        // it was: the capture showed a bright orange wall with the sculpt
-        // behind it. Four steps was still a lattice of orange across the
-        // form on a running build, with the camera inside the plane's extent.
-        // Two steps is the plane's outline and its two centre lines — the
-        // mirror's axis where it meets the floor, and its edge — which says
-        // "the mirror is here" and puts nothing across the clay. Six lines
-        // can afford a little more light than forty: still a fifth of the
-        // accent, nowhere near the active brush's ring.
-        let color = palette::dimmed(palette::ACCENT, 0.22);
-        let steps = 2;
-        let step = extent * 2.0 / steps as f32;
-        for i in 0..=steps {
-            let t = -extent + i as f32 * step;
-            let (a, b, c, d) = match axis {
-                SymmetryAxis::X => (
-                    Vec3::new(0.0, t, -extent),
-                    Vec3::new(0.0, t, extent),
-                    Vec3::new(0.0, -extent, t),
-                    Vec3::new(0.0, extent, t),
-                ),
-                SymmetryAxis::Y => (
-                    Vec3::new(t, 0.0, -extent),
-                    Vec3::new(t, 0.0, extent),
-                    Vec3::new(-extent, 0.0, t),
-                    Vec3::new(extent, 0.0, t),
-                ),
-                SymmetryAxis::Z => (
-                    Vec3::new(t, -extent, 0.0),
-                    Vec3::new(t, extent, 0.0),
-                    Vec3::new(-extent, t, 0.0),
-                    Vec3::new(extent, t, 0.0),
-                ),
-            };
-            line(a, b, color);
-            line(c, d, color);
-        }
-    }
-
-    (vertices, indices)
-}
-
-/// A ring on the surface, plus a mark at its centre.
-///
-/// The accent colour, because this is the active brush — the one thing the
-/// design reserves it for.
-fn cursor_geometry(cursor: BrushCursor) -> (Vec<Vertex>, Vec<u32>) {
-    const SEGMENTS: usize = 48;
-
-    let centre = Vec3::from(cursor.position);
-    let normal = {
-        let n = Vec3::from(cursor.normal);
-        if n.length_squared() > 1e-6 {
-            n.normalize()
-        } else {
-            Vec3::Y
-        }
-    };
-    // Any pair perpendicular to the normal will do; picking the axis least
-    // aligned with it avoids a degenerate cross product.
-    let reference = if normal.x.abs() < 0.9 {
-        Vec3::X
-    } else {
-        Vec3::Y
-    };
-    let u = normal.cross(reference).normalize() * cursor.radius;
-    let v = normal.cross(u).normalize() * cursor.radius;
-
-    // A mirror is where the stroke also lands, not where the hand is. Dimming
-    // it keeps the two readable as different things at a glance.
-    let color = if cursor.mirrored {
-        palette::dimmed(palette::ACCENT, 0.45)
-    } else {
-        palette::ACCENT
-    };
-    let mut vertices = Vec::with_capacity(SEGMENTS + 4);
-    let mut indices = Vec::with_capacity(SEGMENTS * 2 + 4);
-
-    for i in 0..SEGMENTS {
-        let angle = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
-        let (s, c) = angle.sin_cos();
-        // Lifted a hair along the normal so the ring is not swallowed by the
-        // surface it sits on.
-        let point = centre + u * c + v * s + normal * (cursor.radius * 0.02);
-        vertices.push(Vertex {
-            position: point.into(),
-            normal: normal.into(),
-            color,
-            mask: 0.0,
-        });
-        indices.push(i as u32);
-        indices.push(((i + 1) % SEGMENTS) as u32);
-    }
-
-    // A small cross at the centre, so the exact point is readable when the
-    // ring is large.
-    let tick = cursor.radius * 0.12;
-    let base = vertices.len() as u32;
-    for (a, b) in [
-        (u.normalize() * tick, -u.normalize() * tick),
-        (v.normalize() * tick, -v.normalize() * tick),
-    ] {
-        let offset = normal * (cursor.radius * 0.02);
-        for point in [centre + a + offset, centre + b + offset] {
-            vertices.push(Vertex {
-                position: point.into(),
-                normal: normal.into(),
-                color,
-                mask: 0.0,
-            });
-        }
-    }
-    indices.extend_from_slice(&[base, base + 1, base + 2, base + 3]);
-
-    (vertices, indices)
-}
-
-/// A tapered sleeve along each link, which is the membrane a rig would skin
-/// into.
-///
-/// ZBrush shows this while a rig is being built and shows it translucent, so
-/// the chain reads through its own surface. Eight sides is enough at the size
-/// a link is drawn — this is a hint about where the skin will go, not the skin.
-fn membrane_geometry(view: &ArmatureView<'_>) -> (Vec<Vertex>, Vec<u32>) {
-    const SIDES: usize = 8;
-    let mut vertices: Vec<Vertex> = Vec::new();
-    let mut indices: Vec<u32> = Vec::new();
-
-    for (child, parent) in view.links {
-        let (Some((a, ra)), Some((b, rb))) = (
-            view.spheres.get(*child as usize),
-            view.spheres.get(*parent as usize),
-        ) else {
-            continue;
-        };
-        let (from, to) = (Vec3::from(*a), Vec3::from(*b));
-        let axis = to - from;
-        let length = axis.length();
-        if length < 1e-5 {
-            continue;
-        }
-        let forward = axis / length;
-        // Any vector not along the axis gives a frame to sweep the ring in.
-        let aside = if forward.x.abs() < 0.9 {
-            Vec3::X
-        } else {
-            Vec3::Y
-        };
-        let u = forward.cross(aside).normalize();
-        let v = forward.cross(u);
-
-        let colour = palette::dimmed(palette::ACCENT, 0.5);
-        let base = vertices.len() as u32;
-        for side in 0..SIDES {
-            let angle = side as f32 / SIDES as f32 * std::f32::consts::TAU;
-            let (s, c) = angle.sin_cos();
-            let offset = u * c + v * s;
-            // Slightly inside each sphere, so the sleeve meets them rather
-            // than poking out of their silhouettes.
-            for (centre, radius) in [(from, *ra), (to, *rb)] {
-                vertices.push(Vertex {
-                    position: (centre + offset * radius * 0.72).into(),
-                    normal: offset.into(),
-                    color: colour,
-                    mask: 0.0,
-                });
-            }
-        }
-        for side in 0..SIDES {
-            let next = (side + 1) % SIDES;
-            let (a0, a1) = (base + side as u32 * 2, base + side as u32 * 2 + 1);
-            let (b0, b1) = (base + next as u32 * 2, base + next as u32 * 2 + 1);
-            // Both windings, because the sleeve is seen from inside as often
-            // as outside and this pipeline does not cull.
-            indices.extend_from_slice(&[a0, a1, b1, a0, b1, b0]);
-        }
-    }
-
-    (vertices, indices)
-}
-
-/// Three rings and a cross per sphere, and a line per link.
-///
-/// Three rings rather than one: a single ring lies in the view plane and a rig
-/// then reads as flat, which is exactly the information a rig has to convey.
-/// The cage: a line along every edge, and a box at every control point.
-///
-/// Line topology, drawn by the overlay pipeline. The handles are boxes rather
-/// than spheres because a box reads as a *handle* — something to grab — where a
-/// sphere at this size reads as a bead on a wire, and because twelve lines cost
-/// what one sphere's ring costs.
-/// The three axis colours, which every application that has a manipulator
-/// spells the same way: x red, y green, z blue.
-const AXIS_COLOURS: [[f32; 3]; 3] = [[0.85, 0.24, 0.24], [0.36, 0.76, 0.30], [0.28, 0.45, 0.88]];
-
-/// The manipulator: three axes and, where the mode has one, a centre.
-///
-/// Line topology like the cage, and shapes rather than colours alone carry the
-/// meaning — an arrow slides, a ring turns, a box scales — because a person
-/// reaching for a handle is not reading a legend, and because the three
-/// colours are the one part of this a colour-blind sculptor cannot use.
-fn gizmo_geometry_for(
-    view: GizmoView,
-    emit: &mut impl FnMut(Vec3, Vec3, [f32; 3]),
-    triangle: &mut impl FnMut(Vec3, Vec3, Vec3, [f32; 3]),
-) {
-    const RING_SEGMENTS: usize = 40;
-    let pivot = Vec3::from(view.pivot);
-
-    // Drawn heavier than the cage it stands on. A line is one pixel wide
-    // whatever the device, and a one-pixel manipulator over a shaded form is
-    // a thing to squint for; ZBrush's is a handle. Each stroke is laid down
-    // `HANDLE_WEIGHT` times, stepped *across itself in the screen plane* —
-    // perpendicular both to the stroke and to the eye — so it widens the same
-    // way from every angle, and a box's edges thicken rather than hatch.
-    let eye = normalized(Vec3::from(view.view_axis)).unwrap_or(Vec3::Z);
-    let step = view.reach * HANDLE_STEP;
-    let mut segment = |from: Vec3, to: Vec3, colour: [f32; 3]| {
-        // A stroke pointing straight at the eye has no across; any direction
-        // in the screen plane widens it as well as another.
-        let across = normalized(eye.cross(to - from)).unwrap_or_else(|| frame_about(eye).0);
-        for i in 0..HANDLE_WEIGHT {
-            let t = i as f32 - (HANDLE_WEIGHT - 1) as f32 * 0.5;
-            let offset = across * (t * step);
-            emit(from + offset, to + offset, colour);
-        }
-    };
-    let lit = |operation: GizmoMode, handle: GizmoHandle, base: [f32; 3]| {
-        if view.hovered == Some((operation, handle)) {
-            [1.0, 0.85, 0.4]
-        } else {
-            base
-        }
-    };
-    let ring = |centre: Vec3,
-                across: Vec3,
-                other: Vec3,
-                radius: f32,
-                colour: [f32; 3],
-                segment: &mut dyn FnMut(Vec3, Vec3, [f32; 3])| {
-        for step in 0..RING_SEGMENTS {
-            let angle = |at: usize| at as f32 / RING_SEGMENTS as f32 * std::f32::consts::TAU;
-            let at = |a: f32| centre + (across * a.cos() + other * a.sin()) * radius;
-            segment(at(angle(step)), at(angle(step + 1)), colour);
-        }
-    };
-
-    // One widget, every operation: ZBrush's Gizmo 3D. Along each axis an
-    // arrow that slides, a ring that turns and — where a stretch can be
-    // applied per axis — a box that scales, so the operation is chosen by the
-    // handle grabbed rather than by a mode set first. Three modes drew three
-    // different widgets once, and the chips became a step a sculptor had to
-    // take before every move.
-    for (operation, handle) in GizmoHandle::combined(view.per_axis_scale) {
-        let Some(index) = handle.axis_index() else {
-            continue;
-        };
-        let colour = lit(operation, handle, AXIS_COLOURS[index]);
-        let mut unit = Vec3::ZERO;
-        unit[index] = 1.0;
-        let (u, v) = ((index + 1) % 3, (index + 2) % 3);
-        let mut across = Vec3::ZERO;
-        across[u] = 1.0;
-        let mut other = Vec3::ZERO;
-        other[v] = 1.0;
-        match operation {
-            GizmoMode::Move => {
-                // A cone at the tip: a handle, not a hint of one. The shaft
-                // stops where the cone starts so it does not show through the
-                // base.
-                let tip = pivot + unit * view.reach;
-                let head = view.reach * 0.2;
-                segment(pivot, tip - unit * head, colour);
-                cone(tip, unit, head, head * 0.4, colour, triangle);
-            }
-            GizmoMode::Rotate => {
-                // A ring in the plane perpendicular to the axis, inside the
-                // arrows' reach so the two are told apart by radius as well as
-                // by shape.
-                ring(
-                    pivot,
-                    across,
-                    other,
-                    view.reach * RING_REACH,
-                    colour,
-                    &mut segment,
-                );
-            }
-            GizmoMode::Scale => {
-                // A box on the shaft, short of the ring.
-                let at = pivot + unit * (view.reach * SCALE_BOX_REACH);
-                solid_cube(at, view.reach * 0.07, colour, triangle);
-            }
-        }
-    }
-
-    // The centre: a solid block at the pivot, which reads as a centre from
-    // any angle. What it does is the mode's — a slide, or a uniform scale.
-    let centre_operation = GizmoHandle::centre_operation(view.mode);
-    let colour = lit(centre_operation, GizmoHandle::Centre, CENTRE_COLOUR);
-    solid_cube(pivot, view.reach * 0.12, colour, triangle);
-
-    // The outer ring: ZBrush's, and the one a sculptor reaches for most.
-    // Outside the arrows at `VIEW_RING_REACH` — among the axis rings it would
-    // be a fourth thing to tell apart at the same radius, and the whole point
-    // of this one is that it is the easy target. And the four corner brackets
-    // that frame it in the screen plane: they say "this is the widget's
-    // extent" and are grabbed by nothing.
-    let (across, other) = frame_about(eye);
-    let colour = lit(GizmoMode::Rotate, GizmoHandle::View, VIEW_RING_COLOUR);
-    ring(
-        pivot,
-        across,
-        other,
-        view.reach * VIEW_RING_REACH,
-        colour,
-        &mut segment,
-    );
-    let half = view.reach * BRACKET_REACH;
-    let arm = view.reach * 0.22;
-    for (sx, sy) in [(-1.0f32, -1.0f32), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
-        let corner = pivot + (across * sx + other * sy) * half;
-        segment(corner, corner - across * (sx * arm), BRACKET_COLOUR);
-        segment(corner, corner - other * (sy * arm), BRACKET_COLOUR);
-    }
-}
-
-/// How far out the axis rings sit, against the arrows' reach.
-pub const RING_REACH: f32 = 0.8;
-/// Where a per-axis scale box sits along its arrow, against the reach.
-pub const SCALE_BOX_REACH: f32 = 0.55;
-/// Half the side of the corner-bracket square, against the reach.
-pub const BRACKET_REACH: f32 = 1.42;
-/// The centre block's colour: not an axis colour, and not the outer ring's.
-const CENTRE_COLOUR: [f32; 3] = [0.82, 0.78, 0.42];
-/// The brackets, quiet: they frame the widget and are not a handle.
-const BRACKET_COLOUR: [f32; 3] = [0.55, 0.55, 0.58];
-
-/// How far out the outer ring sits, against an axis ring's reach.
-pub const VIEW_RING_REACH: f32 = 1.28;
-
-/// How many passes each manipulator stroke is drawn in.
-const HANDLE_WEIGHT: usize = 3;
-/// How far apart those passes sit, against the manipulator's reach.
-const HANDLE_STEP: f32 = 0.006;
-
-/// Not one of the three axis colours: the outer ring belongs to no axis, and
-/// borrowing red, green or blue would say it did.
-const VIEW_RING_COLOUR: [f32; 3] = [0.82, 0.78, 0.42];
-
-/// A unit vector, or `None` where there is no direction to have.
-fn normalized(v: Vec3) -> Option<Vec3> {
-    (v.length() > 1e-6).then(|| v / v.length())
-}
-
-/// Two unit vectors spanning the plane perpendicular to an axis.
-///
-/// The domain's, in this crate's vector type. One implementation rather than
-/// two: the ring is *drawn* from this frame and *dragged* on a plane built
-/// from the same one, and two copies could disagree.
-pub fn frame_about(axis: Vec3) -> (Vec3, Vec3) {
-    let (across, other) = clayspace_model::perpendicular_frame(axis.into());
-    (across.into(), other.into())
-}
-
-/// The twelve edges of a cube, spelled as the four along each axis.
-fn cube(centre: Vec3, size: f32, colour: [f32; 3], segment: &mut impl FnMut(Vec3, Vec3, [f32; 3])) {
-    for axis in 0..3 {
-        let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
-        for corner in 0..4 {
-            let mut from = [0.0f32; 3];
-            from[u] = if corner & 1 == 0 { -size } else { size };
-            from[v] = if corner & 2 == 0 { -size } else { size };
-            from[axis] = -size;
-            let mut to = from;
-            to[axis] = size;
-            segment(centre + Vec3::from(from), centre + Vec3::from(to), colour);
-        }
-    }
-}
-
-/// The twelve edges of an axis-aligned box.
-///
-/// Two callers now — a selected object and the active subtool — and the corner
-/// arithmetic is the part that is easy to get subtly wrong, so it is written
-/// once.
-fn outline_box(
-    (min, max): ([f32; 3], [f32; 3]),
-    colour: [f32; 3],
-    segment: &mut impl FnMut(Vec3, Vec3, [f32; 3]),
-) {
-    let corner = |i: usize| {
-        Vec3::new(
-            if i & 1 == 0 { min[0] } else { max[0] },
-            if i & 2 == 0 { min[1] } else { max[1] },
-            if i & 4 == 0 { min[2] } else { max[2] },
-        )
-    };
-    // Every pair of corners differing in one bit, which is every pair one axis
-    // apart.
-    for a in 0..8usize {
-        for bit in [1usize, 2, 4] {
-            let b = a | bit;
-            if b != a {
-                segment(corner(a), corner(b), colour);
-            }
-        }
-    }
-}
-
-/// Where the solid handles are lit from, in world space.
-///
-/// The overlay shader draws vertex colour as it is, so what makes a cone read
-/// as a cone is baked here: each face is the handle's colour, darkened by how
-/// far it turns from this light. Upper left and toward the eye, as the
-/// material previews are lit — but fixed in the world, because the handles
-/// are world-aligned and a light that turned with the camera would flatten
-/// whichever face happened to face it.
-const HANDLE_LIGHT: Vec3 = Vec3::new(-0.4, 0.7, 0.6);
-
-/// One face's colour under `HANDLE_LIGHT`, never darker than a little over
-/// half, so the shadowed side of a red cone is still red.
-fn shaded(colour: [f32; 3], a: Vec3, b: Vec3, c: Vec3) -> [f32; 3] {
-    let normal = (b - a).cross(c - a);
-    let facing = normalized(normal)
-        .map(|n| n.dot(HANDLE_LIGHT.normalize()).abs())
-        .unwrap_or(0.0);
-    let light = 0.55 + 0.45 * facing;
-    [colour[0] * light, colour[1] * light, colour[2] * light]
-}
-
-/// A cone with its tip at `tip`, pointing along `axis`, `length` long and
-/// `radius` wide at the base, closed with a disc.
-fn cone(
-    tip: Vec3,
-    axis: Vec3,
-    length: f32,
-    radius: f32,
-    colour: [f32; 3],
-    triangle: &mut impl FnMut(Vec3, Vec3, Vec3, [f32; 3]),
-) {
-    const SEGMENTS: usize = 12;
-    let (across, other) = frame_about(axis);
-    let base = tip - axis * length;
-    let rim = |i: usize| {
-        let a = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
-        base + (across * a.cos() + other * a.sin()) * radius
-    };
-    for i in 0..SEGMENTS {
-        let (p, q) = (rim(i), rim(i + 1));
-        triangle(tip, p, q, colour);
-        triangle(base, q, p, colour);
-    }
-}
-
-/// The six faces of a cube, two triangles each.
-fn solid_cube(
-    centre: Vec3,
-    size: f32,
-    colour: [f32; 3],
-    triangle: &mut impl FnMut(Vec3, Vec3, Vec3, [f32; 3]),
-) {
-    for axis in 0..3 {
-        let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
-        for side in [-1.0f32, 1.0] {
-            let corner = |du: f32, dv: f32| {
-                let mut p = [0.0f32; 3];
-                p[axis] = side * size;
-                p[u] = du * size;
-                p[v] = dv * size;
-                centre + Vec3::from(p)
-            };
-            let (a, b, c, d) = (
-                corner(-1.0, -1.0),
-                corner(1.0, -1.0),
-                corner(1.0, 1.0),
-                corner(-1.0, 1.0),
-            );
-            triangle(a, b, c, colour);
-            triangle(a, c, d, colour);
-        }
-    }
-}
-
-/// What the cage overlay uploads: the lines, and the solid handles.
-struct LatticeGeometry {
-    lines: (Vec<Vertex>, Vec<u32>),
-    solids: (Vec<Vertex>, Vec<u32>),
-}
-
-fn lattice_geometry(view: LatticeView<'_>) -> LatticeGeometry {
-    let mut vertices: Vec<Vertex> = Vec::new();
-    let mut indices: Vec<u32> = Vec::new();
-    let mut solid_vertices: Vec<Vertex> = Vec::new();
-    let mut solid_indices: Vec<u32> = Vec::new();
-
-    let mut segment = |from: Vec3, to: Vec3, color: [f32; 3]| {
-        let base = vertices.len() as u32;
-        for position in [from, to] {
-            vertices.push(Vertex {
-                position: position.into(),
-                normal: [0.0, 1.0, 0.0],
-                color,
-                mask: 0.0,
-            });
-        }
-        indices.push(base);
-        indices.push(base + 1);
-    };
-    let mut triangle = |a: Vec3, b: Vec3, c: Vec3, colour: [f32; 3]| {
-        let base = solid_vertices.len() as u32;
-        let color = shaded(colour, a, b, c);
-        for position in [a, b, c] {
-            solid_vertices.push(Vertex {
-                position: position.into(),
-                normal: [0.0, 1.0, 0.0],
-                color,
-                mask: 0.0,
-            });
-        }
-        solid_indices.extend_from_slice(&[base, base + 1, base + 2]);
-    };
-
-    // A selected object's box, quieter still than the cage: it says where a
-    // shape is, and a bright one would read as the shape itself.
-    const OUTLINE: [f32; 3] = [0.52, 0.62, 0.72];
-    /// The active SDF subtool's box, in the same hue its carried siblings are
-    /// tinted with — one cue, two mechanisms, and a second colour would read as
-    /// a second fact. Dimmed to sit a little below the object outline: which
-    /// subtool is active is standing state, and the box a sculptor just put an
-    /// object into is the more urgent of the two.
-    const SUBTOOL_OUTLINE: [f32; 3] = palette::dimmed(ACTIVE_TINT, 0.68);
-    if let Some(box_) = view.outline {
-        outline_box(box_, OUTLINE, &mut segment);
-    }
-    if let Some(box_) = view.subtool_outline {
-        outline_box(box_, SUBTOOL_OUTLINE, &mut segment);
-    }
-
-    // The cage itself, quiet: it is a frame of reference, and a bright one
-    // would compete with the form it is wrapped around.
-    const CAGE: [f32; 3] = [0.62, 0.45, 0.28];
-    const POINT: [f32; 3] = [0.78, 0.60, 0.38];
-    const SELECTED: [f32; 3] = [1.0, 0.72, 0.30];
-
-    for (from, to) in view.edges {
-        let (Some(a), Some(b)) = (
-            view.points.get(*from as usize),
-            view.points.get(*to as usize),
-        ) else {
-            continue;
-        };
-        segment(Vec3::from(*a), Vec3::from(*b), CAGE);
-    }
-
-    for (index, point) in view.points.iter().enumerate() {
-        let selected = view.selected.binary_search(&index).is_ok();
-        let color = if selected { SELECTED } else { POINT };
-        // Bigger when it is the one in hand, so which point is being dragged
-        // is legible without reading the colour — which a sculptor looking at
-        // the form is not doing.
-        let size = view.handle * if selected { 1.6 } else { 1.0 };
-        let centre = Vec3::from(*point);
-        cube(centre, size, color, &mut segment);
-    }
-
-    // The manipulator last, so it draws over the cage it acts on.
-    if let Some(gizmo) = view.gizmo {
-        gizmo_geometry_for(gizmo, &mut segment, &mut triangle);
-    }
-
-    LatticeGeometry {
-        lines: (vertices, indices),
-        solids: (solid_vertices, solid_indices),
-    }
-}
-
-fn armature_geometry(view: ArmatureView<'_>) -> (Vec<Vertex>, Vec<u32>) {
-    const SEGMENTS: usize = 24;
-    /// How far outside the skin the hoops sit.
-    ///
-    /// At a joint the skin *is* the sphere, so a hoop at the same radius is
-    /// coincident with the surface it exists to annotate and vanishes into it.
-    /// The first version drew rings flush and the rig was invisible over its
-    /// own skin — 0.097 of the frame covered with the scaffolding on, and
-    /// 0.097 with it off.
-    const PROUD: f32 = 1.05;
-    /// And a floor, so a small sphere is still ringed rather than swallowed by
-    /// the surface's own thickness.
-    const MARGIN: f32 = 0.01;
-    let mut vertices: Vec<Vertex> = Vec::new();
-    let mut indices: Vec<u32> = Vec::new();
-
-    let mut ring = |centre: Vec3, radius: f32, axis: usize, color: [f32; 3]| {
-        let base = vertices.len() as u32;
-        for i in 0..SEGMENTS {
-            let angle = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
-            let (s, c) = angle.sin_cos();
-            let offset = match axis {
-                0 => Vec3::new(0.0, c, s),
-                1 => Vec3::new(c, 0.0, s),
-                _ => Vec3::new(c, s, 0.0),
-            };
-            vertices.push(Vertex {
-                position: (centre + offset * radius).into(),
-                normal: [0.0, 1.0, 0.0],
-                color,
-                mask: 0.0,
-            });
-            indices.push(base + i as u32);
-            indices.push(base + ((i + 1) % SEGMENTS) as u32);
-        }
-    };
-
-    for (index, (position, radius)) in view.spheres.iter().enumerate() {
-        let index = index as u32;
-        // The selected sphere is the accent at full strength; the root is
-        // distinguished so a rig has a readable origin; the rest are quiet.
-        let color = if view.selected == Some(index) {
-            palette::ACCENT
-        } else if view.root == Some(index) {
-            palette::dimmed(palette::ACCENT, 0.7)
-        } else {
-            palette::dimmed(palette::FOREGROUND, 0.55)
-        };
-        let centre = Vec3::from(*position);
-        let hoop = radius * PROUD + MARGIN;
-        for axis in 0..3 {
-            ring(centre, hoop, axis, color);
-        }
-    }
-
-    // A line down each link, so the tree's shape is visible where the spheres
-    // are far apart.
-    for (child, parent) in view.links {
-        let (Some((a, _)), Some((b, _))) = (
-            view.spheres.get(*child as usize),
-            view.spheres.get(*parent as usize),
-        ) else {
-            continue;
-        };
-        let color = palette::dimmed(palette::ACCENT, 0.45);
-        let base = vertices.len() as u32;
-        for point in [Vec3::from(*a), Vec3::from(*b)] {
-            vertices.push(Vertex {
-                position: point.into(),
-                normal: [0.0, 1.0, 0.0],
-                color,
-                mask: 0.0,
-            });
-        }
-        indices.push(base);
-        indices.push(base + 1);
-    }
-
-    (vertices, indices)
-}
-
-/// How much of the frame's height the gizmo occupies.
-const GIZMO_FRACTION: f32 = 0.18;
-/// How many lines each half-axis of the navigation gizmo is drawn as.
-const GIZMO_BUNDLE: usize = 5;
-/// How far the copies sit from the axis, in the gizmo's own units.
-const GIZMO_ROD: f32 = 0.018;
-
-/// The three labelled axes, drawn as lines from the origin.
-///
-/// Each axis takes a distinct hue so the orientation is readable at a glance,
-/// and the negative half is drawn dimmer so front and back are separable.
-fn gizmo_geometry() -> (Vec<Vertex>, Vec<u32>) {
-    let mut vertices = Vec::new();
-    let mut indices = Vec::new();
-
-    let axes = [
-        (Vec3::X, [0.85f32, 0.22, 0.24]),
-        (Vec3::Y, [0.36, 0.72, 0.32]),
-        (Vec3::Z, [0.28, 0.48, 0.88]),
-    ];
-
-    // Each half-axis is a bundle of `GIZMO_BUNDLE` lines — the axis and four
-    // copies stepped a little along the other two axes — so it reads as a rod
-    // from every angle rather than as a hairline. A line is one pixel wide
-    // whatever the device; the manipulator thickens itself the same way.
-    let offsets = |direction: Vec3| -> [Vec3; GIZMO_BUNDLE] {
-        let (across, other) = frame_about(direction);
-        [
-            Vec3::ZERO,
-            across * GIZMO_ROD,
-            -across * GIZMO_ROD,
-            other * GIZMO_ROD,
-            -other * GIZMO_ROD,
-        ]
-    };
-    for (direction, color) in axes {
-        for (end, shade) in [(direction, 1.0f32), (-direction, 0.25)] {
-            let tint = [color[0] * shade, color[1] * shade, color[2] * shade];
-            for offset in offsets(direction) {
-                let base = vertices.len() as u32;
-                vertices.push(Vertex {
-                    position: offset.into(),
-                    normal: [0.0, 1.0, 0.0],
-                    color: tint,
-                    mask: 0.0,
-                });
-                vertices.push(Vertex {
-                    position: (end * 0.9 + offset).into(),
-                    normal: [0.0, 1.0, 0.0],
-                    color: tint,
-                    mask: 0.0,
-                });
-                indices.extend_from_slice(&[base, base + 1]);
-            }
-        }
-    }
-
-    (vertices, indices)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3746,8 +2789,8 @@ mod tests {
         assert_eq!(std::mem::size_of::<CameraUniform>(), 128);
         // material: three vec4.
         assert_eq!(std::mem::size_of::<MaterialUniform>(), 48);
-        // ao: two mat4x4 and five vec4.
-        assert_eq!(std::mem::size_of::<AoUniform>(), 208);
+        // ao: two mat4x4, five vec4 and a sixteen-entry vec4 kernel.
+        assert_eq!(std::mem::size_of::<AoUniform>(), 208 + AO_KERNEL * 16);
         for size in [
             std::mem::size_of::<CameraUniform>(),
             std::mem::size_of::<MaterialUniform>(),
@@ -3999,7 +3042,7 @@ mod tests {
     /// what keeps them together.
     #[test]
     fn the_shader_and_the_framebuffer_agree_on_the_occlusion_scale() {
-        let source = include_str!("shaders/ao.wgsl");
+        let source = include_str!("../shaders/ao.wgsl");
         let declared = source
             .lines()
             .find_map(|line| line.trim().strip_prefix("const AO_SPAN: i32 = "))
@@ -4012,6 +3055,97 @@ mod tests {
              pixel and the framebuffer sizes the target for \
              {}",
             Framebuffer::AO_SCALE
+        );
+    }
+
+    /// The precomputed kernel is the distribution the shader used to compute.
+    ///
+    /// Moving it to the host is a pure optimisation, so the thing to hold is
+    /// that it changed nothing: unit directions in the upper hemisphere, an
+    /// even spread over the disc rather than a crowd at its centre, and reaches
+    /// that grow with the index so the near field is sampled as densely as the
+    /// far one.
+    #[test]
+    fn the_occlusion_kernel_covers_the_hemisphere_evenly() {
+        for count in [6usize, 8, 12, 16] {
+            let kernel = ao_kernel(count);
+            let mut previous_reach = 0.0f32;
+            let mut mean = [0.0f32; 3];
+            for entry in kernel.iter().take(count) {
+                let [x, y, z, reach] = *entry;
+                let length = (x * x + y * y + z * z).sqrt();
+                assert!(
+                    (length - 1.0).abs() < 1e-4,
+                    "a sample direction of length {length}"
+                );
+                assert!(z >= 0.0, "a sample pointing into the surface: z = {z}");
+                assert!(
+                    (0.1..=1.0).contains(&reach),
+                    "a reach of {reach} of the radius"
+                );
+                assert!(
+                    reach >= previous_reach,
+                    "reaches must grow with the index, and {reach} follows {previous_reach}"
+                );
+                previous_reach = reach;
+                for (axis, value) in mean.iter_mut().zip([x, y, z]) {
+                    *axis += value / count as f32;
+                }
+            }
+            // Spread rather than clustered: the mean of an even hemisphere
+            // leans along the normal and barely at all across it.
+            assert!(
+                mean[0].abs() < 0.25 && mean[1].abs() < 0.25,
+                "the kernel leans sideways: mean {mean:?} over {count} samples"
+            );
+            assert!(mean[2] > 0.3, "the kernel does not face the surface");
+        }
+    }
+
+    /// Entries past the count are never read, and must not be a direction of
+    /// no length in case one ever is.
+    #[test]
+    fn the_unused_kernel_entries_are_still_directions() {
+        let kernel = ao_kernel(6);
+        for entry in kernel.iter().skip(6) {
+            let length = (entry[0] * entry[0] + entry[1] * entry[1] + entry[2] * entry[2]).sqrt();
+            assert!(
+                (length - 1.0).abs() < 1e-4,
+                "an unused entry of length {length}"
+            );
+        }
+        // And a count of zero is a count of one rather than a division by it.
+        let _ = ao_kernel(0);
+        let _ = ao_kernel(usize::MAX);
+    }
+
+    /// The key light's direction is stated in the shader and in the shadow
+    /// fit, and they have to be the same direction.
+    ///
+    /// A map fitted along one direction and sampled from a light pointing along
+    /// another lands the shadow somewhere the form is not — and it does it
+    /// quietly, because the picture still has a shadow in it.
+    #[test]
+    fn the_shader_and_the_shadow_fit_agree_on_the_key_light() {
+        let source = include_str!("../shaders/matcap.wgsl");
+        let declared = source
+            .lines()
+            .find_map(|line| {
+                let value = line
+                    .trim()
+                    .strip_prefix("const KEY_DIRECTION: vec3<f32> = vec3<f32>(")?
+                    .strip_suffix(");")?;
+                let axes: Vec<f32> = value
+                    .split(',')
+                    .filter_map(|n| n.trim().parse::<f32>().ok())
+                    .collect();
+                <[f32; 3]>::try_from(axes.as_slice()).ok()
+            })
+            .expect("matcap.wgsl declares KEY_DIRECTION");
+        assert_eq!(
+            declared, STUDIO_KEY_DIRECTION,
+            "the shader lights the form from {declared:?} and the shadow map is \
+             fitted along {STUDIO_KEY_DIRECTION:?}"
         );
     }
 
@@ -4084,10 +3218,16 @@ mod tests {
         );
     }
 
+    /// A metric for the unit tests, standing in for a camera looking at the
+    /// origin from four units away through a 480-pixel-tall viewport.
+    fn a_metric() -> overlays::ScreenMetric {
+        overlays::ScreenMetric::new(&Camera::default(), 480.0)
+    }
+
     #[test]
     fn mirrors_are_drawn_dimmer_than_the_pointer() {
-        let (pointer, _) = cursor_geometry(off_axis());
-        let (mirror, _) = cursor_geometry(off_axis().mirror(0));
+        let (pointer, _) = cursor_geometry(off_axis(), a_metric());
+        let (mirror, _) = cursor_geometry(off_axis().mirror(0), a_metric());
 
         let brightness = |v: &[Vertex]| v[0].color.iter().sum::<f32>();
         assert!(
@@ -4106,7 +3246,7 @@ mod tests {
         let count = |cursors: &[BrushCursor]| {
             cursors
                 .iter()
-                .map(|c| cursor_geometry(*c).0.len())
+                .map(|c| cursor_geometry(*c, a_metric()).0.len())
                 .sum::<usize>()
         };
         assert_eq!(count(&four), 4 * count(&one));
@@ -4160,34 +3300,52 @@ mod tests {
     #[test]
     fn no_field_math_in_shaders() {
         // The whole point of meshing on the engine side is that the shader
-        // does not re-implement the field. If one of these appears here, the
-        // drift this project is built to avoid has started.
-        // Both of them. The occlusion pass reads the depth the mesh wrote and
-        // is exactly the kind of pass that would be tempting to write a field
-        // march into instead.
-        let shader = format!(
-            "{}{}",
-            include_str!("shaders/matcap.wgsl"),
-            include_str!("shaders/ao.wgsl")
-        )
-        .to_lowercase();
-        for forbidden in [
-            "sd_sphere",
-            "sdsphere",
-            "smin",
-            "smooth_min",
-            "sdbox",
-            "sd_box",
-            "signed_distance",
-            "raymarch",
-            "sphere_trace",
-            "ctape_eval",
-        ] {
-            assert!(
-                !shader.contains(forbidden),
-                "a viewport shader contains `{forbidden}`, which means it is \
-                 evaluating the field instead of drawing the mesh the engine produced"
-            );
+        // does not re-implement the field. If one of these appears in any of
+        // them, the drift this project is built to avoid has started.
+        //
+        // Every shader, read off the directory rather than listed here. A list
+        // exempts whatever is not on it, silently, and the shader most likely
+        // to be tempted into a field march is the next one somebody writes:
+        // the occlusion pass reads the depth the mesh wrote, and reaching for
+        // a distance function there would look like a shortcut rather than
+        // like a layering violation.
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/shaders");
+        let shaders: Vec<std::path::PathBuf> = std::fs::read_dir(&directory)
+            .expect("the shader directory")
+            .filter_map(|entry| {
+                let path = entry.ok()?.path();
+                (path.extension()? == "wgsl").then_some(path)
+            })
+            .collect();
+        assert!(
+            shaders.len() >= 4,
+            "found {} shaders in {}, which is fewer than there are",
+            shaders.len(),
+            directory.display()
+        );
+
+        for path in shaders {
+            let source = std::fs::read_to_string(&path)
+                .expect("a shader")
+                .to_lowercase();
+            for forbidden in [
+                "sd_sphere",
+                "sdsphere",
+                "smin",
+                "smooth_min",
+                "sdbox",
+                "sd_box",
+                "signed_distance",
+                "raymarch",
+                "sphere_trace",
+                "ctape_eval",
+            ] {
+                assert!(
+                    !source.contains(forbidden),
+                    "{} names `{forbidden}`, which is field math in a shader",
+                    path.display()
+                );
+            }
         }
     }
 
@@ -4199,35 +3357,52 @@ mod tests {
             radius: 0.5,
             mirrored: false,
         };
-        let (vertices, indices) = cursor_geometry(cursor);
+        let (vertices, indices) = cursor_geometry(cursor, a_metric());
         assert!(!vertices.is_empty());
-        assert_eq!(indices.len() % 2, 0, "line geometry needs index pairs");
+        assert_eq!(indices.len() % 3, 0, "a ribbon is triangles");
 
-        // Every ring point must sit at the radius from the centre, in the
-        // plane the normal defines.
+        // The ring is a ribbon now, so its vertices come in pairs straddling
+        // the line they stand for: each pair's midpoint is at the radius, and
+        // the two sit either side of it by half the ribbon's width. Asserting
+        // on the midpoint rather than on each vertex is what says the ribbon
+        // is *centred* on the ring rather than hanging off one side of it.
         let centre = Vec3::from(cursor.position);
-        for vertex in vertices.iter().take(48) {
+        let radius_of = |vertex: &Vertex| {
             let offset = Vec3::from(vertex.position) - centre;
-            let in_plane = offset - Vec3::Y * offset.dot(Vec3::Y);
+            (offset - Vec3::Y * offset.dot(Vec3::Y)).length()
+        };
+        let mut widest: f32 = 0.0;
+        for pair in vertices.chunks_exact(2).take(48) {
+            let (inner, outer) = (radius_of(&pair[0]), radius_of(&pair[1]));
+            let middle = (inner + outer) * 0.5;
             assert!(
-                (in_plane.length() - cursor.radius).abs() < 1e-3,
-                "a ring point sits at {} rather than the radius {}",
-                in_plane.length(),
+                (middle - cursor.radius).abs() < 1e-3,
+                "a ring pair is centred at {middle} rather than at the radius {}",
                 cursor.radius
             );
+            widest = widest.max((outer - inner).abs());
         }
+        assert!(
+            widest > 0.0 && widest < cursor.radius * 0.2,
+            "the ribbon is {widest} across against a ring of radius {}, which \
+             is a band rather than a line",
+            cursor.radius
+        );
     }
 
     #[test]
     fn a_degenerate_normal_still_produces_a_ring() {
         // A pick can report a zero normal; the cursor must not vanish or
         // produce NaN geometry because of it.
-        let (vertices, _) = cursor_geometry(BrushCursor {
-            position: [0.0; 3],
-            normal: [0.0; 3],
-            radius: 0.2,
-            mirrored: false,
-        });
+        let (vertices, _) = cursor_geometry(
+            BrushCursor {
+                position: [0.0; 3],
+                normal: [0.0; 3],
+                radius: 0.2,
+                mirrored: false,
+            },
+            a_metric(),
+        );
         assert!(vertices
             .iter()
             .all(|v| v.position.iter().all(|c| c.is_finite())));

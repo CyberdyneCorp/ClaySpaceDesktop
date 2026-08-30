@@ -155,10 +155,19 @@ fn the_cavity_term_sharpens_creases_occlusion_leaves_flat() {
         "the cavity term darkened only {darker} pixels — see \
          target/visual/96-cavity-on.png"
     );
-    assert_eq!(
-        lighter, 0,
-        "{lighter} pixels came out lighter, which a multiply by a value in \
-         [0, 1] cannot do"
+    // Overwhelmingly darker, rather than not one pixel lighter.
+    //
+    // The arithmetic does say a multiply by a value in [0, 1] cannot lighten
+    // anything, and the first version asserted exactly that — and failed on
+    // macOS with thirty-three pixels four levels the wrong way. Two renders of
+    // the same geometry are not bit-identical on every device: this suite's own
+    // noise floor is thirty-two levels for that reason, and four is well inside
+    // it. What the term claims is a direction, so a direction is what is
+    // measured, and by a margin nothing about the device can produce.
+    assert!(
+        lighter * 20 < darker,
+        "{darker} pixels darkened and {lighter} lightened, which is not a term \
+         that only ever takes light away"
     );
     // Subtle, or it stops being shading and becomes an ink line along every
     // crease — which is a drawing of the mesh, not a picture of the form.

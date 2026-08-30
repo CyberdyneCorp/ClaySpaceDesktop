@@ -64,7 +64,17 @@ struct Ao {
     /// x: cavity strength, zero when the term is off.
     /// y: how far the cavity term reaches, in view units.
     cavity: vec4<f32>,
+    /// The sample kernel, in the tangent frame: xy across the surface, z along
+    /// the normal, w how far along the radius. See `AO_KERNEL`.
+    kernel: array<vec4<f32>, AO_KERNEL>,
 };
+
+/// How many samples the kernel holds room for.
+///
+/// The highest quality tier's count. A fixed array because a uniform's layout
+/// is fixed, and 16 entries is 256 bytes — the whole uniform is under half a
+/// kilobyte, against a limit of 64.
+const AO_KERNEL: u32 = 16u;
 
 @group(0) @binding(0) var<uniform> ao: Ao;
 
@@ -100,14 +110,6 @@ const AO_SPAN: i32 = 2;
 
 /// The occlusion pass's output, and the composite's input.
 @group(0) @binding(3) var occlusion_texture: texture_2d<f32>;
-
-// One triangle rather than two: no seam along the diagonal, and three vertices
-// instead of six. Positions come from the index, so it binds no buffer.
-@vertex
-fn fullscreen_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
-    let uv = vec2<f32>(f32((index << 1u) & 2u), f32(index & 2u));
-    return vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
-}
 
 /// Which of two depths is nearer the camera.
 ///
@@ -248,25 +250,25 @@ fn ao_fs(@builtin(position) position: vec4<f32>) -> @location(0) f32 {
     let tangent = normalize(cross(helper, normal));
     let bitangent = cross(normal, tangent);
 
+    // The per-pixel rotation, as a pair rather than an angle. Every sample is
+    // the kernel's own direction turned by it, and a 2D rotation of a
+    // precomputed pair is two multiplies and an add — against the sine, cosine,
+    // square root and interpolation the loop used to do per sample, all of
+    // which depend only on the sample index and are now computed once on the
+    // host. See `ao_kernel` in `renderer.rs` for what is in it and why.
     let turn = rotation(coord);
-    // The golden angle, so successive samples land as far from each other as
-    // they can and a short loop still covers the hemisphere evenly.
-    let golden = 2.39996323;
+    let turn_cos = cos(turn);
+    let turn_sin = sin(turn);
 
     var occlusion = 0.0;
     for (var i = 0; i < count; i = i + 1) {
-        let t = (f32(i) + 0.5) / f32(count);
-        let angle = f32(i) * golden + turn;
-        // sqrt so the samples spread over the disc's area rather than
-        // crowding the centre, and a shortened radius near the pole.
-        let planar = sqrt(t);
-        let up = sqrt(1.0 - planar * planar);
-        let direction = tangent * (cos(angle) * planar)
-            + bitangent * (sin(angle) * planar)
-            + normal * up;
-        // Sample lengths grow with the index, so the near field is sampled as
-        // densely as the far one rather than every sample sitting on the rim.
-        let at = origin + direction * (radius * mix(0.15, 1.0, t * t));
+        let sample = ao.kernel[i];
+        let across = vec2<f32>(
+            sample.x * turn_cos - sample.y * turn_sin,
+            sample.y * turn_cos + sample.x * turn_sin,
+        );
+        let direction = tangent * across.x + bitangent * across.y + normal * sample.z;
+        let at = origin + direction * (radius * sample.w);
 
         let clip = ao.projection * vec4<f32>(at, 1.0);
         if clip.w <= 0.0 {

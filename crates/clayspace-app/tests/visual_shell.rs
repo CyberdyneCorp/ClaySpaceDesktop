@@ -231,6 +231,9 @@ fn state<'a>(
         scene,
         renaming: None,
         polyframe: false,
+        studio_shading: false,
+        cavity: true,
+        shadows: true,
         stats: SceneStats {
             triangles: 2_356_789,
             vertices: 1_178_394,
@@ -1773,8 +1776,9 @@ const VIEW_MENU: egui::Pos2 = egui::Pos2::new(131.0, 13.0);
 /// A pixel offset, and it moves every time an entry lands above it — which is
 /// what a menu-entry equivalent of `slider_id` would fix. Until then, a test
 /// that starts failing here after a menu entry is added is measuring the
-/// addition rather than a fault.
-const LANGUAGE_ENTRY: egui::Vec2 = egui::Vec2::new(5.0, 218.0);
+/// addition rather than a fault. It was 218 until the shading and cavity
+/// entries landed above it, which is two rows of twenty-two.
+const LANGUAGE_ENTRY: egui::Vec2 = egui::Vec2::new(5.0, 262.0);
 
 #[test]
 fn the_language_can_be_chosen_from_the_menu() {
@@ -1824,7 +1828,30 @@ fn the_language_can_be_chosen_from_the_menu() {
     let closed = capture_shell(&harness, &state, "109-language-closed");
     assert!(
         differing_pixels(&opened, &closed) > 2000,
-        "the Idioma entry opened nothing. See target/visual/108-language-open.png"
+        "the Vista menu did not open at all. See \
+         target/visual/108-language-open.png"
+    );
+
+    // And against the same menu *without* the second click, which is the
+    // comparison that actually says the submenu opened. Held against the
+    // closed shell it says only that a menu is on screen — which it is as soon
+    // as the first click lands, wherever the second one goes. Three offsets
+    // eight pixels apart all satisfied that, so the constant above was being
+    // taken on trust.
+    let menu_only = capture_shell_after(
+        &harness,
+        &state,
+        "110-language-unopened",
+        &[left_click(VIEW_MENU), Vec::new(), Vec::new()],
+        |_| {},
+    );
+    let submenu = differing_pixels(&opened, &menu_only);
+    println!("the Idioma submenu covers {submenu} pixels");
+    assert!(
+        submenu > 400,
+        "clicking {LANGUAGE_ENTRY:?} below the Vista menu changed {submenu} \
+         pixels against the same menu unclicked, so it did not land on Idioma. \
+         See target/visual/108-language-open.png"
     );
 
     // A note for whoever reads that capture: the accented letters in

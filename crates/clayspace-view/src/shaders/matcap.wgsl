@@ -24,6 +24,26 @@ struct Material {
     studio: vec4<f32>,
 };
 
+/// Where the studio's key light stands, and how sharp its shadow is.
+///
+/// Its own group rather than a fourth binding in group 0, because only the
+/// studio pipelines take it: a bind group layout is part of a pipeline's
+/// layout, and adding this to group 0 would make every overlay, reference and
+/// wireframe pipeline in the viewport carry a shadow map they never sample.
+struct Shadow {
+    light_view_projection: mat4x4<f32>,
+    /// x: one texel of the map, in light-space depth, for the bias.
+    /// y: the map's size in texels, for the filter's step.
+    /// z: 1 when the map holds anything, 0 before the first frame that filled
+    ///    it and whenever the rig is switched off.
+    /// w: how much light a shadowed fragment keeps.
+    params: vec4<f32>,
+};
+
+@group(1) @binding(0) var<uniform> shadow: Shadow;
+@group(1) @binding(1) var shadow_map: texture_depth_2d;
+@group(1) @binding(2) var shadow_sampler: sampler_comparison;
+
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var<uniform> material: Material;
 @group(0) @binding(2) var matcap_texture: texture_2d<f32>;
@@ -42,6 +62,12 @@ struct VertexOutput {
     @location(0) view_normal: vec3<f32>,
     @location(1) color: vec3<f32>,
     @location(2) mask: f32,
+    // Where the vertex is in the world, which only the studio rig needs: its
+    // shadow map is cast from a light fixed in the world, and a fragment has to
+    // say where it stands before it can ask whether that light reaches it. The
+    // MatCap path ignores it — it is indexed by a normal and has no notion of
+    // anywhere — and pays one interpolator for the shared vertex stage.
+    @location(3) world_position: vec3<f32>,
 };
 
 // What a frozen region reads as, and how far the blend goes at full mask.
@@ -96,7 +122,22 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     out.view_normal = (camera.view_rotation * vec4<f32>(input.normal, 0.0)).xyz;
     out.color = input.color;
     out.mask = input.mask;
+    out.world_position = input.position;
     return out;
+}
+
+/// The depth-only pass that fills the studio shadow map.
+///
+/// A vertex stage and no fragment stage at all: the pass writes depth and
+/// nothing else, so there is no colour to compute and no target to write it
+/// to. Its own entry point rather than `vs_main` with a different pipeline,
+/// because the matrix is the light's rather than the camera's — and reusing
+/// the camera uniform for it would mean writing the light's matrix into the
+/// camera's buffer, which is the sort of thing that works until something else
+/// reads that buffer in the same frame.
+@vertex
+fn shadow_vs(input: VertexInput) -> @builtin(position) vec4<f32> {
+    return shadow.light_view_projection * vec4<f32>(input.position, 1.0);
 }
 
 @fragment
@@ -234,8 +275,60 @@ fn tone_map(color: vec3<f32>) -> vec3<f32> {
     return clamp(mapped, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
+/// How much of the key light reaches a point, from the shadow map.
+///
+/// One is fully lit. The map is rendered from the key light with a reversed
+/// depth range like everything else here, so a fragment is in shadow when the
+/// map holds something *nearer* the light than it is.
+///
+/// Percentage-closer filtered over three by three texels, which is the usual
+/// first answer and the one to keep until a picture says otherwise: it costs
+/// nine comparisons, the hardware does each of them as part of the fetch, and
+/// it turns the map's own resolution from a staircase into a soft edge.
+///
+/// The bias is along the surface normal rather than along the depth. A depth
+/// bias has to be tuned against the slope or it either lets a surface shadow
+/// itself in stripes or lifts the contact shadow off the thing casting it; a
+/// normal offset moves the sample to where the surface is *thicker* than the
+/// map's texel, which is the quantity the artefact is actually about.
+fn key_light_reaching(world: vec3<f32>, view_normal: vec3<f32>) -> f32 {
+    if shadow.params.z < 0.5 {
+        return 1.0;
+    }
+    // The offset is along the surface in the *world*, and the normal that
+    // arrives here is in view space. A rotation's inverse is its transpose, and
+    // the camera's rotation is already in the uniform for the MatCap lookup, so
+    // this costs a transpose rather than a second interpolator on every vertex
+    // of every pipeline that shares this vertex stage.
+    let normal = normalize((transpose(camera.view_rotation) * vec4<f32>(view_normal, 0.0)).xyz);
+    let offset = world + normal * shadow.params.x;
+    let light_clip = shadow.light_view_projection * vec4<f32>(offset, 1.0);
+    let projected = light_clip.xyz / light_clip.w;
+    let uv = vec2<f32>(projected.x * 0.5 + 0.5, 0.5 - projected.y * 0.5);
+    // Outside the map is outside what the light was fitted to, and the honest
+    // answer there is "lit" rather than a wrapped read of the far edge.
+    if uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || projected.z <= 0.0 {
+        return 1.0;
+    }
+
+    let texel = 1.0 / shadow.params.y;
+    var reaching = 0.0;
+    for (var y = -1; y <= 1; y = y + 1) {
+        for (var x = -1; x <= 1; x = x + 1) {
+            let at = uv + vec2<f32>(f32(x), f32(y)) * texel;
+            reaching = reaching + textureSampleCompare(
+                shadow_map,
+                shadow_sampler,
+                at,
+                projected.z,
+            );
+        }
+    }
+    return mix(shadow.params.w, 1.0, reaching / 9.0);
+}
+
 /// The whole rig, over one view-space normal.
-fn studio_shading(n: vec3<f32>, color: vec3<f32>) -> vec3<f32> {
+fn studio_shading(n: vec3<f32>, color: vec3<f32>, reaching: f32) -> vec3<f32> {
     // The camera looks down -z in view space, so the direction *to* the eye
     // from any visible point is +z.
     let view = vec3<f32>(0.0, 0.0, 1.0);
@@ -244,7 +337,11 @@ fn studio_shading(n: vec3<f32>, color: vec3<f32>) -> vec3<f32> {
     let metallic = clamp(material.studio.y, 0.0, 1.0);
 
     var lit = STUDIO_AMBIENT * albedo;
-    lit += studio_light(n, view, KEY_DIRECTION, KEY_COLOR, KEY_INTENSITY, albedo, roughness, metallic);
+    // Only the key casts. A fill and a rim that cast too would be three shadow
+    // maps for a mode whose whole point is to be a small fixed rig, and the
+    // second and third would be shadows nobody looks for.
+    lit += studio_light(n, view, KEY_DIRECTION, KEY_COLOR, KEY_INTENSITY, albedo, roughness, metallic)
+        * reaching;
     lit += studio_light(n, view, FILL_DIRECTION, FILL_COLOR, FILL_INTENSITY, albedo, roughness, metallic);
     lit += studio_light(n, view, RIM_DIRECTION, RIM_COLOR, RIM_INTENSITY, albedo, roughness, metallic);
 
@@ -253,7 +350,8 @@ fn studio_shading(n: vec3<f32>, color: vec3<f32>) -> vec3<f32> {
 
 @fragment
 fn fs_studio(input: VertexOutput) -> @location(0) vec4<f32> {
-    let shaded = studio_shading(normalize(input.view_normal), input.color);
+    let reaching = key_light_reaching(input.world_position, normalize(input.view_normal));
+    let shaded = studio_shading(normalize(input.view_normal), input.color, reaching);
     let frozen = clamp(input.mask, 0.0, 1.0) * MASK_STRENGTH;
     return vec4<f32>(mix(shaded, MASK_COLOR, frozen), 1.0);
 }
@@ -261,7 +359,9 @@ fn fs_studio(input: VertexOutput) -> @location(0) vec4<f32> {
 /// The same, drawn through, for when a cage is up in Studio mode.
 @fragment
 fn fs_studio_ghost(input: VertexOutput) -> @location(0) vec4<f32> {
-    let shaded = studio_shading(normalize(input.view_normal), input.color);
+    // Unshadowed. A surface being drawn through is being drawn through so that
+    // what is behind it can be seen, and darkening half of it does not help.
+    let shaded = studio_shading(normalize(input.view_normal), input.color, 1.0);
     let frozen = clamp(input.mask, 0.0, 1.0) * MASK_STRENGTH;
     return vec4<f32>(mix(shaded, MASK_COLOR, frozen), material.ghost.x);
 }

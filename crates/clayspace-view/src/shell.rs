@@ -193,6 +193,13 @@ pub struct ShellState<'a> {
     pub view_preset: ViewPresetKind,
     /// Whether a mesh layer is drawn with its own edges over it.
     pub polyframe: bool,
+    /// Whether the sculpt is shaded with the studio light rig rather than a
+    /// MatCap. Display state the renderer owns, like the material.
+    pub studio_shading: bool,
+    /// Whether small creases are sharpened by the screen-space curvature term.
+    pub cavity: bool,
+    /// Whether the studio rig's key light casts.
+    pub shadows: bool,
     pub material: &'a str,
     /// The material itself, for the preview to be painted from — the same
     /// sphere image the viewport shades with, so the swatch is the material
@@ -928,6 +935,31 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                     .clicked()
                 {
                     queue.push(Command::TogglePolyframe);
+                    ui.close_menu();
+                }
+                // The three display terms, together and after the polyframe:
+                // each is a way of shading what is already drawn rather than a
+                // change to what is drawn, and grouping them says so.
+                if ui
+                    .selectable_label(state.studio_shading, s.action_shading)
+                    .clicked()
+                {
+                    queue.push(Command::ToggleShading);
+                    ui.close_menu();
+                }
+                if ui.selectable_label(state.cavity, s.action_cavity).clicked() {
+                    queue.push(Command::ToggleCavity);
+                    ui.close_menu();
+                }
+                // Only the studio rig casts, so the entry is only offered with
+                // it on: a shadow toggle in MatCap mode is a control that does
+                // nothing, which is worse than one that is not there.
+                if state.studio_shading
+                    && ui
+                        .selectable_label(state.shadows, s.action_shadows)
+                        .clicked()
+                {
+                    queue.push(Command::ToggleShadows);
                     ui.close_menu();
                 }
                 // Beside the three view presets, because a reference is
