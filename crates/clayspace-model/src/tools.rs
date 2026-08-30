@@ -1242,6 +1242,13 @@ mod tests {
              {ENGINE_MESH_BRUSHES} fixed-topology brushes are bound. Update \
              this count and `docs/features.md` together."
         );
+        // And the field, which `docs/features.md` states as a count too.
+        let sdf = ToolKind::for_representation(Representation::Sdf).len();
+        assert_eq!(
+            sdf, 14,
+            "the field vocabulary has moved: {sdf} tools reach an SDF layer. \
+             Update this count and `docs/features.md` together."
+        );
         assert_eq!(
             voxel, 13,
             "the voxel vocabulary has moved: {voxel} tools reach a voxel \

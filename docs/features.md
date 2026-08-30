@@ -16,20 +16,21 @@ implementation. A tool with no engine counterpart is not offered.
 
 ## Sculpting tools
 
-All twenty are bound and each is covered by a before-and-after capture in
+All twenty-one are bound and each is covered by a before-and-after capture in
 `target/visual/`. Which of the three representations each one reaches is in the
-Layers column: eleven have an SDF verb, eleven a voxel one, and seventeen a mesh
-one.
+Layers column: fourteen have an SDF verb, thirteen a voxel one, and seventeen a
+mesh one.
 
 | Tool | Engine verb | Layers | What it does |
 |---|---|---|---|
 | Padrão | `clay_layer_apply_stroke` with relief | all three | Displaces the surface along its normal |
 | Inflar | `clay_voxel_sculpt_inflate` / relief, wider and softer | all three | Swells the footprint; a negative amount erodes. On a field it is relief like Padrão — the engine binds both to it — with a region and rim 1.35× the brush and 0.32 of the lift, so it swells where Padrão ridges |
 | Suavizar | `clay_sdf_smooth_*` / `clay_item_volume_relax` / `clay_voxel_sculpt_smooth` | all three | Relaxes the surface. Live on the field side, through a transaction |
-| Mover | `clay_layer_move_surface` | SDF, mesh | Drags the assembled surface. Buds rather than stretches |
+| Mover | `clay_layer_move_surface` / `clay_voxel_sculpt_grab` | all three | Drags the assembled surface. Buds rather than stretches. On a grid the whole gesture is held and applied once from its anchor — a drag does not decompose there, and `ToolKind::holds_the_whole_gesture` says why |
+| Mover Topológico | `clay_item_volume_move_topological` | SDF | The same drag with its reach measured **along the material** rather than through space, so a part close in space and far along the surface is left behind. It bakes, so it costs more than Mover and is the one to reach for when the cheap drag pulls something it should not |
 | Pinçar | `clay_voxel_sculpt_pinch` | voxel, mesh | Moves surface cells toward the brush centre |
 | Raspar | `clay_voxel_sculpt_scrape` | voxel, mesh | Flattens and smooths from one snapshot |
-| Planar | `clay_item_volume_flatten_from`, cut-only | SDF, mesh | Planes without filling, which keeps a facet crisp |
+| Planar | `clay_item_volume_flatten_from`, cut-only / `clay_voxel_sculpt_flatten` | all three | Planes without filling on a field and a mesh, which keeps a facet crisp. **On a grid it is two-sided** — material above the plane goes and hollows below it fill — because that is the verb the grid has; the tooltip says so rather than faking cut-only |
 | Preencher | `clay_voxel_sculpt_fill_cavities` | voxel | Fills narrow pockets |
 | Camada | `clay_layer_apply_stroke`, clamped | all three | A stroke that does not build up on itself |
 | Máscara | `clay_mask_apply_stroke` | all three | Freezes a region against every verb. Invert, clear, expand, contract, smooth, bounded complement and extrude are in the Máscaras menu |
@@ -38,9 +39,9 @@ one.
 | Relaxar | `clay_item_volume_relax` | SDF, mesh | Relax as a brush |
 | Nudge | `clay_voxel_sculpt_smudge` | voxel, mesh | Drags the surface skin, leaving the interior |
 | Trim | `clay_cut_create` | SDF | A shape drawn on the frame, cutting through |
-| Argila | `clay_mesh_sculptor_stamp` (CLAY) | mesh | Builds up in flat-ish planes, the way clay is added by hand |
-| Vinco | `clay_mesh_sculptor_stamp` (CREASE) | mesh | Pinches a sharp ridge or trough along the stroke |
-| Pintar | `clay_voxel_paint_brush` / `clay_mesh_sculptor_stamp` (PAINT) | voxel, mesh | Writes colour rather than moving the surface — see *Not built yet* for what it currently has to paint with |
+| Argila | `clay_layer_apply_stroke` with relief and buildup / `clay_mesh_sculptor_stamp` (CLAY) | SDF, mesh | Builds up in flat-ish planes, the way clay is added by hand. On a field it is relief with **buildup** accumulation and a denser stroke, which is what separates ClayBuildup from Standard in ZBrush too — a second pass adds where Camada's does not |
+| Vinco | `clay_layer_apply_stroke` with incise / `clay_mesh_sculptor_stamp` (CREASE) | SDF, mesh | Pinches a sharp ridge or trough along the stroke. On a field it is `Op::Incise` — "a thin region gives the line", in the engine's words — at 0.6 of the brush, which cuts to the full depth in three fifths of the width. Held, the key raises the ridge it would have cut, which is the inverse the engine names |
+| Pintar | `clay_voxel_paint_brush` / `clay_mesh_sculptor_stamp` (PAINT) | voxel, mesh | Writes colour rather than moving the surface. The colour comes from the swatch in the options bar, which is shown for the two tools that read one |
 | Borrar | `clay_mesh_sculptor_stamp` (SMEAR) | mesh | Drags the surface sideways without carrying it away |
 | Apagar | `clay_voxel_erase_brush` | voxel | Removes cells |
 
@@ -129,6 +130,36 @@ brush count and the tool count differ. *Sculpting a mesh layer* has the detail.
 Settings are held **per tool**: switching away and back returns what you left,
 not a default. Values are clamped to what the engine accepts rather than
 producing an error you cannot act on.
+
+### Brush colour
+
+One current colour, plus the last six before it, shown as a swatch in the
+options bar. It appears for the two tools that read one — Pintar and Borrar —
+and is hidden for the eighteen that do not, because a control that does nothing
+is worse than an absent one.
+
+**Shared across tools, unlike every other brush setting.** Size belongs to the
+tool and to the representation: a size that suits a grid's cells is not the one
+that suits a field, and a small detail brush should stay small when the
+blockout brush is made large. A colour is the opposite — it is what you are
+painting with right now, and every colour brush picks up the same one. Held in
+`BrushSettings` it would have been four values for one question: Pintar and
+Borrar disagreeing on a mesh and again on a grid.
+
+**A grid stores palette indices**, so the adapter resolves the colour to an
+entry before painting: an existing entry within half a step of an eight-bit
+channel is reused, and only a genuinely new colour adds one. Without that
+tolerance a colour wheel adds an entry per stroke — it returns values a float
+apart as the pointer moves inside one pixel — and the engine caps a palette at
+255, past which the nearest entry is used rather than the stroke being refused.
+
+**A structural deposit keeps the neutral clay tone.** "Put material here" and
+"put *this colour* here" are different instructions, and a sculptor blocking out
+with a red swatch chosen should not find every dab red.
+
+The swatch edits in sRGB and the engine stores linear, so the two are converted
+at the one place they meet. Painting moves no vertex, honours the mask and the
+symmetry, undoes as one gesture and survives the document.
 
 ### Symmetry
 
@@ -303,26 +334,40 @@ depositing arm and *added clay* where the sculptor asked to freeze a region, and
 on a mesh it was refused outright even though a mesh stroke had been handing the
 mask to the engine all along. `masking.rs` holds both of those.
 
-**A mask does not survive closing the document.** It is state the next stroke
-reads rather than geometry, and it is kept beside the document rather than in
-it — `clay_mask_create`, one per subtool, released with the layer.
+**A mask survives closing the document.** It belongs to the layer inside the
+engine's own document — `clay_document_add_mask` attaches it and
+`clay_document_save` writes it — so painting one, saving, closing and opening
+again finds the same region frozen and still gating.
+`mask_persistence.rs` is the round trip, and `claycore_mask_persistence.rs` is
+the boundary measurement underneath it.
 
-The engine has a better answer and this build cannot reach it.
-`clay_document_add_mask` attaches a mask *to a layer*, and
-`clay_document_save` writes it: measured, a mask covering 5,600 cells came back
-covering 5,600 after a save and a reopen, and asking a layer that was never
-painted on still answers `NOT_FOUND`. `claycore_mask_persistence.rs` is that
-measurement, kept so the day it stops being true is a failing test.
+It did not, and the reason was never the engine. `Document::mask` handed back a
+mask borrowing the document — it had to, since the handle may not outlive it —
+while every masked verb in the wrapper wanted that handle *and* the document
+together: `apply_stroke`, `relax_region`, `flatten_region`, `mask_extrude`, and
+a voxel grid borrowed out of the same document. The C side is built for exactly
+that pairing and Rust cannot spell it, so each subtool's mask was a standalone
+`clay_mask_create` beside the document and went away with the window.
 
-What stands in the way is the borrow and not the engine. A document-owned mask
-is lent out of the document, and every masked verb in the wrapper takes the
-document *and* the mask together — `apply_stroke`, `relax_region`,
-`flatten_region`, `mask_extrude`, and a voxel grid borrowed out of the same
-document. The C side is built for exactly that pairing; Rust cannot hand a mask
-lent out of a document back into it. Reaching the engine's mask means giving
-those five entry points a form that takes the mask's *layer* rather than the
-mask — a redesign of `claycore`'s masking surface, not a wrapper — so it is
-named here rather than half-done.
+What fixed it was addressing the mask by the **identity of the layer it belongs
+to** rather than lending the handle:
+
+- `MaskSource` names nothing, a caller's own field, or a layer of the document
+  being edited; `apply_stroke` and `mask_extrude` take one and resolve it
+  inside the wrapper, where the two pointers coexist for one C call.
+- `Document::layer_mask` lends a `MaskLease` through a **shared** borrow, which
+  the relax, flatten and mesh paths hold beside another read of the same
+  document.
+- `Document::voxel_layer_masked` hands over a grid and its layer's mask out of
+  one borrow, since a grid takes the document exclusively.
+
+Two things follow that are worth knowing. A document has no verb for
+*detaching* a mask, so **Limpar empties it and it stays attached** — the panel
+keys on whether anything is frozen rather than on whether a mask exists, and
+"there is no mask" is now only reachable on a subtool nobody has painted one
+on. And a mask edit records on the engine's history, so **one mask gesture is
+one undo**; before, an undo after a mask stroke spent itself on whatever came
+before it.
 
 ### What the Máscaras menu does
 
@@ -408,11 +453,13 @@ is a fixed up-vector rather than the surface's own, so flipping it scrapes some
 other face rather than reversing the verb. Left unbound: a guess dressed as a
 feature is worse than an honest absence.
 
-**Pintar is inert on a grid, and says so.** It colours cells that are already
-there, and the palette holds one entry because nothing in the application
-chooses a brush colour — so it paints cells the colour they already are and
-reports `changed: false`. That is the gap under *Not built yet* rather than a
-broken binding.
+**Pintar colours cells that are already there**, which is what makes it the one
+verb on a grid that adds nothing: the palette always exists, so painting a cell
+creates no storage — unlike on a mesh, where the colour attribute is twelve
+bytes a vertex and is refused rather than created. Painting a cell the colour
+it already carries still reports `changed: false`, which is honest rather than
+a broken binding, and `brush_colour.rs` is where the colour question is asked
+properly.
 
 ### Held keys
 
@@ -1802,7 +1849,7 @@ between them**: the locale came from `Locale::default()` at startup and was
 never asked about again, so `Locale::from_tag` — written for exactly this — was
 called by nothing.
 
-**The brush names are translated.** All twenty, on all three representations —
+**The brush names are translated.** All twenty-one, on all three representations —
 the shelf and the status bar's last action both read them from the interface's
 own table. They were `ToolKind::label()`, the domain's own Portuguese, shown
 whatever the language was. `ToolKind::label` keeps that Portuguese for the
@@ -2051,12 +2098,6 @@ changes it, because that is where a person looks for it.
 Panels cannot be resized or collapsed and shortcuts are fixed. See
 [roadmap.md](roadmap.md).
 
-**A mask that survives closing the document.** The engine attaches one to a
-layer and writes it with the file; what stands in the way here is that a
-document-owned mask cannot be handed back into a call that also takes the
-document. The measurement and the shape of the fix are under
-[Masking](#masking).
-
 **The rest of the domain's vocabulary, in more than one language.** The brush
 names go through the string tables now. The other 62 label arms across 14 enums
 — `Combine`, `BlendProfile`, `ViewPresetKind`, `RefPlane`, `MaskOp`,
@@ -2078,14 +2119,37 @@ guide back — "the exact arguments the call above takes, so what comes out goes
 straight back in" — so picking a placed tube and editing it again is reachable;
 nothing does it yet.
 
-**A brush colour.** Nothing in the application chooses one. The voxel paint and
-erase verbs deposit a fixed clay tone, and the SDF combine list leaves `Pintar`
-out for the same reason — it is a real engine operation that would colour
-nothing, and the brick cache meshes the surface with colours off, so what it
-wrote would not be drawn either. Measured at four blend radii, a paint stroke on
-a field moves nothing and changes no pixel. The operation stays in the
-vocabulary so the mapping onto the engine is complete, and it comes back when
-there is a colour to paint with.
+**Colour on a field.** There is a brush colour now — see [Brush
+colour](#brush-colour) — and it reaches the two representations that can carry
+one. The SDF combine list still leaves `Pintar` out, and now for one reason
+rather than two: `Op::Paint` is a real engine operation, but the brick cache
+meshes the surface with colours off and nothing in the surface path carries a
+colour to the GPU, so what it wrote would not be drawn. The operation stays in
+the vocabulary so the mapping onto the engine is complete.
+
+**SDF Pinçar.** `CLAY_DEFORM_MAGNIFY` is the field's pinch and magnify, one
+signed strength, and it is *per item and local* — the engine says so in the
+same paragraph that warns against wiring Move to `grab`: on a form blended from
+several items, magnifying one pulls its share and leaves the rest behind. The C
+ABI has an assembled-surface resolver for the drag (`clay_layer_move_surface`)
+and none for the radial scale, and reconstructing one host-side would put field
+math in this application. Upstream first.
+
+**Alpha stamps on an SDF stroke.** `clay_layer_apply_stroke` scales its item as
+a template per stamp and the deformer chain does not travel with it, so an
+alpha attached to the template stays in the template's frame.
+`claycore/tests/alpha_deformer.rs` measures it. Upstream.
+
+**A mask that gates an already-authored SDF operation.** `clay_item_set_gate`
+is accepted and inert: measured with a mask sampling 1.0 at a cut's own centre
+and 65,752 cells painted, a subtraction eats the protected region at every
+width and threshold tried. `claycore/tests/mask_gate.rs` is written to fail the
+day it works.
+
+**A voxel Vinco.** The engine documents DamStandard on a grid as a *recipe* —
+a small-radius erode with tight falloff and dense spacing — rather than a
+verb, and a preset that borrows a name is not worth a shelf row until somebody
+has looked at what it draws.
 
 ## Deliberately absent
 

@@ -4,7 +4,7 @@ Where the project stands, what is left, and what is still undecided. Task
 counts come from the tasks files under `openspec/changes/`, which are the
 authority.
 
-**Six changes.** `add-clayspace-desktop` stands at **107 of 109 tasks** —
+**Seven changes.** `add-clayspace-desktop` stands at **107 of 109 tasks** —
 milestones 1 to 4 delivered, milestone 5 all but closed.
 `make-representations-first-class` is **complete**, and is what took the
 application from one vocabulary to three; its own summary is below.
@@ -20,8 +20,11 @@ movable whole, and any two of them resolvable into a third by a boolean.
 Switching onto a carried mesh subtool used to hold the interface thread for
 160 ms against a 16 ms bound; the document holds a sculptor per mesh now
 instead of one, and it is 0.00 ms — the last open budget in the suite, closed.
-One remainder: the per-layer mask reaching the engine's own — see *What is
-blocked, and what is not*.
+Its one remainder — the per-layer mask reaching the engine's own — is closed by
+`close-brush-integration-gaps`, which also bound the brush verbs the engine had
+and the shelf did not reach: a brush colour and a Pintar that changes a pixel,
+Mover and Planar on a grid, Argila and Vinco on a field, and Mover Topológico
+as a tool of its own.
 
 Engine pinned at ClayCore **0.60.0**, at the tag rather than at `main` — the
 tag is a release, `main` is where they are still working. On the reference
@@ -230,14 +233,26 @@ states the refusal rather than passing an alpha that would be discarded.
 `claycore/tests/alpha_deformer.rs` holds both halves and fails when the stroke
 starts carrying the chain.
 
-One more gap has no number yet, and is recorded under *Not built yet* in
-[features.md](features.md) rather than here because what stands in the way is on
-this side: the engine's **per-layer mask** is written with the document
-(measured — a mask covering 5,600 cells comes back covering 5,600 after a save
-and a reopen), and `claycore`'s masking surface cannot reach it, because a
-document-owned mask is lent *out* of the document and all five masked verbs take
-the document and the mask together. Masks are per subtool and per session until
-those five entry points take a mask's *layer* instead.
+**The per-layer mask is reached, and it was never an upstream gap.** It sat
+here for a while as one — the engine writes a mask with the document and
+`claycore`'s masking surface could not reach it — and the obstacle was on this
+side the whole time: a document-owned mask is lent *out* of the document, and
+all five masked verbs wanted the document and the mask together, which Rust
+cannot spell. `claycore::MaskSource` names the mask's **layer** instead of
+lending the handle, `Document::layer_mask` lends one through a shared borrow,
+and `Document::voxel_layer_masked` hands over a grid and its layer's mask out
+of one borrow. Masks now survive a save and a reopen and record on the engine's
+history. See [features.md](features.md#masking).
+
+**`clay_layer_move_surface` has no counterpart for the radial scale.** The
+engine's field pinch and magnify is `CLAY_DEFORM_MAGNIFY`, one signed strength,
+and it is per *item* and local — the same paragraph that warns against wiring
+Move to `grab` says so: on a form blended from several items, magnifying one
+pulls its share and leaves the rest behind. The drag has an assembled-surface
+resolver and the scale does not, so `Pinçar` reaches a grid and a mesh and not
+a field. Reconstructing the resolver host-side would put field math in this
+application, which the layering forbids and which the engine's own note asks
+callers not to do. To be filed.
 
 Every other issue filed from this work has been released and taken up —
 including [#71](https://github.com/CyberdyneCorp/ClayCore/issues/71), which was
@@ -322,6 +337,59 @@ That is the whole list. Everything else in milestone 5 landed: masks and
 armatures, document lifecycle including autosave and recovery, mesh import and
 export, diagnostics, units, instrumentation, bundles and attribution, backend
 parity and the cross-platform document check.
+
+### Brush coverage, as delivered
+
+An audit against ClayCore 0.60.0 found the brush system was not misusing the
+engine — the mesh path respects the fixed-topology contract, Grab is a gesture
+rather than a run of dabs, the SDF drag uses the assembled-surface resolver,
+symmetry mirrors directions as well as positions — but that it did not *reach*
+several verbs the pinned engine has had all along. What closed:
+
+| Gap | What was there | What it is now |
+|---|---|---|
+| Voxel Paint was inert | the palette held one entry, nothing chose a colour, and the composition root wrote the vertex-colour switch off on every frame | a brush colour in the sculpt session, resolved to a palette entry and to the mesh paint stamp, and the modulation left on |
+| `sculpt_grab` bound, unreachable | Mover reached a field and a mesh | Mover reaches a grid, holding the gesture and applying it once from its anchor |
+| `sculpt_flatten` bound, unreachable | Planar reached a field and a mesh | Planar reaches a grid, two-sided, with the difference in the tooltip |
+| `Op::Incise` reached no tool | Vinco was mesh-only | Vinco is the field's incise at 0.6 of the brush, inverting to the ridge |
+| `Op::Relief` + buildup reached no tool | Argila was mesh-only | Argila is relief with buildup and a denser stroke |
+| `clay_item_volume_move_topological` not bound at all | — | Mover Topológico, on fields, beside Mover rather than replacing it |
+| masks kept beside the document | lost on close | attached to the layer, saved with the file, on the undo stack |
+
+Two things the work found that the audit did not. **A drag on a grid does not
+decompose**: the engine's grab resamples per cell and weights the displacement
+by its falloff, so a one-cell step moves the middle of the region and not its
+rim — which inside solid material is no change at all. Measured on a slab with
+a 0.35 drag, delivered whole it moved material at every brush size tried, and
+delivered as the eight segments a pointer makes, seven changed nothing. So it
+joins the tools that land at pointer-up. And **the mask migration was never
+upstream**: see *What is blocked, and what is not*.
+
+**What it costs**, from a full `bench-compare` against the recorded Linux
+baseline, on a quiet machine and with nothing flagged:
+
+| figure | baseline | now | |
+|---|---:|---:|---|
+| `brush.sdf.argila.mean` | — | 4.59 | new; beside `padrao`'s 4.02 |
+| `brush.sdf.vinco.mean` | — | 11.83 | new |
+| `brush.sdf.movertopologico.mean` | — | 165.81 | new; it bakes, where `mover` is 390.56 and does not |
+| `brush.voxel.mover.ms` | — | 36.44 | new; one-shot, beside `suavizar`'s 36.46 |
+| `brush.voxel.planar.ms` | — | 36.38 | new |
+| `brush.voxel.pintar.mean` | 0.78 | 0.33 | −57% |
+| `brush.sdf.mascara.mean` | 0.14 | 0.23 | +69% |
+
+The one that went up is the mask, and it went up for a reason worth paying: a
+mask stroke now writes into the document's own layer and records on the undo
+stack, where before it wrote into a field beside the document and recorded
+nothing. Nine hundredths of a millisecond, against a fifty-millisecond dab
+budget, for a mask that survives the file and undoes as one gesture.
+
+What is still upstream, with the measurement behind each: SDF Pinçar needs an
+assembled-surface resolver for the radial scale; SDF stroke alphas need the
+stamp resolver to carry the template's deformer chain; `clay_item_set_gate` is
+accepted and inert. A true regional field inflate and a voxel DamStandard
+recipe are both decisions rather than gaps — neither should be built before
+somebody has looked at what it draws.
 
 ### Level of detail, as delivered
 

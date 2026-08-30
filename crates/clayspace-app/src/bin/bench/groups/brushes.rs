@@ -81,7 +81,7 @@ pub fn measure(policy: &BackendPolicy, run: &mut Run) {
                 run.skip(prefix, Skip::NoGestureForTool);
                 continue;
             }
-            let record = record_for(tool);
+            let record = record_for(representation, tool);
             match measure_tool(&gpu, policy, representation, tool) {
                 Ok(samples) => run.timings(&prefix, record, samples),
                 Err(why) => run.skip(prefix, why),
@@ -99,10 +99,15 @@ fn name(representation: Representation, tool: ToolKind) -> String {
     format!("brush.{representation:?}.{tool:?}").to_lowercase()
 }
 
-/// Region-based tools land once and are rebuilt between samples; everything
-/// else is dabbed onto the document it is already on.
-fn record_for(tool: ToolKind) -> Record {
-    if tool.is_region_based() {
+/// Tools that land once are rebuilt between samples; everything else is dabbed
+/// onto the document it is already on.
+///
+/// Asked of the representation as well as of the tool, because one of them
+/// depends on it: a drag on a grid is destructive and does not compose, so
+/// dabbing it repeatedly onto the same document times the second grab's
+/// resampling of the first rather than a drag.
+fn record_for(representation: Representation, tool: ToolKind) -> Record {
+    if tool.holds_the_whole_gesture(representation) {
         Record::OneShot
     } else {
         Record::Repeatable
@@ -117,7 +122,7 @@ fn measure_tool(
     tool: ToolKind,
 ) -> Result<Vec<f64>, Skip> {
     let scene = Scene::for_representation(representation);
-    if tool.is_region_based() {
+    if tool.holds_the_whole_gesture(representation) {
         // The document is rebuilt between samples: the second replacement of a
         // region is not the first, and timing it as though it were measures a
         // region that has already been flattened.
@@ -204,8 +209,26 @@ mod tests {
     }
 
     #[test]
-    fn the_tools_that_replace_a_region_are_rebuilt_between_samples() {
-        assert_eq!(record_for(ToolKind::Suavizar), Record::OneShot);
-        assert_eq!(record_for(ToolKind::Padrao), Record::Repeatable);
+    fn the_tools_that_land_once_are_rebuilt_between_samples() {
+        for representation in Representation::ALL {
+            assert_eq!(
+                record_for(representation, ToolKind::Suavizar),
+                Record::OneShot
+            );
+            assert_eq!(
+                record_for(representation, ToolKind::Padrao),
+                Record::Repeatable
+            );
+        }
+        // The one that depends on what is being sculpted: a drag composes on a
+        // field and on a mesh and does not on a grid.
+        assert_eq!(
+            record_for(Representation::Voxel, ToolKind::Mover),
+            Record::OneShot
+        );
+        assert_eq!(
+            record_for(Representation::Sdf, ToolKind::Mover),
+            Record::Repeatable
+        );
     }
 }

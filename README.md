@@ -157,7 +157,8 @@ both still reachable.
 
 **`M` paints a mask**, frozen regions show through the surface, and the mask
 menu carries invert, clear, expand, contract, smooth, the bounded complement
-and extrude. **Dynamics → Deformation cage** puts a lattice around the form and deforms
+and extrude. A mask belongs to the subtool it was painted on and is written
+with the document, so it is still there when the file is opened again. **Dynamics → Deformation cage** puts a lattice around the form and deforms
 it by dragging control points, with a move/turn/scale manipulator on the
 selection; the form is drawn through while the cage is up, so the handles
 behind it can still be reached. **Dynamics → Tube along a curve** places a tube through control
