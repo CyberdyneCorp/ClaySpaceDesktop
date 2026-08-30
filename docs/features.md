@@ -2133,18 +2133,31 @@ same paragraph that warns against wiring Move to `grab`: on a form blended from
 several items, magnifying one pulls its share and leaves the rest behind. The C
 ABI has an assembled-surface resolver for the drag (`clay_layer_move_surface`)
 and none for the radial scale, and reconstructing one host-side would put field
-math in this application. Upstream first.
+math in this application. Upstream first, as
+[ClayCore#391](https://github.com/CyberdyneCorp/ClayCore/issues/391).
 
 **Alpha stamps on an SDF stroke.** `clay_layer_apply_stroke` scales its item as
-a template per stamp and the deformer chain does not travel with it, so an
-alpha attached to the template stays in the template's frame.
-`claycore/tests/alpha_deformer.rs` measures it. Upstream.
+a template per stamp and the chain hung off it is not resolved into each
+stamp's frame. Measured as the rise along a stroke, swept over the stamp's
+centre: anywhere on or inside the 0.35 template — `[0, 0, 0]`, `[0, 0, 0.2]`,
+`[0, 0, 0.35]`, every sensible place to put one — moves the surface by nothing,
+while `[0, 0, 0.7]` and `[0, 0, 1.0]`, which mean nothing in that frame, lift
+the whole path evenly instead of leaving the mark the stamp carries.
+`claycore/tests/alpha_deformer.rs` measures it. Upstream, as
+[ClayCore#392](https://github.com/CyberdyneCorp/ClayCore/issues/392).
 
 **A mask that gates an already-authored SDF operation.** `clay_item_set_gate`
 is accepted and inert: measured with a mask sampling 1.0 at a cut's own centre
 and 65,752 cells painted, a subtraction eats the protected region at every
 width and threshold tried. `claycore/tests/mask_gate.rs` is written to fail the
-day it works.
+day it works, and it is
+[ClayCore#394](https://github.com/CyberdyneCorp/ClayCore/issues/394).
+
+**A live preview under a voxel drag.** A grab composes destructively — the same
+total drag split into eight one-cell emissions moves nothing — so Mover on a
+grid holds the whole gesture and lands at pointer-up rather than following the
+pointer. [ClayCore#393](https://github.com/CyberdyneCorp/ClayCore/issues/393)
+asks for the transactional shape the SDF drag already has.
 
 **A voxel Vinco.** The engine documents DamStandard on a grid as a *recipe* —
 a small-radius erode with tight falloff and dense spacing — rather than a

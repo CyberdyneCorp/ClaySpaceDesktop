@@ -161,7 +161,8 @@ is the brick cache's, so the ask is either that contract extended to this call
 or a split between an off-thread adjacency build and a cheap adopt. Filed from
 this work. See *Subtools: what switching costs*.
 
-**`clay_item_set_gate` is accepted and inert.** The entry point that would make
+[#394](https://github.com/CyberdyneCorp/ClayCore/issues/394) — **`clay_item_set_gate`
+is accepted and inert.** The entry point that would make
 a mask protect a surface from an *operation* rather than only from a brush — the
 engine's own note says "a mask over an ear has never done anything about the
 next boolean. This does." Measured against 0.39.0, it does not: with a mask
@@ -221,17 +222,30 @@ the issue is closed and the readers are absent from the pinned header is the
 reason the tripwire is a test rather than a note: a changelog says a thing is
 done, and a test says whether this build can call it.
 
-**A stroke does not carry its template item's deformer chain.**
+[#392](https://github.com/CyberdyneCorp/ClayCore/issues/392) — **a stroke's
+template alpha is not resolved into each stamp's frame.**
 `clay_layer_apply_stroke` documents its item as "the stamp template scaled to
-each stamp's radius", and the chain hung off that template — an alpha, in this
-case — does not travel with it. Measured: the same stroke with an alpha at
-amplitude 0, 0.05 and 0.25 leaves one surface under both `CLAY_OP_ADD` and
-`CLAY_OP_RELIEF`, while the same alpha on an item placed with `clay_layer_add_item`
-changes the surface and grades with the amplitude. So alpha stamps work on
-voxels and on meshes, which take one by their own routes, and an SDF *stroke*
-states the refusal rather than passing an alpha that would be discarded.
-`claycore/tests/alpha_deformer.rs` holds both halves and fails when the stroke
-starts carrying the chain.
+each stamp's radius", and `clay_item_add_alpha` puts the stamp's centre, extent
+and radius in the *item's own* space — so a caller places the alpha on the
+template and expects it at every stamp. It is not resolved there. Measured as
+the rise along a stroke, swept over the stamp's centre: `[0, 0, 0]`, `[0, 0,
+0.2]` and `[0, 0, 0.35]` — every sensible place on a 0.35 template — move the
+surface by nothing, while `[0, 0, 0.7]` and `[0, 0, 1.0]`, which mean nothing
+in that frame and correspond to where the *body's* surface sits in the world,
+lift the whole path roughly evenly rather than leaving the mark the stamp
+carries. So alpha stamps work on voxels and on meshes, which take one by their
+own routes, and an SDF *stroke* states the refusal rather than passing an alpha
+that would land somewhere else.
+
+**`claycore/tests/alpha_deformer.rs` proved this with the wrong variable until
+#392 was written**, and the correction belongs here because it is the second
+tripwire-that-cannot-fail this file has had to record. It swept the amplitude
+with a zero alpha `direction`, which that entry point documents as the normal
+of the stamp's plane with no all-zeroes fallback — so it measured a degenerate
+plane and would have gone on passing after the engine fixed the thing it was
+written to catch. The reading was right; the evidence was not. It now sweeps
+the centre and calibrates against the misplaced case in the same run, and a
+mutation confirms it fails when the gap closes.
 
 **The per-layer mask is reached, and it was never an upstream gap.** It sat
 here for a while as one — the engine writes a mask with the document and
@@ -244,6 +258,7 @@ and `Document::voxel_layer_masked` hands over a grid and its layer's mask out
 of one borrow. Masks now survive a save and a reopen and record on the engine's
 history. See [features.md](features.md#masking).
 
+[#391](https://github.com/CyberdyneCorp/ClayCore/issues/391) —
 **`clay_layer_move_surface` has no counterpart for the radial scale.** The
 engine's field pinch and magnify is `CLAY_DEFORM_MAGNIFY`, one signed strength,
 and it is per *item* and local — the same paragraph that warns against wiring
@@ -252,7 +267,7 @@ pulls its share and leaves the rest behind. The drag has an assembled-surface
 resolver and the scale does not, so `Pinçar` reaches a grid and a mesh and not
 a field. Reconstructing the resolver host-side would put field math in this
 application, which the layering forbids and which the engine's own note asks
-callers not to do. To be filed.
+callers not to do.
 
 Every other issue filed from this work has been released and taken up —
 including [#71](https://github.com/CyberdyneCorp/ClayCore/issues/71), which was
@@ -362,8 +377,13 @@ by its falloff, so a one-cell step moves the middle of the region and not its
 rim — which inside solid material is no change at all. Measured on a slab with
 a 0.35 drag, delivered whole it moved material at every brush size tried, and
 delivered as the eight segments a pointer makes, seven changed nothing. So it
-joins the tools that land at pointer-up. And **the mask migration was never
-upstream**: see *What is blocked, and what is not*.
+joins the tools that land at pointer-up, at the cost of a live preview, and the
+ask for one back is
+[#393](https://github.com/CyberdyneCorp/ClayCore/issues/393) — which carries the
+sharper measurement: the same total drag split 1 / 2 / 4 / 8 ways moves 59 / 61
+/ 0 / 0 cells at a 24-cell footprint, and the coarser splits *inflate* the form
+(2109 occupied cells becoming 2371) rather than translating it. And **the mask
+migration was never upstream**: see *What is blocked, and what is not*.
 
 **What it costs**, from a full `bench-compare` against the recorded Linux
 baseline, on a quiet machine and with nothing flagged:

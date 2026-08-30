@@ -155,12 +155,12 @@ impl AlphaSupport {
         }
         // A field's alpha is a deformer on an item, and `clay_layer_apply_stroke`
         // uses its item as a *template scaled to each stamp's radius* — the
-        // deformer chain does not travel with it. Measured at the engine
-        // boundary and recorded in `claycore/tests/alpha_deformer.rs`: the same
-        // stroke with an alpha of amplitude 0, 0.05 and 0.25 produces a surface
-        // identical to four decimal places under both Add and Relief, while the
-        // same alpha on an item placed with `add_item` changes it and grades
-        // with the amplitude.
+        // chain is not resolved into each stamp's frame. Measured at the engine
+        // boundary and recorded in `claycore/tests/alpha_deformer.rs`: a stamp
+        // centred anywhere on or inside the template's own surface moves the
+        // surface by nothing, and one centred where the template's frame does
+        // not reach lifts the whole path evenly instead of leaving the mark it
+        // carries. Filed as CyberdyneCorp/ClayCore#392.
         //
         // So the refusal is stated before the operation is looked at. Checking
         // the operation first would give a sculptor the more specific-sounding
