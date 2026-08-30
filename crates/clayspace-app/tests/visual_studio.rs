@@ -253,3 +253,99 @@ fn returning_to_matcap_returns_the_frame() {
          and the frame after MatCap was chosen again"
     );
 }
+
+/// The key light casts, and what it casts is self-shadowing.
+///
+/// A key light on an unshadowed form lights the inside of every fold as
+/// brightly as the flank beside it, which is the same failure a MatCap has.
+/// Occlusion does not fix it either: occlusion is a local term at the scale of
+/// a crease, and cannot say that one part of a form is between the light and
+/// another.
+///
+/// Measured as a difference between two frames of the same rig, one casting
+/// and one not. That is the only comparison there is: the map is computed from
+/// the frame it darkens, so no second render exists that should look like it.
+#[test]
+fn the_key_light_casts_a_shadow_on_the_form() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let Some((geometry, camera)) = worked(&harness) else {
+        return;
+    };
+    harness.renderer.set_shading(ShadingMode::Studio);
+
+    harness.renderer.set_shadows(true);
+    let with = harness.capture(geometry.mesh(), &camera, false, "98-studio-shadowed");
+    harness.renderer.set_shadows(false);
+    let without = harness.capture(geometry.mesh(), &camera, false, "98-studio-unshadowed");
+    harness.renderer.set_shadows(true);
+
+    let ground = harness.background();
+    let (mut darker, mut lighter, mut covered) = (0usize, 0usize, 0usize);
+    for y in 0..with.height {
+        for x in 0..with.width {
+            let a = without.pixel(x, y);
+            if (0..3).all(|c| a[c].abs_diff(ground[c]) < 6) {
+                continue;
+            }
+            covered += 1;
+            let delta = a[0] as i32 - with.pixel(x, y)[0] as i32;
+            if delta > 8 {
+                darker += 1;
+            } else if delta < -8 {
+                lighter += 1;
+            }
+        }
+    }
+    println!("studio shadow: {darker} darker, {lighter} lighter, of {covered} covered");
+
+    assert!(
+        darker > 200,
+        "the shadow map darkened {darker} of {covered} covered pixels, which \
+         is not a form shadowing itself — see \
+         target/visual/98-studio-shadowed.png"
+    );
+    // A shadow, not a dimmer. The lit side has to stay lit, or the map is
+    // shadowing everything — which is what a fit the form does not fall inside
+    // produces, and what a comparison the wrong way round produces.
+    assert!(
+        darker * 2 < covered,
+        "{darker} of {covered} covered pixels fell into shadow, which is the \
+         whole form rather than the side facing away from the key"
+    );
+    assert_eq!(
+        lighter, 0,
+        "{lighter} pixels came out lighter with the shadow map, which a term \
+         that only ever takes light away cannot do"
+    );
+}
+
+/// MatCap does not cast.
+///
+/// Its lighting is welded to the camera, so a shadow from it would swing round
+/// the form as the view moved — worse than none. The map is not even allocated
+/// until the studio rig is asked for.
+#[test]
+fn matcap_draws_no_shadow_and_allocates_no_map() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let Some((geometry, camera)) = worked(&harness) else {
+        return;
+    };
+
+    harness.renderer.set_shading(ShadingMode::MatCap);
+    let before = harness.capture(geometry.mesh(), &camera, false, "98-matcap-before-studio");
+    harness.renderer.set_shading(ShadingMode::Studio);
+    let _ = harness.capture(geometry.mesh(), &camera, false, "98-studio-once");
+    harness.renderer.set_shading(ShadingMode::MatCap);
+    let after = harness.capture(geometry.mesh(), &camera, false, "98-matcap-after-studio");
+
+    let differing = support::differing_pixels(&before, &after);
+    assert_eq!(
+        differing, 0,
+        "{differing} pixels differ between a MatCap frame drawn before the \
+         studio rig was ever asked for and one drawn after"
+    );
+}

@@ -704,6 +704,69 @@ figures read as they should:
 quality that resolves has to draw a form — because the count was right and the
 frame was empty.
 
+### One shadow map, in Studio mode
+
+A key light on an unshadowed form lights the inside of every fold as brightly
+as the flank beside it, which is the same failure a MatCap has. Occlusion does
+not fix it: occlusion is a local term at the scale of a crease and cannot say
+that an arm is between the light and a chest.
+
+So the studio rig's key casts, through one directional shadow map — the
+review's own instruction is to start with a single well-fitted map and measure
+before reaching for cascades, and a form on a turntable is exactly what a single
+map is for. 2048², fitted to the *subject's bounding sphere* each frame rather
+than to a fixed volume: the map's resolution on the form is its side divided by
+the form's diameter, so a fit that spends half its area on empty space halves
+the shadow's sharpness. A sphere rather than the box, so the fit does not
+breathe as the form turns under a fixed light.
+
+Three details are worth recording because each was arrived at rather than
+copied.
+
+**The bias is along the surface normal, not along depth.** A depth bias has to
+be tuned against the slope or it either lets a surface shadow itself in stripes
+or lifts the contact shadow off the thing casting it. A normal offset moves the
+sample to where the surface is *thicker* than a map texel, which is the quantity
+the artefact is actually about — and the offset is two texels of the fitted map,
+so it follows the subject's scale for free.
+
+**The pass binds the light's matrix and deliberately not the map.** A texture
+cannot be written by a pass that also holds it for reading, and wgpu refuses the
+whole command buffer over it rather than the pass. So there are two bind groups
+over one uniform buffer: one for the pass that fills the map, one for the shader
+that samples it.
+
+**A shadow keeps 18% of the key's light rather than reaching black.** A shadow
+that reaches black is a hole in the form. The ambient and the fill are still
+arriving, and a sculptor reading a shape needs the shadowed side to stay
+legible.
+
+Measured on the reference form: 2,004 of 25,052 covered pixels fall into shadow
+and none come out lighter, which is a form shadowing itself rather than a rig
+dimming everything. Nothing is allocated until Studio mode is first asked for —
+sixteen megabytes of depth is not a MatCap session's business — and MatCap never
+casts at all, because its lighting is welded to the camera and a shadow from it
+would swing round the form as the view moved.
+
+### Temporal occlusion, decided against
+
+The review puts it at P2 with a condition attached — *only after the static path
+is right*, and *to allow cheaper samples*. The static path is right, and the
+second half of the condition is already met by other means: the quality governor
+takes the sample count down to eight under the pen and back to sixteen when the
+pointer stops, which is the end temporal accumulation is a means to.
+
+What it would cost is the machinery. Two ping-pong pairs — one for occlusion,
+one for the reduced depth it is validated against — a reprojection through the
+previous frame's view-projection, a rejection rule, a per-frame rotation for the
+history to converge over, and an application that keeps redrawing while it does.
+Every one of those has a failure mode, and they share it: occlusion trailing
+behind a brush. That is the one artefact a sculptor cannot work through, and it
+would appear exactly where the machinery is hardest to reason about.
+
+So it is not built, and this is the note saying the decision was made rather
+than forgotten.
+
 ### What the numbers say not to build yet
 
 The review's remaining items each carry a condition, and the conditions are not

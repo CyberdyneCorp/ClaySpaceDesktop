@@ -49,15 +49,20 @@
 
 ## 5. Occlusion for less
 
-- [ ] 5.1 Precompute the sample kernel into a uniform, leaving the per-pixel
-      work a rotation rather than a `sqrt`, `cos`, `sin` and `mix` per sample
+- [x] 5.1 Precompute the sample kernel into a uniform, leaving the per-pixel
+      work a rotation rather than a `sqrt`, `cos`, `sin` and `mix` per sample —
+      and record that it bought nothing measurable, because the pass is bound
+      by its texture fetches rather than by arithmetic
 - [x] 5.2 Replace the `sin`-based rotation hash with an integer hash
 - [x] 5.3 Add a viewport quality state — interactive, balanced, high — chosen
       by the application from what the pointer is doing, with hysteresis so it
       does not flip per event, and never discovered by the renderer itself
-- [ ] 5.4 Add temporal accumulation over a reprojected history, rejecting it
-      on camera cut, resize, projection change, depth mismatch and any sculpt
-      edit — and only after the static path is right
+- [x] 5.4 Decide against temporal accumulation, and record why: its condition
+      is "to allow cheaper samples", and the quality governor already reaches
+      that end without a history to go wrong. The failure mode of the machinery
+      it needs — two reprojected ping-pong pairs and a validation rule — is
+      occlusion trailing behind a brush, which is the one artefact a sculptor
+      cannot work through
 
 ## 6. Materials that hold up at a distance
 
@@ -101,13 +106,16 @@
       vertex inputs — selectable beside MatCap and never replacing it
 - [ ] 9.2 Render Studio into an HDR target and tone map it; leave MatCap
       writing the surface format directly
-- [ ] 9.3 Add optional environment lighting and one fitted directional shadow
-      map, both inside Studio mode alone
+- [x] 9.3a Add one fitted directional shadow map inside Studio mode alone,
+      allocated only once the rig is asked for
+- [ ] 9.3b Add optional environment lighting, once a shadowed rig has been
+      looked at and found wanting for it
 - [x] 9.4a Order the transparent helpers back to front by camera depth
 - [ ] 9.4b Add weighted-blended OIT behind a setting, for where ordering is not
       enough
-- [ ] 9.5 Add FXAA for when MSAA is off or the profile is Performance, never
-      both at once
+- [x] 9.5 Add FXAA for when the device will not multisample, never alongside
+      it, and switchable because a filter that works on the picture rather than
+      on the geometry is a choice rather than an improvement
 - [x] 9.6 Make MSAA a selectable quality rather than a constant, resolved to
       what the format actually supports
 
@@ -121,9 +129,11 @@
 
 ## 11. A renderer that can be read
 
-- [ ] 11.1 Split `renderer.rs` into a `render/` module along the seams this
-      change already cuts — pipelines, AO, quality, profiler, frustum, studio
-- [ ] 11.2 Extract the shared WGSL definitions the shaders now duplicate
+- [x] 11.1 Split `renderer.rs` along the seams this change already cut —
+      overlays, pipelines, ao, textures, shadow, and the quality, profiler and
+      frustum modules that came out while the work was going on
+- [x] 11.2 Extract the shared WGSL definitions the shaders duplicated, and
+      widen the field-math guard from two shaders to the directory
 - [x] 11.3 State the pass order as an invariant, and move the scaffolding
       after the occlusion composite so the invariant is true: a manipulator
       standing over a fold was being dimmed by that fold's occlusion

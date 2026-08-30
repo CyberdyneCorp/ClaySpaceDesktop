@@ -19,6 +19,7 @@ use clayspace_model::{GizmoHandle, GizmoMode, LayerKey, SurfaceOpacity};
 mod ao;
 mod overlays;
 mod pipelines;
+mod shadow;
 mod textures;
 
 use ao::*;
@@ -754,6 +755,20 @@ pub struct Renderer {
     studio_ghost_pipeline: wgpu::RenderPipeline,
     shading: ShadingMode,
     studio_material: StudioMaterial,
+    /// The studio rig's shadow map, once the rig has been asked for.
+    ///
+    /// Lazily built for the reason the layout beside it is not: the layout is a
+    /// description and costs nothing, and the map is a 2048² depth texture that
+    /// a session which never leaves MatCap should not be paying for.
+    shadow: std::cell::RefCell<Option<shadow::ShadowMap>>,
+    /// Whether the studio rig casts. A setting for the same reason occlusion
+    /// is one: the map darkens the frame it is computed from, so the only way
+    /// to see what it is doing is the same frame without it.
+    shadows: bool,
+    shadow_layout: wgpu::BindGroupLayout,
+    /// The shader module the shadow pass's pipeline is built from, kept
+    /// because that pipeline is built later than everything else here.
+    shader: wgpu::ShaderModule,
     ghosted: bool,
     /// How opaque the surface is drawn, as the sculptor set it.
     ///
@@ -790,6 +805,15 @@ pub struct Renderer {
 /// Short of the whole way on purpose. The cue has to survive being looked past
 /// — a sculptor reads the silhouette, not the colour — so it is a warmth the
 /// eye picks up beside a neutral neighbour rather than a coat of paint.
+/// Where the studio rig's key light stands, in world space.
+///
+/// Stated here and in `matcap.wgsl`, which
+/// `the_shader_and_the_shadow_fit_agree_on_the_key_light` holds together. Two
+/// copies of one direction is exactly the arrangement that goes wrong
+/// silently: a shadow map fitted along one direction and sampled from a light
+/// pointing along another lands the shadow somewhere the form is not.
+const STUDIO_KEY_DIRECTION: [f32; 3] = [-0.42, 0.78, 0.47];
+
 const ACTIVE_TINT_STRENGTH: f32 = 0.45;
 
 /// The multiplier the active subtool's material is drawn with.
@@ -957,6 +981,18 @@ impl Renderer {
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("viewport"),
                 bind_group_layouts: &[&bind_group_layout],
+                push_constant_ranges: &[],
+            });
+        // The studio pipelines carry a second group, for the shadow map. Its
+        // *layout* is built eagerly because a pipeline's layout is part of the
+        // pipeline; the sixteen megabytes of depth behind it are not built
+        // until the studio rig is actually asked for.
+        let shadow_layout = shadow::ShadowMap::sample_layout(gpu);
+        let studio_layout = gpu
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("studio"),
+                bind_group_layouts: &[&bind_group_layout, &shadow_layout],
                 push_constant_ranges: &[],
             });
 
@@ -1224,7 +1260,7 @@ impl Renderer {
             ),
             studio_pipeline: make_pipeline(
                 gpu,
-                &layout,
+                &studio_layout,
                 &shader,
                 format,
                 "vs_main",
@@ -1233,7 +1269,7 @@ impl Renderer {
             ),
             studio_ghost_pipeline: make_pipeline(
                 gpu,
-                &layout,
+                &studio_layout,
                 &shader,
                 format,
                 "vs_main",
@@ -1242,6 +1278,10 @@ impl Renderer {
             ),
             shading: ShadingMode::MatCap,
             studio_material: StudioMaterial::default(),
+            shadow: std::cell::RefCell::new(None),
+            shadows: true,
+            shadow_layout,
+            shader,
             references: std::collections::BTreeMap::new(),
             ghosted: false,
             surface_opacity: SurfaceOpacity::SOLID,
@@ -1711,6 +1751,19 @@ impl Renderer {
         self.shading
     }
 
+    /// Whether the studio rig's key light casts a shadow.
+    ///
+    /// Ignored in MatCap mode, which never casts: its lighting is welded to
+    /// the camera, so a shadow from it would swing round the form as the view
+    /// moved.
+    pub fn set_shadows(&mut self, on: bool) {
+        self.shadows = on;
+    }
+
+    pub fn shadows(&self) -> bool {
+        self.shadows
+    }
+
     /// What the studio rig treats the surface as. Ignored in MatCap mode.
     pub fn set_studio_material(&mut self, material: StudioMaterial) {
         self.studio_material = material;
@@ -1962,6 +2015,14 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("viewport"),
             });
+
+        // The studio rig's shadow map, before anything is drawn with it. Only
+        // in Studio mode: MatCap's lighting is welded to the camera, so a
+        // shadow from it would swing round the form as the view moved, which
+        // is worse than none.
+        let form = union_bounds(mesh.bounds(), self.mesh_layers.bounds());
+        self.cast_shadows(gpu, &mut encoder, mesh, form);
+
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("viewport"),
@@ -2034,6 +2095,13 @@ impl Renderer {
                 (ShadingMode::Studio, true) => &self.studio_pipeline,
                 (ShadingMode::Studio, false) => &self.studio_ghost_pipeline,
             };
+            // The studio pipelines carry a second group. It is bound once for
+            // the whole pass rather than per draw: every draw that uses those
+            // pipelines samples the same map.
+            let shadow = self.shadow.borrow();
+            if let (ShadingMode::Studio, Some(map)) = (self.shading, shadow.as_ref()) {
+                pass.set_bind_group(1, &map.sampled, &[]);
+            }
 
             if !mesh.is_empty() {
                 pass.set_pipeline(surface);
@@ -2153,6 +2221,105 @@ impl Renderer {
 
         gpu.queue.submit(Some(encoder.finish()));
         profiler.after_submit();
+    }
+
+    /// Fills the studio rig's shadow map, in Studio mode.
+    ///
+    /// Nothing at all in MatCap mode — the map is not even allocated until the
+    /// rig is first asked for, because it is sixteen megabytes of depth for a
+    /// mode a session may never enter.
+    ///
+    /// Fitted to the form each frame rather than to a fixed volume. The map's
+    /// resolution *on the subject* is its side divided by the subject's
+    /// diameter, so a projection sized to the world rather than to the sculpt
+    /// spends most of its texels on empty space and the rest on a staircase.
+    fn cast_shadows(
+        &self,
+        gpu: &Gpu,
+        encoder: &mut wgpu::CommandEncoder,
+        mesh: &GpuMesh,
+        form: Option<(Vec3, Vec3)>,
+    ) {
+        if self.shading != ShadingMode::Studio {
+            return;
+        }
+        let mut held = self.shadow.borrow_mut();
+        let map = held.get_or_insert_with(|| {
+            shadow::ShadowMap::new(
+                gpu,
+                &self.shader,
+                &self.bind_group_layout,
+                &self.shadow_layout,
+            )
+        });
+
+        let (light_view_projection, offset) =
+            shadow::light_projection(form, Vec3::from(STUDIO_KEY_DIRECTION));
+        // The map has to exist whatever the setting says — the studio
+        // pipelines name it in their layout, and a group they declare and do
+        // not bind is a validation error rather than an unlit frame. What the
+        // setting decides is whether the pass runs and whether the shader
+        // believes what it finds.
+        let drawn = self.shadows && (!mesh.is_empty() || !self.mesh_layers.is_empty());
+        gpu.queue.write_buffer(
+            &map.uniform,
+            0,
+            bytemuck::bytes_of(&shadow::ShadowUniform {
+                light_view_projection: light_view_projection.to_cols_array_2d(),
+                params: [
+                    offset,
+                    shadow::SHADOW_SIZE as f32,
+                    // Nothing drawn is nothing to cast, and a map cleared to
+                    // the far plane shadows every fragment that reads it.
+                    if drawn { 1.0 } else { 0.0 },
+                    shadow::SHADOW_DEPTH,
+                ],
+            }),
+        );
+        if !drawn {
+            return;
+        }
+
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("studio shadow"),
+            color_attachments: &[],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &map.depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(DEPTH_CLEAR),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        pass.set_pipeline(&map.pipeline);
+        // Group 0 is in the pipeline's layout because the studio shader puts
+        // the shadow bindings in group 1, and a layout has to describe every
+        // group its bindings sit in. This pass reads nothing from it.
+        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_bind_group(1, &map.casting, &[]);
+
+        if !mesh.is_empty() {
+            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+            pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+            self.draw_indexed(&mut pass, 0..mesh.index_count, Primitive::Triangles);
+        }
+        if !self.mesh_layers.is_empty() {
+            pass.set_vertex_buffer(0, self.mesh_layers.vertices.slice(..));
+            pass.set_index_buffer(
+                self.mesh_layers.indices.slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+            // Every span, not the frustum-culled set: a subtool the *camera*
+            // cannot see can still stand between the light and one it can.
+            self.draw_indexed(
+                &mut pass,
+                0..self.mesh_layers.index_count,
+                Primitive::Triangles,
+            );
+        }
     }
 
     /// Builds the passes' bind groups for this framebuffer, if they are not
@@ -2955,6 +3122,36 @@ mod tests {
         // And a count of zero is a count of one rather than a division by it.
         let _ = ao_kernel(0);
         let _ = ao_kernel(usize::MAX);
+    }
+
+    /// The key light's direction is stated in the shader and in the shadow
+    /// fit, and they have to be the same direction.
+    ///
+    /// A map fitted along one direction and sampled from a light pointing along
+    /// another lands the shadow somewhere the form is not — and it does it
+    /// quietly, because the picture still has a shadow in it.
+    #[test]
+    fn the_shader_and_the_shadow_fit_agree_on_the_key_light() {
+        let source = include_str!("../shaders/matcap.wgsl");
+        let declared = source
+            .lines()
+            .find_map(|line| {
+                let value = line
+                    .trim()
+                    .strip_prefix("const KEY_DIRECTION: vec3<f32> = vec3<f32>(")?
+                    .strip_suffix(");")?;
+                let axes: Vec<f32> = value
+                    .split(',')
+                    .filter_map(|n| n.trim().parse::<f32>().ok())
+                    .collect();
+                <[f32; 3]>::try_from(axes.as_slice()).ok()
+            })
+            .expect("matcap.wgsl declares KEY_DIRECTION");
+        assert_eq!(
+            declared, STUDIO_KEY_DIRECTION,
+            "the shader lights the form from {declared:?} and the shadow map is \
+             fitted along {STUDIO_KEY_DIRECTION:?}"
+        );
     }
 
     /// A cursor at a point that no mirror plane passes through, so a mirror is
