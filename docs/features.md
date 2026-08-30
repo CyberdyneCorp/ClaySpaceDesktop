@@ -1608,20 +1608,45 @@ wheel that refused to move would read as broken.
   assets. Vertex colours modulate the material where a mesh carries them.
 - Ambient occlusion, so the surface darkens where it closes in on itself. A
   MatCap is indexed by the view-space normal alone and cannot tell an open
-  flank from the bottom of a fold; two passes after the scene read the depth it
-  wrote, derive a normal from that, sample a hemisphere around each pixel and
-  multiply the result onto the resolved colour. Depth rather than the vertex
-  normal because the reference form is about seven triangles per covered pixel,
-  where a screen derivative of the normal reports the tessellation instead of
-  the shape. Costs 0.08 ms a frame. Requires multisampling, since the pass
-  binds the depth buffer as a multisampled texture; a device that falls back to
-  one sample draws without it.
-- 4x multisampling on the scene, where the device will take it for the surface
-  format and falling back to one sample where it will not. The interface is
-  drawn into the resolved target afterwards rather than multisampled with it:
-  text and panel edges are already laid out on the pixel grid. Measured at
-  0.45 ms a frame before and 0.48 ms after, against a 16.7 ms budget — 0.56 ms
-  with the occlusion passes above.
+  flank from the bottom of a fold; three passes after the scene reduce the
+  depth it wrote to half resolution, sample a hemisphere around each pixel
+  there, and bring the result back with a filter that weighs each neighbour by
+  how near its depth is — so the shading stops at a silhouette instead of
+  bleeding across it. Depth rather than the vertex normal because the reference
+  form is about seven triangles per covered pixel, where a screen derivative of
+  the normal reports the tessellation instead of the shape. 0.15 ms a frame at
+  1080p and 0.54 ms at 4K. Its radius is a fraction of the form's own size, so
+  an import at any scale is shaded the same way; it runs at every sample count,
+  including one.
+- **Cavity shading** (*Vista → Realce de cavidades*), on by default and off
+  under the pen. Occlusion works at the scale of its own radius and says
+  nothing about a crease finer than that, which is most of the detail in a
+  finished sculpt; this reads the curvature of the reconstructed surface and
+  darkens where it turns into itself.
+- **Studio lighting** (*Vista → Iluminação de estúdio*), offered beside MatCap
+  and never in place of it. A MatCap's lighting is welded to the camera —
+  orbiting the form orbits the light with it — which is what makes it good for
+  reading form and useless for judging how a surface takes a real light. The
+  studio rig is three lights fixed in the *world* with a filmic curve over
+  them, and its key light casts through a shadow map fitted to the form, so a
+  fold shadows itself. The highlight travels fourteen times as far across the
+  form under the same orbit. The shadow can be switched off
+  (*Vista → Sombra do estúdio*); nothing is allocated for any of it until the
+  rig is first asked for.
+- Multisampling on the scene, four samples by default and resolved down to what
+  the device will actually take. The interface is drawn into the resolved
+  target afterwards rather than multisampled with it: text and panel edges are
+  already laid out on the pixel grid. Measured at 1080p: 0.20 ms a frame with
+  no multisampling, 0.24 at two samples, 0.32 at four, against a 16.7 ms
+  budget. A device that will not multisample the surface format gets a
+  post-process pass over the silhouette instead, which is never run alongside
+  multisampling — four samples and a blur over the top is paying twice to lose
+  detail once.
+- **Reversed depth**, with a near and far plane derived from the viewing
+  distance and the size of what is on screen rather than fixed. A form far
+  smaller than the old fixed near plane of 0.01 was clipped away when zoomed
+  into; a large one spent the whole useful precision of its depth buffer on the
+  first hundredth of the range.
 - Orbit, pan, zoom, frame-all. Pitch is clamped short of the pole, where the
   view matrix degenerates.
 - Four view presets — Perspectiva, Frontal, Lateral, Superior. The orthogonal
@@ -1633,7 +1658,21 @@ wheel that refused to move would read as broken.
   rotation and nothing else.
 - A brush cursor drawn *in the scene* rather than as a screen circle, so it
   shows the footprint the brush will cover. It clears when the pointer leaves
-  the surface rather than hanging at an arbitrary depth.
+  the surface rather than hanging at an arbitrary depth. Drawn as a ribbon a
+  couple of pixels wide rather than as a line: WebGPU has no line width, so a
+  line list is one pixel whatever the display and has no coverage for the
+  scene's multisampling to resolve.
+- **Quality follows the pointer.** A frame drawn under a moving pen is one of
+  hundreds in a stroke and no brush decision rests on the quality of its
+  occlusion, so the sample count drops while a gesture is in progress and the
+  cavity term is switched off. It rises again 160 ms after the pointer stops
+  and fully after 600 — not on release, because the gap between two dabs of one
+  stroke would otherwise be paid at full price, which puts the cost exactly
+  where the latency is measured.
+- **Per-pass GPU time** in the diagnostics window, measured with the device's
+  own clock rather than inferred from how long submission took, alongside the
+  occlusion resolution, the draw calls, the triangles and the bytes uploaded. A
+  device without timestamp queries says so and renders unchanged.
 - Device loss is recovered rather than fatal: the surface, renderer and buffers
   are rebuilt against the same window and nothing authored is lost.
 - Level of detail. A model past three extents from the camera drops to the

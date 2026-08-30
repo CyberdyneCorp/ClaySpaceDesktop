@@ -231,6 +231,9 @@ fn state<'a>(
         scene,
         renaming: None,
         polyframe: false,
+        studio_shading: false,
+        cavity: true,
+        shadows: true,
         stats: SceneStats {
             triangles: 2_356_789,
             vertices: 1_178_394,
@@ -1773,8 +1776,9 @@ const VIEW_MENU: egui::Pos2 = egui::Pos2::new(131.0, 13.0);
 /// A pixel offset, and it moves every time an entry lands above it — which is
 /// what a menu-entry equivalent of `slider_id` would fix. Until then, a test
 /// that starts failing here after a menu entry is added is measuring the
-/// addition rather than a fault.
-const LANGUAGE_ENTRY: egui::Vec2 = egui::Vec2::new(5.0, 218.0);
+/// addition rather than a fault. It was 218 until the shading and cavity
+/// entries landed above it, which is two rows of twenty-two.
+const LANGUAGE_ENTRY: egui::Vec2 = egui::Vec2::new(5.0, 262.0);
 
 #[test]
 fn the_language_can_be_chosen_from_the_menu() {

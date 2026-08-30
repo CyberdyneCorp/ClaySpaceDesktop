@@ -75,6 +75,8 @@
 - [x] 6.4 Add an optional screen-space cavity term, computed from neighbouring
       reconstructed positions and applied in the composite — subtle by
       default, and off while sculpting
+- [x] 6.5 Offer it, the studio rig and the rig's shadow in the View menu. A
+      shading mode nobody can select is not a shading mode
 
 ## 7. Depth worth its bits
 

@@ -24,8 +24,8 @@ use clayspace_model::{
 use clayspace_view::shell::{self, region, ArmatureState, ShellState};
 use clayspace_view::{
     mirrored_cursors, Action, ArmatureView, BrushCursor, Camera, Gpu, GpuMesh, InteractionState,
-    Locale, MatCap, Overlays, QualityGovernor, Renderer, Shortcuts, Strings, SurfaceLoss, Vertex,
-    ViewPreset, ViewportProfile, WindowSurface,
+    Locale, MatCap, Overlays, QualityGovernor, Renderer, ShadingMode, Shortcuts, Strings,
+    SurfaceLoss, Vertex, ViewPreset, ViewportProfile, WindowSurface,
 };
 use clayspace_vm::{
     ArmatureViewModel, Axis, BooleanViewModel, Command, CommandQueue, CurveViewModel,
@@ -3314,6 +3314,18 @@ impl App {
             stats: *self.sculpt.stats().get(),
             view_preset: *self.sculpt.view_preset().get(),
             polyframe: *self.sculpt.polyframe().get(),
+            // The renderer's own display state, read back rather than
+            // mirrored: the material beside it is handled the same way, and a
+            // second copy of a setting is a second thing to keep in step.
+            studio_shading: self
+                .graphics
+                .as_ref()
+                .is_some_and(|g| g.renderer.shading() == ShadingMode::Studio),
+            cavity: self
+                .graphics
+                .as_ref()
+                .is_some_and(|g| g.renderer.cavity() > 0.0),
+            shadows: self.graphics.as_ref().is_some_and(|g| g.renderer.shadows()),
             material,
             matcap: self
                 .graphics
@@ -3519,6 +3531,32 @@ impl App {
             Command::FrameAll => {
                 self.frame_all();
                 self.request_redraw();
+            }
+            Command::ToggleShading => {
+                if let Some(graphics) = self.graphics.as_mut() {
+                    let next = match graphics.renderer.shading() {
+                        ShadingMode::MatCap => ShadingMode::Studio,
+                        ShadingMode::Studio => ShadingMode::MatCap,
+                    };
+                    graphics.renderer.set_shading(next);
+                    self.request_redraw();
+                }
+            }
+            Command::ToggleCavity => {
+                if let Some(graphics) = self.graphics.as_mut() {
+                    let on = graphics.renderer.cavity() > 0.0;
+                    graphics
+                        .renderer
+                        .set_cavity(if on { 0.0 } else { Renderer::CAVITY });
+                    self.request_redraw();
+                }
+            }
+            Command::ToggleShadows => {
+                if let Some(graphics) = self.graphics.as_mut() {
+                    let on = graphics.renderer.shadows();
+                    graphics.renderer.set_shadows(!on);
+                    self.request_redraw();
+                }
             }
             Command::NextMaterial => {
                 if let Some(graphics) = self.graphics.as_mut() {

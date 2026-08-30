@@ -395,6 +395,12 @@ pub struct Strings {
     pub action_quit: &'static str,
     pub state_no_recent: &'static str,
     pub action_diagnostics: &'static str,
+    /// Switching between MatCap and the studio light rig.
+    pub action_shading: &'static str,
+    /// The screen-space crease term.
+    pub action_cavity: &'static str,
+    /// Whether the studio rig's key light casts.
+    pub action_shadows: &'static str,
     pub action_attribution: &'static str,
     pub action_copy: &'static str,
     pub state_copied: &'static str,
@@ -734,6 +740,9 @@ const PT_BR: Strings = Strings {
     action_quit: "Sair",
     state_no_recent: "nenhum documento recente",
     action_diagnostics: "Diagnóstico",
+    action_shading: "Iluminação de estúdio",
+        action_cavity: "Realce de cavidades",
+        action_shadows: "Sombra do estúdio",
     action_attribution: "Atribuições",
     action_copy: "Copiar relatório",
     state_copied: "copiado",
@@ -1070,6 +1079,9 @@ const EN_US: Strings = Strings {
     action_quit: "Quit",
     state_no_recent: "no recent documents",
     action_diagnostics: "Diagnostics",
+    action_shading: "Studio lighting",
+        action_cavity: "Cavity shading",
+        action_shadows: "Studio shadow",
     action_attribution: "Attributions",
     action_copy: "Copy report",
     state_copied: "copied",
@@ -1414,6 +1426,9 @@ const ES_419: Strings = Strings {
     action_quit: "Salir",
     state_no_recent: "sin documentos recientes",
     action_diagnostics: "Diagnóstico",
+    action_shading: "Iluminação de estúdio",
+        action_cavity: "Realce de cavidades",
+        action_shadows: "Sombra do estúdio",
     action_attribution: "Atribuciones",
     action_copy: "Copiar informe",
     state_copied: "copiado",
@@ -1649,7 +1664,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 188] {
+    pub fn all(&self) -> [&'static str; 191] {
         [
             self.action_shapes,
             self.label_shape,
@@ -1826,6 +1841,9 @@ impl Strings {
             self.action_quit,
             self.state_no_recent,
             self.action_diagnostics,
+            self.action_shading,
+            self.action_cavity,
+            self.action_shadows,
             self.action_attribution,
             self.action_copy,
             self.state_copied,

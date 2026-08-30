@@ -305,6 +305,23 @@ pub enum Command {
     /// Cycles what lengths are shown in. Presentation only: no geometry
     /// moves, which is what makes it safe to put on a single click.
     NextDisplayUnit,
+    /// Switches between the MatCap the sculpt path is tuned for and a fixed
+    /// studio light rig.
+    ///
+    /// A MatCap is indexed by the view-space normal, so its lighting is welded
+    /// to the camera: orbiting the form orbits the light with it. That is what
+    /// makes it good for reading form and useless for judging how a surface
+    /// takes a real light, which is the one thing the other mode is for.
+    ToggleShading,
+    /// Whether small creases are sharpened by a screen-space curvature term.
+    ///
+    /// A MatCap knows only the local normal and occlusion knows only its own
+    /// radius, so neither says anything about a crease finer than that — which
+    /// is most of the detail in a finished sculpt.
+    ToggleCavity,
+    /// Whether the studio rig's key light casts. Nothing in MatCap mode, whose
+    /// light moves with the camera and whose shadow would swing with it.
+    ToggleShadows,
     /// Which language the interface is presented in.
     SetLocale(Locale),
     /// Which picture of a voxel layer the viewport draws, and how much its
@@ -333,6 +350,9 @@ impl Command {
                 | Self::NextMaterial
                 | Self::ToggleGrid
                 | Self::TogglePolyframe
+                | Self::ToggleShading
+                | Self::ToggleCavity
+                | Self::ToggleShadows
                 | Self::NextDisplayUnit
                 | Self::SetLocale(_)
                 // A picture of a grid, not a change to one. The engine keeps
@@ -558,6 +578,9 @@ impl Command {
             Self::NextMaterial => "material",
             Self::ToggleGrid => "grid",
             Self::TogglePolyframe => "polyframe",
+            Self::ToggleShading => "shading",
+            Self::ToggleCavity => "cavity",
+            Self::ToggleShadows => "shadows",
             Self::NewDocument => "new document",
             Self::OpenDocument => "open document",
             Self::OpenRecent(_) => "open recent",
@@ -663,6 +686,9 @@ mod tests {
             Command::FrameAll,
             Command::NextMaterial,
             Command::ToggleGrid,
+            Command::ToggleShading,
+            Command::ToggleCavity,
+            Command::ToggleShadows,
         ] {
             assert!(
                 !command.touches_document(),
