@@ -402,6 +402,14 @@ pub struct Framebuffer {
     /// The size of both of the above, in pixels.
     ao_width: u32,
     ao_height: u32,
+    /// Where the scene is drawn when a post-process pass has to read it back.
+    ///
+    /// `Some` only where the device draws with one sample per pixel: that is
+    /// where the silhouette is stair-stepped and where FXAA earns its place.
+    /// With multisampling there is nothing for it to fix and it would only
+    /// soften sculpted detail, so the scene goes straight to the caller's view
+    /// as it always did.
+    antialias: Option<wgpu::TextureView>,
     samples: u32,
 }
 
@@ -520,6 +528,21 @@ impl Framebuffer {
             })
             .create_view(&wgpu::TextureViewDescriptor::default());
 
+        let antialias = (samples == 1).then(|| {
+            gpu.device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("antialias"),
+                    size,
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: attachment,
+                    view_formats: &[],
+                })
+                .create_view(&wgpu::TextureViewDescriptor::default())
+        });
+
         Self {
             id: NEXT_FRAMEBUFFER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             width,
@@ -530,6 +553,7 @@ impl Framebuffer {
             occlusion,
             ao_width,
             ao_height,
+            antialias,
             samples,
         }
     }
@@ -551,11 +575,43 @@ impl Framebuffer {
     pub fn attachment<'a>(
         &'a self,
         target: &'a wgpu::TextureView,
+        post_process: bool,
     ) -> (&'a wgpu::TextureView, Option<&'a wgpu::TextureView>) {
+        let scene = self.scene_view(target, post_process);
         match &self.color {
-            Some(color) => (color, Some(target)),
-            None => (target, None),
+            Some(color) => (color, Some(scene)),
+            None => (scene, None),
         }
+    }
+
+    /// Where the finished scene lands before anything reads it back.
+    ///
+    /// The caller's own view, unless a post-process pass is going to run over
+    /// the scene — a texture cannot be sampled and written by the same pass —
+    /// in which case it lands in the framebuffer's own single-sampled target
+    /// and the post-process writes the caller's.
+    ///
+    /// `post_process` is what the caller *intends*, not what is available: a
+    /// framebuffer that could support one but whose caller has switched it off
+    /// draws straight into the target, so switching it off costs a pass rather
+    /// than adding a copy to get the frame back out.
+    pub fn scene_view<'a>(
+        &'a self,
+        target: &'a wgpu::TextureView,
+        post_process: bool,
+    ) -> &'a wgpu::TextureView {
+        match &self.antialias {
+            Some(view) if post_process => view,
+            _ => target,
+        }
+    }
+
+    /// The scene target a post-process pass reads, when there is one.
+    ///
+    /// `None` when the scene was drawn straight into the caller's view, which
+    /// is to say when there is no post-process pass to run.
+    pub fn antialias_view(&self) -> Option<&wgpu::TextureView> {
+        self.antialias.as_ref()
     }
 
     pub fn samples(&self) -> u32 {

@@ -639,6 +639,11 @@ pub struct Renderer {
     /// Both bind textures the framebuffer owns, so their groups are built
     /// against a framebuffer rather than against the renderer — and rebuilt
     /// when it is, which is on resize and not per frame.
+    /// Anti-aliasing for a device that will not multisample. Run only there;
+    /// see `shaders/fxaa.wgsl`.
+    fxaa_pipeline: wgpu::RenderPipeline,
+    fxaa_layout: wgpu::BindGroupLayout,
+    fxaa_sampler: wgpu::Sampler,
     reduce_layout: wgpu::BindGroupLayout,
     ao_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
@@ -669,6 +674,15 @@ pub struct Renderer {
     /// knowledge, and a renderer that read it would be a second place where
     /// "is the user sculpting" is defined — see [`crate::quality`].
     quality: ViewportQuality,
+    /// Whether the post-process anti-aliasing runs, where there is one to run.
+    ///
+    /// A switch for the same reason occlusion has one: it is the only way to
+    /// see what it is doing, since the pass reads the frame's own colour and
+    /// there is nothing else to compare it against. It is also a real choice —
+    /// the filter works on the picture rather than on the geometry, so it can
+    /// mistake a fine sculpted crease for a stair-step and soften it, and a
+    /// sculptor who would rather have the stair-step should be able to say so.
+    antialias: bool,
     camera_buffer: wgpu::Buffer,
     material_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
@@ -1093,6 +1107,63 @@ impl Renderer {
                 alpha: wgpu::BlendComponent::REPLACE,
             }),
         );
+        // Anti-aliasing for a device that will not multisample. Built
+        // unconditionally and run only where the framebuffer says the scene
+        // was drawn with one sample: a pipeline is cheap to hold and the
+        // alternative is deciding at draw time whether one exists.
+        let fxaa_shader = gpu
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("fxaa"),
+                source: wgpu::ShaderSource::Wgsl(include_str!("shaders/fxaa.wgsl").into()),
+            });
+        let fxaa_layout = gpu
+            .device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("fxaa"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+        let fxaa_pipeline = make_fullscreen_pipeline(
+            gpu,
+            &gpu.device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("fxaa"),
+                    bind_group_layouts: &[&fxaa_layout],
+                    push_constant_ranges: &[],
+                }),
+            &fxaa_shader,
+            "fxaa_fs",
+            format,
+            None,
+        );
+        // Filtered, and clamped: the kernel reaches a pixel either side of the
+        // frame's edge, and a wrapped read there would fold the far edge in.
+        let fxaa_sampler = gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("fxaa"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
         let ao_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("ao"),
             size: std::mem::size_of::<AoUniform>() as u64,
@@ -1179,6 +1250,9 @@ impl Renderer {
             reduce_pipeline,
             ao_pipeline,
             composite_pipeline,
+            fxaa_pipeline,
+            fxaa_layout,
+            fxaa_sampler,
             reduce_layout,
             ao_layout,
             composite_layout,
@@ -1191,6 +1265,7 @@ impl Renderer {
             // is a renderer drawing a still frame — a capture, a test, an
             // export preview. Nothing is being sculpted in any of those.
             quality: ViewportQuality::High,
+            antialias: true,
             camera_buffer,
             material_buffer,
             bind_group,
@@ -1383,6 +1458,20 @@ impl Renderer {
 
     pub fn quality(&self) -> ViewportQuality {
         self.quality
+    }
+
+    /// Whether silhouettes are smoothed after the fact on a device that will
+    /// not multisample.
+    ///
+    /// Does nothing where the device *does* multisample: there is no
+    /// post-process target there, and running both would be paying twice to
+    /// lose detail once.
+    pub fn set_antialias(&mut self, on: bool) {
+        self.antialias = on;
+    }
+
+    pub fn antialias(&self) -> bool {
+        self.antialias
     }
 
     /// What the last measured frame cost the GPU, per pass.
@@ -1845,7 +1934,7 @@ impl Renderer {
         // Multisampled where the device allows it: the scene is drawn into the
         // framebuffer's own target and resolved into `target`, which is what
         // egui then paints the interface onto.
-        let (attachment, resolve_target) = framebuffer.attachment(target);
+        let (attachment, resolve_target) = framebuffer.attachment(target, self.antialias);
 
         // Collects what the previous frame reported before this one records
         // anything. Held across the whole frame so each pass can be given its
@@ -2013,10 +2102,15 @@ impl Renderer {
         // The radius of everything drawn with depth: the surface and the mesh
         // layers together, since either may be the only one present.
         let radius = form_radius(union_bounds(mesh.bounds(), self.mesh_layers.bounds()));
+        // Occlusion composites onto whatever the scene was drawn into, which
+        // is the caller's target unless a post-process pass has to read the
+        // scene back — a texture cannot be sampled and written by one pass.
+        let scene_view = framebuffer.scene_view(target, self.antialias);
+        self.ensure_resources(gpu, framebuffer);
         self.occlude(
             gpu,
             &mut encoder,
-            target,
+            scene_view,
             framebuffer,
             camera,
             aspect,
@@ -2024,6 +2118,12 @@ impl Renderer {
             radius,
             &mut profiler,
         );
+        // And the anti-aliasing, where the device would not multisample. It
+        // runs before the scaffolding rather than after, so a manipulator's
+        // lines — which are drawn at the resolution they are meant to be read
+        // at — are not softened by a filter that exists to hide stair-steps in
+        // the geometry.
+        self.smooth_silhouettes(&mut encoder, target, scene);
         profiler.resolve(&mut encoder);
 
         // The scaffolding, the manipulator and the orientation gizmo, after
@@ -2042,6 +2142,74 @@ impl Renderer {
 
         gpu.queue.submit(Some(encoder.finish()));
         profiler.after_submit();
+    }
+
+    /// Builds the passes' bind groups for this framebuffer, if they are not
+    /// the ones already held.
+    ///
+    /// Once a frame, before anything that reads them, rather than inside
+    /// whichever pass happens to run first. Occlusion can be switched off and
+    /// the anti-aliasing cannot, so "whichever is first" is not a fixed
+    /// answer — the version that built them inside the occlusion pass left a
+    /// device that draws single-sampled with no anti-aliasing at all whenever
+    /// occlusion was off.
+    fn ensure_resources(&self, gpu: &Gpu, framebuffer: &Framebuffer) {
+        let mut cached = self.ao_resources.borrow_mut();
+        if cached
+            .as_ref()
+            .is_some_and(|held| held.framebuffer == framebuffer.id())
+        {
+            return;
+        }
+        *cached = Some(AoResources::new(
+            gpu,
+            framebuffer,
+            (&self.reduce_layout, &self.ao_layout, &self.composite_layout),
+            &self.ao_buffer,
+            (&self.fxaa_layout, &self.fxaa_sampler),
+        ));
+    }
+
+    /// Anti-aliases the scene into `target`, where the device would not
+    /// multisample it.
+    ///
+    /// Nothing at all where it would: four samples and a blur over the top is
+    /// paying twice to lose detail once, and the detail lost would be sculpted
+    /// crease mistaken for stair-step. See `shaders/fxaa.wgsl`.
+    fn smooth_silhouettes(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        scene: [f32; 4],
+    ) {
+        if !self.antialias {
+            return;
+        }
+        let cached = self.ao_resources.borrow();
+        let Some(bind_group) = cached.as_ref().and_then(|held| held.antialias.as_ref()) else {
+            return;
+        };
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("antialias"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    // Cleared rather than loaded: every pixel of the scene's
+                    // rectangle is written, and outside it the target has not
+                    // been drawn to at all.
+                    load: wgpu::LoadOp::Clear(self.background),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        pass.set_viewport(scene[0], scene[1], scene[2], scene[3], 0.0, 1.0);
+        pass.set_pipeline(&self.fxaa_pipeline);
+        pass.set_bind_group(0, bind_group, &[]);
+        self.draw_fullscreen(&mut pass);
     }
 
     /// The scaffolding, drawn on the finished frame rather than in it.
@@ -2141,7 +2309,7 @@ impl Renderer {
         &self,
         gpu: &Gpu,
         encoder: &mut wgpu::CommandEncoder,
-        target: &wgpu::TextureView,
+        scene_view: &wgpu::TextureView,
         framebuffer: &Framebuffer,
         camera: &Camera,
         aspect: f32,
@@ -2199,18 +2367,13 @@ impl Renderer {
                     0.0,
                     0.0,
                 ],
+                kernel: ao_kernel(self.quality.ao_samples() as usize),
             }),
         );
 
-        let mut cached = self.ao_resources.borrow_mut();
-        let resources = match cached.as_ref() {
-            Some(existing) if existing.framebuffer == framebuffer.id() => existing,
-            _ => cached.insert(AoResources::new(
-                gpu,
-                framebuffer,
-                (&self.reduce_layout, &self.ao_layout, &self.composite_layout),
-                &self.ao_buffer,
-            )),
+        let cached = self.ao_resources.borrow();
+        let Some(resources) = cached.as_ref() else {
+            return;
         };
 
         // The reduction and the kernel cover their whole target rather than
@@ -2266,7 +2429,7 @@ impl Renderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("occlusion composite"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
+                    view: scene_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         // Loaded, because this darkens the frame that is
@@ -2396,6 +2559,10 @@ struct AoResources {
     reduce: wgpu::BindGroup,
     ao: wgpu::BindGroup,
     composite: wgpu::BindGroup,
+    /// The post-process pass's view of the scene. `None` where the scene was
+    /// drawn straight into the caller's target, which is where there is no
+    /// post-process pass to run.
+    antialias: Option<wgpu::BindGroup>,
 }
 
 impl AoResources {
@@ -2408,8 +2575,10 @@ impl AoResources {
             &wgpu::BindGroupLayout,
         ),
         ao_buffer: &wgpu::Buffer,
+        fxaa: (&wgpu::BindGroupLayout, &wgpu::Sampler),
     ) -> Self {
         let (reduce_layout, ao_layout, composite_layout) = layouts;
+        let (fxaa_layout, fxaa_sampler) = fxaa;
         let uniform = wgpu::BindGroupEntry {
             binding: 0,
             resource: ao_buffer.as_entire_binding(),
@@ -2443,6 +2612,22 @@ impl AoResources {
                 layout: composite_layout,
                 entries: &[uniform, scene_depth, reduced, occlusion],
             }),
+            antialias: framebuffer.antialias_view().map(|view| {
+                gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("fxaa"),
+                    layout: fxaa_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(fxaa_sampler),
+                        },
+                    ],
+                })
+            }),
         }
     }
 }
@@ -2467,6 +2652,58 @@ struct AoUniform {
     /// Zero strength is the term switched off, which costs the composite a
     /// branch and nothing else.
     cavity: [f32; 4],
+    /// The sample kernel, in the tangent frame. See [`ao_kernel`].
+    kernel: [[f32; 4]; AO_KERNEL],
+}
+
+/// How many samples the kernel holds room for.
+///
+/// The highest quality tier's count. Stated here and in `ao.wgsl`, which the
+/// uniform-size test holds together.
+const AO_KERNEL: usize = 16;
+
+/// The occlusion sample directions, in the tangent frame around the normal.
+///
+/// Computed on the host because none of it depends on the pixel. The loop used
+/// to take a square root, a sine, a cosine and an interpolation *per sample per
+/// pixel* to arrive at a direction that is a function of the sample index
+/// alone; at half resolution and twelve samples that is a quarter of a million
+/// transcendentals a frame at 1080p, computing the same sixteen numbers over
+/// and over.
+///
+/// What is left in the shader is a rotation by the pixel's own turn, which is
+/// two multiplies and an add against a precomputed pair.
+///
+/// The distribution is unchanged, and it is worth saying what it is. The
+/// samples advance by the golden angle, so successive ones land as far from
+/// each other as they can and a short loop still covers the hemisphere evenly.
+/// The planar radius is a square root, so they spread over the disc's *area*
+/// rather than crowding its centre. And the distance along the ray grows with
+/// the index, so the near field is sampled as densely as the far one rather
+/// than every sample sitting on the rim.
+fn ao_kernel(count: usize) -> [[f32; 4]; AO_KERNEL] {
+    /// The golden angle, in radians.
+    const GOLDEN: f32 = 2.399_963_2;
+    /// The shortest a sample's reach gets, as a fraction of the radius.
+    const NEAREST: f32 = 0.15;
+
+    let count = count.clamp(1, AO_KERNEL);
+    std::array::from_fn(|i| {
+        // Entries past the count are never read — the shader loops to `count`
+        // — and are left as the first one rather than as zero, which would be
+        // a direction of no length if one ever were.
+        let i = i.min(count - 1);
+        let t = (i as f32 + 0.5) / count as f32;
+        let planar = t.sqrt();
+        let up = (1.0 - planar * planar).max(0.0).sqrt();
+        let angle = i as f32 * GOLDEN;
+        [
+            angle.cos() * planar,
+            angle.sin() * planar,
+            up,
+            NEAREST + (1.0 - NEAREST) * t * t,
+        ]
+    })
 }
 
 /// How far an occluder can be and still count, as a fraction of the radius of
@@ -3746,8 +3983,8 @@ mod tests {
         assert_eq!(std::mem::size_of::<CameraUniform>(), 128);
         // material: three vec4.
         assert_eq!(std::mem::size_of::<MaterialUniform>(), 48);
-        // ao: two mat4x4 and five vec4.
-        assert_eq!(std::mem::size_of::<AoUniform>(), 208);
+        // ao: two mat4x4, five vec4 and a sixteen-entry vec4 kernel.
+        assert_eq!(std::mem::size_of::<AoUniform>(), 208 + AO_KERNEL * 16);
         for size in [
             std::mem::size_of::<CameraUniform>(),
             std::mem::size_of::<MaterialUniform>(),
@@ -4013,6 +4250,67 @@ mod tests {
              {}",
             Framebuffer::AO_SCALE
         );
+    }
+
+    /// The precomputed kernel is the distribution the shader used to compute.
+    ///
+    /// Moving it to the host is a pure optimisation, so the thing to hold is
+    /// that it changed nothing: unit directions in the upper hemisphere, an
+    /// even spread over the disc rather than a crowd at its centre, and reaches
+    /// that grow with the index so the near field is sampled as densely as the
+    /// far one.
+    #[test]
+    fn the_occlusion_kernel_covers_the_hemisphere_evenly() {
+        for count in [6usize, 8, 12, 16] {
+            let kernel = ao_kernel(count);
+            let mut previous_reach = 0.0f32;
+            let mut mean = [0.0f32; 3];
+            for entry in kernel.iter().take(count) {
+                let [x, y, z, reach] = *entry;
+                let length = (x * x + y * y + z * z).sqrt();
+                assert!(
+                    (length - 1.0).abs() < 1e-4,
+                    "a sample direction of length {length}"
+                );
+                assert!(z >= 0.0, "a sample pointing into the surface: z = {z}");
+                assert!(
+                    (0.1..=1.0).contains(&reach),
+                    "a reach of {reach} of the radius"
+                );
+                assert!(
+                    reach >= previous_reach,
+                    "reaches must grow with the index, and {reach} follows {previous_reach}"
+                );
+                previous_reach = reach;
+                for (axis, value) in mean.iter_mut().zip([x, y, z]) {
+                    *axis += value / count as f32;
+                }
+            }
+            // Spread rather than clustered: the mean of an even hemisphere
+            // leans along the normal and barely at all across it.
+            assert!(
+                mean[0].abs() < 0.25 && mean[1].abs() < 0.25,
+                "the kernel leans sideways: mean {mean:?} over {count} samples"
+            );
+            assert!(mean[2] > 0.3, "the kernel does not face the surface");
+        }
+    }
+
+    /// Entries past the count are never read, and must not be a direction of
+    /// no length in case one ever is.
+    #[test]
+    fn the_unused_kernel_entries_are_still_directions() {
+        let kernel = ao_kernel(6);
+        for entry in kernel.iter().skip(6) {
+            let length = (entry[0] * entry[0] + entry[1] * entry[1] + entry[2] * entry[2]).sqrt();
+            assert!(
+                (length - 1.0).abs() < 1e-4,
+                "an unused entry of length {length}"
+            );
+        }
+        // And a count of zero is a count of one rather than a division by it.
+        let _ = ao_kernel(0);
+        let _ = ao_kernel(usize::MAX);
     }
 
     /// A cursor at a point that no mirror plane passes through, so a mirror is
