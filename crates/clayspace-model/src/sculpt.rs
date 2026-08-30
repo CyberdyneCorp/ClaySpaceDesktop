@@ -256,6 +256,47 @@ pub trait SculptModel {
     /// whole gesture back however many segments drew it.
     fn end_gesture(&mut self) {}
 
+    /// Opens a gesture that would otherwise be held whole, and says whether it
+    /// is open.
+    ///
+    /// The region tools bake on a field: they sample a region into a volume,
+    /// modify it and put it back with a replace, and segmenting that stacks a
+    /// replacement per segment until the surface crumbles. So they were held
+    /// whole and arrived when the pointer came up, and the sculptor smoothed
+    /// blind. Where the engine can hold the volume open across pointer events
+    /// instead, this answers true and the segments are sent as they are made.
+    ///
+    /// Takes the symmetry because pointing the layer's mirror is an *edit*,
+    /// and an edit after the gesture opens is one the commit refuses: the
+    /// transaction fingerprints its source at begin so a preview computed
+    /// against a document that no longer exists cannot be written over a newer
+    /// one. So the mirror is pointed first, and then the gesture opens.
+    ///
+    /// Provided, because only the field path has one to open.
+    fn open_live_gesture(&mut self, tool: crate::tools::ToolKind, symmetry: [bool; 3]) -> bool {
+        let _ = (tool, symmetry);
+        false
+    }
+
+    /// Ends the live gesture, installing what it previewed as one edit.
+    ///
+    /// Returns how many history entries the commit recorded, because a live
+    /// gesture records none until it closes and the count is what an undo of
+    /// the whole gesture has to spend.
+    fn close_live_gesture(&mut self) -> Result<usize, ModelError> {
+        Ok(0)
+    }
+
+    /// Abandons the live gesture, and says how many history entries it still
+    /// left to take back.
+    ///
+    /// The preview itself wrote nothing. Opening the gesture may have — the
+    /// layer's mirror is pointed before the transaction begins, because an
+    /// edit *after* it begins is one the commit refuses.
+    fn discard_live_gesture(&mut self) -> usize {
+        0
+    }
+
     fn bounds(&self) -> Option<([f32; 3], [f32; 3])>;
 }
 

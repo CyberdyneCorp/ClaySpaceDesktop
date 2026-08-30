@@ -63,7 +63,7 @@ impl Default for MoveParams {
 }
 
 impl MoveParams {
-    fn to_raw(self) -> sys::clay_move_params {
+    pub(crate) fn to_raw(self) -> sys::clay_move_params {
         let mut raw = sys::clay_move_params::sized();
         raw.radius = self.radius;
         raw.ease = self.ease;
@@ -178,7 +178,7 @@ impl FlattenParams<'_> {
 }
 
 impl RelaxParams<'_> {
-    fn to_raw(self) -> sys::clay_relax_params {
+    pub(crate) fn to_raw(self) -> sys::clay_relax_params {
         let mut raw = sys::clay_relax_params::sized();
         raw.strength = self.strength;
         raw.radius_cells = self.radius_cells;

@@ -123,6 +123,43 @@ impl SculptModel for SharedDocument {
     fn bounds(&self) -> Option<([f32; 3], [f32; 3])> {
         self.0.borrow().bounds()
     }
+
+    fn set_alpha(&mut self, alpha: Option<clayspace_model::Alpha>) {
+        self.0.borrow_mut().set_alpha(alpha);
+    }
+
+    fn alpha_name(&self) -> Option<String> {
+        self.0.borrow().alpha_name()
+    }
+
+    // The gesture hooks, which have to be forwarded like everything else.
+    //
+    // They are *provided* methods on the trait, so leaving them out is not a
+    // compile error — it silently substitutes the double's answer, and the
+    // ViewModel then believes a document that cannot preview anything. That is
+    // how a dragging verb on a mesh came to stack segment on segment through
+    // the application while `sculpt_session.rs` showed it replaying cleanly
+    // from its anchor: the tests drive `ClayDocument`, and only the
+    // application drives this.
+    fn begin_gesture(&mut self) {
+        self.0.borrow_mut().begin_gesture();
+    }
+
+    fn end_gesture(&mut self) {
+        self.0.borrow_mut().end_gesture();
+    }
+
+    fn open_live_gesture(&mut self, tool: clayspace_model::ToolKind, symmetry: [bool; 3]) -> bool {
+        self.0.borrow_mut().open_live_gesture(tool, symmetry)
+    }
+
+    fn close_live_gesture(&mut self) -> Result<usize, ModelError> {
+        self.0.borrow_mut().close_live_gesture()
+    }
+
+    fn discard_live_gesture(&mut self) -> usize {
+        self.0.borrow_mut().discard_live_gesture()
+    }
 }
 
 impl SceneModel for SharedDocument {
@@ -140,6 +177,17 @@ impl SceneModel for SharedDocument {
 
     fn set_solo(&mut self, key: Option<LayerKey>) -> Result<(), ModelError> {
         self.0.borrow_mut().set_solo(key)
+    }
+
+    fn apply_sculpt_layer_op(
+        &mut self,
+        op: clayspace_model::SculptLayerOp,
+    ) -> Result<(), ModelError> {
+        self.0.borrow_mut().apply_sculpt_layer_op(op)
+    }
+
+    fn sculpt_layer_cost(&self) -> clayspace_model::SculptLayerCost {
+        self.0.borrow().sculpt_layer_cost()
     }
 
     fn set_layer_protection(
