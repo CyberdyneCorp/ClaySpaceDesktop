@@ -50,6 +50,23 @@ fn manipulator_over_the_form(harness: &mut Harness) {
     );
 }
 
+/// No manipulator, for the frames that say where it was.
+fn no_manipulator(harness: &mut Harness) {
+    let gpu = harness.gpu.clone();
+    harness.renderer.set_lattice(
+        &gpu,
+        LatticeView {
+            points: &[],
+            edges: &[],
+            selected: &[],
+            gizmo: None,
+            outline: None,
+            subtool_outline: None,
+            handle: 0.06,
+        },
+    );
+}
+
 /// Which pixels the manipulator covers, as the difference between a frame with
 /// it and a frame without.
 fn scaffolding_pixels(with: &Image, without: &Image) -> Vec<(u32, u32)> {
@@ -62,6 +79,15 @@ fn scaffolding_pixels(with: &Image, without: &Image) -> Vec<(u32, u32)> {
         .collect()
 }
 
+/// How much darker occlusion has to make a pixel before it counts.
+///
+/// Well above what two draws of the same geometry differ by — the support
+/// module measures that at a level or two, on the frames that were meant to be
+/// unchanged — and well below what the thing being ruled out would do:
+/// occlusion takes up to a sixth of a pixel's light, which on a manipulator
+/// drawn near white is some thirty levels. A factor of four either side.
+const DARKENED: i32 = 8;
+
 /// The manipulator is drawn at the colours it was given, whatever the
 /// occlusion under it does.
 #[test]
@@ -73,42 +99,60 @@ fn occlusion_does_not_darken_the_manipulator() {
         return;
     };
 
-    // Where the manipulator is, taken against a frame with no manipulator.
+    // Four frames: with the manipulator and without, under occlusion and
+    // without it. The pair without the manipulator is what says where the
+    // manipulator *is*, and it is taken under both occlusion states rather
+    // than one, because two draws of the same geometry do not agree to the
+    // pixel on every device — a line that lands exactly on a pixel's edge can
+    // be rasterized into it in one frame and not the other. Judging only the
+    // pixels the manipulator covers in *both* leaves that disagreement out by
+    // construction, rather than tolerating some number of it.
     harness.renderer.set_occlusion(true);
-    let bare = harness.capture(geometry.mesh(), &camera, false, "9a-order-bare");
+    let bare_occluded = harness.capture(geometry.mesh(), &camera, false, "9a-order-bare");
     manipulator_over_the_form(&mut harness);
     let occluded = harness.capture(geometry.mesh(), &camera, false, "9a-order-occluded");
 
-    let covered = scaffolding_pixels(&occluded, &bare);
+    harness.renderer.set_occlusion(false);
+    let plain = harness.capture(geometry.mesh(), &camera, false, "9a-order-plain");
+    no_manipulator(&mut harness);
+    let bare_plain = harness.capture(geometry.mesh(), &camera, false, "9a-order-bare-plain");
+
+    let under_occlusion: std::collections::HashSet<(u32, u32)> =
+        scaffolding_pixels(&occluded, &bare_occluded)
+            .into_iter()
+            .collect();
+    let covered: Vec<(u32, u32)> = scaffolding_pixels(&plain, &bare_plain)
+        .into_iter()
+        .filter(|at| under_occlusion.contains(at))
+        .collect();
     assert!(
         covered.len() > 300,
-        "the manipulator covered only {} pixels, so this measures nothing — \
-         see target/visual/9a-order-occluded.png",
+        "the manipulator covered only {} pixels in both frames, so this \
+         measures nothing — see target/visual/9a-order-occluded.png",
         covered.len()
     );
 
-    // The same frame with occlusion off. Every pixel the manipulator covers
-    // must be identical: it is drawn after the composite, so the multiply
-    // cannot reach it.
-    harness.renderer.set_occlusion(false);
-    let plain = harness.capture(geometry.mesh(), &camera, false, "9a-order-plain");
-
+    // Every one of them must be identical: the manipulator is drawn after the
+    // composite, so the multiply cannot reach it.
+    let mut worst = 0i32;
     let darkened = covered
         .iter()
         .filter(|(x, y)| {
             let (a, b) = (plain.pixel(*x, *y), occluded.pixel(*x, *y));
-            (0..3).any(|c| a[c] as i32 - b[c] as i32 > 2)
+            let delta = (0..3).map(|c| a[c] as i32 - b[c] as i32).max().unwrap_or(0);
+            worst = worst.max(delta);
+            delta > DARKENED
         })
         .count();
     println!(
-        "manipulator: {} pixels covered, {darkened} of them darkened by occlusion",
+        "manipulator: {} pixels covered, {darkened} darkened, worst {worst} levels",
         covered.len()
     );
     assert_eq!(
         darkened,
         0,
         "{darkened} of the manipulator's {} pixels were darkened by the \
-         occlusion of the form behind it",
+         occlusion of the form behind it, the worst by {worst} levels",
         covered.len()
     );
 }
@@ -177,8 +221,12 @@ fn the_orientation_gizmo_is_not_hidden_by_the_sculpt() {
         })
         .count();
     println!("orientation gizmo over the sculpt: {drawn} pixels drawn");
+    // A hundred, against the 192 measured: the gizmo is six short lines and a
+    // few labels, so how many pixels it lands on depends on how a device
+    // rasterizes a line, and the claim here is "it is there" rather than "it
+    // is this many". Zero is what a depth-tested gizmo behind the sculpt drew.
     assert!(
-        drawn > 150,
+        drawn > 100,
         "the gizmo drew {drawn} pixels over a sculpt filling its corner — see \
          target/visual/9a-order-gizmo-on.png"
     );
