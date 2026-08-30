@@ -1022,3 +1022,29 @@ did not move, because a dab is dominated by meshing rather than refill.
 **Our own crates are `publish = false`.** This is an application; its crates
 are its internals. `cargo deny` enforces it, because a wildcard path
 dependency on a publishable crate is a combination crates.io rejects.
+
+### The renderer, as five files
+
+`renderer.rs` was 3,205 lines when this work started and 4,736 by the time the
+occlusion rewrite, the studio rig and the quality tiers were in it. The review
+asked for it to be split and, in the same breath, asked for the split not to
+happen all at once: *extract functionality as it changes*. So it went out along
+the seams this change had already cut.
+
+Four of the pieces left the file entirely, as siblings:
+
+| | lines | what it is |
+|---|---:|---|
+| `renderer/overlays.rs` | 792 | the grid, cursor, rig, cage, manipulator and orientation gizmo, as functions from a description to triangles |
+| `renderer/pipelines.rs` | 258 | what a pipeline is, and which way depth runs |
+| `renderer/ao.rs` | 230 | the occlusion uniform, its bind groups, its kernel and its figures |
+| `renderer/textures.rs` | 176 | the two mip chains, and why they are built differently |
+
+and three more came out as modules of their own while the work was going on:
+`quality.rs`, `profiler.rs` and `frustum.rs`.
+
+What stayed is what needs a frame in front of it: the renderer's state, and the
+pass order that state is drawn in. The occlusion *passes* are still beside the
+frame they are part of even though everything they are made of moved out —
+which is the line the split was drawn along, rather than "everything with `ao`
+in its name".
