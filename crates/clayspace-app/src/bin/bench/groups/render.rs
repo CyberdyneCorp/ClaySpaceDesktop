@@ -5,7 +5,7 @@ use std::time::Instant;
 use clayspace_app::{Scene, SurfaceGeometry};
 use clayspace_engine::BackendPolicy;
 use clayspace_model::SculptModel;
-use clayspace_view::{Camera, OffscreenTarget, Renderer};
+use clayspace_view::{Camera, MsaaQuality, OffscreenTarget, Renderer};
 
 use crate::figures::{ms, quantile, Figure};
 use crate::groups::{headless_gpu, VIEWPORT};
@@ -141,6 +141,51 @@ pub fn measure_passes(policy: &BackendPolicy, run: &mut Run) {
         run.insert(
             format!("render.{name}.triangles"),
             Figure::count(stats.triangles as f64),
+        );
+    }
+}
+
+/// What multisampling costs, at one size.
+///
+/// A device of its own per quality, because a pipeline's sample count is part
+/// of its state and one that disagrees with its attachment is a validation
+/// error at draw time — so the count is chosen before anything is built on the
+/// device and never after.
+pub fn measure_msaa(policy: &BackendPolicy, run: &mut Run) {
+    for quality in [MsaaQuality::Off, MsaaQuality::X2, MsaaQuality::X4] {
+        // A document of its own each time, not one built outside the loop.
+        // Meshing is incremental and keyed on what the document has dirtied,
+        // so a second `SurfaceGeometry` over an already-clean document uploads
+        // nothing and draws nothing — which measured 2× multisampling at 0.03
+        // ms against 0.20 ms for none, and was the empty scene rather than the
+        // multisampling.
+        let Ok(mut document) = Scene::Reference.build(policy.clone()) else {
+            return run.skip("msaa", Skip::SceneWouldNotBuild);
+        };
+        let Some(mut gpu) = headless_gpu() else {
+            return run.skip("msaa", Skip::NoHeadlessGpu);
+        };
+        // Before anything is built on the device: a pipeline's sample count is
+        // part of its state, and one that disagrees with its attachment is a
+        // validation error at draw time.
+        gpu.set_msaa(quality);
+        let mut geometry = SurfaceGeometry::new(&gpu);
+        if geometry.rebuild(&gpu, &mut document).is_err() {
+            return run.skip("msaa", Skip::SurfaceWouldNotMesh);
+        }
+        let renderer = Renderer::new(&gpu, OffscreenTarget::FORMAT);
+        let target = OffscreenTarget::new(&gpu, 1920, 1080);
+        let mut camera = Camera::default();
+        match document.bounds() {
+            Some((min, max)) => camera.frame_bounds(min.into(), max.into()),
+            None => camera.frame_default(),
+        }
+
+        let samples = target.framebuffer().samples();
+        let frames = sweep(&gpu, &renderer, &target, &mut camera, geometry.mesh());
+        run.insert(
+            format!("msaa.{samples}x.frame.median"),
+            Figure::ms(quantile(&frames, 0.5), None),
         );
     }
 }

@@ -672,6 +672,38 @@ intermediate buys the ability to run *post-process* effects in linear high
 range, and there is no such effect here. A full-resolution `Rgba16Float` target
 and a second pass to render generated grey clay would be bandwidth for nothing.
 
+### Multisampling became a choice, and choosing it found a bug
+
+`sample_count` wanted four samples and fell back to one; it is now an
+`MsaaQuality` resolved to what the *device* will take. The default stays four
+for every adapter rather than being derived from the device type, deliberately:
+the obvious rule — four on a discrete card, two on an integrated one — reads the
+wrong thing on Apple Silicon, which reports itself integrated and is not short
+of fill rate, and would quietly have taken macOS from four samples to two.
+
+Making it selectable at all surfaced a failure that looked like a measurement.
+The resolve asked the *adapter*, which reports what the hardware has; a device
+may only use the two counts WebGPU guarantees — one and four — unless it asked
+for the adapter-specific ones. Choosing 2× therefore built every pipeline with a
+validation error, and because a validation error here is reported rather than
+fatal, the frame survived and drew nothing:
+
+    msaa.2x.frame.median   0.03 ms      against 0.20 for none
+
+The device now requests `TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES` where the
+adapter has it, the resolve consults the device rather than the adapter, and the
+figures read as they should:
+
+| | 1080p |
+|---|---:|
+| no multisampling | 0.20 ms |
+| 2× | 0.24 |
+| 4× | 0.32 |
+
+`multisampling.rs` now asserts the *picture* rather than the count — every
+quality that resolves has to draw a form — because the count was right and the
+frame was empty.
+
 ### What the numbers say not to build yet
 
 The review's remaining items each carry a condition, and the conditions are not

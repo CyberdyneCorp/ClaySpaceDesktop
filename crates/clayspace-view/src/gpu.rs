@@ -81,12 +81,21 @@ impl Gpu {
             max_buffer_size: adapter.limits().max_buffer_size,
             ..wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits())
         };
-        // Timestamp queries where the adapter has them, and nothing else.
-        // They are what makes per-pass GPU time measurable at all; asking for
-        // them where they do not exist would refuse the device over
-        // diagnostics, so the feature is requested only from the intersection
-        // of what is wanted and what is there.
-        let features = adapter.features() & wgpu::Features::TIMESTAMP_QUERY;
+        // Two features, and only where the adapter has them: asking for one
+        // that does not exist refuses the device, so the request is the
+        // intersection of what is wanted and what is there.
+        //
+        // Timestamp queries are what makes per-pass GPU time measurable at
+        // all. Adapter-specific format features are what make a sample count
+        // other than one or four usable: WebGPU guarantees only those two for
+        // a renderable format, and the adapter reporting that it supports two
+        // is not the same as a device being allowed to ask for it. Without
+        // this, choosing 2× built every pipeline with a validation error and
+        // drew nothing — which the uncaptured-error handler reported and the
+        // frame survived, so it looked like 2× multisampling costing 0.03 ms.
+        let wanted = wgpu::Features::TIMESTAMP_QUERY
+            | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
+        let features = adapter.features() & wanted;
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
@@ -107,7 +116,7 @@ impl Gpu {
         }));
 
         Ok(Self {
-            msaa: MsaaQuality::for_adapter(&adapter),
+            msaa: MsaaQuality::default(),
             adapter: Arc::new(adapter),
             device: Arc::new(device),
             queue: Arc::new(queue),
@@ -154,7 +163,36 @@ impl Gpu {
     /// laid out on the pixel grid, so multisampling them would cost fill rate
     /// to change nothing.
     pub fn sample_count(&self, format: wgpu::TextureFormat) -> u32 {
-        self.msaa.supported_on(self.adapter.as_ref(), format)
+        self.supported_samples(self.msaa, format)
+    }
+
+    /// A quality, or the best below it this device will actually take.
+    ///
+    /// Resolved downward rather than refused: a format that will not
+    /// multisample at all still has to be drawn into.
+    ///
+    /// The *device*, and not the adapter, is what decides. WebGPU guarantees
+    /// one and four samples for a renderable format and nothing else; two and
+    /// eight are adapter-specific, and an adapter that reports them is not the
+    /// same as a device being allowed to ask for them. Reading the adapter
+    /// alone is how 2× came to build every pipeline with a validation error.
+    pub fn supported_samples(&self, quality: MsaaQuality, format: wgpu::TextureFormat) -> u32 {
+        let flags = self.adapter.get_texture_format_features(format).flags;
+        let adapter_specific = self
+            .device
+            .features()
+            .contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
+        MsaaQuality::ALL
+            .into_iter()
+            .rev()
+            .filter(|candidate| *candidate <= quality)
+            .map(MsaaQuality::samples)
+            .find(|samples| match samples {
+                1 => true,
+                4 => flags.sample_count_supported(4),
+                _ => adapter_specific && flags.sample_count_supported(*samples),
+            })
+            .unwrap_or(1)
     }
 
     /// The multisampling this device is drawing at.
@@ -269,6 +307,16 @@ pub enum MsaaQuality {
     /// already dense.
     X2,
     /// The default, and the usual sweet spot.
+    ///
+    /// The default for *every* adapter, deliberately, rather than derived from
+    /// what kind of device it says it is. Multisampling is fill rate, and the
+    /// obvious rule — four on a discrete card, two on an integrated one — reads
+    /// the wrong thing on the platform this is developed on: Apple Silicon
+    /// reports itself integrated and is not short of fill rate, so that rule
+    /// would quietly take macOS from four samples to two. A drop in
+    /// multisampling is a visible change to the picture, so it is a choice
+    /// somebody makes through [`Gpu::set_msaa`] rather than one a heuristic
+    /// makes for them.
     #[default]
     X4,
     /// Rarely worth what it costs. Offered because some devices have it, not
@@ -295,36 +343,6 @@ impl MsaaQuality {
             Self::X4 => "4×",
             Self::X8 => "8×",
         }
-    }
-
-    /// What this adapter should draw at by default.
-    ///
-    /// Four on a discrete card, two on an integrated one or a software
-    /// rasterizer. Multisampling is fill-rate, and fill-rate is the thing an
-    /// integrated GPU has least of — the guidance this follows is that 4× is
-    /// the sweet spot where there is headroom and 2× is where there is not.
-    /// Eight is never chosen automatically: it costs twice what four does to
-    /// move a silhouette by a fraction of a pixel.
-    pub fn for_adapter(adapter: &wgpu::Adapter) -> Self {
-        match adapter.get_info().device_type {
-            wgpu::DeviceType::DiscreteGpu | wgpu::DeviceType::VirtualGpu => Self::X4,
-            _ => Self::X2,
-        }
-    }
-
-    /// This quality, or the best below it the format will take.
-    ///
-    /// Resolved downward rather than refused: a format that will not
-    /// multisample at all still has to be drawn into.
-    pub fn supported_on(self, adapter: &wgpu::Adapter, format: wgpu::TextureFormat) -> u32 {
-        let flags = adapter.get_texture_format_features(format).flags;
-        Self::ALL
-            .into_iter()
-            .rev()
-            .filter(|quality| *quality <= self)
-            .map(Self::samples)
-            .find(|samples| *samples == 1 || flags.sample_count_supported(*samples))
-            .unwrap_or(1)
     }
 }
 
@@ -595,14 +613,14 @@ mod tests {
         assert_eq!(MsaaQuality::default(), MsaaQuality::X4);
     }
 
-    /// Eight is never what an adapter is given automatically. It costs twice
-    /// what four does to move a silhouette by a fraction of a pixel.
+    /// Four is the default, and eight is never it.
+    ///
+    /// Eight costs twice what four does to move a silhouette by a fraction of
+    /// a pixel; a device that has it can be asked for it, and is never given
+    /// it.
     #[test]
-    fn eight_is_never_chosen_for_a_device() {
-        // Not parameterised over a real adapter — this is about the mapping,
-        // and the mapping has two arms.
-        for chosen in [MsaaQuality::X4, MsaaQuality::X2] {
-            assert!(chosen < MsaaQuality::X8);
-        }
+    fn four_is_the_default_and_eight_is_never_it() {
+        assert_eq!(MsaaQuality::default(), MsaaQuality::X4);
+        assert!(MsaaQuality::default() < MsaaQuality::X8);
     }
 }
