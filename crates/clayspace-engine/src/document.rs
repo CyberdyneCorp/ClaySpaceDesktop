@@ -6,8 +6,8 @@
 
 use claycore::{
     Blend, BrickCache, BrickConfig, BrickKey, BrushParams, BrushShape, ClayError, Document,
-    Falloff, ImportBudget, Item, LayerId, Mask, MaskField, Mesh, MeshLayerDesc, MeshParams, Mesher,
-    NodeId, Op, StrokePreset, VolumeParams,
+    Falloff, ImportBudget, Influence, Item, LayerId, Mask, MaskField, Mesh, MeshLayerDesc,
+    MeshParams, Mesher, NodeId, Op, StrokePreset, VolumeParams,
 };
 use clayspace_model::{
     Alpha, Armature, ArmatureModel, BlendProfile, BooleanOp, BooleanRefusal, BooleanSettings,
@@ -267,6 +267,9 @@ impl Layer {
             visible: self.visible,
             protection: self.protection,
             intensity: self.intensity,
+            // Filled by the document, which is the only thing that can ask the
+            // engine — see `ClayDocument::field_health`.
+            health: None,
             sculpt_layers: self.sculpt_layers.clone(),
         }
     }
@@ -887,6 +890,34 @@ impl ClayDocument {
         }
     }
 
+    /// What a layer's field costs, for the row that reports it.
+    ///
+    /// The engine's report alone — **33 µs** on a 97-item layer — where
+    /// [`SceneModel::layer_cost`] beside it also estimates what collapsing
+    /// would occupy, and that estimate is **287 ms**. The scene is assembled
+    /// on every refresh, so only the cheap half belongs in it; the estimate is
+    /// asked for when the sculptor is deciding, which is once.
+    ///
+    /// `None` for a mesh or a grid: neither holds an edit list, so neither has
+    /// a field to steepen.
+    fn field_health(&self, layer: &Layer) -> Option<clayspace_model::FieldHealth> {
+        if layer.representation != Representation::Sdf {
+            return None;
+        }
+        let report = self.document.field_report(layer.id, 0.5).ok()?;
+        Some(clayspace_model::FieldHealth {
+            items: report.item_count,
+            safe_step_scale: report.safe_step_scale,
+            advises_consolidation: report.advises_consolidation,
+            consolidated: self
+                .document
+                .consolidation_state(layer.id)
+                .ok()
+                .flatten()
+                .is_some(),
+        })
+    }
+
     /// Keys dirtied since the last call, cleared as they are handed over.
     ///
     /// The viewport meshes exactly these and patches their ranges, which is
@@ -1005,6 +1036,40 @@ impl ClayDocument {
             .mark_dirty(min, max)
             .map_err(ModelError::engine)?;
         self.drain_dirty()
+    }
+
+    /// Re-meshes what a step through the history actually reached.
+    ///
+    /// An undo used to dirty the whole active layer, because that was the
+    /// narrowest region there was to name: the engine reverted whatever it
+    /// reverted and would not say where. Measured on 1043 surface bricks, that
+    /// cost 1045 keys and 141 ms to take back a dab that cost 18 keys and
+    /// 3.6 ms — about forty times the edit it reverses.
+    ///
+    /// `clay_document_undo_bound` (ABI 0.40.0) reports the world box instead.
+    /// It is a *world* region and not a layer's, which is also more correct
+    /// than what it replaces: an undo of an edit on some other subtool used to
+    /// re-mesh the active one and leave the layer that changed stale.
+    ///
+    /// The engine's own warning against the alternative is worth keeping here:
+    /// the region cannot be worked out by diffing the layer's nodes across the
+    /// call, because "an undone move, resize or colour edit keeps its node id,
+    /// the diff sees nothing, and under-dirtying leaves stale bricks at a
+    /// blend seam".
+    fn refill_what_a_step_reached(&mut self, reached: Influence) -> Result<(), ModelError> {
+        match reached {
+            // A step that cannot change the field — a rename — reports this,
+            // and so does one that changed nothing.
+            Influence::Nothing => Ok(()),
+            Influence::Box { min, max } => self.refill_region(min, max),
+            // A non-local op anywhere in the subtree, an infinite repeat, an
+            // unbounded primitive: there is no finite box and the honest
+            // response is the one that was taken unconditionally before.
+            Influence::Everything => {
+                let layer = self.active_layer().id;
+                self.refill(layer, &[])
+            }
+        }
     }
 
     fn refill(&mut self, layer: LayerId, nodes: &[NodeId]) -> Result<(), ModelError> {
@@ -1517,13 +1582,11 @@ impl ClayDocument {
         if self.crossing_is_newest() {
             return self.undo_crossing();
         }
-        let moved = self.document.undo().map_err(ModelError::engine)?;
+        let stepped = self.document.undo_bound().map_err(ModelError::engine)?;
+        let moved = stepped.moved;
         if moved {
             self.reconcile_layers();
-            let layer = self.active_layer().id;
-            // Undo can move anything the layer holds, so the bound is the
-            // layer rather than a node set.
-            self.refill(layer, &[])?;
+            self.refill_what_a_step_reached(stepped.reached)?;
             self.resync_armature();
             // The engine reverted whatever it reverted and cannot tell the
             // object table it did; the table follows by depth, and so does
@@ -1563,11 +1626,11 @@ impl ClayDocument {
         {
             return self.redo_crossing();
         }
-        let moved = self.document.redo().map_err(ModelError::engine)?;
+        let stepped = self.document.redo_bound().map_err(ModelError::engine)?;
+        let moved = stepped.moved;
         if moved {
             self.reconcile_layers();
-            let layer = self.active_layer().id;
-            self.refill(layer, &[])?;
+            self.refill_what_a_step_reached(stepped.reached)?;
             self.resync_armature();
             // The engine reverted whatever it reverted and cannot tell the
             // object table it did; the table follows by depth, and so does
@@ -4997,7 +5060,14 @@ impl SceneModel for ClayDocument {
 
         Scene {
             nodes,
-            layers: self.layers.iter().map(Layer::summary).collect(),
+            layers: self
+                .layers
+                .iter()
+                .map(|layer| LayerSummary {
+                    health: self.field_health(layer),
+                    ..layer.summary()
+                })
+                .collect(),
             active: self.layers.get(self.active).map(|layer| layer.key),
             soloed: self.solo.as_ref().map(|solo| solo.layer),
         }

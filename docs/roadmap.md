@@ -886,7 +886,25 @@ costs six plane tests against a box per span, it is bounded by the number of
 subtools rather than by anything that scales with the frame, and a scene of
 fifty subtools is a thing a sculptor can make today.
 
-### Undo, which costs far more than the edit it takes back
+### Undo, which cost far more than the edit it takes back
+
+**Taken.** `clay_document_undo_bound` / `_redo_bound` report the world box of
+what a step applied, and the application now re-meshes that instead of the
+active layer's whole bound. Measured on the same fixture, moments apart —
+1045 surface bricks after 96 edits:
+
+| | keys | engine | sync |
+|---|---:|---:|---:|
+| a dab | 18 | 0.76 ms | 7.49 ms |
+| undoing it, before | 1045 | 24.36 ms | 273.69 ms |
+| undoing it, after | 18 | 0.94 ms | **8.63 ms** |
+
+It also fixed a bug rather than only a cost: the old fallback was the *active
+layer's* bound, so undoing an edit made on a different subtool re-meshed the
+wrong one and left the changed surface stale — the undo looked like it had done
+nothing. The section below is what that was.
+
+### Undo, which cost far more than the edit it takes back — as it was
 
 Nothing measured undo until it was asked about, and it was 367 ms to reverse a
 dab that cost 5 ms. On 1043 surface bricks after 96 edits:

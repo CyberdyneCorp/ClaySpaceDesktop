@@ -53,6 +53,13 @@ pub struct LayerSummary {
     pub protection: Protection,
     /// 0..=100, as the design's stack displays it.
     pub intensity: u8,
+    /// What this layer's field costs to evaluate, where it has one.
+    ///
+    /// `None` for a mesh or a grid, which hold no edit list to steepen. Read
+    /// from the engine's own report, which is cheap — 33 µs against the 287 ms
+    /// of the byte estimate beside it, which is why the estimate is asked for
+    /// only when the sculptor is deciding rather than on every refresh.
+    pub health: Option<FieldHealth>,
     /// The recorded passes on this layer, bottom-up.
     ///
     /// Empty for every representation but a grid, and for a grid nobody has
@@ -61,6 +68,27 @@ pub struct LayerSummary {
     /// has no meaning apart from that grid, and a second stack elsewhere would
     /// have to repeat which layer each entry belongs to.
     pub sculpt_layers: Vec<SculptLayer>,
+}
+
+/// What a field layer's edit list costs, and whether the engine advises
+/// collapsing it.
+///
+/// A chain of edits steepens the field it produces: each bake resamples what
+/// the last one left, until a ray march has to take many small steps and every
+/// dab pays for it. The engine measures that and says when it is worth
+/// collapsing the layer into one volume — which is expensive and destructive
+/// enough that it is the sculptor's decision, never something taken quietly.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FieldHealth {
+    /// How many items the layer's edit list holds.
+    pub items: i32,
+    /// Multiply a distance by this before stepping along a ray. A low value
+    /// means the field has steepened and a march takes many small steps.
+    pub safe_step_scale: f32,
+    /// Whether the engine advises collapsing the layer.
+    pub advises_consolidation: bool,
+    /// Whether it is already collapsed.
+    pub consolidated: bool,
 }
 
 /// A recorded pass on a voxel layer.
@@ -424,6 +452,7 @@ mod tests {
             visible: false,
             protection: Protection::default(),
             intensity: 100,
+            health: None,
             sculpt_layers: Vec::new(),
         };
         assert!(
@@ -444,6 +473,7 @@ mod tests {
                     visible: true,
                     protection: Protection::default(),
                     intensity: 100,
+                    health: None,
                     sculpt_layers: Vec::new(),
                 },
                 LayerSummary {
@@ -453,6 +483,7 @@ mod tests {
                     visible: true,
                     protection: Protection::default(),
                     intensity: 70,
+                    health: None,
                     sculpt_layers: Vec::new(),
                 },
             ],

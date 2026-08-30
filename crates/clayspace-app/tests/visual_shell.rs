@@ -30,6 +30,7 @@ fn scene() -> Scene {
             visible,
             protection,
             intensity,
+            health: None,
             sculpt_layers: Vec::new(),
         };
     Scene {
@@ -3198,5 +3199,54 @@ fn a_section_folds_from_its_heading_and_emits_nothing() {
         shell_rect(&ctx, polygons).is_none(),
         "the {:?} row is still drawn under a folded heading",
         strings.label_polygons
+    );
+}
+
+/// The engine's advice about a costly field layer reaches the interface.
+///
+/// It did not, for the life of the feature: `layer_cost` carried
+/// `advises_consolidation` from the engine, through the adapter, into the
+/// domain, and no ViewModel or panel ever read it. The engine knew a subtool
+/// had become expensive to evaluate and there was no way for it to say so.
+///
+/// So this asserts the offer is *drawn*, and drawn only when it is being made.
+#[test]
+fn a_costly_subtool_is_offered_the_one_thing_that_helps() {
+    let strings = Strings::for_locale(Locale::PtBr);
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let quiet = scene();
+    let healthy = state(strings, &quiet, &materials, &report);
+    assert!(
+        probe_shell(&healthy)
+            .memory(|memory| memory
+                .data
+                .get_temp::<egui::Rect>(shell::optimize_button_id()))
+            .is_none(),
+        "a healthy layer was offered a collapse it does not need"
+    );
+
+    let mut costly = scene();
+    let active = costly.active.expect("the fixture has an active layer");
+    for layer in &mut costly.layers {
+        if layer.key == active {
+            layer.health = Some(clayspace_model::FieldHealth {
+                items: 97,
+                safe_step_scale: 0.0014,
+                advises_consolidation: true,
+                consolidated: false,
+            });
+        }
+    }
+    let advised = state(strings, &costly, &materials, &report);
+    assert!(
+        probe_shell(&advised)
+            .memory(|memory| memory
+                .data
+                .get_temp::<egui::Rect>(shell::optimize_button_id()))
+            .is_some(),
+        "the engine advised collapsing the active subtool and the interface \
+         drew nothing: the advice is computed and read by nobody again"
     );
 }

@@ -1271,6 +1271,13 @@ pub fn brush_badge_id() -> egui::Id {
     egui::Id::new("options-brush-badge")
 }
 
+/// Where the offer to collapse a costly layer was drawn, for a test that has
+/// to establish it was drawn at all. Absent when the engine is not advising,
+/// which is most of the time.
+pub fn optimize_button_id() -> egui::Id {
+    egui::Id::new("subtool-optimize")
+}
+
 /// The active brush at the head of its own settings.
 ///
 /// ZBrush puts the brush where its numbers are, and a sculptor glancing at
@@ -1841,6 +1848,13 @@ fn layers_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Command
         ui.add_space(space::SNUG);
         sculpt_recording_control(ui, state, queue);
     }
+    // And what the field costs, where there is a field. Only when the engine
+    // advises collapsing it: a row that is always there is a row nobody reads,
+    // and the number it would carry means nothing to a sculptor until it means
+    // something.
+    if state.representation == Representation::Sdf {
+        field_health_control(ui, state, queue);
+    }
 
     ui.add_space(space::SNUG);
     add_layer_control(ui, state, queue);
@@ -2395,6 +2409,54 @@ fn bytes_label(bytes: usize) -> String {
     } else {
         format!("{bytes} B")
     }
+}
+
+/// What the engine says about the active field layer, and the one thing to do
+/// about it.
+///
+/// A chain of edits steepens the field it produces until a ray march takes
+/// many small steps and every dab pays for it; the engine measures that and
+/// says when collapsing the layer is worth it. Measured here, a layer the
+/// engine advised on took a dab from 56 ms to 13 ms once collapsed — and
+/// collapsing it took about six seconds.
+///
+/// Which is why this offers and never acts. Consolidation costs seconds and
+/// changes what the layer holds, so it is the sculptor's decision; the
+/// interface's job is to say that the moment has arrived, which until now it
+/// never did — the engine's advice was computed and read by nothing.
+fn field_health_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    let Some(layer) = state.scene.active_layer() else {
+        return;
+    };
+    let Some(health) = layer.health else {
+        return;
+    };
+    if !health.advises_consolidation || health.consolidated {
+        return;
+    }
+
+    ui.add_space(space::SNUG);
+    ui.label(
+        egui::RichText::new(s.optimize_advice)
+            .size(type_scale::LABEL)
+            .color(Tokens::accent()),
+    );
+    ui.horizontal(|ui| {
+        let button = ui.button(s.optimize_action);
+        ui.ctx()
+            .memory_mut(|memory| memory.data.insert_temp(optimize_button_id(), button.rect));
+        if button.clicked() {
+            queue.push(Command::OptimizeLayer(layer.key));
+        }
+        // The count rather than the step scale: a sculptor can see how many
+        // strokes they have made and cannot see a Lipschitz bound.
+        ui.label(
+            egui::RichText::new(health.items.to_string())
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+        );
+    });
 }
 
 /// Starting and stopping a recording, and what the stack occupies.

@@ -187,6 +187,14 @@ pub enum Command {
     /// which is what a layer has always been.
     AddLayer(Representation),
     RemoveLayer(LayerKey),
+    /// Collapses a field layer's edit list into one volume.
+    ///
+    /// Always the sculptor's decision and never taken quietly: it costs
+    /// seconds on a worked layer and it changes what the layer holds. The
+    /// engine says when it is worth doing — see [`clayspace_model::FieldHealth`]
+    /// — and the interface offers it; nothing here acts on that advice by
+    /// itself.
+    OptimizeLayer(LayerKey),
     /// Starts renaming a layer, with its current name in the field.
     ///
     /// A mode rather than a dialog: a layer stack is renamed in place, and a
@@ -555,6 +563,7 @@ impl Command {
             Self::SoloLayer(_) => "solo layer",
             Self::AddLayer(_) => "new layer",
             Self::RemoveLayer(_) => "remove layer",
+            Self::OptimizeLayer(_) => "optimize layer",
             Self::BeginRenameLayer(_) => "rename layer",
             Self::EditLayerName(_) => "layer name",
             Self::CommitRenameLayer => "rename layer",

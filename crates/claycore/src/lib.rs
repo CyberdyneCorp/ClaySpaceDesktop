@@ -38,7 +38,9 @@ mod reader;
 mod sculpt;
 mod voxel;
 
-pub use authoring::{Blend, Influence, LayerInfo, LayerRepresentation, Op, Protection, UndoState};
+pub use authoring::{
+    Blend, Influence, LayerInfo, LayerRepresentation, Op, Protection, UndoState, Undone,
+};
 pub use backend::{backends, compiled_backends, Backend};
 pub use brick::{
     BrickCache, BrickConfig, BrickKey, BrickMeshParams, BrickMeshRange, BrickRequest, BrickSamples,

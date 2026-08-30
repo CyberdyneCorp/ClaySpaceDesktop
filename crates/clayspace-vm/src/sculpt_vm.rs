@@ -388,7 +388,7 @@ impl SculptViewModel {
             // Pre-bake repairs move the surface, so the history and the
             // statistics both change — the composition root runs them and
             // refreshes, exactly as it does a conversion.
-            Command::CloseHoles | Command::FillVoids => {}
+            Command::CloseHoles | Command::FillVoids | Command::OptimizeLayer(_) => {}
             Command::SelectLayer(_) => self.follow_the_active_layer(),
             Command::ToggleSymmetry(axis) => {
                 let index = match axis {
