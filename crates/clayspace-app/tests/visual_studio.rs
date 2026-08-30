@@ -314,10 +314,14 @@ fn the_key_light_casts_a_shadow_on_the_form() {
         "{darker} of {covered} covered pixels fell into shadow, which is the \
          whole form rather than the side facing away from the key"
     );
-    assert_eq!(
-        lighter, 0,
-        "{lighter} pixels came out lighter with the shadow map, which a term \
-         that only ever takes light away cannot do"
+    // Overwhelmingly darker, rather than not one pixel lighter — for the
+    // reason the cavity term's sibling assertion gives: eight levels is inside
+    // what two renders of the same geometry differ by on a tile-based device,
+    // and the claim being made is a direction rather than a bound on noise.
+    assert!(
+        lighter * 20 < darker,
+        "{darker} pixels darkened and {lighter} lightened with the shadow map, \
+         which is not a term that only ever takes light away"
     );
 }
 

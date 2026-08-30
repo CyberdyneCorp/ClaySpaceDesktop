@@ -160,6 +160,21 @@ impl Harness {
 /// meant to be unchanged, and hundreds to thousands in every frame that was
 /// meant to change. A margin that wide is what makes this a threshold rather
 /// than a fudge — halving it or doubling it changes no verdict here.
+///
+/// **A corollary, learned three times in one change.** An assertion of the form
+/// "not one pixel went the wrong way" is a claim about *arithmetic* — a
+/// multiply by a value in [0, 1] cannot lighten anything; a pass drawn after a
+/// composite cannot be darkened by it — made against two independent renders,
+/// which is not where arithmetic lives. Three such assertions were written at
+/// thresholds of two, four and eight levels, and all three failed on a macOS
+/// runner on a handful of pixels while passing everywhere else.
+///
+/// The property each was reaching for is a *direction*, and a direction is
+/// measured by a ratio: the term darkens twenty times as many pixels as it
+/// lightens; occlusion darkens the form a hundred times as often as the
+/// manipulator standing over it. Those have no threshold to tune, and they
+/// separate the real regression — which moves the ratio to about one — from the
+/// device by orders of magnitude rather than by a level or two.
 pub const RENDER_NOISE: u8 = 32;
 
 /// How many pixels differ by more than [`RENDER_NOISE`].
