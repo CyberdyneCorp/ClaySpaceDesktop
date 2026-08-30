@@ -92,8 +92,11 @@
       frustum
 - [x] 8.2 Grow GPU buffers geometrically rather than to the exact size asked
       for, and never shrink on the interaction path
-- [ ] 8.3 Patch vertex-only mesh edits without re-uploading indices: a
-      deformation brush changes no topology, and the index buffer knows it
+- [ ] 8.3 Patch vertex-only mesh edits without re-uploading indices — blocked
+      on the engine layer saying whether an edit changed topology, since the
+      renderer cannot guess it and a wrong guess is a stale index buffer. The
+      safe half is taken: the polyframe's edge set is no longer derived on
+      every upload when the polyframe is off
 - [ ] 8.4 Give voxel chunks persistent GPU slots so a dirty chunk is a write
       into its own range rather than a whole-model upload
 - [x] 8.5 Measure CPU draw submission before recording the static overlays
@@ -104,15 +107,22 @@
 
 - [x] 9.1 Add a Studio shading mode — key, fill and rim lights over the same
       vertex inputs — selectable beside MatCap and never replacing it
-- [ ] 9.2 Render Studio into an HDR target and tone map it; leave MatCap
-      writing the surface format directly
+- [x] 9.2 Tone map Studio in the fragment stage, and decide against the HDR
+      intermediate: the curve before an sRGB target is the whole benefit of
+      tone mapping, and an intermediate buys post-process effects in linear
+      high range, of which there are none here. A full-resolution
+      `Rgba16Float` target and a second pass to render generated grey clay
+      would be bandwidth for nothing, which the review says of it too
 - [x] 9.3a Add one fitted directional shadow map inside Studio mode alone,
       allocated only once the rig is asked for
 - [ ] 9.3b Add optional environment lighting, once a shadowed rig has been
       looked at and found wanting for it
 - [x] 9.4a Order the transparent helpers back to front by camera depth
-- [ ] 9.4b Add weighted-blended OIT behind a setting, for where ordering is not
-      enough
+- [x] 9.4b Decide against weighted-blended OIT, whose condition the review
+      states plainly — "only if users actually hit transparency ordering
+      failures". A scene holds at most three reference planes, a membrane and a
+      ghosted surface, and sorting them back to front is exact for planes that
+      do not intersect each other
 - [x] 9.5 Add FXAA for when the device will not multisample, never alongside
       it, and switchable because a filter that works on the picture rather than
       on the geometry is a choice rather than an improvement
