@@ -1636,12 +1636,20 @@ wheel that refused to move would read as broken.
 - Multisampling on the scene, four samples by default and resolved down to what
   the device will actually take. The interface is drawn into the resolved
   target afterwards rather than multisampled with it: text and panel edges are
-  already laid out on the pixel grid. Measured at 1080p: 0.20 ms a frame with
-  no multisampling, 0.24 at two samples, 0.32 at four, against a 16.7 ms
-  budget. A device that will not multisample the surface format gets a
-  post-process pass over the silhouette instead, which is never run alongside
-  multisampling — four samples and a blur over the top is paying twice to lose
-  detail once.
+  already laid out on the pixel grid. A device that will not multisample the
+  surface format gets a post-process pass over the silhouette instead, which is
+  never run alongside multisampling — four samples and a blur over the top is
+  paying twice to lose detail once. Measured at 1080p against a 16.7 ms budget:
+
+  | | ms |
+  |---|---:|
+  | one sample, with the post-process pass | 0.26 |
+  | two samples | 0.24 |
+  | four samples | 0.32 |
+
+  Which says something worth knowing: on this card the fallback costs *more*
+  than two samples of real multisampling and reads worse, so it is what a
+  device gets when it has no choice rather than a cheaper setting to reach for.
 - **Reversed depth**, with a near and far plane derived from the viewing
   distance and the size of what is on screen rather than fixed. A form far
   smaller than the old fixed near plane of 0.01 was clipped away when zoomed
