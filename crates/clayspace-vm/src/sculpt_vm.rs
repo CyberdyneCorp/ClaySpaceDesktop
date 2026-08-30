@@ -687,9 +687,13 @@ impl SculptViewModel {
         // barely smoothed at all.
         // And not while the model is showing the gesture as it is made: a
         // live gesture is exactly one that no longer has to be held.
+        // On a mesh they are none of those things, so the question is asked
+        // of the representation rather than of the tool alone —
+        // `ToolKind::holds_the_whole_gesture` carries the one case that
+        // depends on it, which is the drag on a grid.
         !self.live
-            && tool.is_region_based()
             && self.model.active_representation() != Representation::Mesh
+            && tool.holds_the_whole_gesture(self.model.active_representation())
     }
 
     /// How far a stroke travels before a segment is sent, in stamps.

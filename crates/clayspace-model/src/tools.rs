@@ -374,6 +374,31 @@ impl ToolKind {
         )
     }
 
+    /// Whether a gesture has to arrive **whole** rather than in segments.
+    ///
+    /// [`ToolKind::is_region_based`] is the part of this that does not depend
+    /// on what is being sculpted. The other part does, and there is one:
+    ///
+    /// A drag on a **grid** does not decompose into a series of shorter drags.
+    /// The engine's grab resamples occupancy through the inverse map, rounding
+    /// per axis, and weights the displacement by the falloff across its
+    /// region — so a one-cell drag moves the middle of the region one cell and
+    /// its rim not at all, and inside solid material that is *no change at
+    /// all*. Measured on a slab with a 0.35 drag: delivered whole it moved the
+    /// material at every brush size tried; delivered as the eight segments a
+    /// pointer makes, seven of the eight changed nothing and the eighth
+    /// changed almost nothing.
+    ///
+    /// So the drag is held and applied once, from its anchor, which is the
+    /// same trade the region tools make and for the same reason: it does not
+    /// preview while the pointer moves, and it lands when the pointer comes
+    /// up. The alternative — reverting the last segment and reapplying the
+    /// whole gesture, which is what the mesh drag does — needs a record of
+    /// what a voxel edit changed, and a grid has none.
+    pub fn holds_the_whole_gesture(self, representation: Representation) -> bool {
+        self.is_region_based() || (self == Self::Mover && representation == Representation::Voxel)
+    }
+
     pub fn is_path_driven(self) -> bool {
         matches!(
             self,
