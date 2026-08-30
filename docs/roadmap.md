@@ -748,6 +748,33 @@ sixteen megabytes of depth is not a MatCap session's business — and MatCap nev
 casts at all, because its lighting is welded to the camera and a shadow from it
 would swing round the form as the view moved.
 
+### The brush cursor, as a ribbon
+
+WebGPU has no line width. A line list is one pixel, always, whatever the
+display — and a one-pixel line has no partial coverage, so the scene's
+multisampling has nothing to resolve on it. The cursor a sculptor looks at
+continuously was that line.
+
+It is a strip of triangles now, expanded either side of the curve it stands
+for. The width is decided in *pixels* and converted back into world units at
+the depth each vertex sits at, so the ring reads the same weight whether the
+camera is close or far — measured on a sphere at two distances, 3.5 pixels
+across at one and 3.3 at twice the distance, where a ribbon expanded by a fixed
+world width would have halved.
+
+Two details are what make it a ring rather than a chain of dashes. The
+expansion is perpendicular to *both* the curve and the direction to the eye,
+so the ribbon faces the camera however the ring is turned — an expansion in the
+ring's own plane would vanish to nothing exactly when a brush is being aimed
+along a surface. And the strip is continuous, with each point's width taken
+from the direction through it rather than from either segment meeting there,
+so the corners of a forty-eight-sided ring close instead of leaving a notch at
+every one.
+
+The world-space semantics are untouched: the ring still shows the footprint the
+brush will cover on the actual surface, which is the thing a screen-space circle
+would lie about.
+
 ### Temporal occlusion, decided against
 
 The review puts it at P2 with a condition attached — *only after the static path

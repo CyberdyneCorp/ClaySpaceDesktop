@@ -17,6 +17,7 @@ use glam::Vec3;
 use super::{
     ArmatureView, BrushCursor, GizmoView, LatticeView, Overlays, SymmetryAxis, Vertex, ACTIVE_TINT,
 };
+use crate::camera::Camera;
 use crate::palette;
 use clayspace_model::{GizmoHandle, GizmoMode};
 
@@ -113,7 +114,10 @@ pub(super) fn overlay_geometry(overlays: Overlays, extent: f32) -> (Vec<Vertex>,
 ///
 /// The accent colour, because this is the active brush — the one thing the
 /// design reserves it for.
-pub(super) fn cursor_geometry(cursor: BrushCursor) -> (Vec<Vertex>, Vec<u32>) {
+pub(super) fn cursor_geometry(
+    cursor: BrushCursor,
+    metric: ScreenMetric,
+) -> (Vec<Vertex>, Vec<u32>) {
     const SEGMENTS: usize = 48;
 
     let centre = Vec3::from(cursor.position);
@@ -142,54 +146,181 @@ pub(super) fn cursor_geometry(cursor: BrushCursor) -> (Vec<Vertex>, Vec<u32>) {
     } else {
         palette::ACCENT
     };
-    let mut vertices = Vec::with_capacity(SEGMENTS + 4);
-    let mut indices = Vec::with_capacity(SEGMENTS * 2 + 4);
 
-    for i in 0..SEGMENTS {
-        let angle = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
-        let (s, c) = angle.sin_cos();
-        // Lifted a hair along the normal so the ring is not swallowed by the
-        // surface it sits on.
-        let point = centre + u * c + v * s + normal * (cursor.radius * 0.02);
-        vertices.push(Vertex {
-            position: point.into(),
-            normal: normal.into(),
-            color,
-            mask: 0.0,
-        });
-        indices.push(i as u32);
-        indices.push(((i + 1) % SEGMENTS) as u32);
-    }
+    let mut ribbon = Ribbon::new(color, metric);
+    // Lifted a hair along the normal so the ring is not swallowed by the
+    // surface it sits on.
+    let lift = normal * (cursor.radius * 0.02);
+    let ring: Vec<Vec3> = (0..SEGMENTS)
+        .map(|i| {
+            let angle = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+            let (s, c) = angle.sin_cos();
+            centre + u * c + v * s + lift
+        })
+        .collect();
+    ribbon.loop_through(&ring);
 
     // A small cross at the centre, so the exact point is readable when the
     // ring is large.
     let tick = cursor.radius * 0.12;
-    let base = vertices.len() as u32;
-    for (a, b) in [
-        (u.normalize() * tick, -u.normalize() * tick),
-        (v.normalize() * tick, -v.normalize() * tick),
-    ] {
-        let offset = normal * (cursor.radius * 0.02);
-        for point in [centre + a + offset, centre + b + offset] {
-            vertices.push(Vertex {
-                position: point.into(),
-                normal: normal.into(),
-                color,
-                mask: 0.0,
-            });
-        }
+    for axis in [u.normalize() * tick, v.normalize() * tick] {
+        ribbon.segment(centre + axis + lift, centre - axis + lift);
     }
-    indices.extend_from_slice(&[base, base + 1, base + 2, base + 3]);
 
-    (vertices, indices)
+    ribbon.finish()
 }
 
-/// A tapered sleeve along each link, which is the membrane a rig would skin
-/// into.
+/// What a line needs from the camera to keep a constant width on screen.
 ///
-/// ZBrush shows this while a rig is being built and shows it translucent, so
-/// the chain reads through its own surface. Eight sides is enough at the size
-/// a link is drawn — this is a hint about where the skin will go, not the skin.
+/// A line list is one pixel wide, always: WebGPU has no line width, and the
+/// hardware rasterizes a line as a chain of single pixels. On a dense display
+/// that is a cursor a sculptor squints at, and it does not anti-alias — the
+/// scene is multisampled, but a one-pixel line has no coverage to sample.
+///
+/// So the cursor is a *ribbon*: a strip of triangles expanded either side of
+/// the line it stands for, by a width worked out in pixels and converted back
+/// into world units at the depth each vertex sits at. Multisampling then has
+/// an edge to resolve, and the ring is the same weight at any distance.
+#[derive(Debug, Clone, Copy)]
+pub struct ScreenMetric {
+    /// Where the eye is. The ribbon expands perpendicular to both the line and
+    /// the direction to the eye, so it faces the camera however the ring is
+    /// turned — an expansion in the ring's own plane would vanish to nothing
+    /// when the ring was seen edge-on, which is exactly when a brush is being
+    /// aimed along a surface.
+    eye: Vec3,
+    /// World units per pixel, per unit of distance from the eye.
+    per_pixel: f32,
+    /// The fixed world units per pixel of an orthographic view, where distance
+    /// does not change how large a thing is drawn.
+    fixed: Option<f32>,
+}
+
+impl ScreenMetric {
+    /// What this camera makes of a viewport this many pixels tall.
+    pub fn new(camera: &Camera, height: f32) -> Self {
+        let height = height.max(1.0);
+        let spread = 2.0 * (camera.fov_y * 0.5).tan() / height;
+        Self {
+            eye: camera.eye(),
+            per_pixel: spread,
+            fixed: camera
+                .preset
+                .is_orthographic()
+                .then_some(camera.distance * spread),
+        }
+    }
+
+    /// How many world units one pixel covers at this point.
+    fn at(&self, point: Vec3) -> f32 {
+        self.fixed
+            .unwrap_or_else(|| (point - self.eye).length() * self.per_pixel)
+    }
+
+    /// The direction to expand a line in so the ribbon faces the camera.
+    fn across(&self, along: Vec3, at: Vec3) -> Vec3 {
+        let toward_eye = self.eye - at;
+        let across = along.cross(toward_eye);
+        // Degenerate when the line points straight at the eye, which is a line
+        // covering one pixel anyway. Any perpendicular will do there.
+        if across.length_squared() > 1e-12 {
+            across.normalize()
+        } else {
+            along.any_orthonormal_vector()
+        }
+    }
+}
+
+/// How wide the cursor's lines are drawn, in pixels.
+///
+/// Not one. One is what the hardware already gave, and the point of a ribbon is
+/// to be wider than that and to have an edge for multisampling to resolve.
+/// Not much more than two either: the cursor sits over the clay a sculptor is
+/// reading, and a heavy ring competes with the form.
+const CURSOR_WIDTH: f32 = 2.2;
+
+/// A strip of triangles standing in for a line.
+struct Ribbon {
+    vertices: Vec<Vertex>,
+    indices: Vec<u32>,
+    color: [f32; 3],
+    metric: ScreenMetric,
+}
+
+impl Ribbon {
+    fn new(color: [f32; 3], metric: ScreenMetric) -> Self {
+        Self {
+            vertices: Vec::new(),
+            indices: Vec::new(),
+            color,
+            metric,
+        }
+    }
+
+    /// One straight run, as two triangles.
+    fn segment(&mut self, from: Vec3, to: Vec3) {
+        let along = to - from;
+        if along.length_squared() < 1e-12 {
+            return;
+        }
+        let along = along.normalize();
+        let base = self.vertices.len() as u32;
+        for point in [from, to] {
+            let half = self.metric.at(point) * CURSOR_WIDTH * 0.5;
+            let across = self.metric.across(along, point) * half;
+            self.push(point - across);
+            self.push(point + across);
+        }
+        self.indices
+            .extend_from_slice(&[base, base + 1, base + 2, base + 1, base + 3, base + 2]);
+    }
+
+    /// A closed loop through every point, as a continuous strip.
+    ///
+    /// Continuous rather than a run of independent segments, so the corners
+    /// meet rather than leaving a notch at every one of them — on a
+    /// forty-eight-sided ring at two pixels wide the notches would read as a
+    /// dotted line.
+    fn loop_through(&mut self, points: &[Vec3]) {
+        if points.len() < 3 {
+            return;
+        }
+        let base = self.vertices.len() as u32;
+        for (i, point) in points.iter().enumerate() {
+            // The direction through this point, taken from its neighbours, so
+            // the strip's width is perpendicular to the curve rather than to
+            // one of the two segments meeting at it.
+            let previous = points[(i + points.len() - 1) % points.len()];
+            let next = points[(i + 1) % points.len()];
+            let along = (next - previous).normalize_or_zero();
+            let half = self.metric.at(*point) * CURSOR_WIDTH * 0.5;
+            let across = self.metric.across(along, *point) * half;
+            self.push(*point - across);
+            self.push(*point + across);
+        }
+        let count = points.len() as u32;
+        for i in 0..count {
+            let a = base + i * 2;
+            let b = base + ((i + 1) % count) * 2;
+            self.indices
+                .extend_from_slice(&[a, a + 1, b, a + 1, b + 1, b]);
+        }
+    }
+
+    fn push(&mut self, position: Vec3) {
+        self.vertices.push(Vertex {
+            position: position.into(),
+            normal: [0.0, 1.0, 0.0],
+            color: self.color,
+            mask: 0.0,
+        });
+    }
+
+    fn finish(self) -> (Vec<Vertex>, Vec<u32>) {
+        (self.vertices, self.indices)
+    }
+}
+
 pub(super) fn membrane_geometry(view: &ArmatureView<'_>) -> (Vec<Vertex>, Vec<u32>) {
     const SIDES: usize = 8;
     let mut vertices: Vec<Vertex> = Vec::new();

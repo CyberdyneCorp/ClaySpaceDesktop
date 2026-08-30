@@ -10,6 +10,13 @@
 
 mod support;
 
+/// What the cursor's ribbon needs from the camera to keep a constant width on
+/// screen. The harness's target is a fixed size, so this is the same call the
+/// application makes with the height of its scene rectangle.
+fn metric(camera: &Camera) -> clayspace_view::ScreenMetric {
+    clayspace_view::ScreenMetric::new(camera, Harness::HEIGHT as f32)
+}
+
 use clayspace_view::{
     mirrored_cursors, BrushCursor, Camera, GpuMesh, MatCap, Overlays, ViewPreset,
 };
@@ -494,7 +501,9 @@ fn the_brush_cursor_follows_the_surface_and_clears_off_it() {
     let camera = support::framed_camera(&mesh);
     let gpu_mesh = harness.upload(&mesh);
 
-    harness.renderer.set_cursors(&harness.gpu, &[]);
+    harness
+        .renderer
+        .set_cursors(&harness.gpu, &[], metric(&camera));
     let without = harness.capture(&gpu_mesh, &camera, false, "12-cursor-off");
 
     // On the near face of the sphere, where the camera can see it.
@@ -506,6 +515,7 @@ fn the_brush_cursor_follows_the_surface_and_clears_off_it() {
             radius: 0.35,
             mirrored: false,
         }],
+        metric(&camera),
     );
     let with = harness.capture(&gpu_mesh, &camera, false, "12-cursor-on");
 
@@ -533,6 +543,7 @@ fn the_brush_cursor_follows_the_surface_and_clears_off_it() {
             radius: 0.7,
             mirrored: false,
         }],
+        metric(&camera),
     );
     let larger = harness.capture(&gpu_mesh, &camera, false, "12-cursor-large");
     assert!(
@@ -541,7 +552,9 @@ fn the_brush_cursor_follows_the_surface_and_clears_off_it() {
     );
 
     // Off the surface, it must clear rather than hang at some depth.
-    harness.renderer.set_cursors(&harness.gpu, &[]);
+    harness
+        .renderer
+        .set_cursors(&harness.gpu, &[], metric(&camera));
     let cleared = harness.capture(&gpu_mesh, &camera, false, "12-cursor-cleared");
     // By pixels past the noise rather than by a mean: the cursor is a thin
     // ring, so its whole signal is a mean of 0.059 levels and the residue of
@@ -621,9 +634,11 @@ fn symmetry_shows_every_place_the_stroke_will_land() {
     harness
         .renderer
         .set_overlays(&harness.gpu, Overlays::default(), 2.0);
-    harness
-        .renderer
-        .set_cursors(&harness.gpu, &mirrored_cursors(pointer, [false; 3]));
+    harness.renderer.set_cursors(
+        &harness.gpu,
+        &mirrored_cursors(pointer, [false; 3]),
+        metric(&camera),
+    );
     let alone = harness.capture(&gpu_mesh, &camera, false, "16-symmetry-cursor-off");
 
     let gpu = harness.gpu.clone();
@@ -635,9 +650,11 @@ fn symmetry_shows_every_place_the_stroke_will_land() {
         },
         2.0,
     );
-    harness
-        .renderer
-        .set_cursors(&gpu, &mirrored_cursors(pointer, [true, false, false]));
+    harness.renderer.set_cursors(
+        &gpu,
+        &mirrored_cursors(pointer, [true, false, false]),
+        metric(&camera),
+    );
     let mirrored = harness.capture(&gpu_mesh, &camera, false, "16-symmetry-cursor-x");
 
     assert!(
@@ -654,12 +671,99 @@ fn symmetry_shows_every_place_the_stroke_will_land() {
         },
         2.0,
     );
-    harness
-        .renderer
-        .set_cursors(&gpu, &mirrored_cursors(pointer, [true, true, false]));
+    harness.renderer.set_cursors(
+        &gpu,
+        &mirrored_cursors(pointer, [true, true, false]),
+        metric(&camera),
+    );
     let both = harness.capture(&gpu_mesh, &camera, false, "16-symmetry-cursor-xy");
     assert!(
         both.mean_difference(&mirrored) > 0.001,
         "the second mirror plane changed nothing on screen"
+    );
+}
+
+/// The cursor keeps its weight on screen as the camera pulls back.
+///
+/// A line list is one pixel wide, always — WebGPU has no line width — so the
+/// ring the cursor used to be drew the same single pixel whatever the display
+/// and had no coverage for the scene's multisampling to resolve. It is a
+/// ribbon now, expanded either side of the line it stands for by a width worked
+/// out in pixels and converted back into world units at the depth each vertex
+/// sits at.
+///
+/// So the test is about *invariance*: the same brush seen from twice as far
+/// away covers about half as many pixels in its ring's circumference, and the
+/// ring's width should not change with it. A ribbon expanded by a fixed world
+/// width would halve; the old one-pixel line would stay put but be a pixel.
+#[test]
+fn the_cursor_keeps_its_width_as_the_camera_pulls_back() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let doc = support::sphere_document(1.0);
+    let mesh = support::mesh_document(&doc, 64);
+    let gpu_mesh = harness.upload(&mesh);
+
+    let cursor = BrushCursor {
+        position: [0.0, 0.0, 1.0],
+        normal: [0.0, 0.0, 1.0],
+        radius: 0.35,
+        mirrored: false,
+    };
+
+    // How thick the ring is, as the drawn area divided by its circumference on
+    // screen. The circumference scales with the ring's apparent size, so the
+    // ratio is the width in pixels whatever the distance.
+    let mut widths = Vec::new();
+    for distance in [3.0f32, 6.0] {
+        let camera = Camera {
+            distance,
+            ..Camera::default()
+        };
+        harness
+            .renderer
+            .set_cursors(&harness.gpu, &[], metric(&camera));
+        let without = harness.capture(&gpu_mesh, &camera, false, "12-ribbon-off");
+        harness
+            .renderer
+            .set_cursors(&harness.gpu, &[cursor], metric(&camera));
+        let with = harness.capture(
+            &gpu_mesh,
+            &camera,
+            false,
+            &format!("12-ribbon-{}", distance as u32),
+        );
+
+        let (mut drawn, mut min_x, mut max_x) = (0usize, u32::MAX, 0u32);
+        for y in 0..with.height {
+            for x in 0..with.width {
+                let (a, b) = (with.pixel(x, y), without.pixel(x, y));
+                if (0..3).any(|c| a[c].abs_diff(b[c]) > 8) {
+                    drawn += 1;
+                    min_x = min_x.min(x);
+                    max_x = max_x.max(x);
+                }
+            }
+        }
+        assert!(
+            drawn > 100 && max_x > min_x,
+            "at distance {distance} the cursor drew {drawn} pixels"
+        );
+        // The ring's diameter on screen, and from it its circumference.
+        let circumference = (max_x - min_x) as f64 * std::f64::consts::PI;
+        let width = drawn as f64 / circumference;
+        println!(
+            "distance {distance}: {drawn} pixels over a {}-pixel diameter, {width:.2} wide",
+            max_x - min_x
+        );
+        widths.push(width);
+    }
+
+    let (near, far) = (widths[0], widths[1]);
+    assert!(
+        far > near * 0.6 && far < near * 1.6,
+        "the ring reads {near:.2} pixels wide at distance 3 and {far:.2} at \
+         distance 6; a ribbon expanded by a fixed world width would halve"
     );
 }

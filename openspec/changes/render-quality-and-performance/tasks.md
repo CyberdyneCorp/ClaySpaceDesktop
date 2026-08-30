@@ -148,6 +148,12 @@
       after the occlusion composite so the invariant is true: a manipulator
       standing over a fold was being dimmed by that fold's occlusion
 
+## 13. The cursor, at the weight it is meant to read at
+
+- [x] 13.1 Draw the brush cursor as a camera-facing ribbon of a constant width
+      in pixels, rather than as a line list — which WebGPU draws one pixel wide
+      whatever the display, and which multisampling has no coverage to resolve
+
 ## 12. Say what moved
 
 - [x] 12.1 Report GPU time per pass at each viewport size, at half and full

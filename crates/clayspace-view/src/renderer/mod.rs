@@ -23,6 +23,7 @@ mod shadow;
 mod textures;
 
 use ao::*;
+pub use overlays::ScreenMetric;
 use overlays::*;
 pub use overlays::{frame_about, BRACKET_REACH, RING_REACH, SCALE_BOX_REACH, VIEW_RING_REACH};
 use pipelines::*;
@@ -742,6 +743,9 @@ pub struct Renderer {
     /// The translucent skin between the spheres, drawn while rigging.
     membrane_mesh: GpuMesh,
     membrane_pipeline: wgpu::RenderPipeline,
+    /// The brush cursor's ribbon: the overlay's vertex stage and colour, drawn
+    /// as triangles.
+    cursor_pipeline: wgpu::RenderPipeline,
     /// The reference images, one quad a plane, and the pipeline that draws
     /// them.
     reference_pipeline: wgpu::RenderPipeline,
@@ -1218,6 +1222,19 @@ impl Renderer {
             mapped_at_creation: false,
         });
 
+        // The brush cursor's ribbon: the overlay's vertex stage and colour,
+        // drawn as triangles because a line list is one pixel wide whatever
+        // the display, and has no coverage for multisampling to resolve.
+        let cursor_pipeline = make_pipeline(
+            gpu,
+            &layout,
+            &shader,
+            format,
+            "overlay_vs",
+            "overlay_fs",
+            PipelineState::transparent(wgpu::PrimitiveTopology::TriangleList),
+        );
+
         // Triangles, blended, and no depth write — so the spheres and links
         // behind the membrane still read through it.
         let membrane_pipeline = make_pipeline(
@@ -1298,6 +1315,7 @@ impl Renderer {
             polyframe: false,
             pending_edges: None,
             membrane_pipeline,
+            cursor_pipeline,
             reduce_pipeline,
             ao_pipeline,
             composite_pipeline,
@@ -1394,11 +1412,16 @@ impl Renderer {
     /// Clearing rather than leaving the last position is the point: a ring
     /// hanging in space at an arbitrary depth tells the user the brush would
     /// land somewhere it would not.
-    pub fn set_cursors(&mut self, gpu: &Gpu, cursors: &[BrushCursor]) {
+    pub fn set_cursors(
+        &mut self,
+        gpu: &Gpu,
+        cursors: &[BrushCursor],
+        metric: overlays::ScreenMetric,
+    ) {
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
         for cursor in cursors {
-            let (ring, ring_indices) = cursor_geometry(*cursor);
+            let (ring, ring_indices) = cursor_geometry(*cursor, metric);
             let base = vertices.len() as u32;
             vertices.extend(ring);
             indices.extend(ring_indices.into_iter().map(|i| i + base));
@@ -2135,9 +2158,12 @@ impl Renderer {
                 }
             }
 
-            // The brush cursor, over the surface it will act on.
+            // The brush cursor, over the surface it will act on. Triangles
+            // rather than lines: it is a ribbon a couple of pixels wide, so
+            // that it has an edge for multisampling to resolve and reads the
+            // same weight at any distance. See `overlays::Ribbon`.
             if !self.cursor_mesh.is_empty() {
-                pass.set_pipeline(&self.overlay_pipeline);
+                pass.set_pipeline(&self.cursor_pipeline);
                 pass.set_vertex_buffer(0, self.cursor_mesh.vertices.slice(..));
                 pass.set_index_buffer(
                     self.cursor_mesh.indices.slice(..),
@@ -3223,10 +3249,16 @@ mod tests {
         );
     }
 
+    /// A metric for the unit tests, standing in for a camera looking at the
+    /// origin from four units away through a 480-pixel-tall viewport.
+    fn a_metric() -> overlays::ScreenMetric {
+        overlays::ScreenMetric::new(&Camera::default(), 480.0)
+    }
+
     #[test]
     fn mirrors_are_drawn_dimmer_than_the_pointer() {
-        let (pointer, _) = cursor_geometry(off_axis());
-        let (mirror, _) = cursor_geometry(off_axis().mirror(0));
+        let (pointer, _) = cursor_geometry(off_axis(), a_metric());
+        let (mirror, _) = cursor_geometry(off_axis().mirror(0), a_metric());
 
         let brightness = |v: &[Vertex]| v[0].color.iter().sum::<f32>();
         assert!(
@@ -3245,7 +3277,7 @@ mod tests {
         let count = |cursors: &[BrushCursor]| {
             cursors
                 .iter()
-                .map(|c| cursor_geometry(*c).0.len())
+                .map(|c| cursor_geometry(*c, a_metric()).0.len())
                 .sum::<usize>()
         };
         assert_eq!(count(&four), 4 * count(&one));
@@ -3356,35 +3388,52 @@ mod tests {
             radius: 0.5,
             mirrored: false,
         };
-        let (vertices, indices) = cursor_geometry(cursor);
+        let (vertices, indices) = cursor_geometry(cursor, a_metric());
         assert!(!vertices.is_empty());
-        assert_eq!(indices.len() % 2, 0, "line geometry needs index pairs");
+        assert_eq!(indices.len() % 3, 0, "a ribbon is triangles");
 
-        // Every ring point must sit at the radius from the centre, in the
-        // plane the normal defines.
+        // The ring is a ribbon now, so its vertices come in pairs straddling
+        // the line they stand for: each pair's midpoint is at the radius, and
+        // the two sit either side of it by half the ribbon's width. Asserting
+        // on the midpoint rather than on each vertex is what says the ribbon
+        // is *centred* on the ring rather than hanging off one side of it.
         let centre = Vec3::from(cursor.position);
-        for vertex in vertices.iter().take(48) {
+        let radius_of = |vertex: &Vertex| {
             let offset = Vec3::from(vertex.position) - centre;
-            let in_plane = offset - Vec3::Y * offset.dot(Vec3::Y);
+            (offset - Vec3::Y * offset.dot(Vec3::Y)).length()
+        };
+        let mut widest: f32 = 0.0;
+        for pair in vertices.chunks_exact(2).take(48) {
+            let (inner, outer) = (radius_of(&pair[0]), radius_of(&pair[1]));
+            let middle = (inner + outer) * 0.5;
             assert!(
-                (in_plane.length() - cursor.radius).abs() < 1e-3,
-                "a ring point sits at {} rather than the radius {}",
-                in_plane.length(),
+                (middle - cursor.radius).abs() < 1e-3,
+                "a ring pair is centred at {middle} rather than at the radius {}",
                 cursor.radius
             );
+            widest = widest.max((outer - inner).abs());
         }
+        assert!(
+            widest > 0.0 && widest < cursor.radius * 0.2,
+            "the ribbon is {widest} across against a ring of radius {}, which \
+             is a band rather than a line",
+            cursor.radius
+        );
     }
 
     #[test]
     fn a_degenerate_normal_still_produces_a_ring() {
         // A pick can report a zero normal; the cursor must not vanish or
         // produce NaN geometry because of it.
-        let (vertices, _) = cursor_geometry(BrushCursor {
-            position: [0.0; 3],
-            normal: [0.0; 3],
-            radius: 0.2,
-            mirrored: false,
-        });
+        let (vertices, _) = cursor_geometry(
+            BrushCursor {
+                position: [0.0; 3],
+                normal: [0.0; 3],
+                radius: 0.2,
+                mirrored: false,
+            },
+            a_metric(),
+        );
         assert!(vertices
             .iter()
             .all(|v| v.position.iter().all(|c| c.is_finite())));

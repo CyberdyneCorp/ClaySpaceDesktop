@@ -3474,7 +3474,17 @@ impl App {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        graphics.renderer.set_cursors(&graphics.gpu, &cursors);
+        // The cursor is a ribbon a couple of pixels wide, so how wide that is
+        // in the world depends on where the camera is and how tall the scene's
+        // rectangle is. Both are known here and neither is known to the
+        // renderer at the moment the geometry is built.
+        let metric = clayspace_view::ScreenMetric::new(
+            &self.camera,
+            scene_viewport.map_or(graphics.surface.framebuffer().height as f32, |rect| rect[3]),
+        );
+        graphics
+            .renderer
+            .set_cursors(&graphics.gpu, &cursors, metric);
         graphics.renderer.set_scene_viewport(scene_viewport);
         // With the skin preview off, the surface is simply not drawn — the
         // scaffolding stands alone, which is what ZBrush shows while a rig is
