@@ -2439,6 +2439,9 @@ pub fn diagnostics_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &m
             if heading(ui, s.label_backend) {
                 diagnostics_backend(ui, d);
             }
+            if d.render.is_some() && heading(ui, s.section_rendering) {
+                diagnostics_render(ui, d);
+            }
 
             ui.add_space(space::SNUG);
             ui.horizontal(|ui| {
@@ -2504,6 +2507,61 @@ fn diagnostics_backend(ui: &mut egui::Ui, d: &Diagnostics) {
                 "Alternativa",
                 format!("{} recusou {}", fallback.declined_by, fallback.operation),
             );
+        }
+    }
+}
+
+/// What the viewport drew, and what the device charged for it.
+///
+/// Here rather than in a developer-only overlay because it answers the two
+/// questions a rendering report is actually opened for — "why is this slow"
+/// and "is occlusion even running" — and a person who can reach the
+/// diagnostics window can reach the answer.
+fn diagnostics_render(ui: &mut egui::Ui, d: &Diagnostics) {
+    let Some(r) = &d.render else {
+        return;
+    };
+    readout(
+        ui,
+        "Área",
+        format!("{}×{} · {}× MSAA", r.viewport[0], r.viewport[1], r.samples),
+    );
+    match &r.ao {
+        Some(ao) => readout(
+            ui,
+            "Oclusão",
+            format!(
+                "{}×{} · {} amostras · temporal {}",
+                ao.width,
+                ao.height,
+                ao.samples,
+                if ao.temporal { "ligada" } else { "desligada" }
+            ),
+        ),
+        None => readout(ui, "Oclusão", "desligada".to_string()),
+    }
+    readout(
+        ui,
+        "Desenhos",
+        format!(
+            "{} · {} descartados · {} triângulos · {} linhas",
+            r.draw_calls, r.culled, r.triangles, r.lines
+        ),
+    );
+    readout(ui, "Enviado", format!("{} bytes", r.uploaded_bytes));
+
+    // Listed even when the adapter cannot answer, for the reason the
+    // fallbacks are: silence reads as a broken panel rather than as an
+    // unmeasurable device, and a reader cannot tell the two apart.
+    if !r.gpu_timing {
+        readout(ui, "GPU", "sem marcas de tempo neste adaptador".to_string());
+    } else if r.gpu_passes.is_empty() {
+        readout(ui, "GPU", "nenhum quadro medido ainda".to_string());
+    } else {
+        let total: f32 = r.gpu_passes.iter().map(|(_, ms)| ms).sum();
+        readout(ui, "GPU", format!("{total:.2} ms"));
+        for (pass, ms) in &r.gpu_passes {
+            readout(ui, pass, format!("{ms:.2} ms"));
         }
     }
 }

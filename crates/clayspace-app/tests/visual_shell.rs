@@ -121,6 +121,28 @@ fn diagnostics() -> clayspace_model::Diagnostics {
         }],
         renderer: Some("Apple M3 Max — Metal".into()),
         stalls: vec!["consolidar 6400 ms".into(), "re-malha 45 ms (×12)".into()],
+        render: Some(clayspace_model::RenderDiagnostics {
+            viewport: [1920, 1080],
+            samples: 4,
+            ao: Some(clayspace_model::AoDiagnostics {
+                width: 960,
+                height: 540,
+                samples: 8,
+                temporal: false,
+            }),
+            gpu_passes: vec![
+                ("scene".into(), 2.41),
+                ("depth reduce".into(), 0.18),
+                ("ao".into(), 0.62),
+                ("ao composite".into(), 0.24),
+            ],
+            gpu_timing: true,
+            draw_calls: 18,
+            culled: 2,
+            triangles: 1_420_000,
+            lines: 0,
+            uploaded_bytes: 1_146_880,
+        }),
     }
 }
 

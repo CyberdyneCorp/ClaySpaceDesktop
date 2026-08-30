@@ -172,9 +172,10 @@ fn the_polyframe_draws_a_mesh_layers_edges() {
     // the polyframe is drawn over the mesh layers rather than over it.
     let surface = clayspace_view::GpuMesh::new(&harness.gpu);
 
-    harness.renderer.set_polyframe(false);
+    let gpu = harness.gpu.clone();
+    harness.renderer.set_polyframe(&gpu, false);
     let plain = harness.capture(&surface, &camera, false, "72-polyframe-off");
-    harness.renderer.set_polyframe(true);
+    harness.renderer.set_polyframe(&gpu, true);
     let wired = harness.capture(&surface, &camera, false, "72-polyframe-on");
 
     let differing = (0..plain.height)
@@ -207,7 +208,7 @@ fn the_polyframe_draws_a_mesh_layers_edges() {
     );
 
     // And off again is off: a toggle that only goes one way is not a toggle.
-    harness.renderer.set_polyframe(false);
+    harness.renderer.set_polyframe(&gpu, false);
     let again = harness.capture(&surface, &camera, false, "72-polyframe-off-again");
     // Past the noise floor. Measured on a macOS runner: turning the polyframe
     // *on* moves 10,249 pixels past `RENDER_NOISE` and 33,399 by any amount at

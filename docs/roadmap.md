@@ -499,10 +499,236 @@ darkened it would be reporting its own sampling error as shape, which is
 exactly what the normal-derivative version did. `visual_occlusion.rs` holds
 both, against the same frame with `Renderer::set_occlusion(false)`.
 
-It needs the multisampled depth buffer, which it binds as
-`texture_depth_multisampled_2d`. A device that will not multisample the surface
-format draws without occlusion rather than growing a second shader for a case
-no real device reaches.
+It needed the multisampled depth buffer, which it bound as
+`texture_depth_multisampled_2d`. A device that would not multisample the surface
+format drew without occlusion rather than growing a second shader for a case no
+real device reaches. **That is no longer true**, and the rest of this section is
+what replaced it.
+
+### The occlusion pass, rebuilt around what it was getting wrong
+
+A rendering review of `main` on 2026-08-29 read the whole viewport and found
+nothing to replace and a list of things to refine. The four that mattered were
+all in the pass above.
+
+**It ran at display resolution and blurred without regard for edges.** Sixteen
+projected depth samples a pixel, then sixteen more texture loads in a 4×4 box —
+about 33 million AO depth samples a frame at 1920×1080 and four times that at
+4K. The box average is not depth-aware, so occlusion bled across silhouettes,
+thin openings and disconnected pieces. That halo is what gives a screen-space
+effect away.
+
+**It was welded to multisampling** by the binding above, for a reason that is
+about a texture type and not about rendering.
+
+**Its radius was 0.08 view units**, tuned against the reference form whose
+starting sphere has radius 1. An import a hundredth of that size got no visible
+occlusion; one a hundred times it got total occlusion. Neither is a property of
+the shape.
+
+**It cost the same under a moving pen as it did on an idle model**, for
+quality no brush decision rests on.
+
+So it became three passes. A reduction takes the *closest covered* sample of
+each 2×2 block of the multisampled depth into a single-sampled half-resolution
+target — closest and not average, because an average of a foreground and a
+background that met at a silhouette describes a surface that is not there. The
+kernel runs on that, at a quarter of the pixels. A depth-aware upsample brings
+it back, weighing each neighbour by how near its view-space depth is to the
+pixel being shaded, which is what stops the average at an edge.
+
+Measured here on a discrete card, the same reference form, occlusion at half
+resolution against the same code at full:
+
+| | half res | full res |
+|---|---:|---:|
+| 1080p kernel | **0.03 ms** | 0.10 ms |
+| 1080p reduction | 0.07 | 0.03 |
+| 1080p upsample | 0.05 | 0.05 |
+| 1080p, whole chain | **0.15** | 0.18 |
+| 4K kernel | **0.10 ms** | 0.37 ms |
+| 4K reduction | 0.26 | 0.12 |
+| 4K upsample | 0.18 | 0.18 |
+| 4K, whole chain | **0.54** | 0.67 |
+
+The kernel is three to four times cheaper, which is the arithmetic working out.
+The reduction gives some of it back, and *why* is worth recording so it is not
+re-investigated: at half resolution it reads sixteen multisampled depth samples
+per output pixel against four at full, and it is bound by those loads rather
+than by anything around them — taking its loop bounds out of the uniform and
+into the shader source, so they are compile-time, changed the figure by nothing
+at all.
+
+So the performance win is about a fifth of the pass, and the real win is the
+quality. `visual_ao_quality.rs` is the fixture set that says so, and each case
+is a property rather than a picture:
+
+| fixture | what it holds |
+|---|---|
+| `deep_crease` | a fold half as deep as it is wide still darkens |
+| `thin_gap` | a gap five times deeper than it is wide is not averaged shut |
+| `silhouette` | **no** background pixel more than five from an outline darkens |
+| `contact` | a box on a plane still casts a shadow where they meet |
+| `scale_small` / `scale_large` | the same fold at ×0.01 and ×100 shades alike |
+
+The five in the silhouette case is arithmetic, not taste: an occlusion pixel
+covers two display pixels, the upsample weighs a 3×3 neighbourhood of them, and
+the block one of those was reduced from may straddle the outline — two plus two,
+and one more for the multisampled edge. Beyond that no part of the pass has any
+business having seen the foreground.
+
+The scale pair is the one that took two changes to pass. Making the radius a
+fraction of the form's own radius took it from 0.0% and 0.1% of the form
+darkened to 2.9% and 13.8%; the depth range following the scene took it to
+**2.9% and 2.9%**.
+
+### Depth, which was spending its precision in the wrong place
+
+`near = 0.01, far = 1000`, fixed, whatever was on screen. Two failures at once:
+a thumbnail-sized import zoomed into is clipped away by a near plane larger than
+the model, and a large one gets a buffer whose whole useful precision sits in
+the first hundredth of the range.
+
+The range now follows the viewing distance and the scene's radius, and it is
+**reversed** — near at 1, far at 0, `GreaterEqual`, cleared to zero. Floating
+point crowds its precision near zero; a conventional mapping spends that on the
+far plane, where nothing needs it. The convention is stated once, in
+`DEPTH_COMPARE`, and eight pipelines, a clear value, a wireframe bias and three
+occlusion passes read it from there — they agreed with each other by coincidence
+before that constant existed.
+
+### What a frame is worth is decided outside the renderer
+
+`quality.rs` holds three tiers and the hysteresis between them; the application
+holds what the pointer is doing and hands the answer over. A renderer that
+worked it out for itself would be a second definition of "is the user
+sculpting" for the two to disagree over.
+
+The hysteresis is the part that matters. Raising quality on every pointer
+release would rebuild the frame at full cost *between two dabs of one stroke* —
+which puts the cost exactly where the latency is measured. So the fall is
+immediate, the settle waits 160 ms and the idle rise 600 ms, and a profile is a
+ceiling rather than a target: Presentation still drops to the interactive tier
+under the pen, and Performance never leaves it.
+
+### Two bugs the profiler shipped with, and how they were found
+
+Per-pass GPU time needs timestamp queries, and both mistakes made the *device*
+stop answering — which is exactly what diagnostics must never be able to do.
+
+**A query resolved but never written blocks the device.** The first version kept
+one query set with a pair of slots per pass and resolved the whole set. A query
+that was never written never becomes available, and a resolve waits for it: the
+frame never completed and the driver gave up sixty seconds later. Every frame
+with occlusion switched off did it — which is every frame of every capture that
+compares occlusion on against off. The fix is a query set per pass, resolved
+only for the passes that ran; a set can only be resolved whole, and the
+destination has a 256-byte alignment, so "resolve just the pairs that ran" means
+a set per pair.
+
+**A readback mapped twice is a panic.** The second version asked for the map
+once a frame for as long as a result was in flight rather than once per resolve.
+An offscreen capture reads its target back and waits for the device every frame,
+so nothing is ever in flight and the bug is invisible; `window_smoke`, which
+presents real frames, found it on the first run. `gpu_profiling.rs` now renders
+sixty frames that poll without waiting, which is the condition, and asserts that
+a frame with three of the four passes skipped still completes.
+
+### Materials, at a distance and up close
+
+MatCaps and reference images had no mip chain, so a subtool small enough that
+its normals vary by more than a texel between neighbouring pixels sampled the
+material at random and sparkled as the camera moved. Both have one now. The
+MatCap's levels are *rendered from the material's own recipe* at each level's
+size rather than filtered down — the image is stored sRGB-encoded, and averaging
+its bytes averages in the wrong space. A reference is somebody's photograph and
+has no recipe, so its levels are filtered in linear colour, premultiplied by
+alpha so a cut-out does not bleed its transparent texels into its edge. That is
+the one place in this renderer where anisotropy earns its cost, and it is on:
+a reference plane the camera has swung round to trace against is genuinely
+viewed edge-on, and a MatCap never is.
+
+Two optional terms were added beside them, both off or subtle by default and
+both switched off under the pen: a **contour** that darkens toward the
+silhouette, and a **cavity** that sharpens creases finer than the occlusion
+radius. The cavity is the term the normal-derivative experiment above was
+reaching for, arrived at from the other direction: it reads reconstructed
+*positions* rather than interpolated normals, so triangle size does not enter
+into it.
+
+### Studio shading, which answers the one question a MatCap cannot
+
+A MatCap is indexed by the view-space normal, so its lighting is welded to the
+camera: orbit the form and the light orbits with it. That is exactly what makes
+it good for reading form and useless for judging how a surface will take a real
+light. Studio mode is a three-light rig fixed in the **world** with a filmic
+curve over it, offered beside MatCap and never in place of it — `visual_studio.rs`
+asserts the difference that matters, that the studio highlight travels fourteen
+times as far across the form under the same orbit.
+
+There is no HDR intermediate, deliberately. The curve is applied before the sRGB
+target encodes it, which is the whole benefit of tone mapping; an HDR
+intermediate buys the ability to run *post-process* effects in linear high
+range, and there is no such effect here. A full-resolution `Rgba16Float` target
+and a second pass to render generated grey clay would be bandwidth for nothing.
+
+### Multisampling became a choice, and choosing it found a bug
+
+`sample_count` wanted four samples and fell back to one; it is now an
+`MsaaQuality` resolved to what the *device* will take. The default stays four
+for every adapter rather than being derived from the device type, deliberately:
+the obvious rule — four on a discrete card, two on an integrated one — reads the
+wrong thing on Apple Silicon, which reports itself integrated and is not short
+of fill rate, and would quietly have taken macOS from four samples to two.
+
+Making it selectable at all surfaced a failure that looked like a measurement.
+The resolve asked the *adapter*, which reports what the hardware has; a device
+may only use the two counts WebGPU guarantees — one and four — unless it asked
+for the adapter-specific ones. Choosing 2× therefore built every pipeline with a
+validation error, and because a validation error here is reported rather than
+fatal, the frame survived and drew nothing:
+
+    msaa.2x.frame.median   0.03 ms      against 0.20 for none
+
+The device now requests `TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES` where the
+adapter has it, the resolve consults the device rather than the adapter, and the
+figures read as they should:
+
+| | 1080p |
+|---|---:|
+| no multisampling | 0.20 ms |
+| 2× | 0.24 |
+| 4× | 0.32 |
+
+`multisampling.rs` now asserts the *picture* rather than the count — every
+quality that resolves has to draw a form — because the count was right and the
+frame was empty.
+
+### What the numbers say not to build yet
+
+The review's remaining items each carry a condition, and the conditions are not
+met. Recorded here so they are not built on enthusiasm:
+
+- **GPU-driven indirect draws** and **render bundles for the static overlays**
+  reduce CPU draw submission. The reference scene submits **four** draw calls at
+  1080p.
+- **Packed vertices** reduce vertex bandwidth. The scene pass is 0.09 ms at
+  1080p on 395,392 triangles.
+- **Persistent voxel GPU chunk slots** and **vertex-only mesh patches** need the
+  engine layer to say which chunks changed and to hold a stable layout across
+  syncs, which `visible_mesh_geometry` does not express. The renderer side is
+  ready — `patch_vertices` and `patch_indices` have been there since the SDF
+  path was written, and buffers now grow geometrically so a patch does not
+  reallocate — but throwing the switch means guessing whether topology changed,
+  and a wrong guess is a stale index buffer, which is a wrong picture. What was
+  taken instead is the safe half: the polyframe's edge set, a hash set over
+  three entries per triangle, is no longer derived on every mesh upload when the
+  polyframe is off, which it is by default.
+
+Per-subtool frustum culling *was* built, because its condition is different: it
+costs six plane tests against a box per span, it is bounded by the number of
+subtools rather than by anything that scales with the frame, and a scene of
+fifty subtools is a thing a sculptor can make today.
 
 ### Undo, which costs far more than the edit it takes back
 

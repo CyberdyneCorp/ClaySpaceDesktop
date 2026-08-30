@@ -8,6 +8,7 @@
 //! software rendering adapter does not stop the engine using a GPU, and a
 //! missing GPU backend does not stop rendering.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// A WebGPU device and its queue.
@@ -15,7 +16,19 @@ use std::sync::Arc;
 pub struct Gpu {
     pub device: Arc<wgpu::Device>,
     pub queue: Arc<wgpu::Queue>,
+    /// Bytes written to buffers and textures since the counter was last read.
+    ///
+    /// Here rather than on the renderer because the writes are made from both
+    /// sides of that boundary — the renderer's own meshes and the composition
+    /// root's incremental patches — and a figure that counted only one of them
+    /// would answer the wrong question. Shared with every clone of this handle,
+    /// which is what makes it the *device's* upload traffic rather than one
+    /// caller's.
+    uploaded: Arc<AtomicU64>,
     adapter: Arc<wgpu::Adapter>,
+    /// How much multisampling this device draws the scene with. See
+    /// [`Gpu::msaa`] for why it does not change.
+    msaa: MsaaQuality,
     /// The instance this device came from.
     ///
     /// A surface is an entry in the registry of the instance that created it,
@@ -68,11 +81,26 @@ impl Gpu {
             max_buffer_size: adapter.limits().max_buffer_size,
             ..wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits())
         };
+        // Two features, and only where the adapter has them: asking for one
+        // that does not exist refuses the device, so the request is the
+        // intersection of what is wanted and what is there.
+        //
+        // Timestamp queries are what makes per-pass GPU time measurable at
+        // all. Adapter-specific format features are what make a sample count
+        // other than one or four usable: WebGPU guarantees only those two for
+        // a renderable format, and the adapter reporting that it supports two
+        // is not the same as a device being allowed to ask for it. Without
+        // this, choosing 2× built every pipeline with a validation error and
+        // drew nothing — which the uncaptured-error handler reported and the
+        // frame survived, so it looked like 2× multisampling costing 0.03 ms.
+        let wanted = wgpu::Features::TIMESTAMP_QUERY
+            | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
+        let features = adapter.features() & wanted;
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: Some("clayspace"),
-                    required_features: wgpu::Features::empty(),
+                    required_features: features,
                     required_limits: limits,
                     memory_hints: wgpu::MemoryHints::Performance,
                 },
@@ -88,9 +116,11 @@ impl Gpu {
         }));
 
         Ok(Self {
+            msaa: MsaaQuality::default(),
             adapter: Arc::new(adapter),
             device: Arc::new(device),
             queue: Arc::new(queue),
+            uploaded: Arc::new(AtomicU64::new(0)),
             instance,
         })
     }
@@ -120,30 +150,117 @@ impl Gpu {
         &self.instance
     }
 
-    /// The adapter this device came from, for surface configuration.
     /// How many samples per pixel to draw the scene with.
     ///
-    /// Four where the device will take them for this format, one where it will
-    /// not — asked rather than assumed, because a sample count the format does
-    /// not support is a validation error at pipeline creation and there is no
-    /// reason to take the window down over an edge a fallback covers.
+    /// The quality this device chose, resolved to what the format will
+    /// actually take — asked rather than assumed, because a sample count the
+    /// format does not support is a validation error at pipeline creation and
+    /// there is no reason to take the window down over an edge a fallback
+    /// covers.
     ///
     /// The scene is what this is for. The interface is drawn by egui straight
     /// into the resolved target afterwards: text and panel edges are already
     /// laid out on the pixel grid, so multisampling them would cost fill rate
     /// to change nothing.
     pub fn sample_count(&self, format: wgpu::TextureFormat) -> u32 {
-        const WANTED: u32 = 4;
+        self.supported_samples(self.msaa, format)
+    }
+
+    /// A quality, or the best below it this device will actually take.
+    ///
+    /// Resolved downward rather than refused: a format that will not
+    /// multisample at all still has to be drawn into.
+    ///
+    /// The *device*, and not the adapter, is what decides. WebGPU guarantees
+    /// one and four samples for a renderable format and nothing else; two and
+    /// eight are adapter-specific, and an adapter that reports them is not the
+    /// same as a device being allowed to ask for them. Reading the adapter
+    /// alone is how 2× came to build every pipeline with a validation error.
+    pub fn supported_samples(&self, quality: MsaaQuality, format: wgpu::TextureFormat) -> u32 {
         let flags = self.adapter.get_texture_format_features(format).flags;
-        if flags.sample_count_supported(WANTED) {
+        let adapter_specific = self
+            .device
+            .features()
+            .contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
+        MsaaQuality::ALL
+            .into_iter()
+            .rev()
+            .filter(|candidate| *candidate <= quality)
+            .map(MsaaQuality::samples)
+            .find(|samples| match samples {
+                1 => true,
+                4 => flags.sample_count_supported(4),
+                _ => adapter_specific && flags.sample_count_supported(*samples),
+            })
+            .unwrap_or(1)
+    }
+
+    /// The multisampling this device is drawing at.
+    ///
+    /// Fixed for the life of the device. Changing it means rebuilding both the
+    /// framebuffer and every pipeline — a pipeline's sample count is part of
+    /// its state, and one that disagrees with its attachment is a validation
+    /// error at draw time — so it is chosen once, from what the adapter is,
+    /// rather than toggled.
+    pub fn msaa(&self) -> MsaaQuality {
+        self.msaa
+    }
+
+    pub fn adapter(&self) -> &wgpu::Adapter {
+        &self.adapter
+    }
+
+    /// Records bytes written to the device, for the diagnostics view and the
+    /// render benchmarks.
+    ///
+    /// Called by whatever does the writing rather than wrapped around
+    /// `write_buffer`: the queue is public, and a wrapper that could be
+    /// bypassed would under-report exactly the paths worth watching.
+    pub fn note_upload(&self, bytes: u64) {
+        self.uploaded.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// Bytes uploaded since this was last called, and resets the count.
+    pub fn take_uploaded_bytes(&self) -> u64 {
+        self.uploaded.swap(0, Ordering::Relaxed)
+    }
+
+    /// Bytes uploaded so far, without resetting.
+    pub fn uploaded_bytes(&self) -> u64 {
+        self.uploaded.load(Ordering::Relaxed)
+    }
+
+    /// How many anisotropic samples a texture filter may take.
+    ///
+    /// Sixteen where the device allows it, one where it does not. Asked rather
+    /// than assumed for the reason [`Gpu::sample_count`] is asked: a value the
+    /// device will not take is a validation error at sampler creation, and
+    /// there is no reason to refuse to start over a filtering nicety.
+    pub fn max_anisotropy(&self) -> u16 {
+        const WANTED: u16 = 16;
+        // The downlevel flag is what says the backend honours it at all; the
+        // limit is not exposed separately, and 16 is the ceiling every desktop
+        // backend that supports anisotropy at all provides.
+        if self
+            .adapter
+            .get_downlevel_capabilities()
+            .flags
+            .contains(wgpu::DownlevelFlags::ANISOTROPIC_FILTERING)
+        {
             WANTED
         } else {
             1
         }
     }
 
-    pub fn adapter(&self) -> &wgpu::Adapter {
-        &self.adapter
+    /// Whether the device will report its own clock at pass boundaries.
+    ///
+    /// Diagnostics only. A device without it draws every frame the same way
+    /// and reports no timing; see [`crate::profiler`].
+    pub fn supports_timestamps(&self) -> bool {
+        self.device
+            .features()
+            .contains(wgpu::Features::TIMESTAMP_QUERY)
     }
 
     /// Which adapter is rendering, for the diagnostics view.
@@ -154,6 +271,19 @@ impl Gpu {
         let info = self.adapter.get_info();
         format!("{} ({:?}, {:?})", info.name, info.device_type, info.backend)
     }
+
+    /// Overrides the multisampling this device draws at.
+    ///
+    /// For the render benchmarks, which measure the same scene at more than
+    /// one quality, and for a host that has a reason to override the adapter's
+    /// default. Every framebuffer and every pipeline made before this call
+    /// still carries the old count, and a pipeline whose count disagrees with
+    /// its attachment is a validation error at draw time — so this is only
+    /// sound before a renderer is built on the device, which is why it takes
+    /// `&mut self` and why nothing calls it mid-session.
+    pub fn set_msaa(&mut self, quality: MsaaQuality) {
+        self.msaa = quality;
+    }
 }
 
 impl std::fmt::Debug for Gpu {
@@ -161,6 +291,58 @@ impl std::fmt::Debug for Gpu {
         f.debug_struct("Gpu")
             .field("adapter", &self.adapter_description())
             .finish()
+    }
+}
+
+/// How much multisampling the scene is drawn with.
+///
+/// The scene, and nothing else: the interface is painted into the resolved
+/// target afterwards, and its edges are already on the pixel grid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum MsaaQuality {
+    /// No multisampling. Silhouettes are stair-stepped; a post-process pass is
+    /// the fallback where this is chosen deliberately.
+    Off,
+    /// Half the fill cost of four, and most of the benefit on a panel that is
+    /// already dense.
+    X2,
+    /// The default, and the usual sweet spot.
+    ///
+    /// The default for *every* adapter, deliberately, rather than derived from
+    /// what kind of device it says it is. Multisampling is fill rate, and the
+    /// obvious rule — four on a discrete card, two on an integrated one — reads
+    /// the wrong thing on the platform this is developed on: Apple Silicon
+    /// reports itself integrated and is not short of fill rate, so that rule
+    /// would quietly take macOS from four samples to two. A drop in
+    /// multisampling is a visible change to the picture, so it is a choice
+    /// somebody makes through [`Gpu::set_msaa`] rather than one a heuristic
+    /// makes for them.
+    #[default]
+    X4,
+    /// Rarely worth what it costs. Offered because some devices have it, not
+    /// because it should be reached for.
+    X8,
+}
+
+impl MsaaQuality {
+    pub const ALL: [Self; 4] = [Self::Off, Self::X2, Self::X4, Self::X8];
+
+    pub fn samples(self) -> u32 {
+        match self {
+            Self::Off => 1,
+            Self::X2 => 2,
+            Self::X4 => 4,
+            Self::X8 => 8,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "sem",
+            Self::X2 => "2×",
+            Self::X4 => "4×",
+            Self::X8 => "8×",
+        }
     }
 }
 
@@ -190,20 +372,64 @@ impl std::error::Error for GpuError {}
 pub struct Framebuffer {
     pub width: u32,
     pub height: u32,
+    /// What tells one framebuffer from the next.
+    ///
+    /// wgpu exposes no identity for a texture view, so anything caching a bind
+    /// group over these views has no way to ask whether they are still the
+    /// ones it built against. A counter answers it: a framebuffer is only ever
+    /// replaced wholesale, on resize, so a cache that remembers which number it
+    /// was built for knows exactly when it is stale.
+    id: u64,
     depth: wgpu::TextureView,
     /// The multisampled colour target, resolved into the caller's view.
     ///
     /// `None` where the device will not multisample this format, in which case
     /// drawing goes straight to the caller's view as it always did.
     color: Option<wgpu::TextureView>,
-    /// Single-channel occlusion, written from the depth buffer and multiplied
-    /// onto the resolved colour. `None` when the scene is not multisampled.
-    occlusion: Option<wgpu::TextureView>,
+    /// The scene's depth, reduced to one sample per pixel at the occlusion
+    /// resolution.
+    ///
+    /// The pass between the scene and the occlusion kernel. It exists for two
+    /// reasons at once: it is where the resolution drops, and it is what frees
+    /// occlusion from multisampling — the kernel used to bind this
+    /// framebuffer's depth buffer directly, which can only be done as
+    /// `texture_depth_multisampled_2d`, so a device that would not multisample
+    /// got no occlusion at all.
+    reduced_depth: wgpu::TextureView,
+    /// Single-channel occlusion, written from the reduced depth and multiplied
+    /// onto the resolved colour.
+    occlusion: wgpu::TextureView,
+    /// The size of both of the above, in pixels.
+    ao_width: u32,
+    ao_height: u32,
     samples: u32,
 }
 
+/// The source of [`Framebuffer::id`]. Never reused: a wrapped counter would
+/// hand a cache a stale entry that looks current.
+static NEXT_FRAMEBUFFER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 impl Framebuffer {
     pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
+    /// How many display pixels across one occlusion pixel covers.
+    ///
+    /// Two. Occlusion is a low-frequency term and the kernel is the expensive
+    /// part of it, so running the kernel at half resolution is a quarter of
+    /// the samples — at 1920×1080 that is 8.3 million depth samples a frame
+    /// where the full-resolution pass took 33 million, and at 4K four times
+    /// that saving. What the drop costs is edge accuracy, which the composite
+    /// buys back with a depth-aware upsample rather than the box average it
+    /// replaces.
+    pub const AO_SCALE: u32 = 2;
+
+    /// The reduced depth's format.
+    ///
+    /// A colour target rather than a depth one: it is read by two later passes
+    /// as an ordinary texture, and a single channel of full float is exactly
+    /// the depth buffer's own precision. Loaded, never filtered, so it needs
+    /// no float-filtering feature.
+    pub const REDUCED_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 
     pub fn new(gpu: &Gpu, width: u32, height: u32, format: wgpu::TextureFormat) -> Self {
         let (width, height) = (width.max(1), height.max(1));
@@ -211,6 +437,17 @@ impl Framebuffer {
         let size = wgpu::Extent3d {
             width,
             height,
+            depth_or_array_layers: 1,
+        };
+        // Rounded up, so the last partial block of the frame still has an
+        // occlusion pixel covering it rather than being left unshaded.
+        let (ao_width, ao_height) = (
+            width.div_ceil(Self::AO_SCALE),
+            height.div_ceil(Self::AO_SCALE),
+        );
+        let ao_size = wgpu::Extent3d {
+            width: ao_width,
+            height: ao_height,
             depth_or_array_layers: 1,
         };
         let depth = gpu
@@ -249,34 +486,57 @@ impl Framebuffer {
                 .create_view(&wgpu::TextureViewDescriptor::default())
         });
 
+        let attachment =
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
+        let reduced_depth = gpu
+            .device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("reduced depth"),
+                size: ao_size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: Self::REDUCED_DEPTH_FORMAT,
+                usage: attachment,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
         // Single-sampled, and one channel. It is a shadowing term rather than
-        // a picture: it is averaged over a neighbourhood by the composite pass
-        // anyway, so a sample per pixel is already more resolution than
-        // survives that.
-        let occlusion = (samples > 1).then(|| {
-            gpu.device
-                .create_texture(&wgpu::TextureDescriptor {
-                    label: Some("occlusion"),
-                    size,
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: Self::OCCLUSION_FORMAT,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::TEXTURE_BINDING,
-                    view_formats: &[],
-                })
-                .create_view(&wgpu::TextureViewDescriptor::default())
-        });
+        // a picture: the composite weighs a neighbourhood of it against the
+        // frame's own depth anyway, so a sample per pixel is already more
+        // resolution than survives that.
+        let occlusion = gpu
+            .device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("occlusion"),
+                size: ao_size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: Self::OCCLUSION_FORMAT,
+                usage: attachment,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
         Self {
+            id: NEXT_FRAMEBUFFER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             width,
             height,
             depth,
             color,
+            reduced_depth,
             occlusion,
+            ao_width,
+            ao_height,
             samples,
         }
+    }
+
+    /// Which framebuffer this is, for caches built over its views.
+    pub fn id(&self) -> u64 {
+        self.id
     }
 
     pub fn depth_view(&self) -> &wgpu::TextureView {
@@ -302,15 +562,30 @@ impl Framebuffer {
         self.samples
     }
 
+    /// Where the reduction writes, and the occlusion kernel reads.
+    pub fn reduced_depth_view(&self) -> &wgpu::TextureView {
+        &self.reduced_depth
+    }
+
     /// Where the occlusion pass writes, and the composite reads.
     ///
-    /// `None` where the scene is not multisampled: the pass loads the depth
-    /// buffer through `texture_depth_multisampled_2d`, which a single-sampled
-    /// texture cannot be bound to, and a second shader for a case no real
-    /// device reaches is a permutation to keep working for nothing. A device
-    /// that will not multisample draws without occlusion.
-    pub fn occlusion_view(&self) -> Option<&wgpu::TextureView> {
-        self.occlusion.as_ref()
+    /// Present whatever the sample count. It used to be `None` on a device
+    /// that would not multisample, because the kernel bound this
+    /// framebuffer's depth buffer as `texture_depth_multisampled_2d` and a
+    /// single-sampled texture cannot be bound to that — so such a device drew
+    /// with no occlusion for a reason that was about a binding rather than
+    /// about rendering. The reduction pass removed the coupling.
+    pub fn occlusion_view(&self) -> &wgpu::TextureView {
+        &self.occlusion
+    }
+
+    /// The occlusion target's own size, in pixels.
+    ///
+    /// Stated separately from the scene's because the two do not agree: the
+    /// kernel runs at [`Framebuffer::AO_SCALE`] display pixels per occlusion
+    /// pixel, and a pass told only the scene's size could not place itself.
+    pub fn occlusion_size(&self) -> [u32; 2] {
+        [self.ao_width, self.ao_height]
     }
 
     /// The format the occlusion target is written in.
@@ -318,5 +593,34 @@ impl Framebuffer {
 
     pub fn aspect(&self) -> f32 {
         self.width as f32 / self.height as f32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The qualities are ordered by what they cost, which is what lets
+    /// `supported_on` walk down from the one that was asked for.
+    #[test]
+    fn the_qualities_are_ordered_by_their_sample_count() {
+        let mut samples: Vec<u32> = MsaaQuality::ALL.iter().map(|q| q.samples()).collect();
+        assert_eq!(samples, vec![1, 2, 4, 8]);
+        samples.sort_unstable();
+        assert_eq!(samples, vec![1, 2, 4, 8]);
+        assert!(MsaaQuality::Off < MsaaQuality::X2);
+        assert!(MsaaQuality::X4 < MsaaQuality::X8);
+        assert_eq!(MsaaQuality::default(), MsaaQuality::X4);
+    }
+
+    /// Four is the default, and eight is never it.
+    ///
+    /// Eight costs twice what four does to move a silhouette by a fraction of
+    /// a pixel; a device that has it can be asked for it, and is never given
+    /// it.
+    #[test]
+    fn four_is_the_default_and_eight_is_never_it() {
+        assert_eq!(MsaaQuality::default(), MsaaQuality::X4);
+        assert!(MsaaQuality::default() < MsaaQuality::X8);
     }
 }

@@ -296,10 +296,7 @@ pub fn viewport_layers(document: &mut ClayDocument) -> (Vec<Vertex>, Vec<u32>, V
         .collect();
     let spans = spans
         .into_iter()
-        .map(|span| MeshSpan {
-            layer: span.layer,
-            indices: span.indices,
-        })
+        .map(|span| MeshSpan::new(span.layer, span.indices))
         .collect();
     (vertices, indices, spans)
 }
