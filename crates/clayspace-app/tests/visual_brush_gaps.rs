@@ -439,8 +439,24 @@ fn capture_masked(harness: &Harness, document: &mut ClayDocument, name: &str) ->
 ///
 /// The composition root now draws with the modulation enabled, unconditionally,
 /// and this is the reason that is safe: the brick cache meshes without colour
-/// and `read_mesh` fills those vertices with the identity, so a scene with no
-/// colour in it renders bit for bit as it did.
+/// and `read_mesh` fills those vertices with the identity, so the modulation
+/// has nothing to modulate by.
+///
+/// **Unchanged to within the rasteriser's own precision, rather than bit for
+/// bit**, and the difference is worth stating because the first version of this
+/// asserted the stronger thing and CI was right to refuse it. The shader
+/// computes `mix(vec3(1.0), color, tint.a)`: with the switch off that is
+/// exactly `vec3(1.0)`, and with it on it is the *interpolated* vertex colour.
+/// Every vertex carries exactly 1.0, but perspective-correct interpolation of a
+/// constant is not bit-exact — it is a ratio of two sums — so `color` can come
+/// back a hair under one, and at a silhouette, where the MatCap lookup is
+/// near-tangent and a hair of normal swings the sample a long way, that is
+/// enough to cross an eight-bit boundary.
+///
+/// Measured: 0 pixels of 172,800 on Linux with Vulkan, 6 on the macOS software
+/// rasteriser. The bound below is a five-thousandth of the frame — generous
+/// against six, and far too tight for anything that had actually tinted the
+/// clay, which would move the lit face rather than a rim.
 #[test]
 fn colour_modulation_leaves_a_field_surface_alone() {
     let Some(harness) = Harness::new() else {
@@ -462,9 +478,13 @@ fn colour_modulation_leaves_a_field_surface_alone() {
         "gaps-field-colour-off",
     );
     let on = harness.capture(geometry.mesh(), &on_the_cap(), true, "gaps-field-colour-on");
-    assert_eq!(
-        how_many_differ(&off, &on),
-        0,
-        "the field surface changed when vertex colour was enabled"
+    let pixels = off.pixels.len() / 4;
+    let allowed = pixels / 5_000;
+    let differing = how_many_differ(&off, &on);
+    println!("colour modulation moved {differing} of {pixels} pixels");
+    assert!(
+        differing <= allowed,
+        "the field surface changed when vertex colour was enabled: {differing} \
+         of {pixels} pixels, against {allowed} allowed for rasteriser precision"
     );
 }

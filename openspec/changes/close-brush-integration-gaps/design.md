@@ -44,8 +44,9 @@ every frame. Voxel and mesh vertices have carried real colours through
 `sync_mesh_layers` all along; the SDF surface is meshed with `colors: false`
 and every vertex comes back `[1, 1, 1]`, which is the identity under the
 modulation. So the switch can simply be turned on: the field surface is
-unchanged bit for bit, and the two representations that carry colour start
-showing it.
+unchanged — to within the rasteriser's own precision rather than bit for bit,
+since interpolating a constant colour is a ratio of two sums — and the two
+representations that carry colour start showing it.
 
 ## Voxel Grab accumulates because the engine rounds
 

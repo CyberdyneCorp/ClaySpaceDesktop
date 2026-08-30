@@ -16,4 +16,7 @@ value, so enabling the modulation SHALL leave a field surface unchanged.
 #### Scenario: A field surface is not tinted by the switch
 - **WHEN** the same SDF scene is captured before and after colour modulation is
   enabled
-- **THEN** the two images are identical
+- **THEN** the two images agree to within the rasteriser's own precision, which
+  is not the same as being identical: interpolating a colour that is one at
+  every vertex is a ratio of two sums, so a silhouette pixel may still round
+  the other way

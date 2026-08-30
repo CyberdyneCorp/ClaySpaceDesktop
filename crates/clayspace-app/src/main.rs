@@ -3532,8 +3532,9 @@ impl App {
             // a colour is white: the field surface is meshed with colours off
             // and `read_mesh` fills its vertices with 1.0, and a mesh layer
             // with no colour attribute comes back the same. So a scene with no
-            // colour in it renders bit for bit as it did — which
-            // `colour_modulation_leaves_a_field_surface_alone` holds.
+            // colour in it renders as it did, to within the rasteriser's own
+            // precision — `colour_modulation_leaves_a_field_surface_alone`
+            // holds that, and says why it is not bit for bit.
             true,
         );
         paint_interface(graphics, &context, output, &view, scale);
