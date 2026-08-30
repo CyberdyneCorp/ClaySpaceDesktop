@@ -67,14 +67,17 @@ impl Combine {
     /// The operations the options bar offers for a stroke on a field.
     ///
     /// Every entry of [`Self::ALL`] except Paint, which is real in the engine
-    /// and cannot work here: an SDF stroke has no colour to deposit — there is
-    /// no brush colour anywhere in the application, and the brick cache meshes
-    /// the surface with colours off, so nothing it wrote would be drawn.
-    /// Measured at four radii, the surface under a Paint stroke does not move
-    /// and no pixel changes. Offering it would be offering a control that
-    /// silently does nothing, so it is left out until there is a colour to
-    /// paint with; `Combine::Paint` stays in the vocabulary because the
-    /// operation exists and the mapping onto the engine has to stay complete.
+    /// and cannot work here — now for one reason rather than two. There *is* a
+    /// brush colour (see [`crate::colour`]), and it reaches the two
+    /// representations that carry one; what is still missing is the other
+    /// half. The brick cache meshes the surface with colours off and nothing
+    /// in the surface path carries a colour to the GPU, so what a Paint stroke
+    /// wrote would not be drawn. Measured at four radii, the surface under one
+    /// does not move and no pixel changes. Offering it would be offering a
+    /// control that silently does nothing, so it is left out until the colour
+    /// reaches the rendered geometry; `Combine::Paint` stays in the vocabulary
+    /// because the operation exists and the mapping onto the engine has to
+    /// stay complete.
     pub fn offered_for_strokes() -> Vec<Combine> {
         Self::ALL
             .into_iter()

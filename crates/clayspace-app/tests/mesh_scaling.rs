@@ -190,7 +190,7 @@ fn what_applying_a_stroke_costs() {
                 }],
                 &preset,
                 &item,
-                None,
+                clayspace_engine::claycore::MaskSource::None,
             )
             .expect("stroke");
         apply += started.elapsed();
@@ -321,7 +321,7 @@ fn what_the_backend_costs_for_a_small_refill() {
                     }],
                     &preset,
                     &item,
-                    None,
+                    clayspace_engine::claycore::MaskSource::None,
                 )
                 .expect("stroke");
             cache.mark_dirty_nodes(&doc, layer, &nodes).expect("mark");

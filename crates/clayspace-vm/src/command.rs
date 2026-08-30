@@ -151,6 +151,14 @@ pub enum Command {
     SetBrushAccumulate(bool),
     /// Whether the active tool's brush is modulated by the loaded stamp.
     SetBrushAlpha(bool),
+    /// What the colour brushes paint with.
+    ///
+    /// One value for the session rather than one per tool: it is what the
+    /// sculptor is painting with now, not a property of a brush. See
+    /// `clayspace_model::colour`.
+    SetBrushColour(clayspace_model::Colour),
+    /// Picks the nth colour off the recent list back into the swatch.
+    PickRecentColour(usize),
     /// Asks for a PNG and loads it as the alpha stamp.
     LoadAlpha,
     /// Drops the loaded stamp, so no brush is modulated.
@@ -471,6 +479,8 @@ impl Command {
                 | Self::SetBrushFalloff(_)
                 | Self::SetBrushAccumulate(_)
                 | Self::SetBrushAlpha(_)
+                | Self::SetBrushColour(_)
+                | Self::PickRecentColour(_)
                 // Loading a stamp changes no surface; the stroke that uses it
                 // does. Loading takes the composition root's own path for the
                 // reason import does — it opens a dialog.
@@ -550,6 +560,8 @@ impl Command {
             Self::SetBrushFalloff(_) => "brush edge",
             Self::SetBrushAccumulate(_) => "brush accumulation",
             Self::SetBrushAlpha(_) => "brush stamp",
+            Self::SetBrushColour(_) => "brush colour",
+            Self::PickRecentColour(_) => "recent colour",
             Self::LoadAlpha => "load stamp",
             Self::ClearAlpha => "clear stamp",
             Self::ToggleReferences => "reference panel",

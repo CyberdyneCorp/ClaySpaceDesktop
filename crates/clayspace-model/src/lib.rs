@@ -13,6 +13,7 @@
 pub mod alpha;
 pub mod armature;
 pub mod boolean;
+pub mod colour;
 pub mod combine;
 pub mod conversion;
 pub mod curve;
@@ -38,6 +39,7 @@ pub mod voxel_display;
 pub use alpha::{Alpha, AlphaRefusal, AlphaSupport};
 pub use armature::{Armature, ArmatureModel, NodeIndex, SkinSettings, Zsphere};
 pub use boolean::{BooleanOp, BooleanRefusal, BooleanSettings};
+pub use colour::{Colour, ColourState};
 pub use combine::{BlendProfile, Combine, CombineSettings, StrokeModifiers};
 pub use conversion::{
     ConversionSettings, Cost, DeformSettings, DeformVerb, Direction, Refusal, RepairReport,
@@ -79,7 +81,7 @@ pub use shape::{
 pub use surface::SurfaceOpacity;
 pub use tools::{
     BrushSettings, Falloff, LayerOperation, LayerState, Representation, Shaping, ToolKind,
-    Unavailable, Verbs, ViewPresetKind,
+    ToolNote, Unavailable, Verbs, ViewPresetKind,
 };
 pub use units::{Unit, Units, UnitsModel};
 pub use voxel_display::{SmoothBlur, VoxelDisplay};

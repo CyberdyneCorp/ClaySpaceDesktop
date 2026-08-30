@@ -56,7 +56,7 @@ pub use live::{
     MoveTransaction, PreviewBrick, PreviewDelta, PreviewGrab, PreviewPending, SculptBudget,
     SculptDirty, SculptPolicy, SmoothTransaction,
 };
-pub use mask::{ExtrudeSide, Mask, MaskExtrudeParams, MaskField, MaskRef};
+pub use mask::{ExtrudeSide, Mask, MaskExtrudeParams, MaskField, MaskLease, MaskRef, MaskSource};
 pub use mesh::{ImportBudget, Mesh, MeshLayerDesc, MeshParams, MeshValidity, Mesher, VertexLayout};
 pub use mesh_sculpt::{
     AlphaStamp, MeshBrush, MeshDeform, MeshDeformer, MeshDeltas, MeshFalloff, MeshHit, MeshLattice,
@@ -65,10 +65,12 @@ pub use mesh_sculpt::{
 pub use pick::{Hit, Snapped};
 pub use reader::Reader;
 pub use sculpt::{
-    resolve_stroke, FlattenMode, FlattenParams, MoveParams, RelaxParams, VolumeParams,
+    resolve_stroke, FlattenMode, FlattenParams, MoveParams, RelaxParams, TopologicalMoveParams,
+    VolumeParams,
 };
 pub use voxel::{
-    Cell, ChunkRange, RepairReport, VoxelField, VoxelGrid, VoxelGridRef, VoxelHit, VoxelReader,
+    Cell, ChunkRange, MaskedGrid, RepairReport, VoxelField, VoxelGrid, VoxelGridRef, VoxelHit,
+    VoxelReader,
 };
 
 use claycore_sys as sys;

@@ -41,6 +41,12 @@ pub mod size {
     pub const CONTROL: f32 = 22.0;
     /// A brush swatch in the shelf.
     pub const SWATCH: f32 = 54.0;
+    /// One recently used colour, in the row beside the colour swatch.
+    ///
+    /// Small: six of them plus their gaps sit inside the options bar's slider
+    /// width, and a recent colour is a target to click rather than a thing to
+    /// judge a shade by — the swatch above it is where a colour is read.
+    pub const COLOUR_CHIP: f32 = 16.0;
     /// The active brush's ball at the head of the options bar: what the bar's
     /// height leaves after its padding.
     pub const BADGE: f32 = 42.0;
@@ -242,6 +248,17 @@ mod tests {
     /// marker and the test cannot drift apart.
     const DERIVED: &str = "derived from a token";
 
+    /// The other exemption, and a different one: a colour that is the
+    /// *sculptor's*, carried up from the document.
+    ///
+    /// A paint swatch draws the colour someone chose. It is data rather than
+    /// design, it cannot come from a token — a token is exactly what it is
+    /// not — and a rule that forced one would mean the swatch could never show
+    /// the colour it stands for. Marked separately from `DERIVED` so the two
+    /// exemptions stay distinguishable: one shades a design colour, and this
+    /// one is not a design colour at all.
+    const CHOSEN: &str = "the sculptor's own colour";
+
     /// Every colour on screen comes from a named token.
     ///
     /// The design-system requirement as a test rather than as prose. It has to
@@ -286,10 +303,10 @@ mod tests {
                 if !written_down {
                     continue;
                 }
-                let derived = at
-                    .checked_sub(1)
-                    .is_some_and(|above| lines[above].contains(DERIVED));
-                if !derived {
+                let excused = at.checked_sub(1).is_some_and(|above| {
+                    lines[above].contains(DERIVED) || lines[above].contains(CHOSEN)
+                });
+                if !excused {
                     offenders.push(format!("{name}:{}", at + 1));
                 }
             }
@@ -297,8 +314,9 @@ mod tests {
         assert!(
             offenders.is_empty(),
             "a colour was written down rather than taken from a token, at {}; \
-             add it to `Tokens`, or mark the line \"{DERIVED}\" if it shades \
-             one it was given",
+             add it to `Tokens`, mark the line \"{DERIVED}\" if it shades one \
+             it was given, or \"{CHOSEN}\" if it is a colour from the \
+             document rather than from the design",
             offenders.join(", ")
         );
     }

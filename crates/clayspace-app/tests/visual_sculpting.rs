@@ -94,8 +94,14 @@ fn padrao_deposits_material_along_a_stroke() {
                 StrokeSample::at([s * 1.02, 0.18, c * 1.02], t * 0.2)
             })
             .collect();
-        doc.apply_stroke(layer, &samples, &preset, &stamp, None)
-            .expect("apply stroke");
+        doc.apply_stroke(
+            layer,
+            &samples,
+            &preset,
+            &stamp,
+            clayspace_engine::claycore::MaskSource::None,
+        )
+        .expect("apply stroke");
     });
 
     assert!(
@@ -220,7 +226,7 @@ fn mascara_extrude_pulls_a_patch_off_the_surface() {
         let solid = doc
             .mask_extrude(
                 layer,
-                &mask,
+                clayspace_engine::claycore::MaskSource::Field(&mask),
                 clayspace_engine::claycore::MaskExtrudeParams {
                     thickness: 0.22,
                     border_round: 0.05,

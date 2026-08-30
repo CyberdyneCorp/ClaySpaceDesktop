@@ -3283,6 +3283,7 @@ impl App {
             representation: self.sculpt.active_representation(),
             brush: *self.sculpt.brush().get(),
             combine: *self.sculpt.combine().get(),
+            colour: self.sculpt.colour().get(),
             alpha: alpha_name.as_deref(),
             // The options bar's one "why that did not happen" line, shared.
             //
@@ -3519,7 +3520,22 @@ impl App {
             graphics.surface.framebuffer(),
             &self.camera,
             surface,
-            false,
+            // Vertex colour on, which it was not. A voxel layer's palette and a
+            // mesh layer's colour attribute have reached the vertex buffer
+            // through `sync_mesh_layers` all along, and the fragment stage has
+            // always been able to modulate by them — the composition root was
+            // writing the switch off on every frame, so Pintar could not change
+            // a pixel on either representation.
+            //
+            // Unconditional rather than "when something carries colour",
+            // because the modulation's identity is white and everything without
+            // a colour is white: the field surface is meshed with colours off
+            // and `read_mesh` fills its vertices with 1.0, and a mesh layer
+            // with no colour attribute comes back the same. So a scene with no
+            // colour in it renders as it did, to within the rasteriser's own
+            // precision — `colour_modulation_leaves_a_field_surface_alone`
+            // holds that, and says why it is not bit for bit.
+            true,
         );
         paint_interface(graphics, &context, output, &view, scale);
         frame.present();

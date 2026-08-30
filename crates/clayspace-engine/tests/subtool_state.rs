@@ -239,7 +239,15 @@ fn clearing_one_subtools_mask_leaves_the_others_alone() {
     freeze(&mut doc, [0.0, 0.0, -1.0]);
     doc.apply_mask_op(clayspace_model::MaskOp::Clear)
         .expect("clear the second subtool's mask");
-    assert_eq!(doc.mask_state(), clayspace_model::MaskState::default());
+    // Emptied rather than removed: a mask belongs to the layer inside the
+    // engine's document — which is what makes it survive a save — and the
+    // document has no verb for detaching one. `is_active` is the question the
+    // interface asks, and it is the one that has to answer no.
+    assert!(
+        !doc.mask_state().is_active(),
+        "the cleared mask still freezes {} cells",
+        doc.mask_state().painted_cells
+    );
 
     doc.set_active_layer(first).expect("back to the first");
     assert_eq!(

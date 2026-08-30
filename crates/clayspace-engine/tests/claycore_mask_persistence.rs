@@ -1,27 +1,28 @@
 //! What the engine's per-layer mask can do, measured at the boundary.
 //!
-//! The question this answers is task 6.4's: does a mask attached to a layer
+//! The question this answered was task 6.4's: does a mask attached to a layer
 //! ride the document's save path? It does — `clay_document_add_mask` puts the
-//! mask in the layer, and `clay_document_save` writes it. That is worth having
-//! and this crate does not have it yet: `ClayDocument` keeps each subtool's
-//! mask as a standalone `clay_mask_create`, so a mask is lost when the
-//! document is closed, exactly as it was before masks became per subtool.
+//! mask in the layer, and `clay_document_save` writes it.
 //!
-//! The reason is the borrow, not the engine. `Document::mask` hands back a
-//! `MaskRef` that borrows the document — it must, since the handle may not
-//! outlive it — while every masked verb in the wrapper takes the document
-//! *and* `Option<&MaskField>` together: `apply_stroke(&mut self, …, mask)`,
-//! `relax_region(&self, RelaxParams { mask, … })`, `flatten_region`,
-//! `mask_extrude`, and a voxel grid borrowed out of the same document. The C
-//! side is built for exactly that pairing and Rust cannot express it: a mask
-//! lent out of a document cannot be handed back into it. Reaching the engine's
-//! mask means giving those five entry points a form that takes the mask's
-//! *layer* rather than the mask, which is a redesign of `claycore`'s masking
-//! surface rather than the thin wrapper this change is allowed.
+//! For a long while this file also recorded that the *application* could not
+//! use that, and why. The reason was never the engine: `Document::mask` handed
+//! back a `MaskRef` borrowing the document — it had to, since the handle may
+//! not outlive it — while every masked verb in the wrapper wanted that handle
+//! *and* the document together, which Rust cannot spell. So `ClayDocument`
+//! kept each subtool's mask in a standalone `clay_mask_create` and lost it the
+//! moment a file was closed.
 //!
-//! So this test is the record of what is on the table, and it fails the day
-//! the engine stops serializing masks — which is the other thing worth
-//! knowing before that work is scheduled.
+//! That is closed. `claycore::MaskSource` names the mask's **layer** instead of
+//! lending the handle, `Document::layer_mask` lends one through a *shared*
+//! borrow, and `Document::voxel_layer_masked` hands over a grid and its
+//! layer's mask out of one borrow — so the resolution happens inside this
+//! crate, where the document pointer and the mask pointer coexist for the
+//! length of one C call and neither escapes.
+//!
+//! What is left here is the boundary measurement itself, which fails the day
+//! the engine stops serializing masks. `clayspace-engine`'s
+//! `mask_persistence.rs` is the property one layer up: paint, save, reopen,
+//! and the same region is still frozen and still gating.
 
 use claycore::{Document, Item};
 

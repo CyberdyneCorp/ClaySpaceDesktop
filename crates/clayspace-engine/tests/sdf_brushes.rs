@@ -73,16 +73,19 @@ fn stroke(document: &mut ClayDocument, tool: ToolKind, invert: bool, symmetry: [
 
 /// The brushes that move the surface. Máscara paints the freeze and Trim is a
 /// shape drawn on the view frame, so neither is a stroke that displaces clay.
-const SURFACE_BRUSHES: [ToolKind; 9] = [
+const SURFACE_BRUSHES: [ToolKind; 12] = [
     ToolKind::Padrao,
     ToolKind::Inflar,
     ToolKind::Suavizar,
     ToolKind::Mover,
+    ToolKind::MoverTopologico,
     ToolKind::Planar,
     ToolKind::Camada,
     ToolKind::Puxar,
     ToolKind::Polir,
     ToolKind::Relaxar,
+    ToolKind::Argila,
+    ToolKind::Vinco,
 ];
 
 #[test]
@@ -188,19 +191,33 @@ fn a_brush_does_not_mirror_when_it_is_not_asked_to() {
 /// smooth is not a thing either reference offers, and sharpening is a
 /// different verb rather than a smooth turned over. Nor does a drag: its
 /// direction *is* its sign, and inverting it is dragging the other way.
-const SIGNED: [ToolKind; 5] = [
+/// Argila and Vinco are here too, and they are the pair the engine names: the
+/// relief and the incise are each other's opposite, so building up clay
+/// inverts to cutting in and a crease inverts to the ridge it would have cut.
+/// `sdf_named_brushes.rs` measures both directions.
+const SIGNED: [ToolKind; 7] = [
     ToolKind::Padrao,
     ToolKind::Inflar,
     ToolKind::Camada,
     ToolKind::Planar,
     ToolKind::Polir,
+    ToolKind::Argila,
+    ToolKind::Vinco,
 ];
 
 #[test]
 fn the_depositing_brushes_take_material_away_when_inverted() {
     let base = sphere();
     let rest = reach(&base, AT);
-    for tool in [ToolKind::Padrao, ToolKind::Inflar, ToolKind::Camada] {
+    for tool in [
+        ToolKind::Padrao,
+        ToolKind::Inflar,
+        ToolKind::Camada,
+        // Argila is relief like the other three, so it inverts to the incise —
+        // Vinco is not here because it is the incise *upright*, and its
+        // inverse raises rather than cuts.
+        ToolKind::Argila,
+    ] {
         let mut up = sphere();
         let mut down = sphere();
         stroke(&mut up, tool, false, [false; 3]);

@@ -131,6 +131,8 @@ fn name_of(tool: ToolKind) -> &'static str {
         ToolKind::Padrao => "padrao",
         ToolKind::Inflar => "inflar",
         ToolKind::Suavizar => "suavizar",
+        ToolKind::Mover => "mover",
+        ToolKind::Planar => "planar",
         ToolKind::Pincar => "pincar",
         ToolKind::Raspar => "raspar",
         ToolKind::Camada => "camada",

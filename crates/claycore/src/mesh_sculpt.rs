@@ -23,7 +23,7 @@ use claycore_sys as sys;
 
 use crate::descriptor::Descriptor;
 use crate::error::{check, ErrorKind, Result};
-use crate::mask::Mask;
+use crate::mask::MaskField;
 use crate::mesh::Mesh;
 use crate::raw_failure;
 
@@ -676,7 +676,7 @@ impl MeshSculptor {
     pub fn stamp(
         &mut self,
         stamp: MeshStamp<'_>,
-        mask: Option<&Mask>,
+        mask: Option<&MaskField>,
         deltas: Option<&mut MeshDeltas>,
     ) -> Result<usize> {
         let desc = stamp.as_raw();
@@ -709,7 +709,7 @@ impl MeshSculptor {
         samples: &[[f32; 5]],
         preset: &crate::StrokePreset,
         stamp: MeshStamp<'_>,
-        mask: Option<&Mask>,
+        mask: Option<&MaskField>,
         deltas: Option<&mut MeshDeltas>,
     ) -> Result<usize> {
         if samples.is_empty() {
@@ -779,7 +779,7 @@ impl MeshSculptor {
     pub fn deform(
         &mut self,
         deformer: MeshDeformer,
-        mask: Option<&Mask>,
+        mask: Option<&MaskField>,
         deltas: Option<&mut MeshDeltas>,
     ) -> Result<usize> {
         let desc = deformer.to_raw();
