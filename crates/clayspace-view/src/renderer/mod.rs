@@ -1020,18 +1020,16 @@ impl Renderer {
         // copy of a three-hundred-line shader kept in step by hand.
         let samples = gpu.sample_count(format);
         let ao_source = if samples > 1 {
-            std::borrow::Cow::Borrowed(include_str!("../shaders/ao.wgsl"))
+            shader_source(include_str!("../shaders/ao.wgsl"))
         } else {
-            std::borrow::Cow::Owned(
-                include_str!("../shaders/ao.wgsl")
-                    .replace("texture_depth_multisampled_2d", "texture_depth_2d"),
-            )
+            shader_source(include_str!("../shaders/ao.wgsl"))
+                .replace("texture_depth_multisampled_2d", "texture_depth_2d")
         };
         let ao_shader = gpu
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("ao"),
-                source: wgpu::ShaderSource::Wgsl(ao_source),
+                source: wgpu::ShaderSource::Wgsl(ao_source.into()),
             });
 
         // Binding 1 is the scene's depth, 2 the reduction's output, 3 the
@@ -1126,7 +1124,9 @@ impl Renderer {
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("fxaa"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/fxaa.wgsl").into()),
+                source: wgpu::ShaderSource::Wgsl(
+                    shader_source(include_str!("../shaders/fxaa.wgsl")).into(),
+                ),
             });
         let fxaa_layout = gpu
             .device
@@ -2461,6 +2461,16 @@ impl Renderer {
     }
 }
 
+/// A shader source, with the shared definitions in front of it.
+///
+/// WGSL has no include. Two of the three shaders here draw a fullscreen
+/// triangle and had an identical copy of the twelve lines that do it, and the
+/// failure mode of two identical copies is that one of them is edited — so the
+/// copy that survives is prepended here instead. See `shaders/common.wgsl`.
+fn shader_source(body: &str) -> String {
+    format!("{}\n{body}", include_str!("../shaders/common.wgsl"))
+}
+
 /// The box the triangles in one index range occupy.
 ///
 /// `None` for an empty range, and for a range that names no vertex this buffer
@@ -3092,34 +3102,52 @@ mod tests {
     #[test]
     fn no_field_math_in_shaders() {
         // The whole point of meshing on the engine side is that the shader
-        // does not re-implement the field. If one of these appears here, the
-        // drift this project is built to avoid has started.
-        // Both of them. The occlusion pass reads the depth the mesh wrote and
-        // is exactly the kind of pass that would be tempting to write a field
-        // march into instead.
-        let shader = format!(
-            "{}{}",
-            include_str!("../shaders/matcap.wgsl"),
-            include_str!("../shaders/ao.wgsl")
-        )
-        .to_lowercase();
-        for forbidden in [
-            "sd_sphere",
-            "sdsphere",
-            "smin",
-            "smooth_min",
-            "sdbox",
-            "sd_box",
-            "signed_distance",
-            "raymarch",
-            "sphere_trace",
-            "ctape_eval",
-        ] {
-            assert!(
-                !shader.contains(forbidden),
-                "a viewport shader contains `{forbidden}`, which means it is \
-                 evaluating the field instead of drawing the mesh the engine produced"
-            );
+        // does not re-implement the field. If one of these appears in any of
+        // them, the drift this project is built to avoid has started.
+        //
+        // Every shader, read off the directory rather than listed here. A list
+        // exempts whatever is not on it, silently, and the shader most likely
+        // to be tempted into a field march is the next one somebody writes:
+        // the occlusion pass reads the depth the mesh wrote, and reaching for
+        // a distance function there would look like a shortcut rather than
+        // like a layering violation.
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/shaders");
+        let shaders: Vec<std::path::PathBuf> = std::fs::read_dir(&directory)
+            .expect("the shader directory")
+            .filter_map(|entry| {
+                let path = entry.ok()?.path();
+                (path.extension()? == "wgsl").then_some(path)
+            })
+            .collect();
+        assert!(
+            shaders.len() >= 4,
+            "found {} shaders in {}, which is fewer than there are",
+            shaders.len(),
+            directory.display()
+        );
+
+        for path in shaders {
+            let source = std::fs::read_to_string(&path)
+                .expect("a shader")
+                .to_lowercase();
+            for forbidden in [
+                "sd_sphere",
+                "sdsphere",
+                "smin",
+                "smooth_min",
+                "sdbox",
+                "sd_box",
+                "signed_distance",
+                "raymarch",
+                "sphere_trace",
+                "ctape_eval",
+            ] {
+                assert!(
+                    !source.contains(forbidden),
+                    "{} names `{forbidden}`, which is field math in a shader",
+                    path.display()
+                );
+            }
         }
     }
 
