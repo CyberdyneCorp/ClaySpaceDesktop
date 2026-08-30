@@ -95,6 +95,10 @@ impl LatticeViewModel {
                 self.model.toggle_lattice_point(*index);
                 self.refresh();
             }
+            Command::SelectLatticePoints(indices) => {
+                self.model.select_lattice_points(indices);
+                self.refresh();
+            }
             Command::SetGizmoMode(mode) => {
                 self.model.set_gizmo_mode(*mode);
                 self.refresh();
@@ -194,6 +198,13 @@ mod tests {
                 touched: false,
             };
             Ok(())
+        }
+
+        fn select_lattice_points(&mut self, indices: &[usize]) {
+            let mut selection = indices.to_vec();
+            selection.sort_unstable();
+            selection.dedup();
+            self.state.selection = selection;
         }
 
         fn select_lattice_point(&mut self, index: Option<usize>) {
@@ -331,6 +342,7 @@ mod tests {
                 Err(ModelError::engine("uma camada de voxels não aceita"))
             }
             fn select_lattice_point(&mut self, _: Option<usize>) {}
+            fn select_lattice_points(&mut self, _: &[usize]) {}
             fn toggle_lattice_point(&mut self, _: usize) {}
             fn set_gizmo_mode(&mut self, _: GizmoMode) {}
             fn begin_gizmo_drag(&mut self, _: GizmoHandle, _: [f32; 3], _: [f32; 3]) {}

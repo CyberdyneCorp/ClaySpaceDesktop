@@ -4217,6 +4217,28 @@ pub fn status_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Command
 }
 
 /// The view presets, under the viewport as the design places them.
+/// The rubber band a press draws across the viewport while it gathers control
+/// points.
+///
+/// Drawn from the interface's own tokens rather than by the composition root
+/// with a colour of its own, which is what keeps the closed set closed. A fill
+/// as well as an outline: an outline alone over a shaded form reads as part of
+/// the model at a glance, and what a sculptor needs to see is which side of the
+/// line they are on.
+pub fn selection_box(painter: &egui::Painter, drawn: egui::Rect) {
+    painter.rect_filled(
+        drawn,
+        egui::epaint::CornerRadius::ZERO,
+        Tokens::raised().linear_multiply(0.35),
+    );
+    painter.rect_stroke(
+        drawn,
+        egui::epaint::CornerRadius::ZERO,
+        egui::Stroke::new(1.0, Tokens::text_dim()),
+        egui::StrokeKind::Inside,
+    );
+}
+
 pub fn viewport_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
     ui.horizontal(|ui| {
         ui.add_space(space::PANEL);

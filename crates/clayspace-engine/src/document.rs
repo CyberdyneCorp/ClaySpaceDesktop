@@ -7369,6 +7369,21 @@ impl LatticeModel for ClayDocument {
         self.cage_revision = self.cage_revision.wrapping_add(1);
     }
 
+    fn select_lattice_points(&mut self, indices: &[usize]) {
+        let Some(cage) = self.lattice.as_mut() else {
+            return;
+        };
+        let count = cage.point_count();
+        let mut selection: Vec<usize> = indices.iter().copied().filter(|at| *at < count).collect();
+        // Kept sorted and without repeats, as a Shift-click's selection is:
+        // `is_selected` is a search rather than a scan, and the pivot is the
+        // same wherever the box was drawn from.
+        selection.sort_unstable();
+        selection.dedup();
+        cage.selection = selection;
+        self.cage_revision = self.cage_revision.wrapping_add(1);
+    }
+
     fn set_gizmo_mode(&mut self, mode: GizmoMode) {
         if let Some(cage) = self.lattice.as_mut() {
             cage.mode = mode;

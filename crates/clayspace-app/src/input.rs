@@ -118,6 +118,187 @@ fn notches(points_per_notch: f32, points: f32) -> f32 {
     points / points_per_notch
 }
 
+/// How wide a manipulator handle's grab radius is, against its reach.
+///
+/// Larger than what is drawn on purpose: a handle a person can see and cannot
+/// hit is worse than one drawn a little small.
+pub const GIZMO_GRAB: f32 = 0.16;
+
+/// The unit vector from a point to the camera.
+///
+/// Which is what "the axis facing the eye" means, and what both the outer
+/// ring's drawing and its rotation are built on — one vector rather than two
+/// that could disagree by a fraction of a degree.
+pub fn toward_eye(camera: &clayspace_view::Camera, from: [f32; 3]) -> [f32; 3] {
+    let eye: [f32; 3] = camera.eye().into();
+    let away: [f32; 3] = std::array::from_fn(|i| eye[i] - from[i]);
+    let length = (away.iter().map(|c| c * c).sum::<f32>()).sqrt();
+    if length < 1e-6 {
+        // The camera is on top of the selection, where there is no direction
+        // to have. Any unit vector will do and none is right; the ring is
+        // invisible at this distance anyway.
+        return [0.0, 0.0, 1.0];
+    }
+    std::array::from_fn(|i| away[i] / length)
+}
+
+/// Which handle of the manipulator a ray passes through, if any.
+///
+/// The nearest along the ray wins, so a handle in front takes a press over one
+/// behind it — which is what a person aiming at what they can see expects.
+///
+/// In the library rather than the binary because it is the rule that decides
+/// whether the widget can be used at all, and because the shape of every
+/// handle's target is a claim worth holding: **an arrow is grabbed anywhere
+/// along its shaft**, not at its point. Tested at the tip alone — which is how
+/// it shipped — the target was a sphere a sixth of the arm's length across at
+/// the far end of an arm the sculptor could plainly see, so a press on the
+/// visible shaft fell through to the cage, the clay or the camera and the
+/// widget read as broken. A ring already had this fixed; the arrows did not.
+pub fn handle_under(
+    mode: clayspace_model::GizmoMode,
+    per_axis_scale: bool,
+    pivot: [f32; 3],
+    reach: f32,
+    ray: ([f32; 3], [f32; 3]),
+    camera: &clayspace_view::Camera,
+) -> Option<(clayspace_model::GizmoMode, clayspace_model::GizmoHandle)> {
+    use clayspace_model::{ray_hits_segment, ray_hits_sphere, GizmoHandle, GizmoMode};
+    let slack = reach * GIZMO_GRAB;
+    // A cell rather than a plain local, because the outer ring is tested only
+    // if nothing nearer was hit, and that question is asked while the closure
+    // that answers it is still in scope.
+    let best: std::cell::Cell<Option<((GizmoMode, GizmoHandle), f32)>> = std::cell::Cell::new(None);
+    let keep = |what: (GizmoMode, GizmoHandle), hit: Option<f32>| {
+        if let Some(along) = hit {
+            if best.get().is_none_or(|(_, closest)| along < closest) {
+                best.set(Some((what, along)));
+            }
+        }
+    };
+    let mut consider = |what: (GizmoMode, GizmoHandle), at: [f32; 3], radius: f32| {
+        keep(what, ray_hits_sphere(ray, at, radius));
+    };
+    let ring = |radius: f32,
+                across: [f32; 3],
+                other: [f32; 3],
+                what: (GizmoMode, GizmoHandle),
+                consider: &mut dyn FnMut((GizmoMode, GizmoHandle), [f32; 3], f32)| {
+        // A ring is grabbed anywhere along it, so several points around it
+        // are tested rather than one — a ring tested only at its four
+        // cardinal points is a ring with four handles.
+        let steps = clayspace_model::ring_samples(radius, slack);
+        for step in 0..steps {
+            let angle = step as f32 / steps as f32 * std::f32::consts::TAU;
+            let at = std::array::from_fn(|i| {
+                pivot[i] + (across[i] * angle.cos() + other[i] * angle.sin()) * radius
+            });
+            consider(what, at, slack);
+        }
+    };
+
+    // What is drawn and what can be grabbed have to be the same set, and
+    // `GizmoHandle::combined` is that set: an arrow along its shaft, a ring
+    // anywhere along it, a box on the shaft where the target scales per axis.
+    // The radii are the renderer's own constants, so the picture and the hit
+    // test cannot come apart.
+    for (operation, handle) in GizmoHandle::combined(per_axis_scale) {
+        let Some(index) = handle.axis_index() else {
+            continue;
+        };
+        let Some(axis) = handle.axis() else {
+            continue;
+        };
+        match operation {
+            // The arrows come after everything else; see below.
+            GizmoMode::Move => {}
+            GizmoMode::Scale => {
+                let at = std::array::from_fn(|i| {
+                    pivot[i] + axis[i] * reach * clayspace_view::SCALE_BOX_REACH
+                });
+                consider((operation, handle), at, slack);
+            }
+            GizmoMode::Rotate => {
+                let (u, v) = ((index + 1) % 3, (index + 2) % 3);
+                let mut across = [0.0f32; 3];
+                across[u] = 1.0;
+                let mut other = [0.0f32; 3];
+                other[v] = 1.0;
+                ring(
+                    reach * clayspace_view::RING_REACH,
+                    across,
+                    other,
+                    (operation, handle),
+                    &mut consider,
+                );
+            }
+        }
+    }
+    // The centre does what the mode says: slides, or scales uniformly.
+    consider(
+        (GizmoHandle::centre_operation(mode), GizmoHandle::Centre),
+        pivot,
+        slack,
+    );
+    // The shafts. An arrow is drawn from the pivot to its cone and every part
+    // of it reads as a handle, so a press anywhere along one slides along that
+    // axis — the complaint this answers is that the manipulator "only works if
+    // you land exactly on the axis arrow".
+    //
+    // Tested *after* the rings, the boxes and the centre, and with the same
+    // nearest-along rule, which settles the two ways a shaft meets them. A
+    // ring encircles the pivot, so a ray aimed anywhere down the inner shaft
+    // passes near the ring's *far* side — behind the press — and the nearer
+    // shaft takes it, which is why aiming at the arrow used to turn the
+    // selection instead. Where a handle genuinely sits *on* the shaft — the
+    // centre block at its foot, the scale box partway out, the two rings that
+    // cross it — the two are the same distance away, and going last means the
+    // smaller, more particular target keeps the press.
+    for (operation, handle) in GizmoHandle::combined(per_axis_scale) {
+        if operation != GizmoMode::Move {
+            continue;
+        }
+        let Some(axis) = handle.axis() else {
+            continue;
+        };
+        let tip = std::array::from_fn(|i| pivot[i] + axis[i] * reach);
+        keep(
+            (operation, handle),
+            ray_hits_segment(ray, pivot, tip, slack),
+        );
+    }
+    // The outer ring, tested the way the axis rings are and at the radius it
+    // is drawn at. Only where nothing else was hit, so a press where it
+    // crosses an arrow or a ring goes to that: the outer one is the easy
+    // target everywhere else, and it should not steal the hard ones.
+    if best.get().is_none() {
+        let axis = toward_eye(camera, pivot);
+        let (across, other) = clayspace_view::frame_about(axis.into());
+        ring(
+            reach * clayspace_view::VIEW_RING_REACH,
+            across.into(),
+            other.into(),
+            (GizmoMode::Rotate, GizmoHandle::View),
+            &mut consider,
+        );
+    }
+    best.into_inner().map(|(what, _)| what)
+}
+
+/// Whether the brush ring is drawn under the pointer.
+///
+/// A ring says "the next press leaves a stroke here", so it may only be drawn
+/// where that is true. Two modes take the press away from the brush and both
+/// have to take the ring with it: the whole-subtool manipulator, where a press
+/// on the clay moves it, and a deformation cage, where a press that misses a
+/// control point orbits. The cage half was missed — the routing refused the
+/// stroke and the ring promised one anyway, which is the worst of both: a
+/// sculptor aiming at a control point sees a brush over the form they are
+/// bending and cannot tell whether a slip will sculpt it.
+pub fn shows_the_brush_ring(layer_manipulator_up: bool, caged: bool) -> bool {
+    !layer_manipulator_up && !caged
+}
+
 /// Whether a press should start a stroke, or turn the camera instead.
 ///
 /// Here rather than inline in the event loop because it is a rule rather than
@@ -267,6 +448,95 @@ pub fn ray_at(
     Some(camera.ray_through(ndc, viewport.aspect_ratio()))
 }
 
+/// Where a world point sits in the viewport, in egui points.
+///
+/// The inverse of [`ray_at`], through the camera's own inverse, so the two
+/// cannot drift apart: a pick that lands beside the pointer and a selection
+/// box that catches the wrong points are the same bug seen twice.
+///
+/// `None` where the point is behind the camera, which has no position on
+/// screen to be at.
+pub fn screen_at(
+    camera: &clayspace_view::Camera,
+    viewport: egui::Rect,
+    world: [f32; 3],
+) -> Option<egui::Pos2> {
+    if viewport.width() < 1.0 || viewport.height() < 1.0 {
+        return None;
+    }
+    let ndc = camera.screen_through(world, viewport.aspect_ratio())?;
+    Some(egui::pos2(
+        viewport.min.x + (ndc[0] + 1.0) * 0.5 * viewport.width(),
+        viewport.min.y + (1.0 - ndc[1]) * 0.5 * viewport.height(),
+    ))
+}
+
+/// How far a press has to travel before it is a selection box rather than a
+/// click on nothing, in egui points.
+///
+/// A press and release at the same place is a click, and a click on nothing
+/// clears the selection. Without a threshold the hand's own tremor between
+/// button-down and button-up would make every such click a box of two points
+/// across, which selects nothing and so *looks* the same — until the one time
+/// it catches a control point the sculptor was not aiming at.
+pub const MARQUEE_SLOP: f32 = 3.0;
+
+/// Whether a press that took hold of nothing drew a selection box.
+pub fn is_a_marquee(from: egui::Pos2, to: egui::Pos2) -> bool {
+    (to - from).length() > MARQUEE_SLOP
+}
+
+/// Which of `points` a selection box drawn from `from` to `to` catches.
+///
+/// Every point inside the box, in ascending order — not the nearest one, and
+/// not only the ones facing the camera. Half a cage's control points stand
+/// behind the form and the viewport draws them through it for exactly that
+/// reason: a box drawn around a face has to take the far corners with the near
+/// ones, or turning a whole face — which is what the manipulator exists for —
+/// would need eight separate Shift-clicks and a camera move in the middle.
+///
+/// Points behind the camera are not caught: they have no position on screen,
+/// and a box cannot be drawn around something that is not in the picture.
+pub fn points_within(
+    camera: &clayspace_view::Camera,
+    viewport: egui::Rect,
+    points: &[[f32; 3]],
+    from: egui::Pos2,
+    to: egui::Pos2,
+) -> Vec<usize> {
+    let box_drawn = egui::Rect::from_two_pos(from, to);
+    points
+        .iter()
+        .enumerate()
+        .filter(|(_, at)| {
+            screen_at(camera, viewport, **at).is_some_and(|on_screen| {
+                box_drawn.contains(on_screen) && viewport.contains(on_screen)
+            })
+        })
+        .map(|(index, _)| index)
+        .collect()
+}
+
+/// The selection a marquee leaves behind.
+///
+/// Held apart from the box itself because it is the rule and not the geometry:
+/// a plain drag *replaces* the selection, and one made with the add modifier
+/// held adds to it — the same bargain a Shift-click on a single control point
+/// already makes, so the two gestures can be mixed without one undoing the
+/// other's work.
+pub fn selection_from_marquee(held: &[usize], caught: &[usize], add: bool) -> Vec<usize> {
+    let mut selection: Vec<usize> = if add {
+        held.iter().copied().chain(caught.iter().copied()).collect()
+    } else {
+        caught.to_vec()
+    };
+    // Ascending and without repeats, which is what the model keeps and what
+    // makes the pivot the same however the points were gathered.
+    selection.sort_unstable();
+    selection.dedup();
+    selection
+}
+
 /// Where a drag has carried the point it took hold of.
 ///
 /// A *dragging* verb — Mover, Puxar, Nudge — takes hold of the surface once
@@ -409,6 +679,213 @@ mod drag_tests {
             egui::pos2(-40.0, 300.0)
         )
         .is_none());
+    }
+}
+
+#[cfg(test)]
+mod manipulator_tests {
+    use super::*;
+    use clayspace_model::{GizmoHandle, GizmoMode};
+    use clayspace_view::Camera;
+
+    fn viewport() -> egui::Rect {
+        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))
+    }
+
+    /// The widget at the origin, small enough to sit well inside the frame.
+    const REACH: f32 = 0.5;
+
+    /// A camera off every axis.
+    ///
+    /// Square on, a ring lying in a plane containing the eye is drawn — and
+    /// picked — as a line straight along an axis, so the two share presses
+    /// that have nothing to do with either's grab radius. That is a real
+    /// ambiguity in an edge-on ring rather than a fact about the shaft, and
+    /// this test is about the shaft.
+    fn angled() -> Camera {
+        Camera {
+            yaw: 0.7,
+            pitch: 0.35,
+            ..Camera::default()
+        }
+    }
+
+    /// Which handle a press at a world point finds, through the ray the
+    /// application would actually build for it.
+    fn grabbed(camera: &Camera, at: [f32; 3], mode: GizmoMode) -> Option<(GizmoMode, GizmoHandle)> {
+        let on_screen = screen_at(camera, viewport(), at).expect("a point in front of the camera");
+        let ray = ray_at(camera, viewport(), on_screen).expect("a ray through it");
+        handle_under(mode, true, [0.0; 3], REACH, ray, camera)
+    }
+
+    #[test]
+    fn an_arrow_is_grabbed_anywhere_along_its_shaft() {
+        // Reported from using it: "the gizmo for movement only works if we
+        // perfectly land the mouse on the axis arrow". The shaft is drawn from
+        // the pivot to the cone and every part of it reads as a handle, but
+        // only a sphere at the tip was tested — so a press on most of what a
+        // person can see fell through to the cage, the clay or the camera.
+        let camera = angled();
+        for step in 2..=10 {
+            let along = step as f32 / 10.0;
+            let at = [0.0, REACH * along, 0.0];
+            assert!(
+                grabbed(&camera, at, GizmoMode::Move).is_some(),
+                "nothing at all was grabbable {along} of the way along the arrow"
+            );
+        }
+        // And where nothing else is drawn on the shaft it is the arrow. The
+        // widget's own geometry decides where that is: the centre block sits
+        // at the foot, the scale box at `SCALE_BOX_REACH`, and two of the
+        // three rings cross every axis at `RING_REACH` — each within one grab
+        // radius either side.
+        let free = [
+            GIZMO_GRAB * 1.3,
+            clayspace_view::SCALE_BOX_REACH - GIZMO_GRAB * 1.2,
+            clayspace_view::RING_REACH + GIZMO_GRAB * 1.05,
+            1.0,
+        ];
+        for along in free {
+            let at = [0.0, REACH * along, 0.0];
+            assert_eq!(
+                grabbed(&camera, at, GizmoMode::Move),
+                Some((GizmoMode::Move, GizmoHandle::Axis(1))),
+                "a press {along} of the way along the vertical arrow did not move it"
+            );
+        }
+    }
+
+    #[test]
+    fn the_particular_handles_keep_their_own_presses() {
+        // The shaft is tested only where nothing more particular was hit, so
+        // making the whole arm grabbable must not take the box's press or the
+        // rings'. Both sit *on* the shaft — the box partway out, the rings
+        // where they cross it — and both are the smaller target.
+        let camera = Camera::default();
+        let box_at = [0.0, REACH * clayspace_view::SCALE_BOX_REACH, 0.0];
+        assert_eq!(
+            grabbed(&camera, box_at, GizmoMode::Move),
+            Some((GizmoMode::Scale, GizmoHandle::Axis(1))),
+            "the scale box lost its press to the shaft it sits on"
+        );
+        // The centre block, at the foot of all three shafts.
+        assert_eq!(
+            grabbed(&camera, [0.0; 3], GizmoMode::Move),
+            Some((GizmoMode::Move, GizmoHandle::Centre)),
+            "the centre lost its press to a shaft"
+        );
+    }
+
+    #[test]
+    fn a_press_beyond_the_arrowhead_grabs_nothing() {
+        // The shaft is a finite thing. Tested as a line rather than a segment,
+        // every press along the axis out to the horizon would slide the
+        // selection.
+        let camera = Camera::default();
+        let past = [0.0, REACH * 2.0, 0.0];
+        assert_eq!(
+            grabbed(&camera, past, GizmoMode::Move),
+            None,
+            "a press well past the arrowhead grabbed the arrow"
+        );
+    }
+
+    #[test]
+    fn the_brush_ring_is_off_wherever_a_press_cannot_sculpt() {
+        // The other half of `press_sculpts`: the routing already refused the
+        // stroke, and the ring went on promising one. Reported as brushes
+        // showing over the form while a deformation cage was up.
+        assert!(shows_the_brush_ring(false, false));
+        assert!(!shows_the_brush_ring(false, true), "a cage kept the ring");
+        assert!(!shows_the_brush_ring(true, false));
+    }
+}
+
+#[cfg(test)]
+mod marquee_tests {
+    use super::*;
+    use clayspace_view::Camera;
+
+    fn viewport() -> egui::Rect {
+        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))
+    }
+
+    /// Eight points, a unit box about the origin — a cage's corners.
+    fn corners() -> Vec<[f32; 3]> {
+        let mut points = Vec::new();
+        for z in [-0.5f32, 0.5] {
+            for y in [-0.5f32, 0.5] {
+                for x in [-0.5f32, 0.5] {
+                    points.push([x, y, z]);
+                }
+            }
+        }
+        points
+    }
+
+    #[test]
+    fn a_box_catches_the_points_inside_it_and_no_others() {
+        let camera = Camera::default();
+        let points = corners();
+        // A band drawn around the top half of the box on screen.
+        let top: Vec<egui::Pos2> = points
+            .iter()
+            .filter(|at| at[1] > 0.0)
+            .map(|at| screen_at(&camera, viewport(), *at).expect("on screen"))
+            .collect();
+        let mut band = egui::Rect::NOTHING;
+        for at in &top {
+            band = band.union(egui::Rect::from_center_size(*at, egui::vec2(8.0, 8.0)));
+        }
+        let caught = points_within(&camera, viewport(), &points, band.min, band.max);
+        assert_eq!(
+            caught.len(),
+            4,
+            "a box round the top four corners caught {caught:?}"
+        );
+        for index in caught {
+            assert!(
+                points[index][1] > 0.0,
+                "the box caught a point below it: {:?}",
+                points[index]
+            );
+        }
+    }
+
+    #[test]
+    fn a_box_catches_the_points_behind_the_form_too() {
+        // Half a cage's control points stand behind the clay, and the viewport
+        // draws them through it for exactly that reason. A box that caught
+        // only the near four would make turning a whole face — which is what
+        // the manipulator exists for — eight clicks and a camera move.
+        let camera = Camera::default();
+        let points = corners();
+        let caught = points_within(&camera, viewport(), &points, viewport().min, viewport().max);
+        assert_eq!(
+            caught.len(),
+            points.len(),
+            "a box over the whole viewport missed some"
+        );
+    }
+
+    #[test]
+    fn a_click_is_not_a_box() {
+        // A press and release in one place is a click on nothing, which clears
+        // the selection. The hand's own tremor must not turn that into a box.
+        let at = egui::pos2(400.0, 300.0);
+        assert!(!is_a_marquee(at, at));
+        assert!(!is_a_marquee(at, at + egui::vec2(2.0, 1.0)));
+        assert!(is_a_marquee(at, at + egui::vec2(40.0, 30.0)));
+    }
+
+    #[test]
+    fn a_plain_box_replaces_and_an_adding_one_adds() {
+        let held = [1usize, 4];
+        let caught = [4usize, 6];
+        assert_eq!(selection_from_marquee(&held, &caught, false), vec![4, 6]);
+        // Ascending and without repeats, which is what the model keeps: the
+        // pivot has to be the same however the points were gathered.
+        assert_eq!(selection_from_marquee(&held, &caught, true), vec![1, 4, 6]);
     }
 }
 

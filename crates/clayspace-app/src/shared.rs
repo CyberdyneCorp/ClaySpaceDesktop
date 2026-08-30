@@ -346,6 +346,10 @@ impl LatticeModel for SharedDocument {
         self.0.borrow_mut().toggle_lattice_point(index)
     }
 
+    fn select_lattice_points(&mut self, indices: &[usize]) {
+        self.0.borrow_mut().select_lattice_points(indices)
+    }
+
     fn set_gizmo_mode(&mut self, mode: GizmoMode) {
         self.0.borrow_mut().set_gizmo_mode(mode)
     }
