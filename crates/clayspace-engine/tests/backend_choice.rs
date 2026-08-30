@@ -60,7 +60,7 @@ fn dab_refill(backend: Option<&clayspace_engine::claycore::Backend>) -> Option<D
                 }],
                 &preset,
                 &stamp,
-                None,
+                claycore::MaskSource::None,
             )
             .ok()?;
         cache.mark_dirty_nodes(&doc, layer, &nodes).ok()?;

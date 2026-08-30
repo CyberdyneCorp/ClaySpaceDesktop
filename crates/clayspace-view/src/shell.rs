@@ -3713,7 +3713,11 @@ pub fn right_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
     if state.lattice.active {
         lattice_section(ui, state, queue);
     }
-    if state.mask.present {
+    // What is frozen rather than whether a mask handle exists: a mask belongs
+    // to the document's layer and stays attached once painted, so Limpar
+    // leaves an empty one behind and a panel keyed on its existence would sit
+    // there offering to invert, expand and extrude nothing.
+    if state.mask.is_active() {
         mask_section(ui, state, queue);
     }
 

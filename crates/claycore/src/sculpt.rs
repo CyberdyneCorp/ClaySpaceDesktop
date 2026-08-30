@@ -291,14 +291,17 @@ impl Document {
         samples: &[StrokeSample],
         preset: &StrokePreset,
         item: &Item,
-        mask: Option<&MaskField>,
+        mask: crate::MaskSource<'_>,
     ) -> Result<Vec<NodeId>> {
         if samples.is_empty() {
             return Ok(Vec::new());
         }
         let flat = StrokeSample::flatten(samples);
         let raw_preset = preset.to_raw();
-        let mask_ptr = mask.map_or(std::ptr::null(), |m| m.as_ptr() as *const _);
+        // Resolved here rather than handed in, which is the whole of what
+        // `MaskSource` is for: this method holds the document mutably, so a
+        // caller could never have lent it one of the document's own masks.
+        let mask_ptr = self.mask_ptr(mask);
 
         // An upper bound: a masked stamp emits no node, so the stroke may
         // create fewer than this.

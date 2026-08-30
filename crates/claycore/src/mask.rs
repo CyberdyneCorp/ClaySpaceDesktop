@@ -327,6 +327,39 @@ impl DerefMut for MaskRef<'_> {
     }
 }
 
+/// A layer's mask, borrowed for **reading** for as long as the document is.
+///
+/// The shared counterpart of [`MaskRef`], and the two are separate types
+/// because the borrow is the point: a `MaskRef` comes out of `&mut Document`
+/// and locks the document for the whole of its life, where this comes out of
+/// `&Document` and sits happily beside another read of the same document.
+/// That is what lets a relax name its own layer's mask and still be a relax
+/// *of* that document.
+///
+/// Dereferences to [`MaskField`], so everything a mask can be asked is here
+/// too; there is no `DerefMut`, because a shared borrow may not paint.
+#[derive(Debug)]
+pub struct MaskLease<'doc> {
+    inner: MaskField,
+    _doc: PhantomData<&'doc Document>,
+}
+
+impl MaskLease<'_> {
+    fn from_raw(raw: *mut sys::clay_mask) -> Option<Self> {
+        NonNull::new(raw).map(|raw| Self {
+            inner: MaskField { raw },
+            _doc: PhantomData,
+        })
+    }
+}
+
+impl Deref for MaskLease<'_> {
+    type Target = MaskField;
+    fn deref(&self) -> &MaskField {
+        &self.inner
+    }
+}
+
 /// How a mask extrude leaves the surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ExtrudeSide {
@@ -391,7 +424,105 @@ impl MaskExtrudeParams {
     }
 }
 
+/// Which mask an operation consults.
+///
+/// The reason this exists rather than an `Option<&MaskField>` everywhere: the
+/// C ABI is built for "a document and one of its masks, **together**", and the
+/// mask a sculptor paints belongs to a layer of the document being edited. A
+/// safe wrapper that lends the mask out and then asks for the document mutably
+/// cannot be called — `&mut doc` and `&doc.mask` are the same borrow — so for
+/// years the only reachable masks were standalone ones the host created
+/// itself, which the document does not save.
+///
+/// Naming the *layer* moves the resolution inside the wrapper, where the
+/// document pointer and the mask pointer coexist for the length of one C call
+/// and neither escapes. That is the arrangement the engine already assumes,
+/// and `claycore` is the crate allowed to say so.
+#[derive(Debug, Clone, Copy, Default)]
+pub enum MaskSource<'a> {
+    /// Nothing is frozen.
+    #[default]
+    None,
+    /// A mask the caller owns, or one borrowed from a document the operation
+    /// is not editing.
+    Field(&'a MaskField),
+    /// The mask attached to this layer of the document being edited.
+    ///
+    /// A layer with no mask freezes nothing, which is not an error: it is the
+    /// ordinary state of a document nobody has painted a mask on.
+    Layer(LayerId),
+}
+
+impl<'a> From<Option<&'a MaskField>> for MaskSource<'a> {
+    fn from(mask: Option<&'a MaskField>) -> Self {
+        match mask {
+            Some(mask) => Self::Field(mask),
+            None => Self::None,
+        }
+    }
+}
+
 impl Document {
+    /// The raw handle a source names, for one C call inside this crate.
+    ///
+    /// Null where there is nothing to freeze — which is what every masked
+    /// entry point in the ABI takes for "no mask" — so a layer that carries
+    /// none is the same call as one that was never asked to have one.
+    pub(crate) fn mask_ptr(&self, source: MaskSource<'_>) -> *const sys::clay_mask {
+        match source {
+            MaskSource::None => std::ptr::null(),
+            MaskSource::Field(mask) => mask.as_ptr() as *const _,
+            MaskSource::Layer(layer) => {
+                let mut raw = std::ptr::null_mut();
+                // SAFETY: a valid document handle and an out-parameter written
+                // only on success. The handle is BORROWED — it belongs to the
+                // layer — and is used for the single call this resolves for.
+                let found = unsafe { sys::clay_document_mask(self.as_ptr(), layer.0, &mut raw) };
+                if found == sys::clay_result::CLAY_OK {
+                    raw as *const _
+                } else {
+                    std::ptr::null()
+                }
+            }
+        }
+    }
+
+    /// The mask a layer carries, for reading, borrowed from the document.
+    ///
+    /// A **shared** borrow, which is the whole difference from
+    /// [`Document::mask`]: it can be held across another `&self` call on the
+    /// same document, which is what the relax, flatten and extrude paths need.
+    /// `None` where the layer carries none, rather than an error: not having
+    /// painted a mask is not a failure.
+    pub fn layer_mask(&self, layer: LayerId) -> Option<MaskLease<'_>> {
+        MaskLease::from_raw(self.raw_layer_mask(layer)?)
+    }
+
+    /// The same for writing — painting into it, inverting it, clearing it.
+    pub fn layer_mask_mut(&mut self, layer: LayerId) -> Option<MaskRef<'_>> {
+        MaskRef::from_raw(self.raw_layer_mask(layer)?, "clay_document_mask").ok()
+    }
+
+    /// The layer's mask, attaching one at `cell_size` if it has none.
+    ///
+    /// One call rather than "ask, then add if missing", because the two
+    /// spellings differ only in which of them a caller forgets.
+    pub fn ensure_layer_mask(&mut self, layer: LayerId, cell_size: f32) -> Result<MaskRef<'_>> {
+        if self.raw_layer_mask(layer).is_none() {
+            self.add_mask(layer, cell_size)?;
+        }
+        self.layer_mask_mut(layer)
+            .ok_or_else(|| raw_failure("clay_document_add_mask", ErrorKind::NotFound))
+    }
+
+    /// The layer's mask handle, or `None` where it carries none.
+    fn raw_layer_mask(&self, layer: LayerId) -> Option<*mut sys::clay_mask> {
+        let mut raw = std::ptr::null_mut();
+        // SAFETY: as `mask_ptr`.
+        let found = unsafe { sys::clay_document_mask(self.as_ptr(), layer.0, &mut raw) };
+        (found == sys::clay_result::CLAY_OK && !raw.is_null()).then_some(raw)
+    }
+
     /// Attaches a mask to a layer and lends it back.
     pub fn add_mask(&mut self, layer: LayerId, cell_size: f32) -> Result<MaskRef<'_>> {
         let mut raw = std::ptr::null_mut();
@@ -415,21 +546,26 @@ impl Document {
     }
 
     /// Pulls the masked patch off as a solid item.
+    ///
+    /// The mask is named rather than handed over, so the layer's own can be
+    /// used while the document is held mutably — see [`MaskSource`].
     pub fn mask_extrude(
         &mut self,
         layer: LayerId,
-        mask: &MaskField,
+        mask: MaskSource<'_>,
         params: MaskExtrudeParams,
     ) -> Result<Item> {
         let raw_params = params.to_raw();
+        let mask = self.mask_ptr(mask);
         let mut item = std::ptr::null_mut();
         // SAFETY: all handles valid; the descriptor carries its struct_size.
+        // The mask pointer is borrowed and is used only for this call.
         check(
             unsafe {
                 sys::clay_document_mask_extrude(
                     self.as_ptr(),
                     layer.0,
-                    mask.as_ptr(),
+                    mask as *mut _,
                     &raw_params,
                     &mut item,
                 )

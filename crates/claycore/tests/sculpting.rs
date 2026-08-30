@@ -463,7 +463,7 @@ fn a_stroke_resolves_into_ordinary_edits() {
         .collect();
 
     let nodes = doc
-        .apply_stroke(layer, &samples, &preset, &stamp, None)
+        .apply_stroke(layer, &samples, &preset, &stamp, claycore::MaskSource::None)
         .expect("apply stroke");
 
     assert!(
@@ -500,10 +500,10 @@ fn spacing_follows_arc_length_not_sample_count() {
         .collect();
 
     let a = doc
-        .apply_stroke(layer, &coarse, &preset, &stamp, None)
+        .apply_stroke(layer, &coarse, &preset, &stamp, claycore::MaskSource::None)
         .expect("coarse");
     let b = doc
-        .apply_stroke(layer, &fine, &preset, &stamp, None)
+        .apply_stroke(layer, &fine, &preset, &stamp, claycore::MaskSource::None)
         .expect("fine");
 
     let (a, b) = (a.len() as i32, b.len() as i32);

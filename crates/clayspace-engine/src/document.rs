@@ -6,8 +6,8 @@
 
 use claycore::{
     Blend, BrickCache, BrickConfig, BrickKey, BrushParams, BrushShape, ClayError, Document,
-    Falloff, ImportBudget, Influence, Item, LayerId, Mask, MaskField, Mesh, MeshLayerDesc,
-    MeshParams, Mesher, NodeId, Op, StrokePreset, VolumeParams,
+    Falloff, ImportBudget, Influence, Item, LayerId, Mesh, MeshLayerDesc, MeshParams, Mesher,
+    NodeId, Op, StrokePreset, VolumeParams,
 };
 use clayspace_model::{
     Alpha, Armature, ArmatureModel, BlendProfile, BooleanOp, BooleanRefusal, BooleanSettings,
@@ -182,13 +182,14 @@ struct Layer {
     /// engine's stack unaccounted, and the next undo would spend itself on the
     /// mirror and leave part of the stroke standing.
     mirror: [bool; 3],
-    /// The frozen region painted on this subtool, when one has been.
-    ///
-    /// A mask belongs to what it was painted on. One mask for the document
-    /// froze a region of empty space as far as every other subtool was
-    /// concerned, and switching subtools handed the new one a mask sized and
-    /// placed for the old one's form.
-    mask: Option<Mask>,
+    // The frozen region painted on this subtool is *not* here, and that is
+    // the change: it belongs to the layer inside the engine's own document,
+    // where `clay_document_add_mask` attaches it and `clay_document_save`
+    // writes it, so it survives a save and a reopen — which a mask kept
+    // beside the document never could. What a caller needs is asked of the
+    // document by the layer's identity: see `ClayDocument::active_mask` and
+    // `claycore::MaskSource` for why that took an API change rather than a
+    // field move.
     /// The rig this subtool carries: the nodes it placed, and the tree behind
     /// them.
     ///
@@ -253,7 +254,6 @@ impl Layer {
             // 0/0/0 is what "off" is — so that is what it has been told, and
             // the first stroke that wants the setting above is what writes it.
             mirror: [false; 3],
-            mask: None,
             armature: None,
             armature_bounds: None,
         }
@@ -1000,7 +1000,7 @@ impl ClayDocument {
     /// is what it cannot do: two of the three routes take the document
     /// mutably.
     fn a_mask_worth_extruding(&self) -> Result<(), ModelError> {
-        match Self::active_mask(&self.layers, self.active) {
+        match self.active_mask() {
             None => Err(ModelError::engine("não há máscara para extrudar")),
             Some(mask) if mask.painted_count().unwrap_or(0) == 0 => {
                 Err(ModelError::engine("a máscara está vazia"))
@@ -1011,17 +1011,22 @@ impl ClayDocument {
 
     /// The frozen region the active subtool carries, for a verb to consult.
     ///
-    /// Taken off the layer list rather than through [`Self::active_layer`]
-    /// because most callers hold the document mutably at the same moment: the
-    /// two are disjoint fields and the borrow checker can see that only when
-    /// the field is named.
-    fn active_mask(layers: &[Layer], active: usize) -> Option<&Mask> {
-        layers[active].mask.as_ref()
+    /// Held by the *document*, and asked for by the layer's identity. The
+    /// lease borrows the document **shared**, so it can be held across another
+    /// read of the same document — which is what the relax, flatten and mesh
+    /// paths need, and what a `MaskRef` taken out of `&mut Document` could
+    /// never do.
+    fn active_mask(&self) -> Option<claycore::MaskLease<'_>> {
+        self.document.layer_mask(self.active_layer().id)
     }
 
-    /// The same, in the form the engine's masked verbs take.
-    fn active_mask_field(layers: &[Layer], active: usize) -> Option<&MaskField> {
-        layers[active].mask.as_deref()
+    /// The same, for the entry points that hold the document *mutably*.
+    ///
+    /// They cannot be handed a mask lent out of the document they are about to
+    /// edit, so they are handed its name instead and resolve it themselves.
+    /// See [`claycore::MaskSource`].
+    fn active_mask_source(&self) -> claycore::MaskSource<'static> {
+        claycore::MaskSource::Layer(self.active_layer().id)
     }
 
     /// Refills the cache for what an edit reached, recording exactly which
@@ -2371,7 +2376,7 @@ impl ClayDocument {
         // with it. Measured, and recorded in
         // `claycore/tests/alpha_deformer.rs`.
 
-        let mask = Self::active_mask_field(&self.layers, self.active);
+        let mask = self.active_mask_source();
 
         // No gate on the stamp, and that is a measurement rather than an
         // omission. `clay_item_set_gate` is what would make a mask protect a
@@ -2561,7 +2566,7 @@ impl ClayDocument {
         // region would be pulled like any other. Sampling the mask along the
         // path and dropping the frozen samples is the same rule applied where
         // this verb can apply it.
-        let live: Vec<&GestureSample> = match Self::active_mask(&self.layers, self.active) {
+        let live: Vec<&GestureSample> = match self.active_mask() {
             Some(mask) => {
                 let positions: Vec<[f32; 3]> = samples.iter().map(|s| s.position).collect();
                 let frozen = mask.sample_many(&positions).map_err(ModelError::engine)?;
@@ -2686,6 +2691,9 @@ impl ClayDocument {
         // in.
         let (mut min, mut max) = (min, max);
         Self::grown_for_feather(&mut min, &mut max, cell);
+        // Both borrows of the document are shared, which is what lets the
+        // layer's own mask be read while the layer is sampled.
+        let mask = self.active_mask();
         let mut volume = self
             .document
             .relax_region(
@@ -2696,7 +2704,7 @@ impl ClayDocument {
                     centre,
                     region_radius: brush.size,
                     falloff: brush.size * 0.5,
-                    mask: Self::active_mask_field(&self.layers, self.active),
+                    mask: mask.as_deref(),
                 },
                 Self::bake_volume(cell),
                 min,
@@ -2891,8 +2899,18 @@ impl ClayDocument {
         let Some(last) = samples.last() else {
             return Ok(EditOutcome::NOTHING);
         };
-        let mask = Self::active_mask_field(&self.layers, self.active);
-        let Some(live) = self.live_smooth.as_mut() else {
+        // Split by field: the lease reads the *document* and the transaction is
+        // a sibling field, which the borrow checker can see only when both are
+        // named. `active_mask` would take the whole of `self`.
+        let layer = self.active_layer().id;
+        let Self {
+            document,
+            live_smooth,
+            ..
+        } = self;
+        let mask = document.layer_mask(layer);
+        let mask = mask.as_deref();
+        let Some(live) = live_smooth.as_mut() else {
             return Ok(EditOutcome::NOTHING);
         };
         let dirty_bricks = live.dab(claycore::RelaxParams {
@@ -2932,31 +2950,29 @@ impl ClayDocument {
             })
             .collect();
 
-        let index = self.active;
-        if self.layers[index].mask.is_none() {
-            // The cache's own spacing, not a fraction of the brush.
-            //
-            // A quarter of the brush was tried: at the default brush that is a
-            // 0.1 cell, coarser than anything the surface can express, and
-            // `clay_document_mask_extrude` refuses a wall thinner than a cell —
-            // so a mask painted with a large brush could not be extruded at any
-            // sensible thickness. Matching the voxel size makes a mask as fine
-            // as the thing it freezes.
-            self.layers[index].mask =
-                Some(Mask::new(Self::VOXEL_SIZE).map_err(ModelError::engine)?);
-        }
-
-        let painted = {
-            let mask = self.layers[index].mask.as_mut().expect("just created");
-            mask.apply_stroke(
+        // Attached to the *layer*, inside the document, so that saving the
+        // document saves the mask. The cell size is the cache's own spacing,
+        // not a fraction of the brush.
+        //
+        // A quarter of the brush was tried: at the default brush that is a 0.1
+        // cell, coarser than anything the surface can express, and
+        // `clay_document_mask_extrude` refuses a wall thinner than a cell — so
+        // a mask painted with a large brush could not be extruded at any
+        // sensible thickness. Matching the voxel size makes a mask as fine as
+        // the thing it freezes.
+        let layer = self.active_layer().id;
+        let painted = self
+            .document
+            .ensure_layer_mask(layer, Self::VOXEL_SIZE)
+            .map_err(ModelError::engine)?
+            .apply_stroke(
                 &stroke,
                 &preset,
                 brush.intensity,
                 BrushShape::Sphere,
                 Falloff::Smooth,
             )
-            .map_err(ModelError::engine)?
-        };
+            .map_err(ModelError::engine)?;
 
         // Nothing in the surface moved, and nothing needs re-meshing: a mask
         // is state the *next* stroke reads. The viewport still has to be told,
@@ -3038,6 +3054,9 @@ impl ClayDocument {
         let cell = Self::bake_cell_size(brush.size);
         let (mut min, mut max) = (min, max);
         Self::grown_for_feather(&mut min, &mut max, cell);
+        // As in `relax_stroke`: two shared borrows of the document, so the
+        // layer's own mask can be read while the layer is sampled.
+        let mask = self.active_mask();
         let mut volume = self
             .document
             .flatten_region(
@@ -3061,7 +3080,7 @@ impl ClayDocument {
                     } else {
                         claycore::FlattenMode::CutOnly
                     },
-                    mask: Self::active_mask_field(&self.layers, self.active),
+                    mask: mask.as_deref(),
                 },
                 Self::bake_volume(cell),
                 min,
@@ -3430,6 +3449,9 @@ impl ClayDocument {
                 None,
             ),
         };
+        // Read before the sculptors are borrowed: the lease reads the document
+        // and both are shared borrows of `self`, so the two sit side by side.
+        let mask = self.active_mask();
         let moved = {
             let mut held = self.mesh_sculptors.borrow_mut();
             let Some(sculptor) = held.get_mut(key) else {
@@ -3476,7 +3498,7 @@ impl ClayDocument {
                                 center: mirror.point(stamp.center),
                                 ..stamp
                             },
-                            Self::active_mask(&self.layers, self.active),
+                            mask.as_deref(),
                             Some(&mut deltas),
                         )
                         .map_err(ModelError::engine)?
@@ -3497,7 +3519,7 @@ impl ClayDocument {
                                 center: mirror.point(stamp.center),
                                 ..stamp
                             },
-                            Self::active_mask(&self.layers, self.active),
+                            mask.as_deref(),
                             Some(&mut deltas),
                         )
                         .map_err(ModelError::engine)?
@@ -4110,7 +4132,7 @@ impl ClayDocument {
     /// entirely — which is the common case, and the case where sampling every
     /// vertex of the surface would be pure waste.
     pub fn mask_at(&self, points: &[[f32; 3]]) -> Option<Vec<f32>> {
-        let mask = Self::active_mask(&self.layers, self.active)?;
+        let mask = self.active_mask()?;
         if mask.is_empty().unwrap_or(true) {
             return None;
         }
@@ -4407,10 +4429,14 @@ impl ClayDocument {
         let displacement: [f32; 3] = std::array::from_fn(|axis| steps[axis] * voxel_size);
 
         let brush = brush.sanitized();
-        let Self {
-            document, layers, ..
-        } = self;
-        let mask = layers[index].mask.as_deref();
+        // The grid and the layer's own mask out of one borrow. The two used to
+        // come from different places — the document and a field beside it —
+        // which is exactly what made the mask unsaveable; see
+        // `Document::voxel_layer_masked`.
+        let claycore::MaskedGrid { mut grid, mask, .. } = self
+            .document
+            .voxel_layer_masked(&engine_name)
+            .map_err(ModelError::engine)?;
         let params = BrushParams {
             size: ((brush.size / voxel_size).round() as i32).clamp(1, 64),
             shape: BrushShape::Sphere,
@@ -4422,11 +4448,8 @@ impl ClayDocument {
             },
             strength: brush.intensity,
             seed: 0,
-            mask,
+            mask: mask.as_deref(),
         };
-        let (_, mut grid) = document
-            .voxel_layer(&engine_name)
-            .map_err(ModelError::engine)?;
         let before = grid.change_count().map_err(ModelError::engine)?;
 
         for mirror in mirrors(symmetry) {
@@ -4500,13 +4523,14 @@ impl ClayDocument {
         // Read before the document is borrowed, for the same reason the alpha
         // below is.
         let chosen = self.colour.current();
-        // Split the borrows by field: the layer list — which is where the
-        // mask lives — and the document are disjoint, but `&self` for one and
-        // `&mut self` for another is not.
-        let Self {
-            document, layers, ..
-        } = self;
-        let mask = layers[index].mask.as_deref();
+        // The grid and the layer's own mask out of one borrow — see
+        // `Document::voxel_layer_masked`. What used to be here was a split of
+        // `self` by field, because the mask lived beside the document rather
+        // than inside it.
+        let claycore::MaskedGrid { mut grid, mask, .. } = self
+            .document
+            .voxel_layer_masked(&engine_name)
+            .map_err(ModelError::engine)?;
         let brush = brush.sanitized();
         let params = BrushParams {
             size: ((brush.size / voxel_size).round() as i32).clamp(1, 64),
@@ -4519,14 +4543,8 @@ impl ClayDocument {
             },
             strength: brush.intensity,
             seed: 0,
-            mask,
+            mask: mask.as_deref(),
         };
-
-        // Borrowed for the length of this stroke and no longer, which is what
-        // makes the document able to own it.
-        let (_, mut grid) = document
-            .voxel_layer(&engine_name)
-            .map_err(ModelError::engine)?;
 
         // Index 0 is the engine's empty slot, so a fresh grid has no colour to
         // deposit and every set would write emptiness.
@@ -4868,6 +4886,9 @@ impl SculptModel for ClayDocument {
         // Recorded like a stroke, because it is one edit to a sculptor and one
         // thing a user did.
         let mut deltas = claycore::MeshDeltas::new().map_err(ModelError::engine)?;
+        // Read before the sculptors are borrowed: both are `&self`, and the
+        // lease has to outlive the calls that consult it.
+        let mask = self.active_mask();
         let moved = {
             let mut held = self.mesh_sculptors.borrow_mut();
             let Some(sculptor) = held.get_mut(key) else {
@@ -4888,7 +4909,7 @@ impl SculptModel for ClayDocument {
                         scale_end,
                         ..claycore::MeshDeformer::default()
                     },
-                    Self::active_mask(&self.layers, self.active),
+                    mask.as_deref(),
                     Some(&mut deltas),
                 ),
                 clayspace_model::LayerOperation::Twist { axis, span, angle } => sculptor.deform(
@@ -4899,7 +4920,7 @@ impl SculptModel for ClayDocument {
                         angle,
                         ..claycore::MeshDeformer::default()
                     },
-                    Self::active_mask(&self.layers, self.active),
+                    mask.as_deref(),
                     Some(&mut deltas),
                 ),
                 clayspace_model::LayerOperation::LatticeDrag {
@@ -6700,20 +6721,20 @@ impl ClayDocument {
         // collision shadows a grid (ClayCore #365) — so this goes through the
         // same derivation every other layer-creating route does.
         let name = self.unique_layer_name("Extrusão");
-        // Split by field, because the grid borrows the document exclusively
-        // and the layer list holding the mask is a sibling.
-        let Self {
-            document, layers, ..
-        } = self;
-        let mask = layers[index].mask.as_ref().expect("checked by the caller");
+        // The grid and the layer's own mask out of one borrow, which is what
+        // `voxel_layer_masked` exists for: the grid takes the document
+        // exclusively, and the mask is inside the same document.
         let extruded = {
-            let (_, grid) = document
-                .voxel_layer(&engine_name)
+            let claycore::MaskedGrid { grid, mask, .. } = self
+                .document
+                .voxel_layer_masked(&engine_name)
                 .map_err(ModelError::engine)?;
-            grid.mask_extrude(mask, extrude_params(settings))
+            let mask = mask.expect("checked by the caller");
+            grid.mask_extrude(&mask, extrude_params(settings))
                 .map_err(ModelError::engine)?
         };
-        let id = document
+        let id = self
+            .document
             .voxel_to_layer(&extruded, &name, 0)
             .map_err(ModelError::engine)?;
         let key = self.adopt_engine_layer(id, &name, Representation::Sdf)?;
@@ -7558,7 +7579,7 @@ impl ClayDocument {
 
 impl MaskModel for ClayDocument {
     fn mask_state(&self) -> MaskState {
-        match Self::active_mask(&self.layers, self.active) {
+        match self.active_mask() {
             Some(mask) => MaskState {
                 present: true,
                 painted_cells: mask.painted_count().unwrap_or(0),
@@ -7576,13 +7597,27 @@ impl MaskModel for ClayDocument {
         // Clearing a mask that was never painted is a no-op rather than a
         // refusal: the menu entry is always there, and pressing it on an empty
         // mask should do the obvious nothing.
-        let index = self.active;
+        let layer = self.active_layer().id;
+        // Cleared rather than dropped: the mask belongs to the layer inside
+        // the document, which has no verb for taking one away. An empty mask
+        // freezes nothing, which is what Limpar means, and `mask_state`
+        // reports it as absent so the panel closes exactly as it did.
         if matches!(op, MaskOp::Clear) {
-            self.layers[index].mask = None;
+            if let Some(mut mask) = self.document.layer_mask_mut(layer) {
+                mask.clear().map_err(ModelError::engine)?;
+            }
             return Ok(());
         }
 
-        let Some(mask) = self.layers[index].mask.as_mut() else {
+        // Refused where nothing is frozen, which is the same refusal as before
+        // and now has to be spelled out: a document-owned mask stays attached
+        // once it exists, so "carries a mask" and "freezes something" are no
+        // longer the same question, and every one of these operations is about
+        // a region there has to be.
+        if !self.mask_state().is_active() {
+            return Err(ModelError::engine("não há máscara para editar"));
+        }
+        let Some(mut mask) = self.document.layer_mask_mut(layer) else {
             return Err(ModelError::engine("não há máscara para editar"));
         };
 
@@ -7636,12 +7671,16 @@ impl MaskModel for ClayDocument {
         }
 
         let layer = self.layers[index].id;
-        let Self {
-            document, layers, ..
-        } = self;
-        let mask = layers[index].mask.as_ref().expect("checked above");
-        let item = document
-            .mask_extrude(layer, mask, extrude_params(settings))
+        // Named rather than handed over: the extrusion holds the document
+        // mutably, and the mask is one of that document's own. See
+        // `claycore::MaskSource`.
+        let item = self
+            .document
+            .mask_extrude(
+                layer,
+                claycore::MaskSource::Layer(layer),
+                extrude_params(settings),
+            )
             .map_err(ModelError::engine)?;
 
         // Into a layer of its own. An extrusion is a new piece of geometry, not
