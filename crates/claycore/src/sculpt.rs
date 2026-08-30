@@ -368,6 +368,54 @@ impl Document {
         Ok(applied)
     }
 
+    /// Adds one grab warp to a node already placed in a document, undoably.
+    ///
+    /// `clay_item_add_deformer` builds an item; this edits a placed one, which
+    /// is the only way a verb can warp an existing sculpt. The warp goes at the
+    /// **front** of the node's chain: deformers apply in authoring order, so
+    /// the first is the outermost warp on the geometry, and one appended at the
+    /// back reads its region weight at a point the earlier deformers already
+    /// moved.
+    ///
+    /// The parameter order is the engine's own for `CLAY_DEFORM_GRAB` —
+    /// `cx cy cz r dx dy dz front` — and is what
+    /// [`crate::MoveTransaction::grabs`] hands back, so a host can reproduce a
+    /// live drag's preview through machinery it already has.
+    pub fn add_grab(
+        &mut self,
+        layer: LayerId,
+        node: NodeId,
+        grab: crate::PreviewGrab,
+    ) -> Result<()> {
+        let params = [
+            grab.centre[0],
+            grab.centre[1],
+            grab.centre[2],
+            grab.radius,
+            grab.displacement[0],
+            grab.displacement[1],
+            grab.displacement[2],
+            f32::from(u8::from(grab.front_only)),
+        ];
+        // SAFETY: a live document, a node it holds, and eight floats the
+        // engine is told the count of. `ease` is read by the taper alone.
+        check(
+            unsafe {
+                sys::clay_layer_add_deformer(
+                    self.as_ptr(),
+                    layer.0,
+                    node.0,
+                    sys::clay_deform::CLAY_DEFORM_GRAB as i32,
+                    params.as_ptr(),
+                    params.len(),
+                    grab.ease,
+                    1,
+                )
+            },
+            "clay_layer_add_deformer",
+        )
+    }
+
     /// Which nodes a Move would touch, without touching them.
     ///
     /// Lets a host draw the affected region before the user commits.

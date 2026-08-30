@@ -32,8 +32,8 @@
 //! computed.
 
 use claycore::{
-    BrickCache, BrickConfig, BrickKey, BrickSubmit, Document, LayerId, RelaxParams, SculptPolicy,
-    SmoothTransaction,
+    BrickCache, BrickConfig, BrickKey, BrickSubmit, Document, LayerId, MoveParams, MoveTransaction,
+    RelaxParams, SculptPolicy, SmoothTransaction,
 };
 use clayspace_model::ModelError;
 
@@ -272,4 +272,211 @@ impl LiveSmooth {
     fn samples_per_brick(&self) -> usize {
         (self.config.dim as usize).pow(3)
     }
+}
+
+// -- Move --------------------------------------------------------------------
+
+/// A world-space box to re-fill, or nothing where the drag reached nothing.
+///
+/// Named because it is the whole vocabulary between [`LiveMove`] and the
+/// document that owns the brick cache: a live drag never hands over samples,
+/// only where to go and read them.
+pub(crate) type Region = Option<([f32; 3], [f32; 3])>;
+
+/// A live Move drag in progress.
+///
+/// Move degrades the field by a second mechanism, and the one `LiveSmooth`
+/// answers does not describe it. A drag appends a `grab` to the deformer chain
+/// of every item it reaches, and the engine's Lipschitz bound for a chain is
+/// the *product* of its links — so the safe step scale decays by a constant
+/// factor per drag and the marcher's cost rises with it. Measured on the
+/// application's own starting form, twelve segmented drags took the step scale
+/// from 0.264 to below the float's ability to report it, and a dab from 5.2 ms
+/// to 26 ms.
+///
+/// The transaction is the engine's answer: the edit list is walked **once**, at
+/// begin, every frame after that costs only the items the drag moves, and the
+/// commit writes one grab per item however many frames drew it —
+/// `a_drag_collapses_to_one_grab_where_segments_leave_one_each` holds it to
+/// that.
+///
+/// ## Drawing a drag the document does not carry
+///
+/// Between begin and commit the document is untouched, which is what makes the
+/// transaction cheap and also means there is nothing to mesh: `LiveSmooth`
+/// draws its preview from the bricks the transaction hands over, and a Move
+/// transaction hands over no samples at all. ClayCore's C++ class exposes a
+/// `preview_layer()` for exactly this — a private copy of the layer with the
+/// affected chains replaced, "so the host compiles, draws and picks it exactly
+/// as it does the real one" — but the **C ABI does not carry it**, and this
+/// crate can only reach the C ABI. See `docs/roadmap.md`, under *Known costs
+/// and escape routes*, for the ask.
+///
+/// What the ABI does offer is the resolved grabs, `clay_sdf_move_preview_grab`,
+/// "so a host can reproduce the preview through machinery it already has". So
+/// that is what this does, once per segment:
+///
+///   1. ask the transaction for the grabs the *current total* displacement
+///      resolves to, and write them onto the layer;
+///   2. let the caller re-fill the brick cache, which samples the dragged
+///      surface out of the document;
+///   3. take those grabs straight back off it, leaving the document exactly as
+///      the transaction left it at begin.
+///
+/// Step 3 is what makes the commit legal. A commit re-checks a stamp derived
+/// from the layer's *content* and refuses a layer that moved underneath it, so
+/// the preview has to be gone before the commit — `undo` restores the content
+/// byte for byte and the stamp with it, which
+/// `a_preview_grab_can_be_drawn_and_taken_back_under_an_open_drag` asserts
+/// rather than assumes.
+///
+/// The cache keeps what the document gave up. Nothing re-fills a brick until
+/// something marks it dirty, so the dragged samples stay in the cache and on
+/// screen after step 4 — the same trade `LiveSmooth` makes with its own
+/// lattice, reached a different way.
+pub(crate) struct LiveMove {
+    transaction: MoveTransaction,
+    layer: LayerId,
+    /// Where the drag was anchored. Every update is measured from here: the
+    /// engine takes the **total**, never an increment, and a composition of
+    /// increments moves the surface further than the drag ever asked for.
+    anchor: [f32; 3],
+    /// How many preview grabs are on the undo stack waiting to be taken back.
+    drawn: usize,
+    /// The box the last preview dirtied, so the next one can clear it: a drag
+    /// that moves on leaves the surface it vacated to be re-filled from the
+    /// document, and only this remembers where that was.
+    previewed: Region,
+}
+
+impl LiveMove {
+    pub(crate) fn begin(
+        document: &mut Document,
+        layer: LayerId,
+        anchor: [f32; 3],
+        params: MoveParams,
+    ) -> Result<Self, ModelError> {
+        let transaction = MoveTransaction::begin(document, layer, anchor, params, None)
+            .map_err(ModelError::engine)?;
+        Ok(Self {
+            transaction,
+            layer,
+            anchor,
+            drawn: 0,
+            previewed: None,
+        })
+    }
+
+    pub(crate) fn anchor(&self) -> [f32; 3] {
+        self.anchor
+    }
+
+    /// Advances the drag to `position` and draws the preview onto the layer.
+    ///
+    /// Returns the box to re-fill: the union of where the last preview was and
+    /// where this one is, so the clay the drag has moved off is restored from
+    /// the document in the same pass that draws where it moved to.
+    ///
+    /// The caller must re-fill that box and then call [`Self::settle`], in that
+    /// order. Between the two the layer carries the drag and the brick cache
+    /// does not; after them the cache carries it and the layer does not, which
+    /// is the state the whole gesture is spent in.
+    pub(crate) fn drag(
+        &mut self,
+        document: &mut Document,
+        position: [f32; 3],
+    ) -> Result<Region, ModelError> {
+        let total = std::array::from_fn(|axis| position[axis] - self.anchor[axis]);
+        let dirty = self.transaction.update(total).map_err(ModelError::engine)?;
+        self.draw(document)?;
+        let region = match (self.previewed, dirty.bounds) {
+            (Some(was), Some(now)) => Some(union(was, now)),
+            (some, None) | (None, some) => some,
+        };
+        self.previewed = dirty.bounds;
+        Ok(region)
+    }
+
+    /// Takes the preview back off the layer, once the cache has read it.
+    ///
+    /// Called at the end of every segment rather than at the start of the next
+    /// one, so that a segment leaves the engine's undo depth exactly where it
+    /// found it. The ViewModel counts a live segment's history by that
+    /// difference; a segment that left its preview behind would be counted as
+    /// having written it, and cancelling the gesture would then spend one undo
+    /// per segment against history the gesture never made.
+    pub(crate) fn settle(&mut self, document: &mut Document) -> Result<(), ModelError> {
+        self.take_back(document)
+    }
+
+    /// Writes the current total's grabs onto the layer.
+    fn draw(&mut self, document: &mut Document) -> Result<(), ModelError> {
+        for node in self.transaction.reached().map_err(ModelError::engine)? {
+            // One grab under no symmetry, and one per image of the drag that
+            // reaches the node under a mirror — a straddler takes the ball's
+            // grab and its reflection's, and drawing only the first would
+            // preview half the drag.
+            for grab in self.transaction.grabs(node).map_err(ModelError::engine)? {
+                document
+                    .add_grab(self.layer, node, grab)
+                    .map_err(ModelError::engine)?;
+                self.drawn += 1;
+            }
+        }
+        Ok(())
+    }
+
+    /// Takes the drawn grabs back off the layer.
+    ///
+    /// Through the undo stack, which is the only door the C ABI has: there is
+    /// no remove-deformer call. Each grab was its own entry, so this spends
+    /// exactly as many as it wrote.
+    fn take_back(&mut self, document: &mut Document) -> Result<(), ModelError> {
+        for _ in 0..std::mem::take(&mut self.drawn) {
+            document.undo().map_err(ModelError::engine)?;
+        }
+        Ok(())
+    }
+
+    /// Installs the drag as one grab per item, in one undo step.
+    ///
+    /// Returns the entries the commit recorded and the box to re-fill, which is
+    /// where the last preview stood: the cache holds the drag there and the
+    /// document now holds it too, so one pass makes them agree.
+    pub(crate) fn commit(mut self, document: &mut Document) -> Result<(usize, Region), ModelError> {
+        // Owed even though every settled segment left nothing behind: a
+        // gesture whose last segment failed between `drag` and `settle` has a
+        // preview on the layer, and a commit refuses a layer that changed
+        // since begin.
+        self.take_back(document)?;
+        let before = depth(document);
+        self.transaction.commit().map_err(ModelError::engine)?;
+        let recorded = depth(document).saturating_sub(before);
+        Ok((recorded, self.previewed))
+    }
+
+    /// Abandons the drag, leaving the document as it was before it began.
+    ///
+    /// Returns the box the preview occupied, which still has to be re-filled:
+    /// the document never carried the drag but the cache does.
+    pub(crate) fn cancel(mut self, document: &mut Document) -> Result<Region, ModelError> {
+        self.take_back(document)?;
+        // Dropping the transaction is a cancel; being explicit says so.
+        self.transaction.cancel();
+        Ok(self.previewed)
+    }
+}
+
+fn depth(document: &Document) -> usize {
+    document
+        .undo_state()
+        .map(|state| state.undo_depth)
+        .unwrap_or(0)
+}
+
+fn union(a: ([f32; 3], [f32; 3]), b: ([f32; 3], [f32; 3])) -> ([f32; 3], [f32; 3]) {
+    (
+        std::array::from_fn(|axis| a.0[axis].min(b.0[axis])),
+        std::array::from_fn(|axis| a.1[axis].max(b.1[axis])),
+    )
 }

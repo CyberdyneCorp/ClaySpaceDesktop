@@ -1,4 +1,4 @@
-//! Does the smoothing brush actually show itself *while* the pointer is down?
+//! Do the live brushes actually show themselves *while* the pointer is down?
 //!
 //! The engine-level tests drive `ClayDocument` directly, so they prove the
 //! transaction and its preview work. They cannot prove that a pointer reaches
@@ -41,6 +41,20 @@ impl Fixture {
             document,
             sculpt,
             camera,
+        })
+    }
+
+    /// How steep the active layer's field has become. A deformer chain
+    /// multiplies, so this is what a drag written per segment destroys.
+    fn step_scale(&self) -> f32 {
+        self.document.with(|document| {
+            let key = clayspace_model::SceneModel::scene(document)
+                .active_layer()
+                .expect("an active layer")
+                .key;
+            clayspace_model::SceneModel::layer_cost(document, key)
+                .expect("layer cost")
+                .safe_step_scale
         })
     }
 
@@ -132,6 +146,98 @@ fn smoothing_shows_itself_before_the_stroke_ends() {
     assert_ne!(
         after, before,
         "the stroke changed nothing at all, so the check above proved nothing"
+    );
+}
+
+/// Drags the pointer straight across the model in `segments` steps and returns
+/// how steep the field ended up, plus whether the surface moved on the way.
+fn drag_across(segments: usize) -> Option<(f32, bool, bool)> {
+    let mut fixture = Fixture::new()?;
+    fixture
+        .sculpt
+        .dispatch(Command::SelectTool(ToolKind::Mover))
+        .expect("choose the move brush");
+
+    // The same gesture whatever it is cut into: one travel, more or fewer
+    // samples along it. Cutting a drag more finely used to cost the field a
+    // grab per cut, which is the whole point of the comparison.
+    const FROM: f32 = 600.0;
+    const TRAVEL: f32 = 81.0;
+
+    let before = fixture.drawn();
+    let rested = fixture.step_scale();
+    let mut followed = false;
+    let mut clean_while_down = true;
+    let mut landed = 0;
+    for step in 0..=segments {
+        let x = FROM + TRAVEL * step as f32 / segments as f32;
+        let Some(position) = fixture.pick(egui::pos2(x, 380.0)) else {
+            continue;
+        };
+        let command = if landed == 0 {
+            Command::BeginStroke {
+                position,
+                pressure: 1.0,
+                modifiers: Default::default(),
+            }
+        } else {
+            Command::ContinueStroke {
+                position,
+                pressure: 1.0,
+            }
+        };
+        fixture.sculpt.dispatch(command).expect("a pointer sample");
+        landed += 1;
+        followed |= fixture.drawn() != before;
+        clean_while_down &= fixture.step_scale() == rested;
+    }
+    if landed < 4 {
+        return None;
+    }
+    fixture.sculpt.dispatch(Command::EndStroke).expect("end");
+    assert_ne!(
+        fixture.drawn(),
+        before,
+        "the drag changed nothing at all, so nothing else here proves anything"
+    );
+    Some((fixture.step_scale(), followed, clean_while_down))
+}
+
+#[test]
+fn a_drag_shows_itself_and_costs_the_field_the_same_however_it_is_cut() {
+    // Move is live by a different route than Suavizar. The transaction hands
+    // over no samples to mesh, so the drag is drawn by writing its resolved
+    // grabs onto the layer, sampling them into the brick cache and undoing
+    // them inside the same segment. Two things have to be true of that, and
+    // only the ViewModel can show them: the surface follows the pointer, and
+    // the document carries no part of the drag until it commits.
+    let Some((coarse, followed, clean)) = drag_across(4) else {
+        eprintln!("no backend, or the drag missed the model; skipped");
+        return;
+    };
+    assert!(
+        followed,
+        "the surface the viewport draws never followed the pointer: a Move \
+         that only appears on release is the regression this catches"
+    );
+    assert!(
+        clean,
+        "the layer's field moved while the pointer was down, so a preview \
+         grab was left on it — the document is supposed to carry no part of a \
+         drag until it commits"
+    );
+
+    // And the cost is the gesture's, not the segments'. A drag written per
+    // segment multiplies the layer's Lipschitz bound once per segment, so
+    // delivering the same drag three times more finely used to cost three
+    // times the chain — measured on this form, a tenth of the step scale.
+    let Some((fine, _, _)) = drag_across(12) else {
+        return;
+    };
+    assert!(
+        (coarse - fine).abs() < coarse * 0.05,
+        "the same drag left the safe step scale at {coarse} in four segments \
+         and {fine} in twelve: the gesture is being written per segment again"
     );
 }
 

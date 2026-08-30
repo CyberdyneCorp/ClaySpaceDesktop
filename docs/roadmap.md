@@ -1208,6 +1208,102 @@ surface by less than a cell per pass and the cache's cell is 0.02.
 
 ## Known costs and escape routes
 
+**A Move drag costs the field one grab, and a session of them still
+compounds.** A drag warps every item it reaches with a `grab` deformer, and the
+engine's Lipschitz bound for a chain is the *product* of its links — so the
+safe step scale decays by a constant factor per grab and the marcher pays for
+it. Through 0.60.0 the application wrote one grab per *segment*, so a drag cost
+the field as much as it was finely cut: measured on the starting form, twelve
+drags of six segments each left a chain of 72 and a step scale of 0.000608,
+and a dab went from 5.2 ms to 26 ms. `clay_sdf_move_*` fixed the segment half —
+the same twelve drags now leave a chain of 12 and a step scale of 0.002456,
+which is one grab per gesture and the factor is exactly the segments per drag.
+Driven through the ViewModel, as a sculptor drives it, a twelve-drag session on
+the starting form:
+
+| drag | per segment, as it was | per gesture |
+|---|---|---|
+| 1st | 19.6 ms | **7.3 ms** |
+| 6th | 109.1 ms | **22.8 ms** |
+| 12th | 218.7 ms | **59.5 ms** |
+
+What is left is the *gesture* half, and it is the engine's rather than ours:
+twelve drags is still twelve links, and 0.606 per link is still geometric. The
+escape route the engine offers is `clay_sculpt_policy`'s `max_deformer_chain`
+plus `allow_consolidation`, which collapses the layer inside the stroke's own
+undo step. It is not taken, and the measurement is why. Six gestures of six
+segments on the starting form, then a collapse, then the same gesture again:
+
+| brush | before the collapse | after | |
+|---|---|---|---|
+| Polir | 2647 ms | **202 ms** | 13x better |
+| Suavizar | 161 + 211 + 223 ms | 172 + 232 + **543** ms | 1.5x worse |
+| Mover | 76 + 135 ms | **754 + 591** ms | 6x worse |
+
+Consolidation cures the mechanism it was designed for — a chain of stacked
+baked volumes, which is Polir and Planar — and makes both *live* brushes worse,
+because a collapsed layer is one 3.3 MB dense volume and every verb that
+re-samples or warps it now pays per sample what it used to pay per primitive.
+Move's step scale actually *improves* over the collapse, 0.00275 to 0.08090, and
+the gesture is still six times slower: the marching win is swamped by the cost
+of evaluating warped samples.
+
+Until that is answered upstream, a Move-heavy session's escape route is the
+manual Optimize on the layers that are *not* being dragged, and Optimize stays
+a sculptor's decision rather than something a stroke does on its own.
+
+**The chain bound ignores that a grab has finite support.** `CLAY_DEFORM_GRAB`
+is "identity past r", so two grabs whose balls do not overlap cannot compound
+anywhere — but `deformer_lipschitz` multiplies them regardless. Measured on a
+radius-4 sphere, eight drags of radius 0.3 with their centres 3.06 apart report
+a Lipschitz of **354.871**, which is exactly what eight drags piled on one spot
+report. A sculptor working all over a model therefore pays a bound describing a
+compounding that cannot physically happen, and that — rather than consolidation
+— is the cheap fix.
+
+**A region bake can only append or collapse the whole layer.** Suavizar, Polir
+and Planar sample a region into a volume and put it back, and the only way to
+put it back is `clay_layer_add_item` — so the layer grows one baked volume per
+gesture and every later bake samples all of them. The engine's own words:
+*"a polish samples a document and hands back a volume, so the SECOND pass
+samples a volume rather than a document."* Twelve gestures on one patch of the
+starting form:
+
+| brush | 1st gesture | 12th | items |
+|---|---|---|---|
+| Polir | 22 ms | **244 ms** | 2 → 13 |
+| Suavizar | 458 ms | **939 ms** | 2 → 13 |
+
+Split by phase, Suavizar says exactly where the cost is: the transaction's own
+dabs are **flat** across the session, 197 ms to 223 ms, and both phases that
+touch the document grow — `_begin`'s whole-layer sample 110 to 205 ms, and the
+bake that installs the result 151 to 512 ms. The transaction insulates the dabs
+from the accumulation and cannot insulate its own endpoints.
+
+The other option the ABI offers is `clay_sdf_smooth_commit`, which installs the
+volume as the layer's *one* item — consolidating the whole subtool on every
+stroke, and measurably worse on Metal (ClayCore#379). What is missing is the
+middle: merge a baked region into the layer and leave the parametric items
+outside it alone, which would make repeated work on one patch O(1) in gestures
+rather than O(n). Filed upstream.
+
+**The Move transaction's preview is not carried by the C ABI.** ClayCore's C++
+`SdfMoveTransaction` exposes `preview_layer()` — a private copy of the layer
+with the affected chains replaced, which the sdf-sculpt-transaction spec names
+as the way a host draws a Move preview, "so it compiles, draws and picks like
+any other layer". `clay.h` exposes the resolved grabs and not the layer, and
+this application can only reach the C ABI. So the drag is drawn the other way
+the header invites: the grabs are written onto the layer, sampled into the
+brick cache, and undone inside the same segment. It works, and
+`live_transactions::a_preview_grab_can_be_drawn_and_taken_back_under_an_open_drag`
+holds the three facts it rests on — a written grab moves the surface, each is
+one undo entry, and a commit accepts a layer that was edited and restored,
+because its stamp is derived from content. But it spends two document edits per
+pointer event to draw something the engine already has in hand, and it would be
+a plain `preview_layer()` read if the ABI carried one. Worth asking upstream for
+alongside a remove-deformer call, which the ABI also lacks: `add` has no
+inverse but undo.
+
 **The live Smooth's commit is not used, and that is a decision to revisit.**
 `clay_sdf_smooth_commit` installs the working volume as the layer's one item,
 so every stroke would consolidate the whole subtool. It measures worse on
