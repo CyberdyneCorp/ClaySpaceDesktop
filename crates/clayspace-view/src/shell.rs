@@ -4234,7 +4234,7 @@ pub fn selection_box(painter: &egui::Painter, drawn: egui::Rect) {
     painter.rect_stroke(
         drawn,
         egui::epaint::CornerRadius::ZERO,
-        egui::Stroke::new(1.0, Tokens::text_dim()),
+        egui::Stroke::new(1.0_f32, Tokens::text_dim()),
         egui::StrokeKind::Inside,
     );
 }
