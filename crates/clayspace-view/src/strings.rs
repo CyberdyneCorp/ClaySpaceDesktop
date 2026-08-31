@@ -365,6 +365,17 @@ pub struct Strings {
     /// The shelf's first filter: the brushes the active layer can actually
     /// use, which is what the shelf shows unless a sculptor asks otherwise.
     pub shelf_filter_all: &'static str,
+    /// The brushes a sculptor starred, across every representation.
+    pub shelf_filter_favourites: &'static str,
+    /// The status area's autosave line: counting down to the next one, or
+    /// saying there is nothing waiting to be written.
+    pub label_autosave_in: &'static str,
+    pub state_autosaved: &'static str,
+    /// Starring a brush, and taking the star off it.
+    pub action_favourite_add: &'static str,
+    pub action_favourite_remove: &'static str,
+    /// Shown where the star filter is chosen and nothing has been starred.
+    pub shelf_no_favourites: &'static str,
     /// How much a frame is worth spending on, in `ViewportProfile::ALL` order.
     ///
     /// A display setting: it changes what an idle frame is drawn with and
@@ -375,6 +386,8 @@ pub struct Strings {
     /// puts them away and brings them back.
     pub panel_names: [&'static str; crate::layout::Panel::ALL.len()],
     pub action_reset_layout: &'static str,
+    /// Clearing the chrome away, and bringing it back.
+    pub action_focus: &'static str,
     /// The transform readout that stands beside the manipulator.
     ///
     /// Axis-and-angle rather than three Euler angles, and one scale factor
@@ -791,10 +804,17 @@ libera em vez de congelar.",
 
     shelf_no_tools: "Nenhuma ferramenta para esta representação ainda",
     shelf_filter_all: "Disponíveis",
+    shelf_filter_favourites: "★ Favoritos",
+    label_autosave_in: "Salvamento automático em",
+    state_autosaved: "Nada a salvar",
+    action_favourite_add: "Adicionar aos favoritos",
+    action_favourite_remove: "Remover dos favoritos",
+    shelf_no_favourites: "Nenhum pincel favoritado ainda — use o menu de um pincel",
     viewport_profile_names: ["Desempenho", "Escultura", "Apresentação"],
     label_viewport_profile: "Qualidade da viewport",
     panel_names: ["Painel esquerdo", "Painel direito", "Prateleira"],
     action_reset_layout: "Restaurar disposição",
+    action_focus: "Modo foco",
     hud_position: "Posição",
     hud_rotation: "Rotação",
     hud_axis: "Eixo",
@@ -1167,10 +1187,17 @@ instead.",
 
     shelf_no_tools: "No tools for this representation yet",
     shelf_filter_all: "Available",
+    shelf_filter_favourites: "★ Favourites",
+    label_autosave_in: "Auto save in",
+    state_autosaved: "Nothing to save",
+    action_favourite_add: "Add to favourites",
+    action_favourite_remove: "Remove from favourites",
+    shelf_no_favourites: "No brushes starred yet — use a brush's own menu",
     viewport_profile_names: ["Performance", "Sculpt", "Presentation"],
     label_viewport_profile: "Viewport quality",
     panel_names: ["Left panel", "Right panel", "Shelf"],
     action_reset_layout: "Reset layout",
+    action_focus: "Focus mode",
     hud_position: "Position",
     hud_rotation: "Rotation",
     hud_axis: "Axis",
@@ -1553,10 +1580,17 @@ lados. Con Ctrl, libera en vez de congelar.",
 
     shelf_no_tools: "Todavía no hay herramientas para esta representación",
     shelf_filter_all: "Disponibles",
+    shelf_filter_favourites: "★ Favoritos",
+    label_autosave_in: "Guardado automático en",
+    state_autosaved: "Nada que guardar",
+    action_favourite_add: "Añadir a favoritos",
+    action_favourite_remove: "Quitar de favoritos",
+    shelf_no_favourites: "Ningún pincel en favoritos — usa el menú de un pincel",
     viewport_profile_names: ["Rendimiento", "Escultura", "Presentación"],
     label_viewport_profile: "Calidad de la vista",
     panel_names: ["Panel izquierdo", "Panel derecho", "Estante"],
     action_reset_layout: "Restablecer disposición",
+    action_focus: "Modo enfoque",
     hud_position: "Posición",
     hud_rotation: "Rotación",
     hud_axis: "Eje",
@@ -1909,9 +1943,16 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 216] {
+    pub fn all(&self) -> [&'static str; 223] {
         [
+            self.label_autosave_in,
+            self.state_autosaved,
+            self.shelf_filter_favourites,
+            self.action_favourite_add,
+            self.action_favourite_remove,
+            self.shelf_no_favourites,
             self.action_reset_layout,
+            self.action_focus,
             self.label_voxel_cell,
             self.label_voxel_occupied,
             self.label_viewport_profile,

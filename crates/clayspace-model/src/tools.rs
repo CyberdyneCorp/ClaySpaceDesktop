@@ -513,6 +513,41 @@ impl ToolKind {
         Self::Apagar,
     ];
 
+    /// A stable name for storage.
+    ///
+    /// Not [`ToolKind::label`], which is interface text: it is Portuguese, it is
+    /// translated, and a stored preference that used it would read differently
+    /// in a different language. Not the position in [`ToolKind::ALL`] either —
+    /// that is presentation order, and reordering the shelf would silently
+    /// reinterpret what a sculptor had starred.
+    ///
+    /// The same reasoning as [`crate::Shape::key`], and the same shape.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Padrao => "standard",
+            Self::Inflar => "inflate",
+            Self::Suavizar => "smooth",
+            Self::Mover => "move",
+            Self::MoverTopologico => "move-topological",
+            Self::Pincar => "pinch",
+            Self::Raspar => "scrape",
+            Self::Planar => "planar",
+            Self::Preencher => "fill",
+            Self::Camada => "layer",
+            Self::Mascara => "mask",
+            Self::Puxar => "snake-hook",
+            Self::Polir => "polish",
+            Self::Relaxar => "relax",
+            Self::Nudge => "nudge",
+            Self::Trim => "trim",
+            Self::Argila => "clay",
+            Self::Vinco => "crease",
+            Self::Pintar => "paint",
+            Self::Borrar => "smudge",
+            Self::Apagar => "erase",
+        }
+    }
+
     /// The label the interface shows.
     pub fn label(self) -> &'static str {
         match self {

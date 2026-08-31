@@ -390,6 +390,39 @@ different `wgpu::Instance`s. The offscreen tests never build a surface, so they
 structurally could not have found it. `window_smoke` now requires three
 presented frames and has been verified against the regression.
 
+### What the captures hid
+
+The shell captures run egui several passes deep, because a menu does not exist
+until the frame after the button that opens it was clicked. A glyph reaches
+egui's font atlas in the pass that first *lays it out*, arriving as a
+`textures_delta` on that pass's output — and the harness applied the deltas of
+only the first and the last pass. So any accented character appearing **only**
+inside a menu arrived in a discarded delta and drew as a blank: every menu
+capture on this project was quietly missing its accents, and "Mostrar só esta"
+had been reading as "Mostrar s esta" in the images used to eyeball the design.
+Nothing failed, because nothing asserts on glyphs. Every pass's deltas are
+applied now.
+
+The menu was translucent in those images too, and for a neighbouring reason:
+egui fades a popup in over a twelfth of a second, and each harness pass advanced
+its clock by a sixtieth — so a capture two passes after the click caught the menu
+at a little over half opacity, with the layer rows behind it reading straight
+through the fill. The settling passes now declare a quarter of a second as their
+own duration, which leaves every animation finished.
+
+Both have regression tests, and both tests were checked by putting the bug back:
+the fade one measures the fill where the menu overhangs the panel it opened from,
+against the closed capture at the same pixel, so it can tell a transparent fill
+from an opaque one; the glyph one captures the same menu twice, once with its
+labels laid out in the first pass — the delta that was never dropped, in every
+text style, since a glyph is rasterised per size — and requires the two pictures
+to be identical. The accent is 46 pixels.
+
+The lesson generalises past fonts. These captures exist to be looked at, so a
+harness that renders something *other* than what the application renders is
+worse than a missing test: it answers the question it was asked, wrongly, and
+the answer looks like a picture.
+
 ## Decisions recorded elsewhere
 
 `openspec/changes/add-clayspace-desktop/design.md` carries the full decision

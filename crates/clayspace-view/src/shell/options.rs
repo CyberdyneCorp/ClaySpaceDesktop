@@ -74,6 +74,27 @@ pub fn options_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
                     mask_gesture_control(ui, state, queue);
                 }
 
+                ui.add_space(space::ROOMY);
+                ui.vertical(|ui| {
+                    ui.set_width(OPTION_SLIDER_WIDTH);
+                    // Lazy-mouse lag, moved here from the brush-controls
+                    // section: it shapes the stroke being made, which is what
+                    // this bar is for, and a sculptor reaching for it mid-line
+                    // should not have to find a panel section.
+                    if let Some(value) = slider(
+                        ui,
+                        s.label_smoothing,
+                        state.brush.shaping.smoothing,
+                        0.0..=0.95,
+                        2,
+                    ) {
+                        queue.push(Command::SetBrushSmoothing(value));
+                    }
+                });
+
+                ui.add_space(space::SECTION);
+                symmetry_control(ui, state, queue);
+
                 // The combine vocabulary is the SDF side's alone: cells are set or
                 // cleared and vertices are moved, so neither has a join to make. The
                 // controls are absent rather than greyed because there is no
@@ -127,6 +148,48 @@ fn mask_gesture_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut C
     });
 }
 
+/// Which axes a stroke mirrors across.
+///
+/// Moved out of the left region's sculpt-settings section, which held nothing
+/// else and is gone with it. Symmetry belongs to the stroke rather than to the
+/// scene, and every other thing the stroke is made under is on this bar.
+fn symmetry_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    ui.vertical(|ui| {
+        // A dim label, as Operação and Junção beside it are. `numeric` is a
+        // monospaced face for digits, and the heading over three axis chips
+        // came out heavier than every other heading on the bar.
+        ui.label(
+            egui::RichText::new(s.label_symmetry)
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+        );
+        ui.horizontal(|ui| {
+            for (index, axis) in Axis::ALL.iter().enumerate() {
+                let on = state.symmetry[index];
+                let action = match axis {
+                    Axis::X => Action::SymmetryX,
+                    Axis::Y => Action::SymmetryY,
+                    Axis::Z => Action::SymmetryZ,
+                };
+                // The engaged axis wears the soft accent rather than a raised
+                // grey: symmetry is state a sculptor needs to see without
+                // looking for it, and a mirrored stroke they did not expect is
+                // the most expensive surprise on this bar.
+                let response = ui.add(chip_tinted(
+                    axis.label(),
+                    on,
+                    Tokens::ground(),
+                    Tokens::selection_soft(),
+                ));
+                if with_chord(response, state, action).clicked() {
+                    queue.push(Command::ToggleSymmetry(*axis));
+                }
+            }
+        });
+    });
+}
+
 /// The id the options bar's brush badge is recorded under, for tests.
 pub fn brush_badge_id() -> egui::Id {
     egui::Id::new("options-brush-badge")
@@ -177,7 +240,7 @@ pub(super) const BADGE_TEXT_WIDTH: f32 = 132.0;
 
 /// One of the bar's three sliders. Sized so the bar fits the design's 1280
 /// with the badge at its head; below that the bar scrolls.
-pub(super) const OPTION_SLIDER_WIDTH: f32 = 150.0;
+pub(super) const OPTION_SLIDER_WIDTH: f32 = 128.0;
 
 /// The combine operation, its join profile, and how wide the join reaches.
 ///

@@ -268,6 +268,18 @@ struct App {
 
     /// Where session state lives, when this machine has somewhere to put it.
     store: Option<SessionStore>,
+    /// Whether the chrome is cleared away and only the sculpt is left.
+    ///
+    /// A presentation override rather than a layout: it hides the regions
+    /// *without* touching the sizes and collapse states a sculptor chose, so
+    /// leaving focus mode puts everything back exactly as it was. That is why
+    /// it is not stored — an application that opened with its panels gone
+    /// would look broken — and why it is a bool here rather than three more
+    /// collapse flags in `Layout`.
+    focus: bool,
+    /// The brushes this sculptor starred, read at start-up and written when
+    /// one is added or taken away.
+    favourites: Vec<clayspace_model::ToolKind>,
     /// How wide the regions are and which are put away.
     ///
     /// Read at start-up and written when it changes. Not document state: it
@@ -419,8 +431,19 @@ impl App {
             .as_ref()
             .map(SessionStore::load_layout)
             .unwrap_or_default();
+        let favourites = store
+            .as_ref()
+            .map(SessionStore::load_favourites)
+            .unwrap_or_default();
+        // The profile the last session was left in, or the default.
+        let profile = store
+            .as_ref()
+            .and_then(SessionStore::load_viewport_profile)
+            .unwrap_or_default();
 
         Self {
+            focus: false,
+            favourites,
             layout,
             document,
             sculpt,
@@ -450,7 +473,7 @@ impl App {
             window: None,
             graphics: None,
             drag: Drag::None,
-            quality: QualityGovernor::new(ViewportProfile::default()),
+            quality: QualityGovernor::new(profile),
             hover: None,
             viewport: None,
             overlay_symmetry: [false; 3],
@@ -3130,6 +3153,13 @@ impl App {
             Action::BrushLarger => Command::SetBrushSize(self.sculpt.brush().get().size * 1.25),
             Action::ToggleSkinPreview => Command::ToggleSkinPreview,
             Action::ToggleArmatureEditing => Command::ToggleArmatureEditing,
+            // Handled here rather than as a command, like Sair above it: what
+            // the chrome is doing reaches no document, and `Command` lives in
+            // the layer below the view that owns the regions.
+            Action::ToggleFocus => {
+                self.focus = !self.focus;
+                return;
+            }
         };
         self.handle(command);
     }
@@ -3490,6 +3520,14 @@ impl App {
             // second copy of a setting is a second thing to keep in step.
             viewport_profile: self.quality.profile(),
             collapsed: Panel::ALL.map(|panel| self.layout.is_collapsed(panel)),
+            focus: self.focus,
+            favourites: &self.favourites,
+            // The same question the event loop asks to decide how long to
+            // wait, asked of the same policy and the same clock, so the line a
+            // sculptor reads and the write that happens cannot disagree.
+            autosave_in: self
+                .autosave
+                .next_in(self.saved_at.elapsed(), *self.document_vm.modified().get()),
             studio_shading: self
                 .graphics
                 .as_ref()
@@ -3532,18 +3570,27 @@ impl App {
         // collected. Copied out rather than borrowed: `state` borrows `self`
         // for the frame, so the closure cannot reach `self.layout`.
         let layout = self.layout.clone();
+        let focus = self.focus;
+        // A region is drawn when the sculptor has not put it away *and* the
+        // chrome has not been cleared. Focus asks the question a second time
+        // rather than editing the layout, so what it hides it also gives back.
+        let shown = |panel: Panel| !focus && !layout.is_collapsed(panel);
         let mut resized: [Option<f32>; 3] = [None; 3];
         let output = context.run(raw_input, |ctx| {
             egui::TopBottomPanel::top("menu")
                 .exact_height(region::MENU_BAR)
                 .show(ctx, |ui| shell::menu_bar(ui, &state, &mut queue));
-            egui::TopBottomPanel::top("options")
-                .exact_height(region::OPTIONS_BAR)
-                .show(ctx, |ui| shell::options_bar(ui, &state, &mut queue));
-            egui::TopBottomPanel::bottom("status")
-                .exact_height(region::STATUS)
-                .show(ctx, |ui| shell::status_bar(ui, &state, &mut queue));
-            if !layout.is_collapsed(Panel::Shelf) {
+            if !focus {
+                egui::TopBottomPanel::top("options")
+                    .exact_height(region::OPTIONS_BAR)
+                    .show(ctx, |ui| shell::options_bar(ui, &state, &mut queue));
+            }
+            if !focus {
+                egui::TopBottomPanel::bottom("status")
+                    .exact_height(region::STATUS)
+                    .show(ctx, |ui| shell::status_bar(ui, &state, &mut queue));
+            }
+            if shown(Panel::Shelf) {
                 let height = egui::TopBottomPanel::bottom("shelf")
                     .resizable(true)
                     .default_height(layout.size(Panel::Shelf))
@@ -3557,10 +3604,12 @@ impl App {
                     .height();
                 resized[2] = Some(height);
             }
-            egui::SidePanel::left("rail")
-                .exact_width(region::RAIL)
-                .resizable(false)
-                .show(ctx, |ui| shell::tool_rail(ui, &state, &mut queue));
+            if !focus {
+                egui::SidePanel::left("rail")
+                    .exact_width(region::RAIL)
+                    .resizable(false)
+                    .show(ctx, |ui| shell::tool_rail(ui, &state, &mut queue));
+            }
             // Resizable, and remembered. `layout` carries the width, the
             // bounds a drag is clamped to and whether the region is put away;
             // it was written with all of that and a pair of serialisers and
@@ -3570,7 +3619,7 @@ impl App {
             // one — `Layout::size` reports zero for it — and keeps the width
             // it had, so expanding returns the size a sculptor chose rather
             // than a default.
-            if !layout.is_collapsed(Panel::Left) {
+            if shown(Panel::Left) {
                 let width = egui::SidePanel::left("left")
                     .resizable(true)
                     .default_width(layout.size(Panel::Left))
@@ -3584,7 +3633,7 @@ impl App {
                     .width();
                 resized[0] = Some(width);
             }
-            if !layout.is_collapsed(Panel::Right) {
+            if shown(Panel::Right) {
                 let width = egui::SidePanel::right("right")
                     .resizable(true)
                     .default_width(layout.size(Panel::Right))
@@ -3612,7 +3661,12 @@ impl App {
                     // Inside the central region rather than a panel of its
                     // own, so it spans the viewport it labels and stops at
                     // the inspectors either side.
-                    shell::representation_bar(ui, &state, &mut queue);
+                    // The menu bar stays: it is how a sculptor finds their way
+                    // back out, and Tab is not discoverable from an empty
+                    // window. Everything else goes.
+                    if !focus {
+                        shell::representation_bar(ui, &state, &mut queue);
+                    }
                     ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                         shell::viewport_bar(ui, &state, &mut queue);
                         // Whatever the bar left is the viewport, allocated as
@@ -3649,6 +3703,11 @@ impl App {
                         // belongs to what the pointer is doing rather than to
                         // a panel.
                         shell::transform_hud(ui, rect, &state);
+                        // The brush and its numbers, while the bar that
+                        // carries them is away.
+                        if focus {
+                            shell::brush_hud(ui, rect, &state);
+                        }
                     });
                 });
         });
@@ -3672,6 +3731,13 @@ impl App {
         if let Some(panel) = toggled {
             self.layout.toggle(panel);
             moved = true;
+        }
+        // The menu's route into focus mode, beside the keyboard's.
+        if context
+            .data_mut(|data| data.remove_temp::<bool>(shell::focus_toggle_id()))
+            .unwrap_or(false)
+        {
+            self.focus = !self.focus;
         }
         let reset = context
             .data_mut(|data| data.remove_temp::<bool>(shell::layout_reset_id()))
@@ -3716,6 +3782,10 @@ impl App {
         {
             if chosen != self.quality.profile() {
                 self.quality.set_profile(chosen, Instant::now());
+                // Kept, so the next session opens where this one was left.
+                if let Some(store) = self.store.as_ref() {
+                    store.save_viewport_profile(chosen);
+                }
             }
         }
 
@@ -3726,6 +3796,25 @@ impl App {
         // `Drop`, so calling `drop` on it did nothing but say so; letting the
         // binding end is what actually returns the borrows.
         let _ = &state;
+
+        // A brush starred or unstarred, from its own menu.
+        let starred = context
+            .data(|data| data.get_temp::<clayspace_model::ToolKind>(shell::favourite_toggle_id()));
+        if let Some(tool) = starred {
+            context.data_mut(|data| {
+                data.remove::<clayspace_model::ToolKind>(shell::favourite_toggle_id())
+            });
+            match self.favourites.iter().position(|starred| *starred == tool) {
+                Some(at) => {
+                    self.favourites.remove(at);
+                }
+                None => self.favourites.push(tool),
+            }
+            if let Some(store) = self.store.as_ref() {
+                store.save_favourites(&self.favourites);
+            }
+        }
+
         self.drive(&input);
         for command in queue.drain() {
             if matches!(command, Command::CopyDiagnostics) {

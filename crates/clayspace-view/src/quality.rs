@@ -101,6 +101,15 @@ pub enum ViewportProfile {
 impl ViewportProfile {
     pub const ALL: [Self; 3] = [Self::Performance, Self::Sculpt, Self::Presentation];
 
+    /// A stable name for storage, not the translated one the menu shows.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Performance => "performance",
+            Self::Sculpt => "sculpt",
+            Self::Presentation => "presentation",
+        }
+    }
+
     /// The best this profile will ever draw.
     fn ceiling(self) -> ViewportQuality {
         match self {

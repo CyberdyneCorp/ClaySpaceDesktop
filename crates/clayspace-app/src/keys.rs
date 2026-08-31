@@ -52,6 +52,7 @@ fn key_for(code: KeyCode) -> Option<Key> {
         KeyCode::Delete => Key::Delete,
         KeyCode::Backspace => Key::Backspace,
         KeyCode::Escape => Key::Escape,
+        KeyCode::Tab => Key::Tab,
         _ => return None,
     })
 }
@@ -150,6 +151,7 @@ mod tests {
             KeyCode::Delete,
             KeyCode::Backspace,
             KeyCode::Escape,
+            KeyCode::Tab,
         ]
         .into_iter()
         .flat_map(|code| {

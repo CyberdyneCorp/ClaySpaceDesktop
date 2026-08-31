@@ -40,8 +40,43 @@ pub fn brush_swatch_id(tool: ToolKind) -> egui::Id {
 /// the section folds, enters no history, emits no command, and is forgotten
 /// when the application closes. A shelf that reopened filtered to Malha on an
 /// SDF document would be a document that had changed while nobody was looking.
-pub(super) fn shelf_filter(ctx: &egui::Context) -> Option<Representation> {
-    ctx.data(|data| data.get_temp(shelf_filter_id())).flatten()
+pub(super) fn shelf_filter(ctx: &egui::Context) -> ShelfFilter {
+    ctx.data(|data| data.get_temp(shelf_filter_id()))
+        .unwrap_or_default()
+}
+
+/// Which set of brushes the shelf lists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ShelfFilter {
+    /// The brushes the active layer can actually use. The default, and the
+    /// sculpt workflow.
+    #[default]
+    Available,
+    /// Another representation's vocabulary, for finding out what crossing to it
+    /// would give.
+    Elsewhere(Representation),
+    /// The ones a sculptor starred, across every representation.
+    Favourites,
+}
+
+impl ShelfFilter {
+    /// Every filter the column offers, in the order it draws them.
+    pub fn all() -> Vec<Self> {
+        let mut all = vec![Self::Available];
+        all.extend(Representation::ALL.map(Self::Elsewhere));
+        all.push(Self::Favourites);
+        all
+    }
+}
+
+/// Where a request to star a brush, or take its star off, is left.
+///
+/// The route the section folds and the shelf's filter take: a favourite is the
+/// sculptor's own shortlist, it reaches no document, and `ToolKind` is a domain
+/// type but *starring* is not a domain verb — there is no engine call and no
+/// edit to record.
+pub fn favourite_toggle_id() -> egui::Id {
+    egui::Id::new("favourite-toggle")
 }
 
 /// Where the shelf's filter is kept, and where a test can set it.
@@ -49,38 +84,34 @@ pub fn shelf_filter_id() -> egui::Id {
     egui::Id::new("shelf-filter")
 }
 
-/// The id one filter entry is recorded under. `None` is the available set.
-pub fn shelf_filter_chip_id(filter: Option<Representation>) -> egui::Id {
+/// The id one filter entry is recorded under.
+pub fn shelf_filter_chip_id(filter: ShelfFilter) -> egui::Id {
     egui::Id::new(("shelf-filter-chip", filter))
 }
 
 /// How wide the filter column runs, and how tall one of its rows is.
 ///
-/// Four rows inside the shelf's own height, which is what caps them: the
+/// Five rows inside the shelf's own height, which is what caps them: the
 /// region is 84 logical pixels and the swatches beside them take most of it.
 const FILTER_WIDTH: f32 = 74.0;
-const FILTER_ROW: f32 = 17.0;
+const FILTER_ROW: f32 = 15.0;
 
 /// The filter column at the shelf's leading edge.
 ///
 /// A column rather than a row because the shelf is one swatch tall and a row
 /// of filters above them would take a swatch's worth of height from a region
 /// that has none to give.
-fn shelf_filters(ui: &mut egui::Ui, state: &ShellState<'_>) -> Option<Representation> {
+fn shelf_filters(ui: &mut egui::Ui, state: &ShellState<'_>) -> ShelfFilter {
     let s = state.strings;
     let current = shelf_filter(ui.ctx());
     let mut chosen = current;
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
-        for filter in [
-            None,
-            Some(Representation::Sdf),
-            Some(Representation::Voxel),
-            Some(Representation::Mesh),
-        ] {
+        for filter in ShelfFilter::all() {
             let label = match filter {
-                None => s.shelf_filter_all,
-                Some(representation) => s.representation_name(representation),
+                ShelfFilter::Available => s.shelf_filter_all,
+                ShelfFilter::Elsewhere(representation) => s.representation_name(representation),
+                ShelfFilter::Favourites => s.shelf_filter_favourites,
             };
             let on = filter == current;
             let (rect, response) =
@@ -137,11 +168,28 @@ pub fn brush_shelf(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
         let filter = shelf_filters(ui, state);
         ui.add_space(space::ROOMY);
 
-        let showing = filter.unwrap_or(state.representation);
-        let tools = ToolKind::for_representation(showing);
+        let tools = match filter {
+            ShelfFilter::Available => ToolKind::for_representation(state.representation),
+            ShelfFilter::Elsewhere(representation) => ToolKind::for_representation(representation),
+            // Across every representation, because a favourite is a sculptor's
+            // own shortlist rather than a property of the active layer — and
+            // the ones their layer cannot run are drawn dim like any other
+            // brush met while browsing.
+            ShelfFilter::Favourites => ToolKind::ALL
+                .into_iter()
+                .filter(|tool| state.favourites.contains(tool))
+                .collect(),
+        };
         if tools.is_empty() {
+            // Two different silences: a representation with no verbs yet, and a
+            // shortlist nobody has added to. The second one says how to.
+            let empty = if filter == ShelfFilter::Favourites {
+                state.strings.shelf_no_favourites
+            } else {
+                state.strings.shelf_no_tools
+            };
             ui.label(
-                egui::RichText::new(state.strings.shelf_no_tools)
+                egui::RichText::new(empty)
                     .size(type_scale::LABEL)
                     .color(Tokens::text_dim()),
             );
@@ -222,6 +270,24 @@ fn brush_swatch(
         // The name and what the brush does, for a hand that hovers. ZBrush
         // teaches its brushes by tooltip; one sentence costs nothing and saves
         // a stroke and an undo.
+        // Starring, from the brush's own menu — the gesture a layer row already
+        // uses for the things that are not its primary click. A brush met while
+        // browsing can be starred too: a shortlist is for finding a brush
+        // again, and the layer it applies to is a separate question.
+        let starred = state.favourites.contains(&tool);
+        response.context_menu(|ui| {
+            let label = if starred {
+                state.strings.action_favourite_remove
+            } else {
+                state.strings.action_favourite_add
+            };
+            if ui.button(label).clicked() {
+                ui.ctx()
+                    .data_mut(|data| data.insert_temp(favourite_toggle_id(), tool));
+                ui.close_menu();
+            }
+        });
+
         let response = response.on_hover_text(if usable {
             format!(
                 "{}\n{}",

@@ -246,6 +246,9 @@ fn state<'a>(
         polyframe: false,
         viewport_profile: clayspace_view::ViewportProfile::default(),
         collapsed: [false; 3],
+        focus: false,
+        favourites: &[],
+        autosave_in: None,
         studio_shading: false,
         cavity: true,
         shadows: true,
@@ -297,35 +300,44 @@ fn build_shell(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQ
     egui::TopBottomPanel::top("menu")
         .exact_height(region::MENU_BAR)
         .show(ctx, |ui| shell::menu_bar(ui, state, queue));
-    egui::TopBottomPanel::top("options")
-        .exact_height(region::OPTIONS_BAR)
-        .show(ctx, |ui| shell::options_bar(ui, state, queue));
-    egui::TopBottomPanel::bottom("status")
-        .exact_height(region::STATUS)
-        .show(ctx, |ui| shell::status_bar(ui, state, queue));
+    // Focus mode asked of every region the composition root asks it of, and
+    // in the same order: this function is a second copy of that frame, and a
+    // region hidden in one and not the other is invisible to every capture.
+    if !state.focus {
+        egui::TopBottomPanel::top("options")
+            .exact_height(region::OPTIONS_BAR)
+            .show(ctx, |ui| shell::options_bar(ui, state, queue));
+    }
+    if !state.focus {
+        egui::TopBottomPanel::bottom("status")
+            .exact_height(region::STATUS)
+            .show(ctx, |ui| shell::status_bar(ui, state, queue));
+    }
     // A collapsed region is not drawn, which is the condition the composition
     // root applies. The widths stay exact here rather than resizable: a capture
     // is compared at a known size, and a panel egui had remembered a drag on
     // would make one capture incomparable with the next.
-    if !state.collapsed[2] {
+    if !state.focus && !state.collapsed[2] {
         egui::TopBottomPanel::bottom("shelf")
             .exact_height(region::SHELF)
             .show(ctx, |ui| {
                 egui::ScrollArea::horizontal().show(ui, |ui| shell::brush_shelf(ui, state, queue));
             });
     }
-    egui::SidePanel::left("rail")
-        .exact_width(region::RAIL)
-        .resizable(false)
-        .show(ctx, |ui| shell::tool_rail(ui, state, queue));
-    if !state.collapsed[0] {
+    if !state.focus {
+        egui::SidePanel::left("rail")
+            .exact_width(region::RAIL)
+            .resizable(false)
+            .show(ctx, |ui| shell::tool_rail(ui, state, queue));
+    }
+    if !state.focus && !state.collapsed[0] {
         egui::SidePanel::left("left")
             .exact_width(region::LEFT)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| shell::left_panel(ui, state, queue));
             });
     }
-    if !state.collapsed[1] {
+    if !state.focus && !state.collapsed[1] {
         egui::SidePanel::right("right")
             .exact_width(region::RIGHT)
             .show(ctx, |ui| {
@@ -341,7 +353,9 @@ fn build_shell(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQ
         // the one boundary the design draws no line for.
         .frame(egui::Frame::new().fill(Tokens::viewport()))
         .show(ctx, |ui| {
-            shell::representation_bar(ui, state, queue);
+            if !state.focus {
+                shell::representation_bar(ui, state, queue);
+            }
             // The viewport is what the bar leaves, measured the way the
             // composition root measures it — after the bar rather than before.
             // Taken before it, the rect included the bar's own strip and the
@@ -358,6 +372,9 @@ fn build_shell(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQ
             // invisible to every capture here.
             shell::outline_overlay(ui, viewport, state);
             shell::transform_hud(ui, viewport, state);
+            if state.focus {
+                shell::brush_hud(ui, viewport, state);
+            }
         });
     shell::diagnostics_window(ctx, state, queue);
     shell::attribution_window(ctx, state, queue);
@@ -434,11 +451,35 @@ fn capture_shell(harness: &Harness, state: &ShellState<'_>, name: &str) -> clays
 /// cannot be clicked on the frame the menu is still measuring. `inspect` sees
 /// the commands the input produced, which is the other half of what such a
 /// test is for — a menu that draws and is wired to nothing looks identical.
+/// How long a settling pass lasts, in seconds.
+///
+/// Longer than any animation egui runs — its default `animation_time` is a
+/// twelfth of a second — so a capture shows the state a sculptor sees rather
+/// than one caught part way into a fade.
+const SETTLED_DT: f32 = 0.25;
+
 fn capture_shell_after(
     harness: &Harness,
     state: &ShellState<'_>,
     name: &str,
     frames: &[Vec<egui::Event>],
+    inspect: impl FnOnce(&CommandQueue),
+) -> clayspace_view::Image {
+    capture_shell_after_warming(harness, state, name, frames, &[], inspect)
+}
+
+/// As `capture_shell_after`, having first laid out `warm`.
+///
+/// Laying a string out is what puts its glyphs in the font atlas, so a label
+/// named here reaches the atlas in the *first* pass rather than in whichever
+/// pass first draws it. That is the whole difference the accent bug turned on,
+/// and it is what the regression test compares against.
+fn capture_shell_after_warming(
+    harness: &Harness,
+    state: &ShellState<'_>,
+    name: &str,
+    frames: &[Vec<egui::Event>],
+    warm: &[&str],
     inspect: impl FnOnce(&CommandQueue),
 ) -> clayspace_view::Image {
     let ctx = egui::Context::default();
@@ -452,36 +493,70 @@ fn capture_shell_after(
         )),
         ..Default::default()
     };
+    // The same frame, a quarter of a second long. A popup fades in, and a fade
+    // is measured in time rather than in passes: each pass here advances egui's
+    // clock by its default sixtieth of a second, so a capture taken two passes
+    // after a click caught the menu at a little over half opacity and the layer
+    // rows behind it read straight through its fill. The duration is declared as
+    // the frame's own so egui does not read it as a stutter and clamp it back.
+    let settled_input = || egui::RawInput {
+        predicted_dt: SETTLED_DT,
+        ..raw_input()
+    };
 
-    let mut build = |ctx: &egui::Context| build_shell(ctx, state, &mut queue);
+    // Laid out during the first pass, which is when fonts exist and is the pass
+    // whose delta the harness never dropped. So a warmed label's glyphs are in
+    // the atlas before any menu is opened, and the picture must not depend on
+    // that.
+    let mut warmed = false;
+    let mut build = |ctx: &egui::Context| {
+        if !warmed {
+            warmed = true;
+            // In every text style, because a glyph is rasterised per size and
+            // a menu label is drawn in the button style. Warming one size
+            // rasterises a different set of glyphs and warms nothing that the
+            // menu goes on to draw.
+            let fonts_used: Vec<egui::FontId> = ctx.style().text_styles.values().cloned().collect();
+            for text in warm {
+                for font in &fonts_used {
+                    ctx.fonts(|fonts| {
+                        fonts.layout_no_wrap((*text).to_owned(), font.clone(), egui::Color32::WHITE)
+                    });
+                }
+            }
+        }
+        build_shell(ctx, state, &mut queue)
+    };
 
     // Two passes, not one. An auto-sized `egui::Area` — which is what a window
     // is — spends its first frame measuring and paints nothing, so a
     // single-pass capture of the diagnostics window came back byte-identical
     // to one with the window closed. The panels do not need this; the window
     // does, and one capture path is better than two.
-    let first = ctx.run(raw_input(), &mut build);
+    let mut passes = vec![ctx.run(raw_input(), &mut build)];
     let mut output = ctx.run(raw_input(), &mut build);
 
     for events in frames {
         // The frame the input lands on, and then the frame that draws what it
         // opened — a menu is an `Area` and measures before it paints, exactly
         // as a window does.
-        let _ = ctx.run(
+        passes.push(output);
+        passes.push(ctx.run(
             egui::RawInput {
                 events: events.clone(),
                 ..raw_input()
             },
             &mut build,
-        );
-        let _ = ctx.run(raw_input(), &mut build);
-        output = ctx.run(raw_input(), &mut build);
+        ));
+        passes.push(ctx.run(settled_input(), &mut build));
+        output = ctx.run(settled_input(), &mut build);
     }
 
     let target = OffscreenTarget::new(&harness.gpu, SHELL_WIDTH, SHELL_HEIGHT);
-    // The font atlas arrives in the first pass's deltas, so both are applied
-    // and only the second is tessellated.
-    let image = render_egui(harness, &ctx, [first, output], &target);
+    // Every pass's texture deltas are applied and only the last is tessellated:
+    // a glyph first laid out in a menu arrives in that menu's own pass.
+    passes.push(output);
+    let image = render_egui(harness, &ctx, passes, &target);
     support::save(&image, name);
     // After the capture is written, so a failing expectation still leaves the
     // picture that explains it.
@@ -493,21 +568,30 @@ fn capture_shell_after(
 fn render_egui(
     harness: &Harness,
     ctx: &egui::Context,
-    passes: [egui::FullOutput; 2],
+    // Every pass, not just the first and the last. A glyph reaches the font
+    // atlas in the pass that first lays it out, and a menu is laid out in a
+    // pass whose output used to be discarded — so an accented character that
+    // appears *only* in a menu arrived in a thrown-away delta and drew as a
+    // blank. "Mostrar só esta" came out "Mostrar s esta", and every menu
+    // capture here has been quietly missing its accents.
+    mut passes: Vec<egui::FullOutput>,
     target: &OffscreenTarget,
 ) -> clayspace_view::Image {
     let mut renderer =
         egui_wgpu::Renderer::new(&harness.gpu.device, OffscreenTarget::FORMAT, None, 1, false);
 
     let pixels_per_point = ctx.pixels_per_point();
-    let [first, output] = passes;
     // Every pass's textures, only the last pass's shapes.
-    for pass in [&first, &output] {
+    for pass in &passes {
         for (id, delta) in &pass.textures_delta.set {
             renderer.update_texture(&harness.gpu.device, &harness.gpu.queue, *id, delta);
         }
     }
-    let primitives = ctx.tessellate(output.shapes, pixels_per_point);
+    let shapes = passes
+        .pop()
+        .expect("at least one pass to tessellate")
+        .shapes;
+    let primitives = ctx.tessellate(shapes, pixels_per_point);
 
     let descriptor = egui_wgpu::ScreenDescriptor {
         size_in_pixels: [target.width(), target.height()],
@@ -1299,7 +1383,11 @@ fn click(at: egui::Pos2, button: egui::PointerButton) -> Vec<egui::Event> {
 /// the wrong one is caught by the assertion, not silently tolerated.
 const RENAME_ENTRY: egui::Vec2 = egui::Vec2::new(37.0, 17.0);
 const SOLO_ENTRY: egui::Vec2 = egui::Vec2::new(37.0, 42.0);
-const DELETE_ENTRY: egui::Vec2 = egui::Vec2::new(37.0, 67.0);
+/// Moved from 67 when the row's menu gained its crossings: the two entries and
+/// the rules either side of them sit between Solo and Excluir. Measured rather
+/// than reasoned — the bands are 5-29 for Renomear, 32-59 for the solo, 65-122
+/// for the two crossings, and 128 down for Excluir.
+const DELETE_ENTRY: egui::Vec2 = egui::Vec2::new(37.0, 131.0);
 
 /// Renaming and deleting are reachable from a layer row.
 ///
@@ -1500,6 +1588,15 @@ fn row_centre(state: &ShellState<'_>, key: LayerKey) -> egui::Pos2 {
 /// a context menu is dark chrome over dark chrome, so most of its pixels
 /// differ by less than a level and counting only the loud ones took the menu
 /// from over 400 pixels to 359.
+/// A token colour as the four bytes a capture holds.
+///
+/// The captures are RGBA8 and the tokens are `Color32`, and comparing them is
+/// worth doing exactly rather than within a tolerance: a fill either is the
+/// colour the design chose or is that colour blended with something.
+fn to_bytes(colour: egui::Color32) -> [u8; 4] {
+    colour.to_array()
+}
+
 fn differing_pixels(a: &clayspace_view::Image, b: &clayspace_view::Image) -> usize {
     let mut n = 0;
     for y in 0..a.height.min(b.height) {
@@ -4043,7 +4140,7 @@ fn folding_one_section_leaves_the_other_open() {
 /// Drives the shelf with a filter chosen, and hands back the commands.
 fn shelf_with_filter(
     set: &ShellState<'_>,
-    filter: Option<clayspace_model::Representation>,
+    filter: shell::ShelfFilter,
     then: &[Vec<egui::Event>],
 ) -> (egui::Context, CommandQueue) {
     let ctx = egui::Context::default();
@@ -4073,7 +4170,7 @@ fn the_shelf_shows_the_active_layers_brushes_unless_asked_otherwise() {
     let report = diagnostics();
     let set = state(strings, &scene, &materials, &report);
 
-    let (ctx, _) = shelf_with_filter(&set, None, &[]);
+    let (ctx, _) = shelf_with_filter(&set, shell::ShelfFilter::Available, &[]);
     let drawn = |tool: clayspace_model::ToolKind| {
         ctx.memory(|memory| {
             memory
@@ -4118,7 +4215,11 @@ fn browsing_another_representation_shows_its_brushes_and_picks_none() {
         })
         .expect("no tool is mesh-only, so this test has nothing to browse");
 
-    let (ctx, _) = shelf_with_filter(&set, Some(clayspace_model::Representation::Mesh), &[]);
+    let (ctx, _) = shelf_with_filter(
+        &set,
+        shell::ShelfFilter::Elsewhere(clayspace_model::Representation::Mesh),
+        &[],
+    );
     let at = ctx
         .memory(|memory| {
             memory
@@ -4130,7 +4231,7 @@ fn browsing_another_representation_shows_its_brushes_and_picks_none() {
 
     let (_, queue) = shelf_with_filter(
         &set,
-        Some(clayspace_model::Representation::Mesh),
+        shell::ShelfFilter::Elsewhere(clayspace_model::Representation::Mesh),
         &[left_click(at)],
     );
     assert!(
@@ -4154,19 +4255,19 @@ fn choosing_a_shelf_filter_emits_nothing() {
     let report = diagnostics();
     let set = state(strings, &scene, &materials, &report);
 
-    let (ctx, _) = shelf_with_filter(&set, None, &[]);
+    let (ctx, _) = shelf_with_filter(&set, shell::ShelfFilter::Available, &[]);
     let at = ctx
         .memory(|memory| {
             memory
                 .data
-                .get_temp::<egui::Rect>(shell::shelf_filter_chip_id(Some(
+                .get_temp::<egui::Rect>(shell::shelf_filter_chip_id(shell::ShelfFilter::Elsewhere(
                     clayspace_model::Representation::Mesh,
                 )))
         })
         .expect("the shelf drew no mesh filter")
         .center();
 
-    let (after, queue) = shelf_with_filter(&set, None, &[left_click(at)]);
+    let (after, queue) = shelf_with_filter(&set, shell::ShelfFilter::Available, &[left_click(at)]);
     assert!(
         queue.is_empty(),
         "choosing a shelf filter emitted {:?}; which brushes are *shown* is \
@@ -4174,10 +4275,10 @@ fn choosing_a_shelf_filter_emits_nothing() {
         queue.commands()
     );
     assert_eq!(
-        after.data(|data| data
-            .get_temp::<Option<clayspace_model::Representation>>(shell::shelf_filter_id())
-            .flatten()),
-        Some(clayspace_model::Representation::Mesh),
+        after.data(|data| data.get_temp::<shell::ShelfFilter>(shell::shelf_filter_id())),
+        Some(shell::ShelfFilter::Elsewhere(
+            clayspace_model::Representation::Mesh
+        )),
         "clicking the mesh filter did not choose it"
     );
 }
@@ -4371,9 +4472,18 @@ fn a_grid_says_what_it_is_made_of() {
 ///
 /// Pixel offsets, with the caveat `LANGUAGE_ENTRY` carries: they move whenever
 /// an entry lands above them.
+/// The Portuguese bar's, as every other menu test here uses: the menu names
+/// differ in width between locales, so "Janela" and "Window" do not sit in the
+/// same place. A test that clicks this with English strings opens whatever
+/// menu happens to be under it.
 const WINDOW_MENU: egui::Pos2 = egui::Pos2::new(415.0, 13.0);
-const SHELF_ENTRY: egui::Vec2 = egui::Vec2::new(5.0, 83.0);
-const RESET_ENTRY: egui::Vec2 = egui::Vec2::new(5.0, 117.0);
+/// Measured with `where_the_window_menu_entries_fall`, which is at the foot of
+/// this file for the next time an entry lands above one of these: the bands are
+/// 20-41 for the left region, 44-68 for the right, 71-98 for the shelf, 104-134
+/// for focus mode and 140-170 for the reset.
+const SHELF_ENTRY: egui::Vec2 = egui::Vec2::new(5.0, 85.0);
+const FOCUS_ENTRY: egui::Vec2 = egui::Vec2::new(5.0, 119.0);
+const RESET_ENTRY: egui::Vec2 = egui::Vec2::new(5.0, 155.0);
 
 /// The Janela menu offers the three regions and a way to have them all back.
 ///
@@ -4528,5 +4638,495 @@ fn a_region_put_away_gives_its_space_to_the_viewport() {
         closed >= open,
         "putting the right panel away left the central region no wider: \
          {open:?} against {closed:?}"
+    );
+}
+
+// -- focus mode --------------------------------------------------------------
+
+/// Clearing the chrome away leaves the sculpt, and puts the brush where the
+/// options bar was.
+///
+/// The guide's premise is that the viewport should hold most of a sculptor's
+/// attention, and nothing in the application let them clear the chrome to find
+/// out. What makes it usable rather than blind is the readout: the options bar
+/// carries the size and the intensity, and hiding it without replacing them
+/// would be focus in name only.
+#[test]
+fn focus_mode_leaves_the_sculpt_and_keeps_the_brush_readable() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let ordinary = state(strings, &scene, &materials, &report);
+    assert!(
+        shell_rect(&probe_shell(&ordinary), shell::brush_hud_id()).is_none(),
+        "the brush readout was drawn with the options bar already on screen"
+    );
+
+    let mut focused = state(strings, &scene, &materials, &report);
+    focused.focus = true;
+    if let Some(harness) = Harness::new() {
+        capture_shell(&harness, &focused, "96-focus-mode");
+    }
+    let card = shell_rect(&probe_shell(&focused), shell::brush_hud_id())
+        .expect("focus mode drew no brush readout, so the numbers are simply gone");
+
+    // In the viewport, and in the opposite corner from the transform readout so
+    // the two never stack.
+    let viewport = egui::Rect::from_min_max(
+        egui::pos2(0.0, region::MENU_BAR),
+        egui::pos2(SHELL_WIDTH as f32, SHELL_HEIGHT as f32),
+    );
+    assert!(
+        viewport.contains_rect(card),
+        "the brush readout at {card:?} is outside the viewport {viewport:?}"
+    );
+}
+
+/// Focus is a presentation override: it hides the regions and does not move
+/// them.
+///
+/// The distinction the guide is explicit about — "Focus mode should temporarily
+/// hide regions while retaining their persisted sizes/collapse states" — and
+/// the reason it is a bool beside the layout rather than three more collapse
+/// flags inside it. A focus mode that collapsed the panels would put a
+/// sculptor's own arrangement back wrong when they left it.
+#[test]
+fn focus_does_not_disturb_the_arrangement() {
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let mut focused = state(strings, &scene, &materials, &report);
+    // A sculptor who had put the shelf away and left the other two open.
+    focused.collapsed = [false, false, true];
+    focused.focus = true;
+
+    assert_eq!(
+        focused.collapsed,
+        [false, false, true],
+        "focus mode changed which regions the sculptor had put away"
+    );
+
+    // And it is reachable from the menu as well as the key, so a sculptor who
+    // has not learnt Tab can still get there — asked of an ordinary frame,
+    // which is where the journey starts.
+    let ordinary = state(strings, &scene, &materials, &report);
+    let ctx = probe_shell_after(
+        &ordinary,
+        &[
+            left_click(WINDOW_MENU),
+            left_click(WINDOW_MENU + FOCUS_ENTRY),
+        ],
+    );
+    assert_eq!(
+        ctx.data(|data| data.get_temp::<bool>(shell::focus_toggle_id())),
+        Some(true),
+        "the focus entry left nothing for the composition root to read"
+    );
+}
+
+/// Tab is bound to it, and was bound to nothing before.
+#[test]
+fn tab_clears_the_chrome() {
+    let shortcuts = clayspace_view::Shortcuts::default();
+    let chord = shortcuts
+        .chord(clayspace_view::Action::ToggleFocus)
+        .expect("focus mode has no key bound to it");
+    assert_eq!(
+        chord.label(),
+        "Tab",
+        "focus mode is bound to {} rather than Tab",
+        chord.label()
+    );
+}
+
+/// Prints which Janela entry each offset actually hits.
+///
+/// Kept because the constants above it are pixel offsets down a menu, and they
+/// move every time an entry lands above them — twice already while this branch
+/// was open. Reading them off a screenshot got one wrong by a row; this reports
+/// the bands. Ignored by default: it is a measuring aid, not an assertion.
+///
+/// `cargo test -p clayspace-app --release --test visual_shell -- \
+///  where_the_window_menu --ignored --nocapture`
+#[test]
+#[ignore = "a measuring aid, not an assertion"]
+fn where_the_window_menu_entries_fall() {
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let set = state(strings, &scene, &materials, &report);
+    for y in (20..190).step_by(3) {
+        let at = WINDOW_MENU + egui::Vec2::new(5.0, y as f32);
+        let ctx = probe_shell_after(&set, &[left_click(WINDOW_MENU), left_click(at)]);
+        let panel = ctx.data(|d| d.get_temp::<clayspace_view::Panel>(shell::panel_toggle_id()));
+        let focus = ctx.data(|d| d.get_temp::<bool>(shell::focus_toggle_id()));
+        let reset = ctx.data(|d| d.get_temp::<bool>(shell::layout_reset_id()));
+        if panel.is_some() || focus.is_some() || reset.is_some() {
+            eprintln!("y={y:3} panel={panel:?} focus={focus:?} reset={reset:?}");
+        }
+    }
+}
+
+/// The star filter lists what was starred, whatever representation it belongs
+/// to, and says how to star something when nothing is.
+#[test]
+fn the_star_filter_lists_the_shortlist() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    // Nothing starred: the shelf says so, and says where the gesture is —
+    // a silence that does not explain itself is a feature nobody finds.
+    let bare = state(strings, &scene, &materials, &report);
+    let (ctx, _) = shelf_with_filter(&bare, shell::ShelfFilter::Favourites, &[]);
+    for tool in clayspace_model::ToolKind::ALL {
+        assert!(
+            ctx.memory(|memory| memory
+                .data
+                .get_temp::<egui::Rect>(shell::brush_swatch_id(tool)))
+                .is_none(),
+            "the star filter drew {tool:?} with nothing starred"
+        );
+    }
+
+    // A brush from another representation is listed too: a shortlist is for
+    // finding a brush again, and which layer it applies to is a separate
+    // question the swatch answers by refusing the click.
+    let elsewhere = clayspace_model::ToolKind::ALL
+        .into_iter()
+        .find(|tool| !tool.exists_on(bare.representation))
+        .expect("every tool exists on a field, so this test has nothing to show");
+    let starred = [clayspace_model::ToolKind::Argila, elsewhere];
+    let mut with = state(strings, &scene, &materials, &report);
+    with.favourites = &starred;
+
+    let (ctx, _) = shelf_with_filter(&with, shell::ShelfFilter::Favourites, &[]);
+    for tool in starred {
+        assert!(
+            ctx.memory(|memory| memory
+                .data
+                .get_temp::<egui::Rect>(shell::brush_swatch_id(tool)))
+                .is_some(),
+            "the star filter did not list {tool:?}, which is starred"
+        );
+    }
+    let unstarred = clayspace_model::ToolKind::ALL
+        .into_iter()
+        .find(|tool| !starred.contains(tool))
+        .expect("a tool that is not starred");
+    assert!(
+        ctx.memory(|memory| memory
+            .data
+            .get_temp::<egui::Rect>(shell::brush_swatch_id(unstarred)))
+            .is_none(),
+        "the star filter listed {unstarred:?}, which is not starred"
+    );
+}
+
+// -- the status area's autosave line -----------------------------------------
+
+/// The status area says whether the work is on disk, and when it will be.
+///
+/// The policy and the clock have both been there since autosave shipped, and
+/// the event loop asked them every frame to decide how long to wait. Nothing
+/// ever showed the answer, so a sculptor could not tell whether an hour's work
+/// was written or waiting.
+#[test]
+fn the_status_area_says_when_the_work_will_be_saved() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    // Nothing pending: an unmodified document is never written, so a countdown
+    // would be a timer frozen at zero rather than a saved document.
+    let saved = state(strings, &scene, &materials, &report);
+    assert!(saved.autosave_in.is_none());
+    let ctx = probe_shell(&saved);
+    let quiet = shell_rect(&ctx, shell::autosave_id()).expect("no autosave line was drawn");
+    assert!(
+        quiet.bottom() >= SHELL_HEIGHT as f32 - region::STATUS,
+        "the autosave line at {quiet:?} is not in the status area"
+    );
+
+    // Something pending: the same line, counting down.
+    let mut pending = state(strings, &scene, &materials, &report);
+    pending.autosave_in = Some(std::time::Duration::from_secs(155));
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let waiting = capture_shell(&harness, &pending, "97-autosave-pending");
+    let settled = capture_shell(&harness, &saved, "97-autosave-nothing");
+    let status = egui::Rect::from_min_max(
+        egui::pos2(0.0, SHELL_HEIGHT as f32 - region::STATUS),
+        egui::pos2(SHELL_WIDTH as f32, SHELL_HEIGHT as f32),
+    );
+    assert!(
+        differing_pixels_in(&waiting, &settled, status) > 0,
+        "a document waiting to be saved and one already saved drew the same \
+         status area, so the line says nothing. See \
+         target/visual/97-autosave-pending.png"
+    );
+}
+
+// -- crossing a layer from its own row ---------------------------------------
+
+/// A layer's own menu offers the crossings that layer has, and asks for them in
+/// place.
+///
+/// `ConversionSettings::in_place` is what a sculptor means by converting *this*
+/// layer — the source leaves as the result arrives and the result stands where
+/// it stood — and there was no way to ask for it from the layer itself. The
+/// representation bar speaks for the *active* layer; a sculptor looking at a
+/// stack means the row they opened the menu on.
+#[test]
+fn a_layer_row_offers_its_own_crossings_in_place() {
+    let strings = Strings::for_locale(Locale::PtBr);
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    // A mesh layer, which crosses to voxels and to a field — the case in the
+    // report that asked for this.
+    let mut scene = scene();
+    let key = scene.layers[0].key;
+    scene.layers[0].representation = clayspace_model::Representation::Mesh;
+    let set = state(strings, &scene, &materials, &report);
+
+    let row = probe_shell(&set)
+        .read_response(shell::layer_row_id(key))
+        .map(|response| response.rect)
+        .expect("the stack drew no row for the mesh layer");
+
+    let open = right_click(row.center());
+    if let Some(harness) = Harness::new() {
+        capture_shell_after(
+            &harness,
+            &set,
+            "98-layer-crossings",
+            std::slice::from_ref(&open),
+            |_| {},
+        );
+    }
+    let ctx = probe_shell_after(&set, std::slice::from_ref(&open));
+
+    // Exactly the crossings the domain declares from a mesh, and no others.
+    for representation in clayspace_model::Representation::ALL {
+        let offered = ctx
+            .memory(|memory| {
+                memory
+                    .data
+                    .get_temp::<egui::Rect>(shell::layer_convert_id(key, representation))
+            })
+            .is_some();
+        let declared =
+            clayspace_model::Direction::from_representation(clayspace_model::Representation::Mesh)
+                .into_iter()
+                .any(|direction| direction.to() == representation);
+        assert_eq!(
+            offered,
+            declared,
+            "the row {} {representation:?}, and the domain {} a crossing to it",
+            if offered { "offers" } else { "does not offer" },
+            if declared { "declares" } else { "declares no" },
+        );
+    }
+
+    // And choosing one makes that layer active, aims the crossing in place, and
+    // opens the panel where the cost is stated — rather than converting on a
+    // click.
+    let at = ctx
+        .memory(|memory| {
+            memory.data.get_temp::<egui::Rect>(shell::layer_convert_id(
+                key,
+                clayspace_model::Representation::Voxel,
+            ))
+        })
+        .expect("no crossing into voxels was offered")
+        .center();
+
+    let driven = egui::Context::default();
+    shell::apply_theme(&driven);
+    let mut queue = CommandQueue::new();
+    for _ in 0..2 {
+        run_shell_frame(&driven, &set, &mut queue, Vec::new());
+    }
+    queue.drain();
+    for frame in [open, left_click(at)] {
+        run_shell_frame(&driven, &set, &mut queue, frame);
+        run_shell_frame(&driven, &set, &mut queue, Vec::new());
+    }
+
+    let commands = queue.commands();
+    assert!(
+        commands
+            .iter()
+            .any(|command| matches!(command, Command::SelectLayer(chosen) if *chosen == key)),
+        "the crossing did not make its own layer active first, so it would \
+         convert whichever layer happened to be: {commands:?}"
+    );
+    assert!(
+        commands.iter().any(|command| matches!(
+            command,
+            Command::SetConversion(settings)
+                if settings.in_place
+                    && settings.direction.to() == clayspace_model::Representation::Voxel
+        )),
+        "the crossing was not aimed into voxels in place: {commands:?}"
+    );
+    assert!(
+        commands.iter().any(|c| matches!(c, Command::ToggleConvert)),
+        "the panel stayed shut, so nothing said what the crossing would cost: \
+         {commands:?}"
+    );
+    assert!(
+        !commands.iter().any(|c| matches!(c, Command::RunConversion)),
+        "the row ran the conversion itself, routing around the panel where its \
+         cost is stated and confirmed: {commands:?}"
+    );
+}
+
+/// A menu is captured settled, not part way into its fade.
+///
+/// egui fades a popup in over its `animation_time`, and a fade is measured in
+/// time rather than in passes: the harness's passes each advanced the clock by
+/// a sixtieth of a second, so the capture caught the menu at a little over half
+/// opacity and the layer rows behind it read straight through its fill. Nothing
+/// failed — nothing asserts on a popup's opacity — and the images these tests
+/// exist to be *looked at* were showing a menu no sculptor would ever see.
+///
+/// Measured where the menu overhangs the panel it opened from, so the colour
+/// behind it is the viewport's and a fill of any transparency lands between the
+/// two. The closed capture is checked at the same pixel, which is what makes
+/// the measurement worth anything: if that point were over the panel, a fully
+/// transparent fill would pass.
+#[test]
+fn a_menu_is_captured_settled_rather_than_part_way_into_its_fade() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let mut scene = scene();
+    let key = scene.layers[0].key;
+    scene.layers[0].representation = clayspace_model::Representation::Mesh;
+
+    let closed_state = state(strings, &scene, &materials, &report);
+    let closed = capture_shell(&harness, &closed_state, "98-menu-fade-closed");
+    let row = probe_shell(&closed_state)
+        .read_response(shell::layer_row_id(key))
+        .map(|response| response.rect)
+        .expect("the stack drew no row for the mesh layer");
+
+    let open = right_click(row.center());
+    let opened_state = state(strings, &scene, &materials, &report);
+    let opened = capture_shell_after(
+        &harness,
+        &opened_state,
+        "98-menu-fade",
+        std::slice::from_ref(&open),
+        |_| {},
+    );
+
+    // The right edge of a crossing entry, which is the widest thing in the
+    // menu and so the part that reaches furthest past the panel.
+    let entry = probe_shell_after(&opened_state, std::slice::from_ref(&open))
+        .memory(|memory| {
+            memory.data.get_temp::<egui::Rect>(shell::layer_convert_id(
+                key,
+                clayspace_model::Representation::Voxel,
+            ))
+        })
+        .expect("the menu drew no crossing to voxels");
+
+    let x = (entry.right() - 3.0) as u32;
+    let y = entry.center().y as u32;
+
+    let behind = closed.pixel(x, y);
+    let viewport = to_bytes(clayspace_view::Tokens::viewport());
+    assert_eq!(
+        behind, viewport,
+        "the sample point ({x}, {y}) is not over the viewport with the menu          closed, so it cannot tell a transparent fill from an opaque one"
+    );
+
+    let fill = opened.pixel(x, y);
+    assert_eq!(
+        fill,
+        to_bytes(clayspace_view::Tokens::panel()),
+        "the menu's fill at ({x}, {y}) is neither the panel nor the viewport,          so it was captured part way into its fade — see          target/visual/98-menu-fade.png"
+    );
+}
+
+/// A glyph that appears only inside a menu is drawn.
+///
+/// It was not. A glyph reaches egui's font atlas in the pass that first lays it
+/// out, arriving as a `textures_delta` on *that* pass's output, and the harness
+/// applied the deltas of the first and the last pass only. A menu is laid out
+/// in a pass in between, so an accented character appearing nowhere else in the
+/// frame arrived in a discarded delta and drew as a blank: "Mostrar só esta"
+/// came out "Mostrar s esta", and every menu capture on this project was
+/// quietly missing its accents.
+///
+/// Compared against the same frame with those labels laid out up front, which
+/// puts their glyphs in the first pass's delta — the one the harness never
+/// dropped. Identical images mean the pass a glyph arrives in does not change
+/// the picture, which is the property that was broken.
+#[test]
+fn a_glyph_that_appears_only_in_a_menu_is_drawn() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let scene = scene();
+    let key = scene.layers[0].key;
+    let probe = state(strings, &scene, &materials, &report);
+    let row = probe_shell(&probe)
+        .read_response(shell::layer_row_id(key))
+        .map(|response| response.rect)
+        .expect("the stack drew no row for the layer");
+    let open = right_click(row.center());
+
+    // Every label in the menu, so this does not turn on one accent surviving.
+    let warm = [
+        strings.action_rename_layer,
+        strings.action_solo_layer,
+        strings.action_release_solo,
+        strings.action_remove_layer,
+        strings.label_convert_to,
+    ];
+
+    let cold_state = state(strings, &scene, &materials, &report);
+    let cold = capture_shell_after(
+        &harness,
+        &cold_state,
+        "98-menu-glyphs-cold",
+        std::slice::from_ref(&open),
+        |_| {},
+    );
+
+    let warm_state = state(strings, &scene, &materials, &report);
+    let warmed = capture_shell_after_warming(
+        &harness,
+        &warm_state,
+        "98-menu-glyphs-warm",
+        std::slice::from_ref(&open),
+        &warm,
+        |_| {},
+    );
+
+    let differing = differing_pixels(&cold, &warmed);
+    assert_eq!(
+        differing, 0,
+        "{differing} pixels of the menu depend on whether its labels were          already in the font atlas, so a glyph appearing only in the menu is          being dropped — compare target/visual/98-menu-glyphs-cold.png with          98-menu-glyphs-warm.png"
     );
 }

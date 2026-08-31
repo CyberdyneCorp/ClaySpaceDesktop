@@ -251,6 +251,31 @@ pub(super) fn chip(label: &str, on: bool, unselected: egui::Color32) -> egui::Bu
     .fill(if on { Tokens::raised() } else { unselected })
 }
 
+/// The same, filling with a colour of its own when engaged.
+///
+/// For state a sculptor has to see without looking for it. `chip` lifts an
+/// engaged control to the raised surface, which is a 3.5% step and reads as
+/// "hovered" as much as "on" — fine for a view preset and not for symmetry,
+/// where a mirrored stroke nobody expected is the most expensive surprise on
+/// the options bar.
+pub(super) fn chip_tinted(
+    label: &str,
+    on: bool,
+    unselected: egui::Color32,
+    engaged: egui::Color32,
+) -> egui::Button<'static> {
+    egui::Button::new(
+        egui::RichText::new(label)
+            .size(type_scale::LABEL)
+            .color(if on {
+                Tokens::text()
+            } else {
+                Tokens::text_dim()
+            }),
+    )
+    .fill(if on { engaged } else { unselected })
+}
+
 /// The id a chip carrying an icon is recorded under, so a test can find it.
 ///
 /// For the same reason `slider_id` exists: a test that reaches a control by
