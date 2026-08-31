@@ -2101,6 +2101,25 @@ the ones the domain actually declares from the active representation rather
 than a written list — invoking one aims the panel and opens it, and a panel
 already open is aimed rather than closed.
 
+**The manipulator keeps its size, and says what the numbers are.** Its arms are
+a share of the camera's distance, so it stays the same size to the hand whether
+the sculptor is looking at the whole scene or has zoomed into a pore — true of
+a placed object and a whole subtool since they were built, and true of a
+deformation cage now: the cage's was a share of the cage alone, so it shrank
+with the camera while an identical-looking widget on the object beside it held
+still.
+
+While a manipulator is on a placed object, its transform stands in the
+viewport's lower-leading corner: position, rotation, the axis that rotation is
+about, and scale. A widget shows that something moved and never by how much,
+which is the first question asked when two objects have to line up — and
+nothing in the interface reported a placed object's position at all. Shown for
+a placed object alone: a cage's target is a set of control points and a layer's
+is everything it holds, and neither has one position to report.
+
+An axis and one angle, and one scale factor, because that is what the engine's
+transforms take. Three rotation rows would be two invented numbers.
+
 **The floor dissolves rather than ending.** The grid fades out before it
 reaches its own extent, so it draws no rectangle around the scene, and each
 line is cut into segments so the fade varies along it — a line drawn as two

@@ -195,6 +195,18 @@ pub(super) fn selection_rail(ui: &egui::Ui, rect: egui::Rect) {
     ui.painter().rect_filled(rail, 0.0, Tokens::selection());
 }
 
+/// The symbol lengths are shown in: `mm`, `cm`, `m`.
+///
+/// The one place the unit's own `label()` is called. It is a domain `label()`
+/// like any other as far as the shell's ratchet can tell, and the ratchet is
+/// right to count it — but an SI symbol is not an interface word and has no
+/// translation to move into `Strings`. So there is exactly one call, and the
+/// status bar and the transform readout both come here for it rather than
+/// each reaching for the domain themselves.
+pub(super) fn unit_symbol(units: Units) -> &'static str {
+    units.display.label()
+}
+
 /// A numeric readout, set monospaced so digits do not reflow as they change.
 pub(super) fn numeric(ui: &mut egui::Ui, text: impl Into<String>) {
     ui.label(

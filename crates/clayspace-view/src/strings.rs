@@ -367,6 +367,15 @@ pub struct Strings {
     /// never what is drawn, so no sculpt is affected by choosing one.
     pub viewport_profile_names: [&'static str; crate::quality::ViewportProfile::ALL.len()],
     pub label_viewport_profile: &'static str,
+    /// The transform readout that stands beside the manipulator.
+    ///
+    /// Axis-and-angle rather than three Euler angles, and one scale factor
+    /// rather than three, because that is what the engine's transforms take —
+    /// see `SceneObject`. A readout of three rotations would be inventing two.
+    pub hud_position: &'static str,
+    pub hud_rotation: &'static str,
+    pub hud_axis: &'static str,
+    pub hud_scale: &'static str,
     /// Why a brush met while browsing another representation cannot be picked.
     pub shelf_tool_elsewhere: &'static str,
     // Pre-bake repair.
@@ -774,6 +783,10 @@ libera em vez de congelar.",
     shelf_filter_all: "Disponíveis",
     viewport_profile_names: ["Desempenho", "Escultura", "Apresentação"],
     label_viewport_profile: "Qualidade da viewport",
+    hud_position: "Posição",
+    hud_rotation: "Rotação",
+    hud_axis: "Eixo",
+    hud_scale: "Escala",
     shelf_tool_elsewhere: "sem verbo na camada ativa",
     representation_label: "Representação",
     tool_substituted: "ferramenta trocada: esta camada não tem essa",
@@ -1142,6 +1155,10 @@ instead.",
     shelf_filter_all: "Available",
     viewport_profile_names: ["Performance", "Sculpt", "Presentation"],
     label_viewport_profile: "Viewport quality",
+    hud_position: "Position",
+    hud_rotation: "Rotation",
+    hud_axis: "Axis",
+    hud_scale: "Scale",
     shelf_tool_elsewhere: "no verb on the active layer",
     representation_label: "Representation",
     tool_substituted: "tool changed: this layer has no verb for that one",
@@ -1520,6 +1537,10 @@ lados. Con Ctrl, libera en vez de congelar.",
     shelf_filter_all: "Disponibles",
     viewport_profile_names: ["Rendimiento", "Escultura", "Presentación"],
     label_viewport_profile: "Calidad de la vista",
+    hud_position: "Posición",
+    hud_rotation: "Rotación",
+    hud_axis: "Eje",
+    hud_scale: "Escala",
     shelf_tool_elsewhere: "sin verbo en la capa activa",
     representation_label: "Representación",
     tool_substituted: "herramienta cambiada: esta capa no tiene ese verbo",
@@ -1864,9 +1885,13 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 209] {
+    pub fn all(&self) -> [&'static str; 213] {
         [
             self.label_viewport_profile,
+            self.hud_position,
+            self.hud_rotation,
+            self.hud_axis,
+            self.hud_scale,
             self.shelf_filter_all,
             self.shelf_tool_elsewhere,
             self.section_field,

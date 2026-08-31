@@ -330,9 +330,22 @@ fn build_shell(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQ
         .frame(egui::Frame::new().fill(Tokens::viewport()))
         .show(ctx, |ui| {
             shell::representation_bar(ui, state, queue);
-            ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                shell::viewport_bar(ui, state, queue);
-            });
+            // The viewport is what the bar leaves, measured the way the
+            // composition root measures it — after the bar rather than before.
+            // Taken before it, the rect included the bar's own strip and the
+            // transform readout was drawn across the view presets.
+            let viewport = ui
+                .with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                    shell::viewport_bar(ui, state, queue);
+                    ui.available_rect_before_wrap()
+                })
+                .inner;
+            // The overlays the composition root draws over the scene. Kept in
+            // step with it deliberately: this function is a second copy of
+            // that frame, and a region added to one and not the other is
+            // invisible to every capture here.
+            shell::outline_overlay(ui, viewport, state);
+            shell::transform_hud(ui, viewport, state);
         });
     shell::diagnostics_window(ctx, state, queue);
     shell::attribution_window(ctx, state, queue);
@@ -4219,5 +4232,75 @@ fn a_viewport_profile_is_chosen_from_the_menu_and_emits_nothing() {
         "choosing a viewport profile emitted {:?}; it changes what a frame is \
          drawn with and never what is drawn",
         queue.commands()
+    );
+}
+
+// -- the transform readout ---------------------------------------------------
+
+/// The readout stands beside the manipulator, and only where it has an answer.
+///
+/// A manipulator can show that something moved and never what the numbers are,
+/// which is the question asked the moment two objects have to line up. A cage's
+/// target is a set of control points and a layer's is everything it holds —
+/// neither has a single position, rotation and scale — so the readout is shown
+/// for a placed object and nothing else.
+#[test]
+fn the_transform_readout_is_shown_for_a_placed_object_alone() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let bare = state(strings, &scene, &materials, &report);
+    assert!(
+        shell_rect(&probe_shell(&bare), shell::transform_hud_id()).is_none(),
+        "the transform readout was drawn with no manipulator up"
+    );
+
+    let id = clayspace_model::ObjectId {
+        layer: clayspace_model::LayerKey(1),
+        node: 2,
+    };
+    let objects = [clayspace_model::SceneObject {
+        id,
+        source: clayspace_model::ObjectSource::Shape(clayspace_model::Shape::Sphere),
+        parameters: clayspace_model::Shape::Sphere.defaults(),
+        combine: clayspace_model::CombineSettings::default(),
+        position: [0.0125, 0.0, -0.0032],
+        rotation_axis: [0.0, 1.0, 0.0],
+        rotation_angle: 15f32.to_radians(),
+        scale: 1.0,
+    }];
+    let mut placed = state(strings, &scene, &materials, &report);
+    placed.objects = &objects;
+    placed.selected_object = Some(id);
+    placed.gizmo_target = Some(clayspace_model::GizmoTarget::Object(id));
+
+    if let Some(harness) = Harness::new() {
+        capture_shell(&harness, &placed, "94-transform-hud");
+    }
+    let card = shell_rect(&probe_shell(&placed), shell::transform_hud_id())
+        .expect("a manipulator on a placed object drew no transform readout");
+    let viewport = egui::Rect::from_min_max(
+        egui::pos2(region::RAIL + region::LEFT, 0.0),
+        egui::pos2(
+            SHELL_WIDTH as f32 - region::RIGHT,
+            SHELL_HEIGHT as f32 - region::STATUS - region::SHELF,
+        ),
+    );
+    assert!(
+        viewport.contains_rect(card),
+        "the readout at {card:?} is not inside the viewport {viewport:?}"
+    );
+
+    // A cage's manipulator has no single transform to report, so it gets none.
+    let mut caged = state(strings, &scene, &materials, &report);
+    caged.objects = &objects;
+    caged.gizmo_target = Some(clayspace_model::GizmoTarget::Layer(
+        scene.active.expect("an active layer"),
+    ));
+    assert!(
+        shell_rect(&probe_shell(&caged), shell::transform_hud_id()).is_none(),
+        "the readout answered for a whole layer, which has no one position"
     );
 }

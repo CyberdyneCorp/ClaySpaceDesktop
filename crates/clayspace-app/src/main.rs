@@ -1597,7 +1597,7 @@ impl App {
         let cage = self.lattice.state().get().clone();
         if cage.active {
             let pivot = cage.pivot()?;
-            let reach = Self::cage_handle(&cage) * Self::GIZMO_REACH;
+            let reach = Self::cage_gizmo_reach(&cage, &self.camera);
             return Some((pivot, cage.mode, reach, true));
         }
         let pivot = self.objects.pivot()?;
@@ -1935,7 +1935,7 @@ impl App {
                 gizmo: cage.pivot().map(|pivot| clayspace_view::GizmoView {
                     pivot,
                     mode: cage.mode,
-                    reach: handle * Self::GIZMO_REACH,
+                    reach: Self::cage_gizmo_reach(&cage, &camera),
                     hovered: gizmo_hovered,
                     view_axis: clayspace_app::input::toward_eye(&camera, pivot),
                     // A cage scales its own control points.
@@ -2012,6 +2012,23 @@ impl App {
     /// the handle grabbed cannot come apart.
     fn object_gizmo_reach(camera: &Camera) -> f32 {
         (camera.distance * Self::OBJECT_GIZMO_FRACTION).max(1e-3)
+    }
+
+    /// How long the cage manipulator's arms are.
+    ///
+    /// A share of the cage, floored by the same screen-constant share of the
+    /// camera's distance that an object's manipulator is sized from. It was
+    /// the cage's share alone, which meant the one widget in the application
+    /// that still shrank with the camera: zoom out from a cage and its
+    /// manipulator went with it, while the manipulator on a placed object
+    /// beside it stayed the same size to the hand. Two widgets that look the
+    /// same and behave differently under the same gesture.
+    ///
+    /// Still allowed to grow past the floor on a large cage, because the arms
+    /// should reach past what they turn rather than sit as a mark in the
+    /// middle of it — which is what the cage's own share is for.
+    fn cage_gizmo_reach(cage: &clayspace_model::LatticeState, camera: &Camera) -> f32 {
+        (Self::cage_handle(cage) * Self::GIZMO_REACH).max(Self::object_gizmo_reach(camera))
     }
 
     /// The manipulator's arm as a share of the distance to the camera's
@@ -3553,6 +3570,12 @@ impl App {
                         // viewport while it is up, so the press that would draw
                         // one is the press that draws the other.
                         shell::outline_overlay(ui, rect, &state);
+                        // And the transform readout, in the corner, while a
+                        // manipulator is pointed at a placed object. Over the
+                        // scene for the same reason as the two above: it
+                        // belongs to what the pointer is doing rather than to
+                        // a panel.
+                        shell::transform_hud(ui, rect, &state);
                     });
                 });
         });

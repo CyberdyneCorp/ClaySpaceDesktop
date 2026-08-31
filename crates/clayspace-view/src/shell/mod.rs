@@ -416,7 +416,7 @@ pub fn status_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Command
             ui.add_space(space::PANEL);
             // A control, not a label: the design shows the unit here, and a
             // person looking for where to change it looks where it is shown.
-            let shown = format!("{}: {}", s.label_units, state.units.display.label());
+            let shown = format!("{}: {}", s.label_units, unit_symbol(state.units));
             if ui
                 .add(egui::Button::new(
                     egui::RichText::new(shown)
@@ -523,6 +523,123 @@ fn outline_point(rect: egui::Rect, ndc: [f32; 2]) -> egui::Pos2 {
         rect.min.x + (ndc[0] + 1.0) * 0.5 * rect.width(),
         rect.min.y + (1.0 - ndc[1]) * 0.5 * rect.height(),
     )
+}
+
+/// Where the transform readout was drawn, so a test can ask whether it was.
+pub fn transform_hud_id() -> egui::Id {
+    egui::Id::new("transform-hud")
+}
+
+/// How wide the readout runs, and how far it sits from the viewport's corner.
+const HUD_WIDTH: f32 = 148.0;
+const HUD_MARGIN: f32 = 12.0;
+
+/// The selected object's transform, beside the manipulator that changes it.
+///
+/// The one thing a manipulator cannot say is *what the numbers are*. A drag
+/// moves the form and the sculptor watches it move; whether it has moved twelve
+/// millimetres or twelve and a half is not something a widget can show, and it
+/// is the question asked as soon as two objects have to line up.
+///
+/// Shown only while a manipulator is up and pointed at a placed object. A
+/// cage's target is a set of control points and a layer's is everything it
+/// holds — neither has a single position, rotation and scale to report, and a
+/// readout that showed the pivot instead would be answering a question nobody
+/// asked with a number that looks like the answer to one they did.
+///
+/// # What it does not show
+///
+/// The reference this is drawn from lists three rotations and three scales.
+/// The engine's transforms take an axis and one angle, and one scale factor —
+/// `SceneObject` says so, and `GizmoMode::Scale` offers one handle for exactly
+/// that reason. Three rotation rows would be two invented numbers, and a
+/// sculptor who typed into them would be typing into nothing.
+pub fn transform_hud(ui: &egui::Ui, rect: egui::Rect, state: &ShellState<'_>) {
+    let Some(clayspace_model::GizmoTarget::Object(id)) = state.gizmo_target else {
+        return;
+    };
+    let Some(object) = state.objects.iter().find(|object| object.id == id) else {
+        return;
+    };
+    let s = state.strings;
+
+    // The unit on the heading rather than after each of three numbers, which
+    // is what the reference does and what makes the row fit: "0.1 mm 0.0 mm
+    // -0.0 mm" ran off the card, and three copies of the same word is not
+    // three pieces of information.
+    let unit = unit_symbol(state.units);
+    let triple = |values: &[f32; 3], decimals: usize| {
+        values
+            .iter()
+            .map(|v| {
+                // A value that rounds to nothing is nothing. Left alone, a
+                // position of -0.0032 mm reads as "-0.0", which is a minus
+                // sign in front of zero and the sort of thing a person reads
+                // twice.
+                let rounded = format!("{v:.decimals$}");
+                match rounded.strip_prefix('-') {
+                    Some(rest) if rest.chars().all(|c| c == '0' || c == '.') => rest.to_owned(),
+                    _ => rounded,
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("  ")
+    };
+    let rows: Vec<(String, String)> = vec![
+        (
+            format!("{} ({unit})", s.hud_position),
+            triple(
+                &object.position.map(|v| state.units.to_display(v)),
+                state.units.display.decimals(),
+            ),
+        ),
+        (
+            format!("{} (°)", s.hud_rotation),
+            format!("{:.1}", object.rotation_angle.to_degrees()),
+        ),
+        (s.hud_axis.to_owned(), triple(&object.rotation_axis, 2)),
+        (s.hud_scale.to_owned(), format!("{:.3}×", object.scale)),
+    ];
+
+    let line = type_scale::NUMERIC + space::TIGHT;
+    let height = space::SNUG * 2.0 + rows.len() as f32 * (line + type_scale::HEADING);
+    // The lower-leading corner, which is the one the viewport bar already
+    // occupies the other end of, and the one a right-handed sculptor's hand is
+    // least often over.
+    let card = egui::Rect::from_min_size(
+        egui::pos2(
+            rect.left() + HUD_MARGIN,
+            rect.bottom() - HUD_MARGIN - height,
+        ),
+        egui::vec2(HUD_WIDTH, height),
+    );
+    let painter = ui.painter_at(rect);
+    // Translucent, so the form behind it is not hidden by a readout about
+    // that form. Derived from a token rather than mixed here.
+    painter.rect_filled(card, size::RADIUS, Tokens::panel().gamma_multiply(0.88));
+
+    let mut y = card.top() + space::SNUG;
+    for (label, value) in rows {
+        painter.text(
+            egui::pos2(card.left() + space::SNUG, y),
+            egui::Align2::LEFT_TOP,
+            &label,
+            egui::FontId::proportional(type_scale::HEADING),
+            Tokens::text_faint(),
+        );
+        y += type_scale::HEADING;
+        painter.text(
+            egui::pos2(card.left() + space::SNUG, y),
+            egui::Align2::LEFT_TOP,
+            value,
+            egui::FontId::monospace(type_scale::NUMERIC),
+            Tokens::text(),
+        );
+        y += line;
+    }
+
+    ui.ctx()
+        .memory_mut(|memory| memory.data.insert_temp(transform_hud_id(), card));
 }
 
 /// The rubber band a press draws across the viewport while it gathers control
