@@ -2030,6 +2030,23 @@ boundary there is. The grid's two tones dropped with it, keeping the distance
 above their own ground that they were tuned for rather than becoming more
 prominent as a side effect.
 
+**The shelf can be browsed.** A column at its leading edge holds Disponíveis
+and one entry per representation: the first is the sculpt workflow, unchanged
+and the default, and the others answer the question the representation bar
+raises — a sculptor who can see that Voxels exists, and what crossing to it
+would cost, still had no way to find out which brushes they would get short of
+converting and looking. While browsing, a brush the active layer has no verb
+for is drawn dim, says so on hover, and cannot be picked; a brush that could be
+clicked to no effect is exactly what the shelf's absent-rather-than-disabled
+rule exists to prevent. Which set is shown is interface state: it emits no
+command and is forgotten when the application closes.
+
+There is no favourites filter yet, and the reason is worth writing down: there
+is nowhere to keep one. `layout.rs` holds the panel sizes and collapse state
+the design specifies, is exported from the view crate, and is used by nothing —
+the regions are drawn at fixed widths. A favourites list that forgot itself
+every launch is a promise the application would break each time it opened.
+
 The active swatch also stands on a raised backdrop, and a swatch lifts the same
 way under the pointer — so the active brush is carried by tone as well as by
 hue, which is what a colour-blind sculptor reads, and the shelf follows the

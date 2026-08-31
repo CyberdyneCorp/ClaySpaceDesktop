@@ -67,7 +67,7 @@ pub use menus::menu_bar;
 pub use options::{brush_badge_id, options_bar};
 pub use right::right_panel;
 pub use shapes::{insert_as_chip_id, object_rows};
-pub use shelf::{brush_shelf, brush_swatch_id, tool_rail};
+pub use shelf::{brush_shelf, brush_swatch_id, shelf_filter_chip_id, shelf_filter_id, tool_rail};
 pub use widgets::{chip_id, close_id, heading_id, readout_id, slider_id, slider_widget_id};
 pub use windows::{
     attribution_window, convert_window, deform_window, diagnostics_window, export_window,

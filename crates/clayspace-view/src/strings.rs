@@ -352,6 +352,11 @@ pub struct Strings {
     /// Shown where the shelf would be, on a layer whose representation this
     /// application has no verb bound for yet.
     pub shelf_no_tools: &'static str,
+    /// The shelf's first filter: the brushes the active layer can actually
+    /// use, which is what the shelf shows unless a sculptor asks otherwise.
+    pub shelf_filter_all: &'static str,
+    /// Why a brush met while browsing another representation cannot be picked.
+    pub shelf_tool_elsewhere: &'static str,
     // Pre-bake repair.
     pub action_repair: &'static str,
     pub repair_airtight: &'static str,
@@ -749,6 +754,8 @@ const PT_BR: Strings = Strings {
     label_mirror_new: "Espelhar novas",
 
     shelf_no_tools: "Nenhuma ferramenta para esta representação ainda",
+    shelf_filter_all: "Disponíveis",
+    shelf_tool_elsewhere: "sem verbo na camada ativa",
     representation_label: "Representação",
     tool_substituted: "ferramenta trocada: esta camada não tem essa",
     item_not_transformable: "um traço, uma curva aplicada ou a pele de um esqueleto não se transforma: só uma forma colocada tem manipulador",
@@ -1108,6 +1115,8 @@ const EN_US: Strings = Strings {
     label_mirror_new: "Mirror new",
 
     shelf_no_tools: "No tools for this representation yet",
+    shelf_filter_all: "Available",
+    shelf_tool_elsewhere: "no verb on the active layer",
     representation_label: "Representation",
     tool_substituted: "tool changed: this layer has no verb for that one",
     item_not_transformable: "a stroke, an applied curve or a rig's skin cannot be transformed: only a placed shape carries a manipulator",
@@ -1477,6 +1486,8 @@ const ES_419: Strings = Strings {
     label_mirror_new: "Reflejar nuevas",
 
     shelf_no_tools: "Todavía no hay herramientas para esta representación",
+    shelf_filter_all: "Disponibles",
+    shelf_tool_elsewhere: "sin verbo en la capa activa",
     representation_label: "Representación",
     tool_substituted: "herramienta cambiada: esta capa no tiene ese verbo",
     item_not_transformable: "un trazo, una curva aplicada o la piel de un esqueleto no se transforma: solo una forma colocada tiene manipulador",
@@ -1803,8 +1814,10 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 204] {
+    pub fn all(&self) -> [&'static str; 206] {
         [
+            self.shelf_filter_all,
+            self.shelf_tool_elsewhere,
             self.section_field,
             self.section_voxels,
             self.section_mesh,

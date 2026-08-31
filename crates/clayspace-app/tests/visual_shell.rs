@@ -3880,3 +3880,147 @@ fn folding_one_section_leaves_the_other_open() {
          two are still sharing one heading"
     );
 }
+
+// -- the shelf's filters -----------------------------------------------------
+
+/// Drives the shelf with a filter chosen, and hands back the commands.
+fn shelf_with_filter(
+    set: &ShellState<'_>,
+    filter: Option<clayspace_model::Representation>,
+    then: &[Vec<egui::Event>],
+) -> (egui::Context, CommandQueue) {
+    let ctx = egui::Context::default();
+    shell::apply_theme(&ctx);
+    let mut queue = CommandQueue::new();
+    ctx.data_mut(|data| data.insert_temp(shell::shelf_filter_id(), filter));
+    for _ in 0..2 {
+        run_shell_frame(&ctx, set, &mut queue, Vec::new());
+    }
+    queue.drain();
+    for frame in then {
+        run_shell_frame(&ctx, set, &mut queue, frame.clone());
+        run_shell_frame(&ctx, set, &mut queue, Vec::new());
+    }
+    (ctx, queue)
+}
+
+/// By default the shelf shows what the active layer can be sculpted with.
+///
+/// The filter is a browsing aid laid on top of that behaviour, not a
+/// replacement for it: with nothing chosen the shelf is exactly what it was.
+#[test]
+fn the_shelf_shows_the_active_layers_brushes_unless_asked_otherwise() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let set = state(strings, &scene, &materials, &report);
+
+    let (ctx, _) = shelf_with_filter(&set, None, &[]);
+    let drawn = |tool: clayspace_model::ToolKind| {
+        ctx.memory(|memory| {
+            memory
+                .data
+                .get_temp::<egui::Rect>(shell::brush_swatch_id(tool))
+        })
+        .is_some()
+    };
+    for tool in clayspace_model::ToolKind::ALL {
+        assert_eq!(
+            drawn(tool),
+            tool.exists_on(set.representation),
+            "{tool:?} is drawn: {}, but it exists on {:?}: {}",
+            drawn(tool),
+            set.representation,
+            tool.exists_on(set.representation)
+        );
+    }
+}
+
+/// Browsing another representation lists its brushes and refuses to pick one.
+///
+/// The point of the filter is to answer "what would crossing to a mesh give
+/// me?" without crossing first. What it must not do is let a sculptor select a
+/// brush their layer has no verb for — that would be a click that does
+/// nothing, which is the failure the shelf's absent-rather-than-disabled rule
+/// exists to avoid in the first place.
+#[test]
+fn browsing_another_representation_shows_its_brushes_and_picks_none() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let set = state(strings, &scene, &materials, &report);
+    assert_eq!(set.representation, clayspace_model::Representation::Sdf);
+
+    let elsewhere = clayspace_model::ToolKind::ALL
+        .into_iter()
+        .find(|tool| {
+            tool.exists_on(clayspace_model::Representation::Mesh)
+                && !tool.exists_on(clayspace_model::Representation::Sdf)
+        })
+        .expect("no tool is mesh-only, so this test has nothing to browse");
+
+    let (ctx, _) = shelf_with_filter(&set, Some(clayspace_model::Representation::Mesh), &[]);
+    let at = ctx
+        .memory(|memory| {
+            memory
+                .data
+                .get_temp::<egui::Rect>(shell::brush_swatch_id(elsewhere))
+        })
+        .unwrap_or_else(|| panic!("browsing the mesh brushes did not draw {elsewhere:?}"))
+        .center();
+
+    let (_, queue) = shelf_with_filter(
+        &set,
+        Some(clayspace_model::Representation::Mesh),
+        &[left_click(at)],
+    );
+    assert!(
+        !queue
+            .commands()
+            .iter()
+            .any(|command| matches!(command, Command::SelectTool(_))),
+        "clicking {elsewhere:?} while it was only being browsed selected it: \
+         {:?}. The active layer has no verb for it, so the stroke would do \
+         nothing",
+        queue.commands()
+    );
+}
+
+/// Choosing a filter is interface state and no command's business.
+#[test]
+fn choosing_a_shelf_filter_emits_nothing() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let set = state(strings, &scene, &materials, &report);
+
+    let (ctx, _) = shelf_with_filter(&set, None, &[]);
+    let at = ctx
+        .memory(|memory| {
+            memory
+                .data
+                .get_temp::<egui::Rect>(shell::shelf_filter_chip_id(Some(
+                    clayspace_model::Representation::Mesh,
+                )))
+        })
+        .expect("the shelf drew no mesh filter")
+        .center();
+
+    let (after, queue) = shelf_with_filter(&set, None, &[left_click(at)]);
+    assert!(
+        queue.is_empty(),
+        "choosing a shelf filter emitted {:?}; which brushes are *shown* is \
+         view state and changes no document",
+        queue.commands()
+    );
+    assert_eq!(
+        after.data(|data| data
+            .get_temp::<Option<clayspace_model::Representation>>(shell::shelf_filter_id())
+            .flatten()),
+        Some(clayspace_model::Representation::Mesh),
+        "clicking the mesh filter did not choose it"
+    );
+}
