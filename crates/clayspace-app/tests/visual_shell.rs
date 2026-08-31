@@ -613,8 +613,21 @@ fn the_shell_renders_in_every_locale() {
     }
 }
 
+/// How tall a band at the foot of the frame the brush shelf occupies.
+const SHELF_BAND: u32 = 130;
+
+/// The tool's accent moves when the tool does, and does not grow.
+///
+/// Named for what it measures rather than for the old rule. The accent marks
+/// active state now — the active layer's rail wears it too, and a slider's
+/// travelled range is drawn in it — so "the only thing wearing the accent" is
+/// no longer true of the frame, and counting the whole frame would drown the
+/// tool's few hundred pixels in the options bar's fills. The count is taken in
+/// the shelf, which is where the *tool's* mark lives, so what stays asserted
+/// is the thing that mattered: choosing a different brush moves the mark
+/// instead of adding a second one.
 #[test]
-fn the_active_tool_is_the_only_thing_wearing_the_accent() {
+fn the_active_tool_is_the_only_brush_wearing_the_accent() {
     let Some(harness) = Harness::new() else {
         return;
     };
@@ -632,12 +645,12 @@ fn the_active_tool_is_the_only_thing_wearing_the_accent() {
     second.tool = ToolKind::Suavizar;
     let b = capture_shell(&harness, &second, "63-accent-suavizar");
 
-    // Changing which tool is active must move the accent, and the amount of
-    // accent on screen must stay about the same — it marks one thing.
+    // Changing which tool is active must move the accent, and the amount of it
+    // in the shelf must stay about the same — one brush is marked either way.
     let accent = Tokens::accent();
     let count = |image: &clayspace_view::Image| {
         let mut n = 0usize;
-        for y in 0..image.height {
+        for y in (image.height - SHELF_BAND)..image.height {
             for x in 0..image.width {
                 let p = image.pixel(x, y);
                 if p[0].abs_diff(accent.r()) < 24
@@ -656,14 +669,14 @@ fn the_active_tool_is_the_only_thing_wearing_the_accent() {
     let drift = first_count.abs_diff(second_count) as f64 / first_count as f64;
     assert!(
         drift < 0.5,
-        "the accent covers {first_count} pixels for one tool and {second_count} for another; \
-         it should mark exactly one thing either way"
+        "the accent covers {first_count} pixels in the shelf for one tool and \
+         {second_count} for another; it should mark exactly one brush either way"
     );
 
     // The accent ring is a few hundred pixels in a million, so a mean over the
     // whole frame says nothing. Count the pixels that changed in the shelf,
-    // which is where the accent lives.
-    let shelf_top = a.height - 130;
+    // which is where the tool's mark lives.
+    let shelf_top = a.height - SHELF_BAND;
     let mut moved = 0usize;
     for y in shelf_top..a.height {
         for x in 0..a.width {
@@ -1615,15 +1628,29 @@ fn drag(from: egui::Pos2, to: egui::Pos2) -> Vec<Vec<egui::Event>> {
     ]
 }
 
-/// Where a named slider's handle is, asked of the interface that drew it.
+/// Where a named slider is, asked of the interface that drew it.
 ///
 /// Not a pixel coordinate: panels grow, and a coordinate that found the Passos
 /// slider found the cage's Pontos por eixo the day a section landed above it.
-fn slider_centre(state: &ShellState<'_>, label: &str) -> egui::Pos2 {
+fn slider_rect(state: &ShellState<'_>, label: &str) -> egui::Rect {
     probe_shell(state)
         .memory(|memory| memory.data.get_temp::<egui::Rect>(shell::slider_id(label)))
         .unwrap_or_else(|| panic!("the inspector drew no slider labelled {label:?}"))
-        .center()
+}
+
+/// A drag from a named slider's middle, across a fraction of its own width.
+///
+/// A fraction rather than a pixel delta, because what a delta *means* depends
+/// on how wide the control is: the sliders were ninety-six pixels inside their
+/// columns and now span them, and the forty pixels that pushed the cage from
+/// three divisions to four became four tenths of one division. The gesture
+/// these tests mean is "push it a quarter of the way up", so that is what they
+/// should say — a fixed delta is the same coordinate-off-a-screenshot mistake
+/// `slider_rect` exists to avoid, measured sideways.
+fn slider_drag(state: &ShellState<'_>, label: &str, fraction: f32) -> Vec<Vec<egui::Event>> {
+    let rect = slider_rect(state, label);
+    let from = rect.center();
+    drag(from, from + egui::vec2(rect.width() * fraction, 0.0))
 }
 
 #[test]
@@ -1640,13 +1667,11 @@ fn the_steps_slider_sets_the_amount() {
     let report = diagnostics();
     let mut set = state(strings, &scene, &materials, &report);
     set.mask_steps = 5;
-    let steps = slider_centre(&set, strings.label_mask_steps);
-
     capture_shell_after(
         &harness,
         &set,
         "81-mask-steps",
-        &drag(steps, steps + egui::vec2(50.0, 0.0)),
+        &slider_drag(&set, strings.label_mask_steps, 0.25),
         |queue| {
             let steps: Vec<i32> = queue
                 .commands()
@@ -1792,12 +1817,11 @@ fn the_cage_is_raised_from_the_menu_and_worked_in_the_panel() {
 
     // And its own control is reachable, which the mask's stopped being the day
     // a section landed above it.
-    let divisions = slider_centre(&up, strings.label_cage_divisions);
     capture_shell_after(
         &harness,
         &up,
         "93-cage-divisions",
-        &drag(divisions, divisions + egui::vec2(40.0, 0.0)),
+        &slider_drag(&up, strings.label_cage_divisions, 0.25),
         |queue| {
             let asked: Vec<[i32; 3]> = queue
                 .commands()
@@ -2052,19 +2076,16 @@ fn the_opacity_slider_reaches_the_placement() {
     let report = diagnostics();
     let mut set = state(strings, &scene, &materials, &report);
     with_a_reference(&mut set, "rosto-frente");
-    let handle = slider_centre(
-        &set,
-        &shell::reference_slider_name(
-            clayspace_model::RefPlane::Front,
-            strings.label_reference_opacity,
-        ),
+    let opacity = shell::reference_slider_name(
+        clayspace_model::RefPlane::Front,
+        strings.label_reference_opacity,
     );
 
     capture_shell_after(
         &harness,
         &set,
         "91-reference-opacity",
-        &drag(handle, handle - egui::vec2(40.0, 0.0)),
+        &slider_drag(&set, &opacity, -0.25),
         |queue| {
             let placements: Vec<clayspace_model::ReferenceSettings> = queue
                 .commands()
@@ -2131,13 +2152,12 @@ fn the_model_opacity_slider_reaches_the_renderer() {
     let report = diagnostics();
     let mut set = state(strings, &scene, &materials, &report);
     set.show_references = true;
-    let handle = slider_centre(&set, strings.label_surface_opacity);
 
     capture_shell_after(
         &harness,
         &set,
         "92-model-opacity",
-        &drag(handle, handle - egui::vec2(60.0, 0.0)),
+        &slider_drag(&set, strings.label_surface_opacity, -0.3),
         |queue| {
             let asked: Vec<clayspace_model::SurfaceOpacity> = queue
                 .commands()
@@ -3305,5 +3325,245 @@ fn a_costly_subtool_is_offered_the_one_thing_that_helps() {
             .is_some(),
         "the engine advised collapsing the active subtool and the interface \
          drew nothing: the advice is computed and read by nobody again"
+    );
+}
+
+// -- the design foundation ---------------------------------------------------
+
+/// The shelf draws its brushes at the size the scale reserves for a brush.
+///
+/// A regression test. `close-brush-integration-gaps` changed the shelf's
+/// `allocate_exact_size` from `size::SWATCH` to `size::COLOUR_CHIP` — the size
+/// named for one entry in the recent-colour row, which the same commit
+/// introduced — and every brush on the shelf became a sixteen-pixel disc with
+/// its mark illegible inside it. Nothing failed: no test asked how big the
+/// shelf drew its brushes, and the shelf is not a thing an assertion about
+/// commands can see.
+///
+/// So this asks the shelf, from the rect it recorded, rather than reading the
+/// token name off the source — a name in a call proves nothing about what
+/// reached the screen.
+#[test]
+fn the_shelf_draws_its_brushes_at_the_swatch_size() {
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let set = state(strings, &scene, &materials, &report);
+    let ctx = probe_shell(&set);
+
+    let tools = ToolKind::for_representation(set.representation);
+    assert!(!tools.is_empty(), "the fixture's shelf drew no brushes");
+    for tool in tools {
+        let rect = ctx
+            .memory(|memory| {
+                memory
+                    .data
+                    .get_temp::<egui::Rect>(shell::brush_swatch_id(tool))
+            })
+            .unwrap_or_else(|| panic!("the shelf drew no swatch for {tool:?}"));
+        assert_eq!(
+            (rect.width(), rect.height()),
+            (
+                clayspace_view::design::size::SWATCH,
+                clayspace_view::design::size::SWATCH
+            ),
+            "{tool:?}'s swatch is {}×{}, not the scale's brush-swatch size — a \
+             swatch sized from a token named for another control is how the \
+             shelf lost its brushes once already",
+            rect.width(),
+            rect.height(),
+        );
+    }
+}
+
+/// A slider fills the range it has travelled, and no more.
+///
+/// The fill is the control's state rather than ornament, so it has to answer
+/// the value: none at the bottom of the range, and more of the track as the
+/// value climbs. Measured off the pixels inside the slider's own rect, because
+/// what this is about is what a sculptor sees from across a desk.
+#[test]
+fn a_slider_fills_only_the_range_it_has_travelled() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    // Intensidade, which is the first of the three a sculptor adjusts.
+    let accent = Tokens::accent();
+    let fill = |image: &clayspace_view::Image, rect: egui::Rect| {
+        let (x0, y0) = (rect.left().max(0.0) as u32, rect.top().max(0.0) as u32);
+        let (x1, y1) = (
+            (rect.right() as u32).min(image.width),
+            (rect.bottom() as u32).min(image.height),
+        );
+        (y0..y1)
+            .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                let p = image.pixel(x, y);
+                p[0].abs_diff(accent.r()) < 12
+                    && p[1].abs_diff(accent.g()) < 12
+                    && p[2].abs_diff(accent.b()) < 12
+            })
+            .count()
+    };
+
+    let at = |intensity: f32| {
+        let mut set = state(strings, &scene, &materials, &report);
+        set.brush = BrushSettings {
+            intensity,
+            ..set.brush
+        };
+        set
+    };
+
+    let empty = at(0.0);
+    let rect = slider_rect(&empty, strings.label_intensity);
+    let none = capture_shell(&harness, &empty, "63-slider-empty");
+    let half = at(0.5);
+    let middle = capture_shell(&harness, &half, "63-slider-half");
+    let full = at(1.0);
+    let whole = capture_shell(&harness, &full, "63-slider-full");
+
+    let (none, middle, whole) = (fill(&none, rect), fill(&middle, rect), fill(&whole, rect));
+    assert_eq!(
+        none, 0,
+        "a slider at the bottom of its range painted {none} accent pixels — \
+         the fill is the distance travelled, so travelling none of it draws \
+         nothing. See target/visual/63-slider-empty.png"
+    );
+    assert!(
+        middle > 0 && whole > middle,
+        "the fill does not follow the value: {none} accent pixels at 0.0, \
+         {middle} at 0.5, {whole} at 1.0"
+    );
+}
+
+/// The active layer is railed, and the layers that are not are not.
+///
+/// The tone step from `panel` to `raised` is 3.5% of relative luminance and was
+/// the only thing saying which of four subtools a dab would land on. What this
+/// pins is that the rail is *additional*: cover the accent and the row is still
+/// the raised one, which is the design's rule that state never rests on hue
+/// alone.
+#[test]
+fn the_active_layer_wears_a_rail_and_the_others_do_not() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let set = state(strings, &scene, &materials, &report);
+    let image = capture_shell(&harness, &set, "64-layer-rail");
+
+    let accent = Tokens::accent();
+    let ctx = probe_shell(&set);
+    let railed = |key: LayerKey| {
+        let row = ctx
+            .read_response(shell::layer_row_id(key))
+            .map(|response| response.rect)
+            .unwrap_or_else(|| panic!("the layer stack drew no row for {key:?}"));
+        // The rail stands at the row's leading edge, which is outside the
+        // strip the name senses — so the band swept here starts at the panel's
+        // own edge rather than at the name's.
+        let y = row.center().y as u32;
+        (0..row.left() as u32).any(|x| {
+            let p = image.pixel(x, y);
+            p[0].abs_diff(accent.r()) < 12
+                && p[1].abs_diff(accent.g()) < 12
+                && p[2].abs_diff(accent.b()) < 12
+        })
+    };
+
+    let active = set.scene.active.expect("the fixture has an active layer");
+    assert!(
+        railed(active),
+        "the active subtool has no rail, so which layer a dab lands on is \
+         carried by a 3.5% tone step alone. See target/visual/64-layer-rail.png"
+    );
+    for layer in &set.scene.layers {
+        if layer.key == active {
+            continue;
+        }
+        assert!(
+            !railed(layer.key),
+            "{} is not the active layer and is railed as though it were",
+            layer.name
+        );
+    }
+}
+
+/// A slider can still be adjusted from the keyboard.
+///
+/// `egui::Slider` handled the arrow keys; `sculpt_slider` is drawn by hand and
+/// had to be given them back. The control takes focus either way — a
+/// click-and-drag sense is focusable — so without this it would have been
+/// reachable by keyboard and inert once reached, which is worse than not being
+/// reachable at all.
+#[test]
+fn a_slider_answers_the_arrow_keys() {
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let mut set = state(strings, &scene, &materials, &report);
+    set.mask_steps = 5;
+
+    let ctx = egui::Context::default();
+    shell::apply_theme(&ctx);
+    let mut queue = CommandQueue::new();
+    for _ in 0..2 {
+        run_shell_frame(&ctx, &set, &mut queue, Vec::new());
+    }
+
+    // Focus arrives by Tab, not by clicking — which is true of `egui::Slider`
+    // too, and is what the first version of this test got wrong: it clicked,
+    // and a click on a slider sets the value to wherever it landed, so the
+    // assertion passed with the arrow-key handling deleted. Focus is granted
+    // here directly, by the widget id the shell hands out for the purpose.
+    let widget = ctx
+        .memory(|memory| {
+            memory
+                .data
+                .get_temp::<egui::Id>(shell::slider_widget_id(strings.label_mask_steps))
+        })
+        .expect("the inspector drew no Passos slider");
+    ctx.memory_mut(|memory| memory.request_focus(widget));
+    run_shell_frame(&ctx, &set, &mut queue, Vec::new());
+    queue.drain();
+
+    run_shell_frame(
+        &ctx,
+        &set,
+        &mut queue,
+        vec![egui::Event::Key {
+            key: egui::Key::ArrowRight,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        }],
+    );
+
+    // The state handed in still says five, so an arrow press asks for five
+    // plus one step of the one-to-sixteen range.
+    let asked: Vec<i32> = queue
+        .commands()
+        .iter()
+        .filter_map(|command| match command {
+            Command::SetMaskSteps(steps) => Some(*steps),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        asked.iter().any(|steps| *steps > 5),
+        "the arrow key moved the slider nowhere: it emitted {asked:?}, so a \
+         control that takes keyboard focus does nothing once it has it"
     );
 }

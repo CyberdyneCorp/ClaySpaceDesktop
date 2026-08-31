@@ -1927,9 +1927,20 @@ region with material, geometry and brush inspectors — and, while either is up,
 the shapes and boolean sections — a brush shelf, and a status area with a
 memory meter, the active backend and the working unit.
 
-The **accent marks the active brush and nothing else**. Layer selection is
-indicated by surface tone and weight; a test asserts the accent's coverage
-stays about constant as the active tool changes, so it cannot quietly spread.
+The **accent marks active state**, at the scale of a rail, a ring or a label
+and never as a fill: the active brush wears a ring and an accented name, the
+layer being sculpted wears a two-pixel rail at its leading edge, and a slider's
+travelled range is drawn in it. It marks nothing else — no panel chrome, no
+heading, no border, no hover. A test asserts the accent's coverage *in the
+shelf* stays about constant as the active tool changes, so the brush mark
+cannot quietly spread.
+
+The rail is an addition to the tone step and not a replacement for it. The
+active row is raised, railed, and set in primary rather than secondary text, so
+covering the hue still leaves it identifiable — which the design requires and a
+test checks. It earned a mark because tone alone could not carry it: `panel` to
+`raised` is three and a half per cent of relative luminance, and it was the only
+thing saying which of four subtools a dab would land on.
 **The tool rail on the leading edge** — the region the design named and the
 first build left empty — holds, as icons with their word and key on hover:
 mask painting; frame, polyframe and the reference images; the shapes and
@@ -1955,6 +1966,25 @@ with, cut out of its square — and Terracota reads warm and Polido reads shiny
 before either is read. Clicking it cycles the materials, and says so on hover.
 The view chips and the symmetry chips name their key on hover, so `1`–`4` and
 `X` `Y` `Z` are learnt where they are used rather than from this page.
+
+**A slider shows how far into its range it is.** One widget draws every slider
+in the shell: a track in the ground's tone with the range already travelled
+filled in the accent, a knob restrained at rest that lifts under the pointer,
+and the value monospaced and right-aligned above it. The fill is state rather
+than ornament — it says what the digits cannot say without being read, which is
+what a sculptor adjusting Intensidade mid-stroke needs — so it spans the track's
+start to the knob and a value at the bottom of its range draws none at all.
+Before this the three sliders at the head of the options bar were a hairline
+with a grey knob on it.
+
+**The viewport is darker than the shell around it.** Four surface tones now,
+ordered: the sculpting viewport, the application ground, a panel on it, and a
+raised row. The viewport and the shell were one colour, so the sculpt sat on
+exactly the tone the panels were built from and there was no edge between them
+— the design draws no outline around the viewport, so the tone step is the only
+boundary there is. The grid's two tones dropped with it, keeping the distance
+above their own ground that they were tuned for rather than becoming more
+prominent as a side effect.
 
 The active swatch also stands on a raised backdrop, and a swatch lifts the same
 way under the pointer — so the active brush is carried by tone as well as by

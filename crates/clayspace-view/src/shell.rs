@@ -373,9 +373,20 @@ fn heading_row(ui: &mut egui::Ui, text: &str, open: bool) -> egui::Response {
 }
 
 /// The rule a heading stands under, where something already stands above it.
+///
+/// The break between two sections is one `space::SECTION`, spent either side of
+/// the rule rather than piled on one: a rule hard against the section below it
+/// reads as part of that section rather than as the boundary between two. The
+/// larger half goes below, to the section the heading names.
+///
+/// Written as the section step less the group step rather than as two
+/// constants that happen to add up to it. The pixels are the ones that were
+/// already there; what changes is that the rhythm is now tied to the scale, so
+/// moving `SECTION` moves the panels instead of leaving them on a number
+/// nobody would think to look for here.
 fn heading_rule(ui: &mut egui::Ui) {
     if ui.min_rect().height() > 0.0 {
-        ui.add_space(space::SNUG);
+        ui.add_space(space::SECTION - space::ROOMY);
         let (rule, _) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
         ui.painter().rect_filled(rule, 0.0, Tokens::rule());
@@ -437,6 +448,28 @@ fn closable_heading(ui: &mut egui::Ui, text: &str) -> bool {
         .inner;
     ui.add_space(space::TIGHT);
     closed
+}
+
+/// How wide the mark on an active row is.
+///
+/// Two pixels. The design's rule is that the accent marks at the scale of a
+/// rail rather than filling anything, and this is what "a rail" is: enough to
+/// find the active row from across a desk, not enough to be a coloured row.
+const SELECTION_RAIL: f32 = 2.0;
+
+/// The mark an active row wears: a rail down its leading edge.
+///
+/// Drawn over a surface that is already raised and beside text that is already
+/// primary, never instead of them. Cover the hue and the row is still the
+/// lighter one with the brighter name — which is the accessibility rule the
+/// design states, and the reason the rail is an addition rather than a
+/// replacement for the tone step it stands on.
+fn selection_rail(ui: &egui::Ui, rect: egui::Rect) {
+    let rail = egui::Rect::from_min_max(
+        rect.min,
+        egui::pos2(rect.min.x + SELECTION_RAIL, rect.max.y),
+    );
+    ui.painter().rect_filled(rail, 0.0, Tokens::selection());
 }
 
 /// A numeric readout, set monospaced so digits do not reflow as they change.
@@ -708,6 +741,160 @@ fn readout(ui: &mut egui::Ui, label: &str, value: impl Into<String>) {
     });
 }
 
+/// How tall a slider's track is drawn.
+///
+/// Thicker than the hairline it replaced. The track is the only part of the
+/// control visible from across a desk, and a sculptor adjusting Intensidade
+/// mid-stroke is not reading the digits beside it.
+const SLIDER_TRACK: f32 = 6.0;
+
+/// The most arrow-key presses it should take to cross a slider's whole range.
+///
+/// The floor on how *coarse* a press is. A press also never moves less than
+/// one displayed unit — a step finer than the readout is a press that changes
+/// the number by nothing anyone can see, which is what a fiftieth of the
+/// one-to-sixteen mask range was: 5.3, rendered as 5.
+const SLIDER_KEY_STEPS: f32 = 100.0;
+
+/// The knob's radius at rest, and under the pointer.
+///
+/// The rest of the interface says "quiet until addressed" by dimming; a knob
+/// is too small for a tone change alone to register, so it grows as well.
+const SLIDER_KNOB: f32 = 5.0;
+const SLIDER_KNOB_HOT: f32 = 7.0;
+
+/// The one slider the shell draws: a track, the range travelled, and a knob.
+///
+/// The fill is the control's *state* rather than ornament — it says how far
+/// into its range the value sits, which is the one thing the digits above it
+/// cannot say without being read — so it spans the start of the track to the
+/// knob and stops, and a value at the bottom of its range draws none at all.
+///
+/// Drawn here rather than configured on `egui::Slider` because the parts that
+/// matter are the ones egui does not expose: which side of the knob is filled,
+/// what it is filled with, and how the knob answers the pointer. Written once
+/// so the treatment lives in one place instead of in the thirty-odd call sites
+/// that reach `slider_named`.
+fn sculpt_slider(
+    ui: &mut egui::Ui,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    decimals: usize,
+) -> egui::Response {
+    let (rect, mut response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), size::CONTROL),
+        egui::Sense::click_and_drag(),
+    );
+
+    // Inset by the *hot* radius at both ends, always. Insetting by the current
+    // radius would slide the whole track sideways the moment the pointer
+    // arrived and the knob grew, which reads as the value having changed.
+    let left = rect.left() + SLIDER_KNOB_HOT;
+    let right = rect.right() - SLIDER_KNOB_HOT;
+    let span = (right - left).max(1.0);
+    let (low, high) = (*range.start(), *range.end());
+    let extent = high - low;
+
+    if response.dragged() || response.clicked() {
+        if let Some(at) = response.interact_pointer_pos() {
+            let t = ((at.x - left) / span).clamp(0.0, 1.0);
+            let next = low + t * extent;
+            if next != *value {
+                *value = next;
+                response.mark_changed();
+            }
+        }
+    }
+
+    // The arrow keys, which `egui::Slider` handled and a hand-drawn track
+    // would otherwise have quietly taken away. `Sense::click_and_drag` is
+    // focusable, so the control still takes focus from the keyboard — it just
+    // did nothing once it had it, which is worse than not being reachable.
+    //
+    // How far a press moves is decided below, from the slider's own precision.
+    if response.has_focus() {
+        // Without this the arrows move focus to the next control instead of
+        // moving the value, which is egui's default for a focused widget and
+        // is why `egui::Slider` sets the same filter. Horizontal only: the
+        // slider runs sideways, so up and down should still leave it.
+        ui.ctx().memory_mut(|memory| {
+            memory.set_focus_lock_filter(
+                response.id,
+                egui::EventFilter {
+                    horizontal_arrows: true,
+                    ..Default::default()
+                },
+            );
+        });
+        let presses = ui.input(|input| {
+            input.num_presses(egui::Key::ArrowRight) as i32
+                - input.num_presses(egui::Key::ArrowLeft) as i32
+        });
+        if presses != 0 {
+            // One displayed unit, or a hundredth of the range where that is
+            // coarser. The first keeps a press visible in the readout; the
+            // second keeps a slider set to three decimals from needing a
+            // thousand presses to cross.
+            let unit = 0.1_f32.powi(decimals as i32);
+            let step = unit.max(extent / SLIDER_KEY_STEPS);
+            let next = (*value + presses as f32 * step).clamp(low, high);
+            if next != *value {
+                *value = next;
+                response.mark_changed();
+            }
+        }
+    }
+
+    let t = if extent.abs() > f32::EPSILON {
+        ((*value - low) / extent).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let travelled = left + t * span;
+    let middle = rect.center().y;
+    let track = egui::Rect::from_min_max(
+        egui::pos2(left, middle - SLIDER_TRACK * 0.5),
+        egui::pos2(right, middle + SLIDER_TRACK * 0.5),
+    );
+    let radius = egui::epaint::CornerRadius::same((SLIDER_TRACK * 0.5) as u8);
+    let painter = ui.painter();
+    painter.rect_filled(track, radius, Tokens::control_track());
+    // Guarded rather than left to a zero-width rectangle: a rounded rect of no
+    // width still paints its corners, which is a dot of accent on a control
+    // whose value is nothing.
+    if travelled > left + 0.5 {
+        painter.rect_filled(
+            egui::Rect::from_min_max(track.min, egui::pos2(travelled, track.max.y)),
+            radius,
+            Tokens::control_fill(),
+        );
+    }
+
+    let hot = response.hovered() || response.dragged();
+    let knob = if hot { SLIDER_KNOB_HOT } else { SLIDER_KNOB };
+    let ink = if hot {
+        Tokens::text()
+    } else {
+        Tokens::text_dim()
+    };
+    painter.circle_filled(egui::pos2(travelled, middle), knob, ink);
+
+    response
+}
+
+/// The id egui gave a named slider's widget, so a test can put the keyboard
+/// on it.
+///
+/// Not `slider_id`, which is the key its *rectangle* is filed under. Focus is
+/// addressed by the widget's own id, and egui derives that from the layout —
+/// so it has to be handed out rather than guessed. The arrows only act on a
+/// focused slider, as they do on `egui::Slider`, and focus arrives by Tab: a
+/// click does not take it. A test that clicked and then pressed an arrow was
+/// measuring the click.
+pub fn slider_widget_id(name: &str) -> egui::Id {
+    egui::Id::new(("slider-widget", name))
+}
+
 /// The id a named slider carries, so a test can find where it went.
 ///
 /// Panels grow, and a test that reaches a control by pixel coordinate reaches
@@ -759,7 +946,7 @@ fn slider_named(
     // share an id, and egui would say so rather than let them fight silently.
     let response = ui
         .push_id(slider_id(name), |ui| {
-            ui.add(egui::Slider::new(&mut edited, range).show_value(false))
+            sculpt_slider(ui, &mut edited, range, decimals)
         })
         .inner;
     if response.changed() {
@@ -768,8 +955,10 @@ fn slider_named(
     // Recorded under a name of our own, because egui derives the widget's id
     // from the layout and a test cannot guess it. `push_id` scopes it so two
     // sliders sharing a label in different sections stay apart.
-    ui.ctx()
-        .memory_mut(|memory| memory.data.insert_temp(slider_id(name), response.rect));
+    ui.ctx().memory_mut(|memory| {
+        memory.data.insert_temp(slider_id(name), response.rect);
+        memory.data.insert_temp(slider_widget_id(name), response.id);
+    });
     changed
 }
 
@@ -2170,7 +2359,7 @@ fn layer_row(
         Tokens::panel()
     };
 
-    egui::Frame::new()
+    let row = egui::Frame::new()
         .fill(fill)
         .inner_margin(egui::Margin::symmetric(
             space::SNUG as i8,
@@ -2201,7 +2390,7 @@ fn layer_row(
                 // of `available_height` would make the row as tall as the
                 // layer stack has space for.
                 let strip = egui::vec2(
-                    (ui.available_width() - size::LAYER_ROW_TAIL).max(size::SWATCH),
+                    (ui.available_width() - size::LAYER_ROW_TAIL).max(size::LAYER_NAME_MIN),
                     ui.spacing().interact_size.y,
                 );
                 match state.renaming {
@@ -2244,6 +2433,13 @@ fn layer_row(
                 });
             });
         });
+
+    // The tone step from `panel` to `raised` is 3.5% of relative luminance,
+    // and it was the only thing saying which of four layers a dab would land
+    // on. The rail is what makes that answerable at a glance.
+    if active {
+        selection_rail(ui, row.response.rect);
+    }
 
     // The passes recorded on this layer, nested under it.
     //
@@ -2399,8 +2595,10 @@ fn layer_name(
 ) {
     let name = egui::RichText::new(&layer.name)
         .size(type_scale::BODY)
-        // Selection is indicated by surface tone and weight, never by the
-        // accent — that marks the active brush alone.
+        // Primary text on the active row, secondary on the rest. One of the
+        // three marks the active layer carries — the others are the raised
+        // surface under it and the rail at its leading edge — so that none of
+        // them is load-bearing on its own.
         .color(if active {
             Tokens::text()
         } else {
@@ -3859,6 +4057,16 @@ fn brush_controls_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut
 /// of them saying the same thing — absence carries that better than a greyed
 /// row does. A tool that *has* a verb here and cannot be used right now is
 /// still shown; that is a different sentence and worth the space.
+/// Where a brush's swatch was drawn on the shelf, for tests.
+///
+/// The swatch's *size* is the thing worth pinning, and it cannot be read off
+/// the source usefully — a token name in an `allocate_exact_size` call proves
+/// nothing about what reached the screen. So the rect goes into memory and a
+/// test asks the shelf how big it drew its brushes.
+pub fn brush_swatch_id(tool: ToolKind) -> egui::Id {
+    egui::Id::new(("brush-swatch", tool))
+}
+
 pub fn brush_shelf(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
     let tools = ToolKind::for_representation(state.representation);
     if tools.is_empty() {
@@ -3884,11 +4092,18 @@ pub fn brush_shelf(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
             // "quiet until addressed" rule in the one place it was missing.
             let backdrop = ui.painter().add(egui::Shape::Noop);
             let group = ui.vertical(|ui| {
+                // `size::SWATCH`, which is the size named for this. It was
+                // changed to the size of one entry in the recent-colour row,
+                // added in the same commit, and the shelf spent a release
+                // drawing its brushes as sixteen-pixel discs with their marks
+                // illegible inside them.
                 let (rect, response) = ui.allocate_exact_size(
-                    egui::vec2(size::COLOUR_CHIP, size::COLOUR_CHIP),
+                    egui::vec2(size::SWATCH, size::SWATCH),
                     egui::Sense::click(),
                 );
                 paint_sphere(ui, rect, Tokens::text_dim(), active);
+                ui.ctx()
+                    .memory_mut(|memory| memory.data.insert_temp(brush_swatch_id(tool), rect));
                 // The brush's mark, in the ground's ink: dark on the lit clay,
                 // the way a mark pressed into a ball reads. Not the accent,
                 // which stays on the active brush alone.
@@ -3920,6 +4135,13 @@ pub fn brush_shelf(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
                 }
                 response.hovered()
             });
+            // No rail here, though the active layer wears one. The swatch
+            // already carries the same gesture at the same weight — a thin
+            // accent stroke tracing the thing itself, which for a ball is a
+            // ring — plus a raised card and a label in the accent. A rail
+            // would be a fourth mark on one sixty-pixel card, and the
+            // restraint the style budget asks for is the reason the layer row
+            // needed a mark in the first place: it had none.
             if active || group.inner {
                 ui.painter().set(
                     backdrop,
@@ -4232,7 +4454,12 @@ pub fn viewport_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comma
                 ui.add(chip(
                     state.strings.view_preset_name(preset),
                     on,
-                    Tokens::ground(),
+                    // The bar stands over the viewport, so an unselected chip
+                    // fills with the viewport's ground and disappears into it.
+                    // It filled with the shell's while the two were one
+                    // colour, and would now read as a lighter rectangle
+                    // floating on the sculpt's ground.
+                    Tokens::viewport(),
                 )),
                 state,
                 action,
