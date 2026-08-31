@@ -76,61 +76,6 @@ pub(super) fn curve_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &m
     );
 }
 
-/// How a voxel layer is drawn.
-///
-/// A display setting and nothing more: the engine keeps the choice an argument
-/// rather than grid state so two hosts sharing a document cannot disagree
-/// about what it looks like, and nothing here touches a cell.
-pub(super) fn voxel_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
-    use clayspace_model::{SmoothBlur, VoxelDisplay};
-    let s = state.strings;
-    if !heading(ui, s.section_geometry) {
-        return;
-    }
-
-    ui.label(
-        egui::RichText::new(s.label_voxel_display)
-            .size(type_scale::LABEL)
-            .color(Tokens::text_dim()),
-    );
-    ui.horizontal_wrapped(|ui| {
-        for display in VoxelDisplay::ALL {
-            let on = state.voxel_display == display;
-            if ui
-                .add(chip(s.voxel_display_name(display), on, Tokens::panel()))
-                .clicked()
-            {
-                queue.push(Command::SetVoxelDisplay(display, state.voxel_blur));
-            }
-        }
-    });
-
-    if state.voxel_display != VoxelDisplay::Smooth {
-        return;
-    }
-    if let Some(value) = slider(
-        ui,
-        s.label_voxel_blur,
-        state.voxel_blur.passes() as f32,
-        0.0..=SmoothBlur::MOST as f32,
-        0,
-    ) {
-        queue.push(Command::SetVoxelDisplay(
-            state.voxel_display,
-            SmoothBlur::new(value.round() as i32),
-        ));
-    }
-    // Said where it is true rather than left for a sculptor to find out from a
-    // missing finger.
-    if state.voxel_blur.can_lose_detail() {
-        ui.label(
-            egui::RichText::new(s.hint_voxel_blur)
-                .size(type_scale::LABEL)
-                .color(Tokens::accent()),
-        );
-    }
-}
-
 /// The cage a sculptor is working in: how fine it is, and applying it.
 ///
 /// Only while one is up. A cage is raised from the Dinâmica menu, and a
@@ -273,14 +218,15 @@ pub fn right_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
     }
 
     geometry_section(ui, state);
+
+    // What can be controlled about the representation being sculpted, in a
+    // fixed slot. The section's *contents* change with the active layer and
+    // its position does not: a sculptor moving from a field to a grid should
+    // find the material and the geometry where they left them.
+    inspector::representation_section(ui, state, queue);
+
     if state.armature.exists {
         armature_section(ui, state, queue);
-    }
-
-    // A grid is boxes; whether it should *look* like boxes is a separate
-    // question, and the answer belongs beside the layer it is asked about.
-    if state.representation == Representation::Voxel {
-        voxel_section(ui, state, queue);
     }
     if state.curve.active {
         curve_section(ui, state, queue);

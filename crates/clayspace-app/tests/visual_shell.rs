@@ -3753,3 +3753,130 @@ fn a_narrow_bar_gives_up_its_phrases_first() {
         "the card is {cramped} wide at 1024 and {roomy} at 1600, so the bar          kept its phrases while the crossings ran off the end"
     );
 }
+
+// -- the contextual inspector ------------------------------------------------
+
+/// Every representation gets a section, and no two sections share a heading.
+///
+/// A regression test. The voxel display controls stood under `section_geometry`
+/// — and so do the polygon counts, which are a different section entirely. Two
+/// sections with one word between them, in one panel, sharing the fold that
+/// word is keyed by: folding either put both away, and asking the interface
+/// where "Geometry" was got whichever had been drawn last.
+#[test]
+fn each_representation_has_a_section_of_its_own_name() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    // A field layer's section is drawn from the engine's health report, so the
+    // scene it is asked about has to carry one — without it the section is
+    // correctly absent, which is its own test below.
+    let mut reported = scene.clone();
+    let active = reported.active.expect("the fixture has an active layer");
+    for layer in &mut reported.layers {
+        if layer.key == active {
+            layer.health = Some(clayspace_model::FieldHealth {
+                items: 12,
+                safe_step_scale: 0.9,
+                advises_consolidation: false,
+                consolidated: false,
+            });
+        }
+    }
+
+    for (representation, section, fixture) in [
+        (
+            clayspace_model::Representation::Sdf,
+            strings.section_field,
+            &reported,
+        ),
+        (
+            clayspace_model::Representation::Voxel,
+            strings.section_voxels,
+            &scene,
+        ),
+        (
+            clayspace_model::Representation::Mesh,
+            strings.section_mesh,
+            &scene,
+        ),
+    ] {
+        let mut set = state(strings, fixture, &materials, &report);
+        set.representation = representation;
+        let ctx = probe_shell(&set);
+
+        let own = shell_rect(&ctx, shell::heading_id(section))
+            .unwrap_or_else(|| panic!("{representation:?} drew no {section:?} section"));
+        let geometry = shell_rect(&ctx, shell::heading_id(strings.section_geometry))
+            .expect("the geometry section is always drawn");
+        assert_ne!(
+            own, geometry,
+            "{representation:?}'s section and the geometry section were drawn \
+             in the same place, which is what two sections sharing one heading \
+             look like"
+        );
+        assert!(
+            own.left() >= SHELL_WIDTH as f32 - region::RIGHT,
+            "{section:?} does not stand in the right panel: {own:?}"
+        );
+    }
+
+    // And with no report there is no section, rather than a heading standing
+    // over nothing. Its height is not free: the right region already runs past
+    // its own bottom, and an empty section pushed the mask controls off it.
+    let bare = state(strings, &scene, &materials, &report);
+    assert!(
+        shell_rect(
+            &probe_shell(&bare),
+            shell::heading_id(strings.section_field)
+        )
+        .is_none(),
+        "a field with no health report still drew a {:?} heading, with nothing          under it",
+        strings.section_field
+    );
+}
+
+/// Folding the geometry section leaves the representation's own section open.
+///
+/// The other half of the same regression, and the half a sculptor actually
+/// meets: on a grid, putting the polygon counts away also put the display
+/// controls away, because both were keyed by the word "Geometry".
+#[test]
+fn folding_one_section_leaves_the_other_open() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let mut set = state(strings, &scene, &materials, &report);
+    set.representation = clayspace_model::Representation::Voxel;
+
+    let geometry = shell_rect(
+        &probe_shell(&set),
+        shell::heading_id(strings.section_geometry),
+    )
+    .expect("no geometry heading was drawn");
+
+    // Folded, then asked of a frame drawn afterwards with both slots wiped —
+    // a heading writes its row down every frame it is drawn and the slot is
+    // never cleared, so a stale rect would answer for a section that is gone.
+    let ctx = probe_shell_after(&set, &[left_click(geometry.center())]);
+    let voxels = shell::heading_id(strings.section_voxels);
+    let polygons = shell::readout_id(strings.label_polygons);
+    ctx.data_mut(|data| {
+        data.remove::<egui::Rect>(voxels);
+        data.remove::<egui::Rect>(polygons);
+    });
+    run_shell_frame(&ctx, &set, &mut CommandQueue::new(), Vec::new());
+
+    assert!(
+        shell_rect(&ctx, polygons).is_none(),
+        "the geometry section was folded and its counts are still drawn"
+    );
+    assert!(
+        shell_rect(&ctx, voxels).is_some(),
+        "folding the geometry section also folded the voxel section, so the \
+         two are still sharing one heading"
+    );
+}

@@ -233,6 +233,24 @@ pub struct Strings {
     pub section_shapes: &'static str,
     pub section_boolean: &'static str,
     pub section_geometry: &'static str,
+    /// The contextual section's heading, one per representation.
+    ///
+    /// Distinct from `section_geometry` and from each other. The voxel display
+    /// controls used to stand under `section_geometry` beside the polygon
+    /// counts, which are also under `section_geometry` — two sections with one
+    /// word between them, sharing the fold that word is keyed by, so putting
+    /// one away put the other away too.
+    pub section_field: &'static str,
+    pub section_voxels: &'static str,
+    pub section_mesh: &'static str,
+    /// How many items the active field's edit list holds.
+    pub label_field_items: &'static str,
+    /// Whether that list has been collapsed into one.
+    pub label_field_collapsed: &'static str,
+    pub state_yes: &'static str,
+    pub state_no: &'static str,
+    /// What is true of every mesh layer, and is the reason its brushes differ.
+    pub mesh_topology_fixed: &'static str,
     pub section_resolution: &'static str,
     pub section_brush_controls: &'static str,
     pub section_armature: &'static str,
@@ -650,6 +668,14 @@ const PT_BR: Strings = Strings {
     section_shapes: "FORMAS",
     section_boolean: "BOOLEANA",
     section_geometry: "GEOMETRIA",
+    section_field: "CAMPO",
+    section_voxels: "VOXELS",
+    section_mesh: "MALHA",
+    label_field_items: "Itens no campo",
+    label_field_collapsed: "Colapsado",
+    state_yes: "sim",
+    state_no: "não",
+    mesh_topology_fixed: "Topologia fixa: os pincéis movem os vértices que existem e não criam nem removem nenhum.",
     section_resolution: "RESOLUÇÃO",
     section_brush_controls: "CONTROLES DE PINCEL",
     section_armature: "ARMADURA",
@@ -1001,6 +1027,14 @@ const EN_US: Strings = Strings {
     section_shapes: "SHAPES",
     section_boolean: "BOOLEAN",
     section_geometry: "GEOMETRY",
+    section_field: "FIELD",
+    section_voxels: "VOXELS",
+    section_mesh: "MESH",
+    label_field_items: "Items in the field",
+    label_field_collapsed: "Collapsed",
+    state_yes: "yes",
+    state_no: "no",
+    mesh_topology_fixed: "Fixed topology: the brushes move the vertices that are there and neither add nor remove any.",
     section_resolution: "RESOLUTION",
     section_brush_controls: "BRUSH CONTROLS",
     section_armature: "ARMATURE",
@@ -1357,6 +1391,14 @@ const ES_419: Strings = Strings {
     section_shapes: "FORMAS",
     section_boolean: "BOOLEANA",
     section_geometry: "GEOMETRÍA",
+    section_field: "CAMPO",
+    section_voxels: "VÓXELES",
+    section_mesh: "MALLA",
+    label_field_items: "Elementos en el campo",
+    label_field_collapsed: "Colapsado",
+    state_yes: "sí",
+    state_no: "no",
+    mesh_topology_fixed: "Topología fija: los pinceles mueven los vértices que existen y no crean ni eliminan ninguno.",
     section_resolution: "RESOLUCIÓN",
     section_brush_controls: "CONTROLES DE PINCEL",
     // "Esqueleto", not "Armadura": armadura reads as armour outside of
@@ -1761,8 +1803,16 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 196] {
+    pub fn all(&self) -> [&'static str; 204] {
         [
+            self.section_field,
+            self.section_voxels,
+            self.section_mesh,
+            self.label_field_items,
+            self.label_field_collapsed,
+            self.state_yes,
+            self.state_no,
+            self.mesh_topology_fixed,
             self.section_representation,
             self.hint_representation_active,
             self.hint_representation_other,

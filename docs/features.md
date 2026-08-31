@@ -1944,6 +1944,27 @@ the ones the domain actually declares from the active representation rather
 than a written list — invoking one aims the panel and opens it, and a panel
 already open is aimed rather than closed.
 
+**The inspector answers what is being sculpted**, in one section that keeps its
+place while its contents change: a field states how many items its edit list
+holds and whether it has been collapsed, a grid its display and blur, a mesh
+the contract its brushes work under — they move the vertices that are there and
+neither add nor remove any, which is the reason Inflar and Suavizar behave
+differently on a mesh than on a field. Each is headed by the representation it
+describes. The grid's controls used to stand under `GEOMETRIA`, which is also
+the polygon counts' heading, and a fold is keyed by that word: putting one away
+put the other away too.
+
+Only what the domain holds. Every per-layer field quality, evaluation
+resolution, surface offset, voxel size, grid bounds, normals control and
+subdivision level the concept depicts is absent, because none of them is a
+value this application or the pinned engine can express for a layer — a control
+for something nothing reads is an interface that lies about what the program
+does. Three things that do exist stay where they are rather than being
+duplicated: the combine vocabulary belongs to the stroke and stands in the
+options bar, a grid's recorded passes are nested under the layer they were
+recorded on, and the offer to collapse a costly field appears under the layer
+list only while the engine is advising it.
+
 As the window narrows the bar gives up its phrases first, into the tooltip,
 then its heading, and never its crossings. A card always keeps its icon *and*
 its name: below about five hundred pixels of central region the bar scrolls,

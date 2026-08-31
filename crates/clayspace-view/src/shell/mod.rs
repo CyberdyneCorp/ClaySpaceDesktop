@@ -34,6 +34,7 @@ use crate::strings::Locale;
 use crate::strings::Strings;
 
 mod booleans;
+mod inspector;
 mod left;
 mod menus;
 mod options;
