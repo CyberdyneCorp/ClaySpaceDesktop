@@ -390,6 +390,24 @@ different `wgpu::Instance`s. The offscreen tests never build a surface, so they
 structurally could not have found it. `window_smoke` now requires three
 presented frames and has been verified against the regression.
 
+### What the captures hid
+
+The shell captures run egui several passes deep, because a menu does not exist
+until the frame after the button that opens it was clicked. A glyph reaches
+egui's font atlas in the pass that first *lays it out*, arriving as a
+`textures_delta` on that pass's output — and the harness applied the deltas of
+only the first and the last pass. So any accented character appearing **only**
+inside a menu arrived in a discarded delta and drew as a blank: every menu
+capture on this project was quietly missing its accents, and "Mostrar só esta"
+had been reading as "Mostrar s esta" in the images used to eyeball the design.
+Nothing failed, because nothing asserts on glyphs. Every pass's deltas are
+applied now.
+
+The lesson generalises past fonts. These captures exist to be looked at, so a
+harness that renders something *other* than what the application renders is
+worse than a missing test: it answers the question it was asked, wrongly, and
+the answer looks like a picture.
+
 ## Decisions recorded elsewhere
 
 `openspec/changes/add-clayspace-desktop/design.md` carries the full decision

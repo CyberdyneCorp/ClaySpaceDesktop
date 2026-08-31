@@ -1520,6 +1520,29 @@ says so on the options bar rather than doing nothing, and the press stays the
 brush's: a press on the clay is a stroke, and taking that away to explain
 something would be the worse error.
 
+### Crossing a layer from its own row
+
+The representation bar's cards cross the *active* layer. A sculptor looking at a
+stack of eleven subtools means the row they opened the menu on, so a layer's own
+menu offers the crossings **that layer's** representation has — read from the
+row rather than from the active layer, which is why a mesh row offers Voxels and
+Campo (SDF) while an SDF row offers Voxels and Malha, in the same stack, at the
+same moment.
+
+Invoking one makes that row's layer active before aiming the conversion,
+because the conversion acts on the active layer and a crossing asked of another
+row would otherwise convert something else entirely.
+
+It is aimed **in place**: the source leaves as the result arrives and the result
+stands where it stood, which is what a sculptor means by converting *this*
+layer. That setting had been in the domain from the beginning, with nothing in
+the interface able to ask for it.
+
+The entry carries an ellipsis and opens the conversion panel rather than
+converting on the click. A crossing costs work, a crossing into cells needs a
+size chosen, and one that would not fit the budget is refused — the panel is
+where all three are said, and it is the same reason the bar's cards are inert.
+
 ### Showing one subtool alone
 
 A layer row's own menu offers **Mostrar só esta**, which hides every other
