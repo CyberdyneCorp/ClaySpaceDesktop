@@ -1922,10 +1922,33 @@ and viewport bars. See *Not built yet*.
 ## Interface
 
 The regions from the design: a menu bar, a tool options bar, a left region with
-the scene tree, layer stack and sculpt settings, a central viewport, a right
-region with material, geometry and brush inspectors — and, while either is up,
-the shapes and boolean sections — a brush shelf, and a status area with a
-memory meter, the active backend and the working unit.
+the scene tree, layer stack and sculpt settings, a representation bar and the
+central viewport under it, a right region with material, geometry and brush
+inspectors — and, while either is up, the shapes and boolean sections — a brush
+shelf, and a status area with a memory meter, the active backend and the
+working unit.
+
+**The three representations stand above the viewport, as equals.** One card
+each: an icon of a distinct shape, the representation's name, and a phrase
+saying what it is. The active one is raised and railed, in the same grammar the
+active layer row wears. The other two are shown rather than hidden, because the
+point of the bar is that a sculptor can see what the alternatives are — the
+interface used to say this in a three-letter tag on a layer row and a line of
+text at the far end of the viewport bar, and that line was half untranslated,
+drawing the engine's own word under a translated prefix.
+
+**A card converts nothing.** Crossing between representations costs work and is
+not always reversible, so it stays behind the conversion panel where the cost
+is stated and confirmed. The crossings are a row beside the cards, and they are
+the ones the domain actually declares from the active representation rather
+than a written list — invoking one aims the panel and opens it, and a panel
+already open is aimed rather than closed.
+
+As the window narrows the bar gives up its phrases first, into the tooltip,
+then its heading, and never its crossings. A card always keeps its icon *and*
+its name: below about five hundred pixels of central region the bar scrolls,
+because a representation told by shape alone is exactly what the contrast tests
+elsewhere refuse to allow.
 
 The **accent marks active state**, at the scale of a rail, a ring or a label
 and never as a fill: the active brush wears a ring and an accented name, the

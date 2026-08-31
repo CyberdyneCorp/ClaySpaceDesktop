@@ -42,6 +42,7 @@ mod shapes;
 mod shelf;
 mod widgets;
 mod windows;
+mod workspace;
 
 // The shared vocabulary, and the three modules whose sections another module
 // embeds. Re-established at the `shell` level because these items reached each
@@ -71,6 +72,7 @@ pub use windows::{
     attribution_window, convert_window, deform_window, diagnostics_window, export_window,
     import_window, reference_slider_name, reference_window, repair_window, ReferenceSlot,
 };
+pub use workspace::{convert_to_id, representation_bar, representation_card_id};
 
 /// Everything a frame of interface needs to read.
 ///
@@ -276,6 +278,10 @@ pub mod region {
     pub const RIGHT: f32 = 248.0;
     pub const MENU_BAR: f32 = 30.0;
     pub const OPTIONS_BAR: f32 = 62.0;
+    /// The representation bar, above the viewport. Inside the central region
+    /// rather than a panel of its own: it belongs to the viewport it labels,
+    /// and a full-width strip would run behind the inspectors on both sides.
+    pub const REPRESENTATION_BAR: f32 = 56.0;
     pub const SHELF: f32 = 84.0;
     pub const STATUS: f32 = 28.0;
 }
@@ -457,15 +463,6 @@ pub fn viewport_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comma
         // a panel or a shelf that changed under you is unexplained.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(space::PANEL);
-            ui.label(
-                egui::RichText::new(format!(
-                    "{}: {}",
-                    state.strings.representation_label,
-                    state.representation.label()
-                ))
-                .size(type_scale::LABEL)
-                .color(Tokens::text_dim()),
-            );
             // Why the tool cannot be used, or what the last gesture was refused
             // for, beside the viewport the sculptor is looking at. It stood at
             // the tail of the options bar, past the right edge at the design's
@@ -530,8 +527,12 @@ mod tests {
         // The panels are fixed and the viewport absorbs the rest, so at the
         // smallest window the design targets there must still be a viewport.
         let width = 1280.0 - region::RAIL - region::LEFT - region::RIGHT;
-        let height =
-            800.0 - region::MENU_BAR - region::OPTIONS_BAR - region::SHELF - region::STATUS;
+        let height = 800.0
+            - region::MENU_BAR
+            - region::OPTIONS_BAR
+            - region::REPRESENTATION_BAR
+            - region::SHELF
+            - region::STATUS;
         assert!(width > 400.0, "the viewport would be {width} wide");
         assert!(height > 300.0, "the viewport would be {height} tall");
     }

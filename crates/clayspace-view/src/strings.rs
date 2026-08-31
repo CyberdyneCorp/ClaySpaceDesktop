@@ -72,6 +72,19 @@ pub struct Strings {
     /// reads the same in every language; these are the words a sculptor is
     /// offered when a new layer asks what it should be.
     pub representation_names: [&'static str; clayspace_model::Representation::ALL.len()],
+    /// What each representation *is*, in one short phrase, for the card that
+    /// stands for it in the representation bar.
+    ///
+    /// The name alone says which of three; this says what that means, which is
+    /// what a sculptor meeting the vocabulary for the first time needs. Kept
+    /// to a phrase — the bar is one row tall and a sentence would not fit.
+    pub representation_sentences: [&'static str; clayspace_model::Representation::ALL.len()],
+    /// The representation bar's own heading.
+    pub section_representation: &'static str,
+    /// What a card says on hover: this is what the active layer holds, or
+    /// this is what crossing to it would cost a look at.
+    pub hint_representation_active: &'static str,
+    pub hint_representation_other: &'static str,
     /// The shapes panel, and what it does.
     pub action_shapes: &'static str,
     pub label_shape: &'static str,
@@ -539,6 +552,14 @@ const PT_BR: Strings = Strings {
     ],
     insert_as_names: ["Novo subtool", "No subtool ativo"],
     representation_names: ["Campo (SDF)", "Voxels", "Malha"],
+    representation_sentences: [
+        "Campo de distância com sinal",
+        "Grade de voxels",
+        "Malha de polígonos",
+    ],
+    section_representation: "REPRESENTAÇÃO",
+    hint_representation_active: "o que a camada ativa contém",
+    hint_representation_other: "esta camada não é isto — converter tem custo",
     action_shapes: "Formas",
     label_shape: "Forma",
     label_insert_as: "Inserir como",
@@ -887,6 +908,10 @@ const EN_US: Strings = Strings {
     ],
     insert_as_names: ["New subtool", "Into the active subtool"],
     representation_names: ["Field (SDF)", "Voxels", "Mesh"],
+    representation_sentences: ["Signed Distance Field", "Voxel Grid", "Polygon Mesh"],
+    section_representation: "REPRESENTATION",
+    hint_representation_active: "what the active layer holds",
+    hint_representation_other: "this layer is not this — converting has a cost",
     action_shapes: "Shapes",
     label_shape: "Shape",
     label_insert_as: "Insert as",
@@ -1234,6 +1259,14 @@ const ES_419: Strings = Strings {
     ],
     insert_as_names: ["Nuevo subtool", "En el subtool activo"],
     representation_names: ["Campo (SDF)", "Vóxeles", "Malla"],
+    representation_sentences: [
+        "Campo de distancia con signo",
+        "Rejilla de vóxeles",
+        "Malla de polígonos",
+    ],
+    section_representation: "REPRESENTACIÓN",
+    hint_representation_active: "lo que contiene la capa activa",
+    hint_representation_other: "esta capa no es esto — convertir tiene un costo",
     action_shapes: "Formas",
     label_shape: "Forma",
     label_insert_as: "Insertar como",
@@ -1695,6 +1728,14 @@ impl Strings {
         )
     }
 
+    pub fn representation_sentence(&self, what: clayspace_model::Representation) -> &'static str {
+        Self::at(
+            &self.representation_sentences,
+            clayspace_model::Representation::ALL,
+            what,
+        )
+    }
+
     pub fn voxel_display_name(&self, how: clayspace_model::VoxelDisplay) -> &'static str {
         Self::at(
             &self.voxel_display_names,
@@ -1720,8 +1761,11 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 193] {
+    pub fn all(&self) -> [&'static str; 196] {
         [
+            self.section_representation,
+            self.hint_representation_active,
+            self.hint_representation_other,
             self.action_shapes,
             self.label_shape,
             self.action_insert,
@@ -1994,6 +2038,45 @@ mod tests {
     /// A fourth vocabulary held by position, and the one whose failure would
     /// be quietest: three operations named from `BooleanOp::label` would read
     /// in Portuguese whatever the rest of the panel says.
+    #[test]
+    fn every_representation_is_named_and_explained_in_every_language() {
+        // The bar states all three at once, so a card missing its phrase is
+        // a hole beside two that have one — and two cards sharing a phrase
+        // would say the representations are the same thing.
+        for locale in Locale::ALL {
+            let strings = Strings::for_locale(locale);
+            let mut seen = std::collections::BTreeSet::new();
+            for what in clayspace_model::Representation::ALL {
+                let name = strings.representation_name(what);
+                let sentence = strings.representation_sentence(what);
+                assert!(
+                    !name.is_empty(),
+                    "{what:?} has no name in {}",
+                    locale.label()
+                );
+                assert!(
+                    !sentence.is_empty(),
+                    "{what:?} has no phrase in {}",
+                    locale.label()
+                );
+                assert!(
+                    seen.insert(sentence),
+                    "{} explains two representations as {sentence:?}",
+                    locale.label()
+                );
+            }
+        }
+        let english = Strings::for_locale(Locale::EnUs);
+        let portuguese = Strings::for_locale(Locale::PtBr);
+        assert!(
+            clayspace_model::Representation::ALL
+                .iter()
+                .all(|what| english.representation_sentence(*what)
+                    != portuguese.representation_sentence(*what)),
+            "a representation reads the same in both, so one table was copied"
+        );
+    }
+
     #[test]
     fn the_boolean_operations_speak_every_language() {
         for locale in Locale::ALL {

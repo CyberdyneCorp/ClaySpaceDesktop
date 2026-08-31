@@ -3394,6 +3394,10 @@ impl App {
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
                 .show(ctx, |ui| {
+                    // Inside the central region rather than a panel of its
+                    // own, so it spans the viewport it labels and stops at
+                    // the inspectors either side.
+                    shell::representation_bar(ui, &state, &mut queue);
                     ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                         shell::viewport_bar(ui, &state, &mut queue);
                         // Whatever the bar left is the viewport, allocated as

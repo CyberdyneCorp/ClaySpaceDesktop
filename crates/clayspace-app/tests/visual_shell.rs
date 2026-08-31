@@ -318,8 +318,15 @@ fn build_shell(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQ
             egui::ScrollArea::vertical().show(ui, |ui| shell::right_panel(ui, state, queue));
         });
     egui::CentralPanel::default()
-        .frame(egui::Frame::new().fill(Tokens::ground()))
+        // The viewport's own tone, which is what the renderer clears to. The
+        // application gives this panel no frame at all and lets the cleared
+        // surface show through; a capture has no renderer behind it, so it
+        // paints the same colour by hand. It painted `ground` — the *shell's*
+        // — until the two were separated, and every capture then understated
+        // the one boundary the design draws no line for.
+        .frame(egui::Frame::new().fill(Tokens::viewport()))
         .show(ctx, |ui| {
+            shell::representation_bar(ui, state, queue);
             ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                 shell::viewport_bar(ui, state, queue);
             });
@@ -551,6 +558,25 @@ fn the_shell_draws_every_region() {
         assert!(
             pixel != ground,
             "the {name} rendered as bare viewport ground, so it did not lay out"
+        );
+    }
+
+    // And the regions that are drawn *inside* the central panel rather than as
+    // panels of their own, which the sampling above cannot see.
+    //
+    // This exists because `build_shell` is a second copy of the composition
+    // root's frame, and a region added to one and not the other is invisible
+    // to every visual test here — which is what happened to the representation
+    // bar: it was wired into the application, drew nothing in any capture, and
+    // nothing failed.
+    let ctx = probe_shell(&state);
+    for representation in clayspace_model::Representation::ALL {
+        assert!(
+            ctx.memory(|memory| memory
+                .data
+                .get_temp::<egui::Rect>(shell::representation_card_id(representation)))
+                .is_some(),
+            "the representation bar drew no card for {representation:?}"
         );
     }
 }
@@ -3565,5 +3591,165 @@ fn a_slider_answers_the_arrow_keys() {
         asked.iter().any(|steps| *steps > 5),
         "the arrow key moved the slider nowhere: it emitted {asked:?}, so a \
          control that takes keyboard focus does nothing once it has it"
+    );
+}
+
+// -- the representation bar --------------------------------------------------
+
+/// The bar states the active layer's representation and nothing else.
+#[test]
+fn the_representation_bar_lights_the_active_representation() {
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let set = state(strings, &scene, &materials, &report);
+    let ctx = probe_shell(&set);
+
+    // Every card is drawn — the bar shows the three as equals rather than
+    // hiding the two the layer is not — and each is a distinct rectangle.
+    let mut seen = Vec::new();
+    for representation in clayspace_model::Representation::ALL {
+        let rect = ctx
+            .memory(|memory| {
+                memory
+                    .data
+                    .get_temp::<egui::Rect>(shell::representation_card_id(representation))
+            })
+            .unwrap_or_else(|| panic!("no card was drawn for {representation:?}"));
+        assert!(
+            !seen.contains(&rect),
+            "two representations were drawn in the same place"
+        );
+        seen.push(rect);
+    }
+}
+
+/// A crossing aims the conversion panel. It does not convert.
+///
+/// The whole reason the cards are inert and the crossings are a separate row:
+/// a crossing costs something, is not always reversible, and the panel is
+/// where its cost is stated and confirmed. A bar that ran the conversion on a
+/// click would be routing around the one safeguard the feature has — so this
+/// asserts the aiming happens *and* that `RunConversion` does not.
+#[test]
+fn a_crossing_aims_the_panel_rather_than_converting() {
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let set = state(strings, &scene, &materials, &report);
+
+    let target = clayspace_model::Representation::Voxel;
+    let at = probe_shell(&set)
+        .memory(|memory| {
+            memory
+                .data
+                .get_temp::<egui::Rect>(shell::convert_to_id(target))
+        })
+        .expect("the bar offered no crossing into voxels")
+        .center();
+
+    let ctx = egui::Context::default();
+    shell::apply_theme(&ctx);
+    let mut queue = CommandQueue::new();
+    for _ in 0..2 {
+        run_shell_frame(&ctx, &set, &mut queue, Vec::new());
+    }
+    queue.drain();
+    for frame in drag(at, at) {
+        run_shell_frame(&ctx, &set, &mut queue, frame);
+        run_shell_frame(&ctx, &set, &mut queue, Vec::new());
+    }
+
+    let commands = queue.commands();
+    let aimed = commands.iter().any(|command| {
+        matches!(
+            command,
+            Command::SetConversion(settings) if settings.direction.to() == target
+        )
+    });
+    assert!(
+        aimed,
+        "clicking the crossing into voxels emitted {commands:?} and never \
+         aimed the conversion at it"
+    );
+    assert!(
+        commands.iter().any(|c| matches!(c, Command::ToggleConvert)),
+        "the crossing aimed the panel and left it shut, so nothing said what \
+         the conversion would cost: {commands:?}"
+    );
+    assert!(
+        !commands.iter().any(|c| matches!(c, Command::RunConversion)),
+        "the bar ran the conversion itself, routing around the panel where \
+         its cost is stated and confirmed: {commands:?}"
+    );
+}
+
+/// The bar sheds its phrases before it sheds anything else.
+///
+/// A ladder, not a switch: the crossings are what a sculptor cannot do
+/// without, the phrases explain a vocabulary once and then repeat themselves,
+/// and the heading is the least load-bearing word in the row. So a narrower
+/// window takes the phrases first and the heading second.
+///
+/// What this does **not** claim is that everything fits at any width. It does
+/// not: at 1024 with both inspectors open the central region is under five
+/// hundred pixels, and three cards carrying `icon + name` plus two crossings
+/// need more than that. The bar scrolls there. Going further would mean cards
+/// of icon alone, and the design requires a representation to be told by icon
+/// *and* text — a shape on its own is exactly what the tests elsewhere here
+/// refuse to let state depend on.
+#[test]
+fn a_narrow_bar_gives_up_its_phrases_first() {
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let set = state(strings, &scene, &materials, &report);
+
+    let card_width = |width: f32| {
+        let ctx = egui::Context::default();
+        shell::apply_theme(&ctx);
+        let mut queue = CommandQueue::new();
+        for _ in 0..2 {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, SHELL_HEIGHT as f32),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| build_shell(ctx, &set, &mut queue),
+            );
+        }
+        let card = ctx
+            .memory(|memory| {
+                memory
+                    .data
+                    .get_temp::<egui::Rect>(shell::representation_card_id(set.representation))
+            })
+            .expect("the bar drew no card for the active representation");
+        // And the crossings are still drawn at either width, whether or not
+        // the row has to scroll to reach them.
+        for direction in clayspace_model::Direction::from_representation(set.representation) {
+            assert!(
+                ctx.memory(|memory| memory
+                    .data
+                    .get_temp::<egui::Rect>(shell::convert_to_id(direction.to())))
+                    .is_some(),
+                "at {width} wide the crossing into {:?} was not drawn at all",
+                direction.to()
+            );
+        }
+        card.width()
+    };
+
+    let roomy = card_width(1600.0);
+    let cramped = card_width(1024.0);
+    assert!(
+        cramped < roomy,
+        "the card is {cramped} wide at 1024 and {roomy} at 1600, so the bar          kept its phrases while the crossings ran off the end"
     );
 }

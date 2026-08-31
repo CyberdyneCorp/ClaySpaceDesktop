@@ -22,7 +22,11 @@
 //! attribute — is still shown, disabled, with which of those it is.
 
 /// Which representation a layer holds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `Hash` because the interface keys widget ids off it, as it does off
+/// `ToolKind` — an id derived from a `label()` would be an interface word
+/// doing structural work, and the shell's own ratchet counts those.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Representation {
     /// An ordered edit list evaluated as a distance field.
     Sdf,
