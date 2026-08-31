@@ -60,7 +60,10 @@ fn outline_of(object: &clayspace_model::SceneObject) -> ([f32; 3], [f32; 3]) {
         .copied()
         .fold(0.0f32, f32::max)
         .max(1e-3)
-        * object.scale;
+        // The largest of the three, applied to every axis, as the
+        // application's own bound does: a per-axis reach stops being a bound
+        // the moment the object is turned.
+        * object.scale.iter().copied().fold(0.0f32, f32::max);
     (
         std::array::from_fn(|i| object.position[i] - reach),
         std::array::from_fn(|i| object.position[i] + reach),

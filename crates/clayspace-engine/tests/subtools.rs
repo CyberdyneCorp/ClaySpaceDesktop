@@ -337,9 +337,12 @@ fn dragging_the_manipulator_scales_a_whole_subtool() {
         [APART + 2.0, 0.0, 0.0],
     );
 
+    // A layer scales uniformly — the engine's layer transform takes one
+    // factor, unlike a node's — so the three components stay equal and the
+    // one number is exact.
     assert_eq!(
         doc.target_transform(target).map(|at| at.scale),
-        Some(2.0),
+        Some([2.0; 3]),
         "the drag asked for a doubling and the layer did not take it"
     );
     assert!(

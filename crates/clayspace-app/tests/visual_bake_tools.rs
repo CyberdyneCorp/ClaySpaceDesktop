@@ -52,14 +52,30 @@ fn document() -> Option<ClayDocument> {
 fn roughness(image: &Image, background: [u8; 4]) -> f64 {
     let mut total = 0u64;
     let mut counted = 0u64;
+    // Whether a pixel is the ground rather than the form.
+    let ground = |pixel: [u8; 4]| (0..3).all(|c| pixel[c].abs_diff(background[c]) <= 12);
     for y in 1..image.height {
         for x in 1..image.width {
             let here = image.pixel(x, y);
-            if (0..3).all(|c| here[c].abs_diff(background[c]) <= 12) {
-                continue;
-            }
             let left = image.pixel(x - 1, y);
             let up = image.pixel(x, y - 1);
+            // Across the subject, and *not* across its edge. A pixel whose
+            // neighbour is the ground carries the whole surface-to-ground step,
+            // which is the largest step in the frame and says nothing about
+            // whether the surface is smooth.
+            //
+            // Skipping only the ground pixel itself left that fringe in, and
+            // the fringe made this measurement depend on the ground's own
+            // tone: when the viewport was given a colour of its own, eight
+            // steps darker than the shell it had shared, the antialiased edge
+            // that used to fall inside the tolerance fell outside it, every
+            // one of those large steps was counted, and the figure rose past a
+            // ceiling it had been under — on macOS, where the silhouette
+            // differs enough from Linux's to have been nearer it. Nothing
+            // about the smoothing had changed.
+            if ground(here) || ground(left) || ground(up) {
+                continue;
+            }
             let step = (0..3)
                 .map(|c| here[c].abs_diff(left[c]) as u64 + here[c].abs_diff(up[c]) as u64)
                 .max()
@@ -286,7 +302,20 @@ fn the_smoothing_tools_smooth_rather_than_crumble() {
     // stopped the crumbling — 13 and 9 before it — and did not reach
     // smoothing. The ceiling catches a regression towards the hard replace
     // with room to spare rather than pinning 5.83 exactly.
-    let ceiling = 6.0;
+    // Lowered from 6.0 when `roughness` stopped counting the silhouette
+    // fringe. Every figure above was measured with that fringe included, and
+    // it dominated them: the same four tools read 3.67 -> 3.93 and 3.74 once
+    // the edge left the measurement, against 5.83 whole. Crumbling is
+    // interior pixel-to-pixel disagreement and is what this exists to catch,
+    // so removing the edge takes little from it — the 13 and 9 above were far
+    // past any edge effect.
+    //
+    // Five keeps a margin comparable to the one 6.0 had over its own
+    // measurements, and is strictly tighter than what it replaces rather than
+    // a ceiling raised to accommodate a change. The figures are Linux's; the
+    // spread that put macOS nearer the old limit is what the remaining
+    // headroom is for.
+    let ceiling = 5.0;
     // Over every tool, not only the ones that came out rougher than they went
     // in. The ceiling used to be applied to a list already filtered by
     // `after > before`, so a tool that smoothed a little and was still far

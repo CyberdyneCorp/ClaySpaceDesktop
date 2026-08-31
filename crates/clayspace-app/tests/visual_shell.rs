@@ -31,6 +31,7 @@ fn scene() -> Scene {
             protection,
             intensity,
             health: None,
+            voxel: None,
             sculpt_layers: Vec::new(),
         };
     Scene {
@@ -243,6 +244,7 @@ fn state<'a>(
         scene,
         renaming: None,
         polyframe: false,
+        viewport_profile: clayspace_view::ViewportProfile::default(),
         studio_shading: false,
         cavity: true,
         shadows: true,
@@ -320,11 +322,31 @@ fn build_shell(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQ
             egui::ScrollArea::vertical().show(ui, |ui| shell::right_panel(ui, state, queue));
         });
     egui::CentralPanel::default()
-        .frame(egui::Frame::new().fill(Tokens::ground()))
+        // The viewport's own tone, which is what the renderer clears to. The
+        // application gives this panel no frame at all and lets the cleared
+        // surface show through; a capture has no renderer behind it, so it
+        // paints the same colour by hand. It painted `ground` — the *shell's*
+        // — until the two were separated, and every capture then understated
+        // the one boundary the design draws no line for.
+        .frame(egui::Frame::new().fill(Tokens::viewport()))
         .show(ctx, |ui| {
-            ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                shell::viewport_bar(ui, state, queue);
-            });
+            shell::representation_bar(ui, state, queue);
+            // The viewport is what the bar leaves, measured the way the
+            // composition root measures it — after the bar rather than before.
+            // Taken before it, the rect included the bar's own strip and the
+            // transform readout was drawn across the view presets.
+            let viewport = ui
+                .with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                    shell::viewport_bar(ui, state, queue);
+                    ui.available_rect_before_wrap()
+                })
+                .inner;
+            // The overlays the composition root draws over the scene. Kept in
+            // step with it deliberately: this function is a second copy of
+            // that frame, and a region added to one and not the other is
+            // invisible to every capture here.
+            shell::outline_overlay(ui, viewport, state);
+            shell::transform_hud(ui, viewport, state);
         });
     shell::diagnostics_window(ctx, state, queue);
     shell::attribution_window(ctx, state, queue);
@@ -555,6 +577,25 @@ fn the_shell_draws_every_region() {
             "the {name} rendered as bare viewport ground, so it did not lay out"
         );
     }
+
+    // And the regions that are drawn *inside* the central panel rather than as
+    // panels of their own, which the sampling above cannot see.
+    //
+    // This exists because `build_shell` is a second copy of the composition
+    // root's frame, and a region added to one and not the other is invisible
+    // to every visual test here — which is what happened to the representation
+    // bar: it was wired into the application, drew nothing in any capture, and
+    // nothing failed.
+    let ctx = probe_shell(&state);
+    for representation in clayspace_model::Representation::ALL {
+        assert!(
+            ctx.memory(|memory| memory
+                .data
+                .get_temp::<egui::Rect>(shell::representation_card_id(representation)))
+                .is_some(),
+            "the representation bar drew no card for {representation:?}"
+        );
+    }
 }
 
 #[test]
@@ -615,8 +656,21 @@ fn the_shell_renders_in_every_locale() {
     }
 }
 
+/// How tall a band at the foot of the frame the brush shelf occupies.
+const SHELF_BAND: u32 = 130;
+
+/// The tool's accent moves when the tool does, and does not grow.
+///
+/// Named for what it measures rather than for the old rule. The accent marks
+/// active state now — the active layer's rail wears it too, and a slider's
+/// travelled range is drawn in it — so "the only thing wearing the accent" is
+/// no longer true of the frame, and counting the whole frame would drown the
+/// tool's few hundred pixels in the options bar's fills. The count is taken in
+/// the shelf, which is where the *tool's* mark lives, so what stays asserted
+/// is the thing that mattered: choosing a different brush moves the mark
+/// instead of adding a second one.
 #[test]
-fn the_active_tool_is_the_only_thing_wearing_the_accent() {
+fn the_active_tool_is_the_only_brush_wearing_the_accent() {
     let Some(harness) = Harness::new() else {
         return;
     };
@@ -634,12 +688,12 @@ fn the_active_tool_is_the_only_thing_wearing_the_accent() {
     second.tool = ToolKind::Suavizar;
     let b = capture_shell(&harness, &second, "63-accent-suavizar");
 
-    // Changing which tool is active must move the accent, and the amount of
-    // accent on screen must stay about the same — it marks one thing.
+    // Changing which tool is active must move the accent, and the amount of it
+    // in the shelf must stay about the same — one brush is marked either way.
     let accent = Tokens::accent();
     let count = |image: &clayspace_view::Image| {
         let mut n = 0usize;
-        for y in 0..image.height {
+        for y in (image.height - SHELF_BAND)..image.height {
             for x in 0..image.width {
                 let p = image.pixel(x, y);
                 if p[0].abs_diff(accent.r()) < 24
@@ -658,14 +712,14 @@ fn the_active_tool_is_the_only_thing_wearing_the_accent() {
     let drift = first_count.abs_diff(second_count) as f64 / first_count as f64;
     assert!(
         drift < 0.5,
-        "the accent covers {first_count} pixels for one tool and {second_count} for another; \
-         it should mark exactly one thing either way"
+        "the accent covers {first_count} pixels in the shelf for one tool and \
+         {second_count} for another; it should mark exactly one brush either way"
     );
 
     // The accent ring is a few hundred pixels in a million, so a mean over the
     // whole frame says nothing. Count the pixels that changed in the shelf,
-    // which is where the accent lives.
-    let shelf_top = a.height - 130;
+    // which is where the tool's mark lives.
+    let shelf_top = a.height - SHELF_BAND;
     let mut moved = 0usize;
     for y in shelf_top..a.height {
         for x in 0..a.width {
@@ -1744,15 +1798,29 @@ fn drag(from: egui::Pos2, to: egui::Pos2) -> Vec<Vec<egui::Event>> {
     ]
 }
 
-/// Where a named slider's handle is, asked of the interface that drew it.
+/// Where a named slider is, asked of the interface that drew it.
 ///
 /// Not a pixel coordinate: panels grow, and a coordinate that found the Passos
 /// slider found the cage's Pontos por eixo the day a section landed above it.
-fn slider_centre(state: &ShellState<'_>, label: &str) -> egui::Pos2 {
+fn slider_rect(state: &ShellState<'_>, label: &str) -> egui::Rect {
     probe_shell(state)
         .memory(|memory| memory.data.get_temp::<egui::Rect>(shell::slider_id(label)))
         .unwrap_or_else(|| panic!("the inspector drew no slider labelled {label:?}"))
-        .center()
+}
+
+/// A drag from a named slider's middle, across a fraction of its own width.
+///
+/// A fraction rather than a pixel delta, because what a delta *means* depends
+/// on how wide the control is: the sliders were ninety-six pixels inside their
+/// columns and now span them, and the forty pixels that pushed the cage from
+/// three divisions to four became four tenths of one division. The gesture
+/// these tests mean is "push it a quarter of the way up", so that is what they
+/// should say — a fixed delta is the same coordinate-off-a-screenshot mistake
+/// `slider_rect` exists to avoid, measured sideways.
+fn slider_drag(state: &ShellState<'_>, label: &str, fraction: f32) -> Vec<Vec<egui::Event>> {
+    let rect = slider_rect(state, label);
+    let from = rect.center();
+    drag(from, from + egui::vec2(rect.width() * fraction, 0.0))
 }
 
 #[test]
@@ -1769,13 +1837,11 @@ fn the_steps_slider_sets_the_amount() {
     let report = diagnostics();
     let mut set = state(strings, &scene, &materials, &report);
     set.mask_steps = 5;
-    let steps = slider_centre(&set, strings.label_mask_steps);
-
     capture_shell_after(
         &harness,
         &set,
         "81-mask-steps",
-        &drag(steps, steps + egui::vec2(50.0, 0.0)),
+        &slider_drag(&set, strings.label_mask_steps, 0.25),
         |queue| {
             let steps: Vec<i32> = queue
                 .commands()
@@ -1921,12 +1987,11 @@ fn the_cage_is_raised_from_the_menu_and_worked_in_the_panel() {
 
     // And its own control is reachable, which the mask's stopped being the day
     // a section landed above it.
-    let divisions = slider_centre(&up, strings.label_cage_divisions);
     capture_shell_after(
         &harness,
         &up,
         "93-cage-divisions",
-        &drag(divisions, divisions + egui::vec2(40.0, 0.0)),
+        &slider_drag(&up, strings.label_cage_divisions, 0.25),
         |queue| {
             let asked: Vec<[i32; 3]> = queue
                 .commands()
@@ -1964,8 +2029,10 @@ const VIEW_MENU: egui::Pos2 = egui::Pos2::new(131.0, 13.0);
 /// what a menu-entry equivalent of `slider_id` would fix. Until then, a test
 /// that starts failing here after a menu entry is added is measuring the
 /// addition rather than a fault. It was 218 until the shading and cavity
-/// entries landed above it, which is two rows of twenty-two.
-const LANGUAGE_ENTRY: egui::Vec2 = egui::Vec2::new(5.0, 262.0);
+/// entries landed above it, which is two rows of twenty-two. It was 262 until
+/// the viewport-quality block landed above it: a rule, a heading and its three
+/// profiles, and a rule under them.
+const LANGUAGE_ENTRY: egui::Vec2 = egui::Vec2::new(5.0, 387.0);
 
 #[test]
 fn the_language_can_be_chosen_from_the_menu() {
@@ -2181,19 +2248,16 @@ fn the_opacity_slider_reaches_the_placement() {
     let report = diagnostics();
     let mut set = state(strings, &scene, &materials, &report);
     with_a_reference(&mut set, "rosto-frente");
-    let handle = slider_centre(
-        &set,
-        &shell::reference_slider_name(
-            clayspace_model::RefPlane::Front,
-            strings.label_reference_opacity,
-        ),
+    let opacity = shell::reference_slider_name(
+        clayspace_model::RefPlane::Front,
+        strings.label_reference_opacity,
     );
 
     capture_shell_after(
         &harness,
         &set,
         "91-reference-opacity",
-        &drag(handle, handle - egui::vec2(40.0, 0.0)),
+        &slider_drag(&set, &opacity, -0.25),
         |queue| {
             let placements: Vec<clayspace_model::ReferenceSettings> = queue
                 .commands()
@@ -2260,13 +2324,12 @@ fn the_model_opacity_slider_reaches_the_renderer() {
     let report = diagnostics();
     let mut set = state(strings, &scene, &materials, &report);
     set.show_references = true;
-    let handle = slider_centre(&set, strings.label_surface_opacity);
 
     capture_shell_after(
         &harness,
         &set,
         "92-model-opacity",
-        &drag(handle, handle - egui::vec2(60.0, 0.0)),
+        &slider_drag(&set, strings.label_surface_opacity, -0.3),
         |queue| {
             let asked: Vec<clayspace_model::SurfaceOpacity> = queue
                 .commands()
@@ -2347,7 +2410,7 @@ fn the_shapes_panel_offers_a_shape_and_what_it_is_measured_by() {
         position: [0.4, 0.0, 0.0],
         rotation_axis: [0.0, 1.0, 0.0],
         rotation_angle: 0.0,
-        scale: 1.0,
+        scale: [1.0; 3],
     }];
 
     let mut set = state(strings, &scene, &materials, &report);
@@ -2405,7 +2468,7 @@ fn the_placed_objects_are_listed_where_the_layers_are() {
         position: [0.0; 3],
         rotation_axis: [0.0, 1.0, 0.0],
         rotation_angle: 0.0,
-        scale: 1.0,
+        scale: [1.0; 3],
     }];
 
     let mut set = state(strings, &scene, &materials, &report);
@@ -2450,7 +2513,7 @@ fn a_selected_object_offers_the_manipulators_three_modes() {
         position: [0.0; 3],
         rotation_axis: [0.0, 1.0, 0.0],
         rotation_angle: 0.0,
-        scale: 1.0,
+        scale: [1.0; 3],
     }];
 
     let mut set = state(strings, &scene, &materials, &report);
@@ -3434,5 +3497,859 @@ fn a_costly_subtool_is_offered_the_one_thing_that_helps() {
             .is_some(),
         "the engine advised collapsing the active subtool and the interface \
          drew nothing: the advice is computed and read by nobody again"
+    );
+}
+
+// -- the design foundation ---------------------------------------------------
+
+/// The shelf draws its brushes at the size the scale reserves for a brush.
+///
+/// A regression test. `close-brush-integration-gaps` changed the shelf's
+/// `allocate_exact_size` from `size::SWATCH` to `size::COLOUR_CHIP` — the size
+/// named for one entry in the recent-colour row, which the same commit
+/// introduced — and every brush on the shelf became a sixteen-pixel disc with
+/// its mark illegible inside it. Nothing failed: no test asked how big the
+/// shelf drew its brushes, and the shelf is not a thing an assertion about
+/// commands can see.
+///
+/// So this asks the shelf, from the rect it recorded, rather than reading the
+/// token name off the source — a name in a call proves nothing about what
+/// reached the screen.
+#[test]
+fn the_shelf_draws_its_brushes_at_the_swatch_size() {
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let set = state(strings, &scene, &materials, &report);
+    let ctx = probe_shell(&set);
+
+    let tools = ToolKind::for_representation(set.representation);
+    assert!(!tools.is_empty(), "the fixture's shelf drew no brushes");
+    for tool in tools {
+        let rect = ctx
+            .memory(|memory| {
+                memory
+                    .data
+                    .get_temp::<egui::Rect>(shell::brush_swatch_id(tool))
+            })
+            .unwrap_or_else(|| panic!("the shelf drew no swatch for {tool:?}"));
+        assert_eq!(
+            (rect.width(), rect.height()),
+            (
+                clayspace_view::design::size::SWATCH,
+                clayspace_view::design::size::SWATCH
+            ),
+            "{tool:?}'s swatch is {}×{}, not the scale's brush-swatch size — a \
+             swatch sized from a token named for another control is how the \
+             shelf lost its brushes once already",
+            rect.width(),
+            rect.height(),
+        );
+    }
+}
+
+/// A slider fills the range it has travelled, and no more.
+///
+/// The fill is the control's state rather than ornament, so it has to answer
+/// the value: none at the bottom of the range, and more of the track as the
+/// value climbs. Measured off the pixels inside the slider's own rect, because
+/// what this is about is what a sculptor sees from across a desk.
+#[test]
+fn a_slider_fills_only_the_range_it_has_travelled() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    // Intensidade, which is the first of the three a sculptor adjusts.
+    let accent = Tokens::accent();
+    let fill = |image: &clayspace_view::Image, rect: egui::Rect| {
+        let (x0, y0) = (rect.left().max(0.0) as u32, rect.top().max(0.0) as u32);
+        let (x1, y1) = (
+            (rect.right() as u32).min(image.width),
+            (rect.bottom() as u32).min(image.height),
+        );
+        (y0..y1)
+            .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                let p = image.pixel(x, y);
+                p[0].abs_diff(accent.r()) < 12
+                    && p[1].abs_diff(accent.g()) < 12
+                    && p[2].abs_diff(accent.b()) < 12
+            })
+            .count()
+    };
+
+    let at = |intensity: f32| {
+        let mut set = state(strings, &scene, &materials, &report);
+        set.brush = BrushSettings {
+            intensity,
+            ..set.brush
+        };
+        set
+    };
+
+    let empty = at(0.0);
+    let rect = slider_rect(&empty, strings.label_intensity);
+    let none = capture_shell(&harness, &empty, "63-slider-empty");
+    let half = at(0.5);
+    let middle = capture_shell(&harness, &half, "63-slider-half");
+    let full = at(1.0);
+    let whole = capture_shell(&harness, &full, "63-slider-full");
+
+    let (none, middle, whole) = (fill(&none, rect), fill(&middle, rect), fill(&whole, rect));
+    assert_eq!(
+        none, 0,
+        "a slider at the bottom of its range painted {none} accent pixels — \
+         the fill is the distance travelled, so travelling none of it draws \
+         nothing. See target/visual/63-slider-empty.png"
+    );
+    assert!(
+        middle > 0 && whole > middle,
+        "the fill does not follow the value: {none} accent pixels at 0.0, \
+         {middle} at 0.5, {whole} at 1.0"
+    );
+}
+
+/// The active layer is railed, and the layers that are not are not.
+///
+/// The tone step from `panel` to `raised` is 3.5% of relative luminance and was
+/// the only thing saying which of four subtools a dab would land on. What this
+/// pins is that the rail is *additional*: cover the accent and the row is still
+/// the raised one, which is the design's rule that state never rests on hue
+/// alone.
+#[test]
+fn the_active_layer_wears_a_rail_and_the_others_do_not() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let set = state(strings, &scene, &materials, &report);
+    let image = capture_shell(&harness, &set, "64-layer-rail");
+
+    let accent = Tokens::accent();
+    let ctx = probe_shell(&set);
+    let railed = |key: LayerKey| {
+        let row = ctx
+            .read_response(shell::layer_row_id(key))
+            .map(|response| response.rect)
+            .unwrap_or_else(|| panic!("the layer stack drew no row for {key:?}"));
+        // The rail stands at the row's leading edge, which is outside the
+        // strip the name senses — so the band swept here starts at the panel's
+        // own edge rather than at the name's.
+        let y = row.center().y as u32;
+        (0..row.left() as u32).any(|x| {
+            let p = image.pixel(x, y);
+            p[0].abs_diff(accent.r()) < 12
+                && p[1].abs_diff(accent.g()) < 12
+                && p[2].abs_diff(accent.b()) < 12
+        })
+    };
+
+    let active = set.scene.active.expect("the fixture has an active layer");
+    assert!(
+        railed(active),
+        "the active subtool has no rail, so which layer a dab lands on is \
+         carried by a 3.5% tone step alone. See target/visual/64-layer-rail.png"
+    );
+    for layer in &set.scene.layers {
+        if layer.key == active {
+            continue;
+        }
+        assert!(
+            !railed(layer.key),
+            "{} is not the active layer and is railed as though it were",
+            layer.name
+        );
+    }
+}
+
+/// A slider can still be adjusted from the keyboard.
+///
+/// `egui::Slider` handled the arrow keys; `sculpt_slider` is drawn by hand and
+/// had to be given them back. The control takes focus either way — a
+/// click-and-drag sense is focusable — so without this it would have been
+/// reachable by keyboard and inert once reached, which is worse than not being
+/// reachable at all.
+#[test]
+fn a_slider_answers_the_arrow_keys() {
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let mut set = state(strings, &scene, &materials, &report);
+    set.mask_steps = 5;
+
+    let ctx = egui::Context::default();
+    shell::apply_theme(&ctx);
+    let mut queue = CommandQueue::new();
+    for _ in 0..2 {
+        run_shell_frame(&ctx, &set, &mut queue, Vec::new());
+    }
+
+    // Focus arrives by Tab, not by clicking — which is true of `egui::Slider`
+    // too, and is what the first version of this test got wrong: it clicked,
+    // and a click on a slider sets the value to wherever it landed, so the
+    // assertion passed with the arrow-key handling deleted. Focus is granted
+    // here directly, by the widget id the shell hands out for the purpose.
+    let widget = ctx
+        .memory(|memory| {
+            memory
+                .data
+                .get_temp::<egui::Id>(shell::slider_widget_id(strings.label_mask_steps))
+        })
+        .expect("the inspector drew no Passos slider");
+    ctx.memory_mut(|memory| memory.request_focus(widget));
+    run_shell_frame(&ctx, &set, &mut queue, Vec::new());
+    queue.drain();
+
+    run_shell_frame(
+        &ctx,
+        &set,
+        &mut queue,
+        vec![egui::Event::Key {
+            key: egui::Key::ArrowRight,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        }],
+    );
+
+    // The state handed in still says five, so an arrow press asks for five
+    // plus one step of the one-to-sixteen range.
+    let asked: Vec<i32> = queue
+        .commands()
+        .iter()
+        .filter_map(|command| match command {
+            Command::SetMaskSteps(steps) => Some(*steps),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        asked.iter().any(|steps| *steps > 5),
+        "the arrow key moved the slider nowhere: it emitted {asked:?}, so a \
+         control that takes keyboard focus does nothing once it has it"
+    );
+}
+
+// -- the representation bar --------------------------------------------------
+
+/// The bar states the active layer's representation and nothing else.
+#[test]
+fn the_representation_bar_lights_the_active_representation() {
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let set = state(strings, &scene, &materials, &report);
+    let ctx = probe_shell(&set);
+
+    // Every card is drawn — the bar shows the three as equals rather than
+    // hiding the two the layer is not — and each is a distinct rectangle.
+    let mut seen = Vec::new();
+    for representation in clayspace_model::Representation::ALL {
+        let rect = ctx
+            .memory(|memory| {
+                memory
+                    .data
+                    .get_temp::<egui::Rect>(shell::representation_card_id(representation))
+            })
+            .unwrap_or_else(|| panic!("no card was drawn for {representation:?}"));
+        assert!(
+            !seen.contains(&rect),
+            "two representations were drawn in the same place"
+        );
+        seen.push(rect);
+    }
+}
+
+/// A crossing aims the conversion panel. It does not convert.
+///
+/// The whole reason the cards are inert and the crossings are a separate row:
+/// a crossing costs something, is not always reversible, and the panel is
+/// where its cost is stated and confirmed. A bar that ran the conversion on a
+/// click would be routing around the one safeguard the feature has — so this
+/// asserts the aiming happens *and* that `RunConversion` does not.
+#[test]
+fn a_crossing_aims_the_panel_rather_than_converting() {
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let set = state(strings, &scene, &materials, &report);
+
+    let target = clayspace_model::Representation::Voxel;
+    let at = probe_shell(&set)
+        .memory(|memory| {
+            memory
+                .data
+                .get_temp::<egui::Rect>(shell::convert_to_id(target))
+        })
+        .expect("the bar offered no crossing into voxels")
+        .center();
+
+    let ctx = egui::Context::default();
+    shell::apply_theme(&ctx);
+    let mut queue = CommandQueue::new();
+    for _ in 0..2 {
+        run_shell_frame(&ctx, &set, &mut queue, Vec::new());
+    }
+    queue.drain();
+    for frame in drag(at, at) {
+        run_shell_frame(&ctx, &set, &mut queue, frame);
+        run_shell_frame(&ctx, &set, &mut queue, Vec::new());
+    }
+
+    let commands = queue.commands();
+    let aimed = commands.iter().any(|command| {
+        matches!(
+            command,
+            Command::SetConversion(settings) if settings.direction.to() == target
+        )
+    });
+    assert!(
+        aimed,
+        "clicking the crossing into voxels emitted {commands:?} and never \
+         aimed the conversion at it"
+    );
+    assert!(
+        commands.iter().any(|c| matches!(c, Command::ToggleConvert)),
+        "the crossing aimed the panel and left it shut, so nothing said what \
+         the conversion would cost: {commands:?}"
+    );
+    assert!(
+        !commands.iter().any(|c| matches!(c, Command::RunConversion)),
+        "the bar ran the conversion itself, routing around the panel where \
+         its cost is stated and confirmed: {commands:?}"
+    );
+}
+
+/// The bar sheds its phrases before it sheds anything else.
+///
+/// A ladder, not a switch: the crossings are what a sculptor cannot do
+/// without, the phrases explain a vocabulary once and then repeat themselves,
+/// and the heading is the least load-bearing word in the row. So a narrower
+/// window takes the phrases first and the heading second.
+///
+/// What this does **not** claim is that everything fits at any width. It does
+/// not: at 1024 with both inspectors open the central region is under five
+/// hundred pixels, and three cards carrying `icon + name` plus two crossings
+/// need more than that. The bar scrolls there. Going further would mean cards
+/// of icon alone, and the design requires a representation to be told by icon
+/// *and* text — a shape on its own is exactly what the tests elsewhere here
+/// refuse to let state depend on.
+#[test]
+fn a_narrow_bar_gives_up_its_phrases_first() {
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let set = state(strings, &scene, &materials, &report);
+
+    let card_width = |width: f32| {
+        let ctx = egui::Context::default();
+        shell::apply_theme(&ctx);
+        let mut queue = CommandQueue::new();
+        for _ in 0..2 {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, SHELL_HEIGHT as f32),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| build_shell(ctx, &set, &mut queue),
+            );
+        }
+        let card = ctx
+            .memory(|memory| {
+                memory
+                    .data
+                    .get_temp::<egui::Rect>(shell::representation_card_id(set.representation))
+            })
+            .expect("the bar drew no card for the active representation");
+        // And the crossings are still drawn at either width, whether or not
+        // the row has to scroll to reach them.
+        for direction in clayspace_model::Direction::from_representation(set.representation) {
+            assert!(
+                ctx.memory(|memory| memory
+                    .data
+                    .get_temp::<egui::Rect>(shell::convert_to_id(direction.to())))
+                    .is_some(),
+                "at {width} wide the crossing into {:?} was not drawn at all",
+                direction.to()
+            );
+        }
+        card.width()
+    };
+
+    let roomy = card_width(1600.0);
+    let cramped = card_width(1024.0);
+    assert!(
+        cramped < roomy,
+        "the card is {cramped} wide at 1024 and {roomy} at 1600, so the bar          kept its phrases while the crossings ran off the end"
+    );
+}
+
+// -- the contextual inspector ------------------------------------------------
+
+/// Every representation gets a section, and no two sections share a heading.
+///
+/// A regression test. The voxel display controls stood under `section_geometry`
+/// — and so do the polygon counts, which are a different section entirely. Two
+/// sections with one word between them, in one panel, sharing the fold that
+/// word is keyed by: folding either put both away, and asking the interface
+/// where "Geometry" was got whichever had been drawn last.
+#[test]
+fn each_representation_has_a_section_of_its_own_name() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    // A field layer's section is drawn from the engine's health report, so the
+    // scene it is asked about has to carry one — without it the section is
+    // correctly absent, which is its own test below.
+    let mut reported = scene.clone();
+    let active = reported.active.expect("the fixture has an active layer");
+    for layer in &mut reported.layers {
+        if layer.key == active {
+            layer.health = Some(clayspace_model::FieldHealth {
+                items: 12,
+                safe_step_scale: 0.9,
+                advises_consolidation: false,
+                consolidated: false,
+            });
+        }
+    }
+
+    for (representation, section, fixture) in [
+        (
+            clayspace_model::Representation::Sdf,
+            strings.section_field,
+            &reported,
+        ),
+        (
+            clayspace_model::Representation::Voxel,
+            strings.section_voxels,
+            &scene,
+        ),
+        (
+            clayspace_model::Representation::Mesh,
+            strings.section_mesh,
+            &scene,
+        ),
+    ] {
+        let mut set = state(strings, fixture, &materials, &report);
+        set.representation = representation;
+        let ctx = probe_shell(&set);
+
+        let own = shell_rect(&ctx, shell::heading_id(section))
+            .unwrap_or_else(|| panic!("{representation:?} drew no {section:?} section"));
+        let geometry = shell_rect(&ctx, shell::heading_id(strings.section_geometry))
+            .expect("the geometry section is always drawn");
+        assert_ne!(
+            own, geometry,
+            "{representation:?}'s section and the geometry section were drawn \
+             in the same place, which is what two sections sharing one heading \
+             look like"
+        );
+        assert!(
+            own.left() >= SHELL_WIDTH as f32 - region::RIGHT,
+            "{section:?} does not stand in the right panel: {own:?}"
+        );
+    }
+
+    // And with no report there is no section, rather than a heading standing
+    // over nothing. Its height is not free: the right region already runs past
+    // its own bottom, and an empty section pushed the mask controls off it.
+    let bare = state(strings, &scene, &materials, &report);
+    assert!(
+        shell_rect(
+            &probe_shell(&bare),
+            shell::heading_id(strings.section_field)
+        )
+        .is_none(),
+        "a field with no health report still drew a {:?} heading, with nothing          under it",
+        strings.section_field
+    );
+}
+
+/// Folding the geometry section leaves the representation's own section open.
+///
+/// The other half of the same regression, and the half a sculptor actually
+/// meets: on a grid, putting the polygon counts away also put the display
+/// controls away, because both were keyed by the word "Geometry".
+#[test]
+fn folding_one_section_leaves_the_other_open() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let mut set = state(strings, &scene, &materials, &report);
+    set.representation = clayspace_model::Representation::Voxel;
+
+    let geometry = shell_rect(
+        &probe_shell(&set),
+        shell::heading_id(strings.section_geometry),
+    )
+    .expect("no geometry heading was drawn");
+
+    // Folded, then asked of a frame drawn afterwards with both slots wiped —
+    // a heading writes its row down every frame it is drawn and the slot is
+    // never cleared, so a stale rect would answer for a section that is gone.
+    let ctx = probe_shell_after(&set, &[left_click(geometry.center())]);
+    let voxels = shell::heading_id(strings.section_voxels);
+    let polygons = shell::readout_id(strings.label_polygons);
+    ctx.data_mut(|data| {
+        data.remove::<egui::Rect>(voxels);
+        data.remove::<egui::Rect>(polygons);
+    });
+    run_shell_frame(&ctx, &set, &mut CommandQueue::new(), Vec::new());
+
+    assert!(
+        shell_rect(&ctx, polygons).is_none(),
+        "the geometry section was folded and its counts are still drawn"
+    );
+    assert!(
+        shell_rect(&ctx, voxels).is_some(),
+        "folding the geometry section also folded the voxel section, so the \
+         two are still sharing one heading"
+    );
+}
+
+// -- the shelf's filters -----------------------------------------------------
+
+/// Drives the shelf with a filter chosen, and hands back the commands.
+fn shelf_with_filter(
+    set: &ShellState<'_>,
+    filter: Option<clayspace_model::Representation>,
+    then: &[Vec<egui::Event>],
+) -> (egui::Context, CommandQueue) {
+    let ctx = egui::Context::default();
+    shell::apply_theme(&ctx);
+    let mut queue = CommandQueue::new();
+    ctx.data_mut(|data| data.insert_temp(shell::shelf_filter_id(), filter));
+    for _ in 0..2 {
+        run_shell_frame(&ctx, set, &mut queue, Vec::new());
+    }
+    queue.drain();
+    for frame in then {
+        run_shell_frame(&ctx, set, &mut queue, frame.clone());
+        run_shell_frame(&ctx, set, &mut queue, Vec::new());
+    }
+    (ctx, queue)
+}
+
+/// By default the shelf shows what the active layer can be sculpted with.
+///
+/// The filter is a browsing aid laid on top of that behaviour, not a
+/// replacement for it: with nothing chosen the shelf is exactly what it was.
+#[test]
+fn the_shelf_shows_the_active_layers_brushes_unless_asked_otherwise() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let set = state(strings, &scene, &materials, &report);
+
+    let (ctx, _) = shelf_with_filter(&set, None, &[]);
+    let drawn = |tool: clayspace_model::ToolKind| {
+        ctx.memory(|memory| {
+            memory
+                .data
+                .get_temp::<egui::Rect>(shell::brush_swatch_id(tool))
+        })
+        .is_some()
+    };
+    for tool in clayspace_model::ToolKind::ALL {
+        assert_eq!(
+            drawn(tool),
+            tool.exists_on(set.representation),
+            "{tool:?} is drawn: {}, but it exists on {:?}: {}",
+            drawn(tool),
+            set.representation,
+            tool.exists_on(set.representation)
+        );
+    }
+}
+
+/// Browsing another representation lists its brushes and refuses to pick one.
+///
+/// The point of the filter is to answer "what would crossing to a mesh give
+/// me?" without crossing first. What it must not do is let a sculptor select a
+/// brush their layer has no verb for — that would be a click that does
+/// nothing, which is the failure the shelf's absent-rather-than-disabled rule
+/// exists to avoid in the first place.
+#[test]
+fn browsing_another_representation_shows_its_brushes_and_picks_none() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let set = state(strings, &scene, &materials, &report);
+    assert_eq!(set.representation, clayspace_model::Representation::Sdf);
+
+    let elsewhere = clayspace_model::ToolKind::ALL
+        .into_iter()
+        .find(|tool| {
+            tool.exists_on(clayspace_model::Representation::Mesh)
+                && !tool.exists_on(clayspace_model::Representation::Sdf)
+        })
+        .expect("no tool is mesh-only, so this test has nothing to browse");
+
+    let (ctx, _) = shelf_with_filter(&set, Some(clayspace_model::Representation::Mesh), &[]);
+    let at = ctx
+        .memory(|memory| {
+            memory
+                .data
+                .get_temp::<egui::Rect>(shell::brush_swatch_id(elsewhere))
+        })
+        .unwrap_or_else(|| panic!("browsing the mesh brushes did not draw {elsewhere:?}"))
+        .center();
+
+    let (_, queue) = shelf_with_filter(
+        &set,
+        Some(clayspace_model::Representation::Mesh),
+        &[left_click(at)],
+    );
+    assert!(
+        !queue
+            .commands()
+            .iter()
+            .any(|command| matches!(command, Command::SelectTool(_))),
+        "clicking {elsewhere:?} while it was only being browsed selected it: \
+         {:?}. The active layer has no verb for it, so the stroke would do \
+         nothing",
+        queue.commands()
+    );
+}
+
+/// Choosing a filter is interface state and no command's business.
+#[test]
+fn choosing_a_shelf_filter_emits_nothing() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let set = state(strings, &scene, &materials, &report);
+
+    let (ctx, _) = shelf_with_filter(&set, None, &[]);
+    let at = ctx
+        .memory(|memory| {
+            memory
+                .data
+                .get_temp::<egui::Rect>(shell::shelf_filter_chip_id(Some(
+                    clayspace_model::Representation::Mesh,
+                )))
+        })
+        .expect("the shelf drew no mesh filter")
+        .center();
+
+    let (after, queue) = shelf_with_filter(&set, None, &[left_click(at)]);
+    assert!(
+        queue.is_empty(),
+        "choosing a shelf filter emitted {:?}; which brushes are *shown* is \
+         view state and changes no document",
+        queue.commands()
+    );
+    assert_eq!(
+        after.data(|data| data
+            .get_temp::<Option<clayspace_model::Representation>>(shell::shelf_filter_id())
+            .flatten()),
+        Some(clayspace_model::Representation::Mesh),
+        "clicking the mesh filter did not choose it"
+    );
+}
+
+// -- the viewport's quality --------------------------------------------------
+
+/// Where the third viewport profile falls once the Vista menu is open.
+///
+/// A pixel offset, with the same caveat `LANGUAGE_ENTRY` carries: it moves
+/// whenever an entry lands above it, and a failure here after a menu edit is
+/// measuring the edit.
+const PRESENTATION_ENTRY: egui::Vec2 = egui::Vec2::new(5.0, 315.0);
+
+/// Choosing a viewport profile reaches the governor's own memory, and emits no
+/// command.
+///
+/// The profile decides what an *idle* frame is drawn with and touches no
+/// document, so it never became a command — and could not have: it is a view
+/// type, and commands live in the layer underneath. What this pins is the
+/// other half of that arrangement, which is that the choice is actually left
+/// somewhere the composition root reads. The governor had three profiles and
+/// the guide's exact three tiers from the day it was written, and nothing in
+/// the application had ever set one.
+#[test]
+fn a_viewport_profile_is_chosen_from_the_menu_and_emits_nothing() {
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let set = state(strings, &scene, &materials, &report);
+
+    let ctx = probe_shell_after(
+        &set,
+        &[
+            left_click(VIEW_MENU),
+            left_click(VIEW_MENU + PRESENTATION_ENTRY),
+        ],
+    );
+    assert_eq!(
+        ctx.data(
+            |data| data.get_temp::<clayspace_view::ViewportProfile>(shell::viewport_profile_id())
+        ),
+        Some(clayspace_view::ViewportProfile::Presentation),
+        "choosing Apresentação left nothing for the composition root to read. \
+         See target/visual/107-language-menu.png for where the entries fall"
+    );
+
+    let mut queue = CommandQueue::new();
+    let ctx = egui::Context::default();
+    shell::apply_theme(&ctx);
+    for _ in 0..2 {
+        run_shell_frame(&ctx, &set, &mut queue, Vec::new());
+    }
+    queue.drain();
+    for frame in [
+        left_click(VIEW_MENU),
+        left_click(VIEW_MENU + PRESENTATION_ENTRY),
+    ] {
+        run_shell_frame(&ctx, &set, &mut queue, frame);
+        run_shell_frame(&ctx, &set, &mut queue, Vec::new());
+    }
+    assert!(
+        queue.is_empty(),
+        "choosing a viewport profile emitted {:?}; it changes what a frame is \
+         drawn with and never what is drawn",
+        queue.commands()
+    );
+}
+
+// -- the transform readout ---------------------------------------------------
+
+/// The readout stands beside the manipulator, and only where it has an answer.
+///
+/// A manipulator can show that something moved and never what the numbers are,
+/// which is the question asked the moment two objects have to line up. A cage's
+/// target is a set of control points and a layer's is everything it holds —
+/// neither has a single position, rotation and scale — so the readout is shown
+/// for a placed object and nothing else.
+#[test]
+fn the_transform_readout_is_shown_for_a_placed_object_alone() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let bare = state(strings, &scene, &materials, &report);
+    assert!(
+        shell_rect(&probe_shell(&bare), shell::transform_hud_id()).is_none(),
+        "the transform readout was drawn with no manipulator up"
+    );
+
+    let id = clayspace_model::ObjectId {
+        layer: clayspace_model::LayerKey(1),
+        node: 2,
+    };
+    let objects = [clayspace_model::SceneObject {
+        id,
+        source: clayspace_model::ObjectSource::Shape(clayspace_model::Shape::Sphere),
+        parameters: clayspace_model::Shape::Sphere.defaults(),
+        combine: clayspace_model::CombineSettings::default(),
+        position: [0.0125, 0.0, -0.0032],
+        rotation_axis: [0.0, 1.0, 0.0],
+        rotation_angle: 15f32.to_radians(),
+        scale: [1.0; 3],
+    }];
+    let mut placed = state(strings, &scene, &materials, &report);
+    placed.objects = &objects;
+    placed.selected_object = Some(id);
+    placed.gizmo_target = Some(clayspace_model::GizmoTarget::Object(id));
+
+    if let Some(harness) = Harness::new() {
+        capture_shell(&harness, &placed, "94-transform-hud");
+    }
+    let card = shell_rect(&probe_shell(&placed), shell::transform_hud_id())
+        .expect("a manipulator on a placed object drew no transform readout");
+    let viewport = egui::Rect::from_min_max(
+        egui::pos2(region::RAIL + region::LEFT, 0.0),
+        egui::pos2(
+            SHELL_WIDTH as f32 - region::RIGHT,
+            SHELL_HEIGHT as f32 - region::STATUS - region::SHELF,
+        ),
+    );
+    assert!(
+        viewport.contains_rect(card),
+        "the readout at {card:?} is not inside the viewport {viewport:?}"
+    );
+
+    // A cage's manipulator has no single transform to report, so it gets none.
+    let mut caged = state(strings, &scene, &materials, &report);
+    caged.objects = &objects;
+    caged.gizmo_target = Some(clayspace_model::GizmoTarget::Layer(
+        scene.active.expect("an active layer"),
+    ));
+    assert!(
+        shell_rect(&probe_shell(&caged), shell::transform_hud_id()).is_none(),
+        "the readout answered for a whole layer, which has no one position"
+    );
+}
+
+/// A grid layer says how coarse its cells are, and how many hold anything.
+///
+/// Both have been readable from the engine throughout — `clay_voxel_size` and
+/// `clay_voxel_occupied_count`, bound in `claycore` and read only inside the
+/// adapter — so the interface could say a layer held voxels and not how coarse
+/// they were, which is the number that decides what detail the grid can hold at
+/// all.
+#[test]
+fn a_grid_says_what_it_is_made_of() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let mut measured = scene();
+    let active = measured.active.expect("an active layer");
+    for layer in &mut measured.layers {
+        if layer.key == active {
+            layer.representation = clayspace_model::Representation::Voxel;
+            layer.voxel = Some(clayspace_model::VoxelStats {
+                cell_size: 0.05,
+                occupied: 41_237,
+            });
+        }
+    }
+    let mut set = state(strings, &measured, &materials, &report);
+    set.representation = clayspace_model::Representation::Voxel;
+
+    let ctx = probe_shell(&set);
+    for label in [strings.label_voxel_cell, strings.label_voxel_occupied] {
+        assert!(
+            shell_rect(&ctx, shell::readout_id(label)).is_some(),
+            "the voxel section drew no {label:?} row"
+        );
+    }
+
+    // And a field says nothing about cells, because it has none.
+    let bare = scene();
+    let plain = state(strings, &bare, &materials, &report);
+    assert!(
+        shell_rect(
+            &probe_shell(&plain),
+            shell::readout_id(strings.label_voxel_cell)
+        )
+        .is_none(),
+        "a field layer was given a cell size"
     );
 }

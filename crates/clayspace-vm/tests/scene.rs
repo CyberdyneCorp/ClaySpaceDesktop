@@ -44,6 +44,7 @@ impl FakeScene {
             protection: Protection::default(),
             intensity: 100,
             health: None,
+            voxel: None,
             sculpt_layers: Vec::new(),
         };
         Self {
@@ -167,6 +168,7 @@ impl SceneModel for FakeScene {
             protection: Protection::default(),
             intensity: 100,
             health: None,
+            voxel: None,
             sculpt_layers: Vec::new(),
         });
         self.active = Some(key);

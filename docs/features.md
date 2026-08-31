@@ -2079,14 +2079,135 @@ and viewport bars. See *Not built yet*.
 ## Interface
 
 The regions from the design: a menu bar, a tool options bar, a left region with
-the scene tree, layer stack and sculpt settings, a central viewport, a right
-region with material, geometry and brush inspectors — and, while either is up,
-the shapes and boolean sections — a brush shelf, and a status area with a
-memory meter, the active backend and the working unit.
+the scene tree, layer stack and sculpt settings, a representation bar and the
+central viewport under it, a right region with material, geometry and brush
+inspectors — and, while either is up, the shapes and boolean sections — a brush
+shelf, and a status area with a memory meter, the active backend and the
+working unit.
 
-The **accent marks the active brush and nothing else**. Layer selection is
-indicated by surface tone and weight; a test asserts the accent's coverage
-stays about constant as the active tool changes, so it cannot quietly spread.
+**The three representations stand above the viewport, as equals.** One card
+each: an icon of a distinct shape, the representation's name, and a phrase
+saying what it is. The active one is raised and railed, in the same grammar the
+active layer row wears. The other two are shown rather than hidden, because the
+point of the bar is that a sculptor can see what the alternatives are — the
+interface used to say this in a three-letter tag on a layer row and a line of
+text at the far end of the viewport bar, and that line was half untranslated,
+drawing the engine's own word under a translated prefix.
+
+**A card converts nothing.** Crossing between representations costs work and is
+not always reversible, so it stays behind the conversion panel where the cost
+is stated and confirmed. The crossings are a row beside the cards, and they are
+the ones the domain actually declares from the active representation rather
+than a written list — invoking one aims the panel and opens it, and a panel
+already open is aimed rather than closed.
+
+**The manipulator keeps its size, and says what the numbers are.** Its arms are
+a share of the camera's distance, so it stays the same size to the hand whether
+the sculptor is looking at the whole scene or has zoomed into a pore — true of
+a placed object and a whole subtool since they were built, and true of a
+deformation cage now: the cage's was a share of the cage alone, so it shrank
+with the camera while an identical-looking widget on the object beside it held
+still.
+
+While a manipulator is on a placed object, its transform stands in the
+viewport's lower-leading corner: position, rotation, the axis that rotation is
+about, and scale. A widget shows that something moved and never by how much,
+which is the first question asked when two objects have to line up — and
+nothing in the interface reported a placed object's position at all. Shown for
+a placed object alone: a cage's target is a set of control points and a layer's
+is everything it holds, and neither has one position to report.
+
+An axis and one angle for rotation, because that is what the engine's ABI
+speaks — it stores a quaternion and calls the axis and angle *a* representative
+rather than the representation, so three Euler angles would be one of several
+answers and would change when nothing had moved.
+
+**A placed object stretches per axis.** The manipulator's three scale boxes are
+offered on it: a box on an axis stretches that axis, the centre handle takes
+all three. A whole subtool still scales uniformly, because the engine's *layer*
+transform takes one factor where its *node* transform takes three — the handles
+are offered exactly where they can be applied.
+
+They were hidden on everything but a deformation cage for as long as nothing
+had bound `clay_layer_set_transform_nonuniform`, which the engine has carried
+since ABI 0.54.0 against a pin of 0.60.0. The belief that "every transform in
+the engine's interface takes a single scale factor" was written into the
+domain, the manipulator, the readout and the specification, and nothing went
+back to check it. A capsule could not be squashed into a slot.
+
+What a stretch costs is not what one would guess: the field stays 1-Lipschitz,
+so the safe step scale is unchanged and a marcher takes the steps it always
+did. What is lost is exactness — the value becomes a bound on the distance,
+short by at most the ratio of the largest axis to the smallest and never an
+overestimate — which matters to a consumer reading it *as* a distance and to
+nothing else. A uniform value compiles to identical tape.
+
+**The floor dissolves rather than ending.** The grid fades out before it
+reaches its own extent, so it draws no rectangle around the scene, and each
+line is cut into segments so the fade varies along it — a line drawn as two
+vertices takes the interpolation between its ends, and both ends of a grid line
+are equally far from the middle, so a per-line fade dissolves nothing. Every
+fifth line is major, with the two axes strongest, so a distance can be counted
+rather than estimated.
+
+The fade is by distance from the origin and not from the camera. Overlay
+geometry is uploaded when the overlays change rather than every frame, so a
+camera-dependent colour would rebuild and re-upload the whole grid on every
+orbit; and the form sits at the origin, so a grid densest beneath the sculpt
+says the same thing from every camera instead of changing when the sculptor
+zooms.
+
+**The viewport's quality profile is chosen from the Vista menu** — Desempenho,
+Escultura, Apresentação — beside the shading terms it belongs with. The three
+tiers and the stroke-time degradation between them have existed since the
+renderer was written, and nothing in the application had ever selected one: the
+governor was built with the default and never told otherwise. Choosing a
+profile changes what an *idle* frame is drawn with and never what is drawn, so
+it emits no command and enters no history. It is not remembered across
+launches, for the same reason the shelf has no favourites.
+
+**The inspector answers what is being sculpted**, in one section that keeps its
+place while its contents change: a field states how many items its edit list
+holds and whether it has been collapsed, a grid its cell size, how many cells
+hold anything, and how it is drawn, a mesh
+the contract its brushes work under — they move the vertices that are there and
+neither add nor remove any, which is the reason Inflar and Suavizar behave
+differently on a mesh than on a field. Each is headed by the representation it
+describes. The grid's controls used to stand under `GEOMETRIA`, which is also
+the polygon counts' heading, and a fold is keyed by that word: putting one away
+put the other away too.
+
+Only what the domain holds. Every per-layer field quality, evaluation
+resolution, surface offset, voxel size, grid bounds, normals control and
+subdivision level the concept depicts is absent, because none of them is a
+value this application or the pinned engine can express for a layer — a control
+for something nothing reads is an interface that lies about what the program
+does. Three things that do exist stay where they are rather than being
+duplicated: the combine vocabulary belongs to the stroke and stands in the
+options bar, a grid's recorded passes are nested under the layer they were
+recorded on, and the offer to collapse a costly field appears under the layer
+list only while the engine is advising it.
+
+As the window narrows the bar gives up its phrases first, into the tooltip,
+then its heading, and never its crossings. A card always keeps its icon *and*
+its name: below about five hundred pixels of central region the bar scrolls,
+because a representation told by shape alone is exactly what the contrast tests
+elsewhere refuse to allow.
+
+The **accent marks active state**, at the scale of a rail, a ring or a label
+and never as a fill: the active brush wears a ring and an accented name, the
+layer being sculpted wears a two-pixel rail at its leading edge, and a slider's
+travelled range is drawn in it. It marks nothing else — no panel chrome, no
+heading, no border, no hover. A test asserts the accent's coverage *in the
+shelf* stays about constant as the active tool changes, so the brush mark
+cannot quietly spread.
+
+The rail is an addition to the tone step and not a replacement for it. The
+active row is raised, railed, and set in primary rather than secondary text, so
+covering the hue still leaves it identifiable — which the design requires and a
+test checks. It earned a mark because tone alone could not carry it: `panel` to
+`raised` is three and a half per cent of relative luminance, and it was the only
+thing saying which of four subtools a dab would land on.
 **The tool rail on the leading edge** — the region the design named and the
 first build left empty — holds, as icons with their word and key on hover:
 mask painting; frame, polyframe and the reference images; the shapes and
@@ -2112,6 +2233,42 @@ with, cut out of its square — and Terracota reads warm and Polido reads shiny
 before either is read. Clicking it cycles the materials, and says so on hover.
 The view chips and the symmetry chips name their key on hover, so `1`–`4` and
 `X` `Y` `Z` are learnt where they are used rather than from this page.
+
+**A slider shows how far into its range it is.** One widget draws every slider
+in the shell: a track in the ground's tone with the range already travelled
+filled in the accent, a knob restrained at rest that lifts under the pointer,
+and the value monospaced and right-aligned above it. The fill is state rather
+than ornament — it says what the digits cannot say without being read, which is
+what a sculptor adjusting Intensidade mid-stroke needs — so it spans the track's
+start to the knob and a value at the bottom of its range draws none at all.
+Before this the three sliders at the head of the options bar were a hairline
+with a grey knob on it.
+
+**The viewport is darker than the shell around it.** Four surface tones now,
+ordered: the sculpting viewport, the application ground, a panel on it, and a
+raised row. The viewport and the shell were one colour, so the sculpt sat on
+exactly the tone the panels were built from and there was no edge between them
+— the design draws no outline around the viewport, so the tone step is the only
+boundary there is. The grid's two tones dropped with it, keeping the distance
+above their own ground that they were tuned for rather than becoming more
+prominent as a side effect.
+
+**The shelf can be browsed.** A column at its leading edge holds Disponíveis
+and one entry per representation: the first is the sculpt workflow, unchanged
+and the default, and the others answer the question the representation bar
+raises — a sculptor who can see that Voxels exists, and what crossing to it
+would cost, still had no way to find out which brushes they would get short of
+converting and looking. While browsing, a brush the active layer has no verb
+for is drawn dim, says so on hover, and cannot be picked; a brush that could be
+clicked to no effect is exactly what the shelf's absent-rather-than-disabled
+rule exists to prevent. Which set is shown is interface state: it emits no
+command and is forgotten when the application closes.
+
+There is no favourites filter yet, and the reason is worth writing down: there
+is nowhere to keep one. `layout.rs` holds the panel sizes and collapse state
+the design specifies, is exported from the view crate, and is used by nothing —
+the regions are drawn at fixed widths. A favourites list that forgot itself
+every launch is a promise the application would break each time it opened.
 
 The active swatch also stands on a raised backdrop, and a swatch lifts the same
 way under the pointer — so the active brush is carried by tone as well as by

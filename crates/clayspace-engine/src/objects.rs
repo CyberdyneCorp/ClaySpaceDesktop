@@ -39,8 +39,11 @@ pub struct PlacedObject {
     pub position: [f32; 3],
     pub rotation_axis: [f32; 3],
     pub rotation_angle: f32,
-    /// Uniform: the engine's transforms take one factor, not three.
-    pub scale: f32,
+    /// One factor per axis, applied in the object's own local frame.
+    ///
+    /// Uniform once, on the belief that "the engine's transforms take one
+    /// factor, not three". A node's has taken three since ABI 0.54.0.
+    pub scale: [f32; 3],
 }
 
 impl PlacedObject {
@@ -65,7 +68,7 @@ impl PlacedObject {
             // get wrong."
             rotation_axis: [0.0, 1.0, 0.0],
             rotation_angle: 0.0,
-            scale: 1.0,
+            scale: [1.0; 3],
         }
     }
 
@@ -266,7 +269,10 @@ pub fn write_table(path: &std::path::Path, objects: &[PlacedObject]) -> std::io:
             object.rotation_axis[1],
             object.rotation_axis[2],
             object.rotation_angle,
-            object.scale,
+            // The first component stands where the single uniform scale
+            // stood, so a build that predates the per-axis one reads a
+            // squashed object as evenly scaled rather than failing to read it.
+            object.scale[0],
         ] {
             out.push_str(&format!(" {value}"));
         }
@@ -274,6 +280,15 @@ pub fn write_table(path: &std::path::Path, objects: &[PlacedObject]) -> std::io:
         for value in &object.parameters {
             out.push_str(&format!(" {value}"));
         }
+        // The other two components, appended after the counted run rather
+        // than beside the first. A positional format cannot grow in the
+        // middle: a reader that predates them takes the fields it knows in
+        // order, stops at the end of the parameters, and never looks at these
+        // — so an older build opens a document written by this one and reads
+        // every object as uniformly scaled, which is a degradation and not a
+        // corruption. Growing in the middle would have shifted the parameter
+        // count and made the row unreadable.
+        out.push_str(&format!(" {} {}", object.scale[1], object.scale[2]));
         out.push('\n');
     }
     std::fs::write(path, out)
@@ -337,7 +352,8 @@ fn read_row(line: &str) -> Option<PlacedObject> {
         number(&mut fields)?,
     ];
     let rotation_angle = number(&mut fields)?;
-    let scale = number(&mut fields)?;
+    // Where the uniform scale stood, and now the first of three.
+    let scale_x = number(&mut fields)?;
 
     let count: usize = fields.next()?.parse().ok()?;
     let mut parameters = Vec::with_capacity(count.min(16));
@@ -353,6 +369,15 @@ fn read_row(line: &str) -> Option<PlacedObject> {
         Some(shape) => shape.sanitised(&parameters),
         None => Vec::new(),
     };
+    // Absent in anything written before the per-axis scale, which is what
+    // makes those documents still open: no pair, so the one factor is all
+    // three. A half-written pair falls back the same way rather than taking
+    // one component and inventing the other.
+    let scale = match (number(&mut fields), number(&mut fields)) {
+        (Some(y), Some(z)) => [scale_x, y, z],
+        _ => [scale_x; 3],
+    };
+
     Some(PlacedObject {
         layer,
         node,
@@ -375,6 +400,105 @@ mod tests {
         assert_eq!(kind_of(claycore::prim::STROKE), ItemKind::Stroke);
         assert_eq!(kind_of(claycore::prim::SWEPT), ItemKind::Curve);
         assert_eq!(kind_of(claycore::prim::ARMATURE), ItemKind::Armature);
+    }
+
+    /// One object, with a scale to round-trip.
+    fn placed(scale: [f32; 3]) -> PlacedObject {
+        PlacedObject {
+            layer: clayspace_model::LayerKey(3),
+            node: NodeId::restored(9),
+            source: ObjectSource::Shape(Shape::Capsule),
+            parameters: Shape::Capsule.defaults(),
+            combine: CombineSettings::default(),
+            position: [1.5, -2.0, 0.25],
+            rotation_axis: [0.0, 1.0, 0.0],
+            rotation_angle: 0.5,
+            scale,
+        }
+    }
+
+    /// A squashed object survives being written and read back.
+    #[test]
+    fn a_per_axis_scale_round_trips_through_the_side_car() {
+        let directory = std::env::temp_dir().join("clayspace-objects-per-axis");
+        std::fs::create_dir_all(&directory).expect("a place to write");
+        let path = directory.join("squashed.clay.objects");
+        let object = placed([2.0, 1.0, 0.5]);
+        write_table(&path, std::slice::from_ref(&object)).expect("written");
+
+        let read = read_table(&path);
+        assert_eq!(read.len(), 1, "the row did not come back");
+        assert_eq!(
+            read[0].scale, object.scale,
+            "the stretch was lost between writing and reading"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A document written before the per-axis scale still opens.
+    ///
+    /// The reason the two extra components are appended *after* the counted
+    /// run of parameters rather than beside the first: a positional format
+    /// cannot grow in the middle. This is a row exactly as the previous
+    /// version wrote one — a single scale, then the parameter count and its
+    /// values, and nothing after — and it has to read as evenly scaled rather
+    /// than being dropped.
+    #[test]
+    fn a_row_written_before_the_per_axis_scale_reads_as_uniform() {
+        let defaults = Shape::Capsule.defaults();
+        let mut row = format!(
+            "3 9 {} {} {} {} 1.5 -2 0.25 0 1 0 0.5 1.75 {}",
+            Shape::Capsule.key(),
+            clayspace_model::Combine::default().key(),
+            clayspace_model::BlendProfile::default().key(),
+            clayspace_model::CombineSettings::default().radius,
+            defaults.len(),
+        );
+        for value in &defaults {
+            row.push_str(&format!(" {value}"));
+        }
+
+        let object = read_row(&row).expect("a row from the previous format did not read at all");
+        assert_eq!(
+            object.scale, [1.75; 3],
+            "the one scale a previous version wrote should be all three"
+        );
+        assert_eq!(object.position, [1.5, -2.0, 0.25]);
+    }
+
+    /// And a row from this version is readable by the previous one's rules:
+    /// everything it knows about is in the same place, in the same order.
+    #[test]
+    fn the_fields_a_previous_version_reads_have_not_moved() {
+        let directory = std::env::temp_dir().join("clayspace-objects-order");
+        std::fs::create_dir_all(&directory).expect("a place to write");
+        let path = directory.join("order.clay.objects");
+        write_table(&path, &[placed([2.0, 1.0, 0.5])]).expect("written");
+        let text = std::fs::read_to_string(&path).expect("read back");
+        let row = text.lines().nth(1).expect("a row");
+        let fields: Vec<&str> = row.split_whitespace().collect();
+
+        // Six named fields (layer, node, source, op, blend, radius), then
+        // eight numbers (a position, a rotation axis, an angle, and the first
+        // scale), then the parameter count and its run — the layout that was
+        // there before, with the extra two after everything it describes.
+        const NAMED: usize = 6;
+        const NUMBERS: usize = 8;
+        let count: usize = fields[NAMED + NUMBERS]
+            .parse()
+            .unwrap_or_else(|_| panic!("no parameter count at {}: {fields:?}", NAMED + NUMBERS));
+        assert_eq!(
+            fields.len(),
+            NAMED + NUMBERS + 1 + count + 2,
+            "a field moved: a reader that predates the per-axis scale walks \
+             this row by position and would take the wrong one — {fields:?}"
+        );
+        assert_eq!(
+            fields[NAMED + NUMBERS - 1],
+            "2",
+            "the first scale is not where it was: {fields:?}"
+        );
+        let _ = std::fs::remove_file(&path);
     }
 
     /// And why the table has to record objecthood rather than derive it: a

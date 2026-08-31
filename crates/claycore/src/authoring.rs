@@ -1113,6 +1113,60 @@ impl Document {
         )
     }
 
+    /// The same, with a scale per axis.
+    ///
+    /// Present in the ABI since 0.54.0 and bound by nothing here until now,
+    /// which is why every transform in this application took one factor: the
+    /// engine has been able to squash a capsule into a slot for six minor
+    /// versions and the wrapper never offered it.
+    ///
+    /// The engine is exact about what it costs, and it is not what one would
+    /// guess. The scale is applied innermost, in the node's own local frame,
+    /// and the field stays 1-Lipschitz — so the safe step scale is unchanged
+    /// and a marcher takes the steps it always did. What is lost is
+    /// *exactness*: the value becomes a bound on the distance rather than the
+    /// distance, short by at most the ratio of the largest axis to the
+    /// smallest, and never an overestimate. That matters to a consumer that
+    /// reads the value *as* a distance and to nothing else. A uniform value
+    /// here, `[1.0; 3]` included, keeps the field exact and compiles to
+    /// identical tape.
+    ///
+    /// Every component must be positive. A zero collapses the item onto a
+    /// plane and has no inverse; a negative one mirrors it, which the layer
+    /// mirror already expresses and which would silently flip the winding of a
+    /// boolean.
+    ///
+    /// This call and [`Self::set_node_transform`] each write the *whole*
+    /// transform, which settles what the uniform one does to a node carrying a
+    /// per-axis scale: it collapses it. That is the ABI's own rule — it does
+    /// not do partial updates — so a caller that wants to move a squashed node
+    /// without unsquashing it comes here rather than there.
+    pub fn set_node_transform_nonuniform(
+        &mut self,
+        layer: LayerId,
+        node: NodeId,
+        position: [f32; 3],
+        rotation_axis: [f32; 3],
+        rotation_angle: f32,
+        scale: [f32; 3],
+    ) -> Result<()> {
+        // SAFETY: valid handle and three three-float inputs.
+        check(
+            unsafe {
+                sys::clay_layer_set_transform_nonuniform(
+                    self.as_ptr(),
+                    layer.0,
+                    node.0,
+                    position.as_ptr(),
+                    rotation_axis.as_ptr(),
+                    rotation_angle,
+                    scale.as_ptr(),
+                )
+            },
+            "clay_layer_set_transform_nonuniform",
+        )
+    }
+
     /// Replaces an existing node's shape.
     ///
     /// The engine is explicit that this keeps what belongs to the node rather

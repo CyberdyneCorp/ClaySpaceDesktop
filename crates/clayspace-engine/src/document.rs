@@ -270,6 +270,7 @@ impl Layer {
             // Filled by the document, which is the only thing that can ask the
             // engine — see `ClayDocument::field_health`.
             health: None,
+            voxel: None,
             sculpt_layers: self.sculpt_layers.clone(),
         }
     }
@@ -940,6 +941,28 @@ impl ClayDocument {
                 .ok()
                 .flatten()
                 .is_some(),
+        })
+    }
+
+    /// What a grid layer is made of, where the layer is one.
+    ///
+    /// Read beside the field's health and on the same terms: cheap, asked per
+    /// scene rather than per frame, and `None` where the question does not
+    /// apply. `clay_voxel_size` and `clay_voxel_occupied_count` have been
+    /// bound in `claycore` throughout and were read only inside this adapter,
+    /// so the interface could say a layer held voxels and not how coarse they
+    /// were — which is the one number that decides what detail a grid can hold
+    /// at all.
+    fn voxel_stats(&self, layer: &Layer) -> Option<clayspace_model::VoxelStats> {
+        if layer.representation != Representation::Voxel {
+            return None;
+        }
+        // The reader, which borrows the document immutably — a scene query has
+        // no business taking the exclusive borrow the writable grid wants.
+        let (_, grid) = self.document.voxel_reader(&layer.engine_name).ok()?;
+        Some(clayspace_model::VoxelStats {
+            cell_size: grid.voxel_size().ok()?,
+            occupied: grid.occupied_count().ok()?,
         })
     }
 
@@ -3454,7 +3477,7 @@ impl ClayDocument {
 
         let mut brush = brush.sanitized();
         if let Some(transform) = &placement {
-            brush.size /= transform.scale.max(1e-4);
+            brush.size /= transform.uniform_scale().max(1e-4);
         }
         // Read before the sculptor is borrowed mutably. A mesh takes an alpha
         // by a third route — the brush descriptor's own block — and it is not
@@ -4403,7 +4426,8 @@ impl ClayDocument {
                 at.position
                     .into_iter()
                     .chain(at.rotation_axis)
-                    .chain([at.rotation_angle, at.scale])
+                    .chain([at.rotation_angle])
+                    .chain(at.scale)
                     .fold(hash, |hash, number| {
                         (hash ^ u64::from(number.to_bits())).wrapping_mul(0x1000_0000_01b3)
                     })
@@ -5828,6 +5852,7 @@ impl SceneModel for ClayDocument {
                 .iter()
                 .map(|layer| LayerSummary {
                     health: self.field_health(layer),
+                    voxel: self.voxel_stats(layer),
                     ..layer.summary()
                 })
                 .collect(),
@@ -6220,7 +6245,9 @@ impl SceneModel for ClayDocument {
             key,
             clayspace_model::Transform {
                 position,
-                scale: scale.max(1e-4),
+                // A layer's scale is uniform: the engine's *layer* transform
+                // takes one factor, unlike a node's.
+                scale: [scale.max(1e-4); 3],
                 ..turned
             },
         )
@@ -7704,7 +7731,7 @@ impl ClayDocument {
                 continue;
             }
             let turned = Self::turned_by(transform.rotation_axis, -transform.rotation_angle, moved);
-            let scale = transform.scale.max(1e-4);
+            let scale = transform.uniform_scale().max(1e-4);
             carried
                 .set_offset(coordinate, std::array::from_fn(|i| turned[i] / scale))
                 .map_err(ModelError::engine)?;
@@ -8695,7 +8722,7 @@ impl ClayDocument {
                 transform.position,
                 transform.rotation_axis,
                 transform.rotation_angle,
-                transform.scale.max(1e-4),
+                transform.uniform_scale().max(1e-4),
             )
             .map_err(ModelError::engine)
     }
@@ -8874,13 +8901,13 @@ impl ClayDocument {
     /// A point of a carried mesh, standing where the layer transform puts it.
     fn into_world(transform: &clayspace_model::Transform, point: [f32; 3]) -> [f32; 3] {
         let turned = Self::turned_by(transform.rotation_axis, transform.rotation_angle, point);
-        let scale = transform.scale.max(1e-4);
+        let scale = transform.uniform_scale().max(1e-4);
         std::array::from_fn(|i| turned[i] * scale + transform.position[i])
     }
 
     /// The way back: a world point in the mesh's own coordinates.
     fn into_local(transform: &clayspace_model::Transform, point: [f32; 3]) -> [f32; 3] {
-        let scale = transform.scale.max(1e-4);
+        let scale = transform.uniform_scale().max(1e-4);
         let moved: [f32; 3] = std::array::from_fn(|i| (point[i] - transform.position[i]) / scale);
         Self::turned_by(transform.rotation_axis, -transform.rotation_angle, moved)
     }
@@ -9171,7 +9198,7 @@ impl ClayDocument {
                 position: at,
                 rotation_axis: [0.0, 1.0, 0.0],
                 rotation_angle: 0.0,
-                scale: 1.0,
+                scale: [1.0; 3],
             };
         }
         Ok(())
@@ -9462,7 +9489,7 @@ impl ClayDocument {
                         transform.position,
                         transform.rotation_axis,
                         transform.rotation_angle,
-                        transform.scale.max(1e-4),
+                        transform.uniform_scale().max(1e-4),
                     )
                     .map_err(ModelError::engine)?;
             }
@@ -9820,7 +9847,7 @@ impl ObjectModel for ClayDocument {
         position: [f32; 3],
         rotation_axis: [f32; 3],
         rotation_angle: f32,
-        scale: f32,
+        scale: [f32; 3],
     ) -> Result<(), ModelError> {
         let at = self
             .object_index(id)
@@ -9838,8 +9865,22 @@ impl ObjectModel for ClayDocument {
         if !gesturing {
             self.remember_objects_before();
         }
+        // The per-axis call, always — not only when the three differ. The ABI
+        // does not do partial updates: each of the two writes the *whole*
+        // transform, so the uniform one applied to a node carrying a stretch
+        // would collapse it. Using one call for both means a move can never
+        // quietly unsquash what it moves. A uniform value costs nothing: the
+        // engine says `(1, 1, 1)` and any other uniform triple keeps the field
+        // exact and compiles to identical tape.
         self.document
-            .set_node_transform(layer, node, position, rotation_axis, rotation_angle, scale)
+            .set_node_transform_nonuniform(
+                layer,
+                node,
+                position,
+                rotation_axis,
+                rotation_angle,
+                scale,
+            )
             .map_err(ModelError::engine)?;
 
         let object = &mut self.objects[at];

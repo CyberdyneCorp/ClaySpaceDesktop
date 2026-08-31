@@ -56,10 +56,18 @@ pub enum Icon {
     Curve,
     Undo,
     Redo,
+    /// The three representations, told apart by shape and never by hue: a
+    /// field is nested contours around a form, a grid is cells, and a mesh is
+    /// triangles. Drawn because the representation bar states each one with an
+    /// icon *and* its name — the design's rule that a discriminator is never
+    /// colour alone applies hardest here, where the three are equals.
+    FieldRepresentation,
+    VoxelRepresentation,
+    MeshRepresentation,
 }
 
 impl Icon {
-    pub const ALL: [Icon; 25] = [
+    pub const ALL: [Icon; 28] = [
         Self::Visible,
         Self::Hidden,
         Self::Locked,
@@ -85,6 +93,9 @@ impl Icon {
         Self::Curve,
         Self::Undo,
         Self::Redo,
+        Self::FieldRepresentation,
+        Self::VoxelRepresentation,
+        Self::MeshRepresentation,
     ];
 
     /// What a screen reader or a tooltip says.
@@ -118,6 +129,9 @@ impl Icon {
             Self::Curve => "curva",
             Self::Undo => "desfazer",
             Self::Redo => "refazer",
+            Self::FieldRepresentation => "campo de distância",
+            Self::VoxelRepresentation => "grade de voxels",
+            Self::MeshRepresentation => "malha de triângulos",
         }
     }
 }
@@ -438,6 +452,48 @@ pub fn paint(painter: &egui::Painter, rect: egui::Rect, icon: Icon, tint: egui::
             let (before, end) = (points[18], points[20]);
             painter.add(egui::Shape::line(points, stroke));
             arrow(painter, before, end, unit * 0.45, stroke);
+        }
+        Icon::FieldRepresentation => {
+            // Nested contours: the same form at three distances from its
+            // surface, which is what a distance field is a picture of.
+            for scale in [1.0f32, 0.66, 0.33] {
+                painter.circle_stroke(centre, unit * 0.66 * scale, stroke);
+            }
+        }
+        Icon::VoxelRepresentation => {
+            // Four cells. A grid rather than one box, because a single square
+            // is what half this set already is.
+            let cell = unit * 0.54;
+            for (x, y) in [(-1.0f32, -1.0f32), (0.0, -1.0), (-1.0, 0.0), (0.0, 0.0)] {
+                let corner = centre + egui::vec2(x * cell, y * cell);
+                painter.rect_stroke(
+                    egui::Rect::from_min_size(corner, egui::vec2(cell, cell)),
+                    egui::epaint::CornerRadius::ZERO,
+                    stroke,
+                    egui::StrokeKind::Middle,
+                );
+            }
+        }
+        Icon::MeshRepresentation => {
+            // A triangle subdivided by its own edge midpoints — four faces,
+            // which is what a mesh is a picture of.
+            //
+            // Not a triangle with a line dropped from its apex: that is a
+            // warning sign, and it read as one in the representation bar
+            // beside two icons that are plainly objects.
+            let top = centre + egui::vec2(0.0, -unit * 0.66);
+            let left = centre + egui::vec2(-unit * 0.72, unit * 0.5);
+            let right = centre + egui::vec2(unit * 0.72, unit * 0.5);
+            painter.add(egui::Shape::closed_line(vec![top, left, right], stroke));
+            let midpoint = |a: egui::Pos2, b: egui::Pos2| a + (b - a) * 0.5;
+            painter.add(egui::Shape::closed_line(
+                vec![
+                    midpoint(top, left),
+                    midpoint(left, right),
+                    midpoint(right, top),
+                ],
+                stroke,
+            ));
         }
     }
 }

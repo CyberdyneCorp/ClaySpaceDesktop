@@ -74,6 +74,19 @@ pub struct Strings {
     /// reads the same in every language; these are the words a sculptor is
     /// offered when a new layer asks what it should be.
     pub representation_names: [&'static str; clayspace_model::Representation::ALL.len()],
+    /// What each representation *is*, in one short phrase, for the card that
+    /// stands for it in the representation bar.
+    ///
+    /// The name alone says which of three; this says what that means, which is
+    /// what a sculptor meeting the vocabulary for the first time needs. Kept
+    /// to a phrase — the bar is one row tall and a sentence would not fit.
+    pub representation_sentences: [&'static str; clayspace_model::Representation::ALL.len()],
+    /// The representation bar's own heading.
+    pub section_representation: &'static str,
+    /// What a card says on hover: this is what the active layer holds, or
+    /// this is what crossing to it would cost a look at.
+    pub hint_representation_active: &'static str,
+    pub hint_representation_other: &'static str,
     /// The shapes panel, and what it does.
     pub action_shapes: &'static str,
     pub label_shape: &'static str,
@@ -226,6 +239,28 @@ pub struct Strings {
     pub section_shapes: &'static str,
     pub section_boolean: &'static str,
     pub section_geometry: &'static str,
+    /// The contextual section's heading, one per representation.
+    ///
+    /// Distinct from `section_geometry` and from each other. The voxel display
+    /// controls used to stand under `section_geometry` beside the polygon
+    /// counts, which are also under `section_geometry` — two sections with one
+    /// word between them, sharing the fold that word is keyed by, so putting
+    /// one away put the other away too.
+    pub section_field: &'static str,
+    pub section_voxels: &'static str,
+    pub section_mesh: &'static str,
+    /// How many items the active field's edit list holds.
+    pub label_field_items: &'static str,
+    /// What a grid is made of: how coarse its cells are, and how many hold
+    /// anything.
+    pub label_voxel_cell: &'static str,
+    pub label_voxel_occupied: &'static str,
+    /// Whether that list has been collapsed into one.
+    pub label_field_collapsed: &'static str,
+    pub state_yes: &'static str,
+    pub state_no: &'static str,
+    /// What is true of every mesh layer, and is the reason its brushes differ.
+    pub mesh_topology_fixed: &'static str,
     pub section_resolution: &'static str,
     pub section_brush_controls: &'static str,
     pub section_armature: &'static str,
@@ -327,6 +362,26 @@ pub struct Strings {
     /// Shown where the shelf would be, on a layer whose representation this
     /// application has no verb bound for yet.
     pub shelf_no_tools: &'static str,
+    /// The shelf's first filter: the brushes the active layer can actually
+    /// use, which is what the shelf shows unless a sculptor asks otherwise.
+    pub shelf_filter_all: &'static str,
+    /// How much a frame is worth spending on, in `ViewportProfile::ALL` order.
+    ///
+    /// A display setting: it changes what an idle frame is drawn with and
+    /// never what is drawn, so no sculpt is affected by choosing one.
+    pub viewport_profile_names: [&'static str; crate::quality::ViewportProfile::ALL.len()],
+    pub label_viewport_profile: &'static str,
+    /// The transform readout that stands beside the manipulator.
+    ///
+    /// Axis-and-angle rather than three Euler angles, and one scale factor
+    /// rather than three, because that is what the engine's transforms take —
+    /// see `SceneObject`. A readout of three rotations would be inventing two.
+    pub hud_position: &'static str,
+    pub hud_rotation: &'static str,
+    pub hud_axis: &'static str,
+    pub hud_scale: &'static str,
+    /// Why a brush met while browsing another representation cannot be picked.
+    pub shelf_tool_elsewhere: &'static str,
     // Pre-bake repair.
     pub action_repair: &'static str,
     pub repair_airtight: &'static str,
@@ -546,6 +601,14 @@ const PT_BR: Strings = Strings {
     ],
     insert_as_names: ["Novo subtool", "No subtool ativo"],
     representation_names: ["Campo (SDF)", "Voxels", "Malha"],
+    representation_sentences: [
+        "Campo de distância com sinal",
+        "Grade de voxels",
+        "Malha de polígonos",
+    ],
+    section_representation: "REPRESENTAÇÃO",
+    hint_representation_active: "o que a camada ativa contém",
+    hint_representation_other: "esta camada não é isto — converter tem custo",
     action_shapes: "Formas",
     label_shape: "Forma",
     label_insert_as: "Inserir como",
@@ -640,6 +703,16 @@ libera em vez de congelar.",
     section_shapes: "FORMAS",
     section_boolean: "BOOLEANA",
     section_geometry: "GEOMETRIA",
+    section_field: "CAMPO",
+    section_voxels: "VOXELS",
+    section_mesh: "MALHA",
+    label_field_items: "Itens no campo",
+    label_voxel_cell: "Tamanho da célula",
+    label_voxel_occupied: "Células ocupadas",
+    label_field_collapsed: "Colapsado",
+    state_yes: "sim",
+    state_no: "não",
+    mesh_topology_fixed: "Topologia fixa: os pincéis movem os vértices que existem e não criam nem removem nenhum.",
     section_resolution: "RESOLUÇÃO",
     section_brush_controls: "CONTROLES DE PINCEL",
     section_armature: "ARMADURA",
@@ -713,6 +786,14 @@ libera em vez de congelar.",
     label_mirror_new: "Espelhar novas",
 
     shelf_no_tools: "Nenhuma ferramenta para esta representação ainda",
+    shelf_filter_all: "Disponíveis",
+    viewport_profile_names: ["Desempenho", "Escultura", "Apresentação"],
+    label_viewport_profile: "Qualidade da viewport",
+    hud_position: "Posição",
+    hud_rotation: "Rotação",
+    hud_axis: "Eixo",
+    hud_scale: "Escala",
+    shelf_tool_elsewhere: "sem verbo na camada ativa",
     representation_label: "Representação",
     tool_substituted: "ferramenta trocada: esta camada não tem essa",
     item_not_transformable: "um traço, uma curva aplicada ou a pele de um esqueleto não se transforma: só uma forma colocada tem manipulador",
@@ -899,6 +980,10 @@ const EN_US: Strings = Strings {
     ],
     insert_as_names: ["New subtool", "Into the active subtool"],
     representation_names: ["Field (SDF)", "Voxels", "Mesh"],
+    representation_sentences: ["Signed Distance Field", "Voxel Grid", "Polygon Mesh"],
+    section_representation: "REPRESENTATION",
+    hint_representation_active: "what the active layer holds",
+    hint_representation_other: "this layer is not this — converting has a cost",
     action_shapes: "Shapes",
     label_shape: "Shape",
     label_insert_as: "Insert as",
@@ -992,6 +1077,16 @@ instead.",
     section_shapes: "SHAPES",
     section_boolean: "BOOLEAN",
     section_geometry: "GEOMETRY",
+    section_field: "FIELD",
+    section_voxels: "VOXELS",
+    section_mesh: "MESH",
+    label_field_items: "Items in the field",
+    label_voxel_cell: "Cell size",
+    label_voxel_occupied: "Occupied cells",
+    label_field_collapsed: "Collapsed",
+    state_yes: "yes",
+    state_no: "no",
+    mesh_topology_fixed: "Fixed topology: the brushes move the vertices that are there and neither add nor remove any.",
     section_resolution: "RESOLUTION",
     section_brush_controls: "BRUSH CONTROLS",
     section_armature: "ARMATURE",
@@ -1065,6 +1160,14 @@ instead.",
     label_mirror_new: "Mirror new",
 
     shelf_no_tools: "No tools for this representation yet",
+    shelf_filter_all: "Available",
+    viewport_profile_names: ["Performance", "Sculpt", "Presentation"],
+    label_viewport_profile: "Viewport quality",
+    hud_position: "Position",
+    hud_rotation: "Rotation",
+    hud_axis: "Axis",
+    hud_scale: "Scale",
+    shelf_tool_elsewhere: "no verb on the active layer",
     representation_label: "Representation",
     tool_substituted: "tool changed: this layer has no verb for that one",
     item_not_transformable: "a stroke, an applied curve or a rig's skin cannot be transformed: only a placed shape carries a manipulator",
@@ -1251,6 +1354,14 @@ const ES_419: Strings = Strings {
     ],
     insert_as_names: ["Nuevo subtool", "En el subtool activo"],
     representation_names: ["Campo (SDF)", "Vóxeles", "Malla"],
+    representation_sentences: [
+        "Campo de distancia con signo",
+        "Rejilla de vóxeles",
+        "Malla de polígonos",
+    ],
+    section_representation: "REPRESENTACIÓN",
+    hint_representation_active: "lo que contiene la capa activa",
+    hint_representation_other: "esta capa no es esto — convertir tiene un costo",
     action_shapes: "Formas",
     label_shape: "Forma",
     label_insert_as: "Insertar como",
@@ -1345,6 +1456,16 @@ lados. Con Ctrl, libera en vez de congelar.",
     section_shapes: "FORMAS",
     section_boolean: "BOOLEANA",
     section_geometry: "GEOMETRÍA",
+    section_field: "CAMPO",
+    section_voxels: "VÓXELES",
+    section_mesh: "MALLA",
+    label_field_items: "Elementos en el campo",
+    label_voxel_cell: "Tamaño de celda",
+    label_voxel_occupied: "Celdas ocupadas",
+    label_field_collapsed: "Colapsado",
+    state_yes: "sí",
+    state_no: "no",
+    mesh_topology_fixed: "Topología fija: los pinceles mueven los vértices que existen y no crean ni eliminan ninguno.",
     section_resolution: "RESOLUCIÓN",
     section_brush_controls: "CONTROLES DE PINCEL",
     // "Esqueleto", not "Armadura": armadura reads as armour outside of
@@ -1423,6 +1544,14 @@ lados. Con Ctrl, libera en vez de congelar.",
     label_mirror_new: "Reflejar nuevas",
 
     shelf_no_tools: "Todavía no hay herramientas para esta representación",
+    shelf_filter_all: "Disponibles",
+    viewport_profile_names: ["Rendimiento", "Escultura", "Presentación"],
+    label_viewport_profile: "Calidad de la vista",
+    hud_position: "Posición",
+    hud_rotation: "Rotación",
+    hud_axis: "Eje",
+    hud_scale: "Escala",
+    shelf_tool_elsewhere: "sin verbo en la capa activa",
     representation_label: "Representación",
     tool_substituted: "herramienta cambiada: esta capa no tiene ese verbo",
     item_not_transformable: "un trazo, una curva aplicada o la piel de un esqueleto no se transforma: solo una forma colocada tiene manipulador",
@@ -1725,6 +1854,22 @@ impl Strings {
         )
     }
 
+    pub fn viewport_profile_name(&self, profile: crate::quality::ViewportProfile) -> &'static str {
+        Self::at(
+            &self.viewport_profile_names,
+            crate::quality::ViewportProfile::ALL,
+            profile,
+        )
+    }
+
+    pub fn representation_sentence(&self, what: clayspace_model::Representation) -> &'static str {
+        Self::at(
+            &self.representation_sentences,
+            clayspace_model::Representation::ALL,
+            what,
+        )
+    }
+
     pub fn voxel_display_name(&self, how: clayspace_model::VoxelDisplay) -> &'static str {
         Self::at(
             &self.voxel_display_names,
@@ -1750,8 +1895,28 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 195] {
+    pub fn all(&self) -> [&'static str; 215] {
         [
+            self.label_voxel_cell,
+            self.label_voxel_occupied,
+            self.label_viewport_profile,
+            self.hud_position,
+            self.hud_rotation,
+            self.hud_axis,
+            self.hud_scale,
+            self.shelf_filter_all,
+            self.shelf_tool_elsewhere,
+            self.section_field,
+            self.section_voxels,
+            self.section_mesh,
+            self.label_field_items,
+            self.label_field_collapsed,
+            self.state_yes,
+            self.state_no,
+            self.mesh_topology_fixed,
+            self.section_representation,
+            self.hint_representation_active,
+            self.hint_representation_other,
             self.action_shapes,
             self.label_shape,
             self.action_insert,
@@ -2026,6 +2191,45 @@ mod tests {
     /// A fourth vocabulary held by position, and the one whose failure would
     /// be quietest: three operations named from `BooleanOp::label` would read
     /// in Portuguese whatever the rest of the panel says.
+    #[test]
+    fn every_representation_is_named_and_explained_in_every_language() {
+        // The bar states all three at once, so a card missing its phrase is
+        // a hole beside two that have one — and two cards sharing a phrase
+        // would say the representations are the same thing.
+        for locale in Locale::ALL {
+            let strings = Strings::for_locale(locale);
+            let mut seen = std::collections::BTreeSet::new();
+            for what in clayspace_model::Representation::ALL {
+                let name = strings.representation_name(what);
+                let sentence = strings.representation_sentence(what);
+                assert!(
+                    !name.is_empty(),
+                    "{what:?} has no name in {}",
+                    locale.label()
+                );
+                assert!(
+                    !sentence.is_empty(),
+                    "{what:?} has no phrase in {}",
+                    locale.label()
+                );
+                assert!(
+                    seen.insert(sentence),
+                    "{} explains two representations as {sentence:?}",
+                    locale.label()
+                );
+            }
+        }
+        let english = Strings::for_locale(Locale::EnUs);
+        let portuguese = Strings::for_locale(Locale::PtBr);
+        assert!(
+            clayspace_model::Representation::ALL
+                .iter()
+                .all(|what| english.representation_sentence(*what)
+                    != portuguese.representation_sentence(*what)),
+            "a representation reads the same in both, so one table was copied"
+        );
+    }
+
     #[test]
     fn the_boolean_operations_speak_every_language() {
         for locale in Locale::ALL {

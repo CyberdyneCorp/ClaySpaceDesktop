@@ -39,8 +39,17 @@ pub mod size {
 
     /// A slider or field.
     pub const CONTROL: f32 = 22.0;
-    /// A brush swatch in the shelf.
+    /// A swatch: a brush on the shelf, a material in the inspector. Both are
+    /// the shaded ball the skeuomorphic budget is spent on, at one size.
     pub const SWATCH: f32 = 54.0;
+    /// The narrowest a layer's name may be squeezed to before it stops being
+    /// worth truncating into.
+    ///
+    /// Its own name rather than `SWATCH`, which it borrowed because the two
+    /// numbers happened to agree. A name in a list is not a shaded ball, and a
+    /// size shared between two controls with nothing to do with each other
+    /// cannot be moved for one without moving it for the other.
+    pub const LAYER_NAME_MIN: f32 = 54.0;
     /// One recently used colour, in the row beside the colour swatch.
     ///
     /// Small: six of them plus their gaps sit inside the options bar's slider
@@ -115,6 +124,15 @@ pub fn dim(linear: [f32; 3], amount: f32) -> egui::Color32 {
 pub struct Tokens;
 
 impl Tokens {
+    /// The sculpting viewport's ground.
+    ///
+    /// The bottom of the ladder, and the only surface the sculpt itself sits
+    /// on. Everything drawn over it — the view presets, the tool status —
+    /// takes this as its background rather than `ground`, which is the shell's.
+    pub fn viewport() -> egui::Color32 {
+        color(palette::VIEWPORT)
+    }
+
     /// The application ground.
     pub fn ground() -> egui::Color32 {
         color(palette::GROUND)
@@ -122,18 +140,18 @@ impl Tokens {
 
     /// A panel sitting on the ground.
     pub fn panel() -> egui::Color32 {
-        color(palette::GRID_MINOR)
+        color(palette::PANEL)
     }
 
     /// A raised surface — a selected row, a pressed control.
     pub fn raised() -> egui::Color32 {
-        color(palette::GRID_AXIS)
+        color(palette::RAISED)
     }
 
     /// Separators. Distinguished by tone, never by a drawn outline that
     /// competes for attention.
     pub fn rule() -> egui::Color32 {
-        dim(palette::GRID_AXIS, 0.2)
+        dim(palette::RAISED, 0.2)
     }
 
     /// Primary text.
@@ -159,9 +177,49 @@ impl Tokens {
         dim(palette::FOREGROUND, 0.42)
     }
 
-    /// The sole accent. Marks the active brush and active tool state, and
-    /// nothing else.
+    /// The sole accent. Marks active state — the active brush, the layer being
+    /// sculpted, an engaged toggle — and nothing else.
     pub fn accent() -> egui::Color32 {
+        color(palette::ACCENT)
+    }
+
+    /// What an active row is marked with: the rail at its leading edge.
+    ///
+    /// The accent under the name the interface uses it by, so a component
+    /// draws "the selection" rather than "the accent" and the two can part
+    /// company later without every call site being visited.
+    pub fn selection() -> egui::Color32 {
+        color(palette::ACCENT)
+    }
+
+    /// The accent carried far enough toward the ground to sit *behind*
+    /// something rather than beside it.
+    ///
+    /// For the tint under an engaged chip, where full accent would be the
+    /// brightest thing in the panel and a plain raised surface says nothing
+    /// the neighbouring chips do not. Not a fill for a row or a card — the
+    /// design's rule is that the accent marks at the scale of a rail — but a
+    /// chip is the size of the mark itself.
+    pub fn selection_soft() -> egui::Color32 {
+        dim(palette::ACCENT, 0.80)
+    }
+
+    /// The unfilled part of a slider's track.
+    ///
+    /// The ground showing through the panel, which is what a track is: a
+    /// channel cut into the surface. The same tone `segmented` lays its cells
+    /// on, so a bar of choices and a bar of range read as the same kind of
+    /// control.
+    pub fn control_track() -> egui::Color32 {
+        color(palette::GROUND)
+    }
+
+    /// The part of a slider's track the value has travelled.
+    ///
+    /// State rather than decoration: it says how far into its range a value
+    /// sits, which is the one thing the digits beside it cannot say without
+    /// being read. That is why it is the accent and not a lighter grey.
+    pub fn control_fill() -> egui::Color32 {
         color(palette::ACCENT)
     }
 
@@ -216,18 +274,56 @@ mod tests {
     /// display are in the table now; these are not, so a sculptor on English
     /// or Spanish still meets Portuguese in them.
     ///
+    /// Ten until the representation bar took the viewport bar's line: that one
+    /// drew `Representation::label`, the engine's own word, under a translated
+    /// prefix.
+    ///
     /// The number may go **down** freely. It going *up* means a new control
     /// was wired to a domain label instead of to the table, which is the
     /// mistake this exists to stop repeating while the backlog is worked off.
     /// Fixing one is: add an array to `Strings` keyed off the enum's `::ALL`,
     /// fill all three locales, add an accessor, and call it here.
-    const LABELS_STILL_DRAWN: usize = 10;
+    const LABELS_STILL_DRAWN: usize = 9;
+
+    /// Every `.rs` file in the crate, as (name, source).
+    ///
+    /// Walks rather than reads one directory. Three tests here read the
+    /// crate's own source, and two of them were reading a flat `src/` when
+    /// the shell became a directory: one started failing loudly, and
+    /// `no_literal_colors` went quietly blind to five thousand lines, which
+    /// is the worse of the two outcomes.
+    fn crate_source() -> Vec<(String, String)> {
+        let mut found = Vec::new();
+        let mut stack = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+        while let Some(directory) = stack.pop() {
+            for entry in std::fs::read_dir(&directory).expect("the crate's own source") {
+                let path = entry.expect("entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    let name = path
+                        .strip_prefix(env!("CARGO_MANIFEST_DIR"))
+                        .unwrap_or(&path)
+                        .display()
+                        .to_string();
+                    found.push((
+                        name,
+                        std::fs::read_to_string(&path).expect("read the source"),
+                    ));
+                }
+            }
+        }
+        assert!(!found.is_empty(), "the crate's source could not be read");
+        found
+    }
 
     #[test]
     fn the_shell_draws_no_new_untranslated_labels() {
-        let shell = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/shell.rs");
-        let text = std::fs::read_to_string(&shell).expect("the shell's source");
-        let drawn = text.matches(".label()").count();
+        let drawn: usize = crate_source()
+            .iter()
+            .filter(|(name, _)| name.contains("shell"))
+            .map(|(_, text)| text.matches(".label()").count())
+            .sum();
         assert!(
             drawn <= LABELS_STILL_DRAWN,
             "the shell draws {drawn} domain labels, up from {LABELS_STILL_DRAWN}. \
@@ -272,22 +368,11 @@ mod tests {
     /// so on the line above.
     #[test]
     fn no_literal_colors() {
-        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut offenders = Vec::new();
-        for entry in std::fs::read_dir(&src).expect("the crate's own source") {
-            let path = entry.expect("entry").path();
-            let name = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or_default()
-                .to_owned();
-            if path.extension().is_none_or(|ext| ext != "rs")
-                || name == "design.rs"
-                || name == "palette.rs"
-            {
+        for (name, text) in crate_source() {
+            if name.ends_with("design.rs") || name.ends_with("palette.rs") {
                 continue;
             }
-            let text = std::fs::read_to_string(&path).expect("read the source");
             let lines: Vec<&str> = text.lines().collect();
             for (at, line) in lines.iter().enumerate() {
                 // Both halves of "written down": a constructor call, and a
@@ -321,9 +406,80 @@ mod tests {
         );
     }
 
+    /// Every size the scale names is used by a control.
+    ///
+    /// The other half of what `no_literal_colors` does for colour: a size the
+    /// scale declares and nothing draws with is either a control re-sized from
+    /// somebody else's token or an entry nothing wants, and both are worth
+    /// stopping.
+    ///
+    /// It is **not** what catches the regression that prompted it. The shelf's
+    /// swatch was re-sized from `SWATCH` to `COLOUR_CHIP` and drew its brushes
+    /// as sixteen-pixel discs for a release, and `SWATCH` stayed "used"
+    /// throughout — the material preview draws with it too. A shared size
+    /// cannot be policed by counting references. What catches that one is
+    /// `the_shelf_draws_its_brushes_at_the_swatch_size`, which asks the shelf
+    /// how big it drew a brush and is the only thing that can answer.
+    ///
+    /// Code only, comments stripped: a line of prose naming a token is not a
+    /// control drawn with it, and scanning them let a deliberate re-break of
+    /// exactly this regression walk straight through.
+    ///
+    /// A declared-and-unused size means either a control was re-sized from
+    /// somebody else's token or the scale grew an entry nothing wants. Both
+    /// are worth stopping.
+    #[test]
+    fn every_size_in_the_scale_is_used_by_a_control() {
+        let declaration = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/design.rs"),
+        )
+        .expect("this file");
+        let names: Vec<String> = declaration
+            .lines()
+            .skip_while(|line| !line.contains("pub mod size {"))
+            .take_while(|line| !line.starts_with('}'))
+            .filter_map(|line| {
+                line.trim()
+                    .strip_prefix("pub const ")?
+                    .split(':')
+                    .next()
+                    .map(str::to_owned)
+            })
+            .collect();
+        assert!(!names.is_empty(), "the scale's sizes could not be read");
+
+        let mut drawn = String::new();
+        for (name, text) in crate_source() {
+            if name.ends_with("design.rs") {
+                continue;
+            }
+            // Code only. A comment naming a token is prose about it, not a
+            // control drawn with it — and this test passed a deliberate
+            // re-break of the very regression it is written for, because the
+            // line above the call still said `size::SWATCH` while the call
+            // itself no longer did.
+            for line in text.lines() {
+                drawn.push_str(line.split("//").next().unwrap_or_default());
+                drawn.push('\n');
+            }
+        }
+
+        let unused: Vec<&String> = names
+            .iter()
+            .filter(|name| !drawn.contains(&format!("size::{name}")))
+            .collect();
+        assert!(
+            unused.is_empty(),
+            "the scale names {unused:?} and no control draws with them. Either              a control was re-sized from a token named for something else —              which is how the brush shelf lost its swatches — or the scale              grew an entry nothing wants"
+        );
+    }
+
     #[test]
     fn primary_text_clears_the_contrast_floor_on_every_surface() {
         for (name, surface) in [
+            // The viewport is a surface text is set on as much as the others
+            // are: the view presets and the tool-status line stand on it.
+            ("viewport", Tokens::viewport()),
             ("ground", Tokens::ground()),
             ("panel", Tokens::panel()),
             ("raised", Tokens::raised()),
@@ -358,7 +514,15 @@ mod tests {
 
     #[test]
     fn the_accent_is_legible_where_state_depends_on_it() {
-        for (name, surface) in [("ground", Tokens::ground()), ("panel", Tokens::panel())] {
+        for (name, surface) in [
+            ("viewport", Tokens::viewport()),
+            ("ground", Tokens::ground()),
+            ("panel", Tokens::panel()),
+            // The active layer's rail and the active swatch's are drawn on a
+            // raised surface, which is the lightest thing the accent has to
+            // read against.
+            ("raised", Tokens::raised()),
+        ] {
             let ratio = contrast(Tokens::accent(), surface);
             assert!(
                 ratio >= INDICATOR_CONTRAST_FLOOR,
@@ -371,15 +535,73 @@ mod tests {
     #[test]
     fn surfaces_are_distinguishable_from_one_another() {
         // Panels are told apart from the ground by tone, so the tones must
-        // actually differ.
-        let steps = [Tokens::ground(), Tokens::panel(), Tokens::raised()];
+        // actually differ. The viewport heads the ladder: the sculpt sits at
+        // the bottom of it, which is what makes the chrome recede.
+        let steps = [
+            ("viewport", Tokens::viewport()),
+            ("ground", Tokens::ground()),
+            ("panel", Tokens::panel()),
+            ("raised", Tokens::raised()),
+        ];
         for pair in steps.windows(2) {
+            let ((below, dark), (above, light)) = (pair[0], pair[1]);
             assert!(
-                luminance(pair[1]) > luminance(pair[0]),
-                "two surface tones are not ordered, so a panel would not read \
-                 as sitting on the ground"
+                luminance(light) > luminance(dark),
+                "{above} is not lighter than {below}, so it would not read as \
+                 sitting on it"
             );
         }
+    }
+
+    /// The viewport is separated from the chrome by tone alone.
+    ///
+    /// No outline is drawn around it — `CentralPanel` is given `Frame::NONE` —
+    /// so if these two tones ever met, the sculpt and the panels beside it
+    /// would have no edge between them at all. The step is small on purpose;
+    /// this only asserts that there is one.
+    #[test]
+    fn the_viewport_reads_as_darker_than_the_shell_around_it() {
+        let step = luminance(Tokens::ground()) - luminance(Tokens::viewport());
+        assert!(
+            step > 0.001,
+            "the viewport and the shell are the same tone ({step}), so the \
+             boundary the design draws no line for would be invisible"
+        );
+    }
+
+    /// A slider's track and its fill are told apart, and the track from the
+    /// panel it is cut into.
+    #[test]
+    fn the_slider_track_reads_against_both_the_panel_and_its_fill() {
+        assert!(
+            luminance(Tokens::panel()) > luminance(Tokens::control_track()),
+            "the track must read as cut into the panel, not laid on it"
+        );
+        assert!(
+            contrast(Tokens::control_fill(), Tokens::control_track()) >= INDICATOR_CONTRAST_FLOOR,
+            "the traversed range must be distinguishable from the range still \
+             to come — it is the slider's state, and a state nobody can see is \
+             decoration"
+        );
+    }
+
+    /// The soft accent is still the accent, and still reads as engaged.
+    #[test]
+    fn the_soft_accent_keeps_its_hue_and_its_separation() {
+        let soft = Tokens::selection_soft();
+        assert!(
+            soft.r() > soft.b(),
+            "the soft accent lost its hue and would read as another grey \
+             surface: {soft:?}"
+        );
+        assert!(
+            luminance(soft) > luminance(Tokens::panel()),
+            "an engaged chip must read as lifted from the panel it sits on"
+        );
+        assert!(
+            contrast(Tokens::text(), soft) >= TEXT_CONTRAST_FLOOR,
+            "a chip's word has to stay legible once the chip is tinted"
+        );
     }
 
     #[test]

@@ -9,8 +9,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use clayspace_model::{
-    Combine, CombineSettings, GizmoHandle, GizmoMode, GizmoTarget, InsertAs, ItemKind, LayerKey,
-    ModelError, ObjectId, ObjectModel, Representation, SceneObject, Shape, Transform,
+    Combine, CombineSettings, GizmoHandle, GizmoTarget, InsertAs, ItemKind, LayerKey, ModelError,
+    ObjectId, ObjectModel, Representation, SceneObject, Shape, Transform,
 };
 use clayspace_vm::{Command, ObjectViewModel, Picked, Watcher, ITEM_NOT_TRANSFORMABLE};
 
@@ -87,7 +87,7 @@ fn an_object(node: u32, shape: Shape, at: [f32; 3]) -> SceneObject {
         position: at,
         rotation_axis: [0.0, 1.0, 0.0],
         rotation_angle: 0.0,
-        scale: 1.0,
+        scale: [1.0; 3],
     }
 }
 
@@ -229,7 +229,7 @@ impl ObjectModel for FakeObjects {
         position: [f32; 3],
         rotation_axis: [f32; 3],
         rotation_angle: f32,
-        scale: f32,
+        scale: [f32; 3],
     ) -> Result<(), ModelError> {
         if self.refuse.is_some() {
             return Err(self.refusal());
@@ -786,32 +786,38 @@ fn a_drag_with_nothing_selected_does_nothing() {
     assert!(calls.transforms.is_empty());
 }
 
+/// A placed object stretches per axis, and a whole subtool does not.
+///
+/// The engine's node transform takes a factor per axis and its layer transform
+/// takes one, so the boxes are offered exactly where they can be applied. This
+/// asserted the opposite — the centre handle alone on an object — for as long
+/// as nothing had bound `clay_layer_set_transform_nonuniform`.
 #[test]
-fn scale_mode_offers_no_axis_handles_on_an_object() {
+fn a_placed_object_stretches_per_axis_and_a_subtool_does_not() {
     let (mut vm, _) = viewmodel();
     place(&mut vm);
-    send(&mut vm, Command::SetGizmoMode(GizmoMode::Scale));
-    assert_eq!(vm.handles(), vec![GizmoHandle::Centre]);
+    assert!(
+        vm.per_axis_scale(),
+        "a placed object is a node, and a node's transform takes three factors"
+    );
+
+    send(
+        &mut vm,
+        Command::SetGizmoTarget(Some(GizmoTarget::Layer(clayspace_model::LayerKey(1)))),
+    );
+    assert!(
+        !vm.per_axis_scale(),
+        "a whole subtool is a layer, and a layer's transform takes one factor"
+    );
 }
 
-/// A cage keeps all three, because it scales its own control points rather
-/// than carrying an engine transform.
+/// A curve's control points are a point set, which scales per axis the way a
+/// cage's do — it carries no engine transform at all.
 #[test]
-fn scale_mode_still_offers_axis_handles_on_a_cage() {
+fn a_curve_stretches_per_axis() {
     let (mut vm, _) = viewmodel();
     send(&mut vm, Command::SetGizmoTarget(Some(GizmoTarget::Curve)));
-    send(&mut vm, Command::SetGizmoMode(GizmoMode::Scale));
-    assert_eq!(vm.handles().len(), 4);
-}
-
-#[test]
-fn move_and_rotate_offer_what_they_always_did() {
-    let (mut vm, _) = viewmodel();
-    place(&mut vm);
-    for mode in [GizmoMode::Move, GizmoMode::Rotate] {
-        send(&mut vm, Command::SetGizmoMode(mode));
-        assert_eq!(vm.handles(), GizmoHandle::all_for(mode));
-    }
+    assert!(vm.per_axis_scale());
 }
 
 /// A drag the model refuses has to reach the status area. Leaving the object

@@ -580,7 +580,7 @@ impl ObjectModel for SharedDocument {
         position: [f32; 3],
         rotation_axis: [f32; 3],
         rotation_angle: f32,
-        scale: f32,
+        scale: [f32; 3],
     ) -> Result<(), ModelError> {
         self.0
             .borrow_mut()

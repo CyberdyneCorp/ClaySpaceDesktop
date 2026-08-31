@@ -1597,11 +1597,21 @@ impl App {
         let cage = self.lattice.state().get().clone();
         if cage.active {
             let pivot = cage.pivot()?;
-            let reach = Self::cage_handle(&cage) * Self::GIZMO_REACH;
+            let reach = Self::cage_gizmo_reach(&cage, &self.camera);
             return Some((pivot, cage.mode, reach, true));
         }
         let pivot = self.objects.pivot()?;
-        Some((pivot, *self.objects.mode().get(), self.gizmo_reach(), false))
+        // Which handles the target carries is the ViewModel's answer, not a
+        // rule restated here: a placed object stretches per axis, a whole
+        // subtool does not, and the composition root should not be a second
+        // place that knows why.
+        let per_axis = self.objects.per_axis_scale();
+        Some((
+            pivot,
+            *self.objects.mode().get(),
+            self.gizmo_reach(),
+            per_axis,
+        ))
     }
 
     /// Which handle the pointer is over, for the highlight.
@@ -1859,6 +1869,9 @@ impl App {
         let outline = self.selected_outline();
         let subtool_outline = self.active_subtool_outline();
         let object_mode = *self.objects.mode().get();
+        // The same question `gizmo_target` asks, so the picture and the hit
+        // test offer the same handles.
+        let object_per_axis = self.objects.selected().get().is_some();
         // The handle in hand while a drag is under way, and the one under the
         // pointer otherwise: a gesture keeps its handle lit wherever the
         // pointer has since travelled.
@@ -1907,8 +1920,10 @@ impl App {
                 reach: object_reach,
                 hovered: gizmo_hovered,
                 view_axis: clayspace_app::input::toward_eye(&camera, pivot),
-                // One scale factor, so one handle for it.
-                per_axis_scale: false,
+                // Three boxes on a placed object, none on a whole subtool:
+                // the engine's node transform takes a factor per axis and its
+                // layer transform takes one.
+                per_axis_scale: object_per_axis,
             });
             graphics.renderer.set_lattice(
                 &gpu,
@@ -1935,7 +1950,7 @@ impl App {
                 gizmo: cage.pivot().map(|pivot| clayspace_view::GizmoView {
                     pivot,
                     mode: cage.mode,
-                    reach: handle * Self::GIZMO_REACH,
+                    reach: Self::cage_gizmo_reach(&cage, &camera),
                     hovered: gizmo_hovered,
                     view_axis: clayspace_app::input::toward_eye(&camera, pivot),
                     // A cage scales its own control points.
@@ -1989,7 +2004,12 @@ impl App {
             .copied()
             .fold(0.0f32, f32::max)
             .max(1e-3)
-            * object.scale;
+            // The largest of the three, applied to every axis. A per-axis
+            // reach would be tighter and would stop being a bound the moment
+            // the object was turned — this frames the object from any angle,
+            // which is what the sphere-like bound was already doing when the
+            // scale was one number.
+            * object.scale.iter().copied().fold(0.0f32, f32::max);
         Some((
             std::array::from_fn(|i| object.position[i] - reach),
             std::array::from_fn(|i| object.position[i] + reach),
@@ -2012,6 +2032,23 @@ impl App {
     /// the handle grabbed cannot come apart.
     fn object_gizmo_reach(camera: &Camera) -> f32 {
         (camera.distance * Self::OBJECT_GIZMO_FRACTION).max(1e-3)
+    }
+
+    /// How long the cage manipulator's arms are.
+    ///
+    /// A share of the cage, floored by the same screen-constant share of the
+    /// camera's distance that an object's manipulator is sized from. It was
+    /// the cage's share alone, which meant the one widget in the application
+    /// that still shrank with the camera: zoom out from a cage and its
+    /// manipulator went with it, while the manipulator on a placed object
+    /// beside it stayed the same size to the hand. Two widgets that look the
+    /// same and behave differently under the same gesture.
+    ///
+    /// Still allowed to grow past the floor on a large cage, because the arms
+    /// should reach past what they turn rather than sit as a mark in the
+    /// middle of it — which is what the cage's own share is for.
+    fn cage_gizmo_reach(cage: &clayspace_model::LatticeState, camera: &Camera) -> f32 {
+        (Self::cage_handle(cage) * Self::GIZMO_REACH).max(Self::object_gizmo_reach(camera))
     }
 
     /// The manipulator's arm as a share of the distance to the camera's
@@ -3437,6 +3474,7 @@ impl App {
             // The renderer's own display state, read back rather than
             // mirrored: the material beside it is handled the same way, and a
             // second copy of a setting is a second thing to keep in step.
+            viewport_profile: self.quality.profile(),
             studio_shading: self
                 .graphics
                 .as_ref()
@@ -3518,6 +3556,10 @@ impl App {
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
                 .show(ctx, |ui| {
+                    // Inside the central region rather than a panel of its
+                    // own, so it spans the viewport it labels and stops at
+                    // the inspectors either side.
+                    shell::representation_bar(ui, &state, &mut queue);
                     ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                         shell::viewport_bar(ui, &state, &mut queue);
                         // Whatever the bar left is the viewport, allocated as
@@ -3548,9 +3590,28 @@ impl App {
                         // viewport while it is up, so the press that would draw
                         // one is the press that draws the other.
                         shell::outline_overlay(ui, rect, &state);
+                        // And the transform readout, in the corner, while a
+                        // manipulator is pointed at a placed object. Over the
+                        // scene for the same reason as the two above: it
+                        // belongs to what the pointer is doing rather than to
+                        // a panel.
+                        shell::transform_hud(ui, rect, &state);
                     });
                 });
         });
+
+        // What the View left in its own memory, applied to the governor that
+        // owns it. The profile touches no document, so it never became a
+        // command — and could not have, since `ViewportProfile` is a view type
+        // and commands live under the view. Read after the frame, so the menu
+        // that wrote it has finished.
+        if let Some(chosen) =
+            context.data(|data| data.get_temp::<ViewportProfile>(shell::viewport_profile_id()))
+        {
+            if chosen != self.quality.profile() {
+                self.quality.set_profile(chosen, Instant::now());
+            }
+        }
 
         let scale = context.pixels_per_point();
         self.viewport = viewport;

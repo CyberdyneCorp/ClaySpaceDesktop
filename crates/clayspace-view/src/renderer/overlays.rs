@@ -21,6 +21,105 @@ use crate::camera::Camera;
 use crate::palette;
 use clayspace_model::{GizmoHandle, GizmoMode};
 
+/// How many cells the grid is divided into, across its whole extent.
+const GRID_STEPS: usize = 20;
+
+/// How many cells fall between two major lines.
+///
+/// Five, which is what a ruler does: the eye counts to five without counting.
+/// Every line the same weight is the CAD look the design is moving away from,
+/// and a grid with no landmarks in it is one nobody can judge a distance on.
+const GRID_MAJOR_EVERY: usize = 5;
+
+/// How finely a grid line is cut, so that the fade can vary along it.
+///
+/// A line drawn as two vertices takes the interpolation between its ends, and
+/// both ends of a grid line are equally far from the middle — so the fade came
+/// out uniform along every line and dissolved nothing. Cut into segments, each
+/// vertex carries the fade at its own position and the line thins as it leaves
+/// the form.
+const GRID_SEGMENTS: usize = 24;
+
+/// Where the fade begins and ends, as a fraction of the grid's extent.
+///
+/// It starts well inside the edge, so the grid is at full strength under the
+/// form — which is where a sculptor reads scale off it — and is gone before it
+/// reaches its own boundary, so there is no rectangle drawn around the scene.
+const GRID_FADE_FROM: f32 = 0.35;
+const GRID_FADE_TO: f32 = 0.95;
+
+/// The floor grid: minor lines, a major line every fifth, the two axes, and a
+/// fade that dissolves all of it before it reaches its own edge.
+///
+/// The fade is by distance from the *origin*, not from the camera. The guide
+/// this is drawn from suggests the camera, and that would need the fade
+/// computed in the shader: overlay geometry is uploaded only when the overlays
+/// themselves change — not per frame — so a camera-dependent colour would mean
+/// rebuilding and re-uploading the whole grid on every orbit, which is the
+/// cost the same guide warns against in the next sentence.
+///
+/// Distance from the origin is also the better answer for this application.
+/// The form sits at the origin and the grid is the floor under it, so a grid
+/// that is densest beneath the sculpt and dissolves outward says the same
+/// thing from every camera, rather than changing what it says when the
+/// sculptor zooms.
+///
+/// Faded toward the viewport's own ground rather than by alpha. The overlay
+/// pipeline does blend, but a vertex carries three floats of colour and no
+/// alpha, and widening it would cost every mesh in the application a quarter
+/// more memory for one overlay's benefit. Mixing toward the ground is exact
+/// wherever the grid is drawn over that ground, which is everywhere it is
+/// visible: the pipeline is depth-tested, so the form hides the lines behind
+/// it. A camera below the floor looking up would put an unfaded-looking line
+/// over the clay; that is the one case this trades away, and the shader route
+/// is what to reach for if it ever matters.
+fn grid(segment: &mut impl FnMut(Vec3, Vec3, [f32; 3], [f32; 3]), extent: f32) {
+    let step = extent * 2.0 / GRID_STEPS as f32;
+    // One and two steps up from the ground. Written in linear, because the
+    // target encodes: passing the design's hex values straight through renders
+    // them several times too bright.
+    let minor = palette::GRID_MINOR;
+    let major = palette::GRID_AXIS;
+
+    // How much of a line's colour survives at a point, and what is left is the
+    // ground showing through it.
+    let faded = |at: Vec3, color: [f32; 3]| -> [f32; 3] {
+        let distance = (at.x * at.x + at.z * at.z).sqrt() / extent.max(f32::EPSILON);
+        let t = ((distance - GRID_FADE_FROM) / (GRID_FADE_TO - GRID_FADE_FROM)).clamp(0.0, 1.0);
+        // Smoothstep, so the grid thins out rather than ending on a visible
+        // ring where the linear ramp would start.
+        let keep = 1.0 - t * t * (3.0 - 2.0 * t);
+        let ground = palette::VIEWPORT;
+        [
+            ground[0] + (color[0] - ground[0]) * keep,
+            ground[1] + (color[1] - ground[1]) * keep,
+            ground[2] + (color[2] - ground[2]) * keep,
+        ]
+    };
+
+    for i in 0..=GRID_STEPS {
+        let t = -extent + i as f32 * step;
+        // The two centre lines are the axes and stay strongest; every fifth
+        // line after that is major; the rest are minor.
+        let from_centre = i.abs_diff(GRID_STEPS / 2);
+        let color = if from_centre % GRID_MAJOR_EVERY == 0 {
+            major
+        } else {
+            minor
+        };
+        for s in 0..GRID_SEGMENTS {
+            let (u0, u1) = (
+                -extent + (s as f32 / GRID_SEGMENTS as f32) * extent * 2.0,
+                -extent + ((s + 1) as f32 / GRID_SEGMENTS as f32) * extent * 2.0,
+            );
+            let (a, b) = (Vec3::new(t, 0.0, u0), Vec3::new(t, 0.0, u1));
+            segment(a, b, faded(a, color), faded(b, color));
+            let (a, b) = (Vec3::new(u0, 0.0, t), Vec3::new(u1, 0.0, t));
+            segment(a, b, faded(a, color), faded(b, color));
+        }
+    }
+}
+
 /// Builds the grid and symmetry-plane line geometry.
 ///
 /// Overlays are drawn low-contrast and behind the sculpt in visual weight, and
@@ -29,38 +128,30 @@ pub(super) fn overlay_geometry(overlays: Overlays, extent: f32) -> (Vec<Vertex>,
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
 
-    let mut line = |a: Vec3, b: Vec3, color: [f32; 3]| {
+    let mut segment = |a: Vec3, b: Vec3, from: [f32; 3], to: [f32; 3]| {
         let base = vertices.len() as u32;
         vertices.push(Vertex {
             position: a.into(),
             normal: [0.0, 1.0, 0.0],
-            color,
+            color: from,
             mask: 0.0,
         });
         vertices.push(Vertex {
             position: b.into(),
             normal: [0.0, 1.0, 0.0],
-            color,
+            color: to,
             mask: 0.0,
         });
         indices.extend_from_slice(&[base, base + 1]);
     };
 
     if overlays.grid {
-        let steps = 20;
-        let step = extent * 2.0 / steps as f32;
-        // One and two steps up from the ground. Written in linear, because
-        // the target encodes: passing the design's hex values straight through
-        // renders them several times too bright.
-        let minor = palette::GRID_MINOR;
-        let axis = palette::GRID_AXIS;
-        for i in 0..=steps {
-            let t = -extent + i as f32 * step;
-            let color = if i == steps / 2 { axis } else { minor };
-            line(Vec3::new(t, 0.0, -extent), Vec3::new(t, 0.0, extent), color);
-            line(Vec3::new(-extent, 0.0, t), Vec3::new(extent, 0.0, t), color);
-        }
+        grid(&mut segment, extent);
     }
+
+    // Everything but the grid is one colour end to end, so it goes through the
+    // same builder with both ends the same.
+    let mut line = |a: Vec3, b: Vec3, color: [f32; 3]| segment(a, b, color, color);
 
     for axis in [SymmetryAxis::X, SymmetryAxis::Y, SymmetryAxis::Z] {
         if !overlays.symmetry_planes[axis as usize] {
@@ -920,4 +1011,140 @@ pub(super) fn gizmo_geometry() -> (Vec<Vertex>, Vec<u32>) {
     }
 
     (vertices, indices)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The grid at a given extent, as the vertices it is drawn from.
+    fn grid_vertices(extent: f32) -> Vec<Vertex> {
+        let (vertices, _) = overlay_geometry(
+            Overlays {
+                grid: true,
+                symmetry_planes: [false; 3],
+            },
+            extent,
+        );
+        vertices
+    }
+
+    /// How far a colour still is from the ground it fades into.
+    fn strength(color: [f32; 3]) -> f32 {
+        (0..3)
+            .map(|i| (color[i] - palette::VIEWPORT[i]).abs())
+            .sum()
+    }
+
+    /// The grid dissolves before it reaches its own edge.
+    ///
+    /// The whole point of the fade: a grid that stops at a boundary draws a
+    /// rectangle around the scene, and the eye reads the rectangle rather than
+    /// the form standing in it.
+    #[test]
+    fn the_grid_fades_out_before_its_own_boundary() {
+        const EXTENT: f32 = 3.0;
+        let vertices = grid_vertices(EXTENT);
+        assert!(!vertices.is_empty(), "the grid drew nothing");
+
+        let radius = |v: &Vertex| (v.position[0].powi(2) + v.position[2].powi(2)).sqrt();
+        let outermost = vertices
+            .iter()
+            .max_by(|a, b| radius(a).total_cmp(&radius(b)))
+            .expect("a vertex");
+        assert!(
+            strength(outermost.color) < 1e-4,
+            "the grid's outermost vertex is still {} away from the ground, so \
+             the grid ends on a visible edge rather than dissolving",
+            strength(outermost.color)
+        );
+
+        // And it is still there under the form, which is where a sculptor
+        // reads scale off it.
+        let innermost = vertices
+            .iter()
+            .filter(|v| radius(v) < EXTENT * 0.2)
+            .max_by(|a, b| strength(a.color).total_cmp(&strength(b.color)))
+            .expect("the grid drew nothing near the origin");
+        assert!(
+            strength(innermost.color) > strength(outermost.color),
+            "the grid is no stronger under the form than at its edge"
+        );
+    }
+
+    /// The fade varies *along* a line, not just between lines.
+    ///
+    /// A line drawn as two vertices takes the interpolation between its ends,
+    /// and both ends of a grid line are equally far from the middle — so the
+    /// first version of this faded every line uniformly by its own offset and
+    /// dissolved nothing. The lines are cut into segments for exactly this.
+    #[test]
+    fn a_grid_line_fades_along_its_length() {
+        const EXTENT: f32 = 3.0;
+        let vertices = grid_vertices(EXTENT);
+        // The centre line running along z, which passes through the origin and
+        // reaches the extent at both ends.
+        let along: Vec<&Vertex> = vertices
+            .iter()
+            .filter(|v| v.position[0].abs() < 1e-4)
+            .collect();
+        assert!(
+            along.len() > 4,
+            "the centre line is drawn as {} vertices, too few to fade along",
+            along.len()
+        );
+        let near = along
+            .iter()
+            .min_by(|a, b| a.position[2].abs().total_cmp(&b.position[2].abs()))
+            .expect("a vertex");
+        let far = along
+            .iter()
+            .max_by(|a, b| a.position[2].abs().total_cmp(&b.position[2].abs()))
+            .expect("a vertex");
+        assert!(
+            strength(near.color) > strength(far.color),
+            "one line is the same tone at the origin and at the extent, so the \
+             fade is per line rather than along it"
+        );
+    }
+
+    /// Major lines read as stronger than the minor ones between them.
+    ///
+    /// Compared at the origin, where both lines are well inside the radius the
+    /// fade begins at — so what is being measured is the line's own weight and
+    /// not how far out it happens to sit. The first version of this sampled a
+    /// single line and found, correctly, that it was all one tone.
+    #[test]
+    fn the_grid_has_landmarks_in_it() {
+        const EXTENT: f32 = 3.0;
+        let vertices = grid_vertices(EXTENT);
+        let step = EXTENT * 2.0 / GRID_STEPS as f32;
+        // The lines running along z, sampled where they cross the origin.
+        let at_x = |x: f32| {
+            vertices
+                .iter()
+                .filter(|v| (v.position[0] - x).abs() < 1e-4 && v.position[2].abs() < step * 0.6)
+                .map(|v| strength(v.color))
+                .fold(f32::MIN, f32::max)
+        };
+        let centre = at_x(0.0);
+        let neighbour = at_x(step);
+        assert!(
+            centre > f32::MIN && neighbour > f32::MIN,
+            "the two lines either side of the origin were not both drawn"
+        );
+        // Both sit at a radius well under where the fade starts, so neither is
+        // dimmed by it and the difference is the weight itself.
+        assert!(
+            step / EXTENT < GRID_FADE_FROM,
+            "the neighbouring line is already inside the fade, so this \
+             comparison would be measuring the fade rather than the weight"
+        );
+        assert!(
+            centre > neighbour,
+            "the axis line is {centre} and the minor line beside it {neighbour}: \
+             every line is the same weight, so there is nothing to count cells \
+             against"
+        );
+    }
 }

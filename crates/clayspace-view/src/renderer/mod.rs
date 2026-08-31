@@ -847,12 +847,17 @@ const fn active_tint() -> [f32; 3] {
 }
 
 impl Renderer {
-    /// The viewport's ground, `#23262B`, converted to linear because the
+    /// The viewport's ground, `#1B1E22`, converted to linear because the
     /// render target is sRGB-encoded.
+    ///
+    /// The viewport's own tone rather than the shell's. They were one colour
+    /// until the palette separated them, and while they were, the sculpt sat
+    /// on exactly the tone the panels around it were built from — no outline
+    /// is drawn between the two regions, so there was no edge at all.
     pub const BACKGROUND: wgpu::Color = wgpu::Color {
-        r: palette::GROUND[0] as f64,
-        g: palette::GROUND[1] as f64,
-        b: palette::GROUND[2] as f64,
+        r: palette::VIEWPORT[0] as f64,
+        g: palette::VIEWPORT[1] as f64,
+        b: palette::VIEWPORT[2] as f64,
         a: 1.0,
     };
 
