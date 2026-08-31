@@ -388,6 +388,21 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                     }
                 }
                 ui.separator();
+                // The whole chrome at once, with the key beside it — a mode a
+                // sculptor cannot find their way out of is worse than no mode,
+                // and an empty window says nothing about how it happened.
+                if with_chord(
+                    ui.selectable_label(state.focus, s.action_focus),
+                    state,
+                    Action::ToggleFocus,
+                )
+                .clicked()
+                {
+                    ui.ctx()
+                        .data_mut(|data| data.insert_temp(focus_toggle_id(), true));
+                    ui.close_menu();
+                }
+                ui.separator();
                 if ui.button(s.action_reset_layout).clicked() {
                     ui.ctx()
                         .data_mut(|data| data.insert_temp(layout_reset_id(), true));

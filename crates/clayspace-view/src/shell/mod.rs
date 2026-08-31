@@ -67,7 +67,10 @@ pub use menus::menu_bar;
 pub use options::{brush_badge_id, options_bar};
 pub use right::right_panel;
 pub use shapes::{insert_as_chip_id, object_rows};
-pub use shelf::{brush_shelf, brush_swatch_id, shelf_filter_chip_id, shelf_filter_id, tool_rail};
+pub use shelf::{
+    brush_shelf, brush_swatch_id, favourite_toggle_id, shelf_filter_chip_id, shelf_filter_id,
+    tool_rail, ShelfFilter,
+};
 pub use widgets::{chip_id, close_id, heading_id, readout_id, slider_id, slider_widget_id};
 pub use windows::{
     attribution_window, convert_window, deform_window, diagnostics_window, export_window,
@@ -257,6 +260,14 @@ pub struct ShellState<'a> {
     pub viewport_profile: crate::quality::ViewportProfile,
     /// Which regions are put away, in `Panel::ALL` order.
     pub collapsed: [bool; crate::layout::Panel::ALL.len()],
+    /// Whether the chrome is cleared away and only the sculpt is left.
+    pub focus: bool,
+    /// The brushes this sculptor starred, in no particular order.
+    ///
+    /// A preference rather than document state: it belongs to the person and
+    /// not to the sculpture, so it is stored beside the recent list and the
+    /// arrangement of the regions and reaches no `.clay` file.
+    pub favourites: &'a [ToolKind],
     /// Whether small creases are sharpened by the screen-space curvature term.
     pub cavity: bool,
     /// Whether the studio rig's key light casts.
@@ -295,6 +306,90 @@ pub mod region {
     pub const STATUS: f32 = 28.0;
 }
 
+/// Where the brush readout was drawn, so a test can ask whether it was.
+pub fn brush_hud_id() -> egui::Id {
+    egui::Id::new("brush-hud")
+}
+
+/// How wide the brush readout runs.
+const BRUSH_HUD_WIDTH: f32 = 156.0;
+
+/// The active brush and its numbers, over the viewport.
+///
+/// For focus mode, where the options bar that carries them has gone. Without
+/// it, clearing the chrome away also clears away the size and the intensity a
+/// sculptor is working at — which is not focus, it is working blind.
+///
+/// The brush's own ball at the head of it, as the options bar has, so the two
+/// read as the same thing in two places rather than as two controls.
+pub fn brush_hud(ui: &egui::Ui, rect: egui::Rect, state: &ShellState<'_>) {
+    let s = state.strings;
+    let rows = [
+        (s.label_size, state.units.format(state.brush.size)),
+        (s.label_intensity, format!("{:.2}", state.brush.intensity)),
+        (s.label_flow, format!("{:.2}", state.brush.flow)),
+    ];
+
+    let line = type_scale::NUMERIC + space::TIGHT;
+    let head = size::BADGE.max(type_scale::BODY * 2.0);
+    let height = space::SNUG * 2.0 + head + rows.len() as f32 * (line + type_scale::HEADING);
+    // The upper-leading corner: the opposite one from the transform readout,
+    // so the two never stack, and the corner a sculptor's hand is least often
+    // over.
+    let card = egui::Rect::from_min_size(
+        egui::pos2(rect.left() + HUD_MARGIN, rect.top() + HUD_MARGIN),
+        egui::vec2(BRUSH_HUD_WIDTH, height),
+    );
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(card, size::RADIUS, Tokens::panel().gamma_multiply(0.88));
+
+    // The ball and the brush's mark, at the head.
+    let ball = egui::Rect::from_min_size(
+        card.min + egui::vec2(space::SNUG, space::SNUG),
+        egui::Vec2::splat(size::BADGE),
+    );
+    paint_sphere(ui, ball, Tokens::text_dim(), false);
+    glyphs::paint(&painter, ball, state.tool, Tokens::ground());
+    painter.text(
+        egui::pos2(ball.max.x + space::SNUG, ball.center().y - space::TIGHT),
+        egui::Align2::LEFT_BOTTOM,
+        s.tool(state.tool),
+        egui::FontId::proportional(type_scale::BODY),
+        Tokens::text(),
+    );
+    // Which representation the stroke will land on, which the layer stack and
+    // the representation bar both say and neither is on screen here.
+    painter.text(
+        egui::pos2(ball.max.x + space::SNUG, ball.center().y + space::TIGHT),
+        egui::Align2::LEFT_TOP,
+        s.representation_name(state.representation),
+        egui::FontId::proportional(type_scale::HEADING),
+        Tokens::text_faint(),
+    );
+
+    let mut y = ball.max.y + space::SNUG;
+    for (label, value) in rows {
+        painter.text(
+            egui::pos2(card.left() + space::SNUG, y),
+            egui::Align2::LEFT_TOP,
+            label,
+            egui::FontId::proportional(type_scale::HEADING),
+            Tokens::text_faint(),
+        );
+        painter.text(
+            egui::pos2(card.right() - space::SNUG, y),
+            egui::Align2::RIGHT_TOP,
+            value,
+            egui::FontId::monospace(type_scale::NUMERIC),
+            Tokens::text(),
+        );
+        y += line + type_scale::HEADING;
+    }
+
+    ui.ctx()
+        .memory_mut(|memory| memory.data.insert_temp(brush_hud_id(), card));
+}
+
 /// Where a request to put a region away, or bring it back, is left.
 ///
 /// The same route the viewport profile takes and for the same reasons: the
@@ -302,6 +397,11 @@ pub mod region {
 /// that a command in the layer below could not carry.
 pub fn panel_toggle_id() -> egui::Id {
     egui::Id::new("panel-toggle")
+}
+
+/// Where a request to clear the chrome away, or bring it back, is left.
+pub fn focus_toggle_id() -> egui::Id {
+    egui::Id::new("focus-toggle")
 }
 
 /// Where a request to return every region to the design's size is left.

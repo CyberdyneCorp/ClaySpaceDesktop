@@ -107,6 +107,7 @@ pub enum Key {
     Delete,
     Backspace,
     Escape,
+    Tab,
 }
 
 impl Key {
@@ -130,6 +131,7 @@ impl Key {
             Self::Delete => "Del",
             Self::Backspace => "⌫",
             Self::Escape => "Esc",
+            Self::Tab => "Tab",
         }
     }
 }
@@ -163,11 +165,13 @@ pub enum Action {
     ToggleSkinPreview,
     ToggleArmatureEditing,
     RemoveZsphere,
+    /// Clears the chrome away and leaves the sculpt.
+    ToggleFocus,
     Quit,
 }
 
 impl Action {
-    pub const ALL: [Action; 23] = [
+    pub const ALL: [Action; 24] = [
         Self::NewDocument,
         Self::OpenDocument,
         Self::Save,
@@ -190,6 +194,7 @@ impl Action {
         Self::ToggleSkinPreview,
         Self::ToggleArmatureEditing,
         Self::RemoveZsphere,
+        Self::ToggleFocus,
         Self::Quit,
     ];
 }
@@ -267,6 +272,10 @@ impl Default for Shortcuts {
         // previewing is done constantly.
         bind(Chord::plain(Key::A), Action::ToggleSkinPreview);
         bind(Chord::shift(Key::A), Action::ToggleArmatureEditing);
+        // Tab, which is what a sculpting application uses for this and which
+        // nothing here had bound. Plain rather than modified: it is the one
+        // gesture a sculptor makes without looking.
+        bind(Chord::plain(Key::Tab), Action::ToggleFocus);
         // Two keys, one action: whichever the keyboard has where the thumb
         // expects it. `chord` reports the first for the menu.
         bind(Chord::plain(Key::Delete), Action::RemoveZsphere);

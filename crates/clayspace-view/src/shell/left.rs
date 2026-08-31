@@ -21,7 +21,6 @@ pub fn left_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Command
     scene_section(ui, state);
     layers_section(ui, state, queue);
     layer_transform_section(ui, state, queue);
-    sculpt_settings_section(ui, state, queue);
 }
 
 /// The scene tree: every node, indented by its depth, with whether it shows.
@@ -94,42 +93,6 @@ pub(super) fn layers_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &
 
     ui.add_space(space::SNUG);
     add_layer_control(ui, state, queue);
-}
-
-/// The settings a stroke is made under: which axes it mirrors across.
-pub(super) fn sculpt_settings_section(
-    ui: &mut egui::Ui,
-    state: &ShellState<'_>,
-    queue: &mut CommandQueue,
-) {
-    let s = state.strings;
-    if !heading(ui, s.section_sculpt_settings) {
-        return;
-    }
-    ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new(s.label_symmetry)
-                .size(type_scale::LABEL)
-                .color(Tokens::text_dim()),
-        );
-        for (index, axis) in Axis::ALL.iter().enumerate() {
-            let on = state.symmetry[index];
-            let action = match axis {
-                Axis::X => Action::SymmetryX,
-                Axis::Y => Action::SymmetryY,
-                Axis::Z => Action::SymmetryZ,
-            };
-            if with_chord(
-                ui.add(chip(axis.label(), on, Tokens::panel())),
-                state,
-                action,
-            )
-            .clicked()
-            {
-                queue.push(Command::ToggleSymmetry(*axis));
-            }
-        }
-    });
 }
 
 /// Adding a layer, and saying what it should hold.

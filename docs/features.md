@@ -2078,6 +2078,40 @@ and viewport bars. See *Not built yet*.
 
 ## Interface
 
+**The chrome clears away.** Tab, or Janela → Modo foco, hides the tool rail,
+the options bar, the representation bar, both inspectors, the shelf and the
+status area, and leaves the sculpt. The menu bar stays, because a mode nobody
+can find their way out of is worse than no mode and Tab is not discoverable from
+an empty window; and a floating readout keeps the brush's ball, its name, the
+representation a stroke would land on, and its size, intensity and flow, since
+hiding the bar that carries those without replacing them would be focus in name
+only.
+
+It is a presentation override rather than a layout: it hides the regions without
+touching the sizes and collapse states a sculptor chose, so leaving it puts
+everything back as it was, and it is deliberately not remembered — an
+application that opened with its panels gone would look broken.
+
+**The stroke's settings are on one bar.** Intensidade, Tamanho, Fluxo,
+Suavização and the symmetry axes, with an engaged axis in the soft accent rather
+than a raised grey: symmetry is state a sculptor needs to see without looking
+for it, and a mirrored stroke they did not expect is the most expensive surprise
+on the bar. The smoothing and the symmetry moved here from a right-panel section
+and a left-panel one — moved rather than copied, and the left region's
+sculpt-settings section held nothing else and is gone with it. The edge profile
+was moved too and put back: the bar overflowed and scrolled the colour swatch
+out of view, and an edge is chosen occasionally where a smoothing is dialled
+while drawing.
+
+**Brushes can be starred.** A brush's own menu adds it to a shortlist, the
+shelf's filter column offers ★ Favoritos beside the representations, and the
+list is kept between sessions. It spans every representation, because its
+purpose is finding a brush again rather than describing the active layer — one
+the active layer cannot run is listed dim and refuses the click, like any brush
+met while browsing.
+
+**The viewport's quality profile is remembered** too.
+
 **The regions move, and are remembered.** The left region, the right region and
 the shelf are resizable, clamped so that none can vanish or swallow the
 viewport; each can be put away and brought back from the Janela menu, with a

@@ -246,6 +246,8 @@ fn state<'a>(
         polyframe: false,
         viewport_profile: clayspace_view::ViewportProfile::default(),
         collapsed: [false; 3],
+        focus: false,
+        favourites: &[],
         studio_shading: false,
         cavity: true,
         shadows: true,
@@ -297,35 +299,44 @@ fn build_shell(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQ
     egui::TopBottomPanel::top("menu")
         .exact_height(region::MENU_BAR)
         .show(ctx, |ui| shell::menu_bar(ui, state, queue));
-    egui::TopBottomPanel::top("options")
-        .exact_height(region::OPTIONS_BAR)
-        .show(ctx, |ui| shell::options_bar(ui, state, queue));
-    egui::TopBottomPanel::bottom("status")
-        .exact_height(region::STATUS)
-        .show(ctx, |ui| shell::status_bar(ui, state, queue));
+    // Focus mode asked of every region the composition root asks it of, and
+    // in the same order: this function is a second copy of that frame, and a
+    // region hidden in one and not the other is invisible to every capture.
+    if !state.focus {
+        egui::TopBottomPanel::top("options")
+            .exact_height(region::OPTIONS_BAR)
+            .show(ctx, |ui| shell::options_bar(ui, state, queue));
+    }
+    if !state.focus {
+        egui::TopBottomPanel::bottom("status")
+            .exact_height(region::STATUS)
+            .show(ctx, |ui| shell::status_bar(ui, state, queue));
+    }
     // A collapsed region is not drawn, which is the condition the composition
     // root applies. The widths stay exact here rather than resizable: a capture
     // is compared at a known size, and a panel egui had remembered a drag on
     // would make one capture incomparable with the next.
-    if !state.collapsed[2] {
+    if !state.focus && !state.collapsed[2] {
         egui::TopBottomPanel::bottom("shelf")
             .exact_height(region::SHELF)
             .show(ctx, |ui| {
                 egui::ScrollArea::horizontal().show(ui, |ui| shell::brush_shelf(ui, state, queue));
             });
     }
-    egui::SidePanel::left("rail")
-        .exact_width(region::RAIL)
-        .resizable(false)
-        .show(ctx, |ui| shell::tool_rail(ui, state, queue));
-    if !state.collapsed[0] {
+    if !state.focus {
+        egui::SidePanel::left("rail")
+            .exact_width(region::RAIL)
+            .resizable(false)
+            .show(ctx, |ui| shell::tool_rail(ui, state, queue));
+    }
+    if !state.focus && !state.collapsed[0] {
         egui::SidePanel::left("left")
             .exact_width(region::LEFT)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| shell::left_panel(ui, state, queue));
             });
     }
-    if !state.collapsed[1] {
+    if !state.focus && !state.collapsed[1] {
         egui::SidePanel::right("right")
             .exact_width(region::RIGHT)
             .show(ctx, |ui| {
@@ -341,7 +352,9 @@ fn build_shell(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQ
         // the one boundary the design draws no line for.
         .frame(egui::Frame::new().fill(Tokens::viewport()))
         .show(ctx, |ui| {
-            shell::representation_bar(ui, state, queue);
+            if !state.focus {
+                shell::representation_bar(ui, state, queue);
+            }
             // The viewport is what the bar leaves, measured the way the
             // composition root measures it — after the bar rather than before.
             // Taken before it, the rect included the bar's own strip and the
@@ -358,6 +371,9 @@ fn build_shell(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQ
             // invisible to every capture here.
             shell::outline_overlay(ui, viewport, state);
             shell::transform_hud(ui, viewport, state);
+            if state.focus {
+                shell::brush_hud(ui, viewport, state);
+            }
         });
     shell::diagnostics_window(ctx, state, queue);
     shell::attribution_window(ctx, state, queue);
@@ -4043,7 +4059,7 @@ fn folding_one_section_leaves_the_other_open() {
 /// Drives the shelf with a filter chosen, and hands back the commands.
 fn shelf_with_filter(
     set: &ShellState<'_>,
-    filter: Option<clayspace_model::Representation>,
+    filter: shell::ShelfFilter,
     then: &[Vec<egui::Event>],
 ) -> (egui::Context, CommandQueue) {
     let ctx = egui::Context::default();
@@ -4073,7 +4089,7 @@ fn the_shelf_shows_the_active_layers_brushes_unless_asked_otherwise() {
     let report = diagnostics();
     let set = state(strings, &scene, &materials, &report);
 
-    let (ctx, _) = shelf_with_filter(&set, None, &[]);
+    let (ctx, _) = shelf_with_filter(&set, shell::ShelfFilter::Available, &[]);
     let drawn = |tool: clayspace_model::ToolKind| {
         ctx.memory(|memory| {
             memory
@@ -4118,7 +4134,11 @@ fn browsing_another_representation_shows_its_brushes_and_picks_none() {
         })
         .expect("no tool is mesh-only, so this test has nothing to browse");
 
-    let (ctx, _) = shelf_with_filter(&set, Some(clayspace_model::Representation::Mesh), &[]);
+    let (ctx, _) = shelf_with_filter(
+        &set,
+        shell::ShelfFilter::Elsewhere(clayspace_model::Representation::Mesh),
+        &[],
+    );
     let at = ctx
         .memory(|memory| {
             memory
@@ -4130,7 +4150,7 @@ fn browsing_another_representation_shows_its_brushes_and_picks_none() {
 
     let (_, queue) = shelf_with_filter(
         &set,
-        Some(clayspace_model::Representation::Mesh),
+        shell::ShelfFilter::Elsewhere(clayspace_model::Representation::Mesh),
         &[left_click(at)],
     );
     assert!(
@@ -4154,19 +4174,19 @@ fn choosing_a_shelf_filter_emits_nothing() {
     let report = diagnostics();
     let set = state(strings, &scene, &materials, &report);
 
-    let (ctx, _) = shelf_with_filter(&set, None, &[]);
+    let (ctx, _) = shelf_with_filter(&set, shell::ShelfFilter::Available, &[]);
     let at = ctx
         .memory(|memory| {
             memory
                 .data
-                .get_temp::<egui::Rect>(shell::shelf_filter_chip_id(Some(
+                .get_temp::<egui::Rect>(shell::shelf_filter_chip_id(shell::ShelfFilter::Elsewhere(
                     clayspace_model::Representation::Mesh,
                 )))
         })
         .expect("the shelf drew no mesh filter")
         .center();
 
-    let (after, queue) = shelf_with_filter(&set, None, &[left_click(at)]);
+    let (after, queue) = shelf_with_filter(&set, shell::ShelfFilter::Available, &[left_click(at)]);
     assert!(
         queue.is_empty(),
         "choosing a shelf filter emitted {:?}; which brushes are *shown* is \
@@ -4174,10 +4194,10 @@ fn choosing_a_shelf_filter_emits_nothing() {
         queue.commands()
     );
     assert_eq!(
-        after.data(|data| data
-            .get_temp::<Option<clayspace_model::Representation>>(shell::shelf_filter_id())
-            .flatten()),
-        Some(clayspace_model::Representation::Mesh),
+        after.data(|data| data.get_temp::<shell::ShelfFilter>(shell::shelf_filter_id())),
+        Some(shell::ShelfFilter::Elsewhere(
+            clayspace_model::Representation::Mesh
+        )),
         "clicking the mesh filter did not choose it"
     );
 }
@@ -4371,9 +4391,18 @@ fn a_grid_says_what_it_is_made_of() {
 ///
 /// Pixel offsets, with the caveat `LANGUAGE_ENTRY` carries: they move whenever
 /// an entry lands above them.
+/// The Portuguese bar's, as every other menu test here uses: the menu names
+/// differ in width between locales, so "Janela" and "Window" do not sit in the
+/// same place. A test that clicks this with English strings opens whatever
+/// menu happens to be under it.
 const WINDOW_MENU: egui::Pos2 = egui::Pos2::new(415.0, 13.0);
-const SHELF_ENTRY: egui::Vec2 = egui::Vec2::new(5.0, 83.0);
-const RESET_ENTRY: egui::Vec2 = egui::Vec2::new(5.0, 117.0);
+/// Measured with `where_the_window_menu_entries_fall`, which is at the foot of
+/// this file for the next time an entry lands above one of these: the bands are
+/// 20-41 for the left region, 44-68 for the right, 71-98 for the shelf, 104-134
+/// for focus mode and 140-170 for the reset.
+const SHELF_ENTRY: egui::Vec2 = egui::Vec2::new(5.0, 85.0);
+const FOCUS_ENTRY: egui::Vec2 = egui::Vec2::new(5.0, 119.0);
+const RESET_ENTRY: egui::Vec2 = egui::Vec2::new(5.0, 155.0);
 
 /// The Janela menu offers the three regions and a way to have them all back.
 ///
@@ -4528,5 +4557,193 @@ fn a_region_put_away_gives_its_space_to_the_viewport() {
         closed >= open,
         "putting the right panel away left the central region no wider: \
          {open:?} against {closed:?}"
+    );
+}
+
+// -- focus mode --------------------------------------------------------------
+
+/// Clearing the chrome away leaves the sculpt, and puts the brush where the
+/// options bar was.
+///
+/// The guide's premise is that the viewport should hold most of a sculptor's
+/// attention, and nothing in the application let them clear the chrome to find
+/// out. What makes it usable rather than blind is the readout: the options bar
+/// carries the size and the intensity, and hiding it without replacing them
+/// would be focus in name only.
+#[test]
+fn focus_mode_leaves_the_sculpt_and_keeps_the_brush_readable() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let ordinary = state(strings, &scene, &materials, &report);
+    assert!(
+        shell_rect(&probe_shell(&ordinary), shell::brush_hud_id()).is_none(),
+        "the brush readout was drawn with the options bar already on screen"
+    );
+
+    let mut focused = state(strings, &scene, &materials, &report);
+    focused.focus = true;
+    if let Some(harness) = Harness::new() {
+        capture_shell(&harness, &focused, "96-focus-mode");
+    }
+    let card = shell_rect(&probe_shell(&focused), shell::brush_hud_id())
+        .expect("focus mode drew no brush readout, so the numbers are simply gone");
+
+    // In the viewport, and in the opposite corner from the transform readout so
+    // the two never stack.
+    let viewport = egui::Rect::from_min_max(
+        egui::pos2(0.0, region::MENU_BAR),
+        egui::pos2(SHELL_WIDTH as f32, SHELL_HEIGHT as f32),
+    );
+    assert!(
+        viewport.contains_rect(card),
+        "the brush readout at {card:?} is outside the viewport {viewport:?}"
+    );
+}
+
+/// Focus is a presentation override: it hides the regions and does not move
+/// them.
+///
+/// The distinction the guide is explicit about — "Focus mode should temporarily
+/// hide regions while retaining their persisted sizes/collapse states" — and
+/// the reason it is a bool beside the layout rather than three more collapse
+/// flags inside it. A focus mode that collapsed the panels would put a
+/// sculptor's own arrangement back wrong when they left it.
+#[test]
+fn focus_does_not_disturb_the_arrangement() {
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let mut focused = state(strings, &scene, &materials, &report);
+    // A sculptor who had put the shelf away and left the other two open.
+    focused.collapsed = [false, false, true];
+    focused.focus = true;
+
+    assert_eq!(
+        focused.collapsed,
+        [false, false, true],
+        "focus mode changed which regions the sculptor had put away"
+    );
+
+    // And it is reachable from the menu as well as the key, so a sculptor who
+    // has not learnt Tab can still get there — asked of an ordinary frame,
+    // which is where the journey starts.
+    let ordinary = state(strings, &scene, &materials, &report);
+    let ctx = probe_shell_after(
+        &ordinary,
+        &[
+            left_click(WINDOW_MENU),
+            left_click(WINDOW_MENU + FOCUS_ENTRY),
+        ],
+    );
+    assert_eq!(
+        ctx.data(|data| data.get_temp::<bool>(shell::focus_toggle_id())),
+        Some(true),
+        "the focus entry left nothing for the composition root to read"
+    );
+}
+
+/// Tab is bound to it, and was bound to nothing before.
+#[test]
+fn tab_clears_the_chrome() {
+    let shortcuts = clayspace_view::Shortcuts::default();
+    let chord = shortcuts
+        .chord(clayspace_view::Action::ToggleFocus)
+        .expect("focus mode has no key bound to it");
+    assert_eq!(
+        chord.label(),
+        "Tab",
+        "focus mode is bound to {} rather than Tab",
+        chord.label()
+    );
+}
+
+/// Prints which Janela entry each offset actually hits.
+///
+/// Kept because the constants above it are pixel offsets down a menu, and they
+/// move every time an entry lands above them — twice already while this branch
+/// was open. Reading them off a screenshot got one wrong by a row; this reports
+/// the bands. Ignored by default: it is a measuring aid, not an assertion.
+///
+/// `cargo test -p clayspace-app --release --test visual_shell -- \
+///  where_the_window_menu --ignored --nocapture`
+#[test]
+#[ignore = "a measuring aid, not an assertion"]
+fn where_the_window_menu_entries_fall() {
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let set = state(strings, &scene, &materials, &report);
+    for y in (20..190).step_by(3) {
+        let at = WINDOW_MENU + egui::Vec2::new(5.0, y as f32);
+        let ctx = probe_shell_after(&set, &[left_click(WINDOW_MENU), left_click(at)]);
+        let panel = ctx.data(|d| d.get_temp::<clayspace_view::Panel>(shell::panel_toggle_id()));
+        let focus = ctx.data(|d| d.get_temp::<bool>(shell::focus_toggle_id()));
+        let reset = ctx.data(|d| d.get_temp::<bool>(shell::layout_reset_id()));
+        if panel.is_some() || focus.is_some() || reset.is_some() {
+            eprintln!("y={y:3} panel={panel:?} focus={focus:?} reset={reset:?}");
+        }
+    }
+}
+
+/// The star filter lists what was starred, whatever representation it belongs
+/// to, and says how to star something when nothing is.
+#[test]
+fn the_star_filter_lists_the_shortlist() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    // Nothing starred: the shelf says so, and says where the gesture is —
+    // a silence that does not explain itself is a feature nobody finds.
+    let bare = state(strings, &scene, &materials, &report);
+    let (ctx, _) = shelf_with_filter(&bare, shell::ShelfFilter::Favourites, &[]);
+    for tool in clayspace_model::ToolKind::ALL {
+        assert!(
+            ctx.memory(|memory| memory
+                .data
+                .get_temp::<egui::Rect>(shell::brush_swatch_id(tool)))
+                .is_none(),
+            "the star filter drew {tool:?} with nothing starred"
+        );
+    }
+
+    // A brush from another representation is listed too: a shortlist is for
+    // finding a brush again, and which layer it applies to is a separate
+    // question the swatch answers by refusing the click.
+    let elsewhere = clayspace_model::ToolKind::ALL
+        .into_iter()
+        .find(|tool| !tool.exists_on(bare.representation))
+        .expect("every tool exists on a field, so this test has nothing to show");
+    let starred = [clayspace_model::ToolKind::Argila, elsewhere];
+    let mut with = state(strings, &scene, &materials, &report);
+    with.favourites = &starred;
+
+    let (ctx, _) = shelf_with_filter(&with, shell::ShelfFilter::Favourites, &[]);
+    for tool in starred {
+        assert!(
+            ctx.memory(|memory| memory
+                .data
+                .get_temp::<egui::Rect>(shell::brush_swatch_id(tool)))
+                .is_some(),
+            "the star filter did not list {tool:?}, which is starred"
+        );
+    }
+    let unstarred = clayspace_model::ToolKind::ALL
+        .into_iter()
+        .find(|tool| !starred.contains(tool))
+        .expect("a tool that is not starred");
+    assert!(
+        ctx.memory(|memory| memory
+            .data
+            .get_temp::<egui::Rect>(shell::brush_swatch_id(unstarred)))
+            .is_none(),
+        "the star filter listed {unstarred:?}, which is not starred"
     );
 }

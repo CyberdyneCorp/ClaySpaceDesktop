@@ -354,6 +354,12 @@ pub(super) fn brush_controls_section(
     if let Some(value) = slider(ui, s.label_noise, state.brush.shaping.noise, 0.0..=1.0, 2) {
         queue.push(Command::SetBrushNoise(value));
     }
+    // The edge profile stays. The smoothing moved to the options bar, where the
+    // stroke's other numbers are and where a sculptor reaches for it mid-line;
+    // this did not follow it, because the bar cannot hold everything at the
+    // design's 1280 — four profiles need two hundred pixels between them, and
+    // an edge is chosen occasionally where a smoothing is dialled while
+    // drawing.
     ui.label(
         egui::RichText::new(s.label_edge)
             .size(type_scale::LABEL)
@@ -371,14 +377,5 @@ pub(super) fn brush_controls_section(
     let mut accumulate = state.brush.shaping.accumulate;
     if ui.checkbox(&mut accumulate, s.label_accumulate).changed() {
         queue.push(Command::SetBrushAccumulate(accumulate));
-    }
-    if let Some(value) = slider(
-        ui,
-        s.label_smoothing,
-        state.brush.shaping.smoothing,
-        0.0..=0.95,
-        2,
-    ) {
-        queue.push(Command::SetBrushSmoothing(value));
     }
 }

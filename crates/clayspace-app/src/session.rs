@@ -7,8 +7,9 @@
 
 use std::path::{Path, PathBuf};
 
+use clayspace_model::ToolKind;
 use clayspace_model::{Locale, RecentDocuments, Recovery, RememberedReference};
-use clayspace_view::Layout;
+use clayspace_view::{Layout, ViewportProfile};
 
 /// The application's own directory, and the files in it.
 #[derive(Debug, Clone)]
@@ -178,6 +179,56 @@ impl SessionStore {
         self.root.join("layout")
     }
 
+    /// The brushes this sculptor starred.
+    ///
+    /// One key a line, and a key this build does not recognise is dropped
+    /// rather than failing the file: a shortlist written by a version with a
+    /// brush this one has not got should still bring back the rest.
+    pub fn load_favourites(&self) -> Vec<ToolKind> {
+        let text = std::fs::read_to_string(self.favourites_path()).unwrap_or_default();
+        text.lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .filter_map(|line| ToolKind::ALL.into_iter().find(|tool| tool.key() == line))
+            .collect()
+    }
+
+    pub fn save_favourites(&self, favourites: &[ToolKind]) {
+        if self.ensure_root().is_err() {
+            return;
+        }
+        let mut text = String::new();
+        for tool in favourites {
+            text.push_str(tool.key());
+            text.push('\n');
+        }
+        let _ = std::fs::write(self.favourites_path(), text);
+    }
+
+    fn favourites_path(&self) -> PathBuf {
+        self.root.join("favourites")
+    }
+
+    /// How much an idle frame is worth spending on.
+    ///
+    /// Only a tier this build recognises, as the locale is: taking a default
+    /// for anything else would turn a corrupted file into a silent preference
+    /// nobody set.
+    pub fn load_viewport_profile(&self) -> Option<ViewportProfile> {
+        let text = std::fs::read_to_string(self.root.join("viewport-profile")).ok()?;
+        let name = text.trim();
+        ViewportProfile::ALL
+            .into_iter()
+            .find(|profile| profile.key() == name)
+    }
+
+    pub fn save_viewport_profile(&self, profile: ViewportProfile) {
+        if self.ensure_root().is_err() {
+            return;
+        }
+        let _ = std::fs::write(self.root.join("viewport-profile"), profile.key());
+    }
+
     pub fn load_recent(&self) -> RecentDocuments {
         let text = std::fs::read_to_string(self.recent_path()).unwrap_or_default();
         let mut recent = RecentDocuments::from_paths(
@@ -268,6 +319,52 @@ mod tests {
         std::fs::create_dir_all(store.0.root()).expect("a place to write");
         std::fs::write(store.0.root().join("layout"), "not a layout at all").expect("write");
         assert_eq!(store.0.load_layout(), Layout::default());
+    }
+
+    /// A shortlist of brushes survives a restart.
+    #[test]
+    fn favourites_survive_a_restart() {
+        let store = Scratch::new("favourites");
+        let starred = [ToolKind::Argila, ToolKind::Polir];
+        store.0.save_favourites(&starred);
+        assert_eq!(store.0.load_favourites(), starred.to_vec());
+    }
+
+    /// A brush this build does not know is dropped, and the rest come back.
+    ///
+    /// A shortlist written by a version carrying a brush this one has not got
+    /// should cost that entry and not the file.
+    #[test]
+    fn an_unknown_brush_costs_its_own_line() {
+        let store = Scratch::new("favourites-unknown");
+        std::fs::create_dir_all(store.0.root()).expect("a place to write");
+        std::fs::write(
+            store.0.root().join("favourites"),
+            "clay\nsomething-this-build-has-never-heard-of\npolish\n",
+        )
+        .expect("write");
+        assert_eq!(
+            store.0.load_favourites(),
+            vec![ToolKind::Argila, ToolKind::Polir]
+        );
+    }
+
+    /// The viewport profile survives a restart, and only a real tier loads.
+    #[test]
+    fn a_viewport_profile_survives_a_restart() {
+        let store = Scratch::new("profile");
+        store.0.save_viewport_profile(ViewportProfile::Presentation);
+        assert_eq!(
+            store.0.load_viewport_profile(),
+            Some(ViewportProfile::Presentation)
+        );
+
+        std::fs::write(store.0.root().join("viewport-profile"), "luxurious").expect("write");
+        assert_eq!(
+            store.0.load_viewport_profile(),
+            None,
+            "a tier this build does not know should not become a silent preference"
+        );
     }
 
     fn touch(path: &Path) {
