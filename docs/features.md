@@ -2117,8 +2117,30 @@ nothing in the interface reported a placed object's position at all. Shown for
 a placed object alone: a cage's target is a set of control points and a layer's
 is everything it holds, and neither has one position to report.
 
-An axis and one angle, and one scale factor, because that is what the engine's
-transforms take. Three rotation rows would be two invented numbers.
+An axis and one angle for rotation, because that is what the engine's ABI
+speaks — it stores a quaternion and calls the axis and angle *a* representative
+rather than the representation, so three Euler angles would be one of several
+answers and would change when nothing had moved.
+
+**A placed object stretches per axis.** The manipulator's three scale boxes are
+offered on it: a box on an axis stretches that axis, the centre handle takes
+all three. A whole subtool still scales uniformly, because the engine's *layer*
+transform takes one factor where its *node* transform takes three — the handles
+are offered exactly where they can be applied.
+
+They were hidden on everything but a deformation cage for as long as nothing
+had bound `clay_layer_set_transform_nonuniform`, which the engine has carried
+since ABI 0.54.0 against a pin of 0.60.0. The belief that "every transform in
+the engine's interface takes a single scale factor" was written into the
+domain, the manipulator, the readout and the specification, and nothing went
+back to check it. A capsule could not be squashed into a slot.
+
+What a stretch costs is not what one would guess: the field stays 1-Lipschitz,
+so the safe step scale is unchanged and a marcher takes the steps it always
+did. What is lost is exactness — the value becomes a bound on the distance,
+short by at most the ratio of the largest axis to the smallest and never an
+overestimate — which matters to a consumer reading it *as* a distance and to
+nothing else. A uniform value compiles to identical tape.
 
 **The floor dissolves rather than ending.** The grid fades out before it
 reaches its own extent, so it draws no rectangle around the scene, and each

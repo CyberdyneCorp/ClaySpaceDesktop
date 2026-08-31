@@ -2409,7 +2409,7 @@ fn the_shapes_panel_offers_a_shape_and_what_it_is_measured_by() {
         position: [0.4, 0.0, 0.0],
         rotation_axis: [0.0, 1.0, 0.0],
         rotation_angle: 0.0,
-        scale: 1.0,
+        scale: [1.0; 3],
     }];
 
     let mut set = state(strings, &scene, &materials, &report);
@@ -2467,7 +2467,7 @@ fn the_placed_objects_are_listed_where_the_layers_are() {
         position: [0.0; 3],
         rotation_axis: [0.0, 1.0, 0.0],
         rotation_angle: 0.0,
-        scale: 1.0,
+        scale: [1.0; 3],
     }];
 
     let mut set = state(strings, &scene, &materials, &report);
@@ -2512,7 +2512,7 @@ fn a_selected_object_offers_the_manipulators_three_modes() {
         position: [0.0; 3],
         rotation_axis: [0.0, 1.0, 0.0],
         rotation_angle: 0.0,
-        scale: 1.0,
+        scale: [1.0; 3],
     }];
 
     let mut set = state(strings, &scene, &materials, &report);
@@ -4269,7 +4269,7 @@ fn the_transform_readout_is_shown_for_a_placed_object_alone() {
         position: [0.0125, 0.0, -0.0032],
         rotation_axis: [0.0, 1.0, 0.0],
         rotation_angle: 15f32.to_radians(),
-        scale: 1.0,
+        scale: [1.0; 3],
     }];
     let mut placed = state(strings, &scene, &materials, &report);
     placed.objects = &objects;

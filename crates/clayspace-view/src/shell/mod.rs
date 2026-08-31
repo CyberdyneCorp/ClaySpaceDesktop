@@ -549,11 +549,15 @@ const HUD_MARGIN: f32 = 12.0;
 ///
 /// # What it does not show
 ///
-/// The reference this is drawn from lists three rotations and three scales.
-/// The engine's transforms take an axis and one angle, and one scale factor —
-/// `SceneObject` says so, and `GizmoMode::Scale` offers one handle for exactly
-/// that reason. Three rotation rows would be two invented numbers, and a
-/// sculptor who typed into them would be typing into nothing.
+/// Three rotations. The engine stores a quaternion and its ABI speaks axis and
+/// angle, which it is careful to call *a* representative rather than the
+/// representation — decomposing one into three Euler angles picks one of
+/// several answers, and a readout that changed its numbers when nothing had
+/// moved would be worse than one that shows what the document holds.
+///
+/// The scale is three, because the engine's node transform has taken three
+/// since ABI 0.54.0. It showed one for as long as nothing had bound
+/// `clay_layer_set_transform_nonuniform`.
 pub fn transform_hud(ui: &egui::Ui, rect: egui::Rect, state: &ShellState<'_>) {
     let Some(clayspace_model::GizmoTarget::Object(id)) = state.gizmo_target else {
         return;
@@ -598,7 +602,7 @@ pub fn transform_hud(ui: &egui::Ui, rect: egui::Rect, state: &ShellState<'_>) {
             format!("{:.1}", object.rotation_angle.to_degrees()),
         ),
         (s.hud_axis.to_owned(), triple(&object.rotation_axis, 2)),
-        (s.hud_scale.to_owned(), format!("{:.3}×", object.scale)),
+        (s.hud_scale.to_owned(), triple(&object.scale, 3)),
     ];
 
     let line = type_scale::NUMERIC + space::TIGHT;

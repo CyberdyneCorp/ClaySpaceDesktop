@@ -93,24 +93,6 @@ impl GizmoHandle {
         }
     }
 
-    /// Every handle a mode offers for something carrying a [`Transform`].
-    ///
-    /// The same as [`GizmoHandle::all_for`] except in scale mode, where the
-    /// three axis boxes are not offered: the engine's transforms take one
-    /// scale factor and not three, so an axis box would measure a stretch it
-    /// could not apply. A control that silently does nothing is the failure
-    /// this application keeps refusing — the combine operations' distance
-    /// slider refuses zero for the same reason.
-    ///
-    /// A cage still gets all three, because a cage scales its own control
-    /// points and carries no engine transform.
-    pub fn all_for_transform(mode: GizmoMode) -> Vec<GizmoHandle> {
-        match mode {
-            GizmoMode::Scale => vec![Self::Centre],
-            other => Self::all_for(other),
-        }
-    }
-
     /// Every handle the combined manipulator carries, with the operation each
     /// performs.
     ///
@@ -118,9 +100,12 @@ impl GizmoHandle {
     /// widget, and the operation chosen by the handle grabbed rather than by a
     /// mode set first. The centre is not listed: what it does is whichever of
     /// move and scale the interface's mode names — see
-    /// [`GizmoHandle::centre_operation`]. The scale boxes are offered only
-    /// where a stretch can be applied per axis; on a target the engine scales
-    /// by one factor they would be three handles for one number.
+    /// [`GizmoHandle::centre_operation`]. The scale boxes are offered where a
+    /// stretch can be applied per axis, which — since the per-axis transform
+    /// calls were bound — is every target with a transform, and not only a
+    /// cage. `per_axis_scale` remains a parameter because a target may still
+    /// have no meaningful per-axis stretch, and because a caller that has not
+    /// been widened should not silently gain three handles for one number.
     pub fn combined(per_axis_scale: bool) -> Vec<(GizmoMode, GizmoHandle)> {
         let mut all: Vec<(GizmoMode, GizmoHandle)> =
             (0..3).map(|i| (GizmoMode::Move, Self::Axis(i))).collect();
@@ -296,10 +281,37 @@ pub struct Transform {
     /// thing to get wrong."
     pub rotation_axis: [f32; 3],
     pub rotation_angle: f32,
-    /// Uniform. There is no per-axis scale anywhere in the engine's interface,
-    /// which is why scale mode offers a centre handle and no axis boxes for
-    /// anything that carries one of these.
-    pub scale: f32,
+    /// One factor per axis, applied in the target's own local frame before
+    /// its rotation and position place it.
+    ///
+    /// Uniform once, on the belief that "there is no per-axis scale anywhere
+    /// in the engine's interface". There has been since ABI 0.54.0 —
+    /// `clay_item_set_scale_nonuniform` and
+    /// `clay_layer_set_transform_nonuniform` — and nothing here had bound
+    /// either, so a capsule could not be squashed into a slot and the
+    /// manipulator's three scale boxes were hidden on everything but a cage.
+    ///
+    /// Every component is positive. Zero collapses the target onto a plane and
+    /// has no inverse; a negative one mirrors it, which the layer mirror
+    /// already expresses and which would silently flip a boolean's winding.
+    pub scale: [f32; 3],
+}
+
+impl Transform {
+    /// The one factor a uniform scale would be, for a caller that still wants
+    /// one — a readout, or a route that has not been widened.
+    ///
+    /// The mean of the three rather than any single component, so a target
+    /// that was scaled uniformly reports exactly what it was given.
+    pub fn uniform_scale(&self) -> f32 {
+        self.scale.iter().sum::<f32>() / 3.0
+    }
+
+    /// Whether the three factors agree, which is what keeps the field exact.
+    pub fn is_uniformly_scaled(&self) -> bool {
+        let [x, y, z] = self.scale;
+        (x - y).abs() < 1e-6 && (y - z).abs() < 1e-6
+    }
 }
 
 impl Default for Transform {
@@ -308,7 +320,7 @@ impl Default for Transform {
             position: [0.0; 3],
             rotation_axis: [0.0, 1.0, 0.0],
             rotation_angle: 0.0,
-            scale: 1.0,
+            scale: [1.0; 3],
         }
     }
 }
@@ -365,9 +377,31 @@ impl GizmoDrag {
             GizmoMode::Scale => {
                 let factor = self.factor(to);
                 let offset = sub(current.position, self.pivot);
+                // A box on an axis stretches that axis; the centre handle
+                // takes all three. Which one was grabbed is the whole
+                // difference, and it is the same rule the cage's point-set
+                // scale has always followed — an axis box there reaches one
+                // coordinate and no other.
+                let along = self.handle.axis_index();
+                let scaled = |i: usize| {
+                    let applied = match along {
+                        Some(axis) if axis != i => 1.0,
+                        _ => factor,
+                    };
+                    (current.scale[i] * applied).clamp(MIN_SCALE, MAX_SCALE)
+                };
                 Transform {
-                    position: std::array::from_fn(|i| self.pivot[i] + offset[i] * factor),
-                    scale: (current.scale * factor).clamp(MIN_SCALE, MAX_SCALE),
+                    // The position follows the stretch on the axes it acts on,
+                    // so an object away from the pivot travels with the
+                    // stretch rather than staying put while it deforms.
+                    position: std::array::from_fn(|i| {
+                        let applied = match along {
+                            Some(axis) if axis != i => 1.0,
+                            _ => factor,
+                        };
+                        self.pivot[i] + offset[i] * applied
+                    }),
+                    scale: std::array::from_fn(scaled),
                     ..current
                 }
             }
@@ -376,10 +410,11 @@ impl GizmoDrag {
 
     /// How much bigger this drag is asking for.
     ///
-    /// Uniform whatever handle was grabbed. A per-axis factor has nowhere to
-    /// go — the engine's transforms take one number — so an axis handle in
-    /// scale mode would measure something it could not then apply.
-    /// [`GizmoHandle::all_for_transform`] is what stops one being offered.
+    /// One number, and which axes it reaches is [`Self::resolve`]'s business:
+    /// a box on an axis applies it to that axis, the centre handle to all
+    /// three. It was uniform whatever handle was grabbed, because "the
+    /// engine's transforms take one number" — which stopped being true at ABI
+    /// 0.54.0 and was still being repeated here.
     fn factor(self, to: [f32; 3]) -> f32 {
         let was = length(sub(self.anchor, self.pivot));
         if was < 1e-6 {
@@ -1324,16 +1359,71 @@ mod transform_tests {
     fn a_scale_multiplies_what_is_already_there() {
         let out = drag(GizmoMode::Scale, GizmoHandle::Centre, [1.0, 0.0, 0.0]);
         let bigger = out.resolve(Transform::at([0.0; 3]), [2.0, 0.0, 0.0], false);
-        assert!((bigger.scale - 2.0).abs() < 1e-4);
+        assert!((bigger.uniform_scale() - 2.0).abs() < 1e-4);
         let bigger_again = out.resolve(bigger, [2.0, 0.0, 0.0], false);
-        assert!((bigger_again.scale - 4.0).abs() < 1e-4);
+        assert!((bigger_again.uniform_scale() - 4.0).abs() < 1e-4);
+    }
+
+    /// The centre handle takes all three axes with it.
+    #[test]
+    fn the_centre_handle_scales_uniformly() {
+        let out = drag(GizmoMode::Scale, GizmoHandle::Centre, [1.0, 0.0, 0.0]);
+        let bigger = out.resolve(Transform::at([0.0; 3]), [2.0, 0.0, 0.0], false);
+        assert!(
+            bigger.is_uniformly_scaled(),
+            "the centre handle stretched one axis: {:?}",
+            bigger.scale
+        );
+    }
+
+    /// A box on an axis stretches that axis and leaves the other two alone.
+    ///
+    /// The whole point of binding the engine's per-axis transform: this is what
+    /// makes a slot a squashed capsule without re-authoring the primitive. The
+    /// scale was one number for as long as nothing had bound it, and the
+    /// manipulator hid its three boxes on everything but a cage in consequence.
+    #[test]
+    fn an_axis_box_stretches_one_axis_alone() {
+        for axis in 0..3 {
+            let mut towards = [0.0; 3];
+            towards[axis] = 1.0;
+            let out = drag(GizmoMode::Scale, GizmoHandle::Axis(axis), towards);
+            let stretched = out.resolve(
+                Transform::at([0.0; 3]),
+                std::array::from_fn(|i| towards[i] * 2.0),
+                false,
+            );
+            for other in 0..3 {
+                let got = stretched.scale[other];
+                if other == axis {
+                    assert!(
+                        (got - 2.0).abs() < 1e-4,
+                        "the box on axis {axis} scaled it to {got}"
+                    );
+                } else {
+                    assert!(
+                        (got - 1.0).abs() < 1e-4,
+                        "the box on axis {axis} reached axis {other}, which is now {got}"
+                    );
+                }
+            }
+            assert!(
+                !stretched.is_uniformly_scaled(),
+                "an axis box left the scale uniform: {:?}",
+                stretched.scale
+            );
+        }
     }
 
     #[test]
     fn a_scale_never_passes_through_zero() {
         let out = drag(GizmoMode::Scale, GizmoHandle::Centre, [1.0, 0.0, 0.0]);
         let tiny = out.resolve(Transform::at([0.0; 3]), [0.0, 0.0, 0.0], false);
-        assert!(tiny.scale > 0.0, "scale reached {}", tiny.scale);
+        assert!(
+            tiny.scale.iter().all(|axis| *axis > 0.0),
+            "scale reached {:?}",
+            tiny.scale
+        );
     }
 
     /// A drag is resolved from where it began, so a wandering hand lands where
@@ -1351,21 +1441,55 @@ mod transform_tests {
         assert_ne!(wandered.position, straight.position);
     }
 
+    /// A target that stretches per axis is offered the three boxes.
+    ///
+    /// `all_for_transform` used to stand beside this, answering that a
+    /// transform gets a centre handle and no boxes because "the engine's
+    /// transforms take one scale factor and not three". A node's has taken
+    /// three since ABI 0.54.0. The function was a second source of truth about
+    /// which handles a target carries, used by nothing but its own tests —
+    /// `combined` is the one the picture and the hit test both read — so it
+    /// went rather than being taught the same fact twice.
     #[test]
-    fn scale_mode_offers_no_axis_handles_for_a_transform() {
-        let handles = GizmoHandle::all_for_transform(GizmoMode::Scale);
-        assert_eq!(handles, vec![GizmoHandle::Centre]);
-        // And a cage keeps all four, because it scales its own points.
-        assert_eq!(GizmoHandle::all_for(GizmoMode::Scale).len(), 4);
+    fn the_boxes_are_offered_where_a_stretch_can_be_applied() {
+        let boxes = |per_axis| {
+            GizmoHandle::combined(per_axis)
+                .into_iter()
+                .filter(|(mode, _)| *mode == GizmoMode::Scale)
+                .count()
+        };
+        assert_eq!(
+            boxes(true),
+            3,
+            "a stretchable target should carry a box per axis"
+        );
+        assert_eq!(
+            boxes(false),
+            0,
+            "a target that scales by one factor should carry no boxes, since \
+             each would measure a stretch it cannot apply"
+        );
     }
 
+    /// And the arrows and rings do not depend on it either way.
+    ///
+    /// Three arrows, and four rings: the three axis rings plus the outer one,
+    /// which turns about the view.
     #[test]
     fn move_and_rotate_offer_what_they_always_did() {
-        for mode in [GizmoMode::Move, GizmoMode::Rotate] {
-            assert_eq!(
-                GizmoHandle::all_for_transform(mode),
-                GizmoHandle::all_for(mode)
-            );
+        for per_axis in [false, true] {
+            for (mode, expected) in [(GizmoMode::Move, 3), (GizmoMode::Rotate, 4)] {
+                let offered: Vec<GizmoHandle> = GizmoHandle::combined(per_axis)
+                    .into_iter()
+                    .filter(|(offered, _)| *offered == mode)
+                    .map(|(_, handle)| handle)
+                    .collect();
+                assert_eq!(
+                    offered.len(),
+                    expected,
+                    "{mode:?} should carry {expected} handles, got {offered:?}"
+                );
+            }
         }
     }
 }

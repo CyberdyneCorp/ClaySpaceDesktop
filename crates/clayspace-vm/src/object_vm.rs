@@ -298,15 +298,25 @@ impl ObjectViewModel {
         self.placement = at;
     }
 
-    /// The handles the manipulator offers right now.
+    /// Whether the manipulator offers a scale box per axis on what it is
+    /// pointed at.
     ///
-    /// Scale mode offers the centre alone on a target carrying an engine
-    /// transform: those take one scale factor and not three, and an axis box
-    /// would measure a stretch that could not be applied.
-    pub fn handles(&self) -> Vec<GizmoHandle> {
+    /// The engine's *node* transform takes a factor per axis — since ABI
+    /// 0.54.0, through `clay_layer_set_transform_nonuniform` — and its *layer*
+    /// transform takes one. So a placed object stretches and a whole subtool
+    /// does not, and a curve's control points are a point set that scales per
+    /// axis the way a cage's do.
+    ///
+    /// This replaced a `handles()` that answered with a mode-specific list.
+    /// The manipulator stopped being mode-specific when it became one widget
+    /// carrying every operation, so a list per mode was answering a question
+    /// nobody asks any more — and it was a second place that decided which
+    /// handles exist, beside `GizmoHandle::combined`, which is the one the
+    /// picture and the hit test both read.
+    pub fn per_axis_scale(&self) -> bool {
         match self.target.get() {
-            Some(GizmoTarget::Curve) | None => GizmoHandle::all_for(*self.mode.get()),
-            Some(_) => GizmoHandle::all_for_transform(*self.mode.get()),
+            Some(GizmoTarget::Object(_)) | Some(GizmoTarget::Curve) => true,
+            Some(GizmoTarget::Layer(_)) | None => false,
         }
     }
 

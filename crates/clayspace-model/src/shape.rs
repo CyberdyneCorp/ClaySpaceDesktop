@@ -338,12 +338,29 @@ pub struct SceneObject {
     /// Axis and angle, as every rotation in the engine's interface is given.
     pub rotation_axis: [f32; 3],
     pub rotation_angle: f32,
-    /// Uniform. The engine's transforms take one factor and not three; see
-    /// [`crate::GizmoMode::Scale`] and what the manipulator offers for one.
-    pub scale: f32,
+    /// One factor per axis, applied innermost — in the object's own local
+    /// frame, before its rotation and position place it.
+    ///
+    /// Uniform once, on the belief that "the engine's transforms take one
+    /// factor and not three". A *layer's* transform does; a node's has taken
+    /// three since ABI 0.54.0, through
+    /// `clay_layer_set_transform_nonuniform`, and nothing here had bound it.
+    /// That is what makes a slot a squashed capsule without re-authoring the
+    /// primitive.
+    pub scale: [f32; 3],
 }
 
 impl SceneObject {
+    /// The one factor a uniform scale would be, for a caller that wants one.
+    ///
+    /// The mean of the three, so an object scaled evenly reports exactly what
+    /// it was given. An object that has been stretched has no single scale and
+    /// this is an average of one — which is why the interface shows all three
+    /// where they differ.
+    pub fn uniform_scale(&self) -> f32 {
+        self.scale.iter().sum::<f32>() / 3.0
+    }
+
     /// What the interface calls it.
     ///
     /// A shape's own name, or the mesh layer's — which is the name a sculptor
@@ -628,7 +645,7 @@ pub trait ObjectModel {
         position: [f32; 3],
         rotation_axis: [f32; 3],
         rotation_angle: f32,
-        scale: f32,
+        scale: [f32; 3],
     ) -> Result<(), crate::ModelError> {
         let _ = (id, position, rotation_axis, rotation_angle, scale);
         Err(self.no_objects_here())

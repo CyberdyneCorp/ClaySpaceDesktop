@@ -355,9 +355,16 @@ pub(super) fn selected_object_controls(
 
     ui.add_space(space::SNUG);
     ui.label(
-        egui::RichText::new(format!("{}: {:.2}×", s.label_object_scale, object.scale))
-            .size(type_scale::LABEL)
-            .color(Tokens::text_dim()),
+        // Three factors where they differ and one where they do not, so a
+        // uniformly scaled object still reads as one number rather than as
+        // the same number three times.
+        egui::RichText::new(format!(
+            "{}: {}",
+            s.label_object_scale,
+            scale_text(object.scale)
+        ))
+        .size(type_scale::LABEL)
+        .color(Tokens::text_dim()),
     );
     ui.label(
         egui::RichText::new(s.hint_uniform_scale)

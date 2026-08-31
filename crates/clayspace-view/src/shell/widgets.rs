@@ -195,6 +195,21 @@ pub(super) fn selection_rail(ui: &egui::Ui, rect: egui::Rect) {
     ui.painter().rect_filled(rail, 0.0, Tokens::selection());
 }
 
+/// A per-axis scale, as a person would say it.
+///
+/// One number where the three agree, which is what a uniformly scaled object
+/// has and what "1.00×" has always meant. Three only where there is something
+/// to tell apart — a squashed capsule reads "2.00 × 1.00 × 1.00" and an
+/// unsquashed one does not have to be read three times to find that out.
+pub(super) fn scale_text(scale: [f32; 3]) -> String {
+    let [x, y, z] = scale;
+    if (x - y).abs() < 1e-4 && (y - z).abs() < 1e-4 {
+        format!("{x:.2}×")
+    } else {
+        format!("{x:.2} × {y:.2} × {z:.2}")
+    }
+}
+
 /// The symbol lengths are shown in: `mm`, `cm`, `m`.
 ///
 /// The one place the unit's own `label()` is called. It is a domain `label()`

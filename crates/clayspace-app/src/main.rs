@@ -1601,7 +1601,17 @@ impl App {
             return Some((pivot, cage.mode, reach, true));
         }
         let pivot = self.objects.pivot()?;
-        Some((pivot, *self.objects.mode().get(), self.gizmo_reach(), false))
+        // Which handles the target carries is the ViewModel's answer, not a
+        // rule restated here: a placed object stretches per axis, a whole
+        // subtool does not, and the composition root should not be a second
+        // place that knows why.
+        let per_axis = self.objects.per_axis_scale();
+        Some((
+            pivot,
+            *self.objects.mode().get(),
+            self.gizmo_reach(),
+            per_axis,
+        ))
     }
 
     /// Which handle the pointer is over, for the highlight.
@@ -1859,6 +1869,9 @@ impl App {
         let outline = self.selected_outline();
         let subtool_outline = self.active_subtool_outline();
         let object_mode = *self.objects.mode().get();
+        // The same question `gizmo_target` asks, so the picture and the hit
+        // test offer the same handles.
+        let object_per_axis = self.objects.selected().get().is_some();
         // The handle in hand while a drag is under way, and the one under the
         // pointer otherwise: a gesture keeps its handle lit wherever the
         // pointer has since travelled.
@@ -1907,8 +1920,10 @@ impl App {
                 reach: object_reach,
                 hovered: gizmo_hovered,
                 view_axis: clayspace_app::input::toward_eye(&camera, pivot),
-                // One scale factor, so one handle for it.
-                per_axis_scale: false,
+                // Three boxes on a placed object, none on a whole subtool:
+                // the engine's node transform takes a factor per axis and its
+                // layer transform takes one.
+                per_axis_scale: object_per_axis,
             });
             graphics.renderer.set_lattice(
                 &gpu,
@@ -1989,7 +2004,12 @@ impl App {
             .copied()
             .fold(0.0f32, f32::max)
             .max(1e-3)
-            * object.scale;
+            // The largest of the three, applied to every axis. A per-axis
+            // reach would be tighter and would stop being a bound the moment
+            // the object was turned — this frames the object from any angle,
+            // which is what the sphere-like bound was already doing when the
+            // scale was one number.
+            * object.scale.iter().copied().fold(0.0f32, f32::max);
         Some((
             std::array::from_fn(|i| object.position[i] - reach),
             std::array::from_fn(|i| object.position[i] + reach),

@@ -114,7 +114,7 @@ fn a_moved_object_moves_its_cavity() {
     assert!(!inside(&document, [0.0, 0.9, 0.0]), "the cavity is cut");
 
     document
-        .set_object_transform(id, [0.0, -0.9, 0.0], [0.0, 1.0, 0.0], 0.0, 1.0)
+        .set_object_transform(id, [0.0, -0.9, 0.0], [0.0, 1.0, 0.0], 0.0, [1.0; 3])
         .expect("move");
 
     assert!(inside(&document, [0.0, 0.9, 0.0]), "the old cavity closed");
@@ -222,7 +222,7 @@ fn undoing_a_move_takes_the_table_back_with_it() {
         .place_object(Shape::Sphere, &[0.4], [0.0, 0.9, 0.0], subtracting())
         .expect("place");
     document
-        .set_object_transform(id, [0.0, -0.9, 0.0], [0.0, 1.0, 0.0], 0.0, 1.0)
+        .set_object_transform(id, [0.0, -0.9, 0.0], [0.0, 1.0, 0.0], 0.0, [1.0; 3])
         .expect("move");
 
     document.undo().expect("undo the move");
@@ -270,7 +270,7 @@ fn redoing_a_move_puts_the_table_back_where_it_was() {
         .place_object(Shape::Sphere, &[0.4], [0.0, 0.9, 0.0], subtracting())
         .expect("place");
     document
-        .set_object_transform(id, [0.0, -0.9, 0.0], [0.0, 1.0, 0.0], 0.0, 1.0)
+        .set_object_transform(id, [0.0, -0.9, 0.0], [0.0, 1.0, 0.0], 0.0, [1.0; 3])
         .expect("move");
     document.undo().expect("undo");
     document.redo().expect("redo");
@@ -350,7 +350,7 @@ fn an_object_that_is_gone_refuses_rather_than_panicking() {
     document.remove_object(id).expect("remove");
 
     assert!(document
-        .set_object_transform(id, [0.0; 3], [0.0, 1.0, 0.0], 0.0, 1.0)
+        .set_object_transform(id, [0.0; 3], [0.0, 1.0, 0.0], 0.0, [1.0; 3])
         .is_err());
     assert!(document.remove_object(id).is_err());
 }
@@ -372,7 +372,7 @@ fn a_placed_object_survives_a_reopen() {
         )
         .expect("place");
     document
-        .set_object_transform(id, [0.0, 0.6, 0.0], [0.0, 1.0, 0.0], 0.0, 1.5)
+        .set_object_transform(id, [0.0, 0.6, 0.0], [0.0, 1.0, 0.0], 0.0, [1.5; 3])
         .expect("scale it up");
     document.save(&path).expect("save");
 
@@ -385,7 +385,11 @@ fn a_placed_object_survives_a_reopen() {
 
     assert_eq!(object.source.shape(), Some(Shape::Cylinder));
     assert_eq!(object.combine.op, Combine::Subtract);
-    assert!((object.scale - 1.5).abs() < 1e-4, "scale {}", object.scale);
+    assert!(
+        (object.uniform_scale() - 1.5).abs() < 1e-4,
+        "scale {:?}",
+        object.scale
+    );
     assert!(
         (object.position[1] - 0.6).abs() < 1e-4,
         "position {:?}",
@@ -573,7 +577,7 @@ fn scaling_a_layer_scales_all_of_it() {
         .set_target_transform(
             target,
             Transform {
-                scale: 2.0,
+                scale: [2.0; 3],
                 ..current
             },
         )
@@ -852,16 +856,31 @@ mod the_manipulators_rules {
             .expect("apply");
 
         let after = document.target_transform(target).expect("a transform");
-        assert!(after.scale > 0.0, "scale reached {}", after.scale);
+        assert!(
+            after.scale.iter().all(|axis| *axis > 0.0),
+            "scale reached {:?}",
+            after.scale
+        );
     }
 
+    /// A placed object carries the three scale boxes, and a whole subtool does
+    /// not.
+    ///
+    /// The engine's *node* transform takes a factor per axis and its *layer*
+    /// transform takes one, so the boxes are offered exactly where they can be
+    /// applied. This asserted the opposite for as long as nothing had bound
+    /// `clay_layer_set_transform_nonuniform`, on the reasoning that "an axis
+    /// box would measure a stretch the engine cannot apply".
     #[test]
-    fn the_manipulator_offers_no_axis_scale_on_a_transform() {
-        assert_eq!(
-            GizmoHandle::all_for_transform(GizmoMode::Scale),
-            vec![GizmoHandle::Centre],
-            "an axis box would measure a stretch the engine cannot apply"
-        );
+    fn the_boxes_are_offered_on_a_node_and_not_on_a_layer() {
+        let boxes = |per_axis| {
+            GizmoHandle::combined(per_axis)
+                .into_iter()
+                .filter(|(mode, _)| *mode == GizmoMode::Scale)
+                .count()
+        };
+        assert_eq!(boxes(true), 3, "a placed object stretches per axis");
+        assert_eq!(boxes(false), 0, "a whole layer scales by one factor");
     }
 }
 
@@ -919,7 +938,7 @@ fn a_moved_object_is_still_mirrored() {
 
     // Moved off the plane, where the mirror should make a second.
     document
-        .set_object_transform(id, [0.7, 0.3, 0.0], [0.0, 1.0, 0.0], 0.0, 1.0)
+        .set_object_transform(id, [0.7, 0.3, 0.0], [0.0, 1.0, 0.0], 0.0, [1.0; 3])
         .expect("move");
 
     assert!(
@@ -1065,4 +1084,88 @@ fn a_mesh_operand_survives_a_reopen() {
     assert_eq!(object.combine.op, Combine::Subtract);
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(clayspace_engine::objects::sidecar_for(&path));
+}
+
+// -- a stretch that reaches the field ----------------------------------------
+
+/// A per-axis scale actually squashes the form, and not only the readout.
+///
+/// The engine's node transform has taken three factors since ABI 0.54.0 and
+/// nothing here had bound it, so every placed object was a sphere or a capsule
+/// at one size. This is the proof that binding it reached the field: a sphere
+/// of radius 0.3 stretched to twice its width in x is inside at 0.5 along x,
+/// where an unstretched one is outside, and still outside at 0.5 along y.
+#[test]
+fn a_per_axis_scale_stretches_the_form_it_is_given_to() {
+    // Clear of the starting form, which fills the origin: a point inside that
+    // is inside whatever this test does.
+    let at = [3.0, 0.0, 0.0];
+    let mut document = document();
+    let id = document
+        .place_object(Shape::Sphere, &[0.3], at, CombineSettings::default())
+        .expect("place");
+
+    let along_x = [at[0] + 0.5, 0.0, 0.0];
+    let along_y = [at[0], 0.5, 0.0];
+    assert!(
+        !inside(&document, along_x) && !inside(&document, along_y),
+        "a sphere of radius 0.3 already reaches 0.5, so this test measures nothing"
+    );
+
+    document
+        .set_object_transform(id, at, [0.0, 1.0, 0.0], 0.0, [2.0, 1.0, 1.0])
+        .expect("stretch it in x");
+
+    assert!(
+        inside(&document, along_x),
+        "the object was stretched to twice its width in x and 0.5 along x is \
+         still outside it — the per-axis scale never reached the field"
+    );
+    assert!(
+        !inside(&document, along_y),
+        "stretching x reached y, so the scale is not per axis at all"
+    );
+}
+
+/// And it survives a save and a reopen.
+///
+/// The side-car is a positional text format, and the two extra components had
+/// to be appended after the counted run of parameters rather than beside the
+/// first — a format cannot grow in the middle. This is that decision measured
+/// end to end rather than at the parser.
+#[test]
+fn a_stretched_object_reopens_stretched() {
+    let directory = std::env::temp_dir().join("clayspace-stretch-reopen");
+    std::fs::create_dir_all(&directory).expect("a place to write");
+    let path = directory.join("stretched.clay");
+
+    let mut document = document();
+    let id = document
+        .place_object(Shape::Sphere, &[0.3], [0.0; 3], CombineSettings::default())
+        .expect("place");
+    document
+        .set_object_transform(id, [0.0; 3], [0.0, 1.0, 0.0], 0.0, [2.0, 1.0, 0.5])
+        .expect("stretch");
+    // By id rather than by position: the document is created with a starting
+    // form, and it is listed first.
+    let scale_of = |listed: &[clayspace_model::SceneObject]| {
+        listed
+            .iter()
+            .find(|object| object.id == id)
+            .map(|object| object.scale)
+    };
+    assert_eq!(
+        scale_of(&document.objects()),
+        Some([2.0, 1.0, 0.5]),
+        "the stretch was lost before anything was saved"
+    );
+    document.save(&path).expect("save");
+
+    let mut reopened = document_at(&path);
+    assert_eq!(
+        scale_of(&reopened.objects()),
+        Some([2.0, 1.0, 0.5]),
+        "the stretch did not survive the round trip"
+    );
+    let _ = std::fs::remove_file(&path);
 }
