@@ -59,7 +59,28 @@
 - [x] 6.8 Point the edge-profile test back at the right panel after the move
       was reverted
 
-## 7. Verification
+## 7. Crossing a layer from its own row
+
+- [x] 7.1 Offer the crossings *that layer's* representation has, from its own
+      menu — the representation bar speaks for the active layer, and a sculptor
+      looking at a stack means the row they opened
+- [x] 7.2 Make the row's layer active first, since the conversion acts on the
+      active one
+- [x] 7.3 Aim it in place, and open the panel rather than converting on the
+      click: a crossing into cells needs a size chosen and one over the budget
+      is refused
+- [x] 7.4 An ellipsis on the entry, which is what says a dialog follows
+- [x] 7.5 Move `DELETE_ENTRY`, measured rather than reasoned
+
+## 8. The capture harness's missing accents
+
+- [x] 8.1 Establish it is the harness and not the application: a glyph reaches
+      the font atlas in the pass that first lays it out, and a menu is laid out
+      in a pass whose output was discarded
+- [x] 8.2 Apply every pass's texture deltas rather than the first and the last
+- [x] 8.3 Confirm "Mostrar só esta" keeps its accent
+
+## 9. Verification
 
 - [x] 7.1 Look at focus mode and at the bar
 - [x] 7.2 `just check`

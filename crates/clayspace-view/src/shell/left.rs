@@ -545,6 +545,12 @@ pub(super) fn layer_name(
 }
 
 /// What a layer row's own menu offers.
+/// Where a layer row's crossing entry is recorded, so a test can find it by
+/// the layer and the representation rather than by a pixel.
+pub fn layer_convert_id(key: LayerKey, target: Representation) -> egui::Id {
+    egui::Id::new(("layer-convert", key.0, target))
+}
+
 pub(super) fn layer_menu(
     ui: &mut egui::Ui,
     state: &ShellState<'_>,
@@ -569,6 +575,54 @@ pub(super) fn layer_menu(
         queue.push(Command::SoloLayer((!soloed).then_some(layer.key)));
         ui.close_menu();
     }
+    // Crossing this layer into another representation, in place.
+    //
+    // `ConversionSettings::in_place` is what a sculptor means by converting
+    // *this* layer — the source leaves as the result arrives and the result
+    // stands where it stood, rather than a second layer appearing beside the
+    // original. The setting has always been there; there was no way to ask for
+    // it from the layer itself.
+    //
+    // Offered from the row rather than only from the representation bar because
+    // the bar speaks for the *active* layer, and a sculptor looking at a stack
+    // means the row they opened the menu on.
+    let crossings = Direction::from_representation(layer.representation);
+    if !crossings.is_empty() {
+        ui.separator();
+        for direction in crossings {
+            let target = direction.to();
+            // An ellipsis, because this opens the panel rather than converting:
+            // a crossing costs something, a crossing into cells needs a size
+            // chosen, and one that would not fit the budget is refused. The
+            // panel is where all three are said.
+            let label = format!("{} {}…", s.label_convert_to, s.representation_name(target));
+            let entry = ui.button(label);
+            ui.ctx().memory_mut(|memory| {
+                memory
+                    .data
+                    .insert_temp(layer_convert_id(layer.key, target), entry.rect)
+            });
+            if entry.clicked() {
+                // Made active first: the conversion acts on the active layer,
+                // so a crossing asked of a row that is not the active one would
+                // otherwise convert something else entirely.
+                queue.push(Command::SelectLayer(layer.key));
+                queue.push(Command::SetConversion(
+                    clayspace_model::ConversionSettings {
+                        direction,
+                        in_place: true,
+                        ..state.conversion
+                    },
+                ));
+                if !state.show_convert {
+                    queue.push(Command::ToggleConvert);
+                }
+                ui.close_menu();
+            }
+        }
+        ui.separator();
+    }
+
     // Disabled with the reason on it rather than offered and refused. The
     // document keeps one layer to sculpt on, and the model says so — but a
     // menu entry whose only outcome is an error message in the status area is

@@ -60,8 +60,8 @@ use windows::*;
 
 pub use booleans::boolean_op_chip_id;
 pub use left::{
-    layer_row_id, layer_transform_chip_id, left_panel, new_layer_button_id, new_layer_kind_id,
-    new_layer_kind_menu_id, optimize_button_id,
+    layer_convert_id, layer_row_id, layer_transform_chip_id, left_panel, new_layer_button_id,
+    new_layer_kind_id, new_layer_kind_menu_id, optimize_button_id,
 };
 pub use menus::menu_bar;
 pub use options::{brush_badge_id, options_bar};

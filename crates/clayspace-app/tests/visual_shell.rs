@@ -477,28 +477,30 @@ fn capture_shell_after(
     // single-pass capture of the diagnostics window came back byte-identical
     // to one with the window closed. The panels do not need this; the window
     // does, and one capture path is better than two.
-    let first = ctx.run(raw_input(), &mut build);
+    let mut passes = vec![ctx.run(raw_input(), &mut build)];
     let mut output = ctx.run(raw_input(), &mut build);
 
     for events in frames {
         // The frame the input lands on, and then the frame that draws what it
         // opened — a menu is an `Area` and measures before it paints, exactly
         // as a window does.
-        let _ = ctx.run(
+        passes.push(output);
+        passes.push(ctx.run(
             egui::RawInput {
                 events: events.clone(),
                 ..raw_input()
             },
             &mut build,
-        );
-        let _ = ctx.run(raw_input(), &mut build);
+        ));
+        passes.push(ctx.run(raw_input(), &mut build));
         output = ctx.run(raw_input(), &mut build);
     }
 
     let target = OffscreenTarget::new(&harness.gpu, SHELL_WIDTH, SHELL_HEIGHT);
-    // The font atlas arrives in the first pass's deltas, so both are applied
-    // and only the second is tessellated.
-    let image = render_egui(harness, &ctx, [first, output], &target);
+    // Every pass's texture deltas are applied and only the last is tessellated:
+    // a glyph first laid out in a menu arrives in that menu's own pass.
+    passes.push(output);
+    let image = render_egui(harness, &ctx, passes, &target);
     support::save(&image, name);
     // After the capture is written, so a failing expectation still leaves the
     // picture that explains it.
@@ -510,21 +512,30 @@ fn capture_shell_after(
 fn render_egui(
     harness: &Harness,
     ctx: &egui::Context,
-    passes: [egui::FullOutput; 2],
+    // Every pass, not just the first and the last. A glyph reaches the font
+    // atlas in the pass that first lays it out, and a menu is laid out in a
+    // pass whose output used to be discarded — so an accented character that
+    // appears *only* in a menu arrived in a thrown-away delta and drew as a
+    // blank. "Mostrar só esta" came out "Mostrar s esta", and every menu
+    // capture here has been quietly missing its accents.
+    mut passes: Vec<egui::FullOutput>,
     target: &OffscreenTarget,
 ) -> clayspace_view::Image {
     let mut renderer =
         egui_wgpu::Renderer::new(&harness.gpu.device, OffscreenTarget::FORMAT, None, 1, false);
 
     let pixels_per_point = ctx.pixels_per_point();
-    let [first, output] = passes;
     // Every pass's textures, only the last pass's shapes.
-    for pass in [&first, &output] {
+    for pass in &passes {
         for (id, delta) in &pass.textures_delta.set {
             renderer.update_texture(&harness.gpu.device, &harness.gpu.queue, *id, delta);
         }
     }
-    let primitives = ctx.tessellate(output.shapes, pixels_per_point);
+    let shapes = passes
+        .pop()
+        .expect("at least one pass to tessellate")
+        .shapes;
+    let primitives = ctx.tessellate(shapes, pixels_per_point);
 
     let descriptor = egui_wgpu::ScreenDescriptor {
         size_in_pixels: [target.width(), target.height()],
@@ -1316,7 +1327,11 @@ fn click(at: egui::Pos2, button: egui::PointerButton) -> Vec<egui::Event> {
 /// the wrong one is caught by the assertion, not silently tolerated.
 const RENAME_ENTRY: egui::Vec2 = egui::Vec2::new(37.0, 17.0);
 const SOLO_ENTRY: egui::Vec2 = egui::Vec2::new(37.0, 42.0);
-const DELETE_ENTRY: egui::Vec2 = egui::Vec2::new(37.0, 67.0);
+/// Moved from 67 when the row's menu gained its crossings: the two entries and
+/// the rules either side of them sit between Solo and Excluir. Measured rather
+/// than reasoned — the bands are 5-29 for Renomear, 32-59 for the solo, 65-122
+/// for the two crossings, and 128 down for Excluir.
+const DELETE_ENTRY: egui::Vec2 = egui::Vec2::new(37.0, 131.0);
 
 /// Renaming and deleting are reachable from a layer row.
 ///
@@ -4792,5 +4807,121 @@ fn the_status_area_says_when_the_work_will_be_saved() {
         "a document waiting to be saved and one already saved drew the same \
          status area, so the line says nothing. See \
          target/visual/97-autosave-pending.png"
+    );
+}
+
+// -- crossing a layer from its own row ---------------------------------------
+
+/// A layer's own menu offers the crossings that layer has, and asks for them in
+/// place.
+///
+/// `ConversionSettings::in_place` is what a sculptor means by converting *this*
+/// layer — the source leaves as the result arrives and the result stands where
+/// it stood — and there was no way to ask for it from the layer itself. The
+/// representation bar speaks for the *active* layer; a sculptor looking at a
+/// stack means the row they opened the menu on.
+#[test]
+fn a_layer_row_offers_its_own_crossings_in_place() {
+    let strings = Strings::for_locale(Locale::PtBr);
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    // A mesh layer, which crosses to voxels and to a field — the case in the
+    // report that asked for this.
+    let mut scene = scene();
+    let key = scene.layers[0].key;
+    scene.layers[0].representation = clayspace_model::Representation::Mesh;
+    let set = state(strings, &scene, &materials, &report);
+
+    let row = probe_shell(&set)
+        .read_response(shell::layer_row_id(key))
+        .map(|response| response.rect)
+        .expect("the stack drew no row for the mesh layer");
+
+    let open = right_click(row.center());
+    if let Some(harness) = Harness::new() {
+        capture_shell_after(
+            &harness,
+            &set,
+            "98-layer-crossings",
+            std::slice::from_ref(&open),
+            |_| {},
+        );
+    }
+    let ctx = probe_shell_after(&set, std::slice::from_ref(&open));
+
+    // Exactly the crossings the domain declares from a mesh, and no others.
+    for representation in clayspace_model::Representation::ALL {
+        let offered = ctx
+            .memory(|memory| {
+                memory
+                    .data
+                    .get_temp::<egui::Rect>(shell::layer_convert_id(key, representation))
+            })
+            .is_some();
+        let declared =
+            clayspace_model::Direction::from_representation(clayspace_model::Representation::Mesh)
+                .into_iter()
+                .any(|direction| direction.to() == representation);
+        assert_eq!(
+            offered,
+            declared,
+            "the row {} {representation:?}, and the domain {} a crossing to it",
+            if offered { "offers" } else { "does not offer" },
+            if declared { "declares" } else { "declares no" },
+        );
+    }
+
+    // And choosing one makes that layer active, aims the crossing in place, and
+    // opens the panel where the cost is stated — rather than converting on a
+    // click.
+    let at = ctx
+        .memory(|memory| {
+            memory.data.get_temp::<egui::Rect>(shell::layer_convert_id(
+                key,
+                clayspace_model::Representation::Voxel,
+            ))
+        })
+        .expect("no crossing into voxels was offered")
+        .center();
+
+    let driven = egui::Context::default();
+    shell::apply_theme(&driven);
+    let mut queue = CommandQueue::new();
+    for _ in 0..2 {
+        run_shell_frame(&driven, &set, &mut queue, Vec::new());
+    }
+    queue.drain();
+    for frame in [open, left_click(at)] {
+        run_shell_frame(&driven, &set, &mut queue, frame);
+        run_shell_frame(&driven, &set, &mut queue, Vec::new());
+    }
+
+    let commands = queue.commands();
+    assert!(
+        commands
+            .iter()
+            .any(|command| matches!(command, Command::SelectLayer(chosen) if *chosen == key)),
+        "the crossing did not make its own layer active first, so it would \
+         convert whichever layer happened to be: {commands:?}"
+    );
+    assert!(
+        commands.iter().any(|command| matches!(
+            command,
+            Command::SetConversion(settings)
+                if settings.in_place
+                    && settings.direction.to() == clayspace_model::Representation::Voxel
+        )),
+        "the crossing was not aimed into voxels in place: {commands:?}"
+    );
+    assert!(
+        commands.iter().any(|c| matches!(c, Command::ToggleConvert)),
+        "the panel stayed shut, so nothing said what the crossing would cost: \
+         {commands:?}"
+    );
+    assert!(
+        !commands.iter().any(|c| matches!(c, Command::RunConversion)),
+        "the row ran the conversion itself, routing around the panel where its \
+         cost is stated and confirmed: {commands:?}"
     );
 }

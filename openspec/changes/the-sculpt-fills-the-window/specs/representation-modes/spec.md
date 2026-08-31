@@ -58,3 +58,29 @@ because it is a preference rather than a view.
 - **WHEN** the active tool does not exist on the newly active layer's
   representation
 - **THEN** the application selects one that does and states that it changed
+
+### Requirement: A layer can be crossed from its own row
+The layer stack SHALL offer, from a layer's own menu, the crossings that layer
+has — derived from the declared set for *that layer's* representation rather
+than for the active one.
+
+Invoking one SHALL make that layer active, aim the conversion at that crossing
+with the in-place setting on, and open the conversion panel. It SHALL NOT
+perform the conversion: a crossing costs work, a crossing into cells needs a
+size chosen, and one that would exceed the budget is refused — all three are
+stated in the panel.
+
+In place means the source leaves as the result arrives and the result stands
+where it stood, which is what a sculptor means by converting *this* layer.
+
+#### Scenario: A layer offers its own crossings
+- **WHEN** the user opens a mesh layer's menu
+- **THEN** the crossings a mesh has are offered, and no others
+
+#### Scenario: The crossing acts on the row it was asked of
+- **WHEN** the user invokes a crossing from a layer that is not the active one
+- **THEN** that layer is made active before the conversion is aimed
+
+#### Scenario: A crossing from a row does not convert on the click
+- **WHEN** the user invokes a crossing from a layer's menu
+- **THEN** the conversion is aimed in place and the panel is shown, and the conversion has not run
