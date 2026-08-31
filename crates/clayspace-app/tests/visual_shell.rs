@@ -248,6 +248,7 @@ fn state<'a>(
         collapsed: [false; 3],
         focus: false,
         favourites: &[],
+        autosave_in: None,
         studio_shading: false,
         cavity: true,
         shadows: true,
@@ -4745,5 +4746,51 @@ fn the_star_filter_lists_the_shortlist() {
             .get_temp::<egui::Rect>(shell::brush_swatch_id(unstarred)))
             .is_none(),
         "the star filter listed {unstarred:?}, which is not starred"
+    );
+}
+
+// -- the status area's autosave line -----------------------------------------
+
+/// The status area says whether the work is on disk, and when it will be.
+///
+/// The policy and the clock have both been there since autosave shipped, and
+/// the event loop asked them every frame to decide how long to wait. Nothing
+/// ever showed the answer, so a sculptor could not tell whether an hour's work
+/// was written or waiting.
+#[test]
+fn the_status_area_says_when_the_work_will_be_saved() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    // Nothing pending: an unmodified document is never written, so a countdown
+    // would be a timer frozen at zero rather than a saved document.
+    let saved = state(strings, &scene, &materials, &report);
+    assert!(saved.autosave_in.is_none());
+    let ctx = probe_shell(&saved);
+    let quiet = shell_rect(&ctx, shell::autosave_id()).expect("no autosave line was drawn");
+    assert!(
+        quiet.bottom() >= SHELL_HEIGHT as f32 - region::STATUS,
+        "the autosave line at {quiet:?} is not in the status area"
+    );
+
+    // Something pending: the same line, counting down.
+    let mut pending = state(strings, &scene, &materials, &report);
+    pending.autosave_in = Some(std::time::Duration::from_secs(155));
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let waiting = capture_shell(&harness, &pending, "97-autosave-pending");
+    let settled = capture_shell(&harness, &saved, "97-autosave-nothing");
+    let status = egui::Rect::from_min_max(
+        egui::pos2(0.0, SHELL_HEIGHT as f32 - region::STATUS),
+        egui::pos2(SHELL_WIDTH as f32, SHELL_HEIGHT as f32),
+    );
+    assert!(
+        differing_pixels_in(&waiting, &settled, status) > 0,
+        "a document waiting to be saved and one already saved drew the same \
+         status area, so the line says nothing. See \
+         target/visual/97-autosave-pending.png"
     );
 }

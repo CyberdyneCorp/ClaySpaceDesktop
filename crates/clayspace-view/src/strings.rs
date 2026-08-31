@@ -367,6 +367,10 @@ pub struct Strings {
     pub shelf_filter_all: &'static str,
     /// The brushes a sculptor starred, across every representation.
     pub shelf_filter_favourites: &'static str,
+    /// The status area's autosave line: counting down to the next one, or
+    /// saying there is nothing waiting to be written.
+    pub label_autosave_in: &'static str,
+    pub state_autosaved: &'static str,
     /// Starring a brush, and taking the star off it.
     pub action_favourite_add: &'static str,
     pub action_favourite_remove: &'static str,
@@ -801,6 +805,8 @@ libera em vez de congelar.",
     shelf_no_tools: "Nenhuma ferramenta para esta representação ainda",
     shelf_filter_all: "Disponíveis",
     shelf_filter_favourites: "★ Favoritos",
+    label_autosave_in: "Salvamento automático em",
+    state_autosaved: "Nada a salvar",
     action_favourite_add: "Adicionar aos favoritos",
     action_favourite_remove: "Remover dos favoritos",
     shelf_no_favourites: "Nenhum pincel favoritado ainda — use o menu de um pincel",
@@ -1182,6 +1188,8 @@ instead.",
     shelf_no_tools: "No tools for this representation yet",
     shelf_filter_all: "Available",
     shelf_filter_favourites: "★ Favourites",
+    label_autosave_in: "Auto save in",
+    state_autosaved: "Nothing to save",
     action_favourite_add: "Add to favourites",
     action_favourite_remove: "Remove from favourites",
     shelf_no_favourites: "No brushes starred yet — use a brush's own menu",
@@ -1573,6 +1581,8 @@ lados. Con Ctrl, libera en vez de congelar.",
     shelf_no_tools: "Todavía no hay herramientas para esta representación",
     shelf_filter_all: "Disponibles",
     shelf_filter_favourites: "★ Favoritos",
+    label_autosave_in: "Guardado automático en",
+    state_autosaved: "Nada que guardar",
     action_favourite_add: "Añadir a favoritos",
     action_favourite_remove: "Quitar de favoritos",
     shelf_no_favourites: "Ningún pincel en favoritos — usa el menú de un pincel",
@@ -1933,8 +1943,10 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 221] {
+    pub fn all(&self) -> [&'static str; 223] {
         [
+            self.label_autosave_in,
+            self.state_autosaved,
             self.shelf_filter_favourites,
             self.action_favourite_add,
             self.action_favourite_remove,

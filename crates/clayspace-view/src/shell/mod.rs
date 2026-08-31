@@ -262,6 +262,12 @@ pub struct ShellState<'a> {
     pub collapsed: [bool; crate::layout::Panel::ALL.len()],
     /// Whether the chrome is cleared away and only the sculpt is left.
     pub focus: bool,
+    /// How long until the next autosave, where one is pending.
+    ///
+    /// `None` when the document matches what is on disk, which is not the same
+    /// as "no autosave configured": an unmodified document is never written, so
+    /// there is nothing to count down to. The status area says which.
+    pub autosave_in: Option<std::time::Duration>,
     /// The brushes this sculptor starred, in no particular order.
     ///
     /// A preference rather than document state: it belongs to the person and
@@ -491,6 +497,63 @@ pub fn document_display_name<'a>(strings: &'a Strings, name: &'a str) -> &'a str
     }
 }
 
+/// The id the autosave line is recorded under, for tests.
+pub fn autosave_id() -> egui::Id {
+    egui::Id::new("autosave-readout")
+}
+
+/// How long until the next autosave, or that there is nothing waiting.
+///
+/// Two states rather than a countdown that stops: an unmodified document is
+/// never written — autosave exists to preserve work that is not on disk — so a
+/// timer frozen at zero would read as a stalled save rather than as a saved
+/// document.
+///
+/// A dot before it, in the accent while something is pending and quiet
+/// otherwise, so the state is carried by more than the words: this is the one
+/// line in the status area a sculptor reads to know whether their work is safe.
+fn autosave_readout(ui: &mut egui::Ui, state: &ShellState<'_>) {
+    let s = state.strings;
+    let row = ui.horizontal(|ui| {
+        let (dot, _) =
+            ui.allocate_exact_size(egui::vec2(space::SNUG, space::SNUG), egui::Sense::hover());
+        ui.painter().circle_filled(
+            dot.center(),
+            space::HAIR,
+            if state.autosave_in.is_some() {
+                Tokens::accent()
+            } else {
+                Tokens::text_faint()
+            },
+        );
+        match state.autosave_in {
+            Some(left) => {
+                ui.label(
+                    egui::RichText::new(s.label_autosave_in)
+                        .size(type_scale::HEADING)
+                        .color(Tokens::text_faint()),
+                );
+                numeric(ui, clock(left));
+            }
+            None => {
+                ui.label(
+                    egui::RichText::new(s.state_autosaved)
+                        .size(type_scale::HEADING)
+                        .color(Tokens::text_faint()),
+                );
+            }
+        }
+    });
+    ui.ctx()
+        .memory_mut(|memory| memory.data.insert_temp(autosave_id(), row.response.rect));
+}
+
+/// A duration as minutes and seconds, which is how a countdown is read.
+fn clock(left: std::time::Duration) -> String {
+    let seconds = left.as_secs();
+    format!("{:02}:{:02}", seconds / 60, seconds % 60)
+}
+
 /// The status area: document, memory, backend and units.
 pub fn status_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
     let s = state.strings;
@@ -527,6 +590,13 @@ pub fn status_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Command
                 Tokens::text_dim()
             },
         );
+
+        // Whether the work is on disk, and when it will be. The policy and the
+        // clock have both been here since autosave shipped and neither had
+        // ever been shown: a sculptor could not tell whether an hour's work was
+        // written or waiting.
+        ui.add_space(space::SECTION);
+        autosave_readout(ui, state);
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(space::PANEL);

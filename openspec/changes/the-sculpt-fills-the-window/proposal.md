@@ -89,3 +89,19 @@ interface text and would read differently in another language, and a position in
   for it would be a duplicate.
 - **Brush previews rendered from real brush behaviour**, the custom title bar,
   and rail labels.
+- **The orientation cube.** The gizmo is three coloured axis rods with their
+  negative halves dimmed, which does communicate orientation. What a cube would
+  add is names on the faces and a click — and the click is a third route to the
+  four views the viewport bar's chips and the keys `1`–`4` already give. Naming
+  the faces means text, which the overlay pipeline draws none of, so it would
+  have to come from the shell — and the shell has no camera. Worth doing when
+  the labels are the point; not worth a third way to reach Frontal.
+
+## Two the audit closed rather than built
+
+- **`Not generated yet`.** Already there: `Detail::Pending` drives an accent
+  note in the geometry section reading exactly that. It was on the missing list
+  by mistake.
+- **A `+` in the layer stack's heading.** The stack already carries a labelled
+  *Nova camada* button. A second affordance for one action is the duplication
+  this branch has refused everywhere else.

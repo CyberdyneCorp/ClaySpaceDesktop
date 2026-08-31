@@ -3522,6 +3522,12 @@ impl App {
             collapsed: Panel::ALL.map(|panel| self.layout.is_collapsed(panel)),
             focus: self.focus,
             favourites: &self.favourites,
+            // The same question the event loop asks to decide how long to
+            // wait, asked of the same policy and the same clock, so the line a
+            // sculptor reads and the write that happens cannot disagree.
+            autosave_in: self
+                .autosave
+                .next_in(self.saved_at.elapsed(), *self.document_vm.modified().get()),
             studio_shading: self
                 .graphics
                 .as_ref()
