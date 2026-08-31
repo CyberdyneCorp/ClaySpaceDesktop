@@ -79,6 +79,15 @@
       in a pass whose output was discarded
 - [x] 8.2 Apply every pass's texture deltas rather than the first and the last
 - [x] 8.3 Confirm "Mostrar só esta" keeps its accent
+- [x] 8.4 A regression test: the same menu, captured with its labels already in
+      the atlas and captured without, must give the same picture — laid out in
+      the first pass, which is the delta the harness never dropped, and in every
+      text style, since a glyph is rasterised per size
+- [x] 8.5 The menu was also captured part way into its fade, translucent enough
+      to read the layer rows through — settle egui's clock rather than counting
+      passes, and assert the fill where the menu overhangs the panel, checking
+      the closed capture at the same pixel so the measurement can tell a
+      transparent fill from an opaque one
 
 ## 9. Verification
 

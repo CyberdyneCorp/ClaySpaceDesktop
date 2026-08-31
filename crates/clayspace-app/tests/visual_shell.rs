@@ -451,11 +451,35 @@ fn capture_shell(harness: &Harness, state: &ShellState<'_>, name: &str) -> clays
 /// cannot be clicked on the frame the menu is still measuring. `inspect` sees
 /// the commands the input produced, which is the other half of what such a
 /// test is for — a menu that draws and is wired to nothing looks identical.
+/// How long a settling pass lasts, in seconds.
+///
+/// Longer than any animation egui runs — its default `animation_time` is a
+/// twelfth of a second — so a capture shows the state a sculptor sees rather
+/// than one caught part way into a fade.
+const SETTLED_DT: f32 = 0.25;
+
 fn capture_shell_after(
     harness: &Harness,
     state: &ShellState<'_>,
     name: &str,
     frames: &[Vec<egui::Event>],
+    inspect: impl FnOnce(&CommandQueue),
+) -> clayspace_view::Image {
+    capture_shell_after_warming(harness, state, name, frames, &[], inspect)
+}
+
+/// As `capture_shell_after`, having first laid out `warm`.
+///
+/// Laying a string out is what puts its glyphs in the font atlas, so a label
+/// named here reaches the atlas in the *first* pass rather than in whichever
+/// pass first draws it. That is the whole difference the accent bug turned on,
+/// and it is what the regression test compares against.
+fn capture_shell_after_warming(
+    harness: &Harness,
+    state: &ShellState<'_>,
+    name: &str,
+    frames: &[Vec<egui::Event>],
+    warm: &[&str],
     inspect: impl FnOnce(&CommandQueue),
 ) -> clayspace_view::Image {
     let ctx = egui::Context::default();
@@ -469,8 +493,40 @@ fn capture_shell_after(
         )),
         ..Default::default()
     };
+    // The same frame, a quarter of a second long. A popup fades in, and a fade
+    // is measured in time rather than in passes: each pass here advances egui's
+    // clock by its default sixtieth of a second, so a capture taken two passes
+    // after a click caught the menu at a little over half opacity and the layer
+    // rows behind it read straight through its fill. The duration is declared as
+    // the frame's own so egui does not read it as a stutter and clamp it back.
+    let settled_input = || egui::RawInput {
+        predicted_dt: SETTLED_DT,
+        ..raw_input()
+    };
 
-    let mut build = |ctx: &egui::Context| build_shell(ctx, state, &mut queue);
+    // Laid out during the first pass, which is when fonts exist and is the pass
+    // whose delta the harness never dropped. So a warmed label's glyphs are in
+    // the atlas before any menu is opened, and the picture must not depend on
+    // that.
+    let mut warmed = false;
+    let mut build = |ctx: &egui::Context| {
+        if !warmed {
+            warmed = true;
+            // In every text style, because a glyph is rasterised per size and
+            // a menu label is drawn in the button style. Warming one size
+            // rasterises a different set of glyphs and warms nothing that the
+            // menu goes on to draw.
+            let fonts_used: Vec<egui::FontId> = ctx.style().text_styles.values().cloned().collect();
+            for text in warm {
+                for font in &fonts_used {
+                    ctx.fonts(|fonts| {
+                        fonts.layout_no_wrap((*text).to_owned(), font.clone(), egui::Color32::WHITE)
+                    });
+                }
+            }
+        }
+        build_shell(ctx, state, &mut queue)
+    };
 
     // Two passes, not one. An auto-sized `egui::Area` — which is what a window
     // is — spends its first frame measuring and paints nothing, so a
@@ -492,8 +548,8 @@ fn capture_shell_after(
             },
             &mut build,
         ));
-        passes.push(ctx.run(raw_input(), &mut build));
-        output = ctx.run(raw_input(), &mut build);
+        passes.push(ctx.run(settled_input(), &mut build));
+        output = ctx.run(settled_input(), &mut build);
     }
 
     let target = OffscreenTarget::new(&harness.gpu, SHELL_WIDTH, SHELL_HEIGHT);
@@ -1532,6 +1588,15 @@ fn row_centre(state: &ShellState<'_>, key: LayerKey) -> egui::Pos2 {
 /// a context menu is dark chrome over dark chrome, so most of its pixels
 /// differ by less than a level and counting only the loud ones took the menu
 /// from over 400 pixels to 359.
+/// A token colour as the four bytes a capture holds.
+///
+/// The captures are RGBA8 and the tokens are `Color32`, and comparing them is
+/// worth doing exactly rather than within a tolerance: a fill either is the
+/// colour the design chose or is that colour blended with something.
+fn to_bytes(colour: egui::Color32) -> [u8; 4] {
+    colour.to_array()
+}
+
 fn differing_pixels(a: &clayspace_view::Image, b: &clayspace_view::Image) -> usize {
     let mut n = 0;
     for y in 0..a.height.min(b.height) {
@@ -4923,5 +4988,145 @@ fn a_layer_row_offers_its_own_crossings_in_place() {
         !commands.iter().any(|c| matches!(c, Command::RunConversion)),
         "the row ran the conversion itself, routing around the panel where its \
          cost is stated and confirmed: {commands:?}"
+    );
+}
+
+/// A menu is captured settled, not part way into its fade.
+///
+/// egui fades a popup in over its `animation_time`, and a fade is measured in
+/// time rather than in passes: the harness's passes each advanced the clock by
+/// a sixtieth of a second, so the capture caught the menu at a little over half
+/// opacity and the layer rows behind it read straight through its fill. Nothing
+/// failed — nothing asserts on a popup's opacity — and the images these tests
+/// exist to be *looked at* were showing a menu no sculptor would ever see.
+///
+/// Measured where the menu overhangs the panel it opened from, so the colour
+/// behind it is the viewport's and a fill of any transparency lands between the
+/// two. The closed capture is checked at the same pixel, which is what makes
+/// the measurement worth anything: if that point were over the panel, a fully
+/// transparent fill would pass.
+#[test]
+fn a_menu_is_captured_settled_rather_than_part_way_into_its_fade() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let mut scene = scene();
+    let key = scene.layers[0].key;
+    scene.layers[0].representation = clayspace_model::Representation::Mesh;
+
+    let closed_state = state(strings, &scene, &materials, &report);
+    let closed = capture_shell(&harness, &closed_state, "98-menu-fade-closed");
+    let row = probe_shell(&closed_state)
+        .read_response(shell::layer_row_id(key))
+        .map(|response| response.rect)
+        .expect("the stack drew no row for the mesh layer");
+
+    let open = right_click(row.center());
+    let opened_state = state(strings, &scene, &materials, &report);
+    let opened = capture_shell_after(
+        &harness,
+        &opened_state,
+        "98-menu-fade",
+        std::slice::from_ref(&open),
+        |_| {},
+    );
+
+    // The right edge of a crossing entry, which is the widest thing in the
+    // menu and so the part that reaches furthest past the panel.
+    let entry = probe_shell_after(&opened_state, std::slice::from_ref(&open))
+        .memory(|memory| {
+            memory.data.get_temp::<egui::Rect>(shell::layer_convert_id(
+                key,
+                clayspace_model::Representation::Voxel,
+            ))
+        })
+        .expect("the menu drew no crossing to voxels");
+
+    let x = (entry.right() - 3.0) as u32;
+    let y = entry.center().y as u32;
+
+    let behind = closed.pixel(x, y);
+    let viewport = to_bytes(clayspace_view::Tokens::viewport());
+    assert_eq!(
+        behind, viewport,
+        "the sample point ({x}, {y}) is not over the viewport with the menu          closed, so it cannot tell a transparent fill from an opaque one"
+    );
+
+    let fill = opened.pixel(x, y);
+    assert_eq!(
+        fill,
+        to_bytes(clayspace_view::Tokens::panel()),
+        "the menu's fill at ({x}, {y}) is neither the panel nor the viewport,          so it was captured part way into its fade — see          target/visual/98-menu-fade.png"
+    );
+}
+
+/// A glyph that appears only inside a menu is drawn.
+///
+/// It was not. A glyph reaches egui's font atlas in the pass that first lays it
+/// out, arriving as a `textures_delta` on *that* pass's output, and the harness
+/// applied the deltas of the first and the last pass only. A menu is laid out
+/// in a pass in between, so an accented character appearing nowhere else in the
+/// frame arrived in a discarded delta and drew as a blank: "Mostrar só esta"
+/// came out "Mostrar s esta", and every menu capture on this project was
+/// quietly missing its accents.
+///
+/// Compared against the same frame with those labels laid out up front, which
+/// puts their glyphs in the first pass's delta — the one the harness never
+/// dropped. Identical images mean the pass a glyph arrives in does not change
+/// the picture, which is the property that was broken.
+#[test]
+fn a_glyph_that_appears_only_in_a_menu_is_drawn() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let scene = scene();
+    let key = scene.layers[0].key;
+    let probe = state(strings, &scene, &materials, &report);
+    let row = probe_shell(&probe)
+        .read_response(shell::layer_row_id(key))
+        .map(|response| response.rect)
+        .expect("the stack drew no row for the layer");
+    let open = right_click(row.center());
+
+    // Every label in the menu, so this does not turn on one accent surviving.
+    let warm = [
+        strings.action_rename_layer,
+        strings.action_solo_layer,
+        strings.action_release_solo,
+        strings.action_remove_layer,
+        strings.label_convert_to,
+    ];
+
+    let cold_state = state(strings, &scene, &materials, &report);
+    let cold = capture_shell_after(
+        &harness,
+        &cold_state,
+        "98-menu-glyphs-cold",
+        std::slice::from_ref(&open),
+        |_| {},
+    );
+
+    let warm_state = state(strings, &scene, &materials, &report);
+    let warmed = capture_shell_after_warming(
+        &harness,
+        &warm_state,
+        "98-menu-glyphs-warm",
+        std::slice::from_ref(&open),
+        &warm,
+        |_| {},
+    );
+
+    let differing = differing_pixels(&cold, &warmed);
+    assert_eq!(
+        differing, 0,
+        "{differing} pixels of the menu depend on whether its labels were          already in the font atlas, so a glyph appearing only in the menu is          being dropped — compare target/visual/98-menu-glyphs-cold.png with          98-menu-glyphs-warm.png"
     );
 }
