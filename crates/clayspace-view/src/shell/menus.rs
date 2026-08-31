@@ -371,7 +371,29 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                     }
                 }
             });
-            ui.menu_button(s.menu_window, |_| {});
+            // The regions: which are shown, and how to have them all back.
+            // The menu was declared and left empty, beside a `layout` module
+            // that carried the sizes and the collapse state and was called by
+            // nothing — so a sculptor could neither put a panel away nor drag
+            // one wider, and the design's own arrangement was the only one.
+            ui.menu_button(s.menu_window, |ui| {
+                for (index, panel) in crate::layout::Panel::ALL.into_iter().enumerate() {
+                    // Shown rather than collapsed, so a tick means "this is on
+                    // screen" — which is what a person reads a tick as.
+                    let shown = !state.collapsed[index];
+                    if ui.selectable_label(shown, s.panel_name(panel)).clicked() {
+                        ui.ctx()
+                            .data_mut(|data| data.insert_temp(panel_toggle_id(), panel));
+                        ui.close_menu();
+                    }
+                }
+                ui.separator();
+                if ui.button(s.action_reset_layout).clicked() {
+                    ui.ctx()
+                        .data_mut(|data| data.insert_temp(layout_reset_id(), true));
+                    ui.close_menu();
+                }
+            });
             ui.menu_button(s.menu_help, |ui| {
                 if ui.button(s.action_diagnostics).clicked() {
                     queue.push(Command::ToggleDiagnostics);

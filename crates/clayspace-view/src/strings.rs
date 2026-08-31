@@ -371,6 +371,10 @@ pub struct Strings {
     /// never what is drawn, so no sculpt is affected by choosing one.
     pub viewport_profile_names: [&'static str; crate::quality::ViewportProfile::ALL.len()],
     pub label_viewport_profile: &'static str,
+    /// The three resizable regions, in `Panel::ALL` order, for the menu that
+    /// puts them away and brings them back.
+    pub panel_names: [&'static str; crate::layout::Panel::ALL.len()],
+    pub action_reset_layout: &'static str,
     /// The transform readout that stands beside the manipulator.
     ///
     /// Axis-and-angle rather than three Euler angles, and one scale factor
@@ -789,6 +793,8 @@ libera em vez de congelar.",
     shelf_filter_all: "Disponíveis",
     viewport_profile_names: ["Desempenho", "Escultura", "Apresentação"],
     label_viewport_profile: "Qualidade da viewport",
+    panel_names: ["Painel esquerdo", "Painel direito", "Prateleira"],
+    action_reset_layout: "Restaurar disposição",
     hud_position: "Posição",
     hud_rotation: "Rotação",
     hud_axis: "Eixo",
@@ -1163,6 +1169,8 @@ instead.",
     shelf_filter_all: "Available",
     viewport_profile_names: ["Performance", "Sculpt", "Presentation"],
     label_viewport_profile: "Viewport quality",
+    panel_names: ["Left panel", "Right panel", "Shelf"],
+    action_reset_layout: "Reset layout",
     hud_position: "Position",
     hud_rotation: "Rotation",
     hud_axis: "Axis",
@@ -1547,6 +1555,8 @@ lados. Con Ctrl, libera en vez de congelar.",
     shelf_filter_all: "Disponibles",
     viewport_profile_names: ["Rendimiento", "Escultura", "Presentación"],
     label_viewport_profile: "Calidad de la vista",
+    panel_names: ["Panel izquierdo", "Panel derecho", "Estante"],
+    action_reset_layout: "Restablecer disposición",
     hud_position: "Posición",
     hud_rotation: "Rotación",
     hud_axis: "Eje",
@@ -1854,6 +1864,10 @@ impl Strings {
         )
     }
 
+    pub fn panel_name(&self, panel: crate::layout::Panel) -> &'static str {
+        Self::at(&self.panel_names, crate::layout::Panel::ALL, panel)
+    }
+
     pub fn viewport_profile_name(&self, profile: crate::quality::ViewportProfile) -> &'static str {
         Self::at(
             &self.viewport_profile_names,
@@ -1895,8 +1909,9 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 215] {
+    pub fn all(&self) -> [&'static str; 216] {
         [
+            self.action_reset_layout,
             self.label_voxel_cell,
             self.label_voxel_occupied,
             self.label_viewport_profile,

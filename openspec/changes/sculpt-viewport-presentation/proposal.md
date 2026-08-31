@@ -69,6 +69,9 @@ the frame by the composition root that owns the governor.
   upsampling and pass order; changing them means moving those, with captures
   and a benchmark run behind it, and that is a change about occlusion rather
   than about the grid.
-- **Not remembering the profile across launches.** There is nowhere to remember
-  it, the same gap that keeps the shelf from having favourites: `layout.rs` is
-  exported and used by nothing, and no preference is persisted anywhere.
+- **Not remembering the profile across launches.** Left for a later change
+  rather than impossible. The reason first given here — that there is nowhere
+  to remember it — was wrong: `SessionStore` has been keeping the recent
+  documents and the chosen locale all along, and
+  `the-regions-move-and-are-remembered` puts the arrangement of the regions
+  beside them. The profile can follow.

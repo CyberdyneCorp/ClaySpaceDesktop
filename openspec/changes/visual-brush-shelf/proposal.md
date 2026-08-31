@@ -54,12 +54,15 @@ both refuse.
 ## Out of scope, and why
 
 - **Favourites.** The guide asks for a `★` filter persisted as a user
-  preference. There is no preference store to persist it in: `layout.rs` — the
-  panel sizes and collapse state the design specifies — is exported from
-  `clayspace-view` and used by nothing, and the regions are drawn at fixed
-  widths. A favourites list that forgot itself every launch is a promise the
-  application would break each time it opened, so the star waits for the store.
-  Worth its own change, alongside wiring `layout.rs` to something.
+  preference, and this change does not add one.
+
+  The reason given here was wrong and is corrected in
+  `the-regions-move-and-are-remembered`: there *is* a preference store —
+  `SessionStore`, which has been keeping the recent documents, the chosen
+  locale and the remembered reference images since it was written. What was
+  true is that `layout.rs` had no consumer, which is a different fault and is
+  now fixed. Favourites can follow the same route; they are simply not in this
+  change.
 - **Previews rendered from the real brush behaviour.** The guide files this
   under "eventually". Each brush already carries a distinct drawn mark and a
   test asserts no two are alike; rendering thirteen canonical sphere strokes

@@ -2078,6 +2078,24 @@ and viewport bars. See *Not built yet*.
 
 ## Interface
 
+**The regions move, and are remembered.** The left region, the right region and
+the shelf are resizable, clamped so that none can vanish or swallow the
+viewport; each can be put away and brought back from the Janela menu, with a
+reset that returns every one to the design's own size; and the arrangement is
+stored beside the recent documents and the chosen locale, so it is as it was
+left when the application opens again.
+
+That had been a stated requirement — *"The user SHALL be able to resize and
+collapse each panel region and restore the default layout in one action. Layout
+SHALL persist across sessions"* — with none of it true. The regions were drawn
+at fixed widths, the Janela menu was declared and left empty, and the `layout`
+module carrying the sizes, the bounds, the collapse state, a reset and a pair of
+serialisers was exported to no consumer at all. Its own tests passed throughout.
+
+A collapsed region draws nothing and gives its space to the viewport, and keeps
+the width it had so that bringing it back returns the size a sculptor chose. A
+corrupt stored line costs the arrangement and never the start-up.
+
 The regions from the design: a menu bar, a tool options bar, a left region with
 the scene tree, layer stack and sculpt settings, a representation bar and the
 central viewport under it, a right region with material, geometry and brush
@@ -2264,11 +2282,8 @@ clicked to no effect is exactly what the shelf's absent-rather-than-disabled
 rule exists to prevent. Which set is shown is interface state: it emits no
 command and is forgotten when the application closes.
 
-There is no favourites filter yet, and the reason is worth writing down: there
-is nowhere to keep one. `layout.rs` holds the panel sizes and collapse state
-the design specifies, is exported from the view crate, and is used by nothing —
-the regions are drawn at fixed widths. A favourites list that forgot itself
-every launch is a promise the application would break each time it opened.
+There is no favourites filter yet. It can go in the store the arrangement of
+the regions now uses; it is simply not built.
 
 The active swatch also stands on a raised backdrop, and a swatch lifts the same
 way under the pointer — so the active brush is carried by tone as well as by

@@ -245,6 +245,7 @@ fn state<'a>(
         renaming: None,
         polyframe: false,
         viewport_profile: clayspace_view::ViewportProfile::default(),
+        collapsed: [false; 3],
         studio_shading: false,
         cavity: true,
         shadows: true,
@@ -302,25 +303,35 @@ fn build_shell(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQ
     egui::TopBottomPanel::bottom("status")
         .exact_height(region::STATUS)
         .show(ctx, |ui| shell::status_bar(ui, state, queue));
-    egui::TopBottomPanel::bottom("shelf")
-        .exact_height(region::SHELF)
-        .show(ctx, |ui| {
-            egui::ScrollArea::horizontal().show(ui, |ui| shell::brush_shelf(ui, state, queue));
-        });
+    // A collapsed region is not drawn, which is the condition the composition
+    // root applies. The widths stay exact here rather than resizable: a capture
+    // is compared at a known size, and a panel egui had remembered a drag on
+    // would make one capture incomparable with the next.
+    if !state.collapsed[2] {
+        egui::TopBottomPanel::bottom("shelf")
+            .exact_height(region::SHELF)
+            .show(ctx, |ui| {
+                egui::ScrollArea::horizontal().show(ui, |ui| shell::brush_shelf(ui, state, queue));
+            });
+    }
     egui::SidePanel::left("rail")
         .exact_width(region::RAIL)
         .resizable(false)
         .show(ctx, |ui| shell::tool_rail(ui, state, queue));
-    egui::SidePanel::left("left")
-        .exact_width(region::LEFT)
-        .show(ctx, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| shell::left_panel(ui, state, queue));
-        });
-    egui::SidePanel::right("right")
-        .exact_width(region::RIGHT)
-        .show(ctx, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| shell::right_panel(ui, state, queue));
-        });
+    if !state.collapsed[0] {
+        egui::SidePanel::left("left")
+            .exact_width(region::LEFT)
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| shell::left_panel(ui, state, queue));
+            });
+    }
+    if !state.collapsed[1] {
+        egui::SidePanel::right("right")
+            .exact_width(region::RIGHT)
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| shell::right_panel(ui, state, queue));
+            });
+    }
     egui::CentralPanel::default()
         // The viewport's own tone, which is what the renderer clears to. The
         // application gives this panel no frame at all and lets the cleared
@@ -4351,5 +4362,171 @@ fn a_grid_says_what_it_is_made_of() {
         )
         .is_none(),
         "a field layer was given a cell size"
+    );
+}
+
+// -- the regions' own arrangement --------------------------------------------
+
+/// Where the Janela menu sits, and where its three regions and the reset fall.
+///
+/// Pixel offsets, with the caveat `LANGUAGE_ENTRY` carries: they move whenever
+/// an entry lands above them.
+const WINDOW_MENU: egui::Pos2 = egui::Pos2::new(415.0, 13.0);
+const SHELF_ENTRY: egui::Vec2 = egui::Vec2::new(5.0, 83.0);
+const RESET_ENTRY: egui::Vec2 = egui::Vec2::new(5.0, 117.0);
+
+/// The Janela menu offers the three regions and a way to have them all back.
+///
+/// It was declared and left empty — `ui.menu_button(s.menu_window, |_| {})` —
+/// beside a `layout` module carrying the sizes, the bounds and the collapse
+/// state, exported from the view crate and called by nothing. A sculptor could
+/// neither put a region away nor drag one wider.
+#[test]
+fn the_window_menu_offers_the_regions_and_a_reset() {
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let set = state(strings, &scene, &materials, &report);
+
+    // Every region is named, and named distinctly, so a tick belongs to one.
+    let mut seen = std::collections::BTreeSet::new();
+    for panel in clayspace_view::Panel::ALL {
+        let name = strings.panel_name(panel);
+        assert!(!name.is_empty(), "{panel:?} has no name");
+        assert!(seen.insert(name), "two regions are both called {name:?}");
+    }
+
+    // Choosing one asks for it to be put away, and asks nothing of the
+    // document: which regions are on screen is no command's business.
+    let ctx = probe_shell_after(
+        &set,
+        &[
+            left_click(WINDOW_MENU),
+            left_click(WINDOW_MENU + SHELF_ENTRY),
+        ],
+    );
+    assert_eq!(
+        ctx.data(|data| data.get_temp::<clayspace_view::Panel>(shell::panel_toggle_id())),
+        Some(clayspace_view::Panel::Shelf),
+        "clicking the shelf's entry left nothing for the composition root to read"
+    );
+
+    let mut queue = CommandQueue::new();
+    let driven = egui::Context::default();
+    shell::apply_theme(&driven);
+    for _ in 0..2 {
+        run_shell_frame(&driven, &set, &mut queue, Vec::new());
+    }
+    queue.drain();
+    for frame in [
+        left_click(WINDOW_MENU),
+        left_click(WINDOW_MENU + SHELF_ENTRY),
+    ] {
+        run_shell_frame(&driven, &set, &mut queue, frame);
+        run_shell_frame(&driven, &set, &mut queue, Vec::new());
+    }
+    assert!(
+        queue.is_empty(),
+        "putting a region away emitted {:?}; the arrangement of the regions \
+         enters no history",
+        queue.commands()
+    );
+
+    // And the reset is reachable from the same menu.
+    let ctx = probe_shell_after(
+        &set,
+        &[
+            left_click(WINDOW_MENU),
+            left_click(WINDOW_MENU + RESET_ENTRY),
+        ],
+    );
+    assert_eq!(
+        ctx.data(|data| data.get_temp::<bool>(shell::layout_reset_id())),
+        Some(true),
+        "the reset entry left nothing behind. See target/visual/95-window-menu.png"
+    );
+}
+
+/// A collapsed region reads as absent in the menu, not as present.
+#[test]
+fn a_collapsed_region_is_not_ticked() {
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let mut away = state(strings, &scene, &materials, &report);
+    away.collapsed = [false, false, true];
+    let shown = state(strings, &scene, &materials, &report);
+
+    // The tick is what differs, so the two menus must not render alike.
+    let open = [left_click(WINDOW_MENU), Vec::new()];
+    let with = capture_shell_after(&harness, &shown, "95-window-menu", &open, |_| {});
+    let without = capture_shell_after(&harness, &away, "95-window-menu-away", &open, |_| {});
+    assert!(
+        differing_pixels(&with, &without) > 0,
+        "the menu drew a collapsed region exactly as it draws a shown one, so \
+         the tick says nothing. See target/visual/95-window-menu.png"
+    );
+}
+
+/// A region put away gives its space to the viewport.
+///
+/// The half a sculptor actually meets: `layout` could describe a collapsed
+/// region from the day it was written — `Layout::size` reports zero for one and
+/// `stored_size` keeps the width to come back to — and nothing drew that way,
+/// so there was no way to put a panel away at all.
+#[test]
+fn a_region_put_away_gives_its_space_to_the_viewport() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let shown = state(strings, &scene, &materials, &report);
+    let material = shell::heading_id(strings.section_material);
+    assert!(
+        shell_rect(&probe_shell(&shown), material).is_some(),
+        "the right panel drew no material heading to begin with"
+    );
+
+    let mut away = state(strings, &scene, &materials, &report);
+    away.collapsed = [false, true, false];
+    let ctx = probe_shell(&away);
+    // Asked of a frame drawn with the slot wiped, since a heading writes its
+    // row down every frame it is drawn and the slot is never cleared.
+    ctx.data_mut(|data| data.remove::<egui::Rect>(material));
+    run_shell_frame(&ctx, &away, &mut CommandQueue::new(), Vec::new());
+    assert!(
+        shell_rect(&ctx, material).is_none(),
+        "the right panel was put away and is still drawing its sections"
+    );
+
+    // And the representation bar, which lives in the central region, is wider
+    // for it — the space went to the viewport rather than nowhere.
+    let width_of = |set: &ShellState<'_>| {
+        probe_shell(set)
+            .memory(|memory| {
+                memory
+                    .data
+                    .get_temp::<egui::Rect>(shell::representation_card_id(
+                        clayspace_model::Representation::Sdf,
+                    ))
+            })
+            .map(|card| card.width())
+    };
+    let (open, closed) = (width_of(&shown), width_of(&away));
+    assert!(
+        open.is_some() && closed.is_some(),
+        "the representation bar was not drawn in one of the two"
+    );
+    assert!(
+        closed >= open,
+        "putting the right panel away left the central region no wider: \
+         {open:?} against {closed:?}"
     );
 }
