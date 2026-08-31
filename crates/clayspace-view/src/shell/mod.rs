@@ -253,6 +253,8 @@ pub struct ShellState<'a> {
     /// Whether the sculpt is shaded with the studio light rig rather than a
     /// MatCap. Display state the renderer owns, like the material.
     pub studio_shading: bool,
+    /// How much an idle frame is worth spending on, as the governor holds it.
+    pub viewport_profile: crate::quality::ViewportProfile,
     /// Whether small creases are sharpened by the screen-space curvature term.
     pub cavity: bool,
     /// Whether the studio rig's key light casts.
@@ -289,6 +291,20 @@ pub mod region {
     pub const REPRESENTATION_BAR: f32 = 56.0;
     pub const SHELF: f32 = 84.0;
     pub const STATUS: f32 = 28.0;
+}
+
+/// Where a chosen viewport profile is left for the composition root to read.
+///
+/// The profile is the sculptor's choice about what an idle frame looks like,
+/// and it touches no document — so it goes the way the section folds and the
+/// shelf's filter go, through the interface's own memory. It could not go as a
+/// command in any case: `ViewportProfile` is a view type, and commands live in
+/// the layer underneath this one.
+///
+/// Not remembered across launches, for the same reason the shelf has no
+/// favourites: there is nowhere yet to remember it.
+pub fn viewport_profile_id() -> egui::Id {
+    egui::Id::new("viewport-profile")
 }
 
 /// Applies the design system to an egui context.

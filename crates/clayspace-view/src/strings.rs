@@ -361,6 +361,12 @@ pub struct Strings {
     /// The shelf's first filter: the brushes the active layer can actually
     /// use, which is what the shelf shows unless a sculptor asks otherwise.
     pub shelf_filter_all: &'static str,
+    /// How much a frame is worth spending on, in `ViewportProfile::ALL` order.
+    ///
+    /// A display setting: it changes what an idle frame is drawn with and
+    /// never what is drawn, so no sculpt is affected by choosing one.
+    pub viewport_profile_names: [&'static str; crate::quality::ViewportProfile::ALL.len()],
+    pub label_viewport_profile: &'static str,
     /// Why a brush met while browsing another representation cannot be picked.
     pub shelf_tool_elsewhere: &'static str,
     // Pre-bake repair.
@@ -766,6 +772,8 @@ libera em vez de congelar.",
 
     shelf_no_tools: "Nenhuma ferramenta para esta representação ainda",
     shelf_filter_all: "Disponíveis",
+    viewport_profile_names: ["Desempenho", "Escultura", "Apresentação"],
+    label_viewport_profile: "Qualidade da viewport",
     shelf_tool_elsewhere: "sem verbo na camada ativa",
     representation_label: "Representação",
     tool_substituted: "ferramenta trocada: esta camada não tem essa",
@@ -1132,6 +1140,8 @@ instead.",
 
     shelf_no_tools: "No tools for this representation yet",
     shelf_filter_all: "Available",
+    viewport_profile_names: ["Performance", "Sculpt", "Presentation"],
+    label_viewport_profile: "Viewport quality",
     shelf_tool_elsewhere: "no verb on the active layer",
     representation_label: "Representation",
     tool_substituted: "tool changed: this layer has no verb for that one",
@@ -1508,6 +1518,8 @@ lados. Con Ctrl, libera en vez de congelar.",
 
     shelf_no_tools: "Todavía no hay herramientas para esta representación",
     shelf_filter_all: "Disponibles",
+    viewport_profile_names: ["Rendimiento", "Escultura", "Presentación"],
+    label_viewport_profile: "Calidad de la vista",
     shelf_tool_elsewhere: "sin verbo en la capa activa",
     representation_label: "Representación",
     tool_substituted: "herramienta cambiada: esta capa no tiene ese verbo",
@@ -1811,6 +1823,14 @@ impl Strings {
         )
     }
 
+    pub fn viewport_profile_name(&self, profile: crate::quality::ViewportProfile) -> &'static str {
+        Self::at(
+            &self.viewport_profile_names,
+            crate::quality::ViewportProfile::ALL,
+            profile,
+        )
+    }
+
     pub fn representation_sentence(&self, what: clayspace_model::Representation) -> &'static str {
         Self::at(
             &self.representation_sentences,
@@ -1844,8 +1864,9 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 208] {
+    pub fn all(&self) -> [&'static str; 209] {
         [
+            self.label_viewport_profile,
             self.shelf_filter_all,
             self.shelf_tool_elsewhere,
             self.section_field,

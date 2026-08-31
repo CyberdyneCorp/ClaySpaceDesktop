@@ -2101,6 +2101,30 @@ the ones the domain actually declares from the active representation rather
 than a written list — invoking one aims the panel and opens it, and a panel
 already open is aimed rather than closed.
 
+**The floor dissolves rather than ending.** The grid fades out before it
+reaches its own extent, so it draws no rectangle around the scene, and each
+line is cut into segments so the fade varies along it — a line drawn as two
+vertices takes the interpolation between its ends, and both ends of a grid line
+are equally far from the middle, so a per-line fade dissolves nothing. Every
+fifth line is major, with the two axes strongest, so a distance can be counted
+rather than estimated.
+
+The fade is by distance from the origin and not from the camera. Overlay
+geometry is uploaded when the overlays change rather than every frame, so a
+camera-dependent colour would rebuild and re-upload the whole grid on every
+orbit; and the form sits at the origin, so a grid densest beneath the sculpt
+says the same thing from every camera instead of changing when the sculptor
+zooms.
+
+**The viewport's quality profile is chosen from the Vista menu** — Desempenho,
+Escultura, Apresentação — beside the shading terms it belongs with. The three
+tiers and the stroke-time degradation between them have existed since the
+renderer was written, and nothing in the application had ever selected one: the
+governor was built with the default and never told otherwise. Choosing a
+profile changes what an *idle* frame is drawn with and never what is drawn, so
+it emits no command and enters no history. It is not remembered across
+launches, for the same reason the shelf has no favourites.
+
 **The inspector answers what is being sculpted**, in one section that keeps its
 place while its contents change: a field states how many items its edit list
 holds and whether it has been collapsed, a grid its display and blur, a mesh

@@ -136,6 +136,35 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                     queue.push(Command::ToggleShadows);
                     ui.close_menu();
                 }
+                // How much an idle frame is worth spending on. Beside the
+                // three shading terms because it is the same kind of setting —
+                // it changes what the frame is drawn *with* and never what is
+                // drawn — and a sculptor who finds one here should find the
+                // rest.
+                //
+                // Written straight into the interface's own memory rather than
+                // pushed as a command: nothing about it reaches the document,
+                // and a `Command` carrying it could not be built anyway, since
+                // the profile is a view type and commands live under the view.
+                ui.separator();
+                ui.label(
+                    egui::RichText::new(s.label_viewport_profile)
+                        .size(type_scale::HEADING)
+                        .color(Tokens::text_faint()),
+                );
+                for profile in crate::quality::ViewportProfile::ALL {
+                    let chosen = state.viewport_profile == profile;
+                    if ui
+                        .selectable_label(chosen, s.viewport_profile_name(profile))
+                        .clicked()
+                    {
+                        ui.ctx()
+                            .data_mut(|data| data.insert_temp(viewport_profile_id(), profile));
+                        ui.close_menu();
+                    }
+                }
+                ui.separator();
+
                 // Beside the three view presets, because a reference is
                 // placed on the plane one of them looks down.
                 if ui

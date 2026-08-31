@@ -243,6 +243,7 @@ fn state<'a>(
         scene,
         renaming: None,
         polyframe: false,
+        viewport_profile: clayspace_view::ViewportProfile::default(),
         studio_shading: false,
         cavity: true,
         shadows: true,
@@ -2014,8 +2015,10 @@ const VIEW_MENU: egui::Pos2 = egui::Pos2::new(131.0, 13.0);
 /// what a menu-entry equivalent of `slider_id` would fix. Until then, a test
 /// that starts failing here after a menu entry is added is measuring the
 /// addition rather than a fault. It was 218 until the shading and cavity
-/// entries landed above it, which is two rows of twenty-two.
-const LANGUAGE_ENTRY: egui::Vec2 = egui::Vec2::new(5.0, 262.0);
+/// entries landed above it, which is two rows of twenty-two. It was 262 until
+/// the viewport-quality block landed above it: a rule, a heading and its three
+/// profiles, and a rule under them.
+const LANGUAGE_ENTRY: egui::Vec2 = egui::Vec2::new(5.0, 387.0);
 
 #[test]
 fn the_language_can_be_chosen_from_the_menu() {
@@ -4151,5 +4154,70 @@ fn choosing_a_shelf_filter_emits_nothing() {
             .flatten()),
         Some(clayspace_model::Representation::Mesh),
         "clicking the mesh filter did not choose it"
+    );
+}
+
+// -- the viewport's quality --------------------------------------------------
+
+/// Where the third viewport profile falls once the Vista menu is open.
+///
+/// A pixel offset, with the same caveat `LANGUAGE_ENTRY` carries: it moves
+/// whenever an entry lands above it, and a failure here after a menu edit is
+/// measuring the edit.
+const PRESENTATION_ENTRY: egui::Vec2 = egui::Vec2::new(5.0, 315.0);
+
+/// Choosing a viewport profile reaches the governor's own memory, and emits no
+/// command.
+///
+/// The profile decides what an *idle* frame is drawn with and touches no
+/// document, so it never became a command — and could not have: it is a view
+/// type, and commands live in the layer underneath. What this pins is the
+/// other half of that arrangement, which is that the choice is actually left
+/// somewhere the composition root reads. The governor had three profiles and
+/// the guide's exact three tiers from the day it was written, and nothing in
+/// the application had ever set one.
+#[test]
+fn a_viewport_profile_is_chosen_from_the_menu_and_emits_nothing() {
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let set = state(strings, &scene, &materials, &report);
+
+    let ctx = probe_shell_after(
+        &set,
+        &[
+            left_click(VIEW_MENU),
+            left_click(VIEW_MENU + PRESENTATION_ENTRY),
+        ],
+    );
+    assert_eq!(
+        ctx.data(
+            |data| data.get_temp::<clayspace_view::ViewportProfile>(shell::viewport_profile_id())
+        ),
+        Some(clayspace_view::ViewportProfile::Presentation),
+        "choosing Apresentação left nothing for the composition root to read. \
+         See target/visual/107-language-menu.png for where the entries fall"
+    );
+
+    let mut queue = CommandQueue::new();
+    let ctx = egui::Context::default();
+    shell::apply_theme(&ctx);
+    for _ in 0..2 {
+        run_shell_frame(&ctx, &set, &mut queue, Vec::new());
+    }
+    queue.drain();
+    for frame in [
+        left_click(VIEW_MENU),
+        left_click(VIEW_MENU + PRESENTATION_ENTRY),
+    ] {
+        run_shell_frame(&ctx, &set, &mut queue, frame);
+        run_shell_frame(&ctx, &set, &mut queue, Vec::new());
+    }
+    assert!(
+        queue.is_empty(),
+        "choosing a viewport profile emitted {:?}; it changes what a frame is \
+         drawn with and never what is drawn",
+        queue.commands()
     );
 }

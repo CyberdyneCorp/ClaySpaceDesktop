@@ -3437,6 +3437,7 @@ impl App {
             // The renderer's own display state, read back rather than
             // mirrored: the material beside it is handled the same way, and a
             // second copy of a setting is a second thing to keep in step.
+            viewport_profile: self.quality.profile(),
             studio_shading: self
                 .graphics
                 .as_ref()
@@ -3555,6 +3556,19 @@ impl App {
                     });
                 });
         });
+
+        // What the View left in its own memory, applied to the governor that
+        // owns it. The profile touches no document, so it never became a
+        // command — and could not have, since `ViewportProfile` is a view type
+        // and commands live under the view. Read after the frame, so the menu
+        // that wrote it has finished.
+        if let Some(chosen) =
+            context.data(|data| data.get_temp::<ViewportProfile>(shell::viewport_profile_id()))
+        {
+            if chosen != self.quality.profile() {
+                self.quality.set_profile(chosen, Instant::now());
+            }
+        }
 
         let scale = context.pixels_per_point();
         self.viewport = viewport;
