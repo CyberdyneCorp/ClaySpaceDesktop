@@ -32,6 +32,13 @@ pub(super) struct AoResources {
     /// drawn straight into the caller's target, which is where there is no
     /// post-process pass to run.
     pub(super) antialias: Option<wgpu::BindGroup>,
+    /// What the scaffolding reads to know what stands in front of it.
+    ///
+    /// Here rather than beside the scaffold pipeline because it names the same
+    /// reduced-depth view these do, and so goes stale on exactly the same
+    /// event: a resize replaces the framebuffer, and a bind group holding the
+    /// old view would sample a texture the size the window used to be.
+    pub(super) xray: wgpu::BindGroup,
 }
 
 impl AoResources {
@@ -45,8 +52,10 @@ impl AoResources {
         ),
         ao_buffer: &wgpu::Buffer,
         fxaa: (&wgpu::BindGroupLayout, &wgpu::Sampler),
+        xray: (&wgpu::BindGroupLayout, &wgpu::Buffer),
     ) -> Self {
         let (reduce_layout, ao_layout, composite_layout) = layouts;
+        let (xray_layout, xray_buffer) = xray;
         let (fxaa_layout, fxaa_sampler) = fxaa;
         let uniform = wgpu::BindGroupEntry {
             binding: 0,
@@ -80,6 +89,22 @@ impl AoResources {
                 label: Some("ao composite"),
                 layout: composite_layout,
                 entries: &[uniform, scene_depth, reduced, occlusion],
+            }),
+            xray: gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("xray"),
+                layout: xray_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: xray_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(
+                            framebuffer.reduced_depth_view(),
+                        ),
+                    },
+                ],
             }),
             antialias: framebuffer.antialias_view().map(|view| {
                 gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -124,6 +149,43 @@ pub(super) struct AoUniform {
     /// The sample kernel, in the tangent frame. See [`ao_kernel`].
     pub(super) kernel: [[f32; 4]; AO_KERNEL],
 }
+
+/// What the scaffolding needs to know about the frame it is drawn onto.
+///
+/// One vec4, and its own buffer rather than a corner of the occlusion uniform:
+/// the scaffolding is drawn on frames where occlusion is off, and reading a
+/// buffer whose other fields are only written for occlusion is how a value goes
+/// stale without anything saying so.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub(super) struct XrayUniform {
+    /// Display pixels per depth texel, then the alpha kept where the sculpt is
+    /// in front of the fragment. The rest is padding.
+    pub(super) params: [f32; 4],
+}
+
+/// The alpha a scaffolding fragment keeps where the sculpt stands in front of
+/// it.
+///
+/// Faint enough to read as distance at a glance, and nowhere near invisible.
+/// Looked at rather than reasoned to, over 1.0, 0.7, 0.42 and 0.25 against the
+/// reference form with a rotate manipulator around it — the sweep is in
+/// `9d-xray-ring.png`:
+///
+/// - At 0.7 the far half of a ring is very nearly indistinguishable from the
+///   near half, which is the complaint this answers left unanswered.
+/// - At 0.25 a selected object's outline, which lies *inside* the form, all but
+///   disappears — and an outline that vanishes is the thing the outline exists
+///   to prevent.
+///
+/// Lower also starts to read as *disabled*, which would be a lie about what a
+/// click does: the hit test walks handles by ray and ignores depth entirely, so
+/// a handle drawn faint is grabbed on exactly the same terms as a bright one.
+///
+/// Not the ghost's `SurfaceOpacity::CAGED`, which is a neighbouring figure for
+/// an unrelated quantity — how much of the *clay* shows through while a cage is
+/// up. Nothing ties the two, and they should not be read as tied.
+pub(super) const XRAY_ALPHA: f32 = 0.40;
 
 /// How many samples the kernel holds room for.
 ///

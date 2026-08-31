@@ -390,6 +390,49 @@ different `wgpu::Instance`s. The offscreen tests never build a surface, so they
 structurally could not have found it. `window_smoke` now requires three
 presented frames and has been verified against the regression.
 
+### The scaffolding reads depth without owning any
+
+The manipulator is drawn after the occlusion composite, into the resolved
+target, and binds no depth attachment — that is what keeps occlusion off it.
+Which left it with no way to know what stands in front of it, so a rotate ring
+was drawn at one strength all the way round and gave no sense of which half was
+nearer.
+
+It **samples** depth rather than testing against it. Attaching the framebuffer's
+depth would mean matching its sample count, so either resolving depth into a new
+texture or moving the draw back inside the scene pass — and moving it back is
+the one thing the pass order exists to prevent. Sampling the multisampled depth
+directly forks the shader on whether the device multisamples, which is the exact
+fork the reduced-depth buffer was introduced to remove.
+
+So it reads `Framebuffer::reduced_depth`: already single-sampled, already
+`R32Float`, already `TEXTURE_BINDING`, and already holding this frame's depth
+for the occlusion kernel. Half resolution, which costs a display pixel of slop
+in where faint begins — a low-frequency decision about which half of a ring is
+behind a head, and the same argument the kernel makes for running there.
+
+Two things fell out of it rather than being arranged, and both are worth knowing:
+
+**The reduction had to leave the occlusion gate.** It was the first pass inside
+`occlude`, which returns early when occlusion is off. Read from where it sat, a
+manipulator would have been dimmed only while occlusion happened to be enabled —
+a widget whose appearance depends on the occlusion setting, which is precisely
+what `occlusion_does_not_darken_the_manipulator` forbids. Putting that gate back
+fails that test, which is how the requirement was checked rather than assumed.
+
+**A ghosted surface dims nothing, for free.** The ghost pipelines write no depth
+— "what lets the far half of the cage read through the form", in their own words
+— so while a cage is up the depth buffer is empty and the scaffolding is drawn
+exactly as it always was. The rule stays the single uniform one, with no
+exception list for the cage that could rot.
+
+What did change is the pass-order invariant's *scope*. A faint pixel is forty
+percent widget over sixty percent form, and that form is legitimately shaded, so
+such a pixel does darken with occlusion. The invariant is now stated over the
+pixels the manipulator covers **opaquely** — read off the frame by comparing
+against the same widget drawn with nothing behind it — where 0 of 5382 pixels
+darken against 12% of the form.
+
 ### What the captures hid
 
 The shell captures run egui several passes deep, because a menu does not exist

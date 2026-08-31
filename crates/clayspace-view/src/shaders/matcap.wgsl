@@ -5,13 +5,11 @@
 // surface reaching this shader was meshed by the engine, and re-implementing
 // any of the field math in WGSL is the drift this project is built to avoid.
 // `no_field_math_in_shaders` asserts it.
-
-struct Camera {
-    view_projection: mat4x4<f32>,
-    // The rotation part of the view matrix, used to take normals into view
-    // space for the MatCap lookup.
-    view_rotation: mat4x4<f32>,
-};
+//
+// `Camera` and `VertexInput` come from `common.wgsl`, which is prepended when
+// this module is created: the scaffolding shader reads the same uniform buffer
+// and the same vertex buffer, and two copies of a layout is the one thing that
+// file exists to prevent.
 
 struct Material {
     // rgb tint, a = 1 when the mesh carries vertex colours.
@@ -48,14 +46,6 @@ struct Shadow {
 @group(0) @binding(1) var<uniform> material: Material;
 @group(0) @binding(2) var matcap_texture: texture_2d<f32>;
 @group(0) @binding(3) var matcap_sampler: sampler;
-
-struct VertexInput {
-    @location(0) position: vec3<f32>,
-    @location(1) normal: vec3<f32>,
-    @location(2) color: vec3<f32>,
-    // How frozen this vertex is, 0 to 1.
-    @location(3) mask: f32,
-};
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,

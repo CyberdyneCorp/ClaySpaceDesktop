@@ -619,6 +619,18 @@ pub struct Renderer {
     /// four lines back from its tip reads as a direction; a cone reads as a
     /// handle, which is what ZBrush's and Blender's are.
     scaffold_solid_pipeline: wgpu::RenderPipeline,
+    /// The orientation gizmo's, which binds no depth at all.
+    ///
+    /// The scaffolding is drawn faint where the sculpt stands in front of it,
+    /// and the gizmo must never be: it draws in a corner viewport with a camera
+    /// of its own, and the scene's depth in those pixels is whatever a sculpt
+    /// reaching into that corner happened to write. It was freed from exactly
+    /// that once already, by being taken out of the depth-tested pass.
+    ///
+    /// A pipeline of its own rather than a flag the shader reads. A flag that
+    /// says "do not dim" is a flag that will one day be set wrongly; a pipeline
+    /// with no depth bound cannot dim whatever anything says.
+    gizmo_pipeline: wgpu::RenderPipeline,
     /// The mesh layers' own edges, drawn over them.
     wire_pipeline: wgpu::RenderPipeline,
     /// Those edges, as a line list over `mesh_layers`' own vertices.
@@ -660,6 +672,9 @@ pub struct Renderer {
     reduce_layout: wgpu::BindGroupLayout,
     ao_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
+    /// What the scaffolding reads the scene's depth through.
+    xray_layout: wgpu::BindGroupLayout,
+    xray_buffer: wgpu::Buffer,
     /// The groups themselves, and which framebuffer they were built for.
     ///
     /// Interior mutability because drawing a frame takes `&self`: the cache is
@@ -866,7 +881,9 @@ impl Renderer {
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("matcap"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/matcap.wgsl").into()),
+                source: wgpu::ShaderSource::Wgsl(
+                    shader_source(include_str!("../shaders/matcap.wgsl")).into(),
+                ),
             });
 
         let bind_group_layout =
@@ -1023,7 +1040,9 @@ impl Renderer {
             "overlay_fs",
             PipelineState::transparent(wgpu::PrimitiveTopology::LineList),
         );
-        let scaffold_pipeline = make_pipeline(
+        // The orientation gizmo. The scene shader and the scene's layout, so
+        // there is no depth texture in reach of it at all.
+        let gizmo_pipeline = make_pipeline(
             gpu,
             &layout,
             &shader,
@@ -1032,13 +1051,56 @@ impl Renderer {
             "overlay_fs",
             PipelineState::scaffold(wgpu::PrimitiveTopology::LineList),
         );
+
+        // The scaffolding, which is drawn faint where the sculpt stands in
+        // front of it. Its own module and its own second group: a bind group
+        // layout is part of a pipeline's layout, so putting a depth texture in
+        // group 0 would hand one to every overlay, reference and wireframe
+        // pipeline in the viewport, and in the scene module the group it would
+        // take is already the studio shadow's.
+        let scaffold_shader = gpu
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("scaffold"),
+                source: wgpu::ShaderSource::Wgsl(
+                    shader_source(include_str!("../shaders/scaffold.wgsl")).into(),
+                ),
+            });
+        let xray_layout = gpu
+            .device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("xray"),
+                entries: &[uniform_entry(0), read_entry(1)],
+            });
+        let xray_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("xray"),
+            size: std::mem::size_of::<XrayUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let scaffold_layout = gpu
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("scaffold"),
+                bind_group_layouts: &[&bind_group_layout, &xray_layout],
+                push_constant_ranges: &[],
+            });
+        let scaffold_pipeline = make_pipeline(
+            gpu,
+            &scaffold_layout,
+            &scaffold_shader,
+            format,
+            "scaffold_vs",
+            "scaffold_fs",
+            PipelineState::scaffold(wgpu::PrimitiveTopology::LineList),
+        );
         let scaffold_solid_pipeline = make_pipeline(
             gpu,
-            &layout,
-            &shader,
+            &scaffold_layout,
+            &scaffold_shader,
             format,
-            "overlay_vs",
-            "overlay_fs",
+            "scaffold_vs",
+            "scaffold_fs",
             PipelineState::scaffold(wgpu::PrimitiveTopology::TriangleList),
         );
 
@@ -1313,6 +1375,7 @@ impl Renderer {
             overlay_pipeline,
             scaffold_pipeline,
             scaffold_solid_pipeline,
+            gizmo_pipeline,
             wire_pipeline,
             wire_indices: empty_buffer(gpu, "polyframe", wgpu::BufferUsages::INDEX),
             wire_index_count: 0,
@@ -1327,6 +1390,8 @@ impl Renderer {
             fxaa_pipeline,
             fxaa_layout,
             fxaa_sampler,
+            xray_layout,
+            xray_buffer,
             reduce_layout,
             ao_layout,
             composite_layout,
@@ -2240,7 +2305,7 @@ impl Renderer {
         // `Always` and write no depth, so nothing is lost by separating them
         // from the depth buffer, and the orientation gizmo stops being
         // occludable by a sculpt that reaches into its corner.
-        self.draw_over(&mut encoder, target, scene);
+        self.draw_over(gpu, &mut encoder, target, scene);
 
         gpu.queue.submit(Some(encoder.finish()));
         profiler.after_submit();
@@ -2357,6 +2422,7 @@ impl Renderer {
             (&self.reduce_layout, &self.ao_layout, &self.composite_layout),
             &self.ao_buffer,
             (&self.fxaa_layout, &self.fxaa_sampler),
+            (&self.xray_layout, &self.xray_buffer),
         ));
     }
 
@@ -2402,17 +2468,38 @@ impl Renderer {
         self.draw_fullscreen(&mut pass);
     }
 
+    /// Whether this frame has scaffolding that reads the scene's depth.
+    ///
+    /// The orientation gizmo is not counted: it binds no depth, so a frame with
+    /// nothing but the gizmo needs no reduction run for it.
+    fn has_scaffolding(&self) -> bool {
+        !self.lattice_mesh.is_empty() || !self.lattice_solid_mesh.is_empty()
+    }
+
     /// The scaffolding, drawn on the finished frame rather than in it.
     fn draw_over(
         &self,
+        gpu: &Gpu,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         scene: [f32; 4],
     ) {
         let gizmo = self.show_gizmo && !self.gizmo_mesh.is_empty();
-        if self.lattice_mesh.is_empty() && self.lattice_solid_mesh.is_empty() && !gizmo {
+        if !self.has_scaffolding() && !gizmo {
             return;
         }
+        // What the scaffolding compares itself against. Written here rather
+        // than beside the occlusion uniform because it is read on frames the
+        // occlusion uniform is not written for.
+        gpu.queue.write_buffer(
+            &self.xray_buffer,
+            0,
+            bytemuck::bytes_of(&XrayUniform {
+                params: [Framebuffer::AO_SCALE as f32, XRAY_ALPHA, 0.0, 0.0],
+            }),
+        );
+        let cached = self.ao_resources.borrow();
+        let xray = cached.as_ref().map(|held| &held.xray);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("scaffolding"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -2430,19 +2517,31 @@ impl Renderer {
         pass.set_viewport(scene[0], scene[1], scene[2], scene[3], 0.0, 1.0);
         pass.set_bind_group(0, &self.bind_group, &[]);
 
-        self.draw_mesh(
-            &mut pass,
-            &self.lattice_mesh,
-            &self.scaffold_pipeline,
-            Primitive::Lines,
-        );
-        // The solid handles last, over the shafts they cap.
-        self.draw_mesh(
-            &mut pass,
-            &self.lattice_solid_mesh,
-            &self.scaffold_solid_pipeline,
-            Primitive::Triangles,
-        );
+        // The depth this frame wrote, for the fragments that ask whether the
+        // sculpt is in front of them.
+        //
+        // `ensure_resources` runs earlier in this same frame, so the cache is
+        // there whenever this is reached. The scaffolding is skipped rather than
+        // drawn without the binding if it somehow is not: a draw with no bind
+        // group at that index is a validation failure, and losing a manipulator
+        // for a frame is the smaller of the two.
+        if let Some(xray) = xray {
+            pass.set_bind_group(1, xray, &[]);
+
+            self.draw_mesh(
+                &mut pass,
+                &self.lattice_mesh,
+                &self.scaffold_pipeline,
+                Primitive::Lines,
+            );
+            // The solid handles last, over the shafts they cap.
+            self.draw_mesh(
+                &mut pass,
+                &self.lattice_solid_mesh,
+                &self.scaffold_solid_pipeline,
+                Primitive::Triangles,
+            );
+        }
 
         // The navigation gizmo, in its own corner viewport so it keeps a fixed
         // size whatever the window does. It shares the camera's rotation and
@@ -2465,7 +2564,7 @@ impl Renderer {
             self.draw_mesh(
                 &mut pass,
                 &self.gizmo_mesh,
-                &self.scaffold_pipeline,
+                &self.gizmo_pipeline,
                 Primitive::Lines,
             );
         }
@@ -2483,6 +2582,7 @@ impl Renderer {
     /// depth buffer directly and so could only run where the device would
     /// multisample; the reduction pass is what removed that.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn occlude(
         &self,
         gpu: &Gpu,
@@ -2495,7 +2595,15 @@ impl Renderer {
         form_radius: f32,
         profiler: &mut GpuProfiler,
     ) {
-        if !self.occlusion {
+        // The reduction runs for the scaffolding as well, and the scaffolding
+        // is drawn on frames where occlusion is off.
+        //
+        // Gating it on `self.occlusion`, as the whole of this used to be, would
+        // make a manipulator's appearance depend on whether occlusion happened
+        // to be enabled — which is the one thing the pass order forbids, and
+        // `occlusion_does_not_darken_the_manipulator` compares exactly those
+        // two frames.
+        if !self.occlusion && !self.has_scaffolding() {
             return;
         }
         let projection = camera.projection(aspect);
@@ -2579,6 +2687,12 @@ impl Renderer {
             pass.set_pipeline(&self.reduce_pipeline);
             pass.set_bind_group(0, &resources.reduce, &[]);
             self.draw_fullscreen(&mut pass);
+        }
+        // Everything past here is the occlusion itself. The reduction above is
+        // shared with the scaffolding; the kernel and the composite are not,
+        // and a frame that only needs the depth pays for neither.
+        if !self.occlusion {
+            return;
         }
         {
             // Cleared to white rather than loaded: outside the scene's
@@ -3302,6 +3416,52 @@ mod tests {
         assert_eq!(Vertex::MASK_OFFSET, 36);
     }
 
+    /// Every shader module is created with the shared prelude in front of it.
+    ///
+    /// `common.wgsl` holds what more than one shader needs — the fullscreen
+    /// triangle, and the camera and vertex layouts the scene and the
+    /// scaffolding both read. A module created straight from `include_str!`
+    /// gets none of it, and the failure is a shader that will not parse: the
+    /// scaffolding shader was added by moving `Camera` and `VertexInput` into
+    /// the prelude, and the scene module went on being created without it. That
+    /// builds cleanly — WGSL is compiled when a device is asked for the module,
+    /// not by rustc — so nothing said a word until a frame was drawn.
+    ///
+    /// Read off this file's own source, which is where the mistake is made.
+    #[test]
+    fn every_shader_module_gets_the_shared_prelude() {
+        // Only the code that draws. The tests below read shader sources to
+        // grep them, and `shader_source` itself is where the prelude comes
+        // from — neither is a module being created.
+        let whole = include_str!("mod.rs");
+        let source = whole
+            .split_once("\n#[cfg(test)]")
+            .map(|(code, _)| code)
+            .unwrap_or(whole);
+        let mut checked = 0;
+        for (at, _) in source.match_indices("include_str!(\"../shaders/") {
+            let named = &source[at..];
+            if named.starts_with("include_str!(\"../shaders/common.wgsl\")") {
+                continue;
+            }
+            // The prelude is applied by wrapping, so the call must be inside
+            // one. Looking back a few characters is enough and says exactly
+            // what the rule is: `shader_source(include_str!(..))`.
+            let before = &source[at.saturating_sub("shader_source(".len())..at];
+            assert!(
+                before.ends_with("shader_source("),
+                "a shader module is created without the shared prelude, at \
+                 byte {at} of renderer/mod.rs — see common.wgsl"
+            );
+            checked += 1;
+        }
+        assert!(
+            checked >= 3,
+            "found {checked} shader modules in renderer/mod.rs, which is fewer \
+             than there are — the pattern this reads must have changed"
+        );
+    }
+
     #[test]
     fn no_field_math_in_shaders() {
         // The whole point of meshing on the engine side is that the shader
@@ -3323,7 +3483,7 @@ mod tests {
             })
             .collect();
         assert!(
-            shaders.len() >= 4,
+            shaders.len() >= 5,
             "found {} shaders in {}, which is fewer than there are",
             shaders.len(),
             directory.display()
