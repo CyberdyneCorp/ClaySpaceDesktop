@@ -134,6 +134,16 @@ enum Drag {
     Gizmo,
     /// Dragging a curve's control point.
     Curve,
+    /// Drawing a box across the viewport to gather control points.
+    Marquee,
+    /// Drawing a mask outline over the form.
+    Outline,
+}
+
+/// A vector's direction and its length, or `None` where it has neither.
+fn unit(v: [f32; 3]) -> Option<([f32; 3], f32)> {
+    let length = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    (length > 1e-6).then(|| (std::array::from_fn(|i| v[i] / length), length))
 }
 
 /// One reference lifted out of the ViewModel, owned.
@@ -165,8 +175,22 @@ struct App {
     curve_drag: Option<([f32; 3], [f32; 3], [f32; 3])>,
     /// The plane a lattice drag runs on: an anchor and a normal facing the eye.
     cage_plane: Option<([f32; 3], [f32; 3])>,
+    /// The selection box being drawn: where it began, where it has reached,
+    /// and whether it adds to the selection rather than replacing it.
+    ///
+    /// Held for the length of one gesture. Read by the frame *after* the one
+    /// that moved it, because the viewport's rectangle is what egui allocates
+    /// and the pointer is not routed until that is known — a frame's lag on a
+    /// band the hand is still dragging is not a thing an eye can catch.
+    marquee: Option<(egui::Pos2, egui::Pos2, bool)>,
     /// The manipulator handle in hand, and the plane its drag runs on.
     gizmo_drag: Option<GizmoGesture>,
+    /// The manipulator handle under the pointer, for the highlight.
+    ///
+    /// Kept rather than asked for while the frame is drawn, because the answer
+    /// needs the camera, the pointer and the viewport's rectangle, and only
+    /// two of the three are known where the widget is described.
+    gizmo_hover: Option<(clayspace_model::GizmoMode, clayspace_model::GizmoHandle)>,
     /// How big the manipulator's target was when it was taken up: the target
     /// and half its widest extent. Measured once per selection rather than
     /// every frame, because the engine's bounds of a turned layer are a
@@ -329,8 +353,6 @@ impl App {
     /// Long enough to grab without covering the selection it sits on, which is
     /// what a person is looking at while they aim it.
     const GIZMO_REACH: f32 = 12.0;
-    /// How wide a manipulator handle's grab radius is, against its reach.
-    const GIZMO_GRAB: f32 = 0.16;
     /// How much wider than the handle the grab radius is.
     ///
     /// Larger than what is drawn on purpose: a handle a person can see and
@@ -397,6 +419,8 @@ impl App {
             curve,
             curve_drag: None,
             cage_plane: None,
+            marquee: None,
+            gizmo_hover: None,
             gizmo_drag: None,
             gizmo_fit: None,
             armature,
@@ -1535,32 +1559,20 @@ impl App {
     /// and sits on the selection: a press on the green arrow would otherwise
     /// find whichever control point happens to be behind it.
     fn begin_gizmo_drag(&mut self, point: egui::Pos2) -> bool {
-        // A cage that is up owns the widget; a selected object owns it
-        // otherwise. They cannot both, because putting a cage up is what takes
-        // an object selection's manipulator away.
-        let cage = self.lattice.state().get().clone();
-        let (pivot, mode, reach, per_axis_scale) = if cage.active {
-            match cage.pivot() {
-                Some(pivot) => (
-                    pivot,
-                    cage.mode,
-                    Self::cage_handle(&cage) * Self::GIZMO_REACH,
-                    true,
-                ),
-                None => return false,
-            }
-        } else {
-            match self.objects.pivot() {
-                Some(pivot) => (pivot, *self.objects.mode().get(), self.gizmo_reach(), false),
-                None => return false,
-            }
+        let Some((pivot, mode, reach, per_axis_scale)) = self.gizmo_target() else {
+            return false;
         };
         let Some(ray) = self.ray_at(point) else {
             return false;
         };
-        let Some((operation, handle)) =
-            Self::handle_under(mode, per_axis_scale, pivot, reach, ray, &self.camera)
-        else {
+        let Some((operation, handle)) = clayspace_app::input::handle_under(
+            mode,
+            per_axis_scale,
+            pivot,
+            reach,
+            ray,
+            &self.camera,
+        ) else {
             return false;
         };
         // The handle chose the operation. The interface's mode follows it, so
@@ -1570,6 +1582,42 @@ impl App {
             self.handle(Command::SetGizmoMode(operation));
         }
         self.start_gizmo_drag(ray, pivot, operation, handle, reach)
+    }
+
+    /// What the manipulator is standing on this frame: where it sits, which
+    /// mode it is in, how far its arms reach, and whether it offers a box per
+    /// axis.
+    ///
+    /// A cage that is up owns the widget; a selected object owns it otherwise.
+    /// They cannot both, because putting a cage up is what takes an object
+    /// selection's manipulator away. Asked by the press and by the hover
+    /// highlight alike, so what lights up under the pointer and what a press
+    /// grabs cannot describe different widgets.
+    fn gizmo_target(&mut self) -> Option<([f32; 3], clayspace_model::GizmoMode, f32, bool)> {
+        let cage = self.lattice.state().get().clone();
+        if cage.active {
+            let pivot = cage.pivot()?;
+            let reach = Self::cage_handle(&cage) * Self::GIZMO_REACH;
+            return Some((pivot, cage.mode, reach, true));
+        }
+        let pivot = self.objects.pivot()?;
+        Some((pivot, *self.objects.mode().get(), self.gizmo_reach(), false))
+    }
+
+    /// Which handle the pointer is over, for the highlight.
+    ///
+    /// The same question a press asks, asked every frame the pointer moves. A
+    /// widget that lights the handle under the pointer says which of half a
+    /// dozen overlapping targets a press will take *before* the press is made,
+    /// which is most of what makes a small handle usable at all — and the
+    /// drawing already had a `hovered` field that only a drag ever filled.
+    fn hovered_handle(
+        &mut self,
+        point: egui::Pos2,
+    ) -> Option<(clayspace_model::GizmoMode, clayspace_model::GizmoHandle)> {
+        let (pivot, mode, reach, per_axis_scale) = self.gizmo_target()?;
+        let ray = self.ray_at(point)?;
+        clayspace_app::input::handle_under(mode, per_axis_scale, pivot, reach, ray, &self.camera)
     }
 
     /// Whether the manipulator is on something made of clay — a placed object
@@ -1641,7 +1689,7 @@ impl App {
         // the eye, which is the same vector the ring is drawn perpendicular to.
         // Taken here and held for the gesture, so a camera that moves mid-drag
         // does not twist the selection under a hand that has not moved.
-        let view_axis = Self::toward_eye(&self.camera, pivot);
+        let view_axis = clayspace_app::input::toward_eye(&self.camera, pivot);
         let normal = clayspace_model::drag_plane(mode, handle, view_axis, facing);
         let Some(pressed) = Self::on_plane(ray, pivot, normal) else {
             return false;
@@ -1688,147 +1736,12 @@ impl App {
         (anchor, shift)
     }
 
-    /// The unit vector from a point to the camera.
-    ///
-    /// Which is what "the axis facing the eye" means, and what both the outer
-    /// ring's drawing and its rotation are built on — one vector rather than
-    /// two that could disagree by a fraction of a degree.
-    fn toward_eye(camera: &Camera, from: [f32; 3]) -> [f32; 3] {
-        let eye: [f32; 3] = camera.eye().into();
-        let away: [f32; 3] = std::array::from_fn(|i| eye[i] - from[i]);
-        let length = (away.iter().map(|c| c * c).sum::<f32>()).sqrt();
-        if length < 1e-6 {
-            // The camera is on top of the selection, where there is no
-            // direction to have. Any unit vector will do and none is right;
-            // the ring is invisible at this distance anyway.
-            return [0.0, 0.0, 1.0];
-        }
-        std::array::from_fn(|i| away[i] / length)
-    }
-
-    /// Which handle a ray passes through, if any.
-    ///
-    /// The nearest along the ray wins, so a handle in front takes a press over
-    /// one behind it — which is what a person aiming at what they can see
-    /// expects.
-    fn handle_under(
-        mode: clayspace_model::GizmoMode,
-        per_axis_scale: bool,
-        pivot: [f32; 3],
-        reach: f32,
-        ray: ([f32; 3], [f32; 3]),
-        camera: &Camera,
-    ) -> Option<(clayspace_model::GizmoMode, clayspace_model::GizmoHandle)> {
-        use clayspace_model::{GizmoHandle, GizmoMode};
-        let slack = reach * Self::GIZMO_GRAB;
-        // A cell rather than a plain local, because the outer ring is tested
-        // only if nothing nearer was hit, and that question is asked while
-        // the closure that answers it is still in scope.
-        let best: std::cell::Cell<Option<((GizmoMode, GizmoHandle), f32)>> =
-            std::cell::Cell::new(None);
-        let mut consider = |what: (GizmoMode, GizmoHandle), at: [f32; 3], radius: f32| {
-            if let Some(along) = Self::ray_hits(ray, at, radius) {
-                if best.get().is_none_or(|(_, closest)| along < closest) {
-                    best.set(Some((what, along)));
-                }
-            }
-        };
-        let ring =
-            |radius: f32,
-             across: [f32; 3],
-             other: [f32; 3],
-             what: (GizmoMode, GizmoHandle),
-             consider: &mut dyn FnMut((GizmoMode, GizmoHandle), [f32; 3], f32)| {
-                // A ring is grabbed anywhere along it, so several points around
-                // it are tested rather than one — a ring tested only at its four
-                // cardinal points is a ring with four handles.
-                let steps = clayspace_model::ring_samples(radius, slack);
-                for step in 0..steps {
-                    let angle = step as f32 / steps as f32 * std::f32::consts::TAU;
-                    let at = std::array::from_fn(|i| {
-                        pivot[i] + (across[i] * angle.cos() + other[i] * angle.sin()) * radius
-                    });
-                    consider(what, at, slack);
-                }
-            };
-
-        // What is drawn and what can be grabbed have to be the same set, and
-        // `GizmoHandle::combined` is that set: an arrow's tip, a ring anywhere
-        // along it, a box on the shaft where the target scales per axis. The
-        // radii are the renderer's own constants, so the picture and the hit
-        // test cannot come apart.
-        for (operation, handle) in GizmoHandle::combined(per_axis_scale) {
-            let Some(index) = handle.axis_index() else {
-                continue;
-            };
-            let Some(axis) = handle.axis() else {
-                continue;
-            };
-            match operation {
-                GizmoMode::Move => {
-                    // The tip, where the cone is and where a person aims.
-                    let tip = std::array::from_fn(|i| pivot[i] + axis[i] * reach);
-                    consider((operation, handle), tip, slack);
-                }
-                GizmoMode::Scale => {
-                    let at = std::array::from_fn(|i| {
-                        pivot[i] + axis[i] * reach * clayspace_view::SCALE_BOX_REACH
-                    });
-                    consider((operation, handle), at, slack);
-                }
-                GizmoMode::Rotate => {
-                    let (u, v) = ((index + 1) % 3, (index + 2) % 3);
-                    let mut across = [0.0f32; 3];
-                    across[u] = 1.0;
-                    let mut other = [0.0f32; 3];
-                    other[v] = 1.0;
-                    ring(
-                        reach * clayspace_view::RING_REACH,
-                        across,
-                        other,
-                        (operation, handle),
-                        &mut consider,
-                    );
-                }
-            }
-        }
-        // The centre does what the mode says: slides, or scales uniformly.
-        consider(
-            (GizmoHandle::centre_operation(mode), GizmoHandle::Centre),
-            pivot,
-            slack,
-        );
-        // The outer ring, tested the way the axis rings are and at the radius
-        // it is drawn at. Only where nothing else was hit, so a press where it
-        // crosses an arrow or a ring goes to that: the outer one is the easy
-        // target everywhere else, and it should not steal the hard ones.
-        if best.get().is_none() {
-            let axis = Self::toward_eye(camera, pivot);
-            let (across, other) = clayspace_view::frame_about(axis.into());
-            ring(
-                reach * clayspace_view::VIEW_RING_REACH,
-                across.into(),
-                other.into(),
-                (GizmoMode::Rotate, GizmoHandle::View),
-                &mut consider,
-            );
-        }
-        best.into_inner().map(|(what, _)| what)
-    }
-
     /// How far along a ray a sphere is hit, if it is.
+    ///
+    /// The model's, so a control point, a curve point and a manipulator handle
+    /// are all picked by one piece of arithmetic.
     fn ray_hits(ray: ([f32; 3], [f32; 3]), centre: [f32; 3], radius: f32) -> Option<f32> {
-        let (origin, direction) = ray;
-        let to: [f32; 3] = std::array::from_fn(|i| centre[i] - origin[i]);
-        let along: f32 = (0..3).map(|i| to[i] * direction[i]).sum();
-        if along <= 0.0 {
-            return None; // Behind the eye.
-        }
-        let miss: f32 = (0..3)
-            .map(|i| (to[i] - direction[i] * along).powi(2))
-            .sum::<f32>()
-            .sqrt();
-        (miss <= radius).then_some(along)
+        clayspace_model::ray_hits_sphere(ray, centre, radius)
     }
 
     /// Where a pointer ray meets the plane the manipulator drag runs on.
@@ -1946,6 +1859,13 @@ impl App {
         let outline = self.selected_outline();
         let subtool_outline = self.active_subtool_outline();
         let object_mode = *self.objects.mode().get();
+        // The handle in hand while a drag is under way, and the one under the
+        // pointer otherwise: a gesture keeps its handle lit wherever the
+        // pointer has since travelled.
+        let gizmo_hovered = self
+            .gizmo_drag
+            .map(|gesture| (gesture.mode, gesture.handle))
+            .or(self.gizmo_hover);
         let Some(graphics) = self.graphics.as_mut() else {
             return;
         };
@@ -1985,10 +1905,8 @@ impl App {
                 pivot,
                 mode: object_mode,
                 reach: object_reach,
-                hovered: self
-                    .gizmo_drag
-                    .map(|gesture| (gesture.mode, gesture.handle)),
-                view_axis: Self::toward_eye(&camera, pivot),
+                hovered: gizmo_hovered,
+                view_axis: clayspace_app::input::toward_eye(&camera, pivot),
                 // One scale factor, so one handle for it.
                 per_axis_scale: false,
             });
@@ -2018,10 +1936,8 @@ impl App {
                     pivot,
                     mode: cage.mode,
                     reach: handle * Self::GIZMO_REACH,
-                    hovered: self
-                        .gizmo_drag
-                        .map(|gesture| (gesture.mode, gesture.handle)),
-                    view_axis: Self::toward_eye(&camera, pivot),
+                    hovered: gizmo_hovered,
+                    view_axis: clayspace_app::input::toward_eye(&camera, pivot),
                     // A cage scales its own control points.
                     per_axis_scale: true,
                 }),
@@ -2450,9 +2366,16 @@ impl App {
     /// The rings to draw: the pointer's, plus one for every place symmetry
     /// will also deposit the dab.
     fn cursors(&self) -> Vec<BrushCursor> {
-        // No brush ring in the transform mode: a press on the clay moves it
-        // then, and a ring promising a stroke would promise the wrong thing.
-        if self.layer_manipulator_up() {
+        // No brush ring where a press cannot leave a stroke: the transform
+        // mode, where a press on the clay moves it; a cage, where a press that
+        // misses a control point orbits; and a drawn mask gesture, where a
+        // press begins an outline. The rule and its reasons are
+        // `input::shows_the_brush_ring`.
+        if !clayspace_app::input::shows_the_brush_ring(
+            self.layer_manipulator_up(),
+            self.lattice.state().get().active,
+            self.draws_an_outline(),
+        ) {
             return Vec::new();
         }
         let Some((position, normal)) = self.hover else {
@@ -2584,6 +2507,12 @@ impl App {
             } else {
                 self.hover = self.pick_at(point);
             }
+            // Which manipulator handle a press would take. Only with the
+            // pointer up: during a drag the handle in hand is the one lit,
+            // whatever the pointer has since travelled over.
+            self.gizmo_hover = (self.drag == Drag::None)
+                .then(|| self.hovered_handle(point))
+                .flatten();
         }
     }
 
@@ -2614,6 +2543,7 @@ impl App {
                     self.settle_geometry();
                 }
                 Drag::Curve => self.curve_drag = None,
+                Drag::Outline => self.close_the_drawn_outline(),
                 Drag::Gizmo => {
                     self.gizmo_drag = None;
                     self.handle(Command::EndGizmoDrag);
@@ -2624,6 +2554,7 @@ impl App {
                     // adjusting a corner does it in several pulls, not one.
                     self.cage_plane = None;
                 }
+                Drag::Marquee => self.finish_marquee(),
                 _ => {}
             }
             self.drag = Drag::None;
@@ -2684,6 +2615,42 @@ impl App {
                 && !transformed
                 && button == egui::PointerButton::Primary
                 && self.begin_cage_drag(point, input.smooth_modifier);
+            // A cage takes the whole viewport, so a press that took hold of
+            // no handle draws a selection box over it rather than falling
+            // through to an object or the camera. Turning the model is still
+            // there — the secondary button and the orbit modifier both orbit
+            // — so a cage can be looked at from behind without being taken
+            // down, which is the bargain the miss-orbits rule was making.
+            let boxing = !rigged
+                && !on_curve
+                && !manipulated
+                && !transformed
+                && !caged
+                && button == egui::PointerButton::Primary
+                && !input.orbit_modifier
+                && self.lattice.state().get().active;
+            if boxing {
+                self.marquee = Some((point, point, input.smooth_modifier));
+            }
+            // Before the surface is asked about, and whether or not the press
+            // landed on it: an outline is drawn *around* a region, so it usually
+            // starts on empty space beside the form. Asking `pick_at` first
+            // would send every such press to the camera instead.
+            //
+            // After the cage, though, and that is the cage's rule rather than a
+            // preference: while one is up it owns the viewport, and
+            // `press_sculpts` already refuses a stroke there — so a mask
+            // gesture that took the press out from under a selection box would
+            // be the one thing still reaching past a raised cage.
+            let drawing_an_outline = !rigged
+                && !on_curve
+                && !manipulated
+                && !transformed
+                && !caged
+                && !boxing
+                && button == egui::PointerButton::Primary
+                && !input.orbit_modifier
+                && self.begin_outline(point, input);
             // Last of the four. It always runs now, because a press on
             // geometry is what makes that geometry's subtool the sculpt
             // target; whether it also *takes* the press is decided inside, and
@@ -2691,11 +2658,18 @@ impl App {
             // already selected, since a press on the clay is a stroke and a
             // sculptor who is sculpting must not have one turn into a selection
             // because a cylinder happens to be under the brush.
+            //
+            // Not while an outline is being drawn, though: it freezes a region
+            // of the subtool being worked on, and a press that changed which
+            // subtool that is half way into the gesture would apply the outline
+            // to a form the sculptor was not aiming at.
             let picked_object = !rigged
                 && !on_curve
                 && !manipulated
                 && !transformed
                 && !caged
+                && !boxing
+                && !drawing_an_outline
                 && button == egui::PointerButton::Primary
                 && self.pick_object_at(point);
             let on_surface = !rigged
@@ -2703,13 +2677,22 @@ impl App {
                 && !manipulated
                 && !transformed
                 && !caged
+                && !boxing
+                && !drawing_an_outline
                 && !picked_object
                 && self.pick_at(point).is_some();
+            // In the order the flags above were decided in. They are mutually
+            // exclusive by construction — each is gated on the ones before it —
+            // so the order changes nothing; it is written this way so the match
+            // reads as the arbitration does rather than as a second opinion
+            // about it.
             let started = match button {
                 _ if rigged => Drag::Rig,
                 _ if on_curve => Drag::Curve,
                 _ if manipulated || transformed => Drag::Gizmo,
                 _ if caged => Drag::Cage,
+                _ if boxing => Drag::Marquee,
+                _ if drawing_an_outline => Drag::Outline,
                 egui::PointerButton::Middle => Drag::Pan,
                 egui::PointerButton::Secondary => Drag::Orbit,
                 // The rule lives in `input`, with its reasons and its tests.
@@ -2746,8 +2729,10 @@ impl App {
             match self.drag {
                 Drag::Sculpt => self.carry_sculpt(input),
                 Drag::Curve => self.carry_curve(input),
+                Drag::Outline => self.carry_outline(input),
                 Drag::Gizmo => self.carry_gizmo(input),
                 Drag::Cage => self.carry_cage(input),
+                Drag::Marquee => self.carry_marquee(input),
                 Drag::Rig => self.carry_rig(input),
                 Drag::Orbit => self
                     .camera
@@ -2763,6 +2748,99 @@ impl App {
         if let Some(point) = input.pointer {
             self.stroke_at(point, false, StrokeModifiers::default());
         }
+    }
+
+    /// A press with a drawn gesture in hand, which begins an outline.
+    ///
+    /// `false` where the mask brush is not in hand or its gesture is the
+    /// brush, which is what leaves the press to the tools below.
+    fn begin_outline(&mut self, point: egui::Pos2, input: &ViewportInput) -> bool {
+        if !self.draws_an_outline() {
+            return false;
+        }
+        let Some(at) = self.ndc_at(point) else {
+            return false;
+        };
+        // Latched at the press, as a stroke's modifiers are: a key taken up
+        // half way round the outline would change what it means under the hand
+        // that is drawing it.
+        self.handle(Command::BeginMaskOutline(at, input.invert_modifier));
+        true
+    }
+
+    /// Whether the next press over the viewport draws an outline rather than
+    /// painting.
+    ///
+    /// Asked by the press *and* by the brush ring, from here rather than
+    /// separately: a ring that promised a stroke the press would not leave is
+    /// the mistake the cage made once, and two copies of this question is how
+    /// it would be made again.
+    fn draws_an_outline(&self) -> bool {
+        let painting = *self.sculpt.tool().get() == clayspace_model::ToolKind::Mascara;
+        self.mask.draws_an_outline(painting)
+    }
+
+    /// Movement, while an outline is being drawn.
+    fn carry_outline(&mut self, input: &ViewportInput) {
+        if let Some(at) = input.pointer.and_then(|point| self.ndc_at(point)) {
+            self.handle(Command::ExtendMaskOutline(at));
+        }
+    }
+
+    /// The pointer came up: close the outline on the frame it was drawn over.
+    ///
+    /// Nothing happens where there is no frame — a subtool with no extent has
+    /// nothing for the sweep to run through — and the outline is taken down
+    /// either way, because the gesture has ended whatever came of it.
+    fn close_the_drawn_outline(&mut self) {
+        match self.outline_frame() {
+            Some(frame) => self.busy(|app| {
+                app.timed("máscara desenhada", |app| {
+                    app.handle(Command::EndMaskOutline(frame));
+                });
+            }),
+            None => self.handle(Command::CancelMaskOutline),
+        }
+    }
+
+    /// The plane the outline was drawn on, in world terms.
+    ///
+    /// Through the active subtool, perpendicular to the view, with its `right`
+    /// and `up` taken from the camera's own rays rather than rebuilt from its
+    /// matrices: the outline is collected in the same normalised coordinates
+    /// those rays are cast through, so deriving the frame from them is what
+    /// keeps the region under the line the sculptor drew.
+    fn outline_frame(&self) -> Option<clayspace_model::OutlineFrame> {
+        let viewport = self.viewport?;
+        let aspect = viewport.aspect_ratio();
+        let through = |ndc: [f32; 2]| self.camera.ray_through(ndc, aspect);
+        let (_, forward) = through([0.0, 0.0]);
+
+        // Somewhere on the form, so the plane the outline is measured on cuts
+        // through what it is being drawn around. Without a subtool to aim at,
+        // what the camera is looking at.
+        let anchor = self.sculpt.bounds().map_or_else(
+            || self.camera.target.into(),
+            |(min, max)| std::array::from_fn(|axis| (min[axis] + max[axis]) * 0.5),
+        );
+        let origin = Self::on_plane(through([0.0, 0.0]), anchor, forward)?;
+        let across = Self::on_plane(through([1.0, 0.0]), anchor, forward)?;
+        let above = Self::on_plane(through([0.0, 1.0]), anchor, forward)?;
+
+        let (right, width) = unit(std::array::from_fn(|i| across[i] - origin[i]))?;
+        let (up, height) = unit(std::array::from_fn(|i| above[i] - origin[i]))?;
+        Some(clayspace_model::OutlineFrame {
+            origin,
+            right,
+            up,
+            forward,
+            scale: [width, height],
+        })
+    }
+
+    /// Where a viewport point sits in normalised device coordinates.
+    fn ndc_at(&self, point: egui::Pos2) -> Option<[f32; 2]> {
+        clayspace_app::input::ndc_at(self.viewport?, point)
     }
 
     /// Movement, while a curve drag is under way.
@@ -2799,6 +2877,45 @@ impl App {
         if let Some(at) = input.pointer.and_then(|point| self.on_cage_plane(point)) {
             self.handle(Command::DragLatticePoint(at));
         }
+    }
+
+    /// Movement, while a selection box is being drawn.
+    fn carry_marquee(&mut self, input: &ViewportInput) {
+        if let (Some(point), Some((from, _, add))) = (input.pointer, self.marquee) {
+            self.marquee = Some((from, point, add));
+        }
+    }
+
+    /// A selection box, resolved where the pointer comes up.
+    ///
+    /// Resolved at the release rather than as it is drawn: a selection that
+    /// changed under a moving band would move the manipulator to the middle of
+    /// whatever was momentarily inside it, and the widget would wander across
+    /// the screen while the sculptor was still drawing the box.
+    fn finish_marquee(&mut self) {
+        let Some((from, to, add)) = self.marquee.take() else {
+            return;
+        };
+        let cage = self.lattice.state().get().clone();
+        if !cage.active {
+            return;
+        }
+        if !clayspace_app::input::is_a_marquee(from, to) {
+            // A click that took hold of nothing. It clears the selection —
+            // which is how a sculptor puts the manipulator away — unless the
+            // add modifier is held, where it means "keep what you have".
+            if !add {
+                self.handle(Command::SelectLatticePoint(None));
+            }
+            return;
+        }
+        let Some(viewport) = self.viewport else {
+            return;
+        };
+        let caught =
+            clayspace_app::input::points_within(&self.camera, viewport, &cage.points, from, to);
+        let selection = clayspace_app::input::selection_from_marquee(&cage.selection, &caught, add);
+        self.handle(Command::SelectLatticePoints(selection));
     }
 
     /// Movement, while a rig drag is under way.
@@ -3213,6 +3330,8 @@ impl App {
             strings: self.strings,
             shortcuts: &self.shortcuts,
             mask: *self.mask.state().get(),
+            mask_gesture: *self.mask.gesture().get(),
+            outline: self.mask.draft().get().as_ref(),
             armature: self.armature_state(),
             recent: self.recent.paths(),
             show_repair: self.show_repair,
@@ -3351,6 +3470,11 @@ impl App {
             }),
         };
 
+        // Read before the frame is built, because the closure below cannot
+        // borrow `self` while the ShellState made from it is alive.
+        let marquee = self
+            .marquee
+            .filter(|(from, to, _)| clayspace_app::input::is_a_marquee(*from, *to));
         let output = context.run(raw_input, |ctx| {
             egui::TopBottomPanel::top("menu")
                 .exact_height(region::MENU_BAR)
@@ -3410,6 +3534,24 @@ impl App {
                         );
                         viewport = Some(rect);
                         input = ViewportInput::read(ui, &response);
+                        // The rubber band, over the scene egui draws nothing
+                        // into: the viewport's pixels come from wgpu, and this
+                        // is the one thing about the gesture the interface
+                        // layer draws itself.
+                        if let Some((from, to, _)) = marquee {
+                            shell::selection_box(
+                                ui.painter(),
+                                egui::Rect::from_two_pos(from, to).intersect(rect),
+                            );
+                        }
+                        // And the mask outline, for the same reason and in the
+                        // same place: a gesture's own feedback belongs over the
+                        // scene and under the panels, because it is a picture
+                        // of what the pointer has done so far rather than a
+                        // control. The two never show at once — a cage owns the
+                        // viewport while it is up, so the press that would draw
+                        // one is the press that draws the other.
+                        shell::outline_overlay(ui, rect, &state);
                     });
                 });
         });

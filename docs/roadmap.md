@@ -1208,6 +1208,53 @@ surface by less than a cell per pass and the cache's cell is 0.02.
 
 ## Known costs and escape routes
 
+**A mask can only be written one call at a time, and every call costs the whole
+mask.** A document-owned mask records for the undo history by snapshotting its
+entire chunk map on the first write inside a call and diffing it when the call
+returns (`clay_c.cpp`'s `MaskStep`, `voxel::MaskField::touch`). Every entry
+point brackets its own step — `clay_mask_set`, `clay_mask_paint_cell`,
+`clay_mask_fill`, `clay_mask_invert_within` — and there is no entry point that
+takes a *set* of cells, merges a second mask, or lets a mask gate a brush
+(`clay_mask_paint` documents that `brush->mask` is ignored: "a mask does not
+gate itself"). Measured on a mask covering a million cells:
+
+| writing a region | calls | time |
+|---|---|---|
+| one-cell fills, document mask | 5000 | 21.2 s |
+| one-cell fills, standalone mask | 5000 | 35 ms |
+| the region as one stamp run | 1 | 163 ms |
+
+The standalone row is the same work with the history switched off, so the cost
+is the snapshot rather than the write. The drawn mask gestures are built around this: the
+region is delivered as a **path that visits it**, walked once by
+`clay_mask_apply_stroke`, which is the only entry point that writes many cells
+for one snapshot.
+
+What that costs is a covering factor. The path's lattice is aligned to the
+camera and a brush footprint is aligned to the world, so the footprint has to
+reach half the lattice pitch's diagonal rather than half its side, and every
+cell of the region is written about 2.7 times — 659 ms for an outline thrown
+around the whole of the reference form, against a floor of about 200 ms if the
+footprint tiled. Opening the pitch does not help: it divides the stamps by the
+cube and multiplies each one's footprint by the same, so it buys the region's
+edge and nothing else. A region larger than the ceiling is refused rather than
+coarsened.
+
+A bulk cell write, a mask step a host could hold open across several calls, or a
+footprint the caller could orient would each close this; none exists in 0.60.0.
+Worth filing upstream, and not blocking: see
+[features.md](features.md#freezing-a-region-by-drawing-round-it).
+
+`mask.outline` measures the extreme — an outline around the whole of the reference
+form, 659 ms at 0.21 load per core — and is **not** in the Linux baseline.
+That file was recorded against ClayCore 0.52.2, and `bench-compare` on this tree
+is already red without any of this work: run on a clean checkout of `main` it
+reports regressions across the SDF brushes, the crossings, locality and startup,
+which is the engine pin moving rather than anything a change did. The figure
+goes in when the baseline is re-recorded for 0.60.0. A figure the baseline lacks
+is reported as `new` and does not fail the gate, so nothing is hidden by leaving
+it out.
+
 **A Move drag costs the field one grab, and a session of them still
 compounds.** A drag warps every item it reaches with a `grab` deformer, and the
 engine's Lipschitz bound for a chain is the *product* of its links — so the

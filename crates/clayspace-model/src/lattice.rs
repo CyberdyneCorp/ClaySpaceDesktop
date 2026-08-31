@@ -219,6 +219,15 @@ pub trait LatticeModel {
     /// manipulator exists to transform.
     fn toggle_lattice_point(&mut self, index: usize);
 
+    /// Selects a whole set of points at once, replacing what was selected.
+    ///
+    /// What a selection box leaves behind. Not a loop over
+    /// [`LatticeModel::select_lattice_point`], which would keep only the last
+    /// of them, nor one over [`LatticeModel::toggle_lattice_point`], which
+    /// would take back any point already held — a box says *these*, not *these
+    /// as well as the opposite of what you had*.
+    fn select_lattice_points(&mut self, indices: &[usize]);
+
     /// Which of the manipulator's three modes is in force.
     fn set_gizmo_mode(&mut self, mode: GizmoMode);
 

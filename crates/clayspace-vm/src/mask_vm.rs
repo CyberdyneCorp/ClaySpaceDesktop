@@ -6,7 +6,10 @@
 
 #[cfg(test)]
 use clayspace_model::ExtrudeSide;
-use clayspace_model::{ExtrudeSettings, MaskModel, MaskOp, MaskState};
+use clayspace_model::{
+    ExtrudeSettings, MaskGesture, MaskModel, MaskOp, MaskState, OutlineDraft, OutlineFrame,
+    OutlineMode,
+};
 
 use crate::command::Command;
 use crate::observable::Observable;
@@ -24,6 +27,15 @@ pub struct MaskViewModel {
     /// passes. The menu shows the number beside each so the unit is never in
     /// doubt.
     steps: Observable<i32>,
+    /// Which gesture the mask brush makes.
+    gesture: Observable<MaskGesture>,
+    /// The outline being drawn, in normalised device coordinates.
+    ///
+    /// Held here rather than in the composition root because the viewport
+    /// draws it: an overlay read from ViewModel state is one a headless test
+    /// can assert on, and the first version of this kept the points beside the
+    /// event loop where nothing could.
+    draft: Observable<Option<OutlineDraft>>,
     /// The last refusal, for the status area.
     notice: Observable<Option<String>>,
 }
@@ -36,6 +48,8 @@ impl MaskViewModel {
             state: Observable::new(state),
             extrude: Observable::new(ExtrudeSettings::default()),
             steps: Observable::new(1),
+            gesture: Observable::new(MaskGesture::default()),
+            draft: Observable::new(None),
             notice: Observable::new(None),
         }
     }
@@ -50,6 +64,25 @@ impl MaskViewModel {
 
     pub fn steps(&self) -> &Observable<i32> {
         &self.steps
+    }
+
+    pub fn gesture(&self) -> &Observable<MaskGesture> {
+        &self.gesture
+    }
+
+    /// The outline being drawn, for the viewport to trace.
+    pub fn draft(&self) -> &Observable<Option<OutlineDraft>> {
+        &self.draft
+    }
+
+    /// Whether a press over the viewport should draw a shape rather than
+    /// paint.
+    ///
+    /// Asked with the tool in hand rather than answered from state here: the
+    /// gesture belongs to the mask brush, and an outline drawn while a
+    /// sculpting tool is selected would be a mode nobody chose.
+    pub fn draws_an_outline(&self, painting_the_mask: bool) -> bool {
+        painting_the_mask && self.gesture.get().draws_an_outline()
     }
 
     /// The operation with the panel's amount filled in.
@@ -91,11 +124,72 @@ impl MaskViewModel {
         self.state.set_if_changed(state);
     }
 
+    /// Carries the drawn outline onto the frame it was drawn over and applies
+    /// it.
+    ///
+    /// The draft is taken down whatever happens. A gesture that is refused has
+    /// still ended, and an outline left on the screen after the pointer came
+    /// up would be a line the sculptor cannot get rid of.
+    fn close_the_outline(&mut self, frame: OutlineFrame) {
+        let Some(draft) = self.draft.get().clone() else {
+            return;
+        };
+        self.draft.set(None);
+        let outline = draft.onto(frame);
+        if !outline.encloses_anything() {
+            // Not a refusal: a click with a drawn gesture in hand is how a
+            // sculptor finds out what it does, and it should do nothing
+            // quietly.
+            return;
+        }
+        match self.model.apply_outline(&outline) {
+            Ok(()) => {
+                self.notice.set_if_changed(None);
+            }
+            Err(e) => self.notice.set(Some(e.to_string())),
+        }
+        self.refresh();
+    }
+
     pub fn dispatch(&mut self, command: &Command) {
         match command {
             Command::SetMaskSteps(steps) => {
                 self.steps.set_if_changed((*steps).clamp(1, 16));
             }
+            Command::SetMaskGesture(gesture) => {
+                if self.gesture.set_if_changed(*gesture) {
+                    // A gesture abandoned by changing gesture: the outline on
+                    // screen was drawn for the mode that has just been left.
+                    self.draft.set(None);
+                }
+            }
+            Command::BeginMaskOutline(at, thaw) => {
+                let mode = if *thaw {
+                    OutlineMode::Thaw
+                } else {
+                    OutlineMode::Freeze
+                };
+                self.notice.set_if_changed(None);
+                // The gesture the draft was begun with is carried on it rather
+                // than read back later: switching from Laço to Retângulo with
+                // the pointer down would otherwise reinterpret the points
+                // already collected.
+                let gesture = *self.gesture.get();
+                self.draft.set(Some(OutlineDraft::new(*at, mode, gesture)));
+            }
+            Command::ExtendMaskOutline(at) => {
+                // Read, extended, put back: `Observable` hands out a shared
+                // reference, and the draft is what the overlay is drawn from,
+                // so it has to be replaced rather than mutated in place.
+                if let Some(mut draft) = self.draft.get().clone() {
+                    draft.extend(*at);
+                    self.draft.set(Some(draft));
+                }
+            }
+            Command::CancelMaskOutline => {
+                self.draft.set(None);
+            }
+            Command::EndMaskOutline(frame) => self.close_the_outline(*frame),
             Command::SetExtrudeSettings(settings) => {
                 self.extrude.set_if_changed(settings.sanitized());
             }
@@ -146,6 +240,7 @@ mod tests {
     struct Recorded {
         ops: Vec<MaskOp>,
         extrusions: Vec<ExtrudeSettings>,
+        outlines: Vec<clayspace_model::MaskOutline>,
     }
 
     struct FakeMask {
@@ -185,6 +280,36 @@ mod tests {
             self.recorded.borrow_mut().extrusions.push(settings);
             Ok(())
         }
+
+        fn apply_outline(
+            &mut self,
+            outline: &clayspace_model::MaskOutline,
+        ) -> Result<(), ModelError> {
+            if let Some(refusal) = self.refusal() {
+                return Err(refusal);
+            }
+            self.recorded.borrow_mut().outlines.push(outline.clone());
+            Ok(())
+        }
+    }
+
+    fn frame() -> clayspace_model::OutlineFrame {
+        clayspace_model::OutlineFrame {
+            origin: [0.0, 0.0, 0.0],
+            right: [1.0, 0.0, 0.0],
+            up: [0.0, 1.0, 0.0],
+            forward: [0.0, 0.0, -1.0],
+            scale: [2.0, 1.0],
+        }
+    }
+
+    /// Draws a square outline over the viewport, as a drag would.
+    fn draw_a_square(vm: &mut MaskViewModel, thaw: bool) {
+        vm.dispatch(&Command::BeginMaskOutline([-0.5, -0.5], thaw));
+        for at in [[0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]] {
+            vm.dispatch(&Command::ExtendMaskOutline(at));
+        }
+        vm.dispatch(&Command::EndMaskOutline(frame()));
     }
 
     fn fixture() -> (MaskViewModel, Rc<RefCell<Recorded>>) {
@@ -326,5 +451,156 @@ mod tests {
         vm.notice.set(Some("de antes".into()));
         vm.dispatch(&Command::ExtrudeMask(ExtrudeSettings::default()));
         assert!(vm.notice().get().is_none());
+    }
+
+    #[test]
+    fn an_outline_reaches_the_model_carried_onto_its_frame() {
+        let (mut vm, recorded) = fixture();
+        vm.dispatch(&Command::SetMaskGesture(MaskGesture::Lasso));
+        draw_a_square(&mut vm, false);
+
+        let outlines = &recorded.borrow().outlines;
+        assert_eq!(outlines.len(), 1, "the outline never reached the model");
+        let outline = &outlines[0];
+        assert_eq!(outline.mode, OutlineMode::Freeze);
+        assert_eq!(outline.outline.len(), 4);
+        // Normalised device coordinates on the way in, world units on the way
+        // out: the frame is what carries them across, and an outline still
+        // measured in screen units would freeze a region a fraction of the
+        // size it was drawn.
+        assert_eq!(outline.outline[0], [-1.0, -0.5]);
+        assert!(vm.draft().get().is_none(), "the outline was left on screen");
+    }
+
+    #[test]
+    fn the_modifier_held_at_the_press_decides_what_the_outline_does() {
+        // Latched at the press, as a stroke's modifiers are: a key taken up
+        // half way round would change what the outline means under the hand
+        // that is drawing it.
+        let (mut vm, recorded) = fixture();
+        vm.dispatch(&Command::SetMaskGesture(MaskGesture::Lasso));
+        draw_a_square(&mut vm, true);
+        assert_eq!(recorded.borrow().outlines[0].mode, OutlineMode::Thaw);
+    }
+
+    #[test]
+    fn the_outline_is_there_to_be_drawn_while_it_is_being_made() {
+        let (mut vm, _) = fixture();
+        assert!(vm.draft().get().is_none());
+        vm.dispatch(&Command::BeginMaskOutline([0.0, 0.0], false));
+        assert_eq!(vm.draft().get().as_ref().expect("a draft").track.len(), 1);
+        vm.dispatch(&Command::ExtendMaskOutline([0.5, 0.0]));
+        assert_eq!(vm.draft().get().as_ref().expect("a draft").track.len(), 2);
+    }
+
+    #[test]
+    fn a_box_dragged_corner_to_corner_reaches_the_model_as_four_corners() {
+        let (mut vm, recorded) = fixture();
+        vm.dispatch(&Command::SetMaskGesture(MaskGesture::Rectangle));
+        vm.dispatch(&Command::BeginMaskOutline([-0.5, -0.5], false));
+        // The hand wandered on the way; a box is still its two corners.
+        for at in [[0.1, 0.3], [0.5, 0.5]] {
+            vm.dispatch(&Command::ExtendMaskOutline(at));
+        }
+        vm.dispatch(&Command::EndMaskOutline(frame()));
+
+        let outlines = &recorded.borrow().outlines;
+        assert_eq!(outlines.len(), 1, "the box never reached the model");
+        assert_eq!(
+            outlines[0].outline.len(),
+            4,
+            "a rectangle arrived as something other than four corners"
+        );
+        // The frame's scale is 2 in x and 1 in y, as `frame` sets it.
+        assert_eq!(outlines[0].outline[0], [-1.0, -0.5]);
+        assert_eq!(outlines[0].outline[2], [1.0, 0.5]);
+    }
+
+    #[test]
+    fn the_gesture_the_draft_began_with_is_the_one_it_keeps() {
+        // Switching gesture with the pointer down would reinterpret the points
+        // already collected — a traced path suddenly read as two corners.
+        let (mut vm, recorded) = fixture();
+        vm.dispatch(&Command::SetMaskGesture(MaskGesture::Lasso));
+        vm.dispatch(&Command::BeginMaskOutline([-0.5, -0.5], false));
+        for at in [[0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]] {
+            vm.dispatch(&Command::ExtendMaskOutline(at));
+        }
+        // A gesture change mid-drag takes the draft down rather than
+        // reinterpreting it, so there is nothing left to end.
+        vm.dispatch(&Command::SetMaskGesture(MaskGesture::Rectangle));
+        vm.dispatch(&Command::EndMaskOutline(frame()));
+        assert!(recorded.borrow().outlines.is_empty());
+    }
+
+    #[test]
+    fn an_abandoned_outline_leaves_neither_a_line_nor_a_mask() {
+        let (mut vm, recorded) = fixture();
+        vm.dispatch(&Command::BeginMaskOutline([-0.5, -0.5], false));
+        vm.dispatch(&Command::ExtendMaskOutline([0.5, -0.5]));
+        vm.dispatch(&Command::ExtendMaskOutline([0.5, 0.5]));
+        vm.dispatch(&Command::CancelMaskOutline);
+        assert!(vm.draft().get().is_none(), "the line was left up");
+
+        // And ending after abandoning does nothing, which is what a release
+        // after Escape is.
+        vm.dispatch(&Command::EndMaskOutline(frame()));
+        assert!(recorded.borrow().outlines.is_empty());
+    }
+
+    #[test]
+    fn a_click_with_a_drawn_gesture_in_hand_does_nothing_and_says_nothing() {
+        // An outline of one point encloses nothing. It is how a sculptor finds
+        // out what a tool does, and it must not put a refusal on the screen.
+        let (mut vm, recorded) = fixture();
+        vm.dispatch(&Command::BeginMaskOutline([0.0, 0.0], false));
+        vm.dispatch(&Command::EndMaskOutline(frame()));
+        assert!(recorded.borrow().outlines.is_empty());
+        assert!(vm.notice().get().is_none());
+        assert!(vm.draft().get().is_none());
+    }
+
+    #[test]
+    fn the_gesture_is_the_mask_brushs_and_no_other_tools() {
+        let (mut vm, _) = fixture();
+        assert_eq!(*vm.gesture().get(), MaskGesture::Brush);
+        assert!(!vm.draws_an_outline(true), "the brush drew an outline");
+
+        for gesture in [MaskGesture::Lasso, MaskGesture::Rectangle] {
+            vm.dispatch(&Command::SetMaskGesture(gesture));
+            assert!(vm.draws_an_outline(true), "{gesture:?} drew nothing");
+            assert!(
+                !vm.draws_an_outline(false),
+                "a sculpting tool drew a {gesture:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn leaving_a_drawn_gesture_takes_a_half_drawn_outline_with_it() {
+        let (mut vm, recorded) = fixture();
+        vm.dispatch(&Command::SetMaskGesture(MaskGesture::Lasso));
+        vm.dispatch(&Command::BeginMaskOutline([-0.5, -0.5], false));
+        vm.dispatch(&Command::ExtendMaskOutline([0.5, -0.5]));
+        vm.dispatch(&Command::SetMaskGesture(MaskGesture::Brush));
+        assert!(vm.draft().get().is_none(), "the outline outlived its mode");
+        vm.dispatch(&Command::EndMaskOutline(frame()));
+        assert!(recorded.borrow().outlines.is_empty());
+    }
+
+    #[test]
+    fn a_refused_outline_says_why_and_takes_its_line_down() {
+        const NO_EXTENT: &str = "esta subferramenta não tem extensão";
+        let recorded = Rc::new(RefCell::new(Recorded::default()));
+        let model = FakeMask {
+            recorded: recorded.clone(),
+            cells: 0,
+            refuse: Some(NO_EXTENT),
+        };
+        let mut vm = MaskViewModel::new(Box::new(model));
+        vm.dispatch(&Command::SetMaskGesture(MaskGesture::Lasso));
+        draw_a_square(&mut vm, false);
+        assert_eq!(vm.notice().get().as_deref(), Some(NO_EXTENT));
+        assert!(vm.draft().get().is_none(), "the outline was left on screen");
     }
 }

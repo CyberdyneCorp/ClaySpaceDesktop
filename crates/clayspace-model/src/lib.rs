@@ -26,6 +26,7 @@ pub mod instrument;
 pub mod lattice;
 pub mod locale;
 pub mod mask;
+pub mod outline;
 pub mod reference;
 pub mod scene;
 pub mod sculpt;
@@ -52,8 +53,8 @@ pub use exchange::{
     ExchangeModel, ExportMesher, ExportSettings, ExportWarning, Format, ImportAs, ImportSettings,
 };
 pub use gizmo::{
-    drag_plane, perpendicular_frame, ring_samples, snapped, GizmoDrag, GizmoHandle, GizmoMode,
-    Transform, SNAP_DEGREES,
+    drag_plane, perpendicular_frame, ray_hits_segment, ray_hits_sphere, ring_samples, snapped,
+    GizmoDrag, GizmoHandle, GizmoMode, Transform, SNAP_DEGREES,
 };
 pub use instrument::{FrameLog, Stall, FRAME};
 pub use lattice::{
@@ -61,6 +62,10 @@ pub use lattice::{
 };
 pub use locale::Locale;
 pub use mask::{can_extrude, ExtrudeSettings, ExtrudeSide, MaskModel, MaskOp, MaskState};
+pub use outline::{
+    cells_to_write, coverage_path, lattice_pitch, MaskGesture, MaskOutline, OutlineDraft,
+    OutlineFrame, OutlineMode, CELL_CEILING, COVERING, OUTLINE_SPACING,
+};
 pub use reference::{
     read_references, write_references, RefFormat, RefPlane, ReferenceImage, ReferenceRefusal,
     ReferenceSettings, RememberedReference,

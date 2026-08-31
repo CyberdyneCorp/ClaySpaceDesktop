@@ -5,6 +5,7 @@
 //! on the mask rather than on the surface, which is why they are a vocabulary
 //! of their own rather than more entries in [`crate::tools::ToolKind`].
 
+use crate::outline::MaskOutline;
 use crate::sculpt::ModelError;
 use crate::Representation;
 
@@ -174,6 +175,15 @@ pub trait MaskModel {
     /// The mask is read, not consumed: a sculptor who extrudes and does not
     /// like the result should still have the region they painted.
     fn extrude_mask(&mut self, settings: ExtrudeSettings) -> Result<(), ModelError>;
+
+    /// Freezes or releases everything a shape drawn over the form encloses.
+    ///
+    /// Here rather than in [`MaskOp`] because it is not an operation *on* an
+    /// existing region: it is how a region is drawn in the first place, the
+    /// other way being the brush. Which gesture drew the shape — traced by
+    /// hand or dragged as a box — is settled before it gets here. See
+    /// [`crate::outline`].
+    fn apply_outline(&mut self, outline: &MaskOutline) -> Result<(), ModelError>;
 }
 
 #[cfg(test)]

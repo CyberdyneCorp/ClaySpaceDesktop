@@ -272,6 +272,21 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                     queue.push(Command::ToggleMaskPainting);
                     ui.close_menu();
                 }
+                // And which gesture it makes. Here as well as on the options
+                // bar because the bar only carries it with the mask brush
+                // already in hand, and this is where a sculptor comes looking
+                // for what masking can do.
+                for gesture in MaskGesture::ALL {
+                    let chosen = state.mask_gesture == gesture;
+                    if ui
+                        .selectable_label(chosen, s.mask_gesture_name(gesture))
+                        .on_hover_text(s.hint_mask_outline)
+                        .clicked()
+                    {
+                        queue.push(Command::SetMaskGesture(gesture));
+                        ui.close_menu();
+                    }
+                }
                 ui.separator();
                 // Disabled rather than hidden: a menu whose entries come and
                 // go is harder to learn than one whose entries are sometimes

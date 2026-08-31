@@ -173,6 +173,8 @@ fn state<'a>(
     ShellState {
         colour: colours(),
         shortcuts: shortcuts(),
+        mask_gesture: clayspace_model::MaskGesture::default(),
+        outline: None,
         representation: clayspace_model::Representation::Sdf,
         show_shapes: false,
         insert_as: clayspace_model::InsertAs::default(),
@@ -1556,7 +1558,7 @@ fn the_conversion_panel_offers_a_crossing_into_a_mesh() {
 /// The capture is one pixel per logical unit at the size the design specifies,
 /// so these are the design's own coordinates rather than a scaling of them.
 const MASKS_MENU: egui::Pos2 = egui::Pos2::new(359.0, 13.0);
-const EXPAND_ENTRY: egui::Vec2 = egui::Vec2::new(0.0, 92.0);
+const EXPAND_ENTRY: egui::Vec2 = egui::Vec2::new(0.0, 158.0);
 
 #[test]
 fn the_mask_section_appears_with_a_mask_and_not_without() {
@@ -1627,6 +1629,133 @@ fn the_mask_menu_applies_the_amount_the_panel_is_set_to() {
                 [Command::ApplyMaskOp(clayspace_model::MaskOp::Expand(5))],
                 "Expandir carried something other than the panel's five \
                  steps. See target/visual/80-mask-menu.png"
+            );
+        },
+    );
+}
+
+/// Where the mask's drawn gestures sit in the Máscaras menu.
+const LASSO_ENTRY: egui::Vec2 = egui::Vec2::new(0.0, 74.0);
+const RECTANGLE_ENTRY: egui::Vec2 = egui::Vec2::new(0.0, 96.0);
+
+#[test]
+fn the_mask_brush_offers_its_three_gestures_where_it_is_held() {
+    // A gesture nobody can find is one nobody uses. They are on the options
+    // bar beside the brush's own numbers, and in the menu a sculptor goes to
+    // when looking for what masking can do — and the bar carries them only
+    // with the mask brush in hand, since none of the other nineteen freeze
+    // anything.
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let mut masking = state(strings, &scene, &materials, &report);
+    masking.tool = ToolKind::Mascara;
+    capture_shell(&harness, &masking, "78-mask-gesture");
+
+    let chip = |set: &ShellState<'_>, word: &str| {
+        probe_shell(set).memory(|memory| memory.data.get_temp::<egui::Rect>(shell::chip_id(word)))
+    };
+    // All three, and each in the bar rather than pushed off the end of it: the
+    // control sat at the end once, and a narrow window cut the last chip off.
+    let mut drawn = Vec::new();
+    for gesture in clayspace_model::MaskGesture::ALL {
+        let word = strings.mask_gesture_name(gesture);
+        let rect = chip(&masking, word)
+            .unwrap_or_else(|| panic!("the options bar offered no {word:?} chip"));
+        assert!(
+            rect.top() >= region::MENU_BAR
+                && rect.bottom() <= region::MENU_BAR + region::OPTIONS_BAR,
+            "the {word:?} chip is not in the options bar: {rect:?}"
+        );
+        drawn.push((word, rect));
+    }
+    // Left to right in the order the domain lists them, each with room to be
+    // read. They share edges, as a segmented control's cells do, so what is
+    // asserted is the order and the width rather than a gap.
+    for window in drawn.windows(2) {
+        let [(word, a), (next, b)] = window else {
+            continue;
+        };
+        assert!(
+            a.right() <= b.left() + 0.5,
+            "the {next:?} chip is not after the {word:?} one: {a:?} {b:?}"
+        );
+    }
+    for (word, rect) in &drawn {
+        assert!(rect.width() > 20.0, "the {word:?} chip is {rect:?}");
+    }
+
+    let mut sculpting = state(strings, &scene, &materials, &report);
+    sculpting.tool = ToolKind::Padrao;
+    assert!(
+        chip(
+            &sculpting,
+            strings.mask_gesture_name(clayspace_model::MaskGesture::Lasso)
+        )
+        .is_none(),
+        "a Standard brush was offered a mask gesture to choose"
+    );
+}
+
+#[test]
+fn the_rectangle_is_chosen_from_the_menu_as_well() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let set = state(strings, &scene, &materials, &report);
+    capture_shell_after(
+        &harness,
+        &set,
+        "78-mask-gesture-rectangle",
+        &[
+            left_click(MASKS_MENU),
+            left_click(MASKS_MENU + RECTANGLE_ENTRY),
+        ],
+        |queue| {
+            assert_eq!(
+                queue.commands(),
+                [Command::SetMaskGesture(
+                    clayspace_model::MaskGesture::Rectangle
+                )],
+                "the menu entry for the rectangle is wired to something else. \
+                 See target/visual/78-mask-gesture-rectangle.png"
+            );
+        },
+    );
+}
+
+#[test]
+fn the_lasso_is_chosen_from_the_menu_as_well() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let set = state(strings, &scene, &materials, &report);
+    capture_shell_after(
+        &harness,
+        &set,
+        "78-mask-gesture-menu",
+        &[left_click(MASKS_MENU), left_click(MASKS_MENU + LASSO_ENTRY)],
+        |queue| {
+            assert_eq!(
+                queue.commands(),
+                [Command::SetMaskGesture(clayspace_model::MaskGesture::Lasso)],
+                "the menu entry for the lasso is wired to something else. See \
+                 target/visual/78-mask-gesture-menu.png"
             );
         },
     );
@@ -1723,7 +1852,7 @@ fn the_steps_slider_sets_the_amount() {
 }
 
 /// Where the first Extrudar entry falls once the Máscaras menu is open.
-const EXTRUDE_ENTRY: egui::Vec2 = egui::Vec2::new(0.0, 232.0);
+const EXTRUDE_ENTRY: egui::Vec2 = egui::Vec2::new(0.0, 298.0);
 
 #[test]
 fn extrudar_is_offered_on_a_field_and_greyed_on_a_mesh() {

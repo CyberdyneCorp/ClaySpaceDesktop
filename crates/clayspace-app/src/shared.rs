@@ -288,6 +288,10 @@ impl MaskModel for SharedDocument {
     fn extrude_mask(&mut self, settings: ExtrudeSettings) -> Result<(), ModelError> {
         self.0.borrow_mut().extrude_mask(settings)
     }
+
+    fn apply_outline(&mut self, outline: &clayspace_model::MaskOutline) -> Result<(), ModelError> {
+        self.0.borrow_mut().apply_outline(outline)
+    }
 }
 
 impl CurveModel for SharedDocument {
@@ -344,6 +348,10 @@ impl LatticeModel for SharedDocument {
 
     fn toggle_lattice_point(&mut self, index: usize) {
         self.0.borrow_mut().toggle_lattice_point(index)
+    }
+
+    fn select_lattice_points(&mut self, indices: &[usize]) {
+        self.0.borrow_mut().select_lattice_points(indices)
     }
 
     fn set_gizmo_mode(&mut self, mode: GizmoMode) {

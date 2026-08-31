@@ -19,9 +19,9 @@ use clayspace_model::{
     AlphaSupport, BlendProfile, BrushSettings, Combine, CombineSettings, DeformSettings,
     DeformVerb, Diagnostics, Direction, ExportMesher, ExportSettings, ExportWarning,
     ExtrudeSettings, ExtrudeSide, Falloff, GizmoMode, ImportAs, ImportSettings, LayerKey,
-    LayerSummary, MaskOp, MaskState, RecentDocuments, RefPlane, ReferenceSettings, Representation,
-    Scene, SceneStats, SculptLayer, SculptLayerCost, SculptLayerOp, SurfaceOpacity, ToolKind,
-    Units, ViewPresetKind,
+    LayerSummary, MaskGesture, MaskOp, MaskState, OutlineDraft, OutlineMode, RecentDocuments,
+    RefPlane, ReferenceSettings, Representation, Scene, SceneStats, SculptLayer, SculptLayerCost,
+    SculptLayerOp, SurfaceOpacity, ToolKind, Units, ViewPresetKind,
 };
 use clayspace_vm::{Axis, Command, CommandQueue};
 
@@ -105,6 +105,10 @@ pub struct ArmatureState {
 pub struct ShellState<'a> {
     /// What is frozen, for the mask menu.
     pub mask: MaskState,
+    /// Which gesture the mask brush makes.
+    pub mask_gesture: MaskGesture,
+    /// The outline being drawn over the viewport, while one is.
+    pub outline: Option<&'a OutlineDraft>,
     /// The rig, as the menu and the armature panel need it.
     pub armature: ArmatureState,
     /// Documents opened lately, most recent first.
@@ -426,6 +430,105 @@ pub fn status_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Command
             }
         });
     });
+}
+
+/// The outline being drawn, traced over the viewport.
+///
+/// Drawn by the View from ViewModel state rather than by the event loop that
+/// collects the points: the composition root can see the pointer and the View
+/// can see the design, and the line a sculptor is drawing is a picture rather
+/// than an input.
+///
+/// `rect` is the viewport's own rectangle — the one the scene is drawn into
+/// and the one the pointer was measured against, so the line lands under the
+/// cursor rather than beside it.
+pub fn outline_overlay(ui: &egui::Ui, rect: egui::Rect, state: &ShellState<'_>) {
+    let Some(draft) = state.outline else {
+        return;
+    };
+    let corners = draft.corners();
+    if corners.len() < 2 {
+        return;
+    }
+    let points: Vec<egui::Pos2> = corners
+        .iter()
+        .map(|ndc| outline_point(rect, *ndc))
+        .collect();
+
+    // Freezing and releasing are the same gesture and must not look alike:
+    // the accent draws what will be frozen, and a dim neutral what will be
+    // let go.
+    let tint = match draft.mode {
+        OutlineMode::Freeze => Tokens::accent(),
+        OutlineMode::Thaw => Tokens::text_dim(),
+    };
+    let closing = points.first().copied().zip(points.last().copied());
+    let painter = ui.painter_at(rect);
+    painter.add(egui::Shape::line(
+        points,
+        egui::Stroke::new(OUTLINE_WIDTH, tint),
+    ));
+    if let Some((first, last)) = closing {
+        // A lasso closes itself across a gap the sculptor can see, so the edge
+        // that will close it is drawn faint: showing where it lands is what
+        // makes it predictable rather than surprising. A rectangle has no such
+        // gap — four corners are four edges — and drawing one of them faint
+        // would suggest it were less certain than the other three.
+        let closing_tint = if draft.gesture.closes_a_gap() {
+            tint.gamma_multiply(OUTLINE_CLOSING)
+        } else {
+            tint
+        };
+        painter.add(egui::Shape::line_segment(
+            [last, first],
+            egui::Stroke::new(OUTLINE_WIDTH, closing_tint),
+        ));
+    }
+}
+
+/// How wide the drawn outline is, in points.
+const OUTLINE_WIDTH: f32 = 1.5;
+
+/// How much of the outline's tint the closing edge keeps.
+const OUTLINE_CLOSING: f32 = 0.45;
+
+/// Where a normalised device coordinate lands in the viewport.
+///
+/// The inverse of what the ray through the pointer is built from, and it has
+/// to stay the inverse: an overlay drawn from a different mapping than the
+/// gesture is resolved with is a line that does not enclose what it appears
+/// to.
+///
+/// The same arithmetic as the tail of `input::screen_at`, and it is copied
+/// rather than shared because the layering says so: a View may not reach the
+/// composition root. Two lines, and both carry a note to the other.
+fn outline_point(rect: egui::Rect, ndc: [f32; 2]) -> egui::Pos2 {
+    egui::pos2(
+        rect.min.x + (ndc[0] + 1.0) * 0.5 * rect.width(),
+        rect.min.y + (1.0 - ndc[1]) * 0.5 * rect.height(),
+    )
+}
+
+/// The rubber band a press draws across the viewport while it gathers control
+/// points.
+///
+/// Drawn from the interface's own tokens rather than by the composition root
+/// with a colour of its own, which is what keeps the closed set closed. A fill
+/// as well as an outline: an outline alone over a shaded form reads as part of
+/// the model at a glance, and what a sculptor needs to see is which side of the
+/// line they are on.
+pub fn selection_box(painter: &egui::Painter, drawn: egui::Rect) {
+    painter.rect_filled(
+        drawn,
+        egui::epaint::CornerRadius::ZERO,
+        Tokens::raised().linear_multiply(0.35),
+    );
+    painter.rect_stroke(
+        drawn,
+        egui::epaint::CornerRadius::ZERO,
+        egui::Stroke::new(1.0_f32, Tokens::text_dim()),
+        egui::StrokeKind::Inside,
+    );
 }
 
 /// The view presets, under the viewport as the design places them.

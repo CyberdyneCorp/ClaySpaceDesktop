@@ -12,9 +12,9 @@ use std::path::PathBuf;
 
 use clayspace_model::{
     ConversionSettings, CurveJoin, CurveProfile, ExportSettings, ExtrudeSettings, Falloff,
-    GizmoHandle, GizmoMode, ImportSettings, LayerKey, Locale, MaskOp, RefPlane, ReferenceSettings,
-    Representation, SmoothBlur, StrokeModifiers, SurfaceOpacity, ToolKind, ViewPresetKind,
-    VoxelDisplay,
+    GizmoHandle, GizmoMode, ImportSettings, LayerKey, Locale, MaskGesture, MaskOp, OutlineFrame,
+    RefPlane, ReferenceSettings, Representation, SmoothBlur, StrokeModifiers, SurfaceOpacity,
+    ToolKind, ViewPresetKind, VoxelDisplay,
 };
 
 /// A change to the application or the document.
@@ -115,6 +115,8 @@ pub enum Command {
     SelectLatticePoint(Option<usize>),
     /// Adds or removes one control point without disturbing the rest.
     ToggleLatticePoint(usize),
+    /// Every control point a selection box caught. Replaces the selection.
+    SelectLatticePoints(Vec<usize>),
     /// Which of the manipulator's three modes is in force.
     SetGizmoMode(GizmoMode),
     /// Grabs a manipulator handle at a point on the drag plane, carrying the
@@ -137,6 +139,31 @@ pub enum Command {
     ToggleMaskPainting,
     /// An operation on the mask itself, not through it.
     ApplyMaskOp(MaskOp),
+    /// Which gesture the mask brush makes: a drag across the surface, or an
+    /// outline drawn over the form.
+    ///
+    /// A setting rather than a second tool, because it is one question about
+    /// one brush — ZBrush keeps them in the stroke palette for the same
+    /// reason — and because a second tool would need a second answer to every
+    /// availability question the first one already answers.
+    SetMaskGesture(MaskGesture),
+    /// Starts an outline at a point of the viewport, in normalised device
+    /// coordinates. The flag is whether the modifier that releases rather than
+    /// freezes was held when the gesture began.
+    ///
+    /// Latched at the press, as a stroke's modifiers are: a key caught
+    /// mid-drag would change what the outline means under the sculptor's hand.
+    BeginMaskOutline([f32; 2], bool),
+    /// Carries the outline to where the pointer is now.
+    ExtendMaskOutline([f32; 2]),
+    /// Closes the outline and applies it, on the frame it was drawn over.
+    ///
+    /// The frame arrives with the command rather than being read from a camera
+    /// the ViewModel cannot see: the outline is normalised device coordinates
+    /// until this moment, and this is what carries it into the world.
+    EndMaskOutline(OutlineFrame),
+    /// Abandons the outline, leaving the mask as it was.
+    CancelMaskOutline,
     /// How far Expandir, Contrair and Suavizar máscara reach.
     SetMaskSteps(i32),
     /// What an extrusion would use, as the panel has it set.
@@ -415,6 +442,13 @@ impl Command {
                 // operation. Applying one is, and does mark the document.
                 | Self::SetMaskSteps(_)
                 | Self::SetExtrudeSettings(_)
+                // Choosing the gesture, drawing the outline and abandoning it
+                // change nothing in the document. Only closing it does, which
+                // is why `EndMaskOutline` is not listed here.
+                | Self::SetMaskGesture(_)
+                | Self::BeginMaskOutline(..)
+                | Self::ExtendMaskOutline(_)
+                | Self::CancelMaskOutline
                 // Putting a cage up, resizing it, choosing a point and
                 // dragging one all change the *cage* and not the clay. Only
                 // applying it is an edit — which is also what makes the whole
@@ -449,6 +483,7 @@ impl Command {
                 | Self::ToggleLattice
                 | Self::SetLatticeDivisions(_)
                 | Self::SelectLatticePoint(_)
+                | Self::SelectLatticePoints(_)
                 | Self::ToggleLatticePoint(_)
                 | Self::SetGizmoMode(_)
                 | Self::BeginGizmoDrag(..)
@@ -543,6 +578,7 @@ impl Command {
             Self::ToggleLattice => "gaiola",
             Self::SetLatticeDivisions(_) => "divisões da gaiola",
             Self::SelectLatticePoint(_) => "escolher ponto",
+            Self::SelectLatticePoints(_) => "escolher pontos",
             Self::ToggleLatticePoint(_) => "escolher ponto",
             Self::SetGizmoMode(_) => "modo do manipulador",
             Self::BeginGizmoDrag(..) | Self::DragGizmo(..) | Self::EndGizmoDrag => "manipular",
@@ -550,6 +586,10 @@ impl Command {
             Self::ApplyLattice => "deformar pela gaiola",
             Self::ToggleMaskPainting => "máscara",
             Self::ApplyMaskOp(op) => op.label(),
+            Self::SetMaskGesture(_) => "gesto da máscara",
+            Self::BeginMaskOutline(..) | Self::ExtendMaskOutline(_) => "desenhar o laço",
+            Self::EndMaskOutline(_) => "máscara em laço",
+            Self::CancelMaskOutline => "abandonar o laço",
             Self::SetMaskSteps(_) => "mask steps",
             Self::SetExtrudeSettings(_) => "extrude settings",
             Self::ExtrudeMask(_) => "extrude mask",

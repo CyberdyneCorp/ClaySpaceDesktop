@@ -377,6 +377,47 @@ impl Camera {
         }
     }
 
+    /// Where a world point lands in normalised device coordinates, if it is
+    /// in front of the camera.
+    ///
+    /// Exactly the inverse of [`Camera::ray_through`], and written from the
+    /// same basis rather than from the projection matrix: the matrix carries
+    /// the reversed-Z convention and clip planes this does not need, and two
+    /// derivations of one mapping are two things that can disagree. What it is
+    /// for is asking where a control point *is on screen* — which is the
+    /// question a rubber-band selection asks of every point at once.
+    ///
+    /// `None` where the point is behind a perspective camera, which has no
+    /// screen position to have.
+    pub fn screen_through(&self, world: [f32; 3], aspect: f32) -> Option<[f32; 2]> {
+        let eye = self.eye();
+        let forward = (self.target - eye).normalize_or_zero();
+        let right = forward.cross(self.up()).normalize_or_zero();
+        let up = right.cross(forward);
+        let away = Vec3::from(world) - eye;
+        let (across, high) = (away.dot(right), away.dot(up));
+
+        if self.preset.is_orthographic() {
+            // Parallel rays, so depth does not divide: everything the camera
+            // can see has a position, in front of it or behind.
+            let half_height = self.distance * (self.fov_y * 0.5).tan();
+            if half_height.abs() < 1e-9 {
+                return None;
+            }
+            Some([across / (half_height * aspect), high / half_height])
+        } else {
+            let depth = away.dot(forward);
+            if depth <= 1e-6 {
+                return None; // Behind the eye, or on the lens.
+            }
+            let tan = (self.fov_y * 0.5).tan();
+            if tan.abs() < 1e-9 || aspect.abs() < 1e-9 {
+                return None;
+            }
+            Some([across / (depth * tan * aspect), high / (depth * tan)])
+        }
+    }
+
     /// The framing an empty document gets.
     pub fn frame_default(&mut self) {
         self.target = Vec3::ZERO;
@@ -943,5 +984,42 @@ mod zoom_tests {
         plain.zoom(1.0);
         assert_eq!(aimed.distance, plain.distance);
         assert_eq!(aimed.target, plain.target);
+    }
+
+    #[test]
+    fn a_screen_position_is_the_ray_that_goes_back_through_it() {
+        // The pair has to be exact inverses or a rubber-band selection catches
+        // points beside the ones the sculptor drew the box around. Checked
+        // both ways round, on both projections, away from the centre where a
+        // sign error would hide.
+        for preset in [ViewPreset::Perspective, ViewPreset::Front] {
+            let mut camera = Camera::default();
+            camera.apply_preset(preset);
+            let aspect = 4.0 / 3.0;
+            for ndc in [[0.0f32, 0.0], [0.5, -0.25], [-0.9, 0.8], [0.31, 0.62]] {
+                let (origin, direction) = camera.ray_through(ndc, aspect);
+                let world: [f32; 3] = std::array::from_fn(|i| origin[i] + direction[i] * 3.0);
+                let back = camera
+                    .screen_through(world, aspect)
+                    .expect("a point in front of the camera has a screen position");
+                for axis in 0..2 {
+                    assert!(
+                        (back[axis] - ndc[axis]).abs() < 1e-3,
+                        "{preset:?}: {ndc:?} came back as {back:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn nothing_behind_a_perspective_camera_is_on_screen() {
+        // A point behind the eye projects as neatly as one in front, with the
+        // sign of the depth flipped — so without this a marquee drawn over the
+        // form would also catch whatever stood behind the camera.
+        let camera = Camera::default();
+        let eye = camera.eye();
+        let behind: [f32; 3] = (eye + (eye - camera.target).normalize() * 2.0).into();
+        assert!(camera.screen_through(behind, 1.5).is_none());
     }
 }

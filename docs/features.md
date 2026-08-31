@@ -369,6 +369,112 @@ on. And a mask edit records on the engine's history, so **one mask gesture is
 one undo**; before, an undo after a mask stroke spent itself on whatever came
 before it.
 
+### Freezing a region by drawing round it
+
+The brush is one gesture and it is not always the right one. *This limb, not
+that one* and *everything above this line* are what a mask is usually wanted
+for, and scrubbing a brush over them ends in a ragged boundary a minute later —
+on the near side only, because the far side is behind the form.
+
+So the mask brush has two more gestures. **Gesto** on the options bar, and the
+same three in the Máscaras menu, chooses between **Pincel**, the drag it has
+always had, **Laço**, a shape traced freehand over the form, and **Retângulo**,
+a box dragged corner to corner. Draw one and everything it encloses freezes. Not
+three tools — one setting on one brush, which is where ZBrush keeps them.
+
+The rectangle is not a lesser lasso. A hand cannot draw a straight line, and
+"everything above this line" is the most common thing a mask is wanted for. It
+is square to the **screen** rather than to the world — it is drawn on the
+screen, and a box that came out lozenge-shaped because the camera was turned
+would be a box nobody could aim — and it is the box between the corner pressed
+and the pointer now, whichever way round they are and however far the hand
+wandered on the way.
+
+Past the pointer the two are the same thing. A lasso keeps every point it passed
+through and a rectangle keeps two corners, and that is the only place they
+differ: neither the containment test, nor the traversal, nor the engine can tell
+them apart.
+
+It freezes **through the form**. The outline is drawn on the screen, so the
+surface behind it freezes with the surface in front of it, in one gesture,
+without turning the model. Hold **Ctrl** and the same shape *releases* what it
+encloses instead, which is how a mask is trimmed back rather than cleared and
+repainted. Which of the two it will be is decided when the drag begins and held
+for the whole of it, as a stroke's modifiers are — and so is which gesture is
+drawing, so switching to Retângulo mid-drag abandons what was traced rather than
+reading it as two corners.
+
+The shape is drawn in the accent while it will freeze and in a grey while it
+will release. A lasso's closing edge is shown faint, because a traced outline
+closes across a gap the sculptor can see and showing where it lands is what
+makes it predictable; a rectangle's four edges are all solid, because it has no
+such gap and drawing one of them faint would suggest it were less certain than
+the other three. A press beside the form begins a shape rather than turning the
+camera — an outline is drawn *around* a region — and a click that never became a
+drag does nothing quietly.
+
+**The brush ring goes off while a shape is being drawn**, by the same rule that
+takes it off under a raised cage: a ring says the next press leaves a stroke
+where it sits, and with a lasso or a rectangle in hand the next press draws a
+line on the screen — which is not a thing the surface has a footprint for. The
+outline being traced is the only feedback the gesture needs.
+`input::shows_the_brush_ring` is the one place that decides it, asked by the
+press and by the ring alike so the two cannot come to different answers.
+
+Not while a cage is up, though. A cage owns the viewport and the brushes are off
+under it — [A cage is a mode](#a-cage-is-a-mode) — and a press that takes hold of
+no control point draws the cage's own selection box. A mask gesture that took
+that press would be the one brush still reaching past a raised cage.
+
+The region is the outline swept **straight** along the view direction rather
+than out from the eye. That is the engine's own rule for the cut tool: *"a trim
+is a straight cut, as it is in ZBrush and 3DCoat"*, because a region defined by
+a converging wedge depends on where the camera was standing. It is bounded by
+the active subtool's own extent, and it belongs to that subtool like every other
+mask.
+
+**A whole lasso is one undo**, and that is the reason it is built the way it is.
+A document-owned mask snapshots its whole chunk map for the history on *every*
+call that writes to it — about four milliseconds a call on a mask covering a
+million cells, against seven microseconds on a standalone mask that records
+nothing. A region delivered as five thousand small writes takes twenty-one
+seconds. So it is delivered as **one stroke**: a path that visits every column
+of the region, walked by the engine's own stamper. One call, one snapshot, one
+entry in the history.
+
+The path is a depth-first walk, and it never leaves the region. That is not
+tidiness: a stamp lands everywhere the path goes, so a connector cutting across
+a concave outline would freeze a stripe nobody drew — which is exactly what a
+plain back-and-forth over the rows does the first time a lasso is thrown round a
+C. `mask_outline.rs` draws one and checks that the opening is still free.
+
+**What a lasso costs is the volume it sweeps.** The lattice the path is walked
+on is aligned to the camera, because that is where the outline was drawn, and a
+brush footprint is aligned to the world; a ball has to reach half the pitch's
+*diagonal* to cover the lattice from any angle rather than half its side, so
+every cell of the region is written about 2.7 times, at about 140 nanoseconds a
+write. Sized to half a side instead, the two tile only when the camera happens
+to face down an axis, and from anywhere else the frozen patch comes out speckled
+with cells no stamp reached. A ball rather than a cube is worth 40% of the
+gesture — a cube of the same reach spends 5.8 writes per region cell against
+2.7, all of the difference in corners that overshoot it, and the pair measures
+1191 ms against 800 on one machine. `mask.outline` measures the extreme on a
+quiet one: an outline thrown around the whole of the reference form, 659 ms. An
+ordinary lasso over part of a subtool is a fraction of that.
+
+**The edge is quantised to two mask cells**, 0.04 world units at the mask's own
+0.02 pitch, and the pitch is not a dial: opening it by two divides the stamps by
+eight and multiplies the cells each one writes by eight, so it buys the edge and
+nothing else. A region too large to write at all is therefore *refused* with a
+reason rather than quietly coarsened — a lasso around a subtool tens of units
+across runs to hundreds of millions of cells, and the honest answer is to say so
+and ask for a smaller outline. `visual_mask_outline.rs` is the picture, and it
+also holds the two gestures to each other: a dragged box has to land where a
+traced outline round the same region lands.
+
+Symmetry does not reach it, exactly as it does not reach the brush: a mask is a
+world-addressed field, and neither gesture is mirrored.
+
 ### What the Máscaras menu does
 
 Every entry acts on the mask itself rather than through it. The amounts live in
@@ -898,11 +1004,32 @@ that:
   drops a cage that reaches the switch unresolved rather than re-drawing it
   around a form it was never fitted to.
 
-- **The brushes are off.** A press that misses a control point orbits rather
-  than sculpting. It used to fall through to the brush, so a slip while aiming
-  sculpted the very form the cage was there to bend — and the strokes it left
-  made the next control point harder to hit. Orbiting rather than nothing, so
-  the cage can still be turned to look at from behind without being taken down.
+- **The brushes are off, and so is the ring that promises one.** A press that
+  misses a control point does not sculpt. It used to fall through to the brush,
+  so a slip while aiming sculpted the very form the cage was there to bend —
+  and the strokes it left made the next control point harder to hit. The
+  *cursor* went on being drawn over the form for longer than that: the routing
+  refused the stroke and the orange ring went on offering one, which is the
+  worst of both, since a sculptor aiming at a corner handle could not tell
+  whether a slip would leave a mark. A ring says "the next press leaves a
+  stroke here", so it is drawn only where that is true — the same rule the
+  whole-subtool manipulator already followed, now written once as
+  `input::shows_the_brush_ring` rather than twice.
+- **A press that takes hold of nothing draws a box.** Not every miss is a
+  mistake: a cage is worked a face at a time, and gathering a face by
+  Shift-clicking four or eight corners is four or eight chances to miss. So the
+  primary button drags a rubber band across the viewport and takes every
+  control point inside it — including the ones behind the form, which is the
+  whole reason the cage is drawn through. Held, **Shift** adds the box's catch
+  to the selection instead of replacing it, so a band and a click mix freely. A
+  press and release in one place is not a box but a click on nothing, which
+  clears the selection and puts the manipulator away; three points of travel
+  tell the two apart, so a hand's tremor is still a click.
+
+  The camera keeps working: **the secondary button and the orbit modifier both
+  orbit**, so the cage can still be turned to look at from behind without being
+  taken down. That is what the old rule — a miss orbits — was for, and it is
+  the trackpad's route as much as the mouse's.
 - **The form is drawn through.** Half the control points are behind it, and a
   solid surface hides exactly the handles that need reaching. Blender's X-ray
   and ZBrush's Ghost do the same thing for the same reason. Seen through, not
@@ -916,9 +1043,13 @@ that:
 ### The manipulator
 
 A click selects one control point; **Shift-click** adds or removes one without
-disturbing the rest. That is what the manipulator exists for — dragging points
-one at a time needs no widget, and turning a whole face of the cage cannot be
-done without one.
+disturbing the rest; and a **drag across empty space** takes every point the
+box encloses. That is what the manipulator exists for — dragging points one at
+a time needs no widget, and turning a whole face of the cage cannot be done
+without one. A box is resolved when the pointer comes up rather than as it is
+drawn: a selection that changed under a moving band would drag the widget to
+the middle of whatever was momentarily inside it, and it would wander across
+the screen while the box was still being drawn.
 
 It sits on the **middle of the selection**, not on the last point picked, so
 adding a point moves the widget to where the selection is.
@@ -972,6 +1103,28 @@ mark in the form's middle.
   disabled with the reason on them rather than drawn live and inert, which is
   how they were: the rings appeared, the drag ran, and nothing moved. Moving is
   not affected; it needs no pivot.
+- **An arrow can be grabbed anywhere along its shaft.** Reported from using it:
+  the manipulator "only works if you perfectly land the mouse on the axis
+  arrow". The arrow is drawn from the pivot to its cone and every part of that
+  reads as a handle, but only a sphere at the *tip* was tested — so a press on
+  most of what a person could plainly see missed. Worse than missed: a ring
+  encircles the pivot, so a ray aimed down the inner shaft passes near the
+  ring's **far** side, and the press that was meant to slide the selection
+  turned it instead. The shaft is hit-tested as a capsule now, in the same
+  nearest-along-the-ray competition as everything else, so the near shaft beats
+  the far ring. It is considered **last**, which settles the other half: where
+  a handle genuinely sits *on* the shaft — the centre block at its foot, the
+  scale box partway out, the two rings that cross it at their own radius — the
+  two are the same distance from the eye, and going last leaves the press with
+  the smaller, more particular target.
+- **The handle under the pointer is lit.** Half a dozen targets overlap on one
+  widget, and which of them a press will take was only discoverable by pressing
+  — the renderer has carried a `hovered` field all along and nothing but a drag
+  ever filled it, so a sculptor aiming at an arrow found out what they had
+  grabbed after the fact. It is asked the same question a press asks, every
+  frame the pointer moves, so what lights up and what a press takes cannot
+  describe different widgets. During a drag the handle *in hand* stays lit,
+  wherever the pointer has since travelled.
 - **A ring can be grabbed anywhere along it.** It is hit-tested as a string of
   spheres, and sixteen of them was a number picked rather than derived — at the
   manipulator's own proportions they do not touch, so about a fifth of every
@@ -1012,9 +1165,13 @@ pointing at the viewer unmovable: the pointer could travel a long way and its
 projection onto the axis would barely change.
 
 Press order in the viewport is **manipulator, then control points, then the
-surface**. The manipulator is drawn over the cage and sits on the selection, and
-the cage sits outside the form; without that order a press on the green arrow
-finds a control point behind it, and a press on a corner handle finds the clay.
+selection box, then the surface**. The manipulator is drawn over the cage and
+sits on the selection, and the cage sits outside the form; without that order a
+press on the green arrow finds a control point behind it, and a press on a
+corner handle finds the clay. The box comes after both and before the clay,
+because it is what a press *that took hold of nothing* means — and while a cage
+is up nothing behind it, neither an object nor a stroke, is what the press was
+for.
 
 ### Boxes or a surface
 

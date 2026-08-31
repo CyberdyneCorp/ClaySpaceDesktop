@@ -62,6 +62,18 @@ pub fn options_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
                     }
                 });
 
+                // Shown only with the mask brush in hand, because it is that
+                // brush's own question: one of the twenty tools freezes a
+                // region, and a Pincel/Laço pair beside a Standard brush would
+                // be a control that decides nothing. Beside the brush's own
+                // numbers rather than at the end of the bar, where it sat
+                // first and where a narrow window pushed half of it off the
+                // screen.
+                if state.tool.is_mask_tool() {
+                    ui.add_space(space::SECTION);
+                    mask_gesture_control(ui, state, queue);
+                }
+
                 // The combine vocabulary is the SDF side's alone: cells are set or
                 // cleared and vertices are moved, so neither has a join to make. The
                 // controls are absent rather than greyed because there is no
@@ -86,6 +98,33 @@ pub fn options_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
                 alpha_control(ui, state, queue);
             });
         });
+}
+
+/// How wide the mask brush's three gestures need between them.
+const GESTURE_WIDTH: f32 = 190.0;
+
+/// Which gesture the mask brush makes: a drag across the surface, a shape
+/// traced over the form, or a box dragged corner to corner.
+fn mask_gesture_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    ui.vertical(|ui| {
+        ui.set_width(GESTURE_WIDTH);
+        numeric(ui, s.label_mask_gesture);
+        let response = ui.scope(|ui| {
+            segmented(
+                ui,
+                &MaskGesture::ALL,
+                |gesture| s.mask_gesture_name(gesture),
+                state.mask_gesture,
+            )
+        });
+        if let Some(gesture) = response.inner {
+            queue.push(Command::SetMaskGesture(gesture));
+        }
+        // What the drawn gestures do and what the modifier does to them, on
+        // the row itself: a gesture nobody can discover is one nobody uses.
+        response.response.on_hover_text(s.hint_mask_outline);
+    });
 }
 
 /// The id the options bar's brush badge is recorded under, for tests.

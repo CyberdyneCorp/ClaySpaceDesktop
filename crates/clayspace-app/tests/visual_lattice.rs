@@ -288,6 +288,68 @@ fn the_manipulator_is_one_widget_whatever_the_mode() {
 }
 
 #[test]
+fn the_handle_under_the_pointer_is_lit() {
+    // Which of half a dozen overlapping targets a press will take, said before
+    // the press is made. The renderer has carried a `hovered` field all along
+    // and only a drag ever filled it, so the widget looked the same whether
+    // the pointer was on a handle or beside one — and a sculptor aiming at an
+    // arrow had to press to find out.
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let Some(mut document) = meshed() else {
+        return;
+    };
+    let camera = framed(&document);
+    let (vertices, indices) = support::viewport_geometry(&mut document);
+    let mut mesh = clayspace_view::GpuMesh::new(&harness.gpu);
+    mesh.upload(&harness.gpu, &vertices, &indices);
+
+    document.begin_lattice([2, 2, 2]).expect("a cage");
+    let cage = document.lattice();
+    let edges = cage.edges();
+    let selected = [7usize];
+    let pivot = cage.points[7];
+
+    let shot = |harness: &mut Harness, hovered: Option<(GizmoMode, GizmoHandle)>, name: &str| {
+        harness.renderer.set_lattice(
+            &harness.gpu,
+            LatticeView {
+                points: &cage.points,
+                edges: &edges,
+                selected: &selected,
+                gizmo: Some(GizmoView {
+                    view_axis: LOOKING_DOWN_Z,
+                    per_axis_scale: true,
+                    pivot,
+                    mode: GizmoMode::Move,
+                    reach: handle(&cage) * 12.0,
+                    hovered,
+                }),
+                outline: None,
+                subtool_outline: None,
+                handle: handle(&cage),
+            },
+        );
+        harness.capture(&mesh, &camera, false, name)
+    };
+
+    let cold = shot(&mut harness, None, "124-gizmo-cold");
+    let lit = shot(
+        &mut harness,
+        Some((GizmoMode::Move, GizmoHandle::Axis(1))),
+        "125-gizmo-lit",
+    );
+
+    let changed = how_many_differ(&cold, &lit);
+    assert!(
+        changed > 100,
+        "the hovered arrow drew {changed} pixels differently, which is a \
+         highlight nobody can see. See target/visual/"
+    );
+}
+
+#[test]
 fn the_manipulator_sits_on_the_middle_of_the_selection() {
     // The middle rather than the last point picked, so adding a point moves
     // the widget to where the selection is rather than leaving it on whichever
