@@ -24,7 +24,7 @@ use clayspace_model::{
 use clayspace_view::shell::{self, region, ArmatureState, ShellState};
 use clayspace_view::{
     mirrored_cursors, Action, ArmatureView, BrushCursor, Camera, Gpu, GpuMesh, InteractionState,
-    Locale, MatCap, Overlays, QualityGovernor, Renderer, ShadingMode, Shortcuts, Strings,
+    Locale, MatCap, Overlays, Panel, QualityGovernor, Renderer, ShadingMode, Shortcuts, Strings,
     SurfaceLoss, Vertex, ViewPreset, ViewportProfile, WindowSurface,
 };
 use clayspace_vm::{
@@ -268,6 +268,12 @@ struct App {
 
     /// Where session state lives, when this machine has somewhere to put it.
     store: Option<SessionStore>,
+    /// How wide the regions are and which are put away.
+    ///
+    /// Read at start-up and written when it changes. Not document state: it
+    /// enters no history and no `.clay` file, which is why it lives here
+    /// beside the recent list rather than in the model.
+    layout: clayspace_view::Layout,
     recent: RecentDocuments,
     autosave: AutosavePolicy,
     /// When the last autosave was written, or when the session began.
@@ -407,7 +413,15 @@ impl App {
             .and_then(SessionStore::load_locale)
             .unwrap_or_else(|| Locale::from_tag(&system_language()));
 
+        // How the regions were left. The design's own sizes where there is
+        // nowhere to store one, or where what was stored is unreadable.
+        let layout = store
+            .as_ref()
+            .map(SessionStore::load_layout)
+            .unwrap_or_default();
+
         Self {
+            layout,
             document,
             sculpt,
             scene,
@@ -3475,6 +3489,7 @@ impl App {
             // mirrored: the material beside it is handled the same way, and a
             // second copy of a setting is a second thing to keep in step.
             viewport_profile: self.quality.profile(),
+            collapsed: Panel::ALL.map(|panel| self.layout.is_collapsed(panel)),
             studio_shading: self
                 .graphics
                 .as_ref()
@@ -3513,6 +3528,11 @@ impl App {
         let marquee = self
             .marquee
             .filter(|(from, to, _)| clayspace_app::input::is_a_marquee(*from, *to));
+        // The layout the frame draws with, and where a drag on a splitter is
+        // collected. Copied out rather than borrowed: `state` borrows `self`
+        // for the frame, so the closure cannot reach `self.layout`.
+        let layout = self.layout.clone();
+        let mut resized: [Option<f32>; 3] = [None; 3];
         let output = context.run(raw_input, |ctx| {
             egui::TopBottomPanel::top("menu")
                 .exact_height(region::MENU_BAR)
@@ -3523,28 +3543,61 @@ impl App {
             egui::TopBottomPanel::bottom("status")
                 .exact_height(region::STATUS)
                 .show(ctx, |ui| shell::status_bar(ui, &state, &mut queue));
-            egui::TopBottomPanel::bottom("shelf")
-                .exact_height(region::SHELF)
-                .show(ctx, |ui| {
-                    egui::ScrollArea::horizontal()
-                        .show(ui, |ui| shell::brush_shelf(ui, &state, &mut queue));
-                });
+            if !layout.is_collapsed(Panel::Shelf) {
+                let height = egui::TopBottomPanel::bottom("shelf")
+                    .resizable(true)
+                    .default_height(layout.size(Panel::Shelf))
+                    .height_range(Panel::Shelf.minimum()..=Panel::Shelf.maximum())
+                    .show(ctx, |ui| {
+                        egui::ScrollArea::horizontal()
+                            .show(ui, |ui| shell::brush_shelf(ui, &state, &mut queue));
+                    })
+                    .response
+                    .rect
+                    .height();
+                resized[2] = Some(height);
+            }
             egui::SidePanel::left("rail")
                 .exact_width(region::RAIL)
                 .resizable(false)
                 .show(ctx, |ui| shell::tool_rail(ui, &state, &mut queue));
-            egui::SidePanel::left("left")
-                .exact_width(region::LEFT)
-                .show(ctx, |ui| {
-                    egui::ScrollArea::vertical()
-                        .show(ui, |ui| shell::left_panel(ui, &state, &mut queue));
-                });
-            egui::SidePanel::right("right")
-                .exact_width(region::RIGHT)
-                .show(ctx, |ui| {
-                    egui::ScrollArea::vertical()
-                        .show(ui, |ui| shell::right_panel(ui, &state, &mut queue));
-                });
+            // Resizable, and remembered. `layout` carries the width, the
+            // bounds a drag is clamped to and whether the region is put away;
+            // it was written with all of that and a pair of serialisers and
+            // then drawn at a fixed width for the life of the application.
+            //
+            // A collapsed region is given no space at all rather than a narrow
+            // one — `Layout::size` reports zero for it — and keeps the width
+            // it had, so expanding returns the size a sculptor chose rather
+            // than a default.
+            if !layout.is_collapsed(Panel::Left) {
+                let width = egui::SidePanel::left("left")
+                    .resizable(true)
+                    .default_width(layout.size(Panel::Left))
+                    .width_range(Panel::Left.minimum()..=Panel::Left.maximum())
+                    .show(ctx, |ui| {
+                        egui::ScrollArea::vertical()
+                            .show(ui, |ui| shell::left_panel(ui, &state, &mut queue));
+                    })
+                    .response
+                    .rect
+                    .width();
+                resized[0] = Some(width);
+            }
+            if !layout.is_collapsed(Panel::Right) {
+                let width = egui::SidePanel::right("right")
+                    .resizable(true)
+                    .default_width(layout.size(Panel::Right))
+                    .width_range(Panel::Right.minimum()..=Panel::Right.maximum())
+                    .show(ctx, |ui| {
+                        egui::ScrollArea::vertical()
+                            .show(ui, |ui| shell::right_panel(ui, &state, &mut queue));
+                    })
+                    .response
+                    .rect
+                    .width();
+                resized[1] = Some(width);
+            }
             shell::diagnostics_window(ctx, &state, &mut queue);
             shell::attribution_window(ctx, &state, &mut queue);
             shell::convert_window(ctx, &state, &mut queue);
@@ -3599,6 +3652,59 @@ impl App {
                     });
                 });
         });
+
+        // A splitter that was dragged, stored and written out. Compared before
+        // writing: egui reports the region's width every frame, and a file
+        // rewritten on every frame of a session is a file written thousands of
+        // times for the handful of drags a sculptor actually made.
+        // A region put away or brought back, and a request to have them all
+        // back at the design's own sizes. Read after the frame and taken out of
+        // memory, so one click is one toggle rather than one per frame for as
+        // long as the value sits there.
+        let mut moved = false;
+        // Read then removed, rather than `remove_temp`, which egui offers only
+        // for a type with a default — and a `Panel` has no sensible one: there
+        // is no "no region".
+        let toggled = context.data(|data| data.get_temp::<Panel>(shell::panel_toggle_id()));
+        if toggled.is_some() {
+            context.data_mut(|data| data.remove::<Panel>(shell::panel_toggle_id()));
+        }
+        if let Some(panel) = toggled {
+            self.layout.toggle(panel);
+            moved = true;
+        }
+        let reset = context
+            .data_mut(|data| data.remove_temp::<bool>(shell::layout_reset_id()))
+            .unwrap_or(false);
+        if reset {
+            self.layout.reset();
+            moved = true;
+        }
+        for (index, panel) in Panel::ALL.into_iter().enumerate() {
+            if let Some(size) = resized[index] {
+                if (self.layout.stored_size(panel) - size).abs() > 0.5 {
+                    self.layout.resize(panel, size);
+                    moved = true;
+                }
+            }
+        }
+        if moved {
+            if let Some(store) = self.store.as_ref() {
+                store.save_layout(&self.layout);
+            }
+        }
+        // A reset has to reach egui as well as the stored line. `default_width`
+        // is a default: egui remembers each panel's width in its own memory
+        // and keeps it, so Restaurar disposição moved the stored sizes and left
+        // every panel exactly where it was. Dropping the remembered state is
+        // what makes the default apply again on the next frame.
+        if reset {
+            for id in ["left", "right", "shelf"] {
+                context.data_mut(|data| {
+                    data.remove::<egui::containers::panel::PanelState>(egui::Id::new(id))
+                });
+            }
+        }
 
         // What the View left in its own memory, applied to the governor that
         // owns it. The profile touches no document, so it never became a

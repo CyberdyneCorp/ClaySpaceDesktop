@@ -8,6 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use clayspace_model::{Locale, RecentDocuments, Recovery, RememberedReference};
+use clayspace_view::Layout;
 
 /// The application's own directory, and the files in it.
 #[derive(Debug, Clone)]
@@ -148,6 +149,35 @@ impl SessionStore {
         );
     }
 
+    /// How the regions were arranged when the application last closed.
+    ///
+    /// State rather than configuration, in the directory the recent list and
+    /// the locale already live in. `Layout::deserialize` falls back to the
+    /// design's own sizes on anything malformed and clamps a size written by a
+    /// version with different bounds, so a corrupt line costs a sculptor their
+    /// arrangement and never their start-up.
+    ///
+    /// `layout.rs` has carried the sizes, the minimums, the collapse state and
+    /// this pair of serialisers since it was written, and nothing had ever
+    /// called them: the regions were drawn at fixed widths and the module was
+    /// exported from `clayspace-view` to no consumer at all.
+    pub fn load_layout(&self) -> Layout {
+        std::fs::read_to_string(self.layout_path())
+            .map(|text| Layout::deserialize(&text))
+            .unwrap_or_default()
+    }
+
+    pub fn save_layout(&self, layout: &Layout) {
+        if self.ensure_root().is_err() {
+            return;
+        }
+        let _ = std::fs::write(self.layout_path(), layout.serialize());
+    }
+
+    fn layout_path(&self) -> PathBuf {
+        self.root.join("layout")
+    }
+
     pub fn load_recent(&self) -> RecentDocuments {
         let text = std::fs::read_to_string(self.recent_path()).unwrap_or_default();
         let mut recent = RecentDocuments::from_paths(
@@ -198,6 +228,46 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(self.0.root());
         }
+    }
+
+    /// The arrangement of the regions survives a restart.
+    ///
+    /// `layout.rs` carried `serialize` and `deserialize` from the day it was
+    /// written, with a note that they exist for "a line the composition root
+    /// can store". Nothing had ever stored one.
+    #[test]
+    fn a_layout_survives_a_restart() {
+        let store = Scratch::new("layout-round-trip");
+        let mut layout = Layout::default();
+        layout.resize(clayspace_view::Panel::Left, 300.0);
+        layout.set_collapsed(clayspace_view::Panel::Shelf, true);
+        store.0.save_layout(&layout);
+
+        assert_eq!(
+            store.0.load_layout(),
+            layout,
+            "the arrangement did not come back"
+        );
+    }
+
+    /// A machine with nothing stored opens at the design's own sizes.
+    #[test]
+    fn nothing_stored_is_the_designs_arrangement() {
+        let store = Scratch::new("layout-absent");
+        assert_eq!(store.0.load_layout(), Layout::default());
+    }
+
+    /// And a corrupt line costs the arrangement, never the start-up.
+    ///
+    /// The whole reason `deserialize` falls back rather than failing: a
+    /// sculptor whose layout file was truncated by a full disk should meet the
+    /// design's arrangement, not an application that will not open.
+    #[test]
+    fn a_corrupt_layout_costs_the_arrangement_and_not_the_start_up() {
+        let store = Scratch::new("layout-corrupt");
+        std::fs::create_dir_all(store.0.root()).expect("a place to write");
+        std::fs::write(store.0.root().join("layout"), "not a layout at all").expect("write");
+        assert_eq!(store.0.load_layout(), Layout::default());
     }
 
     fn touch(path: &Path) {

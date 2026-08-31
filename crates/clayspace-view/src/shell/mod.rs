@@ -255,6 +255,8 @@ pub struct ShellState<'a> {
     pub studio_shading: bool,
     /// How much an idle frame is worth spending on, as the governor holds it.
     pub viewport_profile: crate::quality::ViewportProfile,
+    /// Which regions are put away, in `Panel::ALL` order.
+    pub collapsed: [bool; crate::layout::Panel::ALL.len()],
     /// Whether small creases are sharpened by the screen-space curvature term.
     pub cavity: bool,
     /// Whether the studio rig's key light casts.
@@ -291,6 +293,20 @@ pub mod region {
     pub const REPRESENTATION_BAR: f32 = 56.0;
     pub const SHELF: f32 = 84.0;
     pub const STATUS: f32 = 28.0;
+}
+
+/// Where a request to put a region away, or bring it back, is left.
+///
+/// The same route the viewport profile takes and for the same reasons: the
+/// arrangement of the regions touches no document, and `Panel` is a view type
+/// that a command in the layer below could not carry.
+pub fn panel_toggle_id() -> egui::Id {
+    egui::Id::new("panel-toggle")
+}
+
+/// Where a request to return every region to the design's size is left.
+pub fn layout_reset_id() -> egui::Id {
+    egui::Id::new("layout-reset")
 }
 
 /// Where a chosen viewport profile is left for the composition root to read.
