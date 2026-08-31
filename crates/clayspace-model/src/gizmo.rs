@@ -522,6 +522,72 @@ pub fn ring_samples(radius: f32, grab: f32) -> usize {
     ((circumference / grab).ceil() as usize).clamp(8, 512)
 }
 
+/// How far along a ray a sphere is hit, if it is.
+///
+/// The distance *along* the ray rather than the distance to it, so a caller
+/// testing several handles can take the nearest one to the eye — which is the
+/// one a person aiming at what they can see means.
+pub fn ray_hits_sphere(ray: ([f32; 3], [f32; 3]), centre: [f32; 3], radius: f32) -> Option<f32> {
+    let (origin, direction) = ray;
+    let to = sub(centre, origin);
+    let along: f32 = (0..3).map(|i| to[i] * direction[i]).sum();
+    if along <= 0.0 {
+        return None; // Behind the eye.
+    }
+    let miss = length(std::array::from_fn(|i| to[i] - direction[i] * along));
+    (miss <= radius).then_some(along)
+}
+
+/// How far along a ray a capsule — a segment with a radius — is hit, if it is.
+///
+/// What an arrow actually is. Tested at its tip alone, a shaft drawn a
+/// twelfth of the widget long is grabbable over the last fraction of itself,
+/// and every press along the part a person can plainly see falls through to
+/// whatever is behind it. The picture and the hit test have to be the same
+/// set, and this is the shaft's half of that.
+pub fn ray_hits_segment(
+    ray: ([f32; 3], [f32; 3]),
+    from: [f32; 3],
+    to: [f32; 3],
+    radius: f32,
+) -> Option<f32> {
+    let (origin, direction) = ray;
+    let span = sub(to, from);
+    let offset = sub(origin, from);
+    let squared: f32 = (0..3).map(|i| span[i] * span[i]).sum();
+    if squared < 1e-12 {
+        // A segment of no length is a point, and that has its own test.
+        return ray_hits_sphere(ray, from, radius);
+    }
+    // Closest approach between the ray and the segment's line, from the two
+    // derivatives set to zero. `direction` is a unit vector, so the term that
+    // would be `direction · direction` is one and drops out.
+    let b: f32 = (0..3).map(|i| direction[i] * span[i]).sum();
+    let d: f32 = (0..3).map(|i| direction[i] * offset[i]).sum();
+    let e: f32 = (0..3).map(|i| span[i] * offset[i]).sum();
+    let denominator = squared - b * b;
+    // Where along the segment the nearest point is, clamped to the segment
+    // itself: a shaft is a finite thing, and a press past its tip is a press
+    // past it. Parallel — where the denominator vanishes — makes every point
+    // on the segment equally near, and its start is as good an answer as any.
+    let at = if denominator.abs() < 1e-9 {
+        0.0
+    } else {
+        let along_ray = (b * e - squared * d) / denominator;
+        ((e + along_ray * b) / squared).clamp(0.0, 1.0)
+    };
+    // And where along the ray that point is seen from, which is what a caller
+    // comparing several handles orders them by.
+    let along_ray = at * b - d;
+    if along_ray <= 0.0 {
+        return None; // Behind the eye.
+    }
+    let miss = length(std::array::from_fn(|i| {
+        offset[i] + direction[i] * along_ray - span[i] * at
+    }));
+    (miss <= radius).then_some(along_ray)
+}
+
 /// The increment a snapped rotation lands on.
 ///
 /// Fifteen degrees: twenty-four to the turn, and it divides the angles a
@@ -1113,6 +1179,76 @@ mod tests {
             "sixteen samples would have touched after all"
         );
         assert!(ring_samples(radius, grab) > 16);
+    }
+
+    #[test]
+    fn a_shaft_is_grabbable_along_its_whole_length() {
+        // What a person sees is an arrow, and every part of the arrow reads as
+        // a handle. Tested at the tip alone — which is how it was — a press
+        // halfway down the shaft found nothing and fell through to whatever
+        // was behind it, so the manipulator "only worked if you landed exactly
+        // on the arrowhead".
+        let (from, to, radius) = ([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], 0.16f32);
+        // A camera down -z, aimed at each point along the shaft in turn.
+        for step in 0..=20 {
+            let height = step as f32 / 20.0;
+            let origin = [0.0, height, 5.0];
+            let ray = (origin, [0.0, 0.0, -1.0]);
+            assert!(
+                ray_hits_segment(ray, from, to, radius).is_some(),
+                "the shaft could not be grabbed {height} of the way along it"
+            );
+            assert_eq!(
+                ray_hits_sphere(ray, to, radius).is_some(),
+                height > 1.0 - radius,
+                "the tip-only test is what this replaces, at {height}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_press_past_the_arrowhead_is_a_press_past_it() {
+        // The clamp: a capsule is a finite thing, and the shaft does not go on
+        // forever in either direction. Without it, the whole *line* through the
+        // axis would be grabbable and a press anywhere along it — across the
+        // form, off the far side of the widget — would slide the selection.
+        let (from, to, radius) = ([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], 0.16f32);
+        for beyond in [-0.5f32, -0.2, 1.2, 3.0] {
+            let ray = ([0.0, beyond, 5.0], [0.0, 0.0, -1.0]);
+            assert!(
+                ray_hits_segment(ray, from, to, radius).is_none(),
+                "a press {beyond} of the way along the axis grabbed the shaft"
+            );
+        }
+    }
+
+    #[test]
+    fn a_shaft_reports_how_far_along_the_ray_it_was_hit() {
+        // Which is what lets a caller take the nearest handle to the eye. A
+        // shaft five units from the camera answers five, not zero and not the
+        // distance to the pivot.
+        let hit = ray_hits_segment(
+            ([0.0, 0.5, 5.0], [0.0, 0.0, -1.0]),
+            [0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            0.16,
+        )
+        .expect("the shaft is under the ray");
+        assert!((hit - 5.0).abs() < 1e-3, "answered {hit} rather than 5");
+    }
+
+    #[test]
+    fn nothing_behind_the_eye_is_grabbable() {
+        // A ray is half a line. A shaft behind the camera projects onto it as
+        // neatly as one in front, and picking it would grab a handle nobody
+        // can see.
+        assert!(ray_hits_segment(
+            ([0.0, 0.5, -5.0], [0.0, 0.0, -1.0]),
+            [0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            0.16,
+        )
+        .is_none());
     }
 
     #[test]

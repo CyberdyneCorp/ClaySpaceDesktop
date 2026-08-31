@@ -115,6 +115,8 @@ pub enum Command {
     SelectLatticePoint(Option<usize>),
     /// Adds or removes one control point without disturbing the rest.
     ToggleLatticePoint(usize),
+    /// Every control point a selection box caught. Replaces the selection.
+    SelectLatticePoints(Vec<usize>),
     /// Which of the manipulator's three modes is in force.
     SetGizmoMode(GizmoMode),
     /// Grabs a manipulator handle at a point on the drag plane, carrying the
@@ -449,6 +451,7 @@ impl Command {
                 | Self::ToggleLattice
                 | Self::SetLatticeDivisions(_)
                 | Self::SelectLatticePoint(_)
+                | Self::SelectLatticePoints(_)
                 | Self::ToggleLatticePoint(_)
                 | Self::SetGizmoMode(_)
                 | Self::BeginGizmoDrag(..)
@@ -543,6 +546,7 @@ impl Command {
             Self::ToggleLattice => "gaiola",
             Self::SetLatticeDivisions(_) => "divisões da gaiola",
             Self::SelectLatticePoint(_) => "escolher ponto",
+            Self::SelectLatticePoints(_) => "escolher pontos",
             Self::ToggleLatticePoint(_) => "escolher ponto",
             Self::SetGizmoMode(_) => "modo do manipulador",
             Self::BeginGizmoDrag(..) | Self::DragGizmo(..) | Self::EndGizmoDrag => "manipular",

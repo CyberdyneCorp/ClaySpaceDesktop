@@ -52,8 +52,8 @@ pub use exchange::{
     ExchangeModel, ExportMesher, ExportSettings, ExportWarning, Format, ImportAs, ImportSettings,
 };
 pub use gizmo::{
-    drag_plane, perpendicular_frame, ring_samples, snapped, GizmoDrag, GizmoHandle, GizmoMode,
-    Transform, SNAP_DEGREES,
+    drag_plane, perpendicular_frame, ray_hits_segment, ray_hits_sphere, ring_samples, snapped,
+    GizmoDrag, GizmoHandle, GizmoMode, Transform, SNAP_DEGREES,
 };
 pub use instrument::{FrameLog, Stall, FRAME};
 pub use lattice::{

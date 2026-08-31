@@ -294,6 +294,66 @@ fn a_selection_is_built_a_point_at_a_time() {
 }
 
 #[test]
+fn a_selection_box_takes_a_whole_set_at_once() {
+    // What a rubber band drawn across the viewport leaves behind. Not a loop
+    // over the one-point call, which would keep only the last of them, and not
+    // one over the toggle, which would take back whatever was already held —
+    // a box says *these*, not *these as well as the opposite of what you had*.
+    let mut document = meshed();
+    document.begin_lattice([2, 2, 2]).expect("a cage");
+
+    document.select_lattice_point(Some(2));
+    document.select_lattice_points(&[5, 1, 5, 7]);
+    assert_eq!(
+        document.lattice().selection,
+        vec![1, 5, 7],
+        "a box did not replace what was held, in order and without repeats"
+    );
+
+    // A point the cage does not have is not a point. A box is drawn in screen
+    // space and resolved against whatever cage is up, and a stale index must
+    // not put the manipulator somewhere the sculptor cannot see.
+    let count = document.lattice().points.len();
+    document.select_lattice_points(&[0, count + 4]);
+    assert_eq!(document.lattice().selection, vec![0]);
+
+    // An empty box is a click on nothing, which clears.
+    document.select_lattice_points(&[]);
+    assert!(document.lattice().selection.is_empty());
+    assert_eq!(document.lattice().pivot(), None);
+}
+
+#[test]
+fn a_box_round_a_face_gives_the_manipulator_that_face() {
+    // The point of gathering several at once: turning and scaling act about
+    // the middle of the selection and refuse a selection of one, so a whole
+    // face has to be reachable in a gesture rather than in four clicks.
+    let mut document = meshed();
+    document.begin_lattice([2, 2, 2]).expect("a cage");
+    let cage = document.lattice();
+    let face: Vec<usize> = cage
+        .points
+        .iter()
+        .enumerate()
+        .filter(|(_, point)| point[1] > 0.0)
+        .map(|(index, _)| index)
+        .collect();
+
+    document.select_lattice_points(&face);
+    let cage = document.lattice();
+    assert_eq!(cage.selection, face);
+    assert!(
+        cage.can_transform(),
+        "a face gathered in one gesture cannot be turned"
+    );
+    let pivot = cage.pivot().expect("a face has a middle");
+    assert!(
+        pivot[1] > 0.0,
+        "the manipulator sat at {pivot:?} rather than on the face"
+    );
+}
+
+#[test]
 fn the_manipulator_moves_a_whole_face() {
     let mut document = meshed();
     let before = top(&mut document);

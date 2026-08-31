@@ -898,11 +898,32 @@ that:
   drops a cage that reaches the switch unresolved rather than re-drawing it
   around a form it was never fitted to.
 
-- **The brushes are off.** A press that misses a control point orbits rather
-  than sculpting. It used to fall through to the brush, so a slip while aiming
-  sculpted the very form the cage was there to bend — and the strokes it left
-  made the next control point harder to hit. Orbiting rather than nothing, so
-  the cage can still be turned to look at from behind without being taken down.
+- **The brushes are off, and so is the ring that promises one.** A press that
+  misses a control point does not sculpt. It used to fall through to the brush,
+  so a slip while aiming sculpted the very form the cage was there to bend —
+  and the strokes it left made the next control point harder to hit. The
+  *cursor* went on being drawn over the form for longer than that: the routing
+  refused the stroke and the orange ring went on offering one, which is the
+  worst of both, since a sculptor aiming at a corner handle could not tell
+  whether a slip would leave a mark. A ring says "the next press leaves a
+  stroke here", so it is drawn only where that is true — the same rule the
+  whole-subtool manipulator already followed, now written once as
+  `input::shows_the_brush_ring` rather than twice.
+- **A press that takes hold of nothing draws a box.** Not every miss is a
+  mistake: a cage is worked a face at a time, and gathering a face by
+  Shift-clicking four or eight corners is four or eight chances to miss. So the
+  primary button drags a rubber band across the viewport and takes every
+  control point inside it — including the ones behind the form, which is the
+  whole reason the cage is drawn through. Held, **Shift** adds the box's catch
+  to the selection instead of replacing it, so a band and a click mix freely. A
+  press and release in one place is not a box but a click on nothing, which
+  clears the selection and puts the manipulator away; three points of travel
+  tell the two apart, so a hand's tremor is still a click.
+
+  The camera keeps working: **the secondary button and the orbit modifier both
+  orbit**, so the cage can still be turned to look at from behind without being
+  taken down. That is what the old rule — a miss orbits — was for, and it is
+  the trackpad's route as much as the mouse's.
 - **The form is drawn through.** Half the control points are behind it, and a
   solid surface hides exactly the handles that need reaching. Blender's X-ray
   and ZBrush's Ghost do the same thing for the same reason. Seen through, not
@@ -916,9 +937,13 @@ that:
 ### The manipulator
 
 A click selects one control point; **Shift-click** adds or removes one without
-disturbing the rest. That is what the manipulator exists for — dragging points
-one at a time needs no widget, and turning a whole face of the cage cannot be
-done without one.
+disturbing the rest; and a **drag across empty space** takes every point the
+box encloses. That is what the manipulator exists for — dragging points one at
+a time needs no widget, and turning a whole face of the cage cannot be done
+without one. A box is resolved when the pointer comes up rather than as it is
+drawn: a selection that changed under a moving band would drag the widget to
+the middle of whatever was momentarily inside it, and it would wander across
+the screen while the box was still being drawn.
 
 It sits on the **middle of the selection**, not on the last point picked, so
 adding a point moves the widget to where the selection is.
@@ -972,6 +997,28 @@ mark in the form's middle.
   disabled with the reason on them rather than drawn live and inert, which is
   how they were: the rings appeared, the drag ran, and nothing moved. Moving is
   not affected; it needs no pivot.
+- **An arrow can be grabbed anywhere along its shaft.** Reported from using it:
+  the manipulator "only works if you perfectly land the mouse on the axis
+  arrow". The arrow is drawn from the pivot to its cone and every part of that
+  reads as a handle, but only a sphere at the *tip* was tested — so a press on
+  most of what a person could plainly see missed. Worse than missed: a ring
+  encircles the pivot, so a ray aimed down the inner shaft passes near the
+  ring's **far** side, and the press that was meant to slide the selection
+  turned it instead. The shaft is hit-tested as a capsule now, in the same
+  nearest-along-the-ray competition as everything else, so the near shaft beats
+  the far ring. It is considered **last**, which settles the other half: where
+  a handle genuinely sits *on* the shaft — the centre block at its foot, the
+  scale box partway out, the two rings that cross it at their own radius — the
+  two are the same distance from the eye, and going last leaves the press with
+  the smaller, more particular target.
+- **The handle under the pointer is lit.** Half a dozen targets overlap on one
+  widget, and which of them a press will take was only discoverable by pressing
+  — the renderer has carried a `hovered` field all along and nothing but a drag
+  ever filled it, so a sculptor aiming at an arrow found out what they had
+  grabbed after the fact. It is asked the same question a press asks, every
+  frame the pointer moves, so what lights up and what a press takes cannot
+  describe different widgets. During a drag the handle *in hand* stays lit,
+  wherever the pointer has since travelled.
 - **A ring can be grabbed anywhere along it.** It is hit-tested as a string of
   spheres, and sixteen of them was a number picked rather than derived — at the
   manipulator's own proportions they do not touch, so about a fifth of every
@@ -1012,9 +1059,13 @@ pointing at the viewer unmovable: the pointer could travel a long way and its
 projection onto the axis would barely change.
 
 Press order in the viewport is **manipulator, then control points, then the
-surface**. The manipulator is drawn over the cage and sits on the selection, and
-the cage sits outside the form; without that order a press on the green arrow
-finds a control point behind it, and a press on a corner handle finds the clay.
+selection box, then the surface**. The manipulator is drawn over the cage and
+sits on the selection, and the cage sits outside the form; without that order a
+press on the green arrow finds a control point behind it, and a press on a
+corner handle finds the clay. The box comes after both and before the clay,
+because it is what a press *that took hold of nothing* means — and while a cage
+is up nothing behind it, neither an object nor a stroke, is what the press was
+for.
 
 ### Boxes or a surface
 
