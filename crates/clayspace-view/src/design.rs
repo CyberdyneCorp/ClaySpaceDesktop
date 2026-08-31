@@ -281,11 +281,45 @@ mod tests {
     /// fill all three locales, add an accessor, and call it here.
     const LABELS_STILL_DRAWN: usize = 10;
 
+    /// Every `.rs` file in the crate, as (name, source).
+    ///
+    /// Walks rather than reads one directory. Three tests here read the
+    /// crate's own source, and two of them were reading a flat `src/` when
+    /// the shell became a directory: one started failing loudly, and
+    /// `no_literal_colors` went quietly blind to five thousand lines, which
+    /// is the worse of the two outcomes.
+    fn crate_source() -> Vec<(String, String)> {
+        let mut found = Vec::new();
+        let mut stack = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+        while let Some(directory) = stack.pop() {
+            for entry in std::fs::read_dir(&directory).expect("the crate's own source") {
+                let path = entry.expect("entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    let name = path
+                        .strip_prefix(env!("CARGO_MANIFEST_DIR"))
+                        .unwrap_or(&path)
+                        .display()
+                        .to_string();
+                    found.push((
+                        name,
+                        std::fs::read_to_string(&path).expect("read the source"),
+                    ));
+                }
+            }
+        }
+        assert!(!found.is_empty(), "the crate's source could not be read");
+        found
+    }
+
     #[test]
     fn the_shell_draws_no_new_untranslated_labels() {
-        let shell = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/shell.rs");
-        let text = std::fs::read_to_string(&shell).expect("the shell's source");
-        let drawn = text.matches(".label()").count();
+        let drawn: usize = crate_source()
+            .iter()
+            .filter(|(name, _)| name.contains("shell"))
+            .map(|(_, text)| text.matches(".label()").count())
+            .sum();
         assert!(
             drawn <= LABELS_STILL_DRAWN,
             "the shell draws {drawn} domain labels, up from {LABELS_STILL_DRAWN}. \
@@ -330,22 +364,11 @@ mod tests {
     /// so on the line above.
     #[test]
     fn no_literal_colors() {
-        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut offenders = Vec::new();
-        for entry in std::fs::read_dir(&src).expect("the crate's own source") {
-            let path = entry.expect("entry").path();
-            let name = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or_default()
-                .to_owned();
-            if path.extension().is_none_or(|ext| ext != "rs")
-                || name == "design.rs"
-                || name == "palette.rs"
-            {
+        for (name, text) in crate_source() {
+            if name.ends_with("design.rs") || name.ends_with("palette.rs") {
                 continue;
             }
-            let text = std::fs::read_to_string(&path).expect("read the source");
             let lines: Vec<&str> = text.lines().collect();
             for (at, line) in lines.iter().enumerate() {
                 // Both halves of "written down": a constructor call, and a
@@ -403,8 +426,10 @@ mod tests {
     /// are worth stopping.
     #[test]
     fn every_size_in_the_scale_is_used_by_a_control() {
-        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let declaration = std::fs::read_to_string(src.join("design.rs")).expect("this file");
+        let declaration = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/design.rs"),
+        )
+        .expect("this file");
         let names: Vec<String> = declaration
             .lines()
             .skip_while(|line| !line.contains("pub mod size {"))
@@ -420,26 +445,18 @@ mod tests {
         assert!(!names.is_empty(), "the scale's sizes could not be read");
 
         let mut drawn = String::new();
-        let mut stack = vec![src];
-        while let Some(directory) = stack.pop() {
-            for entry in std::fs::read_dir(&directory).expect("the crate's own source") {
-                let path = entry.expect("entry").path();
-                if path.is_dir() {
-                    stack.push(path);
-                } else if path.extension().is_some_and(|ext| ext == "rs")
-                    && path.file_name().is_some_and(|name| name != "design.rs")
-                {
-                    let text = std::fs::read_to_string(&path).expect("read the source");
-                    // Code only. A comment naming a token is prose about it,
-                    // not a control drawn with it — and this test passed a
-                    // deliberate re-break of the very regression it is written
-                    // for, because the line above the call still said
-                    // `size::SWATCH` while the call itself no longer did.
-                    for line in text.lines() {
-                        drawn.push_str(line.split("//").next().unwrap_or_default());
-                        drawn.push('\n');
-                    }
-                }
+        for (name, text) in crate_source() {
+            if name.ends_with("design.rs") {
+                continue;
+            }
+            // Code only. A comment naming a token is prose about it, not a
+            // control drawn with it — and this test passed a deliberate
+            // re-break of the very regression it is written for, because the
+            // line above the call still said `size::SWATCH` while the call
+            // itself no longer did.
+            for line in text.lines() {
+                drawn.push_str(line.split("//").next().unwrap_or_default());
+                drawn.push('\n');
             }
         }
 
