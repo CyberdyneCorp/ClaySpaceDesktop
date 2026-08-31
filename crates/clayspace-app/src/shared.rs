@@ -288,6 +288,10 @@ impl MaskModel for SharedDocument {
     fn extrude_mask(&mut self, settings: ExtrudeSettings) -> Result<(), ModelError> {
         self.0.borrow_mut().extrude_mask(settings)
     }
+
+    fn apply_outline(&mut self, outline: &clayspace_model::MaskOutline) -> Result<(), ModelError> {
+        self.0.borrow_mut().apply_outline(outline)
+    }
 }
 
 impl CurveModel for SharedDocument {

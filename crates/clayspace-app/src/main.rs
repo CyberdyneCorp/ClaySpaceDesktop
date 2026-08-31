@@ -136,6 +136,14 @@ enum Drag {
     Curve,
     /// Drawing a box across the viewport to gather control points.
     Marquee,
+    /// Drawing a mask outline over the form.
+    Outline,
+}
+
+/// A vector's direction and its length, or `None` where it has neither.
+fn unit(v: [f32; 3]) -> Option<([f32; 3], f32)> {
+    let length = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    (length > 1e-6).then(|| (std::array::from_fn(|i| v[i] / length), length))
 }
 
 /// One reference lifted out of the ViewModel, owned.
@@ -2359,12 +2367,14 @@ impl App {
     /// will also deposit the dab.
     fn cursors(&self) -> Vec<BrushCursor> {
         // No brush ring where a press cannot leave a stroke: the transform
-        // mode, where a press on the clay moves it, and a cage, where a press
-        // that misses a control point orbits. The rule and its reasons are
+        // mode, where a press on the clay moves it; a cage, where a press that
+        // misses a control point orbits; and a drawn mask gesture, where a
+        // press begins an outline. The rule and its reasons are
         // `input::shows_the_brush_ring`.
         if !clayspace_app::input::shows_the_brush_ring(
             self.layer_manipulator_up(),
             self.lattice.state().get().active,
+            self.draws_an_outline(),
         ) {
             return Vec::new();
         }
@@ -2533,6 +2543,7 @@ impl App {
                     self.settle_geometry();
                 }
                 Drag::Curve => self.curve_drag = None,
+                Drag::Outline => self.close_the_drawn_outline(),
                 Drag::Gizmo => {
                     self.gizmo_drag = None;
                     self.handle(Command::EndGizmoDrag);
@@ -2621,6 +2632,25 @@ impl App {
             if boxing {
                 self.marquee = Some((point, point, input.smooth_modifier));
             }
+            // Before the surface is asked about, and whether or not the press
+            // landed on it: an outline is drawn *around* a region, so it usually
+            // starts on empty space beside the form. Asking `pick_at` first
+            // would send every such press to the camera instead.
+            //
+            // After the cage, though, and that is the cage's rule rather than a
+            // preference: while one is up it owns the viewport, and
+            // `press_sculpts` already refuses a stroke there — so a mask
+            // gesture that took the press out from under a selection box would
+            // be the one thing still reaching past a raised cage.
+            let drawing_an_outline = !rigged
+                && !on_curve
+                && !manipulated
+                && !transformed
+                && !caged
+                && !boxing
+                && button == egui::PointerButton::Primary
+                && !input.orbit_modifier
+                && self.begin_outline(point, input);
             // Last of the four. It always runs now, because a press on
             // geometry is what makes that geometry's subtool the sculpt
             // target; whether it also *takes* the press is decided inside, and
@@ -2628,12 +2658,18 @@ impl App {
             // already selected, since a press on the clay is a stroke and a
             // sculptor who is sculpting must not have one turn into a selection
             // because a cylinder happens to be under the brush.
+            //
+            // Not while an outline is being drawn, though: it freezes a region
+            // of the subtool being worked on, and a press that changed which
+            // subtool that is half way into the gesture would apply the outline
+            // to a form the sculptor was not aiming at.
             let picked_object = !rigged
                 && !on_curve
                 && !manipulated
                 && !transformed
                 && !caged
                 && !boxing
+                && !drawing_an_outline
                 && button == egui::PointerButton::Primary
                 && self.pick_object_at(point);
             let on_surface = !rigged
@@ -2642,14 +2678,21 @@ impl App {
                 && !transformed
                 && !caged
                 && !boxing
+                && !drawing_an_outline
                 && !picked_object
                 && self.pick_at(point).is_some();
+            // In the order the flags above were decided in. They are mutually
+            // exclusive by construction — each is gated on the ones before it —
+            // so the order changes nothing; it is written this way so the match
+            // reads as the arbitration does rather than as a second opinion
+            // about it.
             let started = match button {
                 _ if rigged => Drag::Rig,
                 _ if on_curve => Drag::Curve,
                 _ if manipulated || transformed => Drag::Gizmo,
                 _ if caged => Drag::Cage,
                 _ if boxing => Drag::Marquee,
+                _ if drawing_an_outline => Drag::Outline,
                 egui::PointerButton::Middle => Drag::Pan,
                 egui::PointerButton::Secondary => Drag::Orbit,
                 // The rule lives in `input`, with its reasons and its tests.
@@ -2686,6 +2729,7 @@ impl App {
             match self.drag {
                 Drag::Sculpt => self.carry_sculpt(input),
                 Drag::Curve => self.carry_curve(input),
+                Drag::Outline => self.carry_outline(input),
                 Drag::Gizmo => self.carry_gizmo(input),
                 Drag::Cage => self.carry_cage(input),
                 Drag::Marquee => self.carry_marquee(input),
@@ -2704,6 +2748,99 @@ impl App {
         if let Some(point) = input.pointer {
             self.stroke_at(point, false, StrokeModifiers::default());
         }
+    }
+
+    /// A press with a drawn gesture in hand, which begins an outline.
+    ///
+    /// `false` where the mask brush is not in hand or its gesture is the
+    /// brush, which is what leaves the press to the tools below.
+    fn begin_outline(&mut self, point: egui::Pos2, input: &ViewportInput) -> bool {
+        if !self.draws_an_outline() {
+            return false;
+        }
+        let Some(at) = self.ndc_at(point) else {
+            return false;
+        };
+        // Latched at the press, as a stroke's modifiers are: a key taken up
+        // half way round the outline would change what it means under the hand
+        // that is drawing it.
+        self.handle(Command::BeginMaskOutline(at, input.invert_modifier));
+        true
+    }
+
+    /// Whether the next press over the viewport draws an outline rather than
+    /// painting.
+    ///
+    /// Asked by the press *and* by the brush ring, from here rather than
+    /// separately: a ring that promised a stroke the press would not leave is
+    /// the mistake the cage made once, and two copies of this question is how
+    /// it would be made again.
+    fn draws_an_outline(&self) -> bool {
+        let painting = *self.sculpt.tool().get() == clayspace_model::ToolKind::Mascara;
+        self.mask.draws_an_outline(painting)
+    }
+
+    /// Movement, while an outline is being drawn.
+    fn carry_outline(&mut self, input: &ViewportInput) {
+        if let Some(at) = input.pointer.and_then(|point| self.ndc_at(point)) {
+            self.handle(Command::ExtendMaskOutline(at));
+        }
+    }
+
+    /// The pointer came up: close the outline on the frame it was drawn over.
+    ///
+    /// Nothing happens where there is no frame — a subtool with no extent has
+    /// nothing for the sweep to run through — and the outline is taken down
+    /// either way, because the gesture has ended whatever came of it.
+    fn close_the_drawn_outline(&mut self) {
+        match self.outline_frame() {
+            Some(frame) => self.busy(|app| {
+                app.timed("máscara desenhada", |app| {
+                    app.handle(Command::EndMaskOutline(frame));
+                });
+            }),
+            None => self.handle(Command::CancelMaskOutline),
+        }
+    }
+
+    /// The plane the outline was drawn on, in world terms.
+    ///
+    /// Through the active subtool, perpendicular to the view, with its `right`
+    /// and `up` taken from the camera's own rays rather than rebuilt from its
+    /// matrices: the outline is collected in the same normalised coordinates
+    /// those rays are cast through, so deriving the frame from them is what
+    /// keeps the region under the line the sculptor drew.
+    fn outline_frame(&self) -> Option<clayspace_model::OutlineFrame> {
+        let viewport = self.viewport?;
+        let aspect = viewport.aspect_ratio();
+        let through = |ndc: [f32; 2]| self.camera.ray_through(ndc, aspect);
+        let (_, forward) = through([0.0, 0.0]);
+
+        // Somewhere on the form, so the plane the outline is measured on cuts
+        // through what it is being drawn around. Without a subtool to aim at,
+        // what the camera is looking at.
+        let anchor = self.sculpt.bounds().map_or_else(
+            || self.camera.target.into(),
+            |(min, max)| std::array::from_fn(|axis| (min[axis] + max[axis]) * 0.5),
+        );
+        let origin = Self::on_plane(through([0.0, 0.0]), anchor, forward)?;
+        let across = Self::on_plane(through([1.0, 0.0]), anchor, forward)?;
+        let above = Self::on_plane(through([0.0, 1.0]), anchor, forward)?;
+
+        let (right, width) = unit(std::array::from_fn(|i| across[i] - origin[i]))?;
+        let (up, height) = unit(std::array::from_fn(|i| above[i] - origin[i]))?;
+        Some(clayspace_model::OutlineFrame {
+            origin,
+            right,
+            up,
+            forward,
+            scale: [width, height],
+        })
+    }
+
+    /// Where a viewport point sits in normalised device coordinates.
+    fn ndc_at(&self, point: egui::Pos2) -> Option<[f32; 2]> {
+        clayspace_app::input::ndc_at(self.viewport?, point)
     }
 
     /// Movement, while a curve drag is under way.
@@ -3193,6 +3330,8 @@ impl App {
             strings: self.strings,
             shortcuts: &self.shortcuts,
             mask: *self.mask.state().get(),
+            mask_gesture: *self.mask.gesture().get(),
+            outline: self.mask.draft().get().as_ref(),
             armature: self.armature_state(),
             recent: self.recent.paths(),
             show_repair: self.show_repair,
@@ -3401,6 +3540,14 @@ impl App {
                                 egui::Rect::from_two_pos(from, to).intersect(rect),
                             );
                         }
+                        // And the mask outline, for the same reason and in the
+                        // same place: a gesture's own feedback belongs over the
+                        // scene and under the panels, because it is a picture
+                        // of what the pointer has done so far rather than a
+                        // control. The two never show at once — a cage owns the
+                        // viewport while it is up, so the press that would draw
+                        // one is the press that draws the other.
+                        shell::outline_overlay(ui, rect, &state);
                     });
                 });
         });

@@ -15,10 +15,10 @@ use clayspace_model::{
     CurvePoint, CurveProfile, CurveState, Direction, DocumentModel, EditOutcome, ExchangeModel,
     ExportMesher, ExportSettings, ExtrudeSettings, Format, GestureSample, GizmoDrag, GizmoHandle,
     GizmoMode, GizmoTarget, HistoryState, ImportAs, ImportSettings, Inserted, ItemKind,
-    LatticeModel, LatticeState, LayerKey, LayerSummary, MaskModel, MaskOp, MaskState, ModelError,
-    NodeIndex, ObjectId, ObjectModel, OpenError, Protection, Refusal, Representation, Scene,
-    SceneModel, SceneNode, SceneStats, SculptModel, Shape, SkinSettings, SmoothBlur, ToolKind,
-    VoxelDisplay, OBJECT_VERBS,
+    LatticeModel, LatticeState, LayerKey, LayerSummary, MaskModel, MaskOp, MaskOutline, MaskState,
+    ModelError, NodeIndex, ObjectId, ObjectModel, OpenError, Protection, Refusal, Representation,
+    Scene, SceneModel, SceneNode, SceneStats, SculptModel, Shape, SkinSettings, SmoothBlur,
+    ToolKind, VoxelDisplay, OBJECT_VERBS,
 };
 
 use crate::backend::{BackendPolicy, Operation};
@@ -3175,6 +3175,50 @@ impl ClayDocument {
             changed: painted > 0,
             dirty_bricks: 0,
         })
+    }
+
+    /// Stamps the mask along each path of a drawn region.
+    ///
+    /// Returns how many stamps landed. One `clay_mask_apply_stroke` per path,
+    /// because that call is the only one that writes many cells for one entry
+    /// in the undo history — see [`clayspace_model::outline`].
+    fn freeze_along(
+        &mut self,
+        paths: Vec<Vec<[f32; 3]>>,
+        target: f32,
+        spacing: f32,
+    ) -> Result<usize, ModelError> {
+        let layer = self.active_layer().id;
+        let preset = outline_preset(spacing);
+        let mut painted = 0usize;
+        for path in paths {
+            let samples: Vec<claycore::StrokeSample> = path
+                .into_iter()
+                .map(|position| claycore::StrokeSample {
+                    position,
+                    pressure: 1.0,
+                    time: 0.0,
+                })
+                .collect();
+            painted += self
+                .document
+                .ensure_layer_mask(layer, Self::VOXEL_SIZE)
+                .map_err(ModelError::engine)?
+                .apply_stroke(
+                    &samples,
+                    &preset,
+                    target,
+                    // A ball, and the radius is what makes it cover: a cube of
+                    // the same reach writes twice the cells for the same
+                    // region, all of them in corners that overshoot it.
+                    BrushShape::Sphere,
+                    // And hard-edged: the region's edge is where the sculptor
+                    // drew it, not a gradient away from it.
+                    Falloff::Constant,
+                )
+                .map_err(ModelError::engine)?;
+        }
+        Ok(painted)
     }
 
     /// Pulls the region the stroke covered onto a plane — Planar and Polir.
@@ -7903,6 +7947,131 @@ impl MaskModel for ClayDocument {
         self.refill(id, &[node])?;
         self.refresh_stats();
         self.stay_on_the_masked_subtool(source)
+    }
+
+    /// Freezes what a shape drawn over the form encloses — ZBrush's mask
+    /// lasso and mask rect, which arrive here as the same thing.
+    ///
+    /// The region is a prism: the outline swept straight along the view
+    /// direction, through the subtool and out the other side, so the far
+    /// surface freezes with the near one exactly as ZBrush's does. What bounds
+    /// the sweep is the subtool's own extent — a mask lattice is unbounded, and
+    /// the engine's advice for every bounded mask operation is that the caller
+    /// supplies the finite region, "from a grid's bounds or an item's".
+    ///
+    /// Delivered as a **stroke** rather than as cells — one per connected
+    /// piece of the region, which is almost always one. A document-owned mask
+    /// snapshots itself for the undo history on every call that writes to it,
+    /// so the region has to arrive in as few of them as it can: see
+    /// [`clayspace_model::outline`], where the path that visits it is built.
+    fn apply_outline(&mut self, outline: &MaskOutline) -> Result<(), ModelError> {
+        if !outline.encloses_anything() {
+            return Err(ModelError::engine(
+                "o laço não fechou uma região; arraste em volta do que quer congelar",
+            ));
+        }
+        let key = self.active_layer().key;
+        let Some(bounds) = SceneModel::layer_bounds(self, key) else {
+            return Err(ModelError::engine(
+                "esta subferramenta não tem extensão para o laço percorrer",
+            ));
+        };
+        // Grown by the footprint, because `clay_layer_bounds` is deliberately
+        // tight: a surface sitting exactly on the box would be swept along its
+        // face and freeze on one side of the cell only.
+        let margin = Self::VOXEL_SIZE * 2.0;
+        let bounds = (
+            std::array::from_fn(|axis| bounds.0[axis] - margin),
+            std::array::from_fn(|axis| bounds.1[axis] + margin),
+        );
+
+        // Refused rather than started, where the region runs to hundreds of
+        // millions of cells. What an outline costs is the volume it sweeps and
+        // the pitch cannot trade that away, so the only honest answers are a
+        // reason and something to do about it.
+        if clayspace_model::cells_to_write(outline, bounds, Self::VOXEL_SIZE)
+            > clayspace_model::CELL_CEILING
+        {
+            return Err(ModelError::engine(
+                "a região do laço é grande demais para congelar de uma vez; \
+                 desenhe um laço menor",
+            ));
+        }
+
+        let spacing = clayspace_model::lattice_pitch(Self::VOXEL_SIZE);
+        let Some(paths) = clayspace_model::coverage_path(outline, bounds, spacing) else {
+            // An outline drawn beside the form rather than over it. Not a
+            // refusal: the sculptor missed, and the mask is what it was.
+            return Ok(());
+        };
+
+        // One stroke per connected piece of the region, and a group around
+        // them where there is more than one: an outline can enclose two pieces
+        // with nothing between them, a single path across both would freeze
+        // the gap, and a sculptor undoing a gesture means the gesture.
+        let grouped = paths.len() > 1;
+        if grouped {
+            self.document
+                .begin_undo_group()
+                .map_err(ModelError::engine)?;
+        }
+        let painted = self.freeze_along(paths, outline.mode.target(), spacing);
+        if grouped {
+            self.document.end_undo_group().map_err(ModelError::engine)?;
+        }
+        let painted = painted?;
+
+        // As a mask stroke does: nothing in the surface moved, so no brick is
+        // dirty and the viewport would keep drawing the region as it was.
+        if painted > 0 {
+            self.mask_revision = self.mask_revision.wrapping_add(1);
+        }
+        Ok(())
+    }
+}
+
+/// The stamp run a drawn region is painted with.
+///
+/// Written out rather than taken from the brush in hand: none of it is a
+/// sculptor's choice. The step along the path is the lattice pitch, and every
+/// shaping field is off — a jittered or tapered run would be an outline that
+/// is not the one drawn.
+///
+/// The footprint reaches half the pitch's **diagonal** rather than half its
+/// side, and the difference is what the region looks like. A brush footprint is
+/// axis-aligned in the world; the lattice is aligned to the *camera*, because
+/// that is where the outline was drawn. Sized to half the pitch, the two tile
+/// only when the camera happens to face down an axis, and from anywhere else
+/// the region comes out speckled with cells no stamp reached — visible as
+/// white flecks all over the frozen patch.
+///
+/// A ball rather than a cube, and it is worth 40% of the gesture: a cube of the
+/// same reach writes 5.8 cells for every cell of the region against a ball's
+/// 2.7, all of the difference in corners that overshoot it. Measured on the
+/// reference form, an outline around the whole of it: 1191 ms against 800 on
+/// the same machine, and `mask.outline` takes the figure on a quiet one.
+fn outline_preset(spacing: f32) -> StrokePreset {
+    StrokePreset {
+        // √3/2, with a little to spare against the arc-length walk landing its
+        // stamps a fraction off the lattice it was built from.
+        radius: spacing * 0.9,
+        // Spacing is a fraction of the diameter, and the diameter is the pitch.
+        spacing: 1.0,
+        strength: 1.0,
+        pressure_size: 0.0,
+        pressure_strength: 0.0,
+        pressure_curve: 1.0,
+        jitter_position: 0.0,
+        jitter_size: 0.0,
+        jitter_rotation: 0.0,
+        seed: 0,
+        rotate_along_stroke: false,
+        taper_start: 0.0,
+        taper_end: 0.0,
+        steady: 0.0,
+        // The path crosses itself where it backtracks, and a region frozen
+        // twice must not be frozen harder than one frozen once.
+        accumulation: claycore::Accumulation::Clamped,
     }
 }
 

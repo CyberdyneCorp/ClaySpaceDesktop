@@ -26,6 +26,7 @@ pub mod instrument;
 pub mod lattice;
 pub mod locale;
 pub mod mask;
+pub mod outline;
 pub mod reference;
 pub mod scene;
 pub mod sculpt;
@@ -61,6 +62,10 @@ pub use lattice::{
 };
 pub use locale::Locale;
 pub use mask::{can_extrude, ExtrudeSettings, ExtrudeSide, MaskModel, MaskOp, MaskState};
+pub use outline::{
+    cells_to_write, coverage_path, lattice_pitch, MaskGesture, MaskOutline, OutlineDraft,
+    OutlineFrame, OutlineMode, CELL_CEILING, COVERING, OUTLINE_SPACING,
+};
 pub use reference::{
     read_references, write_references, RefFormat, RefPlane, ReferenceImage, ReferenceRefusal,
     ReferenceSettings, RememberedReference,

@@ -13,9 +13,9 @@ use clayspace_model::{
     AlphaSupport, BlendProfile, BrushSettings, Combine, CombineSettings, DeformSettings,
     DeformVerb, Diagnostics, Direction, ExportMesher, ExportSettings, ExportWarning,
     ExtrudeSettings, ExtrudeSide, Falloff, GizmoMode, ImportAs, ImportSettings, LayerKey,
-    LayerSummary, MaskOp, MaskState, RecentDocuments, RefPlane, ReferenceSettings, Representation,
-    Scene, SceneStats, SculptLayer, SculptLayerCost, SculptLayerOp, SurfaceOpacity, ToolKind,
-    Units, ViewPresetKind,
+    LayerSummary, MaskGesture, MaskOp, MaskState, OutlineDraft, OutlineMode, RecentDocuments,
+    RefPlane, ReferenceSettings, Representation, Scene, SceneStats, SculptLayer, SculptLayerCost,
+    SculptLayerOp, SurfaceOpacity, ToolKind, Units, ViewPresetKind,
 };
 use clayspace_vm::{Axis, Command, CommandQueue};
 
@@ -57,6 +57,10 @@ pub struct ArmatureState {
 pub struct ShellState<'a> {
     /// What is frozen, for the mask menu.
     pub mask: MaskState,
+    /// Which gesture the mask brush makes.
+    pub mask_gesture: MaskGesture,
+    /// The outline being drawn over the viewport, while one is.
+    pub outline: Option<&'a OutlineDraft>,
     /// The rig, as the menu and the armature panel need it.
     pub armature: ArmatureState,
     /// Documents opened lately, most recent first.
@@ -1103,6 +1107,21 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                     queue.push(Command::ToggleMaskPainting);
                     ui.close_menu();
                 }
+                // And which gesture it makes. Here as well as on the options
+                // bar because the bar only carries it with the mask brush
+                // already in hand, and this is where a sculptor comes looking
+                // for what masking can do.
+                for gesture in MaskGesture::ALL {
+                    let chosen = state.mask_gesture == gesture;
+                    if ui
+                        .selectable_label(chosen, s.mask_gesture_name(gesture))
+                        .on_hover_text(s.hint_mask_outline)
+                        .clicked()
+                    {
+                        queue.push(Command::SetMaskGesture(gesture));
+                        ui.close_menu();
+                    }
+                }
                 ui.separator();
                 // Disabled rather than hidden: a menu whose entries come and
                 // go is harder to learn than one whose entries are sometimes
@@ -1256,6 +1275,18 @@ pub fn options_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
                     }
                 });
 
+                // Shown only with the mask brush in hand, because it is that
+                // brush's own question: one of the twenty tools freezes a
+                // region, and a Pincel/Laço pair beside a Standard brush would
+                // be a control that decides nothing. Beside the brush's own
+                // numbers rather than at the end of the bar, where it sat
+                // first and where a narrow window pushed half of it off the
+                // screen.
+                if state.tool.is_mask_tool() {
+                    ui.add_space(space::SECTION);
+                    mask_gesture_control(ui, state, queue);
+                }
+
                 // The combine vocabulary is the SDF side's alone: cells are set or
                 // cleared and vertices are moved, so neither has a join to make. The
                 // controls are absent rather than greyed because there is no
@@ -1280,6 +1311,110 @@ pub fn options_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
                 alpha_control(ui, state, queue);
             });
         });
+}
+
+/// The outline being drawn, traced over the viewport.
+///
+/// Drawn by the View from ViewModel state rather than by the event loop that
+/// collects the points: the composition root can see the pointer and the View
+/// can see the design, and the line a sculptor is drawing is a picture rather
+/// than an input.
+///
+/// `rect` is the viewport's own rectangle — the one the scene is drawn into
+/// and the one the pointer was measured against, so the line lands under the
+/// cursor rather than beside it.
+pub fn outline_overlay(ui: &egui::Ui, rect: egui::Rect, state: &ShellState<'_>) {
+    let Some(draft) = state.outline else {
+        return;
+    };
+    let corners = draft.corners();
+    if corners.len() < 2 {
+        return;
+    }
+    let points: Vec<egui::Pos2> = corners
+        .iter()
+        .map(|ndc| outline_point(rect, *ndc))
+        .collect();
+
+    // Freezing and releasing are the same gesture and must not look alike:
+    // the accent draws what will be frozen, and a dim neutral what will be
+    // let go.
+    let tint = match draft.mode {
+        OutlineMode::Freeze => Tokens::accent(),
+        OutlineMode::Thaw => Tokens::text_dim(),
+    };
+    let closing = points.first().copied().zip(points.last().copied());
+    let painter = ui.painter_at(rect);
+    painter.add(egui::Shape::line(
+        points,
+        egui::Stroke::new(OUTLINE_WIDTH, tint),
+    ));
+    if let Some((first, last)) = closing {
+        // A lasso closes itself across a gap the sculptor can see, so the edge
+        // that will close it is drawn faint: showing where it lands is what
+        // makes it predictable rather than surprising. A rectangle has no such
+        // gap — four corners are four edges — and drawing one of them faint
+        // would suggest it were less certain than the other three.
+        let closing_tint = if draft.gesture.closes_a_gap() {
+            tint.gamma_multiply(OUTLINE_CLOSING)
+        } else {
+            tint
+        };
+        painter.add(egui::Shape::line_segment(
+            [last, first],
+            egui::Stroke::new(OUTLINE_WIDTH, closing_tint),
+        ));
+    }
+}
+
+/// How wide the drawn outline is, in points.
+const OUTLINE_WIDTH: f32 = 1.5;
+
+/// How much of the outline's tint the closing edge keeps.
+const OUTLINE_CLOSING: f32 = 0.45;
+
+/// Where a normalised device coordinate lands in the viewport.
+///
+/// The inverse of what the ray through the pointer is built from, and it has
+/// to stay the inverse: an overlay drawn from a different mapping than the
+/// gesture is resolved with is a line that does not enclose what it appears
+/// to.
+///
+/// The same arithmetic as the tail of `input::screen_at`, and it is copied
+/// rather than shared because the layering says so: a View may not reach the
+/// composition root. Two lines, and both carry a note to the other.
+fn outline_point(rect: egui::Rect, ndc: [f32; 2]) -> egui::Pos2 {
+    egui::pos2(
+        rect.min.x + (ndc[0] + 1.0) * 0.5 * rect.width(),
+        rect.min.y + (1.0 - ndc[1]) * 0.5 * rect.height(),
+    )
+}
+
+/// How wide the mask brush's three gestures need between them.
+const GESTURE_WIDTH: f32 = 190.0;
+
+/// Which gesture the mask brush makes: a drag across the surface, a shape
+/// traced over the form, or a box dragged corner to corner.
+fn mask_gesture_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    ui.vertical(|ui| {
+        ui.set_width(GESTURE_WIDTH);
+        numeric(ui, s.label_mask_gesture);
+        let response = ui.scope(|ui| {
+            segmented(
+                ui,
+                &MaskGesture::ALL,
+                |gesture| s.mask_gesture_name(gesture),
+                state.mask_gesture,
+            )
+        });
+        if let Some(gesture) = response.inner {
+            queue.push(Command::SetMaskGesture(gesture));
+        }
+        // What the drawn gestures do and what the modifier does to them, on
+        // the row itself: a gesture nobody can discover is one nobody uses.
+        response.response.on_hover_text(s.hint_mask_outline);
+    });
 }
 
 /// The id the options bar's brush badge is recorded under, for tests.
