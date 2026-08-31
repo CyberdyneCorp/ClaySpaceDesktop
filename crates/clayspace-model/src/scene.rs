@@ -60,6 +60,13 @@ pub struct LayerSummary {
     /// of the byte estimate beside it, which is why the estimate is asked for
     /// only when the sculptor is deciding rather than on every refresh.
     pub health: Option<FieldHealth>,
+    /// What the layer's grid is made of, where it is one.
+    ///
+    /// `None` for a field or a mesh, which have no cells. Read from the engine
+    /// as the health is — `clay_voxel_size` and `clay_voxel_occupied_count`,
+    /// both bound in `claycore` and until now used only inside the adapter, so
+    /// the interface could say a layer was voxels and not how coarse they were.
+    pub voxel: Option<VoxelStats>,
     /// The recorded passes on this layer, bottom-up.
     ///
     /// Empty for every representation but a grid, and for a grid nobody has
@@ -89,6 +96,21 @@ pub struct FieldHealth {
     pub advises_consolidation: bool,
     /// Whether it is already collapsed.
     pub consolidated: bool,
+}
+
+/// What a grid layer is made of.
+///
+/// Two numbers a sculptor can act on. The cell size is the one that decides
+/// what detail is possible at all — a feature finer than a cell cannot be
+/// sculpted, and the answer to "why will this not take a crease" is usually
+/// here. The occupied count is what a grid costs, and the thing that grows
+/// when a form is refined.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VoxelStats {
+    /// World units per cell.
+    pub cell_size: f32,
+    /// How many cells hold anything.
+    pub occupied: usize,
 }
 
 /// A recorded pass on a voxel layer.
@@ -453,6 +475,7 @@ mod tests {
             protection: Protection::default(),
             intensity: 100,
             health: None,
+            voxel: None,
             sculpt_layers: Vec::new(),
         };
         assert!(
@@ -474,6 +497,7 @@ mod tests {
                     protection: Protection::default(),
                     intensity: 100,
                     health: None,
+                    voxel: None,
                     sculpt_layers: Vec::new(),
                 },
                 LayerSummary {
@@ -484,6 +508,7 @@ mod tests {
                     protection: Protection::default(),
                     intensity: 70,
                     health: None,
+                    voxel: None,
                     sculpt_layers: Vec::new(),
                 },
             ],

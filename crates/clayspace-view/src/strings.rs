@@ -251,6 +251,10 @@ pub struct Strings {
     pub section_mesh: &'static str,
     /// How many items the active field's edit list holds.
     pub label_field_items: &'static str,
+    /// What a grid is made of: how coarse its cells are, and how many hold
+    /// anything.
+    pub label_voxel_cell: &'static str,
+    pub label_voxel_occupied: &'static str,
     /// Whether that list has been collapsed into one.
     pub label_field_collapsed: &'static str,
     pub state_yes: &'static str,
@@ -703,6 +707,8 @@ libera em vez de congelar.",
     section_voxels: "VOXELS",
     section_mesh: "MALHA",
     label_field_items: "Itens no campo",
+    label_voxel_cell: "Tamanho da célula",
+    label_voxel_occupied: "Células ocupadas",
     label_field_collapsed: "Colapsado",
     state_yes: "sim",
     state_no: "não",
@@ -1075,6 +1081,8 @@ instead.",
     section_voxels: "VOXELS",
     section_mesh: "MESH",
     label_field_items: "Items in the field",
+    label_voxel_cell: "Cell size",
+    label_voxel_occupied: "Occupied cells",
     label_field_collapsed: "Collapsed",
     state_yes: "yes",
     state_no: "no",
@@ -1452,6 +1460,8 @@ lados. Con Ctrl, libera en vez de congelar.",
     section_voxels: "VÓXELES",
     section_mesh: "MALLA",
     label_field_items: "Elementos en el campo",
+    label_voxel_cell: "Tamaño de celda",
+    label_voxel_occupied: "Celdas ocupadas",
     label_field_collapsed: "Colapsado",
     state_yes: "sí",
     state_no: "no",
@@ -1885,8 +1895,10 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 213] {
+    pub fn all(&self) -> [&'static str; 215] {
         [
+            self.label_voxel_cell,
+            self.label_voxel_occupied,
             self.label_viewport_profile,
             self.hud_position,
             self.hud_rotation,

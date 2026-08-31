@@ -2168,7 +2168,8 @@ launches, for the same reason the shelf has no favourites.
 
 **The inspector answers what is being sculpted**, in one section that keeps its
 place while its contents change: a field states how many items its edit list
-holds and whether it has been collapsed, a grid its display and blur, a mesh
+holds and whether it has been collapsed, a grid its cell size, how many cells
+hold anything, and how it is drawn, a mesh
 the contract its brushes work under — they move the vertices that are there and
 neither add nor remove any, which is the reason Inflar and Suavizar behave
 differently on a mesh than on a field. Each is headed by the representation it

@@ -39,8 +39,17 @@ collapse advisory under the layer list.
 The concept this is drawn from lists, per representation: field quality,
 evaluation resolution, surface offset, field smoothness, voxel size, grid
 resolution and bounds, filtering, box view, memory estimate, normals, and a
-subdivision level. **Not one of them is a value this application's domain or
-the pinned engine can express per layer.** Drawing a control for something
+subdivision level.
+
+**Voxel size and occupancy turned out to be real** — `clay_voxel_size` and
+`clay_voxel_occupied_count` are bound in `claycore` and were being read inside
+the engine adapter, so the interface could say a layer held voxels and not how
+coarse they were. They are in the grid's section now; see
+`a-stretch-the-engine-already-had` for the audit that found them and the
+per-axis scale in the same sweep.
+
+**Of the rest, not one is a value this application's domain or the pinned
+engine can express per layer.** Drawing a control for something
 nothing reads is an interface that lies about what the program does, so none of
 them is here. The guide that asks for this panel says the same thing in its own
 words, about a resolution setting it declined to invent.

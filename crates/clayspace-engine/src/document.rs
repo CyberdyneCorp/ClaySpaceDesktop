@@ -270,6 +270,7 @@ impl Layer {
             // Filled by the document, which is the only thing that can ask the
             // engine — see `ClayDocument::field_health`.
             health: None,
+            voxel: None,
             sculpt_layers: self.sculpt_layers.clone(),
         }
     }
@@ -940,6 +941,28 @@ impl ClayDocument {
                 .ok()
                 .flatten()
                 .is_some(),
+        })
+    }
+
+    /// What a grid layer is made of, where the layer is one.
+    ///
+    /// Read beside the field's health and on the same terms: cheap, asked per
+    /// scene rather than per frame, and `None` where the question does not
+    /// apply. `clay_voxel_size` and `clay_voxel_occupied_count` have been
+    /// bound in `claycore` throughout and were read only inside this adapter,
+    /// so the interface could say a layer held voxels and not how coarse they
+    /// were — which is the one number that decides what detail a grid can hold
+    /// at all.
+    fn voxel_stats(&self, layer: &Layer) -> Option<clayspace_model::VoxelStats> {
+        if layer.representation != Representation::Voxel {
+            return None;
+        }
+        // The reader, which borrows the document immutably — a scene query has
+        // no business taking the exclusive borrow the writable grid wants.
+        let (_, grid) = self.document.voxel_reader(&layer.engine_name).ok()?;
+        Some(clayspace_model::VoxelStats {
+            cell_size: grid.voxel_size().ok()?,
+            occupied: grid.occupied_count().ok()?,
         })
     }
 
@@ -5829,6 +5852,7 @@ impl SceneModel for ClayDocument {
                 .iter()
                 .map(|layer| LayerSummary {
                     health: self.field_health(layer),
+                    voxel: self.voxel_stats(layer),
                     ..layer.summary()
                 })
                 .collect(),

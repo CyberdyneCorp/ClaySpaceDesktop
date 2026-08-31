@@ -31,6 +31,7 @@ fn scene() -> Scene {
             protection,
             intensity,
             health: None,
+            voxel: None,
             sculpt_layers: Vec::new(),
         };
     Scene {
@@ -4302,5 +4303,53 @@ fn the_transform_readout_is_shown_for_a_placed_object_alone() {
     assert!(
         shell_rect(&probe_shell(&caged), shell::transform_hud_id()).is_none(),
         "the readout answered for a whole layer, which has no one position"
+    );
+}
+
+/// A grid layer says how coarse its cells are, and how many hold anything.
+///
+/// Both have been readable from the engine throughout — `clay_voxel_size` and
+/// `clay_voxel_occupied_count`, bound in `claycore` and read only inside the
+/// adapter — so the interface could say a layer held voxels and not how coarse
+/// they were, which is the number that decides what detail the grid can hold at
+/// all.
+#[test]
+fn a_grid_says_what_it_is_made_of() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let mut measured = scene();
+    let active = measured.active.expect("an active layer");
+    for layer in &mut measured.layers {
+        if layer.key == active {
+            layer.representation = clayspace_model::Representation::Voxel;
+            layer.voxel = Some(clayspace_model::VoxelStats {
+                cell_size: 0.05,
+                occupied: 41_237,
+            });
+        }
+    }
+    let mut set = state(strings, &measured, &materials, &report);
+    set.representation = clayspace_model::Representation::Voxel;
+
+    let ctx = probe_shell(&set);
+    for label in [strings.label_voxel_cell, strings.label_voxel_occupied] {
+        assert!(
+            shell_rect(&ctx, shell::readout_id(label)).is_some(),
+            "the voxel section drew no {label:?} row"
+        );
+    }
+
+    // And a field says nothing about cells, because it has none.
+    let bare = scene();
+    let plain = state(strings, &bare, &materials, &report);
+    assert!(
+        shell_rect(
+            &probe_shell(&plain),
+            shell::readout_id(strings.label_voxel_cell)
+        )
+        .is_none(),
+        "a field layer was given a cell size"
     );
 }

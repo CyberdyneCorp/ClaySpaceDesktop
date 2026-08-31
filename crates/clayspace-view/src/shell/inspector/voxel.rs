@@ -24,6 +24,17 @@ pub(super) fn show(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
         return;
     }
 
+    // What the grid is made of, before how it is drawn. The cell size is the
+    // number that decides what detail a grid can hold at all — a feature finer
+    // than a cell cannot be sculpted, and it is the usual answer to "why will
+    // this not take a crease". Both have been readable from the engine
+    // throughout and were read only inside the adapter, so the interface could
+    // say a layer held voxels and not how coarse they were.
+    if let Some(grid) = state.scene.active_layer().and_then(|layer| layer.voxel) {
+        readout(ui, s.label_voxel_cell, state.units.format(grid.cell_size));
+        readout(ui, s.label_voxel_occupied, thousands(grid.occupied));
+    }
+
     ui.label(
         egui::RichText::new(s.label_voxel_display)
             .size(type_scale::LABEL)
