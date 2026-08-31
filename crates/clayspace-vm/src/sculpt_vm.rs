@@ -358,6 +358,12 @@ impl SculptViewModel {
             | Command::ToggleZsphereNegative
             | Command::SetSkinThickness(_)
             | Command::ApplyMaskOp(_)
+            // The mask's own gesture, which belongs to the mask ViewModel.
+            | Command::SetMaskGesture(_)
+            | Command::BeginMaskOutline(..)
+            | Command::ExtendMaskOutline(_)
+            | Command::EndMaskOutline(_)
+            | Command::CancelMaskOutline
             | Command::ToggleCurve
             | Command::AddCurvePoint(..)
             | Command::SelectCurvePoint(_)

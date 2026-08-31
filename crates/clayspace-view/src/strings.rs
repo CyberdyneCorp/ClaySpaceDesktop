@@ -48,6 +48,8 @@ pub struct Strings {
     pub blend_names: [&'static str; clayspace_model::BlendProfile::ALL.len()],
     /// Which way an extrusion goes, in `ExtrudeSide::ALL` order.
     pub extrude_side_names: [&'static str; clayspace_model::ExtrudeSide::ALL.len()],
+    /// How the mask brush is used, in `MaskGesture::ALL` order.
+    pub mask_gesture_names: [&'static str; clayspace_model::MaskGesture::ALL.len()],
     /// How a grid is drawn, in `VoxelDisplay::ALL` order.
     pub voxel_display_names: [&'static str; clayspace_model::VoxelDisplay::ALL.len()],
     /// The manipulator's three modes, in `GizmoMode::ALL` order.
@@ -143,6 +145,10 @@ pub struct Strings {
     pub menu_masks: &'static str,
     /// Starting and stopping mask painting.
     pub action_paint_mask: &'static str,
+    /// The heading over the two ways the mask brush can be used.
+    pub label_mask_gesture: &'static str,
+    /// What a drawn gesture does, and what the modifier does to it.
+    pub hint_mask_outline: &'static str,
     /// The curve section of the inspector.
     pub section_curve: &'static str,
     /// Placing a curve, and letting it go.
@@ -452,6 +458,7 @@ const PT_BR: Strings = Strings {
     ],
     blend_names: ["Dura", "Quadrática", "Cúbica", "Circular", "Chanfro"],
     extrude_side_names: ["Para fora", "Para dentro", "Centrado"],
+    mask_gesture_names: ["Pincel", "Laço", "Retângulo"],
     voxel_display_names: ["Voxels", "Suave"],
     gizmo_mode_names: ["Mover", "Girar", "Escalar"],
     tool_names: [
@@ -581,6 +588,10 @@ const PT_BR: Strings = Strings {
     menu_dynamics: "Dinâmica",
     menu_masks: "Máscaras",
     action_paint_mask: "Pintar máscara",
+    label_mask_gesture: "Gesto",
+    hint_mask_outline: "Desenhe em volta do que quer congelar — à mão livre ou \
+arrastando um retângulo. Congela através da forma, dos dois lados. Com Ctrl, \
+libera em vez de congelar.",
     section_curve: "CURVA",
     action_curve: "Tubo por curva",
     action_curve_apply: "Aplicar",
@@ -800,6 +811,7 @@ const EN_US: Strings = Strings {
     ],
     blend_names: ["Hard", "Quadratic", "Cubic", "Circular", "Chamfer"],
     extrude_side_names: ["Outward", "Inward", "Centred"],
+    mask_gesture_names: ["Brush", "Lasso", "Rectangle"],
     voxel_display_names: ["Voxels", "Smooth"],
     gizmo_mode_names: ["Move", "Turn", "Scale"],
     tool_names: [
@@ -929,6 +941,10 @@ const EN_US: Strings = Strings {
     menu_dynamics: "Dynamics",
     menu_masks: "Masks",
     action_paint_mask: "Paint mask",
+    label_mask_gesture: "Gesture",
+    hint_mask_outline: "Draw around what you want frozen — freehand, or drag a \
+rectangle. It freezes through the form, both sides. Hold Ctrl to release \
+instead.",
     section_curve: "CURVE",
     action_curve: "Tube along a curve",
     action_curve_apply: "Apply",
@@ -1147,6 +1163,7 @@ const ES_419: Strings = Strings {
     ],
     blend_names: ["Dura", "Cuadrática", "Cúbica", "Circular", "Chaflán"],
     extrude_side_names: ["Hacia fuera", "Hacia dentro", "Centrado"],
+    mask_gesture_names: ["Pincel", "Lazo", "Rectángulo"],
     voxel_display_names: ["Vóxeles", "Suave"],
     gizmo_mode_names: ["Mover", "Girar", "Escalar"],
     tool_names: [
@@ -1276,6 +1293,10 @@ const ES_419: Strings = Strings {
     menu_dynamics: "Dinámica",
     menu_masks: "Máscaras",
     action_paint_mask: "Pintar máscara",
+    label_mask_gesture: "Gesto",
+    hint_mask_outline: "Dibuja alrededor de lo que quieras congelar — a mano \
+alzada o arrastrando un rectángulo. Congela a través de la forma, por ambos \
+lados. Con Ctrl, libera en vez de congelar.",
     section_curve: "CURVA",
     action_curve: "Tubo por curva",
     action_curve_apply: "Aplicar",
@@ -1660,6 +1681,15 @@ impl Strings {
         Self::at(&self.blend_names, clayspace_model::BlendProfile::ALL, blend)
     }
 
+    /// What the mask brush's gesture is called, in this locale.
+    pub fn mask_gesture_name(&self, gesture: clayspace_model::MaskGesture) -> &'static str {
+        Self::at(
+            &self.mask_gesture_names,
+            clayspace_model::MaskGesture::ALL,
+            gesture,
+        )
+    }
+
     pub fn extrude_side_name(&self, side: clayspace_model::ExtrudeSide) -> &'static str {
         Self::at(
             &self.extrude_side_names,
@@ -1720,7 +1750,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 193] {
+    pub fn all(&self) -> [&'static str; 195] {
         [
             self.action_shapes,
             self.label_shape,
@@ -1793,6 +1823,8 @@ impl Strings {
             self.section_layer_transform,
             self.hint_layer_transform,
             self.action_paint_mask,
+            self.label_mask_gesture,
+            self.hint_mask_outline,
             self.section_mask,
             self.label_mask_steps,
             self.label_mask_cells,

@@ -369,6 +369,112 @@ on. And a mask edit records on the engine's history, so **one mask gesture is
 one undo**; before, an undo after a mask stroke spent itself on whatever came
 before it.
 
+### Freezing a region by drawing round it
+
+The brush is one gesture and it is not always the right one. *This limb, not
+that one* and *everything above this line* are what a mask is usually wanted
+for, and scrubbing a brush over them ends in a ragged boundary a minute later —
+on the near side only, because the far side is behind the form.
+
+So the mask brush has two more gestures. **Gesto** on the options bar, and the
+same three in the Máscaras menu, chooses between **Pincel**, the drag it has
+always had, **Laço**, a shape traced freehand over the form, and **Retângulo**,
+a box dragged corner to corner. Draw one and everything it encloses freezes. Not
+three tools — one setting on one brush, which is where ZBrush keeps them.
+
+The rectangle is not a lesser lasso. A hand cannot draw a straight line, and
+"everything above this line" is the most common thing a mask is wanted for. It
+is square to the **screen** rather than to the world — it is drawn on the
+screen, and a box that came out lozenge-shaped because the camera was turned
+would be a box nobody could aim — and it is the box between the corner pressed
+and the pointer now, whichever way round they are and however far the hand
+wandered on the way.
+
+Past the pointer the two are the same thing. A lasso keeps every point it passed
+through and a rectangle keeps two corners, and that is the only place they
+differ: neither the containment test, nor the traversal, nor the engine can tell
+them apart.
+
+It freezes **through the form**. The outline is drawn on the screen, so the
+surface behind it freezes with the surface in front of it, in one gesture,
+without turning the model. Hold **Ctrl** and the same shape *releases* what it
+encloses instead, which is how a mask is trimmed back rather than cleared and
+repainted. Which of the two it will be is decided when the drag begins and held
+for the whole of it, as a stroke's modifiers are — and so is which gesture is
+drawing, so switching to Retângulo mid-drag abandons what was traced rather than
+reading it as two corners.
+
+The shape is drawn in the accent while it will freeze and in a grey while it
+will release. A lasso's closing edge is shown faint, because a traced outline
+closes across a gap the sculptor can see and showing where it lands is what
+makes it predictable; a rectangle's four edges are all solid, because it has no
+such gap and drawing one of them faint would suggest it were less certain than
+the other three. A press beside the form begins a shape rather than turning the
+camera — an outline is drawn *around* a region — and a click that never became a
+drag does nothing quietly.
+
+**The brush ring goes off while a shape is being drawn**, by the same rule that
+takes it off under a raised cage: a ring says the next press leaves a stroke
+where it sits, and with a lasso or a rectangle in hand the next press draws a
+line on the screen — which is not a thing the surface has a footprint for. The
+outline being traced is the only feedback the gesture needs.
+`input::shows_the_brush_ring` is the one place that decides it, asked by the
+press and by the ring alike so the two cannot come to different answers.
+
+Not while a cage is up, though. A cage owns the viewport and the brushes are off
+under it — [A cage is a mode](#a-cage-is-a-mode) — and a press that takes hold of
+no control point draws the cage's own selection box. A mask gesture that took
+that press would be the one brush still reaching past a raised cage.
+
+The region is the outline swept **straight** along the view direction rather
+than out from the eye. That is the engine's own rule for the cut tool: *"a trim
+is a straight cut, as it is in ZBrush and 3DCoat"*, because a region defined by
+a converging wedge depends on where the camera was standing. It is bounded by
+the active subtool's own extent, and it belongs to that subtool like every other
+mask.
+
+**A whole lasso is one undo**, and that is the reason it is built the way it is.
+A document-owned mask snapshots its whole chunk map for the history on *every*
+call that writes to it — about four milliseconds a call on a mask covering a
+million cells, against seven microseconds on a standalone mask that records
+nothing. A region delivered as five thousand small writes takes twenty-one
+seconds. So it is delivered as **one stroke**: a path that visits every column
+of the region, walked by the engine's own stamper. One call, one snapshot, one
+entry in the history.
+
+The path is a depth-first walk, and it never leaves the region. That is not
+tidiness: a stamp lands everywhere the path goes, so a connector cutting across
+a concave outline would freeze a stripe nobody drew — which is exactly what a
+plain back-and-forth over the rows does the first time a lasso is thrown round a
+C. `mask_outline.rs` draws one and checks that the opening is still free.
+
+**What a lasso costs is the volume it sweeps.** The lattice the path is walked
+on is aligned to the camera, because that is where the outline was drawn, and a
+brush footprint is aligned to the world; a ball has to reach half the pitch's
+*diagonal* to cover the lattice from any angle rather than half its side, so
+every cell of the region is written about 2.7 times, at about 140 nanoseconds a
+write. Sized to half a side instead, the two tile only when the camera happens
+to face down an axis, and from anywhere else the frozen patch comes out speckled
+with cells no stamp reached. A ball rather than a cube is worth 40% of the
+gesture — a cube of the same reach spends 5.8 writes per region cell against
+2.7, all of the difference in corners that overshoot it, and the pair measures
+1191 ms against 800 on one machine. `mask.outline` measures the extreme on a
+quiet one: an outline thrown around the whole of the reference form, 659 ms. An
+ordinary lasso over part of a subtool is a fraction of that.
+
+**The edge is quantised to two mask cells**, 0.04 world units at the mask's own
+0.02 pitch, and the pitch is not a dial: opening it by two divides the stamps by
+eight and multiplies the cells each one writes by eight, so it buys the edge and
+nothing else. A region too large to write at all is therefore *refused* with a
+reason rather than quietly coarsened — a lasso around a subtool tens of units
+across runs to hundreds of millions of cells, and the honest answer is to say so
+and ask for a smaller outline. `visual_mask_outline.rs` is the picture, and it
+also holds the two gestures to each other: a dragged box has to land where a
+traced outline round the same region lands.
+
+Symmetry does not reach it, exactly as it does not reach the brush: a mask is a
+world-addressed field, and neither gesture is mirrored.
+
 ### What the Máscaras menu does
 
 Every entry acts on the mask itself rather than through it. The amounts live in

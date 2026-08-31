@@ -288,15 +288,27 @@ pub fn handle_under(
 /// Whether the brush ring is drawn under the pointer.
 ///
 /// A ring says "the next press leaves a stroke here", so it may only be drawn
-/// where that is true. Two modes take the press away from the brush and both
-/// have to take the ring with it: the whole-subtool manipulator, where a press
-/// on the clay moves it, and a deformation cage, where a press that misses a
-/// control point orbits. The cage half was missed — the routing refused the
-/// stroke and the ring promised one anyway, which is the worst of both: a
-/// sculptor aiming at a control point sees a brush over the form they are
-/// bending and cannot tell whether a slip will sculpt it.
-pub fn shows_the_brush_ring(layer_manipulator_up: bool, caged: bool) -> bool {
-    !layer_manipulator_up && !caged
+/// where that is true. Three modes take the press away from the brush and each
+/// has to take the ring with it: the whole-subtool manipulator, where a press
+/// on the clay moves it; a deformation cage, where a press that misses a
+/// control point orbits; and the mask brush's drawn gestures, where a press
+/// begins an outline instead.
+///
+/// The cage half was missed once — the routing refused the stroke and the ring
+/// promised one anyway, which is the worst of both: a sculptor aiming at a
+/// control point sees a brush over the form they are bending and cannot tell
+/// whether a slip will sculpt it. The lasso and the rectangle are the same
+/// shape of mistake and were made not to repeat it. A ring sized to the brush,
+/// following the surface, says the next press will paint a round dab there; it
+/// will draw a line on the *screen*, which is not a thing the surface has a
+/// footprint for, and the outline being traced is the only feedback the
+/// gesture needs.
+pub fn shows_the_brush_ring(
+    layer_manipulator_up: bool,
+    caged: bool,
+    drawing_an_outline: bool,
+) -> bool {
+    !layer_manipulator_up && !caged && !drawing_an_outline
 }
 
 /// Whether a press should start a stroke, or turn the camera instead.
@@ -438,14 +450,32 @@ pub fn ray_at(
     viewport: egui::Rect,
     point: egui::Pos2,
 ) -> Option<([f32; 3], [f32; 3])> {
-    if !viewport.contains(point) || viewport.width() < 1.0 || viewport.height() < 1.0 {
+    if !viewport.contains(point) {
         return None;
     }
-    let ndc = [
+    let ndc = ndc_at(viewport, point)?;
+    Some(camera.ray_through(ndc, viewport.aspect_ratio()))
+}
+
+/// Where a viewport point sits in normalised device coordinates.
+///
+/// Its own function because three things now depend on agreeing about it: the
+/// ray a pick is made along, the outline a drawn gesture is collected in, and
+/// the line the viewport draws it as. Two of the three used to spell it out
+/// themselves, which is one copy away from an overlay that does not enclose
+/// what it appears to.
+///
+/// Unclipped, unlike [`ray_at`]: an outline is often drawn out past the edge of
+/// the viewport and back, and dropping those points would close the outline
+/// across the middle of the form.
+pub fn ndc_at(viewport: egui::Rect, point: egui::Pos2) -> Option<[f32; 2]> {
+    if viewport.width() < 1.0 || viewport.height() < 1.0 {
+        return None;
+    }
+    Some([
         ((point.x - viewport.min.x) / viewport.width()) * 2.0 - 1.0,
         1.0 - ((point.y - viewport.min.y) / viewport.height()) * 2.0,
-    ];
-    Some(camera.ray_through(ndc, viewport.aspect_ratio()))
+    ])
 }
 
 /// Where a world point sits in the viewport, in egui points.
@@ -453,6 +483,11 @@ pub fn ray_at(
 /// The inverse of [`ray_at`], through the camera's own inverse, so the two
 /// cannot drift apart: a pick that lands beside the pointer and a selection
 /// box that catches the wrong points are the same bug seen twice.
+///
+/// Its tail — normalised coordinates to egui points — is spelled out again in
+/// `shell::outline_point`, which draws the mask outline from the same
+/// coordinates the gesture is collected in. Copied rather than shared because
+/// a View may not reach this crate; both carry a note to the other.
 ///
 /// `None` where the point is behind the camera, which has no position on
 /// screen to be at.
@@ -795,9 +830,16 @@ mod manipulator_tests {
         // The other half of `press_sculpts`: the routing already refused the
         // stroke, and the ring went on promising one. Reported as brushes
         // showing over the form while a deformation cage was up.
-        assert!(shows_the_brush_ring(false, false));
-        assert!(!shows_the_brush_ring(false, true), "a cage kept the ring");
-        assert!(!shows_the_brush_ring(true, false));
+        assert!(shows_the_brush_ring(false, false, false));
+        assert!(
+            !shows_the_brush_ring(false, true, false),
+            "a cage kept the ring"
+        );
+        assert!(!shows_the_brush_ring(true, false, false));
+        assert!(
+            !shows_the_brush_ring(false, false, true),
+            "a drawn mask gesture kept the ring"
+        );
     }
 }
 
