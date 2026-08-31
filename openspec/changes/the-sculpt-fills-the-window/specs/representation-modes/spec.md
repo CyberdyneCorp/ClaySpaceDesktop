@@ -59,6 +59,8 @@ because it is a preference rather than a view.
   representation
 - **THEN** the application selects one that does and states that it changed
 
+## ADDED Requirements
+
 ### Requirement: A layer can be crossed from its own row
 The layer stack SHALL offer, from a layer's own menu, the crossings that layer
 has — derived from the declared set for *that layer's* representation rather

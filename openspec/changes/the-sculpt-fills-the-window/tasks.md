@@ -82,5 +82,5 @@
 
 ## 9. Verification
 
-- [x] 7.1 Look at focus mode and at the bar
-- [x] 7.2 `just check`
+- [x] 9.1 Look at focus mode, at the bar, and at the layer's menu
+- [x] 9.2 `just check`
