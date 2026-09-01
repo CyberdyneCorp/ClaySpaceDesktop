@@ -150,8 +150,8 @@ fn an_incremental_stroke_draws_what_a_full_remesh_would() {
     // The same document, meshed from nothing.
     let mut reference_geometry = SurfaceGeometry::new(&harness.gpu);
     reference_geometry
-        .rebuild(&harness.gpu, &mut document)
-        .expect("the reference mesh");
+        .settle(&harness.gpu, &mut document)
+        .expect("the clean reference mesh");
     let reference = harness.capture(
         reference_geometry.mesh(),
         &camera,
@@ -237,8 +237,8 @@ fn many_strokes_do_not_accumulate_damage() {
 
     let mut reference_geometry = SurfaceGeometry::new(&harness.gpu);
     reference_geometry
-        .rebuild(&harness.gpu, &mut document)
-        .expect("reference mesh");
+        .settle(&harness.gpu, &mut document)
+        .expect("clean reference mesh");
     let reference = harness.capture(
         reference_geometry.mesh(),
         &camera,

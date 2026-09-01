@@ -518,19 +518,13 @@ premium is not 1.04x:
 | face normals | 3.4 ms | 4.0 ms | 6.2 ms |
 | gradient | 4.9 ms | 8.1 ms | **18.9 ms** |
 
-40% at the median, and in the tail the difference between a segment that always
-fits a frame and one that sometimes takes 19 ms. The brush ring is drawn in the
-frame that meshes the edit, so those spikes are the ring visibly trailing the
-pointer — reported as exactly that, and the reason the split is back.
-
-It is not the old split. The drag shades fast, and `SurfaceGeometry::refine_within`
-pays the gradient back **a segment at a time, on frames that are not sculpting**
-— a pause mid-gesture or the frames after the pointer lifts, each bounded by
-what the frame has left. A gesture's debt clears in about five idle frames.
-Neither end pays a hitch: the worst mid-drag segment is 4.9 ms and pointer-up is
-2.0 ms, and `gesture_end.rs` fails if either leaves a frame. A third test there
-holds the drained surface triangle-for-triangle against a full rebuild, which is
-what says the queue can be drained in pieces at all.
+That tail originally led to a split path: face normals during the drag and
+gradient normals over later idle frames. In practice the face-normal path made
+degenerate brick triangles appear as persistent pits and specks. With the
+current parallel mesher, the same release-mode gesture stays inside the frame
+budget while using gradient normals immediately, so the deferred refinement
+queue was removed. `gesture_end.rs` guards the latency, and the visual tests
+hold the live SDF result against a full rebuild.
 
 ### Where the frame time is not
 
@@ -1427,4 +1421,3 @@ did not move, because a dab is dominated by meshing rather than refill.
 **Our own crates are `publish = false`.** This is an application; its crates
 are its internals. `cargo deny` enforces it, because a wildcard path
 dependency on a publishable crate is a combination crates.io rejects.
-

@@ -18,7 +18,8 @@
 use std::collections::HashMap;
 
 use clayspace_engine::claycore::{
-    BrickKey, BrickMeshParams, BrickState, ClayError, Document, Mesh, VertexLayout,
+    BrickKey, BrickMeshParams, BrickState, ClayError, Document, Mesh, MeshParams, Mesher,
+    VertexLayout,
 };
 use clayspace_engine::ClayDocument;
 use clayspace_model::Detail;
@@ -87,27 +88,6 @@ pub struct SurfaceGeometry {
     last_engine_mesh: std::time::Duration,
     last_read: std::time::Duration,
     last_split: std::time::Duration,
-    /// Key sets meshed with face normals, oldest first.
-    ///
-    /// One entry per [`SurfaceGeometry::sync`] that shaded fast, holding
-    /// exactly the keys that sync requested. The set is the unit because the
-    /// engine attributes a straddling triangle to the lowest *requested* key
-    /// (ClayCore #66): re-meshing the same request re-runs that sync with the
-    /// gradient and replaces exactly what it wrote, where re-meshing some
-    /// other slice of it would move triangles between keys and leave the ones
-    /// it moved away from behind.
-    ///
-    /// Ordered because a later sync overwrote an earlier one, and the shading
-    /// pass has to land in the same order to end up with the same surface.
-    pending_shading: std::collections::VecDeque<Vec<BrickKey>>,
-    /// How many queued sets name each key.
-    ///
-    /// So that "is this set meshed again later?" is a lookup per key rather
-    /// than a scan of the queue. Scanning is fine for the two dozen sets a
-    /// gesture leaves and quadratic in the thousands a drag that never pauses
-    /// can reach — and a drag that never pauses is exactly the one that never
-    /// gets to drain.
-    pending_keys: HashMap<BrickKey, usize>,
     /// Where the warped keys' vertices were before a cage preview moved them.
     ///
     /// Positions only, and only while a cage is up. A preview is shown by
@@ -134,9 +114,11 @@ pub struct SurfaceGeometry {
     /// request changes or [`SurfaceGeometry::reapply_detail`] says the mips
     /// have since been built.
     requested: Detail,
+    /// Whether the GPU holds a whole-document mesh instead of the brick store.
+    clean_override: bool,
 }
 
-/// How a mesh is shaded, which is the one knob worth changing mid-gesture.
+/// How a mesh is shaded.
 ///
 /// Both produce identical vertex *positions* — normals are an attribute, not
 /// a displacement — so switching between them cannot move the surface. What
@@ -165,11 +147,13 @@ pub struct SurfaceGeometry {
 /// 19 ms. The cursor ring is drawn in the frame that meshes the edit, so that
 /// tail is what a sculptor feels as the ring trailing the pointer.
 ///
-/// Sculpting therefore shades fast and owes the gradient, which
-/// [`SurfaceGeometry::refine_within`] pays off on frames that are not
-/// sculpting. Not at pointer-up in one pass — that was 15.7 ms in one frame,
-/// the hitch `gesture_end.rs` exists to hold — and not beside the sample
-/// either, which would cost the frame both shadings at once.
+/// The historical drag path used `Fast` and bought the gradient back on idle
+/// frames. That exposed degenerate face normals as persistent-looking pits and
+/// specks, while the current engine's parallel brick mesher has made the old
+/// saving too small to justify drawing damaged clay. Full-resolution document
+/// edits therefore use `Full` immediately. `Fast` remains for live preview
+/// caches, which have no document to sample a gradient from, and coarse LOD,
+/// which refuses gradient attributes.
 ///
 /// [`Shading::Fast`] is also what the coarse LOD surface uses, and there for
 /// a different reason: level 1 *refuses* gradient normals rather than
@@ -205,10 +189,9 @@ impl SurfaceGeometry {
             last_engine_mesh: std::time::Duration::ZERO,
             last_read: std::time::Duration::ZERO,
             last_split: std::time::Duration::ZERO,
-            pending_shading: std::collections::VecDeque::new(),
-            pending_keys: HashMap::new(),
             detail: Detail::Full,
             requested: Detail::Full,
+            clean_override: false,
             over_budget: false,
         }
     }
@@ -244,6 +227,11 @@ impl SurfaceGeometry {
         gpu: &Gpu,
         document: &mut ClayDocument,
     ) -> Result<Option<SyncCost>, ClayError> {
+        if self.clean_override {
+            self.clean_override = false;
+            self.rebuild_at(gpu, document, Detail::Full)?;
+            return Ok(None);
+        }
         // An edit while the coarse surface is drawn returns to full resolution
         // first. The two levels do not share a key space — a coarse key names
         // a 2x2x2 block of fine ones — so the dirty keys the engine hands back
@@ -314,24 +302,16 @@ impl SurfaceGeometry {
         let meshed = Self::holding_a_surface(document, &dirty)?;
 
         let started = std::time::Instant::now();
-        // Face normals while the pointer is down, and the gradient owed.
-        //
-        // The gradient is no longer eleven times the rest of a segment — it is
-        // 40% of it, and a tail that reaches 19 ms where face normals never
-        // leave 6 — so it is deferred rather than skipped, and paid off a
-        // segment at a time by `refine_within` on frames that are not
-        // sculpting. See [`Shading`] for the measurements.
-        self.remesh(document, &meshed, Some(&replace), Shading::Fast, 0)?;
-        // No gradient owed on a preview: the debt is paid by re-meshing the
-        // same keys through the document, and while a live gesture is drawing
-        // there is no document behind those keys. The gesture's end lays the
-        // surface out again at full shading, which settles it.
-        if !document.live_gesture_is_open() {
-            for key in &meshed {
-                *self.pending_keys.entry(*key).or_insert(0) += 1;
-            }
-            self.pending_shading.push_back(meshed.clone());
-        }
+        // A live transaction draws a cache of its own and has no document
+        // behind it from which to sample gradients. Every ordinary edit does,
+        // and uses them immediately: face normals make the cache's degenerate
+        // preview triangles appear as pits across an otherwise smooth form.
+        let shading = if document.live_gesture_is_open() {
+            Shading::Fast
+        } else {
+            Shading::Full
+        };
+        self.remesh(document, &meshed, Some(&replace), shading, 0)?;
         let mesh_time = started.elapsed();
 
         let started = std::time::Instant::now();
@@ -807,89 +787,16 @@ impl SurfaceGeometry {
         }
     }
 
-    /// Re-shades what sculpting shaded fast, for as long as `budget` allows.
+    /// Whether independently re-meshed bricks left the same triangle in more
+    /// than one key.
     ///
-    /// Returns whether anything is still owed, which is the caller's cue to
-    /// ask for another frame.
-    ///
-    /// The positions are already right — `sync` is exact, and normals do not
-    /// move a vertex — so nothing a silhouette test could see changes here.
-    /// What it buys back is the gradient the drag deferred.
-    ///
-    /// The first set of a call runs whatever the budget says, so a caller with
-    /// nothing to spare still makes progress rather than spinning; every set
-    /// after it has to fit in what is left. One set is a dab's worth of keys,
-    /// which is the granularity that keeps that guarantee cheap: 27 keys and
-    /// about 2.2 ms on the reference form, against the 15.7 ms the single
-    /// pointer-up pass cost over all 111 keys a stroke touches.
-    pub fn refine_within(
-        &mut self,
-        gpu: &Gpu,
-        document: &mut ClayDocument,
-        budget: std::time::Duration,
-    ) -> Result<bool, ClayError> {
-        // Level 1 is face-shaded by construction and has no gradient to buy
-        // back, and the queued keys are from the other level's space anyway —
-        // so they are dropped rather than carried across the switch.
-        if self.detail == Detail::Reduced {
-            self.forget_pending();
-            return Ok(false);
-        }
-        let started = std::time::Instant::now();
-        let mut last: Option<std::time::Duration> = None;
-        while !self.pending_shading.is_empty() {
-            // What the previous set cost is the estimate for the next one, so
-            // the budget is a ceiling rather than something to overshoot by
-            // whatever the set after it happens to cost. Stopping only once
-            // the budget was already spent ran 17.7 ms against 12.7 ms.
-            if last.is_some_and(|cost| started.elapsed() + cost > budget) {
-                break;
-            }
-            let keys = self.pending_shading.pop_front().expect("not empty");
-            // Dropped from the tally first, so what is left against a key is
-            // what the sets *behind* this one name.
-            self.untally(&keys);
-            // Every key of it is meshed again further down the queue, so
-            // shading it now would only be overwritten by a set that has to
-            // run regardless. Common in a slow drag, where consecutive
-            // samples dirty the same bricks.
-            if keys.iter().all(|key| self.pending_keys.contains_key(key)) {
-                continue;
-            }
-            let set_started = std::time::Instant::now();
-            let replace: std::collections::HashSet<BrickKey> = keys.iter().copied().collect();
-            self.remesh(document, &keys, Some(&replace), Shading::Full, 0)?;
-            self.upload(gpu);
-            last = Some(set_started.elapsed());
-        }
-        Ok(!self.pending_shading.is_empty())
-    }
-
-    /// Takes one set back out of [`SurfaceGeometry::pending_keys`].
-    ///
-    /// A key whose count reaches zero is removed rather than left at zero, so
-    /// "is this key still queued" stays a `contains_key`.
-    fn untally(&mut self, keys: &[BrickKey]) {
-        for key in keys {
-            let Some(count) = self.pending_keys.get_mut(key) else {
-                continue;
-            };
-            *count -= 1;
-            if *count == 0 {
-                self.pending_keys.remove(key);
-            }
-        }
-    }
-
-    /// Drops the whole shading debt, for when nothing it names is addressable.
-    fn forget_pending(&mut self) {
-        self.pending_shading.clear();
-        self.pending_keys.clear();
-    }
-
-    /// How many segments are waiting for their gradient.
-    pub fn awaiting_refinement(&self) -> usize {
-        self.pending_shading.len()
+    /// The copies can carry different normals because each subset was meshed
+    /// with a different neighbourhood. Drawing both lets depth ordering choose
+    /// the shading and appears as persistent pits or specks. A whole-surface
+    /// rebuild assigns each triangle once, so this is the cue for the
+    /// composition root to take that slower path after a gesture.
+    pub fn has_coincident_triangles(&self) -> bool {
+        contains_coincident_triangles(&self.keys)
     }
 
     /// Shows what a lattice cage would do to the drawn surface.
@@ -994,20 +901,38 @@ impl SurfaceGeometry {
         self.upload(gpu);
     }
 
-    /// Re-meshes the whole surface and compacts the per-key slots.
+    /// Rebuilds the settled full-resolution SDF from the document.
     ///
-    /// No longer needed to close seams. Until ClayCore 0.28.0 a subset mesh
-    /// omitted straddling triangles (#66), so every gesture ended with a full
-    /// re-mesh to pay off what the fast path had approximated; `sync` is exact
-    /// now, held to that by `settle_needed.rs`.
-    ///
-    /// What is left is compaction: slots for bricks the surface has moved out
-    /// of are kept empty rather than removed, so a long session accumulates
-    /// them. That is bookkeeping rather than something a viewer can see, so it
-    /// belongs somewhere deliberate — a document being replaced, an armature
-    /// rewritten — and not on the end of every stroke.
+    /// The interactive brick mesher is retained while editing because it can
+    /// update only dirty keys. Its output can nevertheless contain isolated
+    /// artifacts even after a full brick rebuild. On completion, the document
+    /// mesher supplies a clean whole surface at the same voxel spacing.
     pub fn settle(&mut self, gpu: &Gpu, document: &mut ClayDocument) -> Result<(), ClayError> {
-        self.rebuild(gpu, document)
+        if self.requested == Detail::Reduced {
+            return self.rebuild(gpu, document);
+        }
+
+        let mesh = document.document().mesh(MeshParams {
+            voxel_size: Some(ClayDocument::VOXEL_SIZE),
+            mesher: Mesher::SurfaceNets,
+            ..MeshParams::default()
+        })?;
+        let (mut vertices, indices) = read_mesh(&mesh)?;
+        sample_mask(document, &mut vertices);
+
+        self.keys.clear();
+        self.keys
+            .insert([i32::MIN; 3], KeyGeometry { vertices, indices });
+        self.touched.clear();
+        self.relayout = true;
+        self.dirty = true;
+        self.detail = Detail::Full;
+        self.surface_epoch = document.surface_epoch();
+        self.upload(gpu);
+        self.clean_override = true;
+        document.record_geometry(self.triangle_count(), self.vertex_count(), self.detail);
+        document.take_dirty_keys();
+        Ok(())
     }
 
     /// Rebuilds every key from scratch, at the level last asked for.
@@ -1102,12 +1027,10 @@ impl SurfaceGeometry {
         document: &mut ClayDocument,
         detail: Detail,
     ) -> Result<(), ClayError> {
+        self.clean_override = false;
         let (keys, lod, shading) = self.level_for(document, detail)?;
         self.keys.clear();
         self.touched.clear();
-        // Everything it could name is about to be meshed at the level's own
-        // shading, so the debt is settled rather than carried.
-        self.forget_pending();
         // The spans described geometry that has just been discarded, so the
         // layout cannot be patched onto what replaces it.
         self.relayout = true;
@@ -1232,6 +1155,28 @@ fn sample_mask(document: &ClayDocument, vertices: &mut [Vertex]) {
     }
 }
 
+fn position_key(vertex: &Vertex) -> [u32; 3] {
+    vertex.position.map(f32::to_bits)
+}
+
+fn contains_coincident_triangles(keys: &HashMap<BrickKey, KeyGeometry>) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    for geometry in keys.values() {
+        for triangle in geometry.indices.chunks_exact(3) {
+            let mut positions = [
+                position_key(&geometry.vertices[triangle[0] as usize]),
+                position_key(&geometry.vertices[triangle[1] as usize]),
+                position_key(&geometry.vertices[triangle[2] as usize]),
+            ];
+            positions.sort_unstable();
+            if !seen.insert(positions) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Reads an engine mesh into the renderer's vertex layout in one pass.
 fn read_mesh(mesh: &Mesh) -> Result<(Vec<Vertex>, Vec<u32>), ClayError> {
     let count = mesh.vertex_count();
@@ -1324,4 +1269,46 @@ fn vertex_key(vertex: &Vertex) -> [u32; 10] {
     let [nx, ny, nz] = vertex.normal;
     let [r, g, b] = vertex.color;
     [px, py, pz, nx, ny, nz, r, g, b, vertex.mask].map(f32::to_bits)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{contains_coincident_triangles, HashMap, KeyGeometry, Vertex};
+
+    fn vertex(position: [f32; 3], normal: [f32; 3]) -> Vertex {
+        Vertex {
+            position,
+            normal,
+            color: [1.0; 3],
+            mask: 0.0,
+        }
+    }
+
+    fn triangle(normal: [f32; 3]) -> KeyGeometry {
+        KeyGeometry {
+            vertices: vec![
+                vertex([0.0, 0.0, 0.0], normal),
+                vertex([1.0, 0.0, 0.0], normal),
+                vertex([0.0, 1.0, 0.0], normal),
+            ],
+            indices: vec![0, 1, 2],
+        }
+    }
+
+    #[test]
+    fn the_same_triangle_in_two_bricks_is_contamination_even_if_its_normals_differ() {
+        let keys = HashMap::from([
+            ([0, 0, 0], triangle([0.0, 0.0, 1.0])),
+            ([1, 0, 0], triangle([0.0, 0.1, 0.995])),
+        ]);
+        assert!(contains_coincident_triangles(&keys));
+    }
+
+    #[test]
+    fn different_triangles_are_not_contamination() {
+        let mut second = triangle([0.0, 0.0, 1.0]);
+        second.vertices[0].position[2] = 0.1;
+        let keys = HashMap::from([([0, 0, 0], triangle([0.0, 0.0, 1.0])), ([1, 0, 0], second)]);
+        assert!(!contains_coincident_triangles(&keys));
+    }
 }

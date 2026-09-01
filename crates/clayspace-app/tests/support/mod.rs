@@ -37,6 +37,39 @@ pub fn save(image: &Image, name: &str) -> PathBuf {
     path
 }
 
+/// Isolated pixels much darker than the lit surface around them.
+pub fn dark_specks(image: &Image) -> Vec<(u32, u32)> {
+    let luminance = |x: u32, y: u32| {
+        let p = image.pixel(x, y);
+        (u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2])) / 3
+    };
+    let ring = [
+        (5i32, 0i32),
+        (-5, 0),
+        (0, 5),
+        (0, -5),
+        (4, 4),
+        (-4, -4),
+        (4, -4),
+        (-4, 4),
+    ];
+    let mut found = Vec::new();
+    for y in 6..image.height - 6 {
+        for x in 6..image.width - 6 {
+            if luminance(x, y) > 90 {
+                continue;
+            }
+            let lit = ring
+                .iter()
+                .all(|(dx, dy)| luminance((x as i32 + dx) as u32, (y as i32 + dy) as u32) > 120);
+            if lit {
+                found.push((x, y));
+            }
+        }
+    }
+    found
+}
+
 fn write_png(path: &Path, image: &Image) {
     let file = std::fs::File::create(path)
         .unwrap_or_else(|e| panic!("could not create {}: {e}", path.display()));

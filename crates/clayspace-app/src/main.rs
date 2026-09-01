@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use clayspace_app::input::Activation;
 use clayspace_app::{
@@ -19,7 +19,7 @@ use clayspace_model::{
     AutosavePolicy, Detail, DetailPolicy, Diagnostics, ExchangeModel, ExportSettings,
     ExportWarning, Format, FrameLog, ImportSettings, LayerKey, LayerOperation, RecentDocuments,
     Recovery, RefFormat, RefPlane, Representation, SceneModel, SculptModel, SkinSettings,
-    StrokeModifiers, Units, ViewPresetKind, FRAME,
+    StrokeModifiers, Units, ViewPresetKind,
 };
 use clayspace_view::shell::{self, region, ArmatureState, ShellState};
 use clayspace_view::{
@@ -140,6 +140,34 @@ enum Drag {
     Outline,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GizmoGeometryUpdate {
+    None,
+    Incremental,
+    Settle,
+}
+
+/// How the SDF viewport catches up with a manipulator command.
+///
+/// A whole SDF layer is rebuilt from the document during its move so that the
+/// brick mesher's artifacts never reach the screen.
+fn gizmo_geometry_update(
+    command: &Command,
+    manipulating_clay: bool,
+    representation: Representation,
+) -> GizmoGeometryUpdate {
+    if !manipulating_clay {
+        return GizmoGeometryUpdate::None;
+    }
+    match command {
+        Command::DragGizmo(..) | Command::EndGizmoDrag if representation == Representation::Sdf => {
+            GizmoGeometryUpdate::Settle
+        }
+        Command::DragGizmo(..) | Command::EndGizmoDrag => GizmoGeometryUpdate::Incremental,
+        _ => GizmoGeometryUpdate::None,
+    }
+}
+
 /// A vector's direction and its length, or `None` where it has neither.
 fn unit(v: [f32; 3]) -> Option<([f32; 3], f32)> {
     let length = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
@@ -221,9 +249,6 @@ struct App {
     /// incrementally and the carried layers are not: a mask change re-samples
     /// the stored vertices in place rather than re-meshing anything.
     mask_revision: Option<u64>,
-    /// Whether this frame changed the document, which is what says the frame
-    /// has nothing spare to spend on [`App::refine_geometry`].
-    edited_this_frame: bool,
     /// The camera the level of detail was last decided for.
     ///
     /// The decision needs the model's bounds and its brick count, so it is
@@ -468,7 +493,6 @@ impl App {
             mesh_revision: None,
             cage_revision: None,
             mask_revision: None,
-            edited_this_frame: false,
             detail_camera: None,
             window: None,
             graphics: None,
@@ -1183,51 +1207,6 @@ impl App {
             .with(|document| graphics.geometry.reapply_detail(&gpu, document))
         {
             eprintln!("o nível de detalhe não pôde ser trocado: {e}");
-        }
-    }
-
-    /// Spends what the frame has left re-shading what the drag shaded fast.
-    ///
-    /// Only on a frame that did not sculpt. Re-shading a key the next sample
-    /// will dirty again is thrown away, and doing it *beside* the sample would
-    /// charge the frame both shadings at once — which is the whole reason the
-    /// drag defers it. A held pointer counts as not sculpting, so a pause
-    /// mid-gesture pays the debt down rather than letting it stack up until
-    /// the pointer lifts.
-    ///
-    /// Asks for another frame while anything is still owed: with
-    /// `ControlFlow::Wait` a debt nobody is waiting on would otherwise sit
-    /// there until the next input event.
-    fn refine_geometry(&mut self, frame_started: Instant) {
-        if self.edited_this_frame || self.graphics.is_none() {
-            return;
-        }
-        // What the frame still owes after this: egui's own paint, the scene,
-        // and the present. A reserve rather than a measurement — overrunning
-        // it costs one frame, on a frame where nothing is being tracked.
-        const PRESENT_RESERVE: Duration = Duration::from_millis(4);
-        let spent = frame_started.elapsed() + PRESENT_RESERVE;
-        let Some(budget) = FRAME.checked_sub(spent) else {
-            self.request_redraw();
-            return;
-        };
-
-        let owed = self.timed("sombreamento", |app| {
-            let graphics = app.graphics.as_mut().expect("graphics");
-            let gpu = graphics.gpu.clone();
-            match app
-                .document
-                .with(|document| graphics.geometry.refine_within(&gpu, document, budget))
-            {
-                Ok(owed) => owed,
-                Err(e) => {
-                    eprintln!("o sombreamento não pôde ser concluído: {e}");
-                    false
-                }
-            }
-        });
-        if owed {
-            self.request_redraw();
         }
     }
 
@@ -3304,7 +3283,6 @@ impl App {
             self.refresh_rig();
         }
         if command.touches_document() {
-            self.edited_this_frame = true;
             self.scene.refresh();
             // Painting a mask arrives as a stroke, which this ViewModel never
             // sees, so it is told to look again rather than left stale.
@@ -3323,24 +3301,37 @@ impl App {
         // next stroke, aimed by a ray through the moved field, landed beside
         // the drawn form. So the surface is re-meshed on every frame of such a
         // drag here, and the document is marked unsaved once, when it ends.
-        if matches!(command, Command::DragGizmo(..) | Command::EndGizmoDrag)
-            && self.manipulating_the_clay()
-        {
-            self.edited_this_frame = true;
-            self.sync_geometry();
-            if matches!(command, Command::EndGizmoDrag) {
-                self.scene.refresh();
-                self.document_vm.touched();
+        match gizmo_geometry_update(
+            command,
+            self.manipulating_the_clay(),
+            self.sculpt.active_representation(),
+        ) {
+            GizmoGeometryUpdate::None => {}
+            GizmoGeometryUpdate::Incremental => {
+                self.sync_geometry();
+            }
+            GizmoGeometryUpdate::Settle => {
+                self.settle_geometry();
             }
         }
-        // The coarse levels, which cannot be built mid-stroke: dirtying any
-        // child drops its mip. Not the gesture's shading — that is owed to
-        // [`App::refine_geometry`], which pays it off across the frames after
-        // the pointer stops rather than all of it in this one.
+        if matches!(command, Command::EndGizmoDrag) && self.manipulating_the_clay() {
+            self.scene.refresh();
+            self.document_vm.touched();
+        }
+        // The coarse levels cannot be built mid-stroke: dirtying any child
+        // drops its mip.
         // However a gesture ends, the hold ends with it — a cancelled one as
         // much as a finished one.
         if matches!(command, Command::EndStroke | Command::CancelStroke) {
             self.drag_anchor = None;
+            // The brick mesher can leave isolated dark pits even in a fresh
+            // rebuild. The completed SDF uses the document mesher so that the
+            // artifact cannot remain after a stroke.
+            if matches!(command, Command::EndStroke)
+                && self.sculpt.active_representation() == Representation::Sdf
+            {
+                self.settle_geometry();
+            }
             self.build_mips();
         }
     }
@@ -3359,7 +3350,6 @@ impl App {
         if self.graphics.is_none() {
             return;
         }
-        self.edited_this_frame = false;
         self.settle_quality(frame_started);
 
         // The interface is built first, because it decides where the viewport
@@ -3862,11 +3852,6 @@ impl App {
         // After the frame's commands, so a camera move made in it is the one
         // decided against, and before the surface is drawn.
         self.update_detail();
-        // Last of the work, so it is offered only what the rest of the frame
-        // did not want — and after `update_detail`, whose level switch is what
-        // decides whether the debt is still addressable at all.
-        self.refine_geometry(frame_started);
-
         let graphics = self.graphics.as_mut().expect("graphics");
         let frame = match graphics.surface.acquire(&graphics.gpu) {
             Ok(frame) => frame,
@@ -4318,4 +4303,41 @@ fn next_matcap(current: MatCap) -> MatCap {
     let all = MatCap::ALL;
     let index = all.iter().position(|m| *m == current).unwrap_or(0);
     all[(index + 1) % all.len()]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{gizmo_geometry_update, GizmoGeometryUpdate};
+    use clayspace_model::Representation;
+    use clayspace_vm::Command;
+
+    #[test]
+    fn an_sdf_gizmo_settles_when_the_drag_ends() {
+        assert_eq!(
+            gizmo_geometry_update(&Command::EndGizmoDrag, true, Representation::Sdf),
+            GizmoGeometryUpdate::Settle
+        );
+    }
+
+    #[test]
+    fn an_sdf_gizmo_settles_while_it_is_moving() {
+        assert_eq!(
+            gizmo_geometry_update(
+                &Command::DragGizmo([1.0, 0.0, 0.0], false),
+                true,
+                Representation::Sdf,
+            ),
+            GizmoGeometryUpdate::Settle
+        );
+    }
+
+    #[test]
+    fn carried_geometry_does_not_rebuild_the_sdf_surface() {
+        for representation in [Representation::Voxel, Representation::Mesh] {
+            assert_eq!(
+                gizmo_geometry_update(&Command::EndGizmoDrag, true, representation),
+                GizmoGeometryUpdate::Incremental
+            );
+        }
+    }
 }

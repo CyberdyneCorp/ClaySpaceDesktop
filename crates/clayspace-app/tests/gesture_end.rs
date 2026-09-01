@@ -1,12 +1,11 @@
 //! What a gesture costs a frame, at both ends of it.
 //!
-//! Two hitches, and the change from one to the other is why both are held
-//! here rather than only the second.
+//! Full-resolution SDF edits use gradient normals immediately. That avoids the
+//! pitted face-normal rendering that used to remain until an idle refinement
+//! pass, but it means the cost belongs to each moving frame.
 //!
-//! Lifting the pointer used to run a shading pass over every key the stroke
-//! had touched — 111 of them on the gesture below — because sculpting shaded
-//! with face normals and bought the gradient back afterwards. The application
-//! reported it, in Portuguese, on every stroke:
+//! Lifting the pointer once ran a second shading pass over every key the stroke
+//! had touched. The application reported it, in Portuguese, on every stroke:
 //!
 //! ```text
 //! a interface travou: sombreamento final 17 ms
@@ -20,16 +19,12 @@
 //! cursor ring is drawn in the frame that meshes the edit, so that tail is
 //! what a sculptor feels as the ring trailing the pointer.
 //!
-//! So the drag shades fast again and `refine_within` pays the gradient off a
-//! segment at a time, on frames that are not sculpting. Which means neither
-//! end of a gesture may exceed a frame, and both assertions below are the
-//! regression: `FRAME` is the application's own stall threshold, the one that
-//! printed "a interface travou", so these fail exactly when a sculptor would
-//! have seen the message.
+//! The current engine makes gradient sampling cheap enough to keep it in the
+//! live path. Neither the live segments nor pointer-up may exceed a frame:
+//! `FRAME` is the application's own stall threshold.
 //!
-//! That the drag still draws what a full re-mesh would is `visual_incremental`'s
-//! job; that the deferred shading lands on the same surface a rebuild has is
-//! the last test here.
+//! `visual_incremental` and `visual_subtools` separately hold the live image
+//! against a full rebuild, including its shading.
 
 mod support;
 
@@ -41,8 +36,8 @@ use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{BrushSettings, GestureSample, SculptModel, ToolKind, FRAME};
 use support::Harness;
 
-/// Segments in the test gesture. Enough that the refinement has a gesture's
-/// worth of keys to get through rather than a dab's.
+/// Segments in the test gesture. Enough to exercise repeatedly overlapping
+/// incremental remeshes rather than a single dab.
 const SEGMENTS: usize = 24;
 
 fn document() -> Option<ClayDocument> {
@@ -54,10 +49,6 @@ fn document() -> Option<ClayDocument> {
 
 /// Drags across the front of the model, syncing after each segment as the
 /// application does while the pointer is down.
-///
-/// No refinement in here, deliberately: the application spends only what a
-/// frame has left on it, and a frame that sculpts has nothing left. What the
-/// drag costs is the sync alone.
 ///
 /// Returns the worst segment and the whole gesture's cost.
 fn drag(
@@ -129,21 +120,10 @@ fn neither_end_of_a_gesture_leaves_the_frame() {
     document.build_mips().expect("build the mips");
     let pointer_up = started.elapsed();
 
-    // What one idle frame is willing to spend on the debt, near enough: the
-    // application offers a frame less a reserve for drawing and presenting.
-    let slice = FRAME - Duration::from_millis(4);
-    let started = Instant::now();
-    let owed = geometry
-        .refine_within(&harness.gpu, &mut document, slice)
-        .expect("refine");
-    let refinement = started.elapsed();
-
     println!(
         "gesture: worst segment {worst:.2} ms, whole gesture {total:.2} ms, \
-         pointer-up {:.2} ms, first refinement slice {:.2} ms ({} segments left)",
+         pointer-up {:.2} ms",
         pointer_up.as_secs_f64() * 1000.0,
-        refinement.as_secs_f64() * 1000.0,
-        geometry.awaiting_refinement(),
     );
 
     // The budgets are a property of the binary that ships. Measured on one
@@ -168,9 +148,8 @@ fn neither_end_of_a_gesture_leaves_the_frame() {
              run with --release for the verdict)"
         );
     } else {
-        // The regression the drag has to hold. Shading fully mid-drag put 15 to
-        // 19 ms segments in this gesture's tail, which is a dropped frame with the
-        // pointer moving — the one moment the ring is being watched.
+        // The regression the drag has to hold now that its gradient is sampled
+        // immediately rather than deferred.
         assert!(
             Duration::from_secs_f64(worst / 1000.0) < FRAME,
             "the worst mid-drag segment took {worst:.1} ms, over a {:.1} ms frame. \
@@ -188,39 +167,11 @@ fn neither_end_of_a_gesture_leaves_the_frame() {
             pointer_up.as_secs_f64() * 1000.0,
             FRAME.as_secs_f64() * 1000.0
         );
-
-        // And the refinement itself, which is only allowed to overrun by the one
-        // set it is guaranteed to finish.
-        assert!(
-            refinement < FRAME,
-            "a refinement slice took {:.1} ms against a {:.1} ms budget. It is \
-             meant to stop at the first set that runs the budget out, so a single \
-             set has grown past a frame.",
-            refinement.as_secs_f64() * 1000.0,
-            slice.as_secs_f64() * 1000.0
-        );
     }
-
-    // The debt has to be finite and it has to be paid: a drag that queues
-    // faster than the idle frames can clear would never catch up.
-    let mut slices = 1;
-    let mut owed = owed;
-    while owed {
-        owed = geometry
-            .refine_within(&harness.gpu, &mut document, slice)
-            .expect("refine");
-        slices += 1;
-        assert!(
-            slices < 100,
-            "the refinement queue is not draining: {} segments still owed",
-            geometry.awaiting_refinement()
-        );
-    }
-    println!("gesture: refined in {slices} slices");
 }
 
 #[test]
-fn a_refined_gesture_draws_what_a_rebuild_draws() {
+fn an_incremental_gesture_has_the_same_triangles_as_a_rebuild() {
     let Some(harness) = Harness::new() else {
         return;
     };
@@ -233,14 +184,7 @@ fn a_refined_gesture_draws_what_a_rebuild_draws() {
         .expect("the first mesh");
 
     drag(&harness, &mut geometry, &mut document);
-    // Drained to nothing, which is where the application gets to within a few
-    // idle frames of the pointer lifting.
-    while geometry
-        .refine_within(&harness.gpu, &mut document, FRAME)
-        .expect("refine")
-    {}
-    assert_eq!(geometry.awaiting_refinement(), 0);
-    let refined = triangles(&geometry);
+    let incremental = triangles(&geometry);
 
     let mut rebuilt = SurfaceGeometry::new(&harness.gpu);
     rebuilt
@@ -248,24 +192,21 @@ fn a_refined_gesture_draws_what_a_rebuild_draws() {
         .expect("rebuild");
     let whole = triangles(&rebuilt);
 
-    let missing = whole.difference(&refined).count();
-    let extra = refined.difference(&whole).count();
+    let missing = whole.difference(&incremental).count();
+    let extra = incremental.difference(&whole).count();
     println!(
-        "after refinement: {} triangles against a rebuild's {} — {missing} missing, {extra} spare",
-        refined.len(),
+        "incremental: {} triangles against a rebuild's {} — {missing} missing, {extra} spare",
+        incremental.len(),
         whole.len(),
     );
 
-    // Re-shading replaces a segment with the same request that produced it, so
-    // it may not lose or invent a triangle. This is what says the queue can be
-    // drained a set at a time rather than all at once.
+    // Incremental replacement may not lose or invent a triangle.
     assert_eq!(
         missing, 0,
-        "the refined surface is missing {missing} triangles a rebuild has — \
-         draining the queue a set at a time dropped geometry"
+        "the incremental surface is missing {missing} triangles a rebuild has"
     );
     assert_eq!(
         extra, 0,
-        "the refined surface holds {extra} triangles a rebuild does not"
+        "the incremental surface holds {extra} triangles a rebuild does not"
     );
 }

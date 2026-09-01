@@ -276,30 +276,57 @@ fn moving_a_whole_subtool_moves_the_drawn_surface() {
     document
         .set_target_transform(target, moved)
         .expect("a layer can be placed");
-    document.end_target_drag();
 
-    // The viewport's path — the dirty bricks, not a rebuild.
+    // The live SDF move uses the clean document mesher rather than the brick
+    // mesher, so the viewport never shows its isolated pits.
     geometry
-        .sync(&gpu, &mut document)
-        .expect("re-mesh what the move dirtied");
-    let after = harness.capture(geometry.mesh(), &camera, false, "subtools-move-after");
+        .settle(&gpu, &mut document)
+        .expect("rebuild the moved SDF surface");
+    let moving = harness.capture(geometry.mesh(), &camera, false, "subtools-move-moving");
     assert!(
-        after.mean_difference(&before) > 0.01,
+        moving.mean_difference(&before) > 0.01,
         "the subtool was moved and the drawn surface did not change"
     );
-
-    // And what was drawn incrementally is what a rebuild draws: no stale
-    // bricks left where the form was, none missing where it is. The bound is
-    // loose enough for the incremental path's own speckle — a few hundred
-    // pixels of per-brick residue the rebuild does not have, which
-    // `features.md` lists as known-degraded — and two orders of magnitude
-    // under what the stale form measured (about ten).
-    let truth = meshed(&gpu, &mut document);
-    let rebuilt = harness.capture(truth.mesh(), &camera, false, "subtools-move-rebuilt");
     assert!(
-        after.mean_difference(&rebuilt) < 0.5,
-        "the incremental re-mesh after a move differs from a rebuild by {}: \
-         bricks the layer left were not refilled",
-        after.mean_difference(&rebuilt)
+        support::dark_specks(&moving).is_empty(),
+        "the moved SDF surface contains isolated dark pits: {:?}",
+        support::dark_specks(&moving)
+    );
+
+    // Pointer-up takes the final SDF path: one whole-surface rebuild clears
+    // any per-brick residue an incremental move may leave. A later sculpt used
+    // to be the operation that accidentally did this, so artifacts could
+    // persist until the form was edited again.
+    document.end_target_drag();
+    geometry
+        .settle(&gpu, &mut document)
+        .expect("settle the completed move");
+    let after = harness.capture(geometry.mesh(), &camera, false, "subtools-move-after");
+
+    // The settled result is visually the same as the document's watertight
+    // mesher, rather than the brick mesher that introduced the defects.
+    let engine = document
+        .document()
+        .mesh(clayspace_engine::claycore::MeshParams {
+            voxel_size: Some(ClayDocument::VOXEL_SIZE),
+            mesher: clayspace_engine::claycore::Mesher::SurfaceNets,
+            ..Default::default()
+        })
+        .expect("mesh the clean control");
+    let engine_gpu = harness.upload(&engine);
+    let engine_image = harness.capture(&engine_gpu, &camera, false, "subtools-move-engine");
+    assert!(
+        support::dark_specks(&engine_image).is_empty(),
+        "the document mesher control contains isolated dark pits"
+    );
+    assert!(
+        moving.mean_difference(&engine_image) < 0.01,
+        "the live SDF move differs from the clean document mesh by {}",
+        moving.mean_difference(&engine_image)
+    );
+    assert!(
+        after.mean_difference(&engine_image) < 0.01,
+        "the settled surface after a move differs from the clean document mesh by {}",
+        after.mean_difference(&engine_image)
     );
 }
