@@ -269,12 +269,17 @@ fn mirrored_authoring_grows_both_sides() {
     assert!(*vm.symmetric().get(), "rigging starts symmetric");
 
     vm.press(Grab::Grow(0), [0.0, 0.0, 0.0]);
-    vm.drag([0.6, 0.0, 0.0]);
+    vm.drag([0.4, 0.0, 0.0]);
+    // A pointer drag has more than one sample. The first creates both
+    // ZSpheres; every later one must preserve their reflection rather than
+    // moving only the side that was initially grabbed.
+    vm.drag([0.6, 0.2, 0.0]);
     vm.release();
 
     let tree = vm.tree().get().clone().expect("a tree");
     assert_eq!(tree.nodes.len(), 3, "the reflection was not grown");
-    assert!(tree.nodes.iter().any(|n| n.position[0] < -0.5));
+    assert_eq!(tree.nodes[1].position, [0.6, 0.2, 0.0]);
+    assert_eq!(tree.nodes[2].position, [-0.6, 0.2, 0.0]);
 }
 
 #[test]

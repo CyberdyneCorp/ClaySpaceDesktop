@@ -37,6 +37,13 @@ struct Dragging {
     last: [f32; 3],
     /// The sphere a grow gesture created, once it has one.
     grown: Option<NodeIndex>,
+    /// The reflected counterpart of the sphere being moved, if this gesture
+    /// began on a symmetric pair.
+    ///
+    /// The document adds both members when a mirrored child is grown, but a
+    /// drag is delivered as several move samples. Retaining the counterpart
+    /// here makes every following sample move both sides together.
+    mirror: Option<NodeIndex>,
 }
 
 pub struct ArmatureViewModel {
@@ -220,18 +227,18 @@ impl ArmatureViewModel {
 
     /// Begins a gesture.
     pub fn press(&mut self, grab: Grab, at: [f32; 3]) {
-        if let Grab::Empty = grab {
-            return;
-        }
-        if let Grab::Move(index) | Grab::Grow(index) | Grab::Resize(index) | Grab::Insert(index) =
-            grab
-        {
-            self.selected.set(Some(index));
-        }
+        let index = match grab {
+            Grab::Move(index) | Grab::Grow(index) | Grab::Resize(index) | Grab::Insert(index) => {
+                index
+            }
+            Grab::Empty => return,
+        };
+        self.selected.set(Some(index));
         self.drag = Some(Dragging {
             grab,
             last: at,
             grown: None,
+            mirror: self.mirrored_node(index),
         });
     }
 
@@ -246,8 +253,9 @@ impl ArmatureViewModel {
             at[2] - state.last[2],
         ];
 
+        let mut grown = None;
         let result = match state.grab {
-            Grab::Move(index) => self.model.move_zsphere(index, delta),
+            Grab::Move(index) => self.move_symmetric(index, state.mirror, delta),
             Grab::Resize(index) => {
                 // Distance from the sphere's centre, so dragging away thickens
                 // it — the same gesture ZBrush uses.
@@ -262,11 +270,11 @@ impl ArmatureViewModel {
                         d.max(0.01)
                     })
                     .unwrap_or(self.default_radius);
-                self.model.resize_zsphere(index, radius)
+                self.resize_symmetric(index, state.mirror, radius)
             }
             Grab::Grow(parent) => match state.grown {
                 // The child exists; keep dragging it about.
-                Some(child) => self.model.move_zsphere(child, delta),
+                Some(child) => self.move_symmetric(child, state.mirror, delta),
                 // First movement of the gesture: this is where the new sphere
                 // appears, which is what "drag one out of another" means.
                 None => {
@@ -280,6 +288,7 @@ impl ArmatureViewModel {
                                 drag.grown = Some(child);
                             }
                             self.selected.set(Some(child));
+                            grown = Some(child);
                             Ok(())
                         }
                         Err(e) => Err(e),
@@ -313,6 +322,56 @@ impl ArmatureViewModel {
             drag.last = at;
         }
         self.refresh();
+        if let Some(child) = grown {
+            let mirror = self.mirrored_node(child);
+            if let Some(drag) = self.drag.as_mut() {
+                drag.mirror = mirror;
+            }
+        }
+    }
+
+    /// The node reflected through the armature's X plane, when the tree has
+    /// an authored counterpart. Nodes on the plane intentionally return none:
+    /// they are their own mirror and must not receive a delta twice.
+    fn mirrored_node(&self, index: NodeIndex) -> Option<NodeIndex> {
+        if !*self.symmetric.get() {
+            return None;
+        }
+        let tree = self.tree.get().as_ref()?;
+        let target = Armature::mirrored_position(tree.get(index)?.position)?;
+        tree.nodes
+            .iter()
+            .position(|node| {
+                (0..3).all(|axis| (node.position[axis] - target[axis]).abs() < 1e-4)
+            })
+            .map(|mirror| mirror as NodeIndex)
+    }
+
+    fn move_symmetric(
+        &mut self,
+        index: NodeIndex,
+        mirror: Option<NodeIndex>,
+        delta: [f32; 3],
+    ) -> Result<(), clayspace_model::ModelError> {
+        self.model.move_zsphere(index, delta)?;
+        if let Some(mirror) = mirror {
+            self.model
+                .move_zsphere(mirror, [-delta[0], delta[1], delta[2]])?;
+        }
+        Ok(())
+    }
+
+    fn resize_symmetric(
+        &mut self,
+        index: NodeIndex,
+        mirror: Option<NodeIndex>,
+        radius: f32,
+    ) -> Result<(), clayspace_model::ModelError> {
+        self.model.resize_zsphere(index, radius)?;
+        if let Some(mirror) = mirror {
+            self.model.resize_zsphere(mirror, radius)?;
+        }
+        Ok(())
     }
 
     pub fn release(&mut self) {

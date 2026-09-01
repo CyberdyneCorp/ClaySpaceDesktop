@@ -110,6 +110,25 @@ fn growing_a_sphere_by_dragging_is_one_undo() {
 }
 
 #[test]
+fn a_mirrored_zsphere_stays_mirrored_while_dragging() {
+    let Some(mut rig) = Rigging::new() else {
+        return;
+    };
+    rig.begin([0.0, 0.0, 0.0]);
+
+    rig.gesture(
+        Grab::Grow(0),
+        [0.0, 0.0, 0.0],
+        &[[0.35, 0.0, 0.0], [0.7, 0.25, 0.0]],
+    );
+
+    let tree = rig.armature.tree().get().clone().expect("a tree");
+    assert_eq!(tree.nodes.len(), 3, "the reflected child was not created");
+    assert_eq!(tree.nodes[1].position, [0.7, 0.25, 0.0]);
+    assert_eq!(tree.nodes[2].position, [-0.7, 0.25, 0.0]);
+}
+
+#[test]
 fn a_second_undo_takes_the_rig_itself() {
     let Some(mut rig) = Rigging::new() else {
         return;
