@@ -176,12 +176,15 @@ fn symmetry_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comma
                 // grey: symmetry is state a sculptor needs to see without
                 // looking for it, and a mirrored stroke they did not expect is
                 // the most expensive surprise on this bar.
-                let response = ui.add(chip_tinted(
-                    axis.label(),
-                    on,
-                    Tokens::ground(),
-                    Tokens::selection_soft(),
-                ));
+                let response = ui.add_enabled(
+                    !state.armature.editing || matches!(axis, Axis::X),
+                    chip_tinted(
+                        axis.label(),
+                        on,
+                        Tokens::ground(),
+                        Tokens::selection_soft(),
+                    ),
+                );
                 if with_chord(response, state, action).clicked() {
                     queue.push(Command::ToggleSymmetry(*axis));
                 }

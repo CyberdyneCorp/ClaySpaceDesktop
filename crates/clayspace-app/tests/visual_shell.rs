@@ -226,7 +226,6 @@ fn state<'a>(
             skin_preview: true,
             selection_is_negative: false,
             spheres: 12,
-            mirror: true,
             skin: 1.0,
         },
         strings,

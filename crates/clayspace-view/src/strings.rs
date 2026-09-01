@@ -356,7 +356,6 @@ pub struct Strings {
     pub layer_last_one: &'static str,
     pub label_spheres: &'static str,
     pub label_skin: &'static str,
-    pub label_mirror_new: &'static str,
 
     // Actions and states
     /// Shown where the shelf would be, on a layer whose representation this
@@ -800,7 +799,6 @@ libera em vez de congelar.",
     layer_last_one: "um documento guarda ao menos uma camada",
     label_spheres: "Esferas",
     label_skin: "Pele",
-    label_mirror_new: "Espelhar novas",
 
     shelf_no_tools: "Nenhuma ferramenta para esta representação ainda",
     shelf_filter_all: "Disponíveis",
@@ -1183,7 +1181,6 @@ instead.",
     layer_last_one: "a document keeps at least one layer",
     label_spheres: "Spheres",
     label_skin: "Skin",
-    label_mirror_new: "Mirror new",
 
     shelf_no_tools: "No tools for this representation yet",
     shelf_filter_all: "Available",
@@ -1576,7 +1573,6 @@ lados. Con Ctrl, libera en vez de congelar.",
     layer_last_one: "un documento guarda al menos una capa",
     label_spheres: "Esferas",
     label_skin: "Piel",
-    label_mirror_new: "Reflejar nuevas",
 
     shelf_no_tools: "Todavía no hay herramientas para esta representación",
     shelf_filter_all: "Disponibles",
@@ -1943,7 +1939,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 223] {
+    pub fn all(&self) -> [&'static str; 222] {
         [
             self.label_autosave_in,
             self.state_autosaved,
@@ -2129,7 +2125,6 @@ impl Strings {
             self.layer_last_one,
             self.label_spheres,
             self.label_skin,
-            self.label_mirror_new,
             self.action_undo,
             self.action_redo,
             self.action_frame_all,

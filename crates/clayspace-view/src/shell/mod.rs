@@ -101,7 +101,6 @@ pub struct ArmatureState {
     pub selection_is_negative: bool,
     /// How many spheres, for the readout.
     pub spheres: usize,
-    pub mirror: bool,
     pub skin: f32,
 }
 

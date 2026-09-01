@@ -316,10 +316,6 @@ pub(super) fn armature_section(
     if let Some(value) = slider(ui, s.label_skin, state.armature.skin, 0.5..=3.0, 2) {
         queue.push(Command::SetSkinThickness(value));
     }
-    let mut mirror = state.armature.mirror;
-    if ui.checkbox(&mut mirror, s.label_mirror_new).clicked() {
-        queue.push(Command::SetArmatureMirror(mirror));
-    }
     if state.armature.editing {
         // The gestures, where a person is when they need them. ZBrush
         // teaches these by tutorial; one line costs nothing.

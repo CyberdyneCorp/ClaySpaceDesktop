@@ -296,8 +296,6 @@ pub enum Command {
     ToggleArmatureEditing,
     /// Removes the selected sphere and everything hanging off it.
     RemoveZsphere,
-    /// Whether a new sphere is mirrored as it is added.
-    SetArmatureMirror(bool),
     /// Whether the viewport draws the skin or only the ZSpheres.
     ///
     /// ZBrush's Adaptive Skin preview, on `A`: while building a rig you want
@@ -541,7 +539,6 @@ impl Command {
                 // would be reporting their attention as work.
                 | Self::SoloLayer(_)
                 | Self::ToggleArmatureEditing
-                | Self::SetArmatureMirror(_)
                 | Self::ToggleSkinPreview
         )
     }
@@ -624,7 +621,6 @@ impl Command {
             Self::NewArmature => "new armature",
             Self::ToggleArmatureEditing => "edit armature",
             Self::RemoveZsphere => "remove zsphere",
-            Self::SetArmatureMirror(_) => "armature mirror",
             Self::ToggleSkinPreview => "skin preview",
             Self::ToggleZsphereNegative => "negative zsphere",
             Self::SetSkinThickness(_) => "skin thickness",

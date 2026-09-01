@@ -353,7 +353,6 @@ impl SculptViewModel {
             | Command::NewArmature
             | Command::ToggleArmatureEditing
             | Command::RemoveZsphere
-            | Command::SetArmatureMirror(_)
             | Command::ToggleSkinPreview
             | Command::ToggleZsphereNegative
             | Command::SetSkinThickness(_)

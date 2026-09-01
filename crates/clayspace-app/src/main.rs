@@ -2364,7 +2364,6 @@ impl App {
             skin_preview: self.skin_preview,
             selection_is_negative: self.armature.selected_is_negative(),
             spheres: tree.as_ref().map(|t| t.nodes.len()).unwrap_or(0),
-            mirror: *self.armature.symmetric().get(),
             skin: self.armature.skin().get().thickness,
         }
     }
@@ -2449,7 +2448,7 @@ impl App {
     /// checked every frame, because symmetry can be toggled from the options
     /// bar as well as the keyboard and neither should need a nudge to show.
     fn sync_symmetry_overlay(&mut self) {
-        let symmetry = *self.sculpt.symmetry().get();
+        let symmetry = self.active_symmetry();
         if symmetry == self.overlay_symmetry {
             return;
         }
@@ -2464,6 +2463,17 @@ impl App {
                 },
                 3.0,
             );
+        }
+    }
+
+    /// The top-bar symmetry state. A ZSphere armature has one explicit mirror
+    /// plane (X); its reflected nodes are authored by the rig rather than by
+    /// the field's multi-axis stroke symmetry.
+    fn active_symmetry(&self) -> [bool; 3] {
+        if self.rigging {
+            [*self.armature.symmetric().get(), false, false]
+        } else {
+            *self.sculpt.symmetry().get()
         }
     }
 
@@ -2725,7 +2735,8 @@ impl App {
                 && !drawing_an_outline
                 && button == egui::PointerButton::Primary
                 && self.pick_object_at(point);
-            let on_surface = !rigged
+            let on_surface = !self.rigging
+                && !rigged
                 && !on_curve
                 && !manipulated
                 && !transformed
@@ -2741,6 +2752,10 @@ impl App {
             // about it.
             let started = match button {
                 _ if rigged => Drag::Rig,
+                // An armature is a direct-manipulation mode. A miss belongs
+                // to camera navigation, never to the active sculpt brush:
+                // otherwise a click beside a ZSphere modified its skin.
+                _ if self.rigging => Drag::Orbit,
                 _ if on_curve => Drag::Curve,
                 _ if manipulated || transformed => Drag::Gizmo,
                 _ if caged => Drag::Cage,
@@ -3164,6 +3179,20 @@ impl App {
     /// has to be looked at again is settled last. Run in another order, a
     /// panel refreshes against a document the command has not reached yet.
     fn apply_now(&mut self, command: Command) {
+        // A rig owns the same X mirror the sculptor normally uses, but it
+        // authors the reflected ZSphere itself rather than asking the field
+        // to duplicate a stroke. Keep that one control in the top bar and do
+        // not write a field symmetry setting onto the armature layer.
+        if self.rigging {
+            if let Command::ToggleSymmetry(axis) = command {
+                if axis == Axis::X {
+                    self.armature
+                        .set_symmetric(!*self.armature.symmetric().get());
+                }
+                self.request_redraw();
+                return;
+            }
+        }
         self.dispatch_to_models(&command);
         self.apply_app_effects(&command);
         self.settle_after(&command);
@@ -3496,7 +3525,7 @@ impl App {
                 .or(self.mask.notice().get().as_deref())
                 .or(self.objects.notice().get().as_deref())
                 .or(self.sculpt.tool_status().get().as_deref()),
-            symmetry: *self.sculpt.symmetry().get(),
+            symmetry: self.active_symmetry(),
             scene: &scene,
             renaming: self
                 .renaming
@@ -4082,10 +4111,6 @@ impl App {
                 let negative = !self.armature.selected_is_negative();
                 self.armature.set_selected_negative(negative);
                 self.after_armature_edit(before);
-            }
-            Command::SetArmatureMirror(on) => {
-                self.armature.set_symmetric(on);
-                self.request_redraw();
             }
             Command::SetSkinThickness(thickness) => {
                 let before = self.engine_undo_depth();
