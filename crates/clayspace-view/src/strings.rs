@@ -319,6 +319,30 @@ pub struct Strings {
     pub optimize_advice: &'static str,
     pub optimize_action: &'static str,
     pub optimize_busy: &'static str,
+    /// Rebuilding a mesh layer's topology through a voxel field — DynaMesh.
+    ///
+    /// The action is named for what it does to the form rather than for the
+    /// technique: a sculptor reaches for it because the surface has stopped
+    /// taking detail, not because they want a voxel grid. The hint is where
+    /// the technique and its price go.
+    pub remesh_heading: &'static str,
+    pub remesh_action: &'static str,
+    pub remesh_busy: &'static str,
+    pub remesh_hint: &'static str,
+    pub remesh_resolution: &'static str,
+    pub remesh_resolution_hint: &'static str,
+    pub remesh_sharp: &'static str,
+    pub remesh_sharp_hint: &'static str,
+    pub remesh_remove_loose: &'static str,
+    pub remesh_remove_loose_hint: &'static str,
+    pub remesh_follow: &'static str,
+    pub remesh_follow_hint: &'static str,
+    /// What the last rebuild came to: triangles before and after, and the two
+    /// things it may have done that a sculptor cannot see by looking.
+    pub remesh_result: &'static str,
+    pub remesh_pieces: &'static str,
+    pub remesh_uvs_dropped: &'static str,
+    pub remesh_not_watertight: &'static str,
     pub sculpt_recording: &'static str,
     pub sculpt_cells: &'static str,
     pub sculpt_remove: &'static str,
@@ -769,6 +793,28 @@ libera em vez de congelar.",
     optimize_advice: "Esta camada ficou pesada de avaliar",
     optimize_action: "Otimizar",
     optimize_busy: "Otimizando…",
+    remesh_heading: "Refazer a malha",
+    remesh_action: "Refazer",
+    remesh_busy: "Refazendo a malha…",
+    remesh_hint: "reconstrói a topologia inteira: partes sobrepostas se fundem, \
+                  triângulos esticados desaparecem e a densidade fica uniforme. \
+                  A malha antiga não volta a não ser desfazendo",
+    remesh_resolution: "Resolução",
+    remesh_resolution_hint: "células ao longo da maior dimensão da forma; \
+                            detalhe menor que uma célula não sobrevive",
+    remesh_sharp: "Arestas vivas",
+    remesh_sharp_hint: "segura quinas em vez de arredondá-las, ao custo da \
+                        garantia de malha fechada — o motor marca este modo \
+                        como experimental",
+    remesh_remove_loose: "Remover pedaços soltos",
+    remesh_remove_loose_hint: "descarta cacos pequenos demais para esta resolução",
+    remesh_follow: "Seguir a forma atual",
+    remesh_follow_hint: "puxa a malha nova de volta para a superfície que ela \
+                         substitui, recuperando o detalhe que a amostragem arredondou",
+    remesh_result: "triângulos",
+    remesh_pieces: "peças",
+    remesh_uvs_dropped: "as coordenadas de textura foram descartadas",
+    remesh_not_watertight: "o resultado não ficou fechado",
     sculpt_recording: "gravando",
     sculpt_cells: "células",
     sculpt_remove: "remover o passe",
@@ -1151,6 +1197,28 @@ instead.",
     optimize_advice: "This subtool has become costly to evaluate",
     optimize_action: "Optimise",
     optimize_busy: "Optimising…",
+    remesh_heading: "Rebuild the mesh",
+    remesh_action: "Rebuild",
+    remesh_busy: "Rebuilding the mesh…",
+    remesh_hint: "rebuilds the whole topology: overlapping parts fuse, stretched \
+                  triangles disappear and the density comes out even. The old \
+                  mesh comes back only by undoing",
+    remesh_resolution: "Resolution",
+    remesh_resolution_hint: "cells across the form's longest dimension; detail \
+                            finer than a cell does not survive",
+    remesh_sharp: "Sharp edges",
+    remesh_sharp_hint: "holds corners instead of rounding them, at the cost of \
+                        the watertight guarantee — the engine marks this mode \
+                        experimental",
+    remesh_remove_loose: "Remove loose pieces",
+    remesh_remove_loose_hint: "discards fragments too small for this resolution",
+    remesh_follow: "Follow the current form",
+    remesh_follow_hint: "pulls the new mesh back towards the surface it replaces, \
+                         recovering detail the sampling rounded off",
+    remesh_result: "triangles",
+    remesh_pieces: "pieces",
+    remesh_uvs_dropped: "texture coordinates were dropped",
+    remesh_not_watertight: "the result did not come out closed",
     sculpt_recording: "recording",
     sculpt_cells: "cells",
     sculpt_remove: "remove the pass",
@@ -1541,6 +1609,28 @@ lados. Con Ctrl, libera en vez de congelar.",
     optimize_advice: "Esta capa se volvió costosa de evaluar",
     optimize_action: "Optimizar",
     optimize_busy: "Optimizando…",
+    remesh_heading: "Rehacer la malla",
+    remesh_action: "Rehacer",
+    remesh_busy: "Rehaciendo la malla…",
+    remesh_hint: "reconstruye toda la topología: las partes superpuestas se \
+                  fusionan, los triángulos estirados desaparecen y la densidad \
+                  queda uniforme. La malla anterior solo vuelve deshaciendo",
+    remesh_resolution: "Resolución",
+    remesh_resolution_hint: "celdas a lo largo de la dimensión mayor de la forma; \
+                            el detalle menor que una celda no sobrevive",
+    remesh_sharp: "Aristas vivas",
+    remesh_sharp_hint: "conserva las esquinas en vez de redondearlas, a costa de \
+                        la garantía de malla cerrada — el motor marca este modo \
+                        como experimental",
+    remesh_remove_loose: "Quitar piezas sueltas",
+    remesh_remove_loose_hint: "descarta fragmentos demasiado pequeños para esta resolución",
+    remesh_follow: "Seguir la forma actual",
+    remesh_follow_hint: "tira de la malla nueva hacia la superficie que sustituye, \
+                         recuperando el detalle que el muestreo redondeó",
+    remesh_result: "triángulos",
+    remesh_pieces: "piezas",
+    remesh_uvs_dropped: "se descartaron las coordenadas de textura",
+    remesh_not_watertight: "el resultado no quedó cerrado",
     sculpt_recording: "grabando",
     sculpt_cells: "celdas",
     sculpt_remove: "quitar el pase",

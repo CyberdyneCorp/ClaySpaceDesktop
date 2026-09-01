@@ -230,6 +230,16 @@ pub enum Command {
     /// — and the interface offers it; nothing here acts on that advice by
     /// itself.
     OptimizeLayer(LayerKey),
+    /// Rebuilds a mesh layer's topology through a voxel field — DynaMesh.
+    ///
+    /// The mesh counterpart to [`Command::OptimizeLayer`] and offered on the
+    /// same terms: it is what a sculptor reaches for when a form has been
+    /// pulled somewhere its triangles cannot follow, it destroys the topology
+    /// it replaces, and it is never taken quietly. One undoable step.
+    RemeshLayer(LayerKey),
+    /// How the next rebuild is made. Not an edit — nothing reaches the
+    /// document until the rebuild is asked for.
+    SetRemeshSettings(clayspace_model::RemeshSettings),
     /// Starts renaming a layer, with its current name in the field.
     ///
     /// A mode rather than a dialog: a layer stack is renamed in place, and a
@@ -613,6 +623,8 @@ impl Command {
             Self::AddLayer(_) => "new layer",
             Self::RemoveLayer(_) => "remove layer",
             Self::OptimizeLayer(_) => "optimize layer",
+            Self::RemeshLayer(_) => "remesh layer",
+            Self::SetRemeshSettings(_) => "remesh settings",
             Self::BeginRenameLayer(_) => "rename layer",
             Self::EditLayerName(_) => "layer name",
             Self::CommitRenameLayer => "rename layer",

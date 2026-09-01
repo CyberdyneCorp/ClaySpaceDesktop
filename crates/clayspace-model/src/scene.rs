@@ -98,6 +98,131 @@ pub struct FieldHealth {
     pub consolidated: bool,
 }
 
+/// How a mesh layer is rebuilt through a voxel field.
+///
+/// DynaMesh, as sculpting applications name it: throw the geometry into a
+/// voxel grid and march a new surface out of it. Overlapping shells fuse,
+/// self-intersections resolve, stretched triangles disappear and the density
+/// comes out uniform — which is what makes it the repair a sculptor reaches
+/// for after pulling a form somewhere its topology cannot follow.
+///
+/// One number the sculptor drives and three switches, rather than the engine's
+/// full parameter block. The rest of that block is either a default the engine
+/// states for itself or a decision with one defensible answer here, and a
+/// control per field would be a panel nobody could read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RemeshSettings {
+    /// Cells across the form's longest extent.
+    ///
+    /// Stated this way rather than in world units because it means the same
+    /// thing on a thumbnail and on a bust — the sculptor is choosing a density,
+    /// not a length. The engine resolves it against the source's own bounds and
+    /// reports back what it came to in world units.
+    pub resolution: u32,
+    /// Hold hard edges, at the cost of the watertight guarantee.
+    ///
+    /// The engine's sharp mode is dual contouring and is flagged experimental
+    /// there: measured on a chamfered cube it is three times closer to the
+    /// feature with a third of the triangles, and it is not manifold. Offered
+    /// because that trade is sometimes the right one, and named as the trade it
+    /// is.
+    pub sharp: bool,
+    /// Drop the specks a rebuild leaves behind.
+    pub remove_loose_pieces: bool,
+    /// Pull the rebuilt surface back towards the one it replaced.
+    ///
+    /// A lerp and never a snap, so it recovers detail the sampling rounded off
+    /// without reintroducing the geometry the rebuild was asked to remove.
+    pub follow_the_source: bool,
+}
+
+impl Default for RemeshSettings {
+    /// 128 across the longest extent, which is the density a first rebuild
+    /// wants: coarse enough to actually fuse what a sculptor has pulled
+    /// together, fine enough that the form is still recognisably itself.
+    fn default() -> Self {
+        Self {
+            resolution: 128,
+            sharp: false,
+            remove_loose_pieces: true,
+            follow_the_source: true,
+        }
+    }
+}
+
+impl RemeshSettings {
+    /// The coarsest and finest the interface offers.
+    ///
+    /// The floor is where a rebuild stops describing the form at all; the
+    /// ceiling is where it stops being a rebuild and becomes a subdivision
+    /// with a different name, at a cost the engine's own memory ceiling would
+    /// meet soon after.
+    pub const RESOLUTION: std::ops::RangeInclusive<u32> = 32..=512;
+
+    pub fn sanitized(self) -> Self {
+        Self {
+            resolution: self
+                .resolution
+                .clamp(*Self::RESOLUTION.start(), *Self::RESOLUTION.end()),
+            ..self
+        }
+    }
+
+    /// What counts as a loose piece, in cubic world units, for a form of this
+    /// longest extent.
+    ///
+    /// The engine's threshold is a volume and the sculptor's control is a
+    /// switch, so the number has to be derived — and it has to be derived from
+    /// the form. "A speck" is a different volume on a thumbnail and on a bust,
+    /// and the only scale that follows the form is its own longest extent
+    /// divided by the resolution, which is exactly the cell the engine will
+    /// sample at. Half a cell cubed is under one sample: a piece that could
+    /// not have been resolved at this resolution in the first place.
+    ///
+    /// `None` where nothing should be removed — the switch is off, or there is
+    /// no extent to scale by. Keeping everything is the safe answer to a
+    /// missing extent: a threshold guessed at the wrong scale takes away
+    /// material the sculptor meant to keep, and a rebuild that kept a speck is
+    /// a rebuild they can run again.
+    ///
+    /// The first version of this used the resolution alone, which is the right
+    /// number for a form one unit across and wrong by the cube of the extent
+    /// for every other — eight times too permissive on the starting form, and
+    /// aggressive enough on a small one to discard pieces that were wanted.
+    pub fn loose_piece_volume(self, extent: Option<f32>) -> Option<f32> {
+        let extent = extent.filter(|e| *e > 0.0 && e.is_finite())?;
+        self.remove_loose_pieces.then(|| {
+            let cell = extent / self.sanitized().resolution as f32;
+            (cell * 0.5).powi(3)
+        })
+    }
+}
+
+/// What a rebuild did, and what it cost.
+///
+/// Shown afterwards rather than logged. Every field here is something the
+/// sculptor cannot see by looking at the result: the triangle counts say
+/// whether the resolution was the one they meant, and the rest is what the
+/// operation destroyed on the way — which it always does, and which no
+/// interface should leave them to discover.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RemeshOutcome {
+    pub triangles_before: u64,
+    pub triangles_after: u64,
+    /// What the resolution came to in world units.
+    pub voxel_size: f32,
+    /// How many separate pieces the form is in now. More than one after a
+    /// rebuild meant to fuse is the answer to "why did that not join".
+    pub pieces: u32,
+    pub pieces_removed: u32,
+    pub watertight: bool,
+    /// Set whenever the source carried them. Not a failure and not a setting:
+    /// a spatially reprojected UV across a seam is a stretched layout that
+    /// looks like a preserved one, so the engine drops them rather than
+    /// pretending.
+    pub uvs_dropped: bool,
+}
+
 /// What a grid layer is made of.
 ///
 /// Two numbers a sculptor can act on. The cell size is the one that decides
@@ -437,11 +562,118 @@ pub trait SceneModel {
 
     /// Carries a mesh the document holds but never sculpts.
     fn add_mesh_layer(&mut self, name: &str) -> Result<LayerKey, crate::ModelError>;
+
+    /// Rebuilds a mesh layer through a voxel field — DynaMesh.
+    ///
+    /// One undoable step, and destructive by construction: [`RemeshOutcome`]
+    /// is what says so, and is the reason this answers with a value rather
+    /// than with `()`. A refusal leaves the layer exactly as it was, which is
+    /// what lets the interface offer a resolution the source may turn out not
+    /// to survive.
+    ///
+    /// Provided, so a double that models no meshes refuses in one sentence
+    /// rather than implementing a rebuild it has nothing to rebuild.
+    fn remesh_layer(
+        &mut self,
+        key: LayerKey,
+        settings: RemeshSettings,
+    ) -> Result<RemeshOutcome, crate::ModelError> {
+        let (_, _) = (key, settings);
+        Err(crate::ModelError::engine(
+            "remalhar só se aplica a uma camada de malha",
+        ))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A speck is relative to the form, not to the origin's units.
+    ///
+    /// The whole content of the switch: two forms of different size, sculpted
+    /// at the same resolution, have to treat "too small to keep" the same way
+    /// relative to themselves. Held as a cube law because that is what a volume
+    /// against a length is, and because the defect this replaced was exactly a
+    /// missing factor of the extent cubed.
+    #[test]
+    fn what_counts_as_a_loose_piece_scales_with_the_form() {
+        let settings = RemeshSettings {
+            resolution: 128,
+            remove_loose_pieces: true,
+            ..RemeshSettings::default()
+        };
+        let small = settings.loose_piece_volume(Some(1.0)).expect("a threshold");
+        let large = settings
+            .loose_piece_volume(Some(10.0))
+            .expect("a threshold");
+        let ratio = large / small;
+        assert!(
+            (ratio - 1000.0).abs() < 1.0,
+            "a form ten times as long should call a piece a thousand times as \
+             large a speck; the ratio is {ratio}"
+        );
+    }
+
+    /// And a finer resolution calls fewer things specks.
+    #[test]
+    fn a_finer_resolution_lowers_the_threshold() {
+        let coarse = RemeshSettings {
+            resolution: 64,
+            remove_loose_pieces: true,
+            ..RemeshSettings::default()
+        };
+        let fine = RemeshSettings {
+            resolution: 256,
+            ..coarse
+        };
+        assert!(
+            fine.loose_piece_volume(Some(2.0)) < coarse.loose_piece_volume(Some(2.0)),
+            "a resolution that can resolve smaller pieces must not discard them"
+        );
+    }
+
+    /// Nothing is removed where there is nothing to scale by, or where the
+    /// sculptor did not ask.
+    ///
+    /// The direction matters: a threshold guessed at the wrong scale takes away
+    /// material, and there is no way to notice that it should not have.
+    #[test]
+    fn a_missing_extent_removes_nothing() {
+        let asked = RemeshSettings {
+            remove_loose_pieces: true,
+            ..RemeshSettings::default()
+        };
+        assert_eq!(asked.loose_piece_volume(None), None);
+        assert_eq!(asked.loose_piece_volume(Some(0.0)), None);
+        assert_eq!(asked.loose_piece_volume(Some(f32::NAN)), None);
+
+        let unasked = RemeshSettings {
+            remove_loose_pieces: false,
+            ..RemeshSettings::default()
+        };
+        assert_eq!(unasked.loose_piece_volume(Some(2.0)), None);
+    }
+
+    #[test]
+    fn a_resolution_outside_the_range_is_clamped_rather_than_refused() {
+        let settings = RemeshSettings {
+            resolution: 4,
+            ..RemeshSettings::default()
+        };
+        assert_eq!(
+            settings.sanitized().resolution,
+            *RemeshSettings::RESOLUTION.start()
+        );
+        let settings = RemeshSettings {
+            resolution: 100_000,
+            ..RemeshSettings::default()
+        };
+        assert_eq!(
+            settings.sanitized().resolution,
+            *RemeshSettings::RESOLUTION.end()
+        );
+    }
 
     #[test]
     fn the_three_protection_states_are_distinct() {

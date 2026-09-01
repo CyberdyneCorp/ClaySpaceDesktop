@@ -64,6 +64,11 @@ impl SceneViewModel {
             }
             Command::RemoveLayer(key) => self.model.remove_layer(*key),
             Command::OptimizeLayer(key) => self.model.consolidate_layer(*key),
+            // Dispatched by the composition root rather than here: the outcome
+            // is a value the interface shows — what came out, and what the
+            // rebuild destroyed on the way — and `dispatch` deals in
+            // `Result<(), _>`. See `SceneViewModel::remesh`.
+            Command::RemeshLayer(_) => return Ok(()),
             // Not this ViewModel's business.
             _ => return Ok(()),
         };
@@ -108,6 +113,30 @@ impl SceneViewModel {
     /// it: a widget on a form's middle has to reach past that form to be seen.
     pub fn layer_bounds(&self, key: LayerKey) -> Option<([f32; 3], [f32; 3])> {
         self.model.layer_bounds(key)
+    }
+
+    /// Rebuilds a mesh layer's topology, and answers what that cost.
+    ///
+    /// Apart from [`SceneViewModel::dispatch`] because it has something to
+    /// say: a rebuild always destroys the topology it replaces, and the
+    /// outcome is the only account of what went with it. A command returning
+    /// `Ok(())` would leave the interface to guess.
+    pub fn remesh(
+        &mut self,
+        key: LayerKey,
+        settings: clayspace_model::RemeshSettings,
+    ) -> Result<clayspace_model::RemeshOutcome, ModelError> {
+        match self.model.remesh_layer(key, settings) {
+            Ok(outcome) => {
+                self.refusal.set_if_changed(None);
+                self.refresh();
+                Ok(outcome)
+            }
+            Err(error) => {
+                self.refusal.set_if_changed(Some(error.to_string()));
+                Err(error)
+            }
+        }
     }
 
     /// Re-reads the scene from the model.

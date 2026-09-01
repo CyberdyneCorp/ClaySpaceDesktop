@@ -16,6 +16,13 @@ pub fn optimize_button_id() -> egui::Id {
     egui::Id::new("subtool-optimize")
 }
 
+/// Where the offer to rebuild a mesh layer's topology was drawn. Absent for
+/// every representation but a mesh, and for a mesh row whose triangles have
+/// not arrived.
+pub fn remesh_button_id() -> egui::Id {
+    egui::Id::new("subtool-remesh")
+}
+
 /// The scene tree and the layer stack.
 pub fn left_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
     scene_section(ui, state);
@@ -89,6 +96,15 @@ pub(super) fn layers_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &
     // something.
     if state.representation == Representation::Sdf {
         field_health_control(ui, state, queue);
+    }
+    // And the mesh counterpart, which is a rebuild rather than a collapse.
+    // Always offered rather than only when something is wrong: a field
+    // steepens measurably and the engine can say when, and there is no
+    // equivalent number for "this topology has stopped taking detail" — the
+    // sculptor is the one who can see that, so the control waits for them
+    // instead of waiting for advice that does not exist.
+    if state.representation == Representation::Mesh {
+        remesh_control(ui, state, queue);
     }
 
     ui.add_space(space::SNUG);
@@ -688,6 +704,153 @@ pub(super) fn field_health_control(
                 .color(Tokens::text_dim()),
         );
     });
+}
+
+/// Rebuilding a mesh layer's topology through a voxel field — DynaMesh.
+///
+/// The mesh counterpart to [`field_health_control`], and offered on the same
+/// terms: it costs seconds, it destroys what it replaces, and it is never
+/// taken quietly. What differs is when it is shown. A field's steepening is
+/// something the engine measures and advises on, so that row appears only when
+/// the advice arrives; a mesh's topology going wrong under a pull is something
+/// only the sculptor can see, so this one is always there for them to reach.
+///
+/// The price is on the heading's hover rather than in a paragraph under the
+/// button. It is the same sentence every time and a sculptor reaching for this
+/// the tenth time is not reading it — but the first time, and the time they
+/// wonder where their UVs went, it has to be somewhere.
+pub(super) fn remesh_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    let Some(layer) = state.scene.active_layer() else {
+        return;
+    };
+
+    ui.add_space(space::SNUG);
+    ui.label(
+        egui::RichText::new(s.remesh_heading)
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    )
+    .on_hover_text(s.remesh_hint);
+
+    let mut settings = state.remesh;
+    let mut changed = false;
+
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(s.remesh_resolution)
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+        );
+        // Logarithmic, because the numbers a sculptor moves between are 64,
+        // 128, 256 rather than 128, 129, 130: on a linear track the whole
+        // useful lower half of the range is the first centimetre.
+        let slider = ui.add(
+            egui::Slider::new(
+                &mut settings.resolution,
+                clayspace_model::RemeshSettings::RESOLUTION,
+            )
+            .logarithmic(true)
+            .show_value(true),
+        );
+        if slider.changed() {
+            changed = true;
+        }
+        slider.on_hover_text(s.remesh_resolution_hint);
+    });
+
+    for (label, hint, flag) in [
+        (
+            s.remesh_remove_loose,
+            s.remesh_remove_loose_hint,
+            &mut settings.remove_loose_pieces,
+        ),
+        (
+            s.remesh_follow,
+            s.remesh_follow_hint,
+            &mut settings.follow_the_source,
+        ),
+        (s.remesh_sharp, s.remesh_sharp_hint, &mut settings.sharp),
+    ] {
+        let toggle = ui.checkbox(
+            flag,
+            egui::RichText::new(label)
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+        );
+        if toggle.changed() {
+            changed = true;
+        }
+        toggle.on_hover_text(hint);
+    }
+
+    if changed {
+        queue.push(Command::SetRemeshSettings(settings));
+    }
+
+    ui.horizontal(|ui| {
+        // Enabled, and refused by the model where it has to be. The usual
+        // arrangement in this file is to disable a control with its reason on
+        // it, and the one case that would need it here — a mesh row whose
+        // triangles have not arrived, since an import fills one later — is not
+        // a fact the scene carries. Guessing at it from the layer's
+        // representation would disable nothing and only look as though it
+        // did, so the refusal is left where it is measurable: the model
+        // states it and the shell shows it beside the layer stack.
+        let button = ui.button(s.remesh_action);
+        ui.ctx()
+            .memory_mut(|memory| memory.data.insert_temp(remesh_button_id(), button.rect));
+        if button.clicked() {
+            // Made active first, as a conversion is: the rebuild acts on the
+            // active layer, so asking it of a row that is not the active one
+            // would rebuild something else entirely.
+            queue.push(Command::SelectLayer(layer.key));
+            queue.push(Command::RemeshLayer(layer.key));
+        }
+
+        // What the last one came to, beside the button that made it. The
+        // triangle counts are the answer to "was that the resolution I meant";
+        // the piece count is the answer to "why did those two not join".
+        if let Some(outcome) = state.remesh_outcome {
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} → {} {}",
+                    outcome.triangles_before, outcome.triangles_after, s.remesh_result
+                ))
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+            );
+        }
+    });
+
+    let Some(outcome) = state.remesh_outcome else {
+        return;
+    };
+    if outcome.pieces > 1 {
+        ui.label(
+            egui::RichText::new(format!("{} {}", outcome.pieces, s.remesh_pieces))
+                .size(type_scale::LABEL)
+                .color(Tokens::accent()),
+        );
+    }
+    // Both of these are things the sculptor cannot see by looking at the
+    // result, which is the whole reason they are said. Dropped UVs are not a
+    // failure — the engine will not pretend to reproject a layout across a
+    // seam — and a rebuild that did not come out closed is the sharp mode
+    // being what it is documented to be.
+    for notice in [
+        outcome.uvs_dropped.then_some(s.remesh_uvs_dropped),
+        (!outcome.watertight).then_some(s.remesh_not_watertight),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        ui.label(
+            egui::RichText::new(notice)
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+        );
+    }
 }
 
 /// Starting and stopping a recording, and what the stack occupies.

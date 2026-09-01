@@ -62,6 +62,9 @@ descriptors! {
     sys::clay_sculpt_dirty,
     sys::clay_sculpt_budget,
     sys::clay_sdf_preview_delta_info,
+    sys::clay_voxel_remesh_params,
+    sys::clay_voxel_remesh_estimate,
+    sys::clay_voxel_remesh_report,
 }
 
 #[cfg(test)]

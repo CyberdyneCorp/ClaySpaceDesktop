@@ -142,6 +142,28 @@ struct Layer {
     /// vertices are what the engine holds and where they *stand* is
     /// [`ClayDocument::layer_placement`]'s answer.
     mesh_bounds: Option<([f32; 3], [f32; 3])>,
+    /// The engine's geometry revision for this mesh layer, as last seen.
+    ///
+    /// Bumped by the engine every time the layer's triangles are replaced
+    /// wholesale and by nothing else — notably **not** by a sculpt, which
+    /// moves vertices and leaves the topology alone. That is the distinction
+    /// this side needs: a brush is exactly the change a mesh sculptor's
+    /// adjacency and BVH survive, and a rebuild is exactly the change they do
+    /// not.
+    ///
+    /// Remembered rather than asked at the point of use, because the moment
+    /// that matters is one where nothing calls: undoing a remesh replaces the
+    /// triangles from inside the engine's own history, and the only account
+    /// this side gets of it is that the number moved. See
+    /// [`ClayDocument::settle_geometry_revisions`]. Zero for every layer that
+    /// is not a mesh layer.
+    ///
+    /// Named for the engine's own term, and deliberately not for
+    /// [`ClayDocument::mesh_revision`], which is a different number about a
+    /// different thing: that one tells the viewport when to upload again and
+    /// counts every drawn layer together, including the brush strokes this one
+    /// is defined not to move.
+    geometry_revision: u64,
     /// This layer's grid as triangles, one entry per chunk.
     ///
     /// Kept per chunk so an edit costs the edit. Meshing a grid whole after
@@ -247,6 +269,7 @@ impl Layer {
             intensity: 100,
             voxel_bounds: None,
             mesh_bounds: None,
+            geometry_revision: 0,
             voxel_chunks: std::collections::BTreeMap::new(),
             sculpt_layers: Vec::new(),
             symmetry: Self::STARTING_SYMMETRY,
@@ -305,6 +328,33 @@ struct Crossing {
     /// the depth the interface reports: a sculptor made one crossing and has
     /// one thing to undo.
     steps: usize,
+}
+
+/// A rebuild of a mesh layer's topology, and where it sits in the engine's
+/// history.
+///
+/// Recorded because the engine's own signal does not cover the case that
+/// matters most. `clay_document_mesh_layer_revision` is documented as bumped
+/// "every time a layer's triangles are replaced wholesale", and the reason
+/// given for it existing is the cache that a wholesale replacement invalidates
+/// — an adjacency, a BVH, a live sculptor. Measured on ClayCore 0.73.0, it is
+/// bumped by the rebuild and **not by history moving over one**: a layer
+/// attached at revision 1 and rebuilt to revision 2 comes back to its original
+/// 119,100 triangles under undo, and to the rebuilt 37,752 under redo, at
+/// revision 2 throughout. So the one moment the number was added for is the
+/// one moment it says nothing.
+///
+/// Held here in the way this file already holds a crossing: by the engine
+/// depth the step sits at, so a history move across it is recognisable. The
+/// alternative — dropping every mesh sculptor on every undo — puts the weld
+/// back on the interface thread for a step that usually touched no mesh at
+/// all, which is the cost `crate::sculptors` exists to avoid.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Rebuild {
+    layer: LayerKey,
+    /// The engine's undo depth after the rebuild was recorded, as a crossing
+    /// records its own.
+    engine_depth: usize,
 }
 
 /// A layer shown alone, and what the rest looked like before it was.
@@ -567,6 +617,13 @@ pub struct ClayDocument {
     /// reason: any engine edit since has raised the depth, which makes that
     /// edit the more recent one.
     crossing_undo: Vec<Crossing>,
+    /// Where this session's mesh rebuilds sit in the engine's history.
+    ///
+    /// Never pruned by a history step, in either direction: a rebuild undone
+    /// can be redone, and both directions replace the layer's triangles. What
+    /// clears it is the engine truncating the redo stack, which is the only
+    /// event that makes a recorded depth unreachable. See [`Rebuild`].
+    rebuilds: Vec<Rebuild>,
     crossing_redo: Vec<Crossing>,
     /// Layers an undone crossing has taken off the scene.
     ///
@@ -728,6 +785,7 @@ impl ClayDocument {
             mesh_undo: Vec::new(),
             mesh_redo: Vec::new(),
             crossing_undo: Vec::new(),
+            rebuilds: Vec::new(),
             crossing_redo: Vec::new(),
             suppressed: std::collections::HashSet::new(),
             retired: std::collections::HashMap::new(),
@@ -2423,17 +2481,36 @@ impl ClayDocument {
 
         let mask = self.active_mask_source();
 
-        // No gate on the stamp, and that is a measurement rather than an
-        // omission. `clay_item_set_gate` is what would make a mask protect a
-        // surface from an *operation* rather than only from a brush — a mask
-        // over an ear keeps a stroke from depositing there and, without it,
-        // does nothing about the boolean the next stroke performs across the
-        // region. The wrapper exists and matches the documented contract, and
-        // the engine accepts the call and does nothing: measured with a mask
-        // sampling 1.0 at the cut's own centre and 65,752 cells painted, a
-        // subtraction eats the protected region at every width and threshold
-        // tried, and never refuses. `claycore/tests/mask_gate.rs` holds that,
-        // and this comes back the day it fails.
+        // The stamp is gated by the layer's own mask, which is what makes a
+        // mask protect a surface from the *operation* and not only from the
+        // brush. The mask a stroke consumes keeps a stamp from being
+        // deposited where it protects; it says nothing about the boolean each
+        // deposited stamp then performs, so a subtraction crossing a masked
+        // ear used to take the ear anyway.
+        //
+        // Set on the *template* and correct for every stamp, because the gate
+        // is in world space and does not travel with the item: the engine's
+        // header is explicit that "the region it protects is where you
+        // painted it and stays there whatever `clay_item_set_position` ...
+        // then do to the gated item". So this is unlike the alpha above,
+        // which is in the item's own frame and is why a stroke cannot carry
+        // one.
+        //
+        // Until ClayCore 0.67.0 the gate was placed by the transform of the
+        // item it protected, so a stamp with a placement — which every stamp
+        // in a stroke has — carried its protection off to somewhere the
+        // sculptor had not painted, and the call looked inert at every
+        // threshold and width. That is CyberdyneCorp/ClayCore#394, fixed in
+        // the 0.73.0 pin, and it is why this call was removed and is now
+        // back. `claycore/tests/mask_gate.rs` measures it at the boundary.
+        //
+        // Refusal is not failure. The engine refuses a gate that would
+        // protect nothing — an empty mask, or one no cell of which reaches
+        // the threshold — rather than reporting a success that does nothing,
+        // and an ungated stamp is exactly right in that case.
+        if let Some(painted) = self.document.layer_mask(layer) {
+            let _ = stamp.set_gate(&painted, Self::GATE_THRESHOLD, Self::GATE_WIDTH);
+        }
 
         let nodes = self
             .document
@@ -2450,6 +2527,28 @@ impl ClayDocument {
             dirty_bricks: self.dirty.len(),
         })
     }
+
+    /// The paint level a gated stamp treats as protected.
+    ///
+    /// Half, which is also what the engine takes for a threshold at or below
+    /// zero — spelled rather than defaulted, because the number decides what
+    /// a half-pressure edge of the mask brush means and that is the
+    /// application's decision to have made.
+    const GATE_THRESHOLD: f32 = 0.5;
+
+    /// How far a stamp's protection fades across, in world units.
+    ///
+    /// The engine measures the mask into a signed distance and derives the
+    /// falloff from this rather than from the brush edge that painted it, so
+    /// this is the only control over how hard the protected boundary is. It
+    /// trades against the march: the header's own note is that "a WIDE gate
+    /// costs almost no step scale and a NARROW one costs honestly", because
+    /// a narrow fade is a steep field.
+    ///
+    /// Four cells of the brick cache. One or two cells is a boundary the
+    /// viewport cannot resolve anyway, paid for in step scale; much wider and
+    /// the protection bleeds visibly into material the sculptor left unpainted.
+    const GATE_WIDTH: f32 = Self::VOXEL_SIZE * 4.0;
 
     /// How much wider than the brush Inflar's region and rim are, against
     /// Padrão's. Wide enough that the swell reads as a swell beside the
@@ -6319,6 +6418,112 @@ impl SceneModel for ClayDocument {
         Ok(())
     }
 
+    fn remesh_layer(
+        &mut self,
+        key: LayerKey,
+        settings: clayspace_model::RemeshSettings,
+    ) -> Result<clayspace_model::RemeshOutcome, ModelError> {
+        let index = self.index_of(key)?;
+        let layer = &self.layers[index];
+        // Refused by representation rather than left to the engine's
+        // NOT_FOUND, because "essa camada não é uma malha" is the sentence a
+        // sculptor can act on and a result code is not. A field steepens and
+        // is consolidated; a grid has cells and is resampled; only a mesh has
+        // topology to rebuild.
+        if layer.representation != Representation::Mesh {
+            return Err(ModelError::engine(
+                "remalhar reconstrói a topologia de uma malha; esta camada não é uma",
+            ));
+        }
+        if !layer.carries_geometry {
+            return Err(ModelError::engine(
+                "esta camada de malha ainda não carrega triângulos",
+            ));
+        }
+        if let Some(refusal) = layer.protection.refusal() {
+            return Err(ModelError::engine(refusal));
+        }
+        let id = layer.id;
+
+        // Dropped *before* the rebuild rather than after it. The sculptor
+        // holds an adjacency and a BVH over triangles the rebuild is about to
+        // replace, and while the engine refuses a stale one rather than
+        // reading freed storage — it compares the layer's geometry revision
+        // since ABI 0.64.0, which is what catches a rebuild landing on the
+        // same vertex and index counts — a refusal arriving on the sculptor's
+        // next stroke is a failure this side can simply not create.
+        self.mesh_sculptors.borrow_mut().forget(key);
+
+        let settings = settings.sanitized();
+        // The form's longest extent, which is what turns the sculptor's switch
+        // into the world-unit volume the engine's threshold is stated in. Read
+        // before the rebuild, since afterwards it describes the result.
+        let extent = self.layer_bounds(key).map(|(min, max)| {
+            (0..3)
+                .map(|axis| max[axis] - min[axis])
+                .fold(0.0f32, f32::max)
+        });
+        let report = self
+            .document
+            .remesh_layer(id, Self::remesh_params(settings, extent))
+            // The engine fills the report for a refusal too wherever the
+            // numbers exist — an open-surface refusal carries the source's
+            // boundary-edge count — so the count is what the sentence says
+            // rather than the result code. The layer is byte-identical after
+            // one, which is what makes offering a resolution safe.
+            .map_err(|refused| {
+                let report = refused.report;
+                if report.source_was_open && report.source_boundary_edges > 0 {
+                    ModelError::engine(format!(
+                        "a malha está aberta em {} arestas e não pôde ser \
+                         remalhada: {}",
+                        report.source_boundary_edges, refused.error
+                    ))
+                } else {
+                    ModelError::engine(refused.error)
+                }
+            })?;
+
+        // The rebuild replaced every vertex and index, so what this side
+        // remembers about the layer's geometry is now about a mesh that no
+        // longer exists. Both are re-read here rather than left to the next
+        // caller: the box sizes the manipulator and frames the view, and the
+        // revision is what tells an undo of this rebuild that it has to do the
+        // same again.
+        self.refresh_mesh_bounds(key);
+        self.settle_geometry_revisions();
+        // Where this rebuild sits in the engine's history, so a step across it
+        // in either direction is recognisable later. The revision alone cannot
+        // do that — see [`Rebuild`] for the measurement.
+        self.rebuilds.push(Rebuild {
+            layer: key,
+            engine_depth: self.engine_undo_depth(),
+        });
+        // Ready for the pointer on the frame this returns, as a crossing is.
+        // Without it the first stroke after a rebuild has no sculptor, the
+        // pick that would place it answers nothing, and the press orbits the
+        // camera instead — which is the failure `to_mesh.rs` records for the
+        // crossing and is reachable the same way here.
+        //
+        // The *active* layer, which is this one wherever the interface asked:
+        // the control issues `SelectLayer` before `RemeshLayer` for the same
+        // reason a conversion does. Arming `key` unconditionally would pay the
+        // weld for a layer nobody is about to touch, and arming nothing would
+        // leave the layer that is about to be touched without one.
+        self.arm_mesh_sculptor();
+        self.refresh_stats();
+
+        Ok(clayspace_model::RemeshOutcome {
+            triangles_before: report.source_triangles,
+            triangles_after: report.result_triangles,
+            voxel_size: report.voxel_size,
+            pieces: report.result_components,
+            pieces_removed: report.removed_components,
+            watertight: report.result_watertight,
+            uvs_dropped: report.uvs_dropped,
+        })
+    }
+
     fn add_mesh_layer(&mut self, name: &str) -> Result<LayerKey, ModelError> {
         // Carried, not sculpted: the layer is recorded so the tools can refuse
         // it by representation rather than by a special case.
@@ -6356,6 +6561,136 @@ impl SceneModel for ClayDocument {
 impl ClayDocument {
     pub fn layer_id(&self, key: LayerKey) -> Result<LayerId, ModelError> {
         self.index_of(key).map(|index| self.layers[index].id)
+    }
+
+    /// The engine's rebuild parameters for what the interface offers.
+    ///
+    /// Four controls become a parameter block of fourteen, and the rest are
+    /// left at whatever `clay_mesh_voxel_remesh_defaults` says rather than
+    /// transcribed here — the header asks callers not to transcribe them, and
+    /// a value copied out on the day this was written is one that stops
+    /// following the engine silently.
+    ///
+    /// Two of the four are stated rather than passed through. Colours are
+    /// always carried across where the source has them, because a rebuild that
+    /// dropped a sculptor's polypaint would be a repair that costs the work;
+    /// the engine produces none where there were none, so there is nothing to
+    /// decide. And an open surface is **closed** rather than refused: a
+    /// sculptor reaching for this has a form that has gone wrong, and refusing
+    /// the one operation that fixes it because it is not watertight is the
+    /// interface being right about the wrong thing. The outcome says what came
+    /// out, which is where "it closed a hole you wanted" is visible.
+    fn remesh_params(
+        settings: clayspace_model::RemeshSettings,
+        extent: Option<f32>,
+    ) -> claycore::RemeshParams {
+        claycore::RemeshParams {
+            resolution: claycore::Resolution::LongestAxis(settings.resolution),
+            surface: if settings.sharp {
+                claycore::Surface::Sharp
+            } else {
+                claycore::Surface::Smooth
+            },
+            open_surface: claycore::OpenSurface::Close,
+            // What counts as a speck is a policy about forms rather than a
+            // translation of the engine's vocabulary, so the number comes from
+            // the model, where it is derived from the form's own extent and
+            // unit-tested. `None` is "remove nothing", which covers both the
+            // switch being off and there being no extent to scale by.
+            small_components: match settings.loose_piece_volume(extent) {
+                Some(volume) => claycore::SmallComponents::RemoveBelowVolume(volume),
+                None => claycore::SmallComponents::Keep,
+            },
+            preserve_volume: true,
+            projection: settings.follow_the_source.then_some(claycore::Projection {
+                // A lerp and never a snap. Most of the way back to the source,
+                // which recovers the detail the sampling rounded off; not all
+                // of it, because a full pull reintroduces the self-intersecting
+                // geometry the rebuild was asked to remove.
+                strength: 0.8,
+                // Beyond a cell or so the nearest point on the source is not
+                // the corresponding one, and pulling a vertex there is how a
+                // projection turns a clean rebuild into a spiky one.
+                max_distance_voxels: 1.5,
+            }),
+            preserve_colors: true,
+            ..claycore::RemeshParams::default()
+        }
+    }
+
+    /// Re-reads every mesh layer's geometry revision, and drops what a change
+    /// invalidates.
+    ///
+    /// The engine bumps a mesh layer's revision when its triangles are
+    /// replaced wholesale and by nothing else — a brush moves vertices and
+    /// leaves the topology alone, which is exactly the change a sculptor's
+    /// adjacency and BVH survive. So a moved revision is the one signal that
+    /// what this side holds over that layer is now about a mesh that is gone.
+    ///
+    /// Asked here rather than at each site that could rebuild one, because the
+    /// site that matters calls nothing on this side at all: **undoing** a
+    /// remesh puts the old triangles back from inside the engine's own
+    /// history, and the number moving is the only account of it there is. A
+    /// same-count rebuild is the case no other check catches — neither the
+    /// pointer nor the counts move — and it is why the engine grew this number
+    /// in ABI 0.64.0.
+    fn settle_geometry_revisions(&mut self) {
+        // Every layer a rebuild in this session could have put back or taken
+        // away with the depth history now stands at. Both directions replace
+        // the triangles, and the engine's revision reports neither, so this is
+        // the only account there is. Cheap: the list holds one entry per
+        // rebuild a sculptor has actually made, which is a handful per
+        // session, and the depth is a field read.
+        let depth = self.engine_undo_depth();
+        let crossed: Vec<LayerKey> = self
+            .rebuilds
+            .iter()
+            .filter(|rebuild| {
+                // At the rebuild's own depth the layer holds the rebuilt
+                // triangles; one step below it holds what they replaced. Both
+                // are reachable by a single step from the other, so both are
+                // the moment a cache over the layer stops describing it.
+                rebuild.engine_depth == depth || rebuild.engine_depth == depth + 1
+            })
+            .map(|rebuild| rebuild.layer)
+            .collect();
+        for key in crossed {
+            // Unconditional, unlike the revision path below: this is the case
+            // where nothing observable moved. Bounded by there having been a
+            // rebuild on this layer at all — a document nobody has run one on
+            // pays nothing, which is what keeps an ordinary undo from putting
+            // the weld back on the interface thread.
+            self.mesh_sculptors.borrow_mut().forget(key);
+            self.refresh_mesh_bounds(key);
+        }
+
+        let mesh_layers: Vec<(LayerKey, LayerId)> = self
+            .layers
+            .iter()
+            .filter(|layer| layer.representation == Representation::Mesh)
+            .map(|layer| (layer.key, layer.id))
+            .collect();
+        for (key, id) in mesh_layers {
+            let Ok(revision) = self.document.mesh_layer_revision(id) else {
+                continue;
+            };
+            let Ok(index) = self.index_of(key) else {
+                continue;
+            };
+            if self.layers[index].geometry_revision == revision {
+                continue;
+            }
+            self.layers[index].geometry_revision = revision;
+            // Zero is "this layer has no geometry the engine will name", which
+            // is where a mesh row stands before its triangles arrive. Nothing
+            // was ever built over that, so there is nothing to drop and no box
+            // to re-measure.
+            if revision == 0 {
+                continue;
+            }
+            self.mesh_sculptors.borrow_mut().forget(key);
+            self.refresh_mesh_bounds(key);
+        }
     }
 
     /// How a bake-and-replace verb samples the document.
@@ -6593,6 +6928,7 @@ impl ClayDocument {
             mesh_undo: Vec::new(),
             mesh_redo: Vec::new(),
             crossing_undo: Vec::new(),
+            rebuilds: Vec::new(),
             crossing_redo: Vec::new(),
             suppressed: std::collections::HashSet::new(),
             retired: std::collections::HashMap::new(),
@@ -8489,6 +8825,11 @@ impl ClayDocument {
         for key in unmeasured {
             self.refresh_mesh_bounds(key);
         }
+        // And a mesh layer whose triangles history has just *replaced* — an
+        // undone or redone rebuild — keeps its box and its key and changes
+        // underneath both. Only the engine's revision says so. See
+        // `settle_geometry_revisions`.
+        self.settle_geometry_revisions();
     }
 
     /// Re-reads the rig from the document after history moved underneath it.

@@ -1,26 +1,35 @@
 //! Gating an item by a mask, and what the engine does with one.
 //!
-//! `clay_item_set_gate` is the entry point that would make masking protect a
-//! surface from *any* operation rather than only from a brush. The engine's own
-//! note is explicit about the gap it fills: a mask gates authoring elsewhere —
-//! a voxel edit consumes one per cell as it writes, an SDF stroke consumes one
-//! when it becomes items — but "neither touches an item already in the edit
-//! list, so a mask over an ear has never done anything about the next boolean.
-//! This does."
+//! `clay_item_set_gate` is the entry point that makes masking protect a
+//! surface from *any* operation rather than only from a brush. The engine's
+//! own note is explicit about the gap it fills: a mask gates authoring
+//! elsewhere — a voxel edit consumes one per cell as it writes, an SDF stroke
+//! consumes one when it becomes items — but "neither touches an item already
+//! in the edit list, so a mask over an ear has never done anything about the
+//! next boolean. This does."
 //!
-//! Measured, in ClayCore 0.39.0, it does not. The call is accepted and the
-//! subtraction eats the protected region anyway, at every width and threshold
-//! tried, with a mask that samples 1.0 at the cut's own centre. That is against
-//! the entry point's own contract twice over: it neither protects nor refuses,
-//! and the contract promises one or the other — "Refused, leaving the item
-//! ungated, when the mask is empty or nothing reaches the threshold — a gate
-//! that protects nothing and reports success is harder to notice than a
-//! failure."
+//! **It did not, for as long as this repository had measured it.** Through
+//! ClayCore 0.66.0 the call was accepted and the subtraction ate the protected
+//! region anyway, at every width and threshold tried, with a mask sampling 1.0
+//! at the cut's own centre — against the entry point's own contract twice
+//! over, since it neither protected nor refused and the contract promises one
+//! or the other. So these tests were written as tripwires, to fail the day the
+//! engine started honouring the gate.
 //!
-//! So this is written to **fail when the engine starts honouring it**. The
-//! application does not call the gate, because a call per stroke that does
-//! nothing is a cost with no benefit and a promise in the interface that would
-//! not be kept. When this test fails, `stroke_sdf` is where the gate goes back.
+//! They fired on the move to 0.73.0. The cause was never the threshold or the
+//! width: the gate was placed by the transform of *the item it protects*,
+//! while the mask it measures is stored in world units, so a cut with a
+//! placement carried its own protection away from where the mask was painted.
+//! At the identity nothing moves, which is why no fixture upstream caught it.
+//! Fixed in ABI 0.67.0 as CyberdyneCorp/ClayCore#394, and the header now says
+//! outright that "the gate is in world space, and does not travel with the
+//! item".
+//!
+//! So they are held the other way round now: the gate protects, and it
+//! protects at every width and threshold the earlier version swept. That is
+//! what lets `clayspace-engine`'s `stroke_sdf` set a gate on the stroke
+//! template and have every stamp respect it, which is where the call went
+//! back.
 
 use claycore::{
     BrushShape, Document, Falloff, Item, Mask, MeshParams, Op, StrokePreset, StrokeSample,
@@ -83,7 +92,6 @@ fn cut_sphere(gate: Option<(&Mask, f32, f32)>) -> Option<Document> {
     cut.set_op(Op::Subtract).ok()?;
     cut.set_position([0.0, 0.0, 1.0]).ok()?;
     if let Some((mask, threshold, width)) = gate {
-        // Accepted, which is half the problem.
         cut.set_gate(mask, threshold, width).ok()?;
     }
     document.add_item(layer, &cut).ok()?;
@@ -111,13 +119,18 @@ fn the_mask_covers_the_region_the_gate_is_given() {
     );
 }
 
-/// The measurement, held in the direction that makes it a tripwire.
+/// The measurement: a gate protects the region the mask covers.
 ///
-/// When this fails the engine has started honouring the gate. That is the good
-/// outcome, and what changes with it is `clayspace-engine`'s `stroke_sdf`,
-/// where the gate call was removed for exactly this reason.
+/// Held as an inequality on the *rise*, not an equality against the ungated
+/// cut. The gate is a distance measured from the mask and faded across
+/// `width`, so a fully protected centre still sits a little below an
+/// untouched sphere where the fade reaches it — an equality would be asking
+/// the gate to be a step, which is precisely what it is documented not to be.
+///
+/// Measured on 0.73.0: the ungated subtraction takes the top of the sphere
+/// from 1.0 to 0.729, and the gated one leaves it at 1.0.
 #[test]
-fn a_gate_is_accepted_and_does_not_yet_protect() {
+fn a_gate_protects_the_masked_region() {
     let Some(mask) = mask_over_the_cut() else {
         return;
     };
@@ -133,18 +146,25 @@ fn a_gate_is_accepted_and_does_not_yet_protect() {
         "the ungated subtraction did not cut into the sphere ({open}), so the \
          comparison says nothing about the gate"
     );
-    assert_eq!(
-        open, protected,
-        "the gate has started protecting the masked region. That is good news: \
-         clayspace-engine's stroke_sdf removed its set_gate call because this \
-         did nothing, and the call should go back."
+    assert!(
+        protected > open + 0.1,
+        "the gate did not protect the masked region: {protected} against \
+         {open} ungated, on a sphere that started at 1.0. This is what \
+         clayspace-engine's stroke_sdf sets a gate for, and a mask that stops \
+         protecting would leave the call there doing nothing"
     );
 }
 
-/// And it is inert at every width and threshold, so the application is not
-/// simply holding it wrong.
+/// And it protects at every width and threshold, which is the sweep the
+/// earlier version of this file used to establish the opposite.
+///
+/// Worth keeping rather than folding into the test above. What made the old
+/// defect hard to read was that it looked like a tuning problem: the obvious
+/// response to an inert gate is to try a different threshold, and this is the
+/// evidence that no threshold was the answer. Held now, it says the same thing
+/// in the other direction — the protection is not balanced on one lucky pair.
 #[test]
-fn no_width_or_threshold_makes_the_gate_bite() {
+fn every_width_and_threshold_protects() {
     let Some(mask) = mask_over_the_cut() else {
         return;
     };
@@ -158,17 +178,17 @@ fn no_width_or_threshold_makes_the_gate_bite() {
         (0.0, 0.15),
         (0.0, 0.4),
         (0.5, 0.15),
+        (0.5, 0.15),
         (0.1, 0.15),
     ] {
         let Some(gated) = cut_sphere(Some((&mask, threshold, width))) else {
             return;
         };
-        assert_eq!(
-            top_of_the_cut(&gated),
-            open,
-            "a gate at threshold {threshold} and width {width} protected the \
-             region. The engine honours the gate now, and the application \
-             should call it again."
+        let protected = top_of_the_cut(&gated);
+        assert!(
+            protected > open + 0.1,
+            "a gate at threshold {threshold} and width {width} left the region \
+             unprotected: {protected} against {open} ungated"
         );
     }
 }

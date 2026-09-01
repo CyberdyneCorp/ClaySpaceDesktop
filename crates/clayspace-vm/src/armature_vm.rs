@@ -342,9 +342,7 @@ impl ArmatureViewModel {
         let target = Armature::mirrored_position(tree.get(index)?.position)?;
         tree.nodes
             .iter()
-            .position(|node| {
-                (0..3).all(|axis| (node.position[axis] - target[axis]).abs() < 1e-4)
-            })
+            .position(|node| (0..3).all(|axis| (node.position[axis] - target[axis]).abs() < 1e-4))
             .map(|mirror| mirror as NodeIndex)
     }
 

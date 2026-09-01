@@ -26,7 +26,7 @@ and the shelf did not reach: a brush colour and a Pintar that changes a pixel,
 Mover and Planar on a grid, Argila and Vinco on a field, and Mover Topológico
 as a tool of its own.
 
-Engine pinned at ClayCore **0.60.0**, at the tag rather than at `main` — the
+Engine pinned at ClayCore **0.73.0**, at the tag rather than at `main` — the
 tag is a release, `main` is where they are still working. On the reference
 scene a dab is 2.1 ms median against a 50 ms budget and startup to first
 document is 11.4 ms, recorded against 0.52.2 on Linux x86_64. The macOS
@@ -162,19 +162,41 @@ or a split between an off-thread adjacency build and a cheap adopt. Filed from
 this work. See *Subtools: what switching costs*.
 
 [#394](https://github.com/CyberdyneCorp/ClayCore/issues/394) — **`clay_item_set_gate`
-is accepted and inert.** The entry point that would make
-a mask protect a surface from an *operation* rather than only from a brush — the
-engine's own note says "a mask over an ear has never done anything about the
-next boolean. This does." Measured against 0.39.0, it does not: with a mask
-sampling 1.0 at the cut's own centre and 65,752 cells painted, a subtracting
-edit takes the protected region at every width and threshold tried, and the call
-never refuses. The contract promises one or the other — "a gate that protects
-nothing and reports success is harder to notice than a failure". The wrapper is
-written and matches the contract; the application does not call it, because a
-call per stroke that does nothing is a cost with no benefit and a promise in the
-interface that would not be kept. `claycore/tests/mask_gate.rs` is a tripwire
-written to fail when the engine honours it, and names `stroke_sdf` as where the
-call goes back.
+was accepted and inert, and is fixed in the 0.73.0 pin.** The entry point that
+makes a mask protect a surface from an *operation* rather than only from a
+brush — the engine's own note says "a mask over an ear has never done anything
+about the next boolean. This does." Measured against 0.39.0, it did not: with a
+mask sampling 1.0 at the cut's own centre and 65,752 cells painted, a
+subtracting edit took the protected region at every width and threshold tried,
+and the call never refused. So the application did not make it, and
+`claycore/tests/mask_gate.rs` was a tripwire written to fail when the engine
+honoured it, naming `stroke_sdf` as where the call goes back.
+
+It fired on the move to 0.73.0. The cause was never the threshold or the width:
+the gate was placed by the transform of *the item it protects*, while the mask
+it measures is stored in world units, so a cut with a placement carried its own
+protection away from where the mask was painted — and at the identity nothing
+moves, which is why no fixture upstream caught it. Fixed in ABI 0.67.0; the
+header now says outright that "the gate is in world space, and does not travel
+with the item". `stroke_sdf` gates its stroke template, both tripwire files are
+turned around to hold the protection, and measured through the application an
+unmasked subtracting stroke takes the centre of the starting form from 1.0 to
+0.825 where a masked one leaves it at 1.0.
+
+**A mesh layer's geometry revision does not move when history replaces its
+triangles**, and this one is ours to file. `clay_document_mesh_layer_revision`
+is documented as bumped "every time a layer's triangles are replaced wholesale",
+and the reason given for it existing is the cache a wholesale replacement
+invalidates — an adjacency, a BVH, a live sculptor, "wrong in a way nothing else
+detects". Measured on 0.73.0: a layer attached at revision 1 and rebuilt to
+revision 2 comes back to its original 119,100 triangles under undo and to the
+rebuilt 37,752 under redo, at revision 2 throughout. The one moment the number
+was added for is the one moment it is silent — and it is not theoretical, since
+a sculptor who rebuilds, undoes and keeps working gets a refused stroke on the
+next dab. `ClayDocument` records the engine depth each rebuild sits at and drops
+the sculptor when history stands on either side of one;
+`claycore/tests/voxel_remesh.rs` holds the gap as an equality that fails the day
+the engine closes it.
 
 **A placed node's transform, parameters and operation could be set and never
 read** — [#317](https://github.com/CyberdyneCorp/ClayCore/issues/317), and as
@@ -193,8 +215,14 @@ this became true, and it did not: its
 read and never that the readers are absent, so it passes on both sides of the
 change. A tripwire that cannot fail is worth knowing about; the two in
 `crates/claycore/tests` — `mask_gate.rs` and `alpha_deformer.rs` — are written
-the other way and both still hold, so the mask gate is still accepted and
-still does not protect.
+the other way, and the 0.73.0 pin is what they were for. `mask_gate.rs` fired
+and is now held the other way round. `alpha_deformer.rs` did not, and the
+distinction is worth keeping: #392 is in that release and is about a *placed*
+item's stamp arriving in the wrong frame, while what this repository measured is
+that `clay_layer_apply_stroke` does not resolve a template's deformer chain into
+each stamp's frame. Two different things with one issue number between them, so
+`AlphaSupport` still refuses an alpha on an SDF stroke for the reason it always
+gave.
 
 `clay_layer_set_transform`, `clay_layer_set_prim` and
 `clay_layer_set_op_blend` write them; nothing reads any of them back. What can

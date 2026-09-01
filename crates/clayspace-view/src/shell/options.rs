@@ -178,12 +178,7 @@ fn symmetry_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comma
                 // the most expensive surprise on this bar.
                 let response = ui.add_enabled(
                     !state.armature.editing || matches!(axis, Axis::X),
-                    chip_tinted(
-                        axis.label(),
-                        on,
-                        Tokens::ground(),
-                        Tokens::selection_soft(),
-                    ),
+                    chip_tinted(axis.label(), on, Tokens::ground(), Tokens::selection_soft()),
                 );
                 if with_chord(response, state, action).clicked() {
                     queue.push(Command::ToggleSymmetry(*axis));

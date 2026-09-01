@@ -127,6 +127,14 @@ pub struct ShellState<'a> {
     /// own answer could disagree with the one the conversion actually uses.
     pub conversion: clayspace_model::ConversionSettings,
     pub conversion_cost: Option<clayspace_model::Cost>,
+    /// How the next mesh rebuild is made, and what the last one came to.
+    ///
+    /// The outcome is held rather than shown once and lost: a sculptor asks
+    /// "did that actually join?" after looking at the result, not while the
+    /// rebuild is running, and the piece count is the answer. `None` until one
+    /// has been made in this session.
+    pub remesh: clayspace_model::RemeshSettings,
+    pub remesh_outcome: Option<clayspace_model::RemeshOutcome>,
     /// The boolean panel: whether it is open, what it is set to, what could
     /// take part, what the pair would cost, and why the last attempt was
     /// refused.
