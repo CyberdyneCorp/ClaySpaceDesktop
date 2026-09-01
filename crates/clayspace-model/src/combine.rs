@@ -451,8 +451,6 @@ mod tests {
         );
     }
 
-    use super::*;
-
     #[test]
     fn every_operation_has_a_distinct_label() {
         for (i, a) in Combine::ALL.iter().enumerate() {
