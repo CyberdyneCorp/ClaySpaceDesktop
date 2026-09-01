@@ -2508,8 +2508,28 @@ impl ClayDocument {
         // protect nothing — an empty mask, or one no cell of which reaches
         // the threshold — rather than reporting a success that does nothing,
         // and an ungated stamp is exactly right in that case.
-        if let Some(painted) = self.document.layer_mask(layer) {
-            let _ = stamp.set_gate(&painted, Self::GATE_THRESHOLD, Self::GATE_WIDTH);
+        //
+        // And only for the operations that can take material away, which is a
+        // correction rather than an optimisation dressed as one. The engine
+        // *measures* the mask into a signed distance on every `set_gate`, and
+        // a stroke arrives as one call per dab: measured, that is 3.8 ms on a
+        // 36,000-cell mask, every dab, for a mask that has not changed. Gating
+        // unconditionally took `mask.gated_ratio` from 0.92 — a frozen region
+        // costing a stroke nothing — to 8.00, and the benchmark refused the
+        // change for it.
+        //
+        // What makes the narrowing correct rather than a trade is that the
+        // additive half was never the gap. Authoring gating already keeps a
+        // stamp from being deposited where the mask protects, close to totally
+        // — `a_mask_still_keeps_a_brush_from_depositing` measured 1.0005
+        // against an unmasked 1.1400 and passed before any of this. The gap
+        // the engine names is the item already in the edit list whose reach
+        // *removes*: "a mask over an ear has never done anything about the
+        // next boolean." So the gate goes where the boolean is.
+        if combine.op.takes_material_away() {
+            if let Some(painted) = self.document.layer_mask(layer) {
+                let _ = stamp.set_gate(&painted, Self::GATE_THRESHOLD, Self::GATE_WIDTH);
+            }
         }
 
         let nodes = self
