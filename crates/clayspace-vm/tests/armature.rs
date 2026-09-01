@@ -298,7 +298,11 @@ fn inserting_into_a_mirrored_link_keeps_both_branches_symmetric() {
     vm.release();
 
     let tree = vm.tree().get().clone().expect("a tree");
-    assert_eq!(tree.nodes.len(), 5, "only one link received an inserted joint");
+    assert_eq!(
+        tree.nodes.len(),
+        5,
+        "only one link received an inserted joint"
+    );
     assert_eq!(tree.nodes[3].position, [0.2, 0.25, 0.0]);
     assert_eq!(tree.nodes[4].position, [-0.2, 0.25, 0.0]);
     assert_eq!(tree.nodes[1].parent, 3);
