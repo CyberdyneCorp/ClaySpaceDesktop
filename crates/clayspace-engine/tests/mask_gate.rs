@@ -1,16 +1,17 @@
-//! What a mask does, and does not do, to an operation that crosses it.
+//! What a mask does to an operation that crosses it.
 //!
 //! A mask gates *authoring*: an SDF stroke consumes one when it becomes items,
-//! so a brush does not deposit where the mask protects. It does not gate the
-//! item once it is in the edit list, so a subtracting stroke crossing a
-//! protected region takes the material anyway.
+//! so a brush does not deposit where the mask protects. That half has always
+//! worked. The other half is the item once it is in the edit list — a
+//! subtracting stroke crossing a protected region — and `clay_item_set_gate`
+//! is the entry point that closes it.
 //!
-//! `clay_item_set_gate` is the entry point that would close that, and in
-//! ClayCore 0.39.0 it is accepted and inert — measured at the engine boundary
-//! in `claycore/tests/mask_gate.rs`, with a mask sampling 1.0 at the cut's own
-//! centre, at every width and threshold tried. So these tests hold the
-//! behaviour as it is rather than as it should be, and the tripwire that says
-//! when it changes lives one layer down where the measurement is unambiguous.
+//! Through ClayCore 0.66.0 that call was accepted and inert, measured at the
+//! engine boundary in `claycore/tests/mask_gate.rs`, so `stroke_sdf` did not
+//! make it and these tests held the gap as it was rather than as it should be.
+//! ABI 0.67.0 fixed the placement (CyberdyneCorp/ClayCore#394) and the 0.73.0
+//! pin brought it in: the gate is set on the stroke template now, and both
+//! halves are held here.
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
@@ -75,15 +76,16 @@ fn centre(document: &ClayDocument) -> Option<f32> {
         .map(|hit| hit[2])
 }
 
-/// A mask does not yet protect a region from a subtracting edit that crosses
-/// it, and this says so rather than leaving it unstated.
+/// A mask protects a region from a subtracting edit that crosses it.
 ///
-/// Held as an equality on purpose. The tempting version of this test asserts
-/// that the protected region survives, fails, and gets marked `#[ignore]` —
-/// which records nothing and is never looked at again. This records the
-/// behaviour, and it fails the moment the behaviour improves.
+/// Held as a margin rather than an equality against the unmasked cut. The gate
+/// is a distance measured off the mask and faded across a width the
+/// application chooses, so the protected centre is not asked to be untouched
+/// to the last bit — only to be recognisably not cut. Measured on the 0.73.0
+/// pin: the unmasked stroke takes the centre from 1.0 to 0.825 and the masked
+/// one leaves it at 1.0.
 #[test]
-fn a_mask_does_not_yet_protect_a_region_from_a_subtracting_edit() {
+fn a_mask_protects_a_region_from_a_subtracting_edit() {
     let (mut open, mut protected) = (document(), document());
     let start = centre(&open).expect("the starting form is under the ray");
     assert!(
@@ -113,12 +115,11 @@ fn a_mask_does_not_yet_protect_a_region_from_a_subtracting_edit() {
         "the subtraction did not cut into the form ({start} -> {cut}), so the \
          comparison says nothing about the mask"
     );
-    assert_eq!(
-        cut, kept,
-        "a mask has started protecting a region from a subtracting edit. That \
-         is good news and it is what clay_item_set_gate was wrapped for: \
-         claycore's mask_gate test and stroke_sdf's removed gate call should \
-         both change with it."
+    assert!(
+        kept > cut + 0.05,
+        "a masked region was cut anyway: {kept} against an unmasked {cut}, \
+         from a start of {start}. stroke_sdf gates the stroke template with \
+         the layer's mask, and this is what says that reaches the surface"
     );
 }
 

@@ -35,6 +35,7 @@ mod mesh;
 mod mesh_sculpt;
 mod pick;
 mod reader;
+mod remesh;
 mod sculpt;
 mod voxel;
 
@@ -64,6 +65,10 @@ pub use mesh_sculpt::{
 };
 pub use pick::{Hit, Snapped};
 pub use reader::Reader;
+pub use remesh::{
+    OpenSurface, Projection, RemeshEstimate, RemeshParams, RemeshRefusal, RemeshReport, Resolution,
+    SmallComponents, Surface,
+};
 pub use sculpt::{
     resolve_stroke, FlattenMode, FlattenParams, MoveParams, RelaxParams, TopologicalMoveParams,
     VolumeParams,
@@ -136,7 +141,7 @@ pub fn revision() -> &'static str {
 /// constant exists so that a mismatch can also be reported in diagnostics.
 pub const EXPECTED_ABI: Version = Version {
     major: 0,
-    minor: 60,
+    minor: 73,
     patch: 0,
 };
 

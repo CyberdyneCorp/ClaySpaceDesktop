@@ -71,8 +71,8 @@ pub use reference::{
     ReferenceSettings, RememberedReference,
 };
 pub use scene::{
-    FieldHealth, LayerCost, LayerKey, LayerSummary, Protection, Scene, SceneModel, SceneNode,
-    SculptLayer, SculptLayerCost, SculptLayerOp, VoxelStats,
+    FieldHealth, LayerCost, LayerKey, LayerSummary, Protection, RemeshOutcome, RemeshSettings,
+    Scene, SceneModel, SceneNode, SculptLayer, SculptLayerCost, SculptLayerOp, VoxelStats,
 };
 pub use sculpt::{
     Detail, EditOutcome, GestureSample, HistoryEntry, HistoryState, ModelError, SceneStats,

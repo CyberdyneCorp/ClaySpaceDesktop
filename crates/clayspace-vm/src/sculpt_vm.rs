@@ -391,6 +391,9 @@ impl SculptViewModel {
             | Command::ToggleRepair
             | Command::SetConversion(_)
             | Command::RunConversion
+            // How the next rebuild is made, which reaches nothing until it is
+            // asked for.
+            | Command::SetRemeshSettings(_)
             // The stamp is loaded through the composition root, which owns the
             // file dialog; the ViewModel only reads its name back.
             | Command::LoadAlpha
@@ -414,7 +417,13 @@ impl SculptViewModel {
             // Pre-bake repairs move the surface, so the history and the
             // statistics both change — the composition root runs them and
             // refreshes, exactly as it does a conversion.
-            Command::CloseHoles | Command::FillVoids | Command::OptimizeLayer(_) => {}
+            // A rebuild joins them: it replaces a mesh layer's triangles and
+            // leaves it a mesh layer, so the shelf offers what it offered and
+            // only the statistics and the history move.
+            Command::CloseHoles
+            | Command::FillVoids
+            | Command::OptimizeLayer(_)
+            | Command::RemeshLayer(_) => {}
             Command::SelectLayer(_) => self.follow_the_active_layer(),
             Command::ToggleSymmetry(axis) => {
                 let index = match axis {

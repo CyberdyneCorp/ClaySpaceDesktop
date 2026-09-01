@@ -300,10 +300,23 @@ fn posing_the_character_carries_the_limb() {
         !solid_at(&document, [0.82, 0.06, 0.0]),
         "the arm left surface behind where it used to be"
     );
-    // The other arm stayed put: moving a subtree must not move its mirror.
+    // And so did the other arm. A rig is built mirrored — one drag grows two
+    // limbs — and posing it is mirrored for the same reason: a sculptor who
+    // lifts a shoulder on a symmetric character means both shoulders, and
+    // having to repeat every pose on the far side is the thing symmetry exists
+    // to remove. `move_symmetric` reflects the gesture as `[-dx, dy, dz]`, so
+    // this drag — straight up, dx of zero — lifts each side by the same 0.55.
+    //
+    // Held the other way round until now: this asserted that the left arm
+    // stayed put, which was true of the application and is no longer what it
+    // is for. The assertion was the stale half, not the behaviour.
     assert!(
-        solid_at(&document, [-0.82, 0.06, 0.0]),
-        "the left arm moved with the right one"
+        solid_at(&document, [-0.82, 0.61, 0.0]),
+        "the left arm did not follow the right one up"
+    );
+    assert!(
+        !solid_at(&document, [-0.82, 0.06, 0.0]),
+        "the left arm left surface behind where it used to be"
     );
 }
 

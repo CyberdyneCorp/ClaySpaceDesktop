@@ -260,6 +260,14 @@ impl SceneModel for SharedDocument {
     fn add_mesh_layer(&mut self, name: &str) -> Result<LayerKey, ModelError> {
         self.0.borrow_mut().add_mesh_layer(name)
     }
+
+    fn remesh_layer(
+        &mut self,
+        key: LayerKey,
+        settings: clayspace_model::RemeshSettings,
+    ) -> Result<clayspace_model::RemeshOutcome, ModelError> {
+        self.0.borrow_mut().remesh_layer(key, settings)
+    }
 }
 
 impl DocumentModel for SharedDocument {

@@ -338,6 +338,32 @@ mask to the engine all along. `masking.rs` holds both of those.
 engine's own document — `clay_document_add_mask` attaches it and
 `clay_document_save` writes it — so painting one, saving, closing and opening
 again finds the same region frozen and still gating.
+
+**And it now protects against the *operation*, not only against the brush.**
+Those are two different things, and until the ClayCore 0.73.0 pin only the
+first worked. A mask gates *authoring*: a stroke consumes it as it becomes
+items, so a brush does not deposit where you painted. It said nothing about
+what those items then do — so a **subtracting** stroke crossing a masked ear
+took the ear anyway, which is precisely the case a sculptor paints a mask for.
+Measured through the application now: an unmasked subtracting stroke takes the
+centre of the starting form from 1.0 to **0.825**, and a masked one leaves it
+at **1.0**.
+
+The entry point that does this, `clay_item_set_gate`, had been in this
+codebase's engine wrapper doing nothing since v0.39.0 — accepted, and inert at
+every width and threshold tried. The cause was never the tuning: the gate was
+placed by the transform of *the item it protects*, while the mask it measures
+is stored in world units, so a cut with a placement carried its protection away
+from where the mask was painted. Fixed upstream as
+[#394](https://github.com/CyberdyneCorp/ClayCore/issues/394), and the header
+now states the rule the fix rests on — the gate is in world space and does not
+travel with the item, so it can be set once on a stroke's template and be right
+for every mark the stroke makes.
+
+The protection **fades** rather than stopping at a step, across four cells of
+the brick cache. That is not a softness setting: the engine measures the mask
+into a distance and derives the falloff from that width, because a step in the
+field has no finite bound and nothing could march it.
 `mask_persistence.rs` is the round trip, and `claycore_mask_persistence.rs` is
 the boundary measurement underneath it.
 
@@ -610,7 +636,9 @@ turned over, and neither reference offers an inverted smooth.
 A mesh layer comes from an import or from a **crossing** — see *Crossing
 between representations*, where SDF and voxel layers both reach one. Either way
 it is the same kind of thing from here on: the verbs reach both, the quality
-readout measures both, and a save writes both.
+readout measures both, and a save writes both. When the topology stops taking
+what you are asking of it, *When a mesh has stopped taking detail* is the way
+back.
 
 **A drag pulls; it does not slide.** The interface picks the surface under the
 pointer for a stamping verb, because that is where the stamp belongs. A
@@ -1711,6 +1739,66 @@ occupy costs **287 ms**. They used to be one call, which is most of why the
 advice never reached the screen — nothing could afford to ask on a refresh
 path. The scene carries the advice; the estimate is asked for where a sculptor
 is deciding.
+
+## When a mesh has stopped taking detail
+
+The field layer's answer to a form that has become expensive is to collapse it;
+the mesh layer's answer to a form that has become *wrong* is to rebuild it.
+**Refazer a malha** — DynaMesh, in the vocabulary most sculptors bring with
+them — throws the layer's geometry into a voxel grid and marches a new surface
+out of it. Overlapping shells fuse into one skin, self-intersections resolve,
+triangles stretched thin by a long pull disappear, and the density comes out
+even across the whole form. It is what you reach for after pulling a limb
+somewhere its triangles could not follow.
+
+It sits under the layer stack, where a field layer's *Otimizar* row sits, and
+it is offered whenever a mesh subtool is active rather than waiting for advice.
+That difference is deliberate. A field's steepening is something the engine
+measures and can raise a hand about; there is no equivalent number for "this
+topology has stopped taking detail" — the sculptor is the one who can see it,
+so the control waits for them instead of waiting for a measurement that does
+not exist.
+
+**One number and three switches.** The *Resolução* is cells across the form's
+longest dimension, so it means the same thing on a thumbnail and on a bust, and
+the engine reports back what it came to in world units. Detail finer than a
+cell does not survive, which is the whole of what choosing it decides. The
+switches are *Remover pedaços soltos*, which discards fragments too small for
+the resolution to have described anyway; *Seguir a forma atual*, which pulls
+the new surface most of the way back onto the one it replaces so the sampling's
+rounding is recovered — a lerp and never a snap, because pulling all the way
+back reintroduces the geometry the rebuild was asked to remove; and *Arestas
+vivas*, which holds corners instead of rounding them at the cost of the
+watertight guarantee. The engine marks that last mode experimental and so does
+the hint on it.
+
+**It says what it destroyed.** Every rebuild is destructive — vertex and polygon
+identity are gone, and texture coordinates are dropped rather than reprojected,
+because a UV layout spatially reprojected across a seam is a stretched one that
+looks preserved. So the triangle counts before and after stay beside the button
+until the next rebuild, along with the number of separate pieces the form is now
+in. That last one is the answer to the question a sculptor actually asks after
+looking at the result: *did those two actually join?*
+
+**One undo step, and a refusal costs nothing.** Nothing is written until the
+rebuild has succeeded and validated, so asking for a resolution the form turns
+out not to survive gives a sentence and leaves the layer byte-identical. That
+is what makes a resolution control safe to offer at all, rather than something
+to guess at and then undo.
+
+**Sculpting works immediately afterwards, and after undoing it.** A mesh
+sculptor is a weld and an adjacency pass over every triangle — 160 ms on the
+reference form — and a rebuild replaces every triangle it was built over. The
+one held over the old geometry is dropped before the rebuild and a new one is
+ready by the time the panel updates, so the next stroke lands rather than the
+press orbiting the camera. It also holds through **undo**, which took its own
+work: the engine's geometry revision is documented as moving whenever a layer's
+triangles are replaced wholesale, and measured on 0.73.0 it does not move when
+*history* replaces them — 1, 2, 2, 2 across attach, rebuild, undo, redo, while
+the triangle count goes 119,100 / 37,752 / 119,100 / 37,752. So the application
+keeps its own note of where each rebuild sits in the history. Without it, a
+sculptor who rebuilds, dislikes the result, undoes and carries on gets *the mesh
+changed its vertex or index count under this sculptor* on their next dab.
 
 ## Crossing between representations
 

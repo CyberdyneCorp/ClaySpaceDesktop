@@ -341,6 +341,13 @@ struct App {
     deform: clayspace_model::DeformSettings,
     show_convert: bool,
     conversion: clayspace_model::ConversionSettings,
+    /// How the next mesh rebuild is made, and what the last one came to.
+    ///
+    /// Held here rather than in a ViewModel for the same reason the conversion
+    /// settings are: nothing reaches the document until the rebuild is asked
+    /// for, so there is no model state for them to be a view of.
+    remesh: clayspace_model::RemeshSettings,
+    remesh_outcome: Option<clayspace_model::RemeshOutcome>,
     import: ImportSettings,
     export: ExportSettings,
     /// What a dragging verb took hold of, and where the pointer was then.
@@ -525,6 +532,8 @@ impl App {
             deform: clayspace_model::DeformSettings::default(),
             show_convert: false,
             conversion: clayspace_model::ConversionSettings::default(),
+            remesh: clayspace_model::RemeshSettings::default(),
+            remesh_outcome: None,
             import: ImportSettings::default(),
             export: ExportSettings::default(),
             renaming: None,
@@ -3035,6 +3044,44 @@ impl App {
         }
     }
 
+    /// Rebuilds the active mesh layer's topology — DynaMesh.
+    ///
+    /// Run through the composition root rather than through the scene
+    /// ViewModel's `dispatch` because it has an answer to carry back: a
+    /// rebuild destroys the topology it replaces, and the outcome is the only
+    /// account of what went with it.
+    ///
+    /// Held rather than shown once. A sculptor asks "did those two actually
+    /// join?" after looking at the result, and the piece count is where that
+    /// is answered — so it stays beside the button until the next rebuild
+    /// replaces it.
+    ///
+    /// A refusal leaves the layer byte-identical, which the engine guarantees
+    /// and which is what makes offering a resolution slider safe at all: the
+    /// sculptor can ask for one the form will not survive and get a sentence
+    /// rather than a half-rebuilt mesh.
+    fn run_remesh(&mut self, key: clayspace_model::LayerKey) {
+        let settings = self.remesh;
+        let outcome =
+            self.busy(|app| app.timed("remesh layer", |app| app.scene.remesh(key, settings)));
+        match outcome {
+            Ok(outcome) => {
+                self.remesh_outcome = Some(outcome);
+                self.document_vm.touched();
+                // The layer's triangles are new ones. The carried-geometry
+                // path re-reads them from the document, and the statistics and
+                // the mask both follow the same way a repair's do.
+                self.sync_geometry();
+                self.sync_mesh_layers();
+                self.sync_mask();
+            }
+            // Shown by the scene ViewModel's refusal, which the shell already
+            // reads: a rebuild refused for an unusable resolution is the same
+            // kind of answer as a rename refused for an empty name.
+            Err(e) => eprintln!("a malha não pôde ser refeita: {e}"),
+        }
+    }
+
     /// Opens the rename field on a layer, seeded with the name it has.
     ///
     /// Seeded rather than blank: renaming is usually a correction to what is
@@ -3250,6 +3297,8 @@ impl App {
         match command {
             Command::ToggleConvert => self.show_convert = !self.show_convert,
             Command::SetConversion(settings) => self.conversion = settings.sanitized(),
+            Command::SetRemeshSettings(settings) => self.remesh = settings.sanitized(),
+            Command::RemeshLayer(key) => self.run_remesh(*key),
             Command::RunConversion => self.run_conversion(),
             Command::ToggleRepair => self.show_repair = !self.show_repair,
             Command::SculptLayer(op) => self.run_sculpt_layer_op(op.clone()),
@@ -3473,6 +3522,8 @@ impl App {
                 .flatten(),
             show_convert: self.show_convert,
             conversion: self.conversion,
+            remesh: self.remesh,
+            remesh_outcome: self.remesh_outcome,
             // Asked of the document, which is the only layer that can see the
             // bounds a region is measured against.
             conversion_cost: self

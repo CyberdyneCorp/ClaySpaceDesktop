@@ -202,6 +202,8 @@ fn state<'a>(
         surface_opacity: clayspace_model::SurfaceOpacity::default(),
         show_convert: false,
         conversion: clayspace_model::ConversionSettings::default(),
+        remesh: clayspace_model::RemeshSettings::default(),
+        remesh_outcome: None,
         conversion_cost: None,
         // A mask with something in it, so the menu's enabled state is what the
         // capture shows rather than a row of grey.
