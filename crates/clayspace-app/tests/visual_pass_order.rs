@@ -9,6 +9,16 @@
 //! form is deepest, which is where they are most likely to be aiming.
 //!
 //! So the scaffolding is drawn after the composite, and this holds it there.
+//!
+//! The scaffolding *is* drawn faint where the sculpt stands in front of it,
+//! which is a depth cue and not occlusion: it comes from one comparison against
+//! the depth the sculpt wrote, it is the same with occlusion on and off, and
+//! the reduction it reads runs either way for exactly that reason. What it does
+//! change is what a *faint* pixel contains — forty percent widget over sixty
+//! percent form — so a faint pixel darkens with occlusion because the form
+//! showing through it does. The invariant here is therefore stated over the
+//! pixels the manipulator covers opaquely, which is where the question "was the
+//! widget darkened" has an answer at all.
 
 mod support;
 
@@ -114,6 +124,11 @@ fn occlusion_does_not_darken_the_manipulator() {
 
     harness.renderer.set_occlusion(false);
     let plain = harness.capture(geometry.mesh(), &camera, false, "9a-order-plain");
+    // The same manipulator with nothing behind it, which is its own colour at
+    // full strength: the scaffolding is drawn faint where the sculpt stands in
+    // front of it, and nothing stands in front of it here.
+    let nothing = clayspace_view::GpuMesh::new(&harness.gpu);
+    let whole = harness.capture(&nothing, &camera, false, "9a-order-whole");
     no_manipulator(&mut harness);
     let bare_plain = harness.capture(geometry.mesh(), &camera, false, "9a-order-bare-plain");
 
@@ -124,11 +139,25 @@ fn occlusion_does_not_darken_the_manipulator() {
     let covered: Vec<(u32, u32)> = scaffolding_pixels(&plain, &bare_plain)
         .into_iter()
         .filter(|at| under_occlusion.contains(at))
+        // Only where the manipulator is drawn *opaquely*, which is where it is
+        // in front of the form or clear of it.
+        //
+        // Where it is drawn faint the form shows through it, and that form is
+        // legitimately shaded by occlusion — so such a pixel does darken, and
+        // what darkened is the sculpt behind the widget rather than the widget.
+        // Opaque is read off the frame rather than assumed: a pixel that is the
+        // manipulator's own colour with the form there and with it removed had
+        // nothing of the form in it.
+        .filter(|(x, y)| {
+            let (drawn, full) = (plain.pixel(*x, *y), whole.pixel(*x, *y));
+            (0..3).all(|c| drawn[c].abs_diff(full[c]) <= 8)
+        })
         .collect();
     assert!(
         covered.len() > 300,
-        "the manipulator covered only {} pixels in both frames, so this \
-         measures nothing — see target/visual/9a-order-occluded.png",
+        "the manipulator was drawn opaquely over only {} pixels of both \
+         frames, so this measures nothing — see \
+         target/visual/9a-order-occluded.png",
         covered.len()
     );
 

@@ -1033,7 +1033,9 @@ that:
 - **The form is drawn through.** Half the control points are behind it, and a
   solid surface hides exactly the handles that need reaching. Blender's X-ray
   and ZBrush's Ghost do the same thing for the same reason. Seen through, not
-  turned off: the form stays readable as a form.
+  turned off: the form stays readable as a form. A ghosted surface writes no
+  depth, which is also why the cage keeps full-strength handles while the
+  manipulator on solid clay is drawn faint where the clay is in front of it.
 - **Handles keep their size.** They are sized from the box the cage was *built*
   with, not from where its points are now. Sized from the current extent — as
   they were at first — hauling one corner out inflated every other handle, so
@@ -1073,6 +1075,30 @@ cannot use. The rings sit inside the arrows' reach and the boxes inside the
 rings, so the three are told apart by radius as well as by shape; the outer
 ring stays outside everything at 1.28 of the reach, and the picture and the
 hit test read the same constants.
+
+**It is seen through the form it stands on.** Every part of the widget is
+drawn wherever it is — a handle behind the clay is never hidden, which is what
+makes the far half of a cage reachable at all — but a part with the sculpt in
+front of it is drawn **faint**. Drawn at one strength everywhere, a rotate ring
+around a head reads as a circle painted on the frame; faint on its far half, it
+reads as a hoop the head passes through, and which way it will turn under a drag
+becomes something a sculptor can see rather than infer.
+
+Faint says *behind*, never *unavailable*. The hit test walks every handle by ray
+and ignores depth entirely, so a handle drawn faint is grabbed on exactly the
+same terms as a bright one; that is also why it is not drawn fainter still, since
+past a point a pale handle reads as disabled, which would be a lie about what a
+click does.
+
+It is a comparison against the depth the clay wrote, and the clay is the only
+thing that writes depth. So a widget over empty space, over the grid, over a
+symmetry plane, over a reference photograph — or over a **ghosted** surface — is
+drawn exactly as it always was. That last one matters more than it sounds:
+whenever a cage is up the surface is ghosted, so a cage keeps the full-strength
+scaffolding it has always had, and the depth cue appears on the case that asked
+for it, a manipulator on solid clay. The orientation gizmo in the corner is left
+out entirely — it has a camera of its own, and the clay's depth in those pixels
+says nothing about where it stands.
 
 **The widget stands over the whole form.** Its arms reach past the target's
 own box — an object's outline, a subtool's bounds — with a floor at the
