@@ -152,6 +152,50 @@ impl Combine {
         matches!(self, Self::Relief | Self::Incise)
     }
 
+    /// Whether this operation can take material away from a region a mask
+    /// protects, and so has to be gated as an *item* rather than only as a
+    /// brush.
+    ///
+    /// A mask gates authoring: the engine consumes it as a stroke becomes
+    /// items, so no stamp is deposited where the sculptor froze. That half has
+    /// always worked, and measured it is close to total — 1.0005 against
+    /// 1.1400 for the same additive stroke unmasked, on a sphere that started
+    /// at 1.0. What it does not cover is an item already in the edit list
+    /// whose reach extends past where it was deposited, which is the engine's
+    /// own framing: "a mask over an ear has never done anything about the next
+    /// boolean."
+    ///
+    /// That gap only bites when the reach *removes*. An additive or outward
+    /// displacing stamp landing beside a frozen region adds a little material
+    /// at its rim; a subtracting one eats the ear. So this is what decides
+    /// whether `clay_item_set_gate` is worth calling, and the distinction is
+    /// not cosmetic: the engine measures the mask into a signed distance every
+    /// time that call is made, which costs **3.8 ms** on a 36,000-cell mask
+    /// and is paid per dab. Gating every operation took a stroke on a masked
+    /// subtool from 0.92x the cost of an ungated one to 8x — measured by
+    /// `mask.gated_ratio`, and the reason this predicate exists.
+    ///
+    /// Read after inversion, never before: holding the invert key turns Relief
+    /// into Incise, and it is the operation that actually runs that decides
+    /// whether anything can be taken away.
+    pub fn takes_material_away(self) -> bool {
+        match self {
+            // The two that remove wholesale.
+            Self::Subtract | Self::Intersect => true,
+            // Replaces what is under it, so what was there can go.
+            Self::Replace => true,
+            // The cutting family: a channel, a deboss, a lip set into the
+            // surface, a wall hollowed out of it, a crease.
+            Self::Groove | Self::Engrave | Self::Inset | Self::Shell | Self::Incise => true,
+            // Additive, or displacing outward: Tongue keeps the ridge a groove
+            // would have cut, Pipe lays a bead, Emboss raises, Relief pushes
+            // the surface along its own normal. Paint moves no surface at all.
+            Self::Add | Self::Tongue | Self::Pipe | Self::Emboss | Self::Relief | Self::Paint => {
+                false
+            }
+        }
+    }
+
     /// Whether the operation does nothing at all without a distance.
     ///
     /// For most operations the radius rounds a join that would otherwise be
@@ -355,6 +399,57 @@ impl CombineSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every operation answers, and the two ends are the ones that matter.
+    ///
+    /// Held as a whole-enum sweep rather than a spot check because the cost of
+    /// getting one wrong is asymmetric and silent: a false positive makes a
+    /// stroke on a masked subtool several times slower, and a false negative
+    /// lets a cut eat a region the sculptor froze. A new operation added to
+    /// `Combine` without a thought about this fails to compile, since the match
+    /// is exhaustive.
+    #[test]
+    fn only_the_operations_that_remove_need_an_item_gate() {
+        for op in Combine::ALL {
+            let removes = op.takes_material_away();
+            match op {
+                Combine::Subtract | Combine::Intersect | Combine::Replace => {
+                    assert!(removes, "{} removes wholesale", op.label())
+                }
+                Combine::Groove
+                | Combine::Engrave
+                | Combine::Inset
+                | Combine::Shell
+                | Combine::Incise => assert!(removes, "{} cuts in", op.label()),
+                Combine::Add
+                | Combine::Tongue
+                | Combine::Pipe
+                | Combine::Emboss
+                | Combine::Relief
+                | Combine::Paint => {
+                    assert!(!removes, "{} adds or displaces outward", op.label())
+                }
+            }
+        }
+    }
+
+    /// Inverting an operation can turn it into one that needs the gate.
+    ///
+    /// Relief is the ordinary stroke and takes nothing away; held with the
+    /// invert key it becomes Incise, which does. This is why `stroke_sdf` asks
+    /// the question *after* resolving the inversion — asking before would leave
+    /// a masked region unprotected from exactly the gesture a sculptor uses to
+    /// cut.
+    #[test]
+    fn inverting_a_displacing_stroke_makes_it_one_that_removes() {
+        assert!(!Combine::Relief.takes_material_away());
+        let inverted = Combine::Relief.inverted().expect("relief has an opposite");
+        assert_eq!(inverted, Combine::Incise);
+        assert!(
+            inverted.takes_material_away(),
+            "an inverted relief stroke cuts, and has to be gated as one"
+        );
+    }
 
     #[test]
     fn every_operation_has_a_distinct_label() {
