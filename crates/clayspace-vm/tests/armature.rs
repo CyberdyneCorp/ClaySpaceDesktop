@@ -283,6 +283,29 @@ fn mirrored_authoring_grows_both_sides() {
 }
 
 #[test]
+fn inserting_into_a_mirrored_link_keeps_both_branches_symmetric() {
+    let mut vm = ArmatureViewModel::new(FakeRig::default().boxed());
+    vm.begin([0.0, 0.0, 0.0]);
+    vm.press(Grab::Grow(0), [0.0, 0.0, 0.0]);
+    vm.drag([0.6, 0.0, 0.0]);
+    vm.release();
+
+    // The pair created above owns links 0→1 and 0→2. Inserting into one
+    // must insert into both, then carry the two new joints together.
+    vm.press(Grab::Insert(1), [0.3, 0.0, 0.0]);
+    vm.drag([0.3, 0.0, 0.0]);
+    vm.drag([0.2, 0.25, 0.0]);
+    vm.release();
+
+    let tree = vm.tree().get().clone().expect("a tree");
+    assert_eq!(tree.nodes.len(), 5, "only one link received an inserted joint");
+    assert_eq!(tree.nodes[3].position, [0.2, 0.25, 0.0]);
+    assert_eq!(tree.nodes[4].position, [-0.2, 0.25, 0.0]);
+    assert_eq!(tree.nodes[1].parent, 3);
+    assert_eq!(tree.nodes[2].parent, 4);
+}
+
+#[test]
 fn the_highlight_follows_the_pointer() {
     let mut vm = rigged();
     let (origin, direction) = ray_at(1.0, 0.0);

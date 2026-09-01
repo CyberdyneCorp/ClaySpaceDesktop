@@ -129,6 +129,28 @@ fn a_mirrored_zsphere_stays_mirrored_while_dragging() {
 }
 
 #[test]
+fn an_inserted_mirrored_joint_keeps_its_branches_paired() {
+    let Some(mut rig) = Rigging::new() else {
+        return;
+    };
+    rig.begin([0.0, 0.0, 0.0]);
+    rig.gesture(Grab::Grow(0), [0.0, 0.0, 0.0], &[[0.6, 0.0, 0.0]]);
+
+    rig.gesture(
+        Grab::Insert(1),
+        [0.3, 0.0, 0.0],
+        &[[0.3, 0.0, 0.0], [0.2, 0.25, 0.0]],
+    );
+
+    let tree = rig.armature.tree().get().clone().expect("a tree");
+    assert_eq!(tree.nodes.len(), 5);
+    assert_eq!(tree.nodes[3].position, [0.2, 0.25, 0.0]);
+    assert_eq!(tree.nodes[4].position, [-0.2, 0.25, 0.0]);
+    assert_eq!(tree.nodes[1].parent, 3);
+    assert_eq!(tree.nodes[2].parent, 4);
+}
+
+#[test]
 fn a_second_undo_takes_the_rig_itself() {
     let Some(mut rig) = Rigging::new() else {
         return;

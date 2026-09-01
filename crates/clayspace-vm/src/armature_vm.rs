@@ -298,13 +298,14 @@ impl ArmatureViewModel {
             Grab::Insert(child) => match state.grown {
                 // Already inserted; the rest of the gesture moves it, so a
                 // joint can be placed off the line it was inserted on.
-                Some(inserted) => self.model.move_zsphere(inserted, delta),
-                None => match self.model.insert_zsphere(child) {
+                Some(inserted) => self.move_symmetric(inserted, state.mirror, delta),
+                None => match self.insert_symmetric(child, state.mirror) {
                     Ok(inserted) => {
                         if let Some(drag) = self.drag.as_mut() {
                             drag.grown = Some(inserted);
                         }
                         self.selected.set(Some(inserted));
+                        grown = Some(inserted);
                         Ok(())
                     }
                     Err(e) => Err(e),
@@ -372,6 +373,18 @@ impl ArmatureViewModel {
             self.model.resize_zsphere(mirror, radius)?;
         }
         Ok(())
+    }
+
+    fn insert_symmetric(
+        &mut self,
+        child: NodeIndex,
+        mirror: Option<NodeIndex>,
+    ) -> Result<NodeIndex, clayspace_model::ModelError> {
+        let inserted = self.model.insert_zsphere(child)?;
+        if let Some(mirror) = mirror {
+            self.model.insert_zsphere(mirror)?;
+        }
+        Ok(inserted)
     }
 
     pub fn release(&mut self) {
