@@ -2646,8 +2646,9 @@ changes it, because that is where a person looks for it.
 
 ## Not built yet
 
-Panels cannot be resized or collapsed and shortcuts are fixed. See
-[roadmap.md](roadmap.md).
+Shortcuts are fixed. See [roadmap.md](roadmap.md). Panels *can* be resized and
+collapsed — see [Interface](#interface); this line said otherwise until
+`the-regions-move-and-are-remembered` built it.
 
 **The rest of the domain's vocabulary, in more than one language.** The brush
 names go through the string tables now. The other 62 label arms across 14 enums
@@ -2696,13 +2697,6 @@ while `[0, 0, 0.7]` and `[0, 0, 1.0]`, which mean nothing in that frame, lift
 the whole path evenly instead of leaving the mark the stamp carries.
 `claycore/tests/alpha_deformer.rs` measures it. Upstream, as
 [ClayCore#392](https://github.com/CyberdyneCorp/ClayCore/issues/392).
-
-**A mask that gates an already-authored SDF operation.** `clay_item_set_gate`
-is accepted and inert: measured with a mask sampling 1.0 at a cut's own centre
-and 65,752 cells painted, a subtraction eats the protected region at every
-width and threshold tried. `claycore/tests/mask_gate.rs` is written to fail the
-day it works, and it is
-[ClayCore#394](https://github.com/CyberdyneCorp/ClayCore/issues/394).
 
 **A live preview under a voxel drag.** A grab composes destructively — the same
 total drag split into eight one-cell emissions moves nothing — so Mover on a
@@ -2759,16 +2753,15 @@ stroke rather than the representation, since two of the three take a stamp —
 instead of passing an alpha that would be discarded. `claycore`'s
 `alpha_deformer` test fails the day the stroke carries the chain.
 
-**A mask gating an operation.** A mask gates *authoring*: a brush does not
-deposit where the mask protects. It does not gate an item already in the edit
-list, so a subtracting stroke crossing a protected region takes the material
-anyway. `clay_item_set_gate` is the entry point that would close that and it is
-accepted and inert in 0.39.0 — measured with a mask sampling 1.0 at the cut's own
-centre and 65,752 cells painted, at every width and threshold tried, never
-refusing. The wrapper is written and matches the documented contract; the
-application does not call it, because a call per stroke that does nothing is a
-cost with no benefit and a promise the interface could not keep. Both
-`mask_gate` tests fail when the engine honours it.
+**A mask gating an operation** — *no longer absent.* It was, for as long as
+`clay_item_set_gate` was accepted and inert: measured on 0.39.0 with a mask
+sampling 1.0 at the cut's own centre and 65,752 cells painted, at every width
+and threshold tried, a subtraction ate the protected region and the call never
+refused. The wrapper matched the documented contract and the application
+declined to make the call, because a call per stroke that does nothing is a
+cost with no benefit and a promise the interface could not keep, and both
+`mask_gate` tests were written to fail the day the engine honoured it. They
+fired on v0.73.0. See *Masking* for what it does now.
 
 **Windows.** Out of scope for this change.
 
