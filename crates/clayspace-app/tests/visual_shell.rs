@@ -113,6 +113,7 @@ fn diagnostics() -> clayspace_model::Diagnostics {
         app_version: "ClaySpaceDesktop 0.1.0".into(),
         engine_version: "claycore 0.27.3".into(),
         engine_revision: "v0.27.3-0-g804fc9d".into(),
+        document_format: "1.16".into(),
         platform: "macos aarch64".into(),
         backends: vec!["cpu".into(), "metal".into()],
         active_backend: "metal".into(),

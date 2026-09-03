@@ -35,6 +35,14 @@ pub struct Diagnostics {
     /// and differ by a commit, which is exactly the case that cost this
     /// project a round of issues filed against a stale engine.
     pub engine_revision: String,
+    /// The `.clayspace` container version this build writes, as `major.minor`.
+    ///
+    /// In the report because it is the answer to the one question a document
+    /// this build wrote can raise elsewhere: a build older than the one that
+    /// introduced a minor *refuses* the file rather than misreading it, so
+    /// "it will not open on the other machine" has a number behind it that a
+    /// person can quote.
+    pub document_format: String,
     pub platform: String,
 
     /// Every backend the engine registered on this machine.
@@ -158,6 +166,7 @@ impl Diagnostics {
         line("application", &self.app_version);
         line("engine", &self.engine_version);
         line("engine revision", &self.engine_revision);
+        line("document format", &self.document_format);
         line("platform", &self.platform);
         line("backends", &self.backends.join(", "));
         line(
@@ -254,6 +263,7 @@ mod tests {
             app_version: "0.1.0".into(),
             engine_version: "0.27.3".into(),
             engine_revision: "804fc9d".into(),
+            document_format: "1.16".into(),
             platform: "macos aarch64".into(),
             backends: vec!["cpu".into(), "metal".into()],
             active_backend: "metal".into(),

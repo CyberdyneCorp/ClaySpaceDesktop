@@ -382,6 +382,7 @@ impl BackendPolicy {
             app_version: format!("ClaySpaceDesktop {}", env!("CARGO_PKG_VERSION")),
             engine_version: format!("claycore {}", claycore::version()),
             engine_revision: claycore::revision().to_string(),
+            document_format: claycore::Document::FORMAT.to_string(),
             platform: format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
             backends: self.available.iter().map(ToString::to_string).collect(),
             active_backend: self.active.to_string(),

@@ -59,7 +59,8 @@ pub use brick::{
 pub use brush::{Accumulation, BrushParams, BrushShape, Falloff, StrokePreset, StrokeSample};
 pub use consolidate::{ConsolidationCost, ConsolidationParams, FieldReport};
 pub use document::{
-    prim, ArmatureEdit, Document, GizmoCage, Item, LayerId, NodeId, PointType, Primitive, Profile,
+    prim, ArmatureEdit, Document, FormatVersion, GizmoCage, Item, LayerId, NodeId, PointType,
+    Primitive, Profile,
 };
 pub use error::{ClayError, ErrorKind, Result};
 pub use live::{
