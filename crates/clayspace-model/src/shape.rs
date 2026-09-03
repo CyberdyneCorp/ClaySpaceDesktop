@@ -543,7 +543,8 @@ pub trait ObjectModel {
     /// into a volume of its own, so sculpting the copy cannot reach the
     /// original. An instance would be cheaper and would share the field, which
     /// is the upstream ask (ClayCore #364); until it lands, saying "instance"
-    /// would name something this cannot do.
+    /// would name something this cannot do. Re-checked against ClayCore
+    /// v0.78.0, which adds no instancing entry point and does not name #364.
     fn copy_subtool(
         &mut self,
         from: crate::LayerKey,

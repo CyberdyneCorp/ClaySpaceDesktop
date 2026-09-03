@@ -256,6 +256,11 @@ fn a_layer_rebuild_replaces_the_layer_and_is_undoable() {
     // 0.73.0, attach 1 / rebuild 2 / undo 2 / redo 2, with the triangle count
     // going 119,100 -> 37,752 -> 119,100 -> 37,752.
     //
+    // Re-checked at v0.78.0 and unchanged. The revision work in that release
+    // is all in the new tier — the surface view's four counters and the
+    // hierarchy's three — and `clay_document_mesh_layer_revision` is not among
+    // the entry points it touches.
+    //
     // So the one moment the number was added for is the one moment it is
     // silent. Held as an equality rather than left unstated, because
     // `clayspace-engine` carries a second record — the engine depth a rebuild

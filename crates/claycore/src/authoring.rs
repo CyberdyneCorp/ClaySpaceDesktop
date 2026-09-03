@@ -912,17 +912,6 @@ impl Document {
             .collect())
     }
 
-    /// The layers this document holds, discovered by probing.
-    ///
-    /// The C ABI has no enumeration: a host knows the layers it created and,
-    /// after `clay_document_load`, knows nothing. So this asks `clay_layer_bounds`
-    /// for consecutive ids and keeps the ones that answer, stopping after a run
-    /// of misses long enough to clear any gap left by a removal.
-    ///
-    /// It recovers ids and nothing else. Names, visibility, representation and
-    /// stack order have no getters, so a document that comes back from disk
-    /// comes back anonymous and in creation order rather than the order it was
-    /// saved in. Filed as ClayCore #69; when enumeration lands this goes.
     /// Every layer, in **stack order** — index 0 is evaluated first.
     ///
     /// Until ClayCore 0.29.0 there was no enumeration at all, and this probed
@@ -930,7 +919,12 @@ impl Document {
     /// run of eight misses before giving up. That guessed: a document with
     /// nine removals in a row came back short, and the order was the id order
     /// rather than the evaluation order — so a reopened document could
-    /// evaluate differently from the one saved. See ClayCore #69.
+    /// evaluate differently from the one saved. See ClayCore #69, which
+    /// enumeration closed: this asks `clay_document_layer_count` and
+    /// `clay_document_layer_at`, and [`Self::layer_info`] and
+    /// [`Self::layer_name`] answer for what each layer is. Re-checked at
+    /// v0.78.0 — what is still write-only is a *node*, one level down, which
+    /// is `tests/claycore_repros.rs` and a different ask.
     pub fn layer_ids(&self) -> Result<Vec<LayerId>> {
         let mut count: usize = 0;
         // SAFETY: a valid handle and one out-parameter.

@@ -49,6 +49,11 @@ pub enum Surface {
     /// triangles — and is **experimental**: the engine does not claim the
     /// watertight guarantee for it, and measured it is not manifold at
     /// longest-axis 96.
+    ///
+    /// ClayCore v0.78.0 states this among its own known limits, in those
+    /// words, and marks it "unchanged from v0.73.0". So the warning
+    /// `ExportMesher::Sharp` carries — *experimental no motor* — is still the
+    /// honest thing to say beside it.
     Sharp,
 }
 
