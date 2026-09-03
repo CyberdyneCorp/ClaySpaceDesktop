@@ -3722,28 +3722,14 @@ impl App {
             // An object refusal was the same Observable nobody read: a
             // re-shape, a re-combine, a removal and a refused transform each
             // wrote one and none of them reached the screen.
-            tool_status: self
-                // The document's own, first: a save or an open that failed is
-                // the most recent explicit action there is, and it is the one
-                // whose silence costs work rather than a click. This
-                // Observable has said "the last failure, for the interface to
-                // show" since it was written and nothing showed it — so a
-                // save refused because a hierarchy's side-car could not be
-                // written went to stderr, and the sculptor was left looking at
-                // a document that had failed to save and did not say so.
-                .document_vm
-                .notice()
-                .get()
-                .as_deref()
-                .or(self.references.notice().get().as_deref())
-                .or(self.mask.notice().get().as_deref())
-                .or(self.objects.notice().get().as_deref())
-                // The scene's, which `run_remesh` has claimed reaches the
-                // screen since it was written and did not: nothing read this
-                // Observable, so a rebuild refused for an unusable resolution
-                // — and now a level refused for its peak — went to stderr.
-                .or(self.scene.refusal().get().as_deref())
-                .or(self.sculpt.tool_status().get().as_deref()),
+            tool_status: tool_status(ToolStatusSources {
+                document: self.document_vm.notice().get().as_deref(),
+                reference: self.references.notice().get().as_deref(),
+                mask: self.mask.notice().get().as_deref(),
+                object: self.objects.notice().get().as_deref(),
+                scene: self.scene.refusal().get().as_deref(),
+                sculpt: self.sculpt.tool_status().get().as_deref(),
+            }),
             symmetry: self.active_symmetry(),
             scene: &scene,
             renaming: self
@@ -4543,6 +4529,48 @@ impl ApplicationHandler for App {
     }
 }
 
+/// Every source that can explain "why that did not happen", in the order the
+/// options bar prefers them.
+///
+/// Named rather than positional because the order *is* the behaviour: four of
+/// these six were Observables that nothing read, and each was found the same
+/// way — an action refused, a sentence written, and no sentence on screen. A
+/// tuple of six `Option<&str>` would let a reorder pass review unnoticed.
+struct ToolStatusSources<'a> {
+    /// A save or an open that failed. First because it is the most recent
+    /// explicit action there is, and the one whose silence costs work rather
+    /// than a click: a save refused because a hierarchy's side-car could not
+    /// be written went to stderr, and the sculptor was left looking at a
+    /// document that had failed to save and did not say so.
+    document: Option<&'a str>,
+    /// A PNG that will not load, which is a sentence naming what is wrong with
+    /// *that* file.
+    reference: Option<&'a str>,
+    /// Extruding on a layer that has no field to extrude from.
+    mask: Option<&'a str>,
+    /// A re-shape, a re-combine, a removal or a refused transform.
+    object: Option<&'a str>,
+    /// A rebuild refused for an unusable resolution, and now a level refused
+    /// for its peak. `run_remesh` has claimed this reaches the screen since it
+    /// was written and it did not.
+    scene: Option<&'a str>,
+    /// A standing condition rather than an explicit action, so it comes last.
+    sculpt: Option<&'a str>,
+}
+
+/// The options bar's one "why that did not happen" line.
+///
+/// A refusal raised by an explicit action beats a standing condition, and the
+/// document's own beats every other explicit one.
+fn tool_status<'a>(from: ToolStatusSources<'a>) -> Option<&'a str> {
+    from.document
+        .or(from.reference)
+        .or(from.mask)
+        .or(from.object)
+        .or(from.scene)
+        .or(from.sculpt)
+}
+
 fn next_matcap(current: MatCap) -> MatCap {
     let all = MatCap::ALL;
     let index = all.iter().position(|m| *m == current).unwrap_or(0);
@@ -4551,9 +4579,95 @@ fn next_matcap(current: MatCap) -> MatCap {
 
 #[cfg(test)]
 mod tests {
-    use super::{gizmo_geometry_update, GizmoGeometryUpdate};
+    use super::{gizmo_geometry_update, tool_status, GizmoGeometryUpdate, ToolStatusSources};
     use clayspace_model::Representation;
     use clayspace_vm::Command;
+
+    /// Nothing to explain, which is the state the options bar is in almost
+    /// always.
+    fn quiet() -> ToolStatusSources<'static> {
+        ToolStatusSources {
+            document: None,
+            reference: None,
+            mask: None,
+            object: None,
+            scene: None,
+            sculpt: None,
+        }
+    }
+
+    /// A save that failed reaches the options bar.
+    ///
+    /// It did not. `DocumentVm::notice` has said "the last failure, for the
+    /// interface to show" since it was written, and the chain that builds the
+    /// options bar never read it — so a save refused because a hierarchy's
+    /// side-car could not be written printed to stderr, which no sculptor is
+    /// looking at, and the document silently stayed unsaved. Removing
+    /// `document` from `tool_status` fails here.
+    #[test]
+    fn a_failed_save_reaches_the_options_bar() {
+        assert_eq!(
+            tool_status(ToolStatusSources {
+                document: Some("the side-car could not be written"),
+                ..quiet()
+            }),
+            Some("the side-car could not be written")
+        );
+    }
+
+    /// A refused rebuild reaches the options bar.
+    ///
+    /// The same hole in a second Observable: `run_remesh` has claimed this
+    /// reaches the screen since it was written and nothing read it, so a
+    /// rebuild refused for an unusable resolution — and now a level refused
+    /// for its peak, which is this branch's own new refusal — went to stderr
+    /// and the click looked like it had done nothing. Removing `scene` from
+    /// `tool_status` fails here.
+    #[test]
+    fn a_refused_rebuild_reaches_the_options_bar() {
+        assert_eq!(
+            tool_status(ToolStatusSources {
+                scene: Some("that resolution will not fit"),
+                ..quiet()
+            }),
+            Some("that resolution will not fit")
+        );
+    }
+
+    /// An explicit refusal beats a standing condition, and the document's beats
+    /// every other explicit one.
+    ///
+    /// The order is the behaviour: a sculptor who has just been told a save
+    /// failed must not have that replaced by a tool note that was already true
+    /// before the click.
+    #[test]
+    fn the_most_recent_explicit_refusal_is_the_one_shown() {
+        assert_eq!(
+            tool_status(ToolStatusSources {
+                document: Some("save"),
+                reference: Some("reference"),
+                mask: Some("mask"),
+                object: Some("object"),
+                scene: Some("scene"),
+                sculpt: Some("standing"),
+            }),
+            Some("save")
+        );
+        assert_eq!(
+            tool_status(ToolStatusSources {
+                scene: Some("scene"),
+                sculpt: Some("standing"),
+                ..quiet()
+            }),
+            Some("scene")
+        );
+    }
+
+    /// Six silences say nothing rather than an empty line.
+    #[test]
+    fn nothing_refused_says_nothing() {
+        assert_eq!(tool_status(quiet()), None);
+    }
 
     #[test]
     fn an_sdf_gizmo_settles_when_the_drag_ends() {
