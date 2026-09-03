@@ -55,7 +55,8 @@
 
 use claycore::{Multires, MultiresDesc};
 use clayspace_model::{
-    CageFault, ModelError, MultiresLevels, MultiresState, Refusal, SubdivisionCost,
+    CageFault, ModelError, MultiresLevels, MultiresSculptLayer, MultiresSculptLayerId,
+    MultiresSculptLayerOp, MultiresState, Refusal, SubdivisionCost, WriteDomain,
 };
 
 /// How deep the level meshes and detail may reach before a hierarchy declines
@@ -170,15 +171,25 @@ impl Hierarchy {
 
     /// What the layer stack and the inspector are shown.
     ///
-    /// The pass stack is empty here and that is not a placeholder: nothing in
-    /// this application writes into a hierarchy's passes yet, so a row read
-    /// back from `clay_multires_sculpt_layer_*` would always be a pass the
-    /// engine made and no sculptor asked for. The stroke goes into the form
-    /// under the passes, which is what an empty stack means.
+    /// The whole of it, read back from the engine every time rather than
+    /// mirrored here: a pass's strength, visibility and lock are the engine's
+    /// values, a merge and a bake rewrite the stack wholesale, and a restore
+    /// from bytes replaces every id there was. A host-side copy would be one
+    /// undo away from describing a stack that is not there.
+    ///
+    /// The write domain is [`WriteDomain::Automatic`] and there is no control
+    /// that changes it, which is a decision and not an omission. `Automatic`
+    /// means "the active pass, or the form where there is none", and the
+    /// interface expresses the choice by which row is selected — the form has
+    /// a row of its own under the passes. A separate three-way control beside
+    /// that would be a second way to say the same thing, and the two would
+    /// disagree the first time one of them was changed.
     pub fn state(&self) -> MultiresState {
         MultiresState {
             levels: self.levels(),
-            ..MultiresState::just_the_cage()
+            sculpt_layers: self.sculpt_layers(),
+            active_sculpt_layer: self.active_pass(),
+            write_domain: WriteDomain::Automatic,
         }
         .sanitized()
     }
@@ -397,6 +408,149 @@ impl Hierarchy {
 
     pub fn gesture_is_open(&self) -> bool {
         self.open.is_some()
+    }
+
+    // -- the pass stack ------------------------------------------------------
+
+    /// The stack, bottom-first, as the layer row draws it.
+    ///
+    /// Every failure is a pass dropped from the list rather than a refused
+    /// read, which is [`crate::objects`]'s rule for the same reason: this is
+    /// asked once per frame off the layer summary, and a stack that refused to
+    /// describe itself because one row would not answer would take the whole
+    /// interface down with it.
+    ///
+    /// `masked` is `false` for every pass and that is the honest answer rather
+    /// than a stub. The ABI reports a pass's bytes — coefficients *and* mask
+    /// together — and offers no flag saying whether a mask block is stored;
+    /// the only reader is per vertex. This application cannot author one
+    /// either: `clay_multires_set_sculpt_layer_mask` writes a weight one
+    /// vertex at a time, and the freeze this application paints is a volume
+    /// rather than a per-vertex weight. So the row draws the mask badge from
+    /// this field and it never lights, which is the state of things — an
+    /// indicator wired to a value nobody can move is better than a control
+    /// that pretends to.
+    fn sculpt_layers(&self) -> Vec<MultiresSculptLayer> {
+        let Ok(ids) = self.surface.sculpt_layer_ids() else {
+            return Vec::new();
+        };
+        let mut passes: Vec<MultiresSculptLayer> = ids
+            .into_iter()
+            .filter_map(|id| {
+                let info = self.surface.sculpt_layer_info(id).ok()?;
+                Some(MultiresSculptLayer {
+                    id: MultiresSculptLayerId::new(id.get()),
+                    index: info.index as usize,
+                    // A pass with no name of its own is empty here rather than
+                    // numbered here: the number a sculptor reads is the row's
+                    // position, which is `display_name`'s business and moves
+                    // when the stack is reordered.
+                    name: self.surface.sculpt_layer_name(id).unwrap_or_default(),
+                    strength: info.strength,
+                    visible: info.visible,
+                    locked: info.locked,
+                    masked: false,
+                    coverage_vertices: info.coverage_vertices,
+                    bytes: info.bytes as usize,
+                })
+            })
+            .collect();
+        // Bottom-first, by the engine's own index rather than by the order the
+        // ids came back in. `MultiresState::sanitized` re-derives `index` from
+        // this order, so sorting here is what makes the two agree.
+        passes.sort_by_key(|pass| pass.index);
+        passes
+    }
+
+    /// Which pass the next stroke would enter, or the form under them.
+    pub fn active_pass(&self) -> MultiresSculptLayerId {
+        self.surface
+            .active_sculpt_layer()
+            .map_or(MultiresSculptLayerId::BASE, |id| {
+                MultiresSculptLayerId::new(id.get())
+            })
+    }
+
+    /// Whether the next stamp lands on a pass rather than in the form.
+    ///
+    /// [`WriteDomain::Automatic`] resolved against the active pass — see
+    /// [`Hierarchy::state`] for why that is the only domain this application
+    /// sends.
+    pub fn stamps_into_a_pass(&self) -> bool {
+        !self.active_pass().is_base()
+    }
+
+    /// Acts on the stack.
+    ///
+    /// Every operation is the engine's, including the two a host is most
+    /// tempted to do itself. A reorder is `clay_multires_move_sculpt_layer`
+    /// rather than a `Vec::rotate`, because the stack the interface draws is
+    /// read back from the engine and a host-side order would last exactly
+    /// until the next frame; a merge is `clay_multires_merge_sculpt_layer_down`
+    /// rather than the obvious arithmetic, because the obvious arithmetic
+    /// divides by the lower pass's strength and zero is a state one slider
+    /// reaches.
+    pub fn apply_sculpt_layer_op(&mut self, op: &MultiresSculptLayerOp) -> Result<(), ModelError> {
+        use MultiresSculptLayerOp as Op;
+
+        let engine = |id: MultiresSculptLayerId| claycore::SculptLayerId::from_raw(id.raw());
+        let refused = |refusal: claycore::MultiresRefusal| ModelError::engine(refusal.to_string());
+        match op {
+            Op::Add { name } => {
+                let name = name.trim();
+                self.surface
+                    .add_sculpt_layer((!name.is_empty()).then_some(name))
+                    .map(|_| ())
+                    .map_err(refused)?;
+            }
+            Op::Rename { id, name } => self
+                .surface
+                .rename_sculpt_layer(engine(*id), name)
+                .map_err(refused)?,
+            Op::SetStrength { id, strength } => self
+                .surface
+                .set_sculpt_layer_strength(engine(*id), strength.clamp(0.0, 1.0))
+                .map_err(refused)?,
+            Op::SetVisible { id, visible } => self
+                .surface
+                .set_sculpt_layer_visible(engine(*id), *visible)
+                .map_err(refused)?,
+            Op::SetLocked { id, locked } => self
+                .surface
+                .set_sculpt_layer_locked(engine(*id), *locked)
+                .map_err(refused)?,
+            Op::SetActive { id } => self
+                .surface
+                .set_active_sculpt_layer(engine(*id))
+                .map_err(refused)?,
+            Op::Move { id, to } => self
+                .surface
+                .move_sculpt_layer(engine(*id), *to)
+                .map_err(refused)?,
+            Op::Remove { id } => self
+                .surface
+                .remove_sculpt_layer(engine(*id))
+                .map_err(refused)?,
+            Op::MergeDown { id } => self
+                .surface
+                .merge_sculpt_layer_down(engine(*id))
+                .map_err(refused)?,
+            Op::BakeToBase { id } => self
+                .surface
+                .bake_sculpt_layer_to_base(engine(*id))
+                .map_err(refused)?,
+            Op::Compact => self
+                .surface
+                .compact_sculpt_layers()
+                .map_err(ModelError::engine)?,
+        }
+        // The evaluated surface may have moved under the triangles this side
+        // is holding — a strength, a visibility, a removal and a bake all do —
+        // so the copy is given up rather than reasoned about per operation.
+        // Dropping it on a rename costs one level-mesh copy and gets the rule
+        // down to one line.
+        self.drawn = None;
+        Ok(())
     }
 }
 

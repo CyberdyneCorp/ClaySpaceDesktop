@@ -4739,10 +4739,26 @@ impl ClayDocument {
         // Read before the sculptor is taken: the lease reads the document.
         let mask = self.active_mask();
 
+        // Where it lands: the form under the passes, or the pass the sculptor
+        // has selected. The two are different entry points and not a flag —
+        // see [`ClayDocument::stamp_into_a_pass`].
+        if hierarchy.stamps_into_a_pass() {
+            return Self::stamp_into_a_pass(
+                hierarchy,
+                verb,
+                &stamp,
+                &points,
+                gesture,
+                symmetry,
+                mask.as_deref(),
+            );
+        }
+
         let mut sculptor = hierarchy
             .surface_mut()
             .sculptor()
             .map_err(ModelError::engine)?;
+
         // Clears the record `MeshBrush::Layer` measures its ceiling against,
         // so a second stroke over the same place deposits from the surface as
         // that stroke found it rather than from where the last one stopped.
@@ -4801,6 +4817,106 @@ impl ClayDocument {
         // tree of this side's that a stamp leaves stale — the fixed sculptor
         // inside the level is the engine's own and lives and dies with the
         // bind.
+        Ok(moved)
+    }
+
+    /// The same stroke, into the pass the sculptor has selected.
+    ///
+    /// A separate function because it is a different entry point and not a
+    /// flag: a write into a pass goes through the layered stroke transaction,
+    /// which begins, stamps and commits. The transaction is what fixes the
+    /// target channel at pointer-down — so changing the active pass mid-drag
+    /// cannot split one gesture across two — and what holds the composition
+    /// for the length of the gesture, so a stamp is not summing the whole
+    /// stack again between dabs.
+    ///
+    /// **The path is stamped sample by sample rather than resolved**, and that
+    /// is the one place a pass stroke differs from a stroke into the form. The
+    /// transaction offers stamps and no resolver — clay.h carries
+    /// `clay_multires_sculpt_layer_stroke_stamp` and no `_apply_stroke` beside
+    /// it — so what a resolved stroke would do with the preset's spacing,
+    /// taper and jitter does not happen here. The samples that arrive are
+    /// already about one dab's travel apart, because
+    /// `SculptViewModel::stamps_between_segments` spaced them before they were
+    /// sent, so the coverage is right; what is missing is the jitter and the
+    /// taper, and a pass stroke is that much more even than the same stroke
+    /// into the form.
+    ///
+    /// The pressure of each sample reaches the stamp's strength, since nothing
+    /// else applies it once the resolver is out of the path.
+    ///
+    /// A refusal from `begin` is the honest one to surface: it names a locked
+    /// pass, which is the sculptor's own doing and the sentence they need.
+    #[allow(clippy::too_many_arguments)]
+    fn stamp_into_a_pass(
+        hierarchy: &mut crate::multires::Hierarchy,
+        verb: claycore::MeshBrush,
+        stamp: &claycore::MeshStamp<'_>,
+        points: &[[f32; 5]],
+        gesture: [f32; 3],
+        symmetry: [bool; 3],
+        mask: Option<&claycore::MaskField>,
+    ) -> Result<u64, ModelError> {
+        let mut stroke = hierarchy
+            .surface_mut()
+            .sculpt_layer_stroke()
+            .map_err(ModelError::engine)?;
+        // Detail rather than Automatic, though the active pass makes the two
+        // the same thing here: Detail refuses to open where there is no active
+        // pass, and Automatic would quietly write the form instead. The
+        // caller has already established there is one, so this is the refusal
+        // standing behind that check rather than a second opinion about it.
+        stroke
+            .set_write_domain(claycore::WriteDomain::Detail)
+            .map_err(ModelError::engine)?;
+        stroke
+            .begin()
+            .map_err(|refused| ModelError::engine(refused.to_string()))?;
+
+        let mut moved = 0;
+        for mirror in mirrors(symmetry) {
+            let stamped = if verb == claycore::MeshBrush::Grab {
+                // One stamp carrying its region by the whole drag, exactly as
+                // the form's path does and for the same reason.
+                stroke
+                    .stamp(
+                        claycore::MeshStamp {
+                            direction: mirror.vector(gesture),
+                            center: mirror.point(stamp.center),
+                            ..*stamp
+                        },
+                        mask,
+                    )
+                    .map_err(ModelError::engine)?
+                    .moved_vertices
+            } else {
+                let mut here = 0;
+                for sample in points {
+                    let at = mirror.point([sample[0], sample[1], sample[2]]);
+                    here += stroke
+                        .stamp(
+                            claycore::MeshStamp {
+                                direction: mirror.vector(stamp.direction),
+                                center: at,
+                                strength: stamp.strength * sample[3],
+                                ..*stamp
+                            },
+                            mask,
+                        )
+                        .map_err(ModelError::engine)?
+                        .moved_vertices;
+                }
+                here
+            };
+            moved += stamped;
+        }
+        // Committing rather than letting the transaction fall out of scope:
+        // `Drop` cancels, which is right for an unwind and wrong for a stroke
+        // that finished. The entry count it answers with is the record's, and
+        // that record does not cross the ABI — this application's undo holds
+        // the hierarchy's serialized bytes instead, taken before the gesture
+        // opened.
+        stroke.commit().map_err(ModelError::engine)?;
         Ok(moved)
     }
 
@@ -7904,6 +8020,68 @@ impl SceneModel for ClayDocument {
         }
         // The drawn level changed, or the surface under it did.
         self.refresh_multires_bounds(key);
+        self.refresh_stats();
+        Ok(())
+    }
+
+    /// Acts on the active hierarchy's stack of passes.
+    ///
+    /// Not an undo entry, for the reason a grid's pass operations are not one:
+    /// a pass is a control that stays adjustable long after the strokes that
+    /// filled it, and a sculptor whose next undo took back a slider rather
+    /// than the work would have to choose between the two.
+    ///
+    /// Two refusals are stated here rather than left to the engine, because
+    /// both are sentences a sculptor can act on. A layer that is not a
+    /// hierarchy has no stack at all — the same shape
+    /// [`ClayDocument::apply_multires_level_op`] refuses in. And a composition
+    /// change **while a gesture is open** is refused by the engine anyway: a
+    /// stamp reads the evaluated surface, so a slider moved between two stamps
+    /// would author one gesture against two different surfaces. Saying so here
+    /// means the message names the stroke rather than an engine code, and
+    /// means the three operations that move no vertex — a rename, a lock and a
+    /// change of which pass is active — go through as the domain says they do.
+    fn apply_multires_sculpt_layer_op(
+        &mut self,
+        op: clayspace_model::MultiresSculptLayerOp,
+    ) -> Result<(), ModelError> {
+        let key = self.active_layer().key;
+        let index = self.active;
+        if self.layers[index].multires.is_none() {
+            return Err(ModelError::Unavailable(
+                clayspace_model::Unavailable::NoVerbHere {
+                    active: self.layers[index].representation,
+                    verbs: clayspace_model::Verbs {
+                        sdf: None,
+                        voxel: None,
+                        mesh: None,
+                        multires: Some("clay_multires_add_sculpt_layer"),
+                    },
+                    note: None,
+                },
+            ));
+        }
+        if let Some(refusal) = self.layers[index].protection.refusal() {
+            return Err(ModelError::engine(refusal));
+        }
+        let hierarchy = self.layers[index]
+            .multires
+            .as_mut()
+            .expect("checked just above");
+        if op.needs_the_stroke_closed() && hierarchy.gesture_is_open() {
+            return Err(ModelError::engine(
+                "termine o traço antes de mexer na composição dos passes",
+            ));
+        }
+        hierarchy.apply_sculpt_layer_op(&op)?;
+        if op.changes_the_surface() {
+            // Only where the form moved. A reorder, a rename and a change of
+            // which pass is active move nothing at all — the stack is additive
+            // and therefore commutes — and re-deriving a hierarchy's bounds
+            // for one of those would be paying for a picture that has not
+            // changed.
+            self.refresh_multires_bounds(key);
+        }
         self.refresh_stats();
         Ok(())
     }

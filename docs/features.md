@@ -1025,6 +1025,63 @@ layer row, the workspace bar and the inspector all draw a mesh differently — a
 a record that was found and could not be reconstructed is named in the
 diagnostics report.
 
+**A stack of passes, dialable long afterwards.** A hierarchy carries named
+passes the way a grid does, and the word is shared on purpose — but the two
+stacks share no addressing at all. A hierarchy's pass is named by an id the
+engine minted and never by its position, because a reorder renumbers every
+position at or below the pass it moves.
+
+A new pass takes the next stroke; the row for **the form** under the passes
+sends it back into the surface itself, which is how a sculptor corrects the
+anatomy under a set of wrinkles without disturbing them. Measured, on a flat
+cage at level 2: a dab into a pass stands 0.900 proud of a sheet that was flat
+at 0.000, its slider at zero returns the sheet to 0.000 **exactly**, and back
+at one it returns the 0.900 — with no stroke replayed. Hiding it is the same
+statement in one click.
+
+Three properties follow from the stack being a *sum* rather than a sequence.
+**Reordering is free** — passes commute, so a list drag is organisation and
+never geometry, and an interface that treated it as an edit would re-evaluate
+millions of vertices for a drag that changed a list. **Strength is composition,
+not a scale on the pen**: a stroke into a pass at half strength records its
+full contribution and the surface moves half as far, so raising the slider
+afterwards doubles what is on screen. And a **merge** or a **bake into the
+form** is defined by visual parity — the surface after equals the surface
+before, at any strength including zero — so what they cost is the slider, not
+the shape.
+
+**A lock refuses a stroke and permits every property change.** That is the
+engine's rule and it is the useful one: a lock exists so a sculptor can keep
+working over a finished pass, and one that also froze the name and the slider
+would mean "hide from the interface". A lock can always be taken off from the
+row that shows it.
+
+**The composition is held while the pointer is down.** A stamp reads the
+evaluated surface, so a slider moved between two stamps would author one
+gesture against two different surfaces. Those changes are refused for the
+length of the gesture rather than deferred to its end — a control that appeared
+to move and then silently applied later is the worse surprise. A rename, a lock
+and a change of which pass takes the next stroke move no vertex and go through.
+
+**A pass is not undo.** Dialling one is a property of the stack that stays
+adjustable long after the strokes that filled it, so it is not an entry in the
+history: a sculptor whose next undo took back a slider rather than the work
+would have to choose between the two.
+
+**A pass stroke is stamped rather than resolved.** The layered transaction the
+engine offers carries stamps and no stroke resolver, so what a resolved stroke
+does with the preset's jitter and taper does not happen inside a pass. The
+samples arriving are already about one dab's travel apart, so the coverage is
+the same; a pass stroke is that much more even than the same stroke into the
+form.
+
+**A pass's own mask is reported and not authored.** The engine stores a
+per-vertex weight with each pass, whose identity is 1, and there is no call
+that says whether one is stored — only a reader per vertex. Nothing in this
+application writes one either: the freeze a sculptor paints is a volume rather
+than a per-vertex weight. So the row carries the badge and the badge does not
+light.
+
 **The two colour brushes are not offered.** A hierarchy stores where a vertex
 went and not what colour it is, so a paint stamp would move nothing, be dropped
 by the write-back, and evaporate with the level cache. Paint the cage before
@@ -3080,19 +3137,6 @@ total drag split into eight one-cell emissions moves nothing — so Mover on a
 grid holds the whole gesture and lands at pointer-up rather than following the
 pointer. [ClayCore#393](https://github.com/CyberdyneCorp/ClayCore/issues/393)
 asks for the transactional shape the SDF drag already has.
-
-**The stack of passes on a hierarchy.** A hierarchy carries named, dialable,
-lockable passes — the same statement a grid's passes make, with a different
-implementation underneath — and the domain describes them, addressed by an id
-that a reorder does not renumber. Nothing applies one yet: a stroke on a
-hierarchy goes into the form under the passes, which is what an empty stack
-means. Two things about them are already settled. **Reordering a pass is free**:
-passes are additive and commute, so a reorder changes organisation and not
-geometry, and an interface that treated a list drag as an edit would
-re-evaluate millions of vertices for it. And **strength is composition, not a
-scale on the pen** — a stroke into a pass at half strength records its full
-contribution and the surface moves half as far, so raising the slider
-afterwards doubles what is on screen and replays no stroke.
 
 **Exporting a hierarchy exports its cage.** The engine combines a document's
 mesh layers on the way out, and a hierarchy's layer is a mesh layer holding the

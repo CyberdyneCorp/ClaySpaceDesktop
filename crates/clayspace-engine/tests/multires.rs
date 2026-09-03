@@ -735,3 +735,359 @@ fn a_level_bakes_out_as_a_mesh_that_keeps_the_sculpt() {
         "and nothing is holding a hierarchy any more"
     );
 }
+
+// -- the pass stack ---------------------------------------------------------
+//
+// A pass is a stroke you can dial back afterwards, and "afterwards" is the
+// whole of it. These measure that: a pass takes the stroke, and its slider
+// still moves the surface long after the pointer came up. Everything else here
+// guards the four ways this stack differs from a grid's — it is addressed by
+// id, a reorder moves nothing, a lock refuses coefficients and permits every
+// property, and a composition change waits for the stroke to close.
+
+use clayspace_model::{MultiresSculptLayerId, MultiresSculptLayerOp as PassOp};
+
+/// The stack as the layer row would draw it.
+fn passes(document: &ClayDocument, key: LayerKey) -> Vec<clayspace_model::MultiresSculptLayer> {
+    document
+        .scene()
+        .layer(key)
+        .and_then(|layer| layer.multires.as_ref())
+        .map(|state| state.sculpt_layers.clone())
+        .expect("the row is a hierarchy")
+}
+
+fn active_pass(document: &ClayDocument, key: LayerKey) -> MultiresSculptLayerId {
+    document
+        .scene()
+        .layer(key)
+        .and_then(|layer| layer.multires.as_ref())
+        .map(|state| state.active_sculpt_layer)
+        .expect("the row is a hierarchy")
+}
+
+/// Adds a pass and answers its id.
+fn add_pass(document: &mut ClayDocument, key: LayerKey, name: &str) -> MultiresSculptLayerId {
+    document
+        .apply_multires_sculpt_layer_op(PassOp::Add {
+            name: name.to_string(),
+        })
+        .expect("a hierarchy takes a pass");
+    passes(document, key)
+        .last()
+        .expect("the pass that was just added")
+        .id
+}
+
+/// A dab into a pass is still there to dial an hour later.
+///
+/// The property the whole stack exists for, and the one an interface would
+/// otherwise quietly lose: a strength that only worked during the stroke that
+/// made the pass would be a stroke modifier wearing a layer's clothes. So the
+/// dab is made, the gesture is closed, and only *then* is the slider moved —
+/// twice, in both directions, with the surface measured each time.
+///
+/// Zero is asserted as a return to the flat sheet rather than as "less": a
+/// pass at zero strength contributes exactly nothing, which is what makes
+/// hiding one and comparing an exact test rather than an approximate one.
+#[test]
+fn a_pass_is_still_dialable_long_after_the_stroke_that_filled_it() {
+    let (mut document, key) = with_a_hierarchy("dialable", 2);
+    let flat = relief(&mut document);
+
+    let pass = add_pass(&mut document, key, "Rugas");
+    assert_eq!(
+        active_pass(&document, key),
+        pass,
+        "a new pass takes the stroke, or a sculptor has to find the control \
+         that says so before anything they do lands anywhere"
+    );
+
+    assert!(dab(&mut document, [0.0, 0.0, 0.0], 0.9), "sculpt something");
+    let standing = relief(&mut document);
+    assert!(
+        standing > flat + 1e-4,
+        "the dab reached the surface: {standing} against {flat}"
+    );
+
+    // The gesture is over. Everything below is the slider alone.
+    document
+        .apply_multires_sculpt_layer_op(PassOp::SetStrength {
+            id: pass,
+            strength: 0.0,
+        })
+        .expect("dial it back");
+    let dialled_out = relief(&mut document);
+    assert!(
+        (dialled_out - flat).abs() < 1e-5,
+        "a pass at zero contributes exactly nothing, and this left {dialled_out} \
+         where the untouched sheet stands at {flat}"
+    );
+
+    document
+        .apply_multires_sculpt_layer_op(PassOp::SetStrength {
+            id: pass,
+            strength: 1.0,
+        })
+        .expect("dial it back in");
+    assert!(
+        (relief(&mut document) - standing).abs() < 1e-5,
+        "and dialling it back in restores exactly what was there, with no \
+         stroke replayed"
+    );
+
+    // Visibility is the same statement made with one click instead of a drag.
+    document
+        .apply_multires_sculpt_layer_op(PassOp::SetVisible {
+            id: pass,
+            visible: false,
+        })
+        .expect("hide it");
+    assert!(
+        (relief(&mut document) - flat).abs() < 1e-5,
+        "hiding a pass removes its contribution bit for bit"
+    );
+}
+
+/// With no pass made, the stroke goes into the form, as it always did.
+///
+/// The compatibility half: a sculptor who never opens the stack must not have
+/// to. `MultiresSculptLayerId::BASE` is what an empty stack reads as, and the
+/// stroke that follows takes the plain sculptor's path.
+#[test]
+fn a_stroke_lands_in_the_form_where_no_pass_has_been_made() {
+    let (mut document, key) = with_a_hierarchy("no-pass", 2);
+    assert!(
+        active_pass(&document, key).is_base(),
+        "a fresh hierarchy has no pass, so the stroke has nowhere else to go"
+    );
+    assert!(passes(&document, key).is_empty());
+
+    assert!(dab(&mut document, [0.0, 0.0, 0.0], 0.9), "sculpt something");
+    assert!(
+        relief(&mut document) > 1e-4,
+        "and it reached the form under the passes"
+    );
+    assert!(
+        passes(&document, key).is_empty(),
+        "without minting a pass nobody asked for"
+    );
+}
+
+/// Selecting the form under the passes sends the next stroke back into it.
+///
+/// This is the whole of the write domain as this application expresses it:
+/// there is no three-way control, there is a row for the form and a row per
+/// pass, and which one is selected is the answer. So a sculptor fixing the
+/// anatomy under a set of wrinkles selects the form, and the wrinkles are left
+/// exactly where they were.
+#[test]
+fn selecting_the_form_leaves_the_passes_untouched() {
+    let (mut document, key) = with_a_hierarchy("the-form", 2);
+    let pass = add_pass(&mut document, key, "Rugas");
+    assert!(dab(&mut document, [0.6, 0.0, 0.6], 0.5), "fill the pass");
+    let with_the_pass = relief(&mut document);
+
+    document
+        .apply_multires_sculpt_layer_op(PassOp::SetActive {
+            id: MultiresSculptLayerId::BASE,
+        })
+        .expect("select the form");
+    assert!(
+        dab(&mut document, [-0.6, 0.0, -0.6], 0.5),
+        "sculpt the form"
+    );
+
+    let coverage = passes(&document, key)
+        .iter()
+        .find(|row| row.id == pass)
+        .expect("the pass is still there")
+        .coverage_vertices;
+    document
+        .apply_multires_sculpt_layer_op(PassOp::SetVisible {
+            id: pass,
+            visible: false,
+        })
+        .expect("hide the pass");
+    let form_alone = relief(&mut document);
+    assert!(
+        form_alone > 1e-4,
+        "the second dab went into the form, so hiding the pass leaves it: \
+         {form_alone}"
+    );
+    assert!(
+        with_the_pass > 1e-4 && coverage > 0,
+        "and the first dab is still the pass's own: {with_the_pass}, over \
+         {coverage} vertices"
+    );
+}
+
+/// A reorder is organisation and never geometry.
+///
+/// The load-bearing difference from a grid's stack, and the one an interface
+/// is most likely to get wrong: passes here are additive and therefore
+/// commute, so a list drag must not re-evaluate a surface millions of vertices
+/// wide. Measured vertex by vertex rather than asserted.
+#[test]
+fn sliding_a_pass_through_the_stack_moves_no_vertex() {
+    let (mut document, key) = with_a_hierarchy("reorder", 2);
+    let lower = add_pass(&mut document, key, "Baixo");
+    assert!(dab(&mut document, [0.5, 0.0, 0.5], 0.5), "fill the lower");
+    let upper = add_pass(&mut document, key, "Alto");
+    assert!(dab(&mut document, [-0.5, 0.0, -0.5], 0.5), "fill the upper");
+
+    let before = drawn(&mut document);
+    document
+        .apply_multires_sculpt_layer_op(PassOp::Move { id: upper, to: 0 })
+        .expect("slide it to the bottom");
+    let after = drawn(&mut document);
+
+    assert_eq!(before.len(), after.len(), "and the same vertices");
+    assert!(
+        before == after,
+        "a reorder moved the surface, which an additive stack cannot do — the \
+         interface is now paying for a re-evaluation on a list drag"
+    );
+    let order: Vec<_> = passes(&document, key).iter().map(|row| row.id).collect();
+    assert_eq!(
+        order,
+        vec![upper, lower],
+        "while the stack itself did reorder, or nothing was measured"
+    );
+}
+
+/// A lock refuses a stroke and permits every property change.
+///
+/// Both halves, because a lock that also froze the name and the slider would
+/// mean "hide from the interface", which is a different feature — and because
+/// a lock a sculptor could not undo from the row that shows it would be a
+/// trap.
+#[test]
+fn a_locked_pass_refuses_the_stroke_and_takes_every_other_change() {
+    let (mut document, key) = with_a_hierarchy("locked", 2);
+    let pass = add_pass(&mut document, key, "Rugas");
+    document
+        .apply_multires_sculpt_layer_op(PassOp::SetLocked {
+            id: pass,
+            locked: true,
+        })
+        .expect("lock it");
+
+    document.begin_gesture();
+    let refused = document.apply_stroke(
+        ToolKind::Padrao,
+        BrushSettings {
+            size: 0.9,
+            intensity: 1.0,
+            ..BrushSettings::default()
+        },
+        &[GestureSample {
+            position: [0.0; 3],
+            pressure: 1.0,
+            time: 0.0,
+        }],
+        [false; 3],
+    );
+    document.end_gesture();
+    assert!(
+        refused.is_err(),
+        "a locked pass took a stroke, so the lock is decoration"
+    );
+
+    for op in [
+        PassOp::Rename {
+            id: pass,
+            name: "Rugas finas".to_string(),
+        },
+        PassOp::SetStrength {
+            id: pass,
+            strength: 0.5,
+        },
+        PassOp::SetVisible {
+            id: pass,
+            visible: false,
+        },
+        PassOp::SetLocked {
+            id: pass,
+            locked: false,
+        },
+    ] {
+        let label = op.label();
+        document
+            .apply_multires_sculpt_layer_op(op)
+            .unwrap_or_else(|e| panic!("a lock refused {label}, which it guards no part of: {e}"));
+    }
+}
+
+/// A composition change waits for the pointer to come up.
+///
+/// The engine refuses it, and the refusal is right rather than a limitation: a
+/// stamp reads the evaluated surface, so a slider moved between two stamps
+/// would author one gesture against two different surfaces. The three that
+/// move no vertex go through.
+#[test]
+fn the_composition_is_held_while_a_gesture_is_open() {
+    let (mut document, key) = with_a_hierarchy("held", 2);
+    let pass = add_pass(&mut document, key, "Rugas");
+
+    document.begin_gesture();
+    let _ = document.apply_stroke(
+        ToolKind::Padrao,
+        BrushSettings {
+            size: 0.9,
+            intensity: 1.0,
+            ..BrushSettings::default()
+        },
+        &[GestureSample {
+            position: [0.0; 3],
+            pressure: 1.0,
+            time: 0.0,
+        }],
+        [false; 3],
+    );
+
+    let refused = document.apply_multires_sculpt_layer_op(PassOp::SetStrength {
+        id: pass,
+        strength: 0.25,
+    });
+    assert!(
+        refused.is_err(),
+        "a slider moved mid-gesture, so one stroke is being authored against \
+         two different surfaces"
+    );
+    document
+        .apply_multires_sculpt_layer_op(PassOp::Rename {
+            id: pass,
+            name: "Rugas finas".to_string(),
+        })
+        .expect("a rename moves no vertex and is allowed through");
+
+    document.end_gesture();
+    document
+        .apply_multires_sculpt_layer_op(PassOp::SetStrength {
+            id: pass,
+            strength: 0.25,
+        })
+        .expect("and the slider works again once the pointer is up");
+}
+
+/// A layer that is not a hierarchy says what a pass belongs to.
+///
+/// Named rather than generic, exactly as the level operations are: a sculptor
+/// on a field or a mesh needs to know that passes are a hierarchy's, not that
+/// "this failed".
+#[test]
+fn a_field_layer_says_where_passes_live() {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
+    let mut document = ClayDocument::new(policy).expect("a document");
+    let refusal = document
+        .apply_multires_sculpt_layer_op(PassOp::Add {
+            name: "Rugas".to_string(),
+        })
+        .expect_err("a field has no pass stack");
+    let said = refusal.to_string();
+    assert!(
+        said.to_lowercase().contains("multires"),
+        "the refusal has to name the representation a pass belongs to: {said}"
+    );
+}
