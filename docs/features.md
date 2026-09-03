@@ -1914,6 +1914,54 @@ keeps its own note of where each rebuild sits in the history. Without it, a
 sculptor who rebuilds, dislikes the result, undoes and carries on gets *the mesh
 changed its vertex or index count under this sculptor* on their next dab.
 
+## The work between two strokes
+
+Some work makes the *next* interaction cheaper and *this* one slower. Rebuilding
+the ray-query tree a mesh subtool is picked and sculpted through is the one this
+application produces: every dab **refits** it, which keeps it a valid partition
+of the same triangles at a cost proportional to the brush rather than to the
+mesh, and after enough refitting the partition stops being a *good* one even
+though it stays correct. Queries get slower and nothing says so.
+
+**None of it is correctness**, and that is what decides where it happens. A
+rebuild declined, deferred forever or never made leaves the form exactly where
+it is; what it costs is a slower pick. So it is never taken in the middle of a
+drag, and the engine does not take it at all — it holds a *request*, because its
+own measurement is that a rebuild produced a better tree in one of five
+deformations and a dramatically worse one in two. The application is the one
+that decides, and it decides at the only moment where a stall belongs to
+nobody: the pointer coming up.
+
+**The queue refuses to be drained while a pointer is down**, and that is a
+mechanism rather than a rule somebody has to remember. A gesture holds the
+queue for as long as it is open, so there is nothing for a drain to take work
+from — and it holds it in a way that gives it back when the gesture is thrown
+away as well as when it is finished, because a drag abandoned halfway would
+otherwise stop the application doing maintenance for the rest of the session.
+
+**Eight milliseconds**, which is half the sixteen the specification allows an
+engine operation to hold the interface thread, at a moment that already pays for
+a surface refresh and a mip chain. Work that does not fit is left where it is
+rather than done anyway, and it is still there next time with a count of how
+often it has been asked for — which is how a job the application keeps starving
+becomes visible instead of silent. What a rebuild costs is **measured on the
+machine it runs on**: the engine carries no model of anybody's hardware and says
+so, so the first one is timed and every request after it is weighed against that
+figure rather than against a guess.
+
+**A gesture holds a memory pin.** A trim gives back what can be rebuilt, and the
+engine prices what that costs the interaction after it rather than asserting it
+— between 0.62 and 2.04 times as long at the gentlest pressure, and between 13
+and 182 times at the hardest, growing with the model. Landing that in the middle
+of a drag is the one place the cost is certain to be paid by the sculptor, so
+while a pointer is down a trim reports what it *would* have released and
+releases nothing. The pin is taken and given back at exactly the two moments the
+gate is, which is what keeps them from coming apart.
+
+Nothing in the application trims yet — a trim reaches a hierarchy or an adaptive
+surface, and neither is held here. What the pin buys before then is that the
+first one cannot be written without one to hand it.
+
 ## Crossing between representations
 
 ClayCore carries SDF, voxel and mesh side by side, and the intended workflow

@@ -615,7 +615,13 @@ pub struct ClayDocument {
     /// the edit, and it is what a test can assert on without timing anything.
     meshed_chunks: usize,
     /// Whether a gesture is open and should be previewed rather than banked.
+    ///
+    /// Written only by [`ClayDocument::set_previewing`], because two other
+    /// things follow it exactly — see [`crate::maintenance`].
     previewing: bool,
+    /// The work this document owes itself between two interactions, the gate
+    /// that keeps it from happening during one, and the pin a gesture holds.
+    maintenance: crate::maintenance::Maintenance,
     /// Bumped by every preview, so the viewport knows to look again.
     ///
     /// A preview banks nothing, so nothing else about the document changes and
@@ -908,6 +914,7 @@ impl ClayDocument {
             carried: (0, 0),
             live_mesh: None,
             previewing: false,
+            maintenance: crate::maintenance::Maintenance::new(),
             live_generation: 0,
             live_smooth: None,
             live_move: None,
@@ -4164,6 +4171,12 @@ impl ClayDocument {
         // `?` anywhere above leaves by this same door.
         live.settle()?;
 
+        // A refit keeps the tree valid and says nothing about whether it is
+        // still a good partition. Whether it has stopped being one is read
+        // once between strokes rather than here, where a drag would pay for
+        // the reading on every pointer move.
+        self.request_index_rebuild(key);
+
         // A gesture that reached nothing is not worth a place on the stack,
         // and putting one there would make an undo appear to do nothing.
         let reached = live.deltas().vertex_count().map_err(ModelError::engine)? > 0;
@@ -4927,20 +4940,260 @@ impl ClayDocument {
             )
     }
 
-    /// How stretched the active mesh layer's triangles are.
+    /// What the active mesh layer's ray-query tree costs.
     ///
-    /// Sculpting a mesh stretches what is there — a large grab does, and
-    /// snakehook does it to the extreme — and nothing here retessellates,
-    /// because that would spend the retopology the import was for. So the
-    /// stretch is *reported* rather than prevented, and a sculptor learns the
-    /// mesh wants retopology at the point it starts wanting it instead of at
-    /// export.
+    /// The engine's own words for the figure: the expected number of triangle
+    /// tests a random ray must make. Lower is better, and it is only
+    /// meaningful **against the same tree's own history** — a tree that has
+    /// been refitted through a hundred dabs, against what it scored when it
+    /// was built. It says nothing across two models, and it is not a measure
+    /// of how stretched the triangles are, which is what this used to claim.
+    ///
+    /// Nothing here retessellates, because that would spend the retopology the
+    /// import was for; what a decayed figure argues for is a rebuild of the
+    /// tree, which is queued rather than done — see `crate::maintenance`.
     ///
     /// `None` where the active layer is not a sculpted mesh.
     pub fn mesh_quality(&self) -> Option<f32> {
         let key = self.active_layer().key;
         self.sculptor_for(key)
             .and_then(|sculptor| sculptor.borrow_mut().quality().ok())
+    }
+
+    // -- work that is not required for correctness ---------------------------
+
+    /// Opens or shuts a gesture, and everything that follows exactly from it.
+    ///
+    /// `previewing` is written nowhere else, because two other things track it
+    /// and the whole value of them is that they cannot come apart from it: the
+    /// maintenance queue's gate, which must be shut for exactly as long as a
+    /// pointer is down, and the memory pin, which must be held for exactly as
+    /// long and given back on every way out. Both were reachable from five
+    /// separate assignments before this; now there is one door.
+    fn set_previewing(&mut self, open: bool) {
+        self.previewing = open;
+        if open {
+            self.maintenance.open_gesture();
+        } else {
+            self.maintenance.close_gesture();
+        }
+    }
+
+    /// Queues work that would make the next interaction cheaper, or folds it
+    /// into the identical request already queued.
+    ///
+    /// Nothing is done here. What is queued is a request, and a request this
+    /// document never services leaves the form exactly where it is — which is
+    /// what makes it safe to call from inside a stroke, where a drag asks for
+    /// the same rebuild on every segment and the queue keeps one entry.
+    ///
+    /// `estimated_micros` is what the caller believes it will cost, and zero
+    /// means "unknown" exactly as the engine means it — which is what most
+    /// callers honestly have, and what the budget lets through once so that
+    /// there is something to measure.
+    pub fn request_maintenance(
+        &mut self,
+        kind: claycore::MaintenanceKind,
+        target: u32,
+        estimated_micros: u64,
+    ) {
+        self.maintenance
+            .request_costing(kind, target, estimated_micros);
+    }
+
+    /// What is queued, in queue order.
+    pub fn maintenance_queued(&self) -> Vec<claycore::MaintenanceItem> {
+        self.maintenance.queued()
+    }
+
+    /// The pin every trim this document takes is handed.
+    ///
+    /// A trim releases what is rebuildable, and the engine prices what that
+    /// costs the interaction after it rather than asserting it: 0.62–2.04x at
+    /// Warning and 13–182x at Critical, growing with the model. A pin is what
+    /// keeps that cost from landing in the middle of a drag — a trim taken
+    /// while one is held releases nothing and reports what it *would* have
+    /// released, so a memory warning stays honest without a surface going out
+    /// from under a gesture in flight.
+    ///
+    /// Nothing in this document trims yet: a trim reaches a hierarchy or an
+    /// adaptive surface, and this application holds neither. What this
+    /// accessor buys before then is that the first one cannot be written
+    /// without a pin to hand it.
+    pub fn memory_pin(&self) -> Option<&claycore::MemoryPin> {
+        self.maintenance.pin()
+    }
+
+    /// What an index rebuild has been measured to cost on this machine, or
+    /// `None` before the first one.
+    ///
+    /// The engine carries no machine model and says so, so the first rebuild
+    /// is filed with no estimate and timed, and every request after it is
+    /// weighed against the budget using this.
+    pub fn measured_rebuild_micros(&self) -> Option<u64> {
+        self.maintenance.measured_rebuild_micros()
+    }
+
+    /// Whether a gesture is holding the memory pin.
+    ///
+    /// The balance this document has to keep: held for exactly as long as a
+    /// pointer is down, and given back on every way out including the ones
+    /// that unwind.
+    pub fn memory_pinned(&self) -> bool {
+        self.maintenance.is_pinned()
+    }
+
+    /// The between-strokes moment: a budgeted drain of the maintenance queue.
+    ///
+    /// Reached from every way a gesture ends — the pointer coming up, the
+    /// gesture cancelled, a cage applied or abandoned — because those are the
+    /// moments where a stall belongs to nobody, and the queue itself refuses
+    /// to be drained anywhere else.
+    fn settle_between_strokes(&mut self) {
+        self.drain_maintenance(crate::maintenance::Maintenance::BUDGET);
+    }
+
+    /// Does what the queue holds until the budget is spent, and reports how
+    /// many items were serviced.
+    ///
+    /// The four lines the C header describes, with the one policy decision it
+    /// leaves to a host written out: an item is *started* only if what is left
+    /// of the budget covers the estimate it carries. An item with no estimate
+    /// is started once — that is how this host learns what one costs, and it
+    /// is the only overrun this loop can produce. An item that has been
+    /// measured and does not fit stops the drain rather than being stepped
+    /// over, because `take_next` hands out the head of the queue and a loop
+    /// that skipped it would ask for the same item again forever.
+    ///
+    /// Declining is not dropping. `take_next` peeks and `complete` removes, so
+    /// what the budget did not reach is still there next time, with its own
+    /// count of the asking climbing where a host is starving it.
+    ///
+    /// Refused outright while a gesture is open. That is the gate, and it is a
+    /// mechanism rather than a convention: there is no queue to take work from
+    /// while a [`claycore::StrokeScope`] holds it.
+    pub fn drain_maintenance(&mut self, budget: std::time::Duration) -> usize {
+        let Some(mut queue) = self.maintenance.take_for_drain() else {
+            return 0;
+        };
+        let started = std::time::Instant::now();
+        let mut serviced = 0;
+        loop {
+            let left = budget.saturating_sub(started.elapsed());
+            let item = match queue.take_next() {
+                Ok(Some(item)) => item,
+                // Empty. It cannot mean the gate here — the queue is in this
+                // loop's hand, which is what taking it out was for.
+                Ok(None) => break,
+                Err(e) => {
+                    eprintln!("a fila de manutenção não pôde ser lida: {e}");
+                    break;
+                }
+            };
+            if !crate::maintenance::Maintenance::affordable(&item, left) {
+                break;
+            }
+            self.perform_maintenance(item);
+            match queue.complete(item.kind, item.target) {
+                Ok(_) => serviced += 1,
+                Err(e) => {
+                    // Left queued, which is the safe direction — the work was
+                    // done, and doing it again costs time rather than
+                    // correctness — but the loop has to stop, or it would take
+                    // the same head item forever.
+                    eprintln!("um item de manutenção não pôde ser encerrado: {e}");
+                    break;
+                }
+            }
+        }
+        self.maintenance.put_back(queue);
+        serviced
+    }
+
+    /// Does one item.
+    ///
+    /// Only one kind is reachable here. The other four name an adaptive
+    /// surface's chunk arena, a hierarchy's detail field, its slot pools and a
+    /// deferred normal flush: this application holds neither an adaptive
+    /// surface nor a hierarchy, and its deferred normals are settled by the
+    /// gesture that deferred them rather than queued — `LiveMesh` owes the
+    /// flush to the handle that owes it, and settles on `Drop`, which is a
+    /// stronger guarantee than a queue entry for the one item that is not
+    /// optional. An item of a kind
+    /// nobody here produces is still *completed* rather than left, because a
+    /// head item nothing will ever service blocks everything behind it.
+    fn perform_maintenance(&mut self, item: claycore::MaintenanceItem) {
+        if item.kind == claycore::MaintenanceKind::IndexRebuild {
+            self.rebuild_mesh_index(LayerKey(u64::from(item.target)));
+        }
+    }
+
+    /// Rebuilds a mesh layer's ray-query tree, if it has drifted far enough
+    /// from what it scored when it was built to be worth it.
+    ///
+    /// The engine measures and the host decides, and this is the deciding. A
+    /// stroke refits, which keeps the tree a valid partition of the same
+    /// triangles at a cost proportional to the brush; what refitting does not
+    /// do is keep that partition a *good* one, and after enough of it queries
+    /// get slower with nothing saying so. `quality` is what says so — the
+    /// expected number of triangle tests a random ray must make — and it is
+    /// only meaningful against the same tree's own history, which is why the
+    /// figure a tree scored when it was built is kept beside it.
+    ///
+    /// Nothing happens where the sculptor has gone. A layer whose sculptor was
+    /// evicted, removed or rebuilt has no decayed tree to speak of: the one it
+    /// has next is new.
+    fn rebuild_mesh_index(&mut self, layer: LayerKey) {
+        let Some(sculptor) = self.sculptor_for(layer) else {
+            return;
+        };
+        // `try_borrow_mut` rather than `borrow_mut`: a drain runs at the
+        // moment a gesture ended, and a sculptor still borrowed there is a bug
+        // in this file rather than something a user can reach.
+        let Ok(mut sculptor) = sculptor.try_borrow_mut() else {
+            debug_assert!(false, "a tree was rebuilt while its sculptor was borrowed");
+            return;
+        };
+        let Ok(quality) = sculptor.quality() else {
+            return;
+        };
+        if !self.maintenance.has_decayed(layer, quality) {
+            // Declined, and the reading it was declined on is what that cost —
+            // which is not a rebuild's cost and is deliberately not recorded
+            // as one.
+            return;
+        }
+        let started = std::time::Instant::now();
+        if let Err(e) = sculptor.refresh() {
+            eprintln!("a árvore de consulta não pôde ser reconstruída: {e}");
+            return;
+        }
+        let took = started.elapsed();
+        let rebuilt = sculptor.quality().ok();
+        drop(sculptor);
+
+        self.maintenance.note_rebuild_cost(took);
+        if let Some(rebuilt) = rebuilt {
+            // A new tree, so a new figure to measure the next drift against.
+            self.maintenance.note_baseline(layer, rebuilt);
+        }
+    }
+
+    /// Asks for a mesh layer's tree to be rebuilt between strokes.
+    ///
+    /// Called from every path that writes through a mesh sculptor. It is a
+    /// *request*: whether the tree has actually decayed is read once at the
+    /// drain rather than once per segment, because the reading walks the tree
+    /// and a drag would pay for it on every pointer move to learn something
+    /// that only changes slowly.
+    ///
+    /// The queue's target is a `u32` and a layer key is a `u64`, which is a
+    /// truncation this document cannot reach: keys are handed out one per
+    /// layer ever made, so aliasing one would take four billion subtools in a
+    /// single session.
+    fn request_index_rebuild(&mut self, layer: LayerKey) {
+        self.maintenance
+            .request(claycore::MaintenanceKind::IndexRebuild, layer.0 as u32);
     }
 
     /// The engine's own undo depth, which is what the two histories order by.
@@ -5048,11 +5301,23 @@ impl ClayDocument {
         // one point of the surface, which is what lets a brush move a split
         // seam as a seam rather than tearing it open.
         const WELD: f32 = 1e-4;
-        let sculptor = claycore::MeshSculptor::for_layer(&mut self.document, engine_name, WELD)
+        let mut sculptor = claycore::MeshSculptor::for_layer(&mut self.document, engine_name, WELD)
             .map_err(ModelError::engine)?;
+        // What this tree scores while it is new, which is the only figure a
+        // later reading of it means anything against: the engine is explicit
+        // that the number compares a tree with its own history and never with
+        // another model's. Read here rather than at the first stroke, because
+        // this is the one moment the partition is known to be a good one.
+        let quality = sculptor.quality().ok();
         self.mesh_sculptors
             .borrow_mut()
             .insert(key, std::rc::Rc::new(std::cell::RefCell::new(sculptor)));
+        if let Some(quality) = quality {
+            self.maintenance.note_baseline(key, quality);
+        }
+        let standing: Vec<LayerKey> = self.layers.iter().map(|layer| layer.key).collect();
+        self.maintenance
+            .retain_baselines(|layer| layer == key || standing.contains(&layer));
         Ok(())
     }
 
@@ -5717,6 +5982,9 @@ impl SculptModel for ClayDocument {
             sculptor.refit().map_err(ModelError::engine)?;
             moved
         };
+        // Taper, twist and a lattice laid as an operation each move most of
+        // the mesh, which is the other case the engine names for a rebuild.
+        self.request_index_rebuild(key);
 
         if deltas.vertex_count().map_err(ModelError::engine)? > 0 {
             self.mesh_undo.push(MeshGesture {
@@ -5842,7 +6110,7 @@ impl SculptModel for ClayDocument {
     }
 
     fn begin_gesture(&mut self) {
-        self.previewing = true;
+        self.set_previewing(true);
         // A drag is anchored where the press landed, so the last one's anchor
         // must not be lying around when the next one opens.
         self.voxel_grab = None;
@@ -5861,7 +6129,7 @@ impl SculptModel for ClayDocument {
     }
 
     fn end_gesture(&mut self) {
-        self.previewing = false;
+        self.set_previewing(false);
         // The tendril is finished; the next pull is its own.
         self.live_hook = None;
         // As is the drag.
@@ -5882,6 +6150,10 @@ impl SculptModel for ClayDocument {
             });
             self.mesh_redo.clear();
         }
+        // The pointer is up. Whatever the drag made necessary, and this
+        // document can afford, is done now — on a budget, because this is the
+        // only moment where a stall belongs to nobody.
+        self.settle_between_strokes();
     }
 
     fn bounds(&self) -> Option<([f32; 3], [f32; 3])> {
@@ -7330,6 +7602,7 @@ impl ClayDocument {
             carried: (0, 0),
             live_mesh: None,
             previewing: false,
+            maintenance: crate::maintenance::Maintenance::new(),
             live_generation: 0,
             live_smooth: None,
             live_move: None,
@@ -8279,19 +8552,29 @@ impl LatticeModel for ClayDocument {
         self.cage_revision = self.cage_revision.wrapping_add(1);
         if cage.is_identity() {
             self.discard_cage_preview();
+            // A cage dragged and then dragged back to exactly where it started
+            // is the identity *and* had a preview up, so this is a gesture
+            // ending like any other. It used to leave `previewing` set, which
+            // now means it would also leave the maintenance gate shut and the
+            // memory pin held for the rest of the session.
+            self.set_previewing(false);
+            self.settle_between_strokes();
             return Ok(());
         }
-        match cage.representation {
+        let laid = match cage.representation {
             // The preview is taken back and the cage laid down once more, this
             // time banked. Not "keep what is on screen": a preview holds the
             // deltas of one pass, and turning that into the edit would leave
             // the undo stack describing a gesture rather than a deformation.
             Representation::Mesh => {
-                self.previewing = false;
+                self.set_previewing(false);
                 self.bend_mesh(&cage)
             }
             _ => self.bend_field(&cage),
-        }
+        };
+        // A cage drag is a gesture like any other, and this is where it ends.
+        self.settle_between_strokes();
+        laid
     }
 
     fn cancel_lattice(&mut self) {
@@ -8300,8 +8583,9 @@ impl LatticeModel for ClayDocument {
         // and leaving the form bent would be the opposite of what Esc means
         // everywhere else here.
         self.discard_cage_preview();
-        self.previewing = false;
+        self.set_previewing(false);
         self.lattice = None;
+        self.settle_between_strokes();
     }
 }
 
@@ -8395,6 +8679,10 @@ impl ClayDocument {
                 .apply_lattice(&lattice, Some(live.deltas()))
                 .map_err(ModelError::engine)?
         };
+        // A cage moves every vertex, which the engine names as the case a
+        // rebuild is the right call after rather than a refit. Asked for
+        // rather than done: every pointer move comes through here.
+        self.request_index_rebuild(cage.layer);
         if self.previewing {
             // Held rather than banked. The cage is still up and every drag
             // replaces the last, so bending a form is one undo however many
@@ -8550,7 +8838,7 @@ impl ClayDocument {
             return;
         };
         if cage.representation == Representation::Mesh && !cage.is_identity() {
-            self.previewing = true;
+            self.set_previewing(true);
             if let Err(e) = self.bend_mesh(&cage) {
                 eprintln!("a gaiola não pôde ser pré-visualizada: {e}");
             }
