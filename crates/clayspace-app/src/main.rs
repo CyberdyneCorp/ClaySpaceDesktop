@@ -2296,6 +2296,10 @@ impl App {
                     stale_seeds_rejected: document.stale_seeds_rejected(),
                 }),
         );
+        // The surfaces this application holds are folded in on the way, which
+        // is what keeps the figure from being the document's memory with the
+        // largest thing in it left out — see `ClayDocument::memory`.
+        report.memory = self.document.with(|document| document.memory_diagnostics());
         report
     }
 

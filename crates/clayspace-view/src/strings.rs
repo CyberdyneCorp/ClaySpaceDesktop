@@ -275,6 +275,8 @@ pub struct Strings {
     pub section_rendering: &'static str,
     /// The mesh-sculpting section of the diagnostics report.
     pub section_mesh_sculpting: &'static str,
+    /// The memory section of the diagnostics report.
+    pub section_memory: &'static str,
 
     // Labels
     /// How far a stamp is turned about its own facing — the grain.
@@ -772,6 +774,7 @@ libera em vez de congelar.",
     section_diagnostics: "DIAGNÓSTICO",
     section_rendering: "RENDERIZAÇÃO",
     section_mesh_sculpting: "ESCULTURA EM MALHA",
+    section_memory: "MEMÓRIA",
 
     label_grain: "Grão",
     label_intensity: "Intensidade",
@@ -1181,6 +1184,7 @@ instead.",
     section_diagnostics: "DIAGNOSTICS",
     section_rendering: "RENDERING",
     section_mesh_sculpting: "MESH SCULPTING",
+    section_memory: "MEMORY",
 
     label_grain: "Grain",
     label_intensity: "Intensity",
@@ -1598,6 +1602,7 @@ lados. Con Ctrl, libera en vez de congelar.",
     section_diagnostics: "DIAGNÓSTICO",
     section_rendering: "RENDERIZAÇÃO",
     section_mesh_sculpting: "ESCULTURA EN MALLA",
+    section_memory: "MEMORIA",
 
     label_grain: "Grano",
     label_intensity: "Intensidad",
@@ -2054,7 +2059,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 226] {
+    pub fn all(&self) -> [&'static str; 227] {
         [
             self.label_autosave_in,
             self.state_autosaved,
@@ -2182,6 +2187,7 @@ impl Strings {
             self.section_diagnostics,
             self.section_rendering,
             self.section_mesh_sculpting,
+            self.section_memory,
             self.label_grain,
             self.label_intensity,
             self.label_size,

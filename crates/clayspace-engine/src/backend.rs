@@ -402,6 +402,7 @@ impl BackendPolicy {
             // fills it from whatever document is open, exactly as it does the
             // renderer and the stalls.
             mesh: None,
+            memory: None,
         }
     }
 }

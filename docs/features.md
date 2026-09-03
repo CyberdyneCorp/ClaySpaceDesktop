@@ -2901,6 +2901,29 @@ This is the count of those catches. Zero is the ordinary reading; the two
 numbers are shown together because zero over no sculptors and zero over four
 are the same number and different facts.
 
+**Memória** carries three figures and not one, because a total answers the
+wrong question. A sculptor who has just been told memory is short is not asking
+how big the document is; they are asking which part they are allowed to let go
+of. *Trabalho* is their own work and is never released, *reconstruível*
+reconstructs identically and costs only a stall, and *desfazer* is undo depth,
+which is a policy rather than a fact about the sculpture. All three come from
+the engine's own arithmetic over its category lines rather than from a sum
+taken here, so a line added upstream and left unclassified cannot make them
+disagree with the total.
+
+The fourth row is *superfícies*, and it is the honesty check. A mesh-sculpting
+session is a handle this application holds **beside** its document rather than
+inside it, so `clay_document_memory` reports the whole surface tier as zero —
+correctly, since it cannot walk what it does not own. Measured on the starting
+form crossed to a mesh and dabbed once, the plain roll-up says 8.5 MB and the
+session beside it is another 8.4 MB: a host that stopped at the plain figure
+would publish half the truth, and the gap only widens with the mesh. So the
+application asks each session what it costs, merges the ledgers — only it knows
+which sessions belong to this document, which is why the engine merges none —
+and calls `clay_document_memory_with_surfaces`. The row says how many sessions
+were asked as well as what they came to, so a surface tier of zero reads as
+*there are none* rather than as *nobody asked*.
+
 **Ajuda → Atribuições** shows the attribution manifest, which is generated
 from `cargo metadata` and embedded in the binary rather than shipped beside it.
 

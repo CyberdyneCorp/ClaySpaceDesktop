@@ -80,6 +80,55 @@ pub struct Diagnostics {
     /// and the report is assembled by the layer that knows the build. A
     /// report taken with no document open carries `None`.
     pub mesh: Option<MeshDiagnostics>,
+
+    /// Where the document's memory is, and what it would cost to release it.
+    ///
+    /// Optional for the reason [`Self::mesh`] is: it is the document's answer
+    /// rather than this build's, and a report taken with no document open
+    /// carries `None`.
+    pub memory: Option<MemoryDiagnostics>,
+}
+
+/// Where a document's memory is, in the terms that decide what may be released.
+///
+/// A single total is the wrong answer to the question a memory warning
+/// actually asks. Under pressure a host does not need to know how big the
+/// document is, it needs to know **which part**, because that is what decides
+/// what it is allowed to let go of:
+///
+/// | | what letting it go costs |
+/// |---|---|
+/// | [`essential`](Self::essential) | the user's work. Never. |
+/// | [`rebuildable`](Self::rebuildable) | a stall, and nothing else — it reconstructs identically |
+/// | [`undoable`](Self::undoable) | undo depth, which is this application's own policy |
+///
+/// The three are the engine's own arithmetic over its category lines rather
+/// than a sum taken here, so a line added upstream and not classified cannot
+/// make them disagree with the total.
+///
+/// [`surfaces`](Self::surfaces) and [`surface_bytes`](Self::surface_bytes) are
+/// in the report because of what they would otherwise hide. A hierarchy and a
+/// mesh-sculpting session are held *beside* a document rather than inside it,
+/// so the engine's plain roll-up reports them as zero — correctly, since it
+/// cannot walk what it does not own. A host that stops there and shows the
+/// plain figure at twenty million vertices publishes a number that omits the
+/// largest thing the artist is holding. These two say that this application
+/// asked its own surfaces and folded the answer in, and how much that was, so
+/// a zero can be read as "there are none" rather than as "we did not ask".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MemoryDiagnostics {
+    /// The user's work. Never released.
+    pub essential: u64,
+    /// Reconstructs identically; releasing it costs a stall.
+    pub rebuildable: u64,
+    /// Undo depth, and this application's own policy.
+    pub undoable: u64,
+    /// What the engine reports for the whole, roll-ups and everything else.
+    pub total: u64,
+    /// How many surfaces this application asked for a ledger.
+    pub surfaces: usize,
+    /// What those surfaces contributed to the figures above.
+    pub surface_bytes: u64,
 }
 
 /// What mesh sculpting has had to correct for itself.
@@ -245,8 +294,43 @@ impl Diagnostics {
                 ),
             );
         }
+        if let Some(memory) = &self.memory {
+            // The breakdown before the total, deliberately: the total is the
+            // part a reader already has an intuition for and the split is the
+            // part that decides anything.
+            line(
+                "memory",
+                &format!(
+                    "{} essential, {} rebuildable, {} undoable of {} total",
+                    megabytes(memory.essential),
+                    megabytes(memory.rebuildable),
+                    megabytes(memory.undoable),
+                    megabytes(memory.total)
+                ),
+            );
+            // Reported at zero surfaces as well, because that is the line that
+            // says the surfaces were *asked*. Without it a zero surface tier
+            // cannot be told from a host that never filled the ledger.
+            line(
+                "memory surfaces",
+                &format!(
+                    "{} held, {} folded in",
+                    memory.surfaces,
+                    megabytes(memory.surface_bytes)
+                ),
+            );
+        }
         out
     }
+}
+
+/// Bytes as a figure a person can compare against what their machine has.
+///
+/// Mebibytes, since that is what the engine's budgets are stated in, and one
+/// decimal: a memory report read to the byte invites a reader to treat a
+/// container walk as an equality, which the engine is explicit it is not.
+fn megabytes(bytes: u64) -> String {
+    format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
 }
 
 /// A source of diagnostics.
@@ -273,6 +357,7 @@ mod tests {
             stalls: Vec::new(),
             render: None,
             mesh: None,
+            memory: None,
         }
     }
 
@@ -356,6 +441,56 @@ mod tests {
     #[test]
     fn a_report_taken_with_no_document_omits_the_mesh_line() {
         assert!(!sample().to_report().contains("mesh sculptors"));
+    }
+
+    fn memory() -> MemoryDiagnostics {
+        MemoryDiagnostics {
+            essential: 8 * 1024 * 1024,
+            rebuildable: 2 * 1024 * 1024,
+            undoable: 1024 * 1024,
+            total: 11 * 1024 * 1024,
+            surfaces: 2,
+            surface_bytes: 3 * 1024 * 1024,
+        }
+    }
+
+    /// The whole reason the three are carried instead of one figure: a reader
+    /// deciding what to release needs to know which part is which, and a total
+    /// says nothing about that.
+    #[test]
+    fn the_report_names_which_part_the_memory_is_in_and_not_only_how_much() {
+        let mut diagnostics = sample();
+        diagnostics.memory = Some(memory());
+        let text = diagnostics.to_report();
+        assert!(
+            text.contains("8.0 MB essential, 2.0 MB rebuildable, 1.0 MB undoable of 11.0 MB total"),
+            "{text}"
+        );
+    }
+
+    /// The line that says the surfaces were asked. A surface tier of zero is
+    /// the right answer on a document holding none, and it is also what a host
+    /// that never filled the ledger would print — so the count is what tells
+    /// the two apart.
+    #[test]
+    fn the_surfaces_folded_in_are_reported_even_when_there_are_none() {
+        let mut diagnostics = sample();
+        diagnostics.memory = Some(MemoryDiagnostics {
+            surfaces: 0,
+            surface_bytes: 0,
+            ..memory()
+        });
+        let text = diagnostics.to_report();
+        assert!(
+            text.contains("memory surfaces: 0 held, 0.0 MB folded in"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_report_taken_with_no_document_omits_the_memory_lines() {
+        let text = sample().to_report();
+        assert!(!text.contains("memory"), "{text}");
     }
 
     #[test]

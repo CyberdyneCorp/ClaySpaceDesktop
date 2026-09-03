@@ -5079,6 +5079,76 @@ impl ClayDocument {
         self.mesh_sculptors.borrow().len()
     }
 
+    // -- what this document costs -------------------------------------------
+
+    /// The ledger for the surfaces this document is holding *beside* itself.
+    ///
+    /// A [`claycore::MeshSculptor`] is an owning handle the host keeps next to
+    /// its document rather than inside it — the engine cannot walk one, so
+    /// [`claycore::Document::memory`] reports the whole surface tier as zero
+    /// and that is ownership rather than an omission. Only this side knows
+    /// which sculptors belong to this document, so only this side can fill the
+    /// ledger, and the engine's API says so by taking one.
+    ///
+    /// Returns how many surfaces were asked as well as what they answered,
+    /// because zero surfaces and a zero ledger are the same number and
+    /// different facts.
+    ///
+    /// The ledger is accumulated onto the *first* answer rather than onto a
+    /// default one, and that is not tidiness: merging carries the shorter of
+    /// the two category counts, so folding into a zeroed ledger would report
+    /// every category as unfilled however many surfaces were added to it.
+    pub fn surface_ledger(&self) -> Result<(usize, claycore::MemoryLedger), ModelError> {
+        let held = self.mesh_sculptors.borrow();
+        let mut ledger: Option<claycore::MemoryLedger> = None;
+        let mut surfaces = 0;
+        for sculptor in held.values() {
+            let one = sculptor
+                .borrow_mut()
+                .memory_ledger()
+                .map_err(ModelError::engine)?;
+            surfaces += 1;
+            match ledger.as_mut() {
+                Some(into) => into.merge(&one),
+                None => ledger = Some(one),
+            }
+        }
+        Ok((surfaces, ledger.unwrap_or_default()))
+    }
+
+    /// Where this document's memory is, with the surfaces beside it folded in.
+    ///
+    /// [`claycore::Document::memory_with_surfaces`] rather than the plain
+    /// roll-up, because the plain one omits every surface the host owns — and
+    /// a mesh-sculpting session over a few million triangles is comfortably
+    /// the largest thing an artist is holding. A figure that leaves it out is
+    /// not a smaller answer to the same question, it is an answer to a
+    /// different one.
+    pub fn memory(&self) -> Result<claycore::MemoryReport, ModelError> {
+        let (_, surfaces) = self.surface_ledger()?;
+        self.document
+            .memory_with_surfaces(&surfaces)
+            .map_err(ModelError::engine)
+    }
+
+    /// The same figures as the diagnostics report carries them.
+    ///
+    /// `None` where the engine refused the question, which is what keeps a
+    /// report that is opened *because* something has gone wrong from being the
+    /// thing that cannot be opened.
+    pub fn memory_diagnostics(&self) -> Option<clayspace_model::MemoryDiagnostics> {
+        let (surfaces, ledger) = self.surface_ledger().ok()?;
+        let report = self.document.memory_with_surfaces(&ledger).ok()?;
+        Some(clayspace_model::MemoryDiagnostics {
+            essential: report.essential,
+            rebuildable: report.rebuildable,
+            undoable: report.undoable,
+            total: report.total,
+            surfaces,
+            surface_bytes: ledger.total,
+        })
+    }
+
     // -- work that is not required for correctness ---------------------------
 
     /// Opens or shuts a gesture, and everything that follows exactly from it.

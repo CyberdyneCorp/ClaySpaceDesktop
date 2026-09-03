@@ -152,6 +152,17 @@ fn diagnostics() -> clayspace_model::Diagnostics {
             sculptors: 2,
             stale_seeds_rejected: 1,
         }),
+        // A document whose surfaces carry rather more than its edit list does,
+        // which is the case the breakdown exists for: the plain roll-up would
+        // report the 40 MB and leave the 96 MB of sculpting session out.
+        memory: Some(clayspace_model::MemoryDiagnostics {
+            essential: 128 * 1024 * 1024,
+            rebuildable: 6 * 1024 * 1024,
+            undoable: 2 * 1024 * 1024,
+            total: 136 * 1024 * 1024,
+            surfaces: 2,
+            surface_bytes: 96 * 1024 * 1024,
+        }),
     }
 }
 
@@ -1080,6 +1091,18 @@ fn the_diagnostics_window_carries_what_an_issue_needs() {
     assert!(
         text.contains("metal declined raycast"),
         "the fallback is missing:\n{text}"
+    );
+    // The memory breakdown, which is the part of the report that says what a
+    // sculptor under pressure is allowed to release. A total on its own does
+    // not answer that, and neither does a figure that leaves the sculpting
+    // sessions out — so both the split and the surfaces line are checked.
+    assert!(
+        text.contains("128.0 MB essential") && text.contains("6.0 MB rebuildable"),
+        "the memory breakdown is missing:\n{text}"
+    );
+    assert!(
+        text.contains("memory surfaces: 2 held, 96.0 MB folded in"),
+        "the report does not say the surfaces were asked:\n{text}"
     );
 }
 
