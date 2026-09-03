@@ -57,6 +57,10 @@ impl Screen {
                 self.upload(gpu, document);
                 Ok(())
             }
+            // No member builds one, so nothing in this harness reaches here —
+            // and every group that could is already saying `NoReferenceScene`
+            // rather than reporting a figure it did not take.
+            Representation::Multires => Err(Skip::NoReferenceScene),
         }
     }
 

@@ -328,6 +328,12 @@ impl Layer {
             health: None,
             voxel: None,
             sculpt_layers: self.sculpt_layers.clone(),
+            // No `Layer` here holds a `clay_multires` yet, so there is nothing
+            // to report. `None` and not a default state: a hierarchy with one
+            // level and no passes is a real thing an interface would draw
+            // controls for, and every layer claiming to be one would be worse
+            // than none of them being.
+            multires: None,
         }
     }
 
@@ -1491,6 +1497,14 @@ impl ClayDocument {
             Direction::MeshToSdf => self.mesh_to_sdf(&name, cell_size),
             Direction::SdfToMesh => self.sdf_to_mesh(&name, cell_size),
             Direction::VoxelToMesh => self.voxels_to_mesh(&name),
+            // The domain has both hierarchy crossings and this adapter has
+            // neither: nothing here holds a `clay_multires`, so there is
+            // nothing to build one into and nothing to bake one out of. The
+            // undo group above is already open, and it closes below on this
+            // path exactly as it does on a refusal from any of the six.
+            Direction::MeshToMultires | Direction::MultiresToMesh => Err(ModelError::engine(
+                "esta versão ainda não constrói uma hierarquia de subdivisão",
+            )),
         };
         // The source leaves and the result takes its row here rather than
         // after the group: it keeps the entries adjacent, which is what lets
@@ -6024,6 +6038,16 @@ impl SculptModel for ClayDocument {
             }
             Representation::Voxel => self.stroke_voxel(tool, brush, samples, symmetry),
             Representation::Mesh => self.stroke_mesh(tool, brush, samples, symmetry),
+            // The domain has the fourth representation and this adapter does
+            // not hold one yet: `add_layer` refuses it, no crossing builds one,
+            // and no `Layer` carries a `clay_multires`. A refusal here rather
+            // than a fourth branch guessing at a hierarchy that cannot exist —
+            // and it is reachable only if some other part of this file starts
+            // making them without wiring the stroke, which is exactly the
+            // silence worth a sentence.
+            Representation::Multires => Err(ModelError::engine(
+                "esta versão ainda não esculpe uma hierarquia de subdivisão",
+            )),
         }
     }
 
@@ -6081,6 +6105,7 @@ impl SculptModel for ClayDocument {
                 clayspace_model::Unavailable::NoVerbHere {
                     active: self.active_representation(),
                     verbs: operation.verbs(),
+                    note: None,
                 },
             ));
         }
@@ -7017,6 +7042,20 @@ impl SceneModel for ClayDocument {
                 "uma camada de malha vem de uma malha importada; use Ficheiro → Importar",
             ));
         }
+        // The same dead row, one representation further along, and it is the
+        // one the `_` arm below would have made. A hierarchy is built from a
+        // cage: `clay_multires_from_mesh` takes the triangles and there is no
+        // call that makes an empty one at all. Asked for one, this would have
+        // fallen through to `add_sdf_layer` and recorded the row as a
+        // hierarchy — which is verbatim the defect the paragraph above
+        // describes, so it is refused in the same place and for the same
+        // reason rather than being discovered again later.
+        if representation == Representation::Multires {
+            return Err(ModelError::engine(
+                "uma hierarquia de subdivisão vem de uma malha; converta uma \
+                 camada de malha para multirresolução",
+            ));
+        }
         // Made unique before the engine sees it. A voxel layer's grid is
         // reachable only by name (ClayCore #365), so two of them sharing one
         // shadow each other; `rename_layer` refuses a collision a sculptor
@@ -7052,7 +7091,17 @@ impl SceneModel for ClayDocument {
                         sdf: None,
                         voxel: Some("clay_voxel_begin_sculpt_layer"),
                         mesh: None,
+                        // A hierarchy has a pass stack too, and it is NOT this
+                        // one: `SculptLayerOp` addresses a pass by its position
+                        // in a grid's stack, and the hierarchy's is addressed
+                        // by an id that a reorder does not renumber. The two
+                        // are `clayspace_model::SculptLayerOp` and
+                        // `clayspace_model::MultiresSculptLayerOp`, and this
+                        // column stays empty so that pointing one at the other
+                        // is a refusal rather than an off-by-one.
+                        multires: None,
                     },
+                    note: None,
                 },
             ));
         }
@@ -9251,6 +9300,14 @@ impl MaskModel for ClayDocument {
                      converta-a para SDF primeiro",
                 ))
             }
+            // A hierarchy has no field either, and the route out is the same
+            // one a mesh takes.
+            Representation::Multires => {
+                return Err(ModelError::engine(
+                    "uma hierarquia de subdivisão não tem campo para extrudar; \
+                     converta um nível para malha e depois para SDF",
+                ))
+            }
             Representation::Sdf => {}
         }
 
@@ -10522,6 +10579,7 @@ impl ClayDocument {
                 clayspace_model::Unavailable::NoVerbHere {
                     active: layer.representation,
                     verbs: OBJECT_VERBS,
+                    note: None,
                 },
             ));
         }
@@ -10717,6 +10775,12 @@ impl ClayDocument {
                 .document
                 .mesh_layer_as_volume(&engine_name, Self::bake_volume(cell))
                 .map_err(ModelError::engine),
+            // No hierarchy stands in a document this adapter builds; see the
+            // stroke dispatch. When one does, the operand is a level baked to a
+            // mesh and then this same mesh route.
+            Representation::Multires => Err(ModelError::engine(
+                "uma hierarquia de subdivisão ainda não entra numa booleana",
+            )),
         }
     }
 

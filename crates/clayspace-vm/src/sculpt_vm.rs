@@ -792,6 +792,13 @@ impl SculptViewModel {
             // makes it wrong elsewhere.
             Representation::Sdf => tool == ToolKind::Puxar,
             Representation::Voxel => false,
+            // The mesh's answer, because the drag IS the mesh's drag: a stamp
+            // on a hierarchy is the fixed sculptor's stamp over the bound
+            // level's own mesh. And the take-back the replay needs is exact
+            // there — a layered gesture's cancel restores recorded `before`
+            // values rather than reconstructing them — so a segment can be
+            // undone and the gesture laid down again from its anchor.
+            Representation::Multires => true,
         }
     }
 

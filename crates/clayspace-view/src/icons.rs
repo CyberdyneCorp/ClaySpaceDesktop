@@ -56,18 +56,20 @@ pub enum Icon {
     Curve,
     Undo,
     Redo,
-    /// The three representations, told apart by shape and never by hue: a
-    /// field is nested contours around a form, a grid is cells, and a mesh is
-    /// triangles. Drawn because the representation bar states each one with an
-    /// icon *and* its name — the design's rule that a discriminator is never
-    /// colour alone applies hardest here, where the three are equals.
+    /// The four representations, told apart by shape and never by hue: a
+    /// field is nested contours around a form, a grid is cells, a mesh is
+    /// triangles, and a hierarchy is a cage with the surface it implies inside
+    /// it. Drawn because the representation bar states each one with an icon
+    /// *and* its name — the design's rule that a discriminator is never colour
+    /// alone applies hardest here, where the four are equals.
     FieldRepresentation,
     VoxelRepresentation,
     MeshRepresentation,
+    MultiresRepresentation,
 }
 
 impl Icon {
-    pub const ALL: [Icon; 28] = [
+    pub const ALL: [Icon; 29] = [
         Self::Visible,
         Self::Hidden,
         Self::Locked,
@@ -96,6 +98,7 @@ impl Icon {
         Self::FieldRepresentation,
         Self::VoxelRepresentation,
         Self::MeshRepresentation,
+        Self::MultiresRepresentation,
     ];
 
     /// What a screen reader or a tooltip says.
@@ -132,6 +135,7 @@ impl Icon {
             Self::FieldRepresentation => "campo de distância",
             Self::VoxelRepresentation => "grade de voxels",
             Self::MeshRepresentation => "malha de triângulos",
+            Self::MultiresRepresentation => "hierarquia de subdivisão",
         }
     }
 }
@@ -494,6 +498,26 @@ pub fn paint(painter: &egui::Painter, rect: egui::Rect, icon: Icon, tint: egui::
                 ],
                 stroke,
             ));
+        }
+        Icon::MultiresRepresentation => {
+            // The cage, and the surface it implies inside it. That pairing is
+            // what a subdivision hierarchy is a picture of, and it is the one
+            // drawing in this set that says "two things, one under the other"
+            // without saying "levels", which nothing legible at 22 px can.
+            //
+            // Not a finer version of the mesh's subdivided triangle, which was
+            // the obvious drawing and is the wrong one: beside it in the
+            // representation bar the two would differ only by how many lines
+            // they have, and at this size that is a hue-like discriminator
+            // wearing shape's clothes.
+            let half = unit * 0.66;
+            painter.rect_stroke(
+                egui::Rect::from_center_size(centre, egui::vec2(half * 2.0, half * 2.0)),
+                egui::epaint::CornerRadius::ZERO,
+                stroke,
+                egui::StrokeKind::Middle,
+            );
+            painter.circle_stroke(centre, half, stroke);
         }
     }
 }

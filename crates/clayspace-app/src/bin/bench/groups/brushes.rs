@@ -121,7 +121,7 @@ fn measure_tool(
     representation: Representation,
     tool: ToolKind,
 ) -> Result<Vec<f64>, Skip> {
-    let scene = Scene::for_representation(representation);
+    let scene = Scene::for_representation(representation).ok_or(Skip::NoReferenceScene)?;
     if tool.holds_the_whole_gesture(representation) {
         // The document is rebuilt between samples: the second replacement of a
         // region is not the first, and timing it as though it were measures a

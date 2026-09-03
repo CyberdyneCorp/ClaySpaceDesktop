@@ -157,7 +157,9 @@ pub trait SculptModel {
                 sdf: None,
                 voxel: None,
                 mesh: None,
+                multires: None,
             },
+            note: None,
         }))
     }
 

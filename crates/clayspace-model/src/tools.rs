@@ -15,7 +15,7 @@
 //! not is a failing count rather than a silence.
 //!
 //! A tool with no verb on the active representation is **absent** rather than
-//! offered and disabled. With three representations carrying substantially
+//! offered and disabled. With four representations carrying substantially
 //! different vocabularies, one list would be mostly disabled entries whatever
 //! the active layer, all carrying the same sentence. A tool that *has* a verb
 //! here and cannot be used right now — a locked layer, a hidden one, a missing
@@ -34,20 +34,41 @@ pub enum Representation {
     Voxel,
     /// Imported triangles, held verbatim.
     Mesh,
+    /// A cage, a subdivision hierarchy over it, and detail stored per level.
+    ///
+    /// The one thing that distinguishes it from a mesh, and the reason it is a
+    /// representation rather than a mode: what is stored above the cage is not
+    /// a position but a *displacement in a frame carried up from the level
+    /// below*. So moving the form at a coarse level moves the frames, and the
+    /// wrinkles cut at a fine one ride on them instead of being smeared or
+    /// re-projected. A mesh cannot express that, because a mesh has one level
+    /// and nothing under it to move.
+    ///
+    /// Two consequences run through this crate. Where the brush writes and
+    /// what the viewport draws are two independent numbers rather than one —
+    /// see [`crate::multires::MultiresLevels`]. And a hierarchy stores where
+    /// its vertices went and not what colour they are, which is why the two
+    /// colour brushes reach a mesh and not this.
+    Multires,
 }
 
 impl Representation {
-    pub const ALL: [Representation; 3] = [Self::Sdf, Self::Voxel, Self::Mesh];
+    pub const ALL: [Representation; 4] = [Self::Sdf, Self::Voxel, Self::Mesh, Self::Multires];
 
     /// The representations an *empty* layer can be created in.
     ///
-    /// Two, not three. A mesh layer is made by carrying a mesh — there is no
+    /// Two, not four. A mesh layer is made by carrying a mesh — there is no
     /// call anywhere that makes an empty one — so "add a layer and choose
     /// mesh" produced a row labelled mesh with a field layer behind it that
     /// nothing could ever put triangles into. The specification qualifies the
     /// offer, "SDF, voxel and mesh *where a mesh source is at hand*", and at
     /// the moment a layer is added out of nothing there is none: that route is
     /// the import, which makes its own layer.
+    ///
+    /// A hierarchy is out for the same reason and more sharply: it is built
+    /// *from a cage*, `clay_multires_from_mesh` refuses rather than repairs
+    /// one, and there is no call that makes an empty one at all. It arrives
+    /// through [`crate::Direction::MeshToMultires`] or not at all.
     pub const CREATABLE: [Representation; 2] = [Self::Sdf, Self::Voxel];
 
     pub fn label(self) -> &'static str {
@@ -55,11 +76,12 @@ impl Representation {
             Self::Sdf => "SDF",
             Self::Voxel => "voxel",
             Self::Mesh => "mesh",
+            Self::Multires => "multires",
         }
     }
 }
 
-/// What one tool invokes on each of the three representations.
+/// What one tool invokes on each of the four representations.
 ///
 /// A field is `None` where that representation has no verb for the tool. The
 /// engine's name is carried rather than a boolean so that "does this apply
@@ -69,6 +91,22 @@ pub struct Verbs {
     pub sdf: Option<&'static str>,
     pub voxel: Option<&'static str>,
     pub mesh: Option<&'static str>,
+    /// The hierarchy's column.
+    ///
+    /// Almost the mesh column, and that is the engine's doing rather than a
+    /// convenience: `clay_multires_sculptor_stamp` takes a
+    /// `clay_mesh_brush_desc` and runs the fixed sculptor over the active
+    /// level's own mesh, so "the same verbs, the same falloffs, the same mask,
+    /// the same alpha and the same automasking — because it is the same code".
+    /// One brush runtime across the three representations is ClayCore #419,
+    /// and this column is where that shows.
+    ///
+    /// It is not a copy of the mesh column, though, and the three places it
+    /// differs are the three places a table beats a rule: the two colour
+    /// brushes are absent, because a hierarchy stores where a vertex went and
+    /// not what colour it is, and the smooth names a different entry point,
+    /// because a smooth here picks which frequency it acts on.
+    pub multires: Option<&'static str>,
 }
 
 impl Verbs {
@@ -77,12 +115,13 @@ impl Verbs {
             Representation::Sdf => self.sdf,
             Representation::Voxel => self.voxel,
             Representation::Mesh => self.mesh,
+            Representation::Multires => self.multires,
         }
     }
 
     /// How many representations this tool reaches.
     pub fn count(self) -> usize {
-        [self.sdf, self.voxel, self.mesh]
+        [self.sdf, self.voxel, self.mesh, self.multires]
             .into_iter()
             .filter(Option::is_some)
             .count()
@@ -200,31 +239,52 @@ impl LayerOperation {
     /// hardcoded refusal did, telling a sculptor on a field that filling voids
     /// "applies to mesh layers".
     pub fn verbs(self) -> Verbs {
+        // Every one of the six is `multires: None`, and that is six separate
+        // absences rather than one. The three forward point maps have no
+        // hierarchy entry point at all — there is no `clay_multires_*_deform`
+        // and no `clay_multires_*_lattice` in the ABI, because a level above
+        // the cage is *derived*, so there is nothing to push a vertex of
+        // through a map and have the result survive the next evaluation. The
+        // three grid repairs are grid repairs.
+        //
+        // `RefineRegion` is the one worth pausing on, because its own doc
+        // sentence — "block out coarse, then pay for detail only where the
+        // detail goes" — is the multiresolution idea word for word, and a
+        // reader will reach for it. It is still `None`: a grid refines a
+        // *region*, and a hierarchy subdivides a whole level, which is
+        // [`crate::multires::MultiresLevels::subdivided`] and priced by
+        // [`crate::multires::SubdivisionCost`] rather than by a `Cost` in
+        // cells.
         match self {
             Self::Taper { .. } | Self::Twist { .. } => Verbs {
                 sdf: None,
                 voxel: None,
                 mesh: Some("clay_mesh_sculptor_deform"),
+                multires: None,
             },
             Self::LatticeDrag { .. } => Verbs {
                 sdf: None,
                 voxel: None,
                 mesh: Some("clay_mesh_sculptor_lattice"),
+                multires: None,
             },
             Self::CloseHoles { .. } => Verbs {
                 sdf: None,
                 voxel: Some("clay_voxel_repair_close_holes"),
                 mesh: None,
+                multires: None,
             },
             Self::FillVoids => Verbs {
                 sdf: None,
                 voxel: Some("clay_voxel_repair_fill_voids"),
                 mesh: None,
+                multires: None,
             },
             Self::RefineRegion { .. } => Verbs {
                 sdf: None,
                 voxel: Some("clay_voxel_add_level_region"),
                 mesh: None,
+                multires: None,
             },
         }
     }
@@ -399,6 +459,15 @@ impl ToolKind {
     /// up. The alternative — reverting the last segment and reapplying the
     /// whole gesture, which is what the mesh drag does — needs a record of
     /// what a voxel edit changed, and a grid has none.
+    /// A hierarchy answers the mesh's way rather than the grid's, and the
+    /// reason is the one the paragraph above gives for why the grid is the
+    /// exception: the alternative to holding a drag is reverting the last
+    /// segment and reapplying the whole gesture, which needs an exact record
+    /// of what the last segment changed. A grid has none. A hierarchy has one
+    /// — the layered stroke's cancel is defined to be exact, because a layered
+    /// write is `L += dE` and the only exact restore is the recorded `before`
+    /// values, so the record exists from the first stamp. So a drag on a
+    /// hierarchy previews as it moves, as it does on a mesh.
     pub fn holds_the_whole_gesture(self, representation: Representation) -> bool {
         self.is_region_based() || (self == Self::Mover && representation == Representation::Voxel)
     }
@@ -424,10 +493,36 @@ pub enum ToolNote {
     /// A grid's flatten fills hollows below the plane as well as taking
     /// material off above it, where the field and mesh verbs cut only.
     VoxelPlanarIsTwoSided,
+    /// A hierarchy's smooth picks a frequency, where the other three have one.
+    ///
+    /// `clay_multires_sculpt_layer_stroke_smooth` takes a mode, and the split
+    /// is representational rather than a setting: the hierarchy already stores
+    /// the form and the detail in different arrays, so smoothing the positions,
+    /// smoothing the coefficients and smoothing the form *with the detail
+    /// carried through unchanged* are three different passes. The third is the
+    /// one an artist correcting anatomy under pores is asking for, and it is
+    /// the one that cannot exist on a flat mesh — there is nothing under the
+    /// surface to smooth separately from it.
+    MultiresSmoothChoosesAFrequency,
+    /// A hierarchy carries no colour of its own, so the colour brushes are not
+    /// offered on one.
+    ///
+    /// The one note here attached to a tool that is **absent** rather than
+    /// present. It is worth the exception because the absence otherwise reads
+    /// as an oversight: every other mesh brush is on this shelf, these two are
+    /// missing, and the shelf cannot say why. What it does not do is leave the
+    /// sculptor without a route — the cage's colours are subdivided all the way
+    /// up, so painting before the hierarchy is built, or baking a level back to
+    /// a mesh and painting that, both work.
+    MultiresStoresNoColour,
 }
 
 impl ToolNote {
-    pub const ALL: [ToolNote; 1] = [Self::VoxelPlanarIsTwoSided];
+    pub const ALL: [ToolNote; 3] = [
+        Self::VoxelPlanarIsTwoSided,
+        Self::MultiresSmoothChoosesAFrequency,
+        Self::MultiresStoresNoColour,
+    ];
 }
 
 /// Why a tool cannot be used right now.
@@ -446,6 +541,18 @@ pub enum Unavailable {
     NoVerbHere {
         active: Representation,
         verbs: Verbs,
+        /// Why the tool is missing *here in particular*, where saying so is
+        /// worth more than the list of where it is not missing.
+        ///
+        /// Almost always `None`: "applies to voxel and mesh layers; this one
+        /// is a field" answers the question for nearly every absence, and a
+        /// second sentence on every refusal is a second sentence nobody reads.
+        /// It is here for the absence that reads as an oversight rather than
+        /// as a boundary — see [`ToolNote::MultiresStoresNoColour`].
+        ///
+        /// The wording lives with the other strings, as every [`ToolNote`]'s
+        /// does; what is decided here is *which* absences carry one.
+        note: Option<ToolNote>,
     },
     /// The layer is ghosted or locked.
     LayerProtected,
@@ -459,7 +566,7 @@ pub enum Unavailable {
 impl std::fmt::Display for Unavailable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NoVerbHere { active, verbs } => {
+            Self::NoVerbHere { active, verbs, .. } => {
                 let on: Vec<&str> = Representation::ALL
                     .into_iter()
                     .filter(|r| verbs.on(*r).is_some())
@@ -582,7 +689,10 @@ impl ToolKind {
     pub fn engine_verbs(self) -> String {
         let verbs = self.verbs();
         let mut named: Vec<&'static str> = Vec::new();
-        for verb in [verbs.sdf, verbs.voxel, verbs.mesh].into_iter().flatten() {
+        for verb in [verbs.sdf, verbs.voxel, verbs.mesh, verbs.multires]
+            .into_iter()
+            .flatten()
+        {
             if !named.contains(&verb) {
                 named.push(verb);
             }
@@ -604,35 +714,43 @@ impl ToolKind {
                 sdf: Some("clay_layer_apply_stroke (CLAY_OP_RELIEF)"),
                 voxel: Some("clay_voxel_sculpt_inflate"),
                 mesh: Some("clay_mesh_sculptor_stamp (DRAW)"),
+                multires: Some("clay_multires_sculptor_stamp (DRAW)"),
             },
             Self::Inflar => Verbs {
                 sdf: Some("clay_layer_apply_stroke (CLAY_OP_RELIEF)"),
                 voxel: Some("clay_voxel_sculpt_inflate"),
                 mesh: Some("clay_mesh_sculptor_stamp (INFLATE)"),
+                multires: Some("clay_multires_sculptor_stamp (INFLATE)"),
             },
             Self::Suavizar => Verbs {
                 sdf: Some("clay_item_volume_relax"),
                 voxel: Some("clay_voxel_sculpt_smooth"),
                 mesh: Some("clay_mesh_sculptor_stamp (SMOOTH)"),
+                multires: Some("clay_multires_sculpt_layer_stroke_smooth"),
             },
-            // The one tool that is the same call on all three, because a
+            // The one tool that is the same call on all four, because a
             // mask is not part of any of them: it is a world-addressed field
             // the verbs consult, and freezing a region of a mesh is the same
-            // act as freezing a region of a field.
+            // act as freezing a region of a field. A hierarchy takes it the
+            // same way — the layer transform is used only to find each vertex
+            // on the mask's own lattice.
             Self::Mascara => Verbs {
                 sdf: Some("clay_mask_apply_stroke"),
                 voxel: Some("clay_mask_apply_stroke"),
                 mesh: Some("clay_mask_apply_stroke"),
+                multires: Some("clay_mask_apply_stroke"),
             },
             Self::Camada => Verbs {
                 sdf: Some("clay_layer_apply_stroke (clamped accumulation)"),
                 voxel: Some("clay_voxel_sculpt_inflate (clamped)"),
                 mesh: Some("clay_mesh_sculptor_stamp (LAYER)"),
+                multires: Some("clay_multires_sculptor_stamp (LAYER)"),
             },
             Self::Mover => Verbs {
                 sdf: Some("clay_layer_move_surface"),
                 voxel: Some("clay_voxel_sculpt_grab"),
                 mesh: Some("clay_mesh_sculptor_stamp (GRAB)"),
+                multires: Some("clay_multires_sculptor_stamp (GRAB)"),
             },
             // SDF only, and that is the engine's answer rather than a
             // shortcut. The verb bakes a re-sampled *volume*, which a grid has
@@ -644,11 +762,15 @@ impl ToolKind {
                 sdf: Some("clay_item_volume_move_topological"),
                 voxel: None,
                 mesh: None,
+                // A hierarchy has no volume to bake either, and the geodesic
+                // Grab it does have is `Mover`'s verb rather than this one.
+                multires: None,
             },
             Self::Puxar => Verbs {
                 sdf: Some("clay_item_set_curve_points (snakehook)"),
                 voxel: None,
                 mesh: Some("clay_mesh_sculptor_stamp (SNAKEHOOK)"),
+                multires: Some("clay_multires_sculptor_stamp (SNAKEHOOK)"),
             },
             // Two-sided on a grid, cut-only on the other two, and the
             // difference is the engine's rather than a compromise: the voxel
@@ -660,36 +782,43 @@ impl ToolKind {
                 sdf: Some("clay_item_volume_flatten (cut-only)"),
                 voxel: Some("clay_voxel_sculpt_flatten (two-sided)"),
                 mesh: Some("clay_mesh_sculptor_stamp (FLATTEN)"),
+                multires: Some("clay_multires_sculptor_stamp (FLATTEN)"),
             },
             Self::Polir => Verbs {
                 sdf: Some("clay_item_volume_flatten (cut-only, hPolish)"),
                 voxel: None,
                 mesh: Some("clay_mesh_sculptor_stamp (POLISH)"),
+                multires: Some("clay_multires_sculptor_stamp (POLISH)"),
             },
             Self::Relaxar => Verbs {
                 sdf: Some("clay_item_volume_relax"),
                 voxel: None,
                 mesh: Some("clay_mesh_sculptor_stamp (RELAX)"),
+                multires: Some("clay_multires_sculptor_stamp (RELAX)"),
             },
             Self::Trim => Verbs {
                 sdf: Some("clay_cut_create"),
                 voxel: None,
                 mesh: None,
+                multires: None,
             },
             Self::Raspar => Verbs {
                 sdf: None,
                 voxel: Some("clay_voxel_sculpt_scrape"),
                 mesh: Some("clay_mesh_sculptor_stamp (SCRAPE)"),
+                multires: Some("clay_multires_sculptor_stamp (SCRAPE)"),
             },
             Self::Preencher => Verbs {
                 sdf: None,
                 voxel: Some("clay_voxel_sculpt_fill_cavities"),
                 mesh: None,
+                multires: None,
             },
             Self::Pincar => Verbs {
                 sdf: None,
                 voxel: Some("clay_voxel_sculpt_pinch"),
                 mesh: Some("clay_mesh_sculptor_stamp (PINCH)"),
+                multires: Some("clay_multires_sculptor_stamp (PINCH)"),
             },
             // Relief with buildup, which is what ClayBuildup *is*: the
             // engine's equivalence table maps Clay to relief along the stroke
@@ -699,6 +828,7 @@ impl ToolKind {
                 sdf: Some("clay_layer_apply_stroke (CLAY_OP_RELIEF, buildup)"),
                 voxel: None,
                 mesh: Some("clay_mesh_sculptor_stamp (CLAY)"),
+                multires: Some("clay_multires_sculptor_stamp (CLAY)"),
             },
             // Incise, which the engine describes in the same sentence as the
             // tool: "a thin region gives the line — Crease and DamStandard".
@@ -714,28 +844,53 @@ impl ToolKind {
                 sdf: Some("clay_layer_apply_stroke (CLAY_OP_INCISE)"),
                 voxel: None,
                 mesh: Some("clay_mesh_sculptor_stamp (CREASE)"),
+                multires: Some("clay_multires_sculptor_stamp (CREASE)"),
             },
             // One tool, two bindings: "put colour here" is the same intent
             // whether the colour lands on a vertex or in a cell.
+            //
+            // Two and not three, which is the first of the places the
+            // hierarchy's column is not the mesh's. A hierarchy stores where a vertex WENT — a displacement
+            // read in the vertex's own transported frame — and nothing else:
+            // `absorb_level_edit` is the one write path and it takes positions.
+            // A paint stamp moves no vertex, so the stamp reports zero moved
+            // and the write-back is skipped entirely; the colour it wrote lands
+            // in the level's cache, which is rebuildable storage the engine
+            // releases under pressure. The brush would appear to work and its
+            // work would evaporate.
+            //
+            // The route that does work is the cage's: level 0's colours are
+            // subdivided over their own connectivity all the way up, so paint
+            // the cage as a mesh before building the hierarchy, or bake a level
+            // back to a mesh and paint that. `ToolNote::MultiresStoresNoColour`
+            // is where that is said to a sculptor.
             Self::Pintar => Verbs {
                 sdf: None,
                 voxel: Some("clay_voxel_paint_brush"),
                 mesh: Some("clay_mesh_sculptor_stamp (PAINT)"),
+                multires: None,
             },
             Self::Apagar => Verbs {
                 sdf: None,
                 voxel: Some("clay_voxel_erase_brush"),
                 mesh: None,
+                // Not to be confused with the hierarchy's two erasers, which
+                // are gestures inside a layered stroke rather than verbs of
+                // their own here yet — see `crate::multires`.
+                multires: None,
             },
+            // And the other half of the same absence.
             Self::Borrar => Verbs {
                 sdf: None,
                 voxel: None,
                 mesh: Some("clay_mesh_sculptor_stamp (SMEAR)"),
+                multires: None,
             },
             Self::Nudge => Verbs {
                 sdf: None,
                 voxel: Some("clay_voxel_sculpt_smudge"),
                 mesh: Some("clay_mesh_sculptor_stamp (NUDGE)"),
+                multires: Some("clay_multires_sculptor_stamp (NUDGE)"),
             },
         }
     }
@@ -771,6 +926,7 @@ impl ToolKind {
             return Err(Unavailable::NoVerbHere {
                 active: layer.representation,
                 verbs: self.verbs(),
+                note: self.note_on(layer.representation),
             });
         }
         if !layer.editable {
@@ -779,10 +935,27 @@ impl ToolKind {
         if !layer.visible {
             return Err(Unavailable::LayerHidden);
         }
-        // A mesh row with no triangles yet. Only the mesh side can be empty in
-        // this sense: a field and a grid are both editable from nothing.
-        if layer.representation == Representation::Mesh && !layer.carries_geometry {
-            return Err(Unavailable::MissingAttribute { needs: "mesh" });
+        // A row whose geometry has not arrived. Two representations can be in
+        // that state and two cannot: a field and a grid are both editable from
+        // nothing, a mesh row is recorded before its triangles land, and a
+        // hierarchy row is the same case one step further along — it is built
+        // from a cage, so before the cage there is no level 0, and with no
+        // level 0 there is no level for a stamp to bind to.
+        //
+        // What it says it wants differs, and that is the point of naming it
+        // rather than saying "geometry": a sculptor told "this layer carries no
+        // mesh" reaches for an import, and one told "this layer carries no
+        // cage" reaches for the crossing that builds one.
+        if !layer.carries_geometry {
+            match layer.representation {
+                Representation::Mesh => {
+                    return Err(Unavailable::MissingAttribute { needs: "mesh" })
+                }
+                Representation::Multires => {
+                    return Err(Unavailable::MissingAttribute { needs: "cage" })
+                }
+                Representation::Sdf | Representation::Voxel => {}
+            }
         }
         Ok(())
     }
@@ -794,9 +967,20 @@ impl ToolKind {
     /// representations of the same artist intent behave differently enough to
     /// surprise — and where faking agreement would mean doing arithmetic the
     /// engine does not offer.
+    ///
+    /// Answers for a pair whether or not the tool is *offered* on it. Two of
+    /// the three notes describe a tool that is there, and one describes one
+    /// that is not — [`ToolKind::availability`] carries that one into the
+    /// refusal, since a tool nobody can select is a tool nobody can hover.
     pub fn note_on(self, representation: Representation) -> Option<ToolNote> {
         match (self, representation) {
             (Self::Planar, Representation::Voxel) => Some(ToolNote::VoxelPlanarIsTwoSided),
+            (Self::Suavizar, Representation::Multires) => {
+                Some(ToolNote::MultiresSmoothChoosesAFrequency)
+            }
+            (Self::Pintar | Self::Borrar, Representation::Multires) => {
+                Some(ToolNote::MultiresStoresNoColour)
+            }
             _ => None,
         }
     }
@@ -814,6 +998,13 @@ impl ToolKind {
     /// Only on a mesh. A grid's palette always exists, so painting a cell
     /// creates nothing that was not already there — the cost the mesh rule
     /// guards against is twelve bytes a *vertex*, which a grid does not pay.
+    ///
+    /// A hierarchy is deliberately not in this answer, and the omission is
+    /// checked rather than assumed: the two colour brushes have no verb there
+    /// at all, so a sculptor never reaches a state where the question "does
+    /// this layer carry colour" is the one standing between them and the tool.
+    /// `a_hierarchy_is_never_asked_for_a_colour_attribute` is what keeps the
+    /// two answers from drifting apart.
     pub fn needs_colour_attribute(self, representation: Representation) -> bool {
         self.writes_colour() && representation == Representation::Mesh
     }
@@ -1189,7 +1380,11 @@ mod tests {
     #[test]
     fn no_tool_is_offered_on_a_protected_layer() {
         for tool in ToolKind::ALL {
-            for representation in [Representation::Sdf, Representation::Voxel] {
+            for representation in [
+                Representation::Sdf,
+                Representation::Voxel,
+                Representation::Multires,
+            ] {
                 if !tool.exists_on(representation) {
                     continue;
                 }
@@ -1323,6 +1518,21 @@ mod tests {
             "the field vocabulary has moved: {sdf} tools reach an SDF layer. \
              Update this count and `docs/features.md` together."
         );
+        // And the hierarchy, which is the mesh vocabulary less the two colour
+        // brushes and plus the mask — fourteen brushes and Máscara.
+        let multires_brushes = ToolKind::for_representation(Representation::Multires)
+            .iter()
+            .filter(|t| !t.is_mask_tool())
+            .count();
+        assert_eq!(
+            multires_brushes,
+            ENGINE_MESH_BRUSHES - 2,
+            "the hierarchy's vocabulary has moved: {multires_brushes} brushes \
+             reach a multires layer, of the engine's {ENGINE_MESH_BRUSHES} — \
+             one brush runtime across the representations (ClayCore #419), \
+             less Pintar and Borrar, which have no colour to write. Update \
+             this count and `docs/features.md` together."
+        );
         assert_eq!(
             voxel, 13,
             "the voxel vocabulary has moved: {voxel} tools reach a voxel \
@@ -1414,6 +1624,228 @@ mod tests {
             }
             .sanitized();
             assert_eq!(settings.shaping.azimuth, 0.0, "{wrong} survived");
+        }
+    }
+
+    // -- the fourth representation -------------------------------------------
+
+    /// The hierarchy's shelf is the mesh's, less the two brushes that write a
+    /// colour and not a position.
+    ///
+    /// Asserted as a *difference from the mesh column* rather than as a list of
+    /// fourteen names, because that is the claim the engine actually makes:
+    /// `clay_multires_sculptor_stamp` takes a `clay_mesh_brush_desc` and runs
+    /// the fixed sculptor over the level's own mesh, so a verb that arrives on
+    /// a mesh layer arrives here on the same day unless something about the
+    /// hierarchy stops it. Writing the fourteen out would pass on the day a
+    /// seventeenth mesh brush landed and nobody thought about this column.
+    #[test]
+    fn a_hierarchy_sculpts_with_the_mesh_vocabulary_less_its_colour() {
+        let mesh: Vec<ToolKind> = ToolKind::for_representation(Representation::Mesh);
+        let multires: Vec<ToolKind> = ToolKind::for_representation(Representation::Multires);
+
+        let missing: Vec<ToolKind> = mesh
+            .iter()
+            .copied()
+            .filter(|tool| !multires.contains(tool))
+            .collect();
+        assert_eq!(
+            missing,
+            vec![ToolKind::Pintar, ToolKind::Borrar],
+            "the hierarchy's shelf differs from the mesh's by something other \
+             than the two colour brushes"
+        );
+        assert!(
+            multires.iter().all(|tool| mesh.contains(tool)),
+            "the hierarchy was given a verb the mesh sculptor does not have"
+        );
+        for tool in &multires {
+            let verb = tool.verb_on(Representation::Multires).expect("a verb");
+            assert!(
+                verb.starts_with("clay_multires_") || tool.is_mask_tool(),
+                "{} claims a hierarchy verb that is not a hierarchy call: {verb}",
+                tool.label()
+            );
+        }
+    }
+
+    /// The mask is one call on all four, and it has to stay that way.
+    ///
+    /// A mask is not part of any representation — it is a world-addressed field
+    /// the verbs consult — so freezing a region of a hierarchy is the same act
+    /// as freezing a region of a field, and the hierarchy takes it "exactly as
+    /// every other representation takes one".
+    #[test]
+    fn the_mask_is_the_same_call_wherever_it_is_painted() {
+        let verbs = ToolKind::Mascara.verbs();
+        assert_eq!(verbs.count(), Representation::ALL.len());
+        for representation in Representation::ALL {
+            assert_eq!(
+                verbs.on(representation),
+                Some("clay_mask_apply_stroke"),
+                "the mask took a different route on {}",
+                representation.label()
+            );
+        }
+    }
+
+    /// A hierarchy stores where its vertices went, not what colour they are, so
+    /// the colour brushes are absent — and the refusal says which of those two
+    /// it is rather than leaving a sculptor to read it as an oversight.
+    #[test]
+    fn a_colour_brush_on_a_hierarchy_is_refused_with_the_reason_and_not_only_the_list() {
+        for tool in [ToolKind::Pintar, ToolKind::Borrar] {
+            let error = tool
+                .availability(LayerState::editable(Representation::Multires))
+                .expect_err("a hierarchy carries no colour");
+            match error {
+                Unavailable::NoVerbHere { note, .. } => assert_eq!(
+                    note,
+                    Some(ToolNote::MultiresStoresNoColour),
+                    "{} is refused with no reason beyond where it does apply",
+                    tool.label()
+                ),
+                other => panic!("{} was refused for the wrong reason: {other}", tool.label()),
+            }
+            // And the list is still there, naming the route that does work.
+            assert!(
+                error.to_string().contains("mesh"),
+                "the refusal must still say where the brush does apply: {error}"
+            );
+        }
+    }
+
+    /// Every other absence carries no note, which is what keeps the one that
+    /// does worth reading.
+    #[test]
+    fn an_ordinary_absence_is_refused_without_a_second_sentence() {
+        for tool in ToolKind::ALL {
+            for representation in Representation::ALL {
+                let Err(Unavailable::NoVerbHere { note, .. }) =
+                    tool.availability(LayerState::editable(representation))
+                else {
+                    continue;
+                };
+                let expected = matches!(
+                    (tool, representation),
+                    (
+                        ToolKind::Pintar | ToolKind::Borrar,
+                        Representation::Multires
+                    )
+                );
+                assert_eq!(
+                    note.is_some(),
+                    expected,
+                    "{} on {} carries the wrong kind of refusal",
+                    tool.label(),
+                    representation.label()
+                );
+            }
+        }
+    }
+
+    /// The colour rule is answered in one place, not two.
+    ///
+    /// `needs_colour_attribute` is about a mesh row that may or may not carry a
+    /// colour attribute — a question with two answers. On a hierarchy there is
+    /// no question, because the brush is not offered at all, and this pins the
+    /// two answers together so that offering the brush later without giving it
+    /// somewhere to write fails here.
+    #[test]
+    fn a_hierarchy_is_never_asked_for_a_colour_attribute() {
+        for tool in ToolKind::ALL {
+            assert!(
+                !tool.needs_colour_attribute(Representation::Multires),
+                "{} would ask a hierarchy for a colour attribute",
+                tool.label()
+            );
+            if tool.writes_colour() {
+                assert!(
+                    !tool.exists_on(Representation::Multires),
+                    "{} writes colour and is offered on a hierarchy, which \
+                     stores none",
+                    tool.label()
+                );
+            }
+        }
+    }
+
+    /// A smooth on a hierarchy is the one tool that carries a caveat there, and
+    /// it is a caveat about a choice the other three do not have.
+    #[test]
+    fn a_smooth_on_a_hierarchy_says_it_picks_a_frequency() {
+        assert_eq!(
+            ToolKind::Suavizar.note_on(Representation::Multires),
+            Some(ToolNote::MultiresSmoothChoosesAFrequency)
+        );
+        assert_eq!(ToolKind::Suavizar.note_on(Representation::Mesh), None);
+        assert_eq!(
+            ToolKind::Suavizar.verb_on(Representation::Multires),
+            Some("clay_multires_sculpt_layer_stroke_smooth"),
+            "the note has to name a call that takes a mode"
+        );
+    }
+
+    /// A drag on a hierarchy previews as it moves, as it does on a mesh — the
+    /// grid is the only representation that holds one whole.
+    #[test]
+    fn only_a_grid_holds_a_drag_whole() {
+        for representation in Representation::ALL {
+            assert_eq!(
+                ToolKind::Mover.holds_the_whole_gesture(representation),
+                representation == Representation::Voxel,
+                "Mover on {}",
+                representation.label()
+            );
+        }
+    }
+
+    /// A hierarchy row before its cage arrives is the mesh row's case, and the
+    /// refusal names what it is waiting for rather than "geometry".
+    #[test]
+    fn a_hierarchy_with_no_cage_yet_says_it_is_waiting_for_one() {
+        let waiting = LayerState {
+            representation: Representation::Multires,
+            editable: true,
+            visible: true,
+            carries_geometry: false,
+        };
+        assert_eq!(
+            ToolKind::Padrao.availability(waiting),
+            Err(Unavailable::MissingAttribute { needs: "cage" })
+        );
+        assert_eq!(
+            ToolKind::Padrao.availability(LayerState {
+                representation: Representation::Mesh,
+                ..waiting
+            }),
+            Err(Unavailable::MissingAttribute { needs: "mesh" }),
+            "the two are different sentences because they send a sculptor to \
+             different places"
+        );
+        // And the two that are editable from nothing still are.
+        for representation in [Representation::Sdf, Representation::Voxel] {
+            assert!(ToolKind::Padrao
+                .availability(LayerState {
+                    representation,
+                    ..waiting
+                })
+                .is_ok());
+        }
+    }
+
+    /// A whole-form operation reaches no hierarchy, and the compiler is what
+    /// says so: `LayerOperation::all`'s `match` is exhaustive, so an operation
+    /// added without an answer for this column stops the file compiling.
+    #[test]
+    fn no_whole_form_operation_reaches_a_hierarchy() {
+        for operation in LayerOperation::all() {
+            assert!(
+                !operation.applies_to(Representation::Multires),
+                "{} claims a hierarchy verb; there is no clay_multires_* \
+                 deformer in the ABI",
+                operation.label()
+            );
         }
     }
 }

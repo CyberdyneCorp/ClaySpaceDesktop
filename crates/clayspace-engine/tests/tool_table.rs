@@ -22,6 +22,23 @@ use clayspace_model::{
     BrushSettings, GestureSample, MaskModel, Representation, SculptModel, ToolKind,
 };
 
+/// The representations this adapter can build a document of.
+///
+/// Three of the four. The domain carries a subdivision hierarchy and this
+/// adapter does not hold one yet — no crossing builds one, no `Layer` carries a
+/// `clay_multires`, and `apply_stroke` refuses it in as many words. Walking it
+/// here would test the refusal rather than the table.
+///
+/// Derived from `Representation::ALL` by subtraction rather than written out,
+/// so that a fifth representation is walked by default and has to be excluded
+/// deliberately — which is the direction that fails loudly.
+fn buildable() -> Vec<Representation> {
+    Representation::ALL
+        .into_iter()
+        .filter(|representation| *representation != Representation::Multires)
+        .collect()
+}
+
 /// Where each fixture is worked, and where every stroke here is made.
 fn over(representation: Representation) -> [f32; 3] {
     match representation {
@@ -29,6 +46,7 @@ fn over(representation: Representation) -> [f32; 3] {
         Representation::Sdf | Representation::Mesh => [0.0, 0.0, 1.0],
         // The middle of the slab.
         Representation::Voxel => [0.0, 0.0, 0.0],
+        Representation::Multires => unreachable!("see `buildable`"),
     }
 }
 
@@ -178,7 +196,7 @@ fn strokes(tool: ToolKind) -> bool {
 #[test]
 fn every_declared_pair_lands() {
     let mut missed: Vec<String> = Vec::new();
-    for representation in Representation::ALL {
+    for representation in buildable() {
         for tool in ToolKind::for_representation(representation) {
             if !strokes(tool) {
                 continue;
@@ -202,7 +220,7 @@ fn a_tool_the_table_does_not_offer_is_refused_rather_than_run() {
     // neighbouring verb — the catch-all arm that did exactly that is what put
     // spheres under the planing tools.
     let mut refused = 0;
-    for representation in Representation::ALL {
+    for representation in buildable() {
         for tool in ToolKind::ALL {
             if tool.exists_on(representation) {
                 continue;

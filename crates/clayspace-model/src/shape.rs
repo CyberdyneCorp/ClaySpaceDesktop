@@ -384,6 +384,10 @@ pub const OBJECT_VERBS: crate::Verbs = crate::Verbs {
     sdf: Some("clay_layer_add_item"),
     voxel: None,
     mesh: None,
+    // Nor a hierarchy, and for the same reason as the mesh: an object is an
+    // item in an ordered list that is evaluated, and a hierarchy's surface is
+    // stored rather than evaluated from a list.
+    multires: None,
 };
 
 /// Where a form put into the scene goes.
@@ -758,6 +762,7 @@ pub trait ObjectModel {
         crate::ModelError::Unavailable(crate::Unavailable::NoVerbHere {
             active: crate::Representation::Sdf,
             verbs: OBJECT_VERBS,
+            note: None,
         })
     }
 }
@@ -828,8 +833,17 @@ mod tests {
     #[test]
     fn an_object_needs_a_field_to_live_in() {
         assert!(OBJECT_VERBS.on(crate::Representation::Sdf).is_some());
-        assert!(OBJECT_VERBS.on(crate::Representation::Voxel).is_none());
-        assert!(OBJECT_VERBS.on(crate::Representation::Mesh).is_none());
+        for elsewhere in crate::Representation::ALL {
+            if elsewhere == crate::Representation::Sdf {
+                continue;
+            }
+            assert!(
+                OBJECT_VERBS.on(elsewhere).is_none(),
+                "an object was offered somewhere with no list to put it in: {}",
+                elsewhere.label()
+            );
+        }
+        assert_eq!(OBJECT_VERBS.count(), 1);
     }
 
     /// A parameter whose key is not in the list is a slider the interface can

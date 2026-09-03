@@ -74,7 +74,18 @@ pub struct LayerSummary {
     /// because a sculpt layer is *part of* the layer it was recorded on — it
     /// has no meaning apart from that grid, and a second stack elsewhere would
     /// have to repeat which layer each entry belongs to.
+    ///
+    /// A hierarchy's passes are **not** here. They are in [`Self::multires`],
+    /// because they are addressed by an id rather than by a position and the
+    /// two must not be reachable through one field — see
+    /// [`crate::multires`]'s own table.
     pub sculpt_layers: Vec<SculptLayer>,
+    /// The levels and the passes, where the layer is a hierarchy.
+    ///
+    /// `None` for the other three, which have neither. Nested for the reason
+    /// `sculpt_layers` is nested and `voxel` is: none of it means anything
+    /// apart from the layer it belongs to.
+    pub multires: Option<crate::multires::MultiresState>,
 }
 
 /// What a field layer's edit list costs, and whether the engine advises
@@ -515,6 +526,51 @@ pub trait SceneModel {
     fn sculpt_layer_cost(&self) -> SculptLayerCost {
         SculptLayerCost::default()
     }
+
+    /// Moves the active hierarchy's levels, or changes how many it has.
+    ///
+    /// Apart from [`SceneModel::apply_multires_sculpt_layer_op`] because they
+    /// are different questions about different things: one is how finely the
+    /// surface is stored, the other is what passes are stacked on it, and a
+    /// sculptor does either without the other.
+    ///
+    /// Provided, so a double that models no hierarchies refuses in one sentence
+    /// rather than implementing four operations it has nothing to apply.
+    fn apply_multires_level_op(
+        &mut self,
+        op: crate::multires::MultiresLevelOp,
+    ) -> Result<(), crate::ModelError> {
+        let _ = op;
+        Err(crate::ModelError::engine(
+            "níveis são de uma hierarquia de subdivisão",
+        ))
+    }
+
+    /// Acts on the active hierarchy's stack of passes.
+    ///
+    /// Takes [`crate::multires::MultiresSculptLayerOp`] and never
+    /// [`SculptLayerOp`], which addresses a grid's stack by position. The two
+    /// stacks share a noun on purpose and share no addressing at all.
+    fn apply_multires_sculpt_layer_op(
+        &mut self,
+        op: crate::multires::MultiresSculptLayerOp,
+    ) -> Result<(), crate::ModelError> {
+        let _ = op;
+        Err(crate::ModelError::engine(
+            "passes de subdivisão são de uma hierarquia",
+        ))
+    }
+
+    /// What subdividing the active hierarchy once more would cost.
+    ///
+    /// Asked before the button is pressed, because a level multiplies faces by
+    /// four and it is the peak allocation during the build rather than the
+    /// steady state after it that ends a session. `None` where the active layer
+    /// is not a hierarchy, or where the engine will not say.
+    fn subdivision_cost(&self) -> Option<crate::multires::SubdivisionCost> {
+        None
+    }
+
     /// Moves a layer to a position in the stack, which is its evaluation order.
     fn move_layer(&mut self, key: LayerKey, index: usize) -> Result<(), crate::ModelError>;
 
@@ -709,6 +765,7 @@ mod tests {
             health: None,
             voxel: None,
             sculpt_layers: Vec::new(),
+            multires: None,
         };
         assert!(
             !layer.is_editable(),
@@ -731,6 +788,7 @@ mod tests {
                     health: None,
                     voxel: None,
                     sculpt_layers: Vec::new(),
+                    multires: None,
                 },
                 LayerSummary {
                     key: LayerKey(2),
@@ -742,6 +800,7 @@ mod tests {
                     health: None,
                     voxel: None,
                     sculpt_layers: Vec::new(),
+                    multires: None,
                 },
             ],
             active: Some(LayerKey(2)),
@@ -750,5 +809,37 @@ mod tests {
         assert_eq!(scene.active_layer().map(|l| l.name.as_str()), Some("B"));
         assert_eq!(scene.layer(LayerKey(1)).map(|l| l.intensity), Some(100));
         assert!(scene.layer(LayerKey(9)).is_none());
+    }
+
+    /// A layer carries one pass stack or the other, and never reaches for the
+    /// wrong one.
+    ///
+    /// Two fields rather than one, because the two stacks are addressed
+    /// differently and a single field would let a caller pass a grid's position
+    /// where a hierarchy's identity belongs — see [`crate::multires`]'s own
+    /// table. This holds that a hierarchy's row leaves the grid's field empty,
+    /// which is what the layer stack draws from.
+    #[test]
+    fn a_hierarchy_carries_its_passes_apart_from_a_grids() {
+        let hierarchy = LayerSummary {
+            key: LayerKey(3),
+            name: "Cabeça".into(),
+            representation: Representation::Multires,
+            visible: true,
+            protection: Protection::default(),
+            intensity: 100,
+            health: None,
+            voxel: None,
+            sculpt_layers: Vec::new(),
+            multires: Some(crate::multires::MultiresState::just_the_cage()),
+        };
+        assert!(
+            hierarchy.sculpt_layers.is_empty(),
+            "a hierarchy's passes reached the grid's field"
+        );
+        let state = hierarchy.multires.as_ref().expect("a hierarchy");
+        assert!(state.levels.is_only_the_cage());
+        assert!(state.sculpt_layers.is_empty());
+        assert!(state.active_sculpt_layer.is_base());
     }
 }

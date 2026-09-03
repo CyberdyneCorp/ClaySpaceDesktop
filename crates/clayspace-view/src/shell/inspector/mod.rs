@@ -16,7 +16,15 @@
 //! drawing a control for a value nothing reads is worse than leaving the space
 //! empty — it is an interface that lies about what the program does.
 //!
-//! What is genuinely here is small, and two of the three representations carry
+//! One item on that list has stopped being unexpressible. ClayCore 0.78.0's
+//! hierarchy has a subdivision level per surface — two of them, since where the
+//! brush writes and what is drawn are independent — and `clayspace_model`
+//! describes both. There is still no control here for them, because no layer
+//! can be a hierarchy yet and the shell carries neither number: the hierarchy's
+//! section states the contract and draws nothing, which is this module's own
+//! rule applied to itself rather than an omission.
+//!
+//! What is genuinely here is small, and three of the four representations carry
 //! most of their story elsewhere on purpose:
 //!
 //! - a **field**'s combine vocabulary is in the options bar, because it
@@ -24,6 +32,7 @@
 //! - a **grid**'s recorded passes are nested under the layer they were
 //!   recorded on, in the left stack, because a pass has no meaning apart from
 //!   that grid;
+//! - and a **hierarchy**'s passes are the same arrangement for the same reason;
 //! - and the advisory to collapse a costly field stays under the layer list,
 //!   where it appears only when the engine is actually advising it.
 //!
@@ -33,6 +42,7 @@
 use super::*;
 
 mod mesh;
+mod multires;
 mod sdf;
 mod voxel;
 
@@ -42,5 +52,6 @@ pub fn representation_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: 
         Representation::Sdf => sdf::show(ui, state),
         Representation::Voxel => voxel::show(ui, state, queue),
         Representation::Mesh => mesh::show(ui, state),
+        Representation::Multires => multires::show(ui, state),
     }
 }

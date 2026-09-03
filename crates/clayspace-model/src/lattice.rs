@@ -28,6 +28,21 @@ pub fn division_limit(representation: Representation) -> Option<i32> {
         // A grid has no lattice route at all: no forward vertex pass and no
         // deformer stack to resolve one into.
         Representation::Voxel => None,
+        // Nor has a hierarchy, and this is the one answer here that looks
+        // wrong at a glance. A cage is exactly what a subdivision surface has,
+        // and bending it at level 0 propagating up through every level is the
+        // representation's whole point — so "no cage" reads like a mistake.
+        //
+        // It is not, because the two cages are different objects. This one is
+        // a lattice the interface makes up around whatever it is given, and
+        // the engine applies it through `clay_mesh_sculptor_lattice`, which
+        // takes a fixed mesh. There is no `clay_multires_*_lattice`: a level
+        // above the base is *derived*, so pushing its vertices through a point
+        // map writes nothing the next evaluation would not overwrite, and
+        // pushing the base's through one is a deformation of the cage that the
+        // ABI offers no entry point for. The hierarchy's own cage is dragged
+        // by sculpting level 0, which is a stroke and not a lattice.
+        Representation::Multires => None,
     }
 }
 
@@ -331,6 +346,11 @@ mod tests {
         assert_eq!(division_limit(Representation::Sdf), Some(4));
         assert_eq!(division_limit(Representation::Voxel), None);
         assert!(!can_be_caged(Representation::Voxel));
+        // And a hierarchy, which HAS a cage and still cannot be given this
+        // one: the engine's lattice takes a fixed mesh, and a level above the
+        // base is derived from the level below rather than stored.
+        assert_eq!(division_limit(Representation::Multires), None);
+        assert!(!can_be_caged(Representation::Multires));
 
         assert_eq!(
             clamp_divisions([40, 1, 8], Representation::Mesh),

@@ -6,6 +6,21 @@
 //! the composition root meshes them at level 1. The join was blocked until
 //! ClayCore 0.30.0 gave the meshing call a level (#93).
 //!
+//! # Not a subdivision level
+//!
+//! This module and [`crate::multires`] share the English word "detail" and
+//! share nothing else, and the wrong one is one letter away in an import list.
+//! What is here is a *rendering economy*: how far away a form has to be before
+//! the viewport draws it off a coarser mip, with the sculpt identical either
+//! way. A hierarchy's levels are the sculpt — level 4 holds displacements level
+//! 1 does not — which is why one of these is a policy and the other is state.
+//!
+//! A hierarchy has a level-of-detail question too, and it is this one: its
+//! display level is what a policy like this would move. Nothing here does that
+//! yet, and the reason is worth writing down rather than discovering — the
+//! policy below is stated in model extents and brick counts, and a hierarchy
+//! has neither.
+//!
 //! The rule that matters is hysteresis. A single threshold flickers: a camera
 //! resting exactly on it swaps the whole surface between levels every frame
 //! the pointer twitches, which is far worse than always being coarse. So the

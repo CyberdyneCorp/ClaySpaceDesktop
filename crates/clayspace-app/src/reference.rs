@@ -123,12 +123,25 @@ impl Scene {
         }
     }
 
-    /// The member to measure a given representation on.
-    pub fn for_representation(representation: Representation) -> Scene {
+    /// The member to measure a given representation on, where there is one.
+    ///
+    /// `None` for the hierarchy, and that answer is the point of the `Option`
+    /// rather than an omission to be filled in later. A member is a *subject* —
+    /// a build recipe with a recorded size and a revision, against which two
+    /// runs are declared comparable — and adding one is not free: it changes
+    /// `conditions.scenes`, which is the first thing `compare::unlike` refuses
+    /// on, so every committed baseline stops comparing the day it lands.
+    ///
+    /// So it arrives with the change that can measure it, and until then the
+    /// groups that derive themselves from `Representation::ALL` say
+    /// `Skip::NoReferenceScene` on every run instead of quietly reporting
+    /// nothing.
+    pub fn for_representation(representation: Representation) -> Option<Scene> {
         match representation {
-            Representation::Sdf => Self::Reference,
-            Representation::Voxel => Self::VoxelReference,
-            Representation::Mesh => Self::MeshReference,
+            Representation::Sdf => Some(Self::Reference),
+            Representation::Voxel => Some(Self::VoxelReference),
+            Representation::Mesh => Some(Self::MeshReference),
+            Representation::Multires => None,
         }
     }
 
@@ -451,6 +464,11 @@ impl Scene {
             Representation::Sdf => Some(document.surface_brick_count()),
             Representation::Voxel => document.occupied_cells(),
             Representation::Mesh => Some(document.visible_mesh_geometry().3.len() / 3),
+            // Unreachable while no member builds one — `representation()` is
+            // this enum's own answer and none of the five says so — and left
+            // as a refusal rather than a `_` arm so that a member added
+            // without a size to check it against fails here.
+            Representation::Multires => None,
         }
     }
 

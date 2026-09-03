@@ -46,6 +46,7 @@ impl FakeScene {
             health: None,
             voxel: None,
             sculpt_layers: Vec::new(),
+            multires: None,
         };
         Self {
             calls,
@@ -170,6 +171,7 @@ impl SceneModel for FakeScene {
             health: None,
             voxel: None,
             sculpt_layers: Vec::new(),
+            multires: None,
         });
         self.active = Some(key);
         Ok(key)

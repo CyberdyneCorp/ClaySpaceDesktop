@@ -33,6 +33,7 @@ fn scene() -> Scene {
             health: None,
             voxel: None,
             sculpt_layers: Vec::new(),
+            multires: None,
         };
     Scene {
         nodes: vec![
@@ -1266,15 +1267,32 @@ fn the_conversion_panel_states_what_a_crossing_costs() {
         );
     }
 
-    // Every representation reaches the other two, so the panel offers two
-    // crossings whatever the active layer is — its contents follow the active
-    // representation like the shelf does. An SDF layer used to offer one,
-    // because nothing crossed into a mesh.
+    // The panel's contents follow the active representation, like the shelf's
+    // do, so every representation has to reach somewhere from it — a layer
+    // whose panel offers nothing is a panel with a heading and no rows.
+    //
+    // Not a single number for all of them. A field and a grid reach each other
+    // and a mesh; a mesh reaches all three of the others, since it is also the
+    // only way into a subdivision hierarchy; and a hierarchy reaches only a
+    // mesh, because a cage is built from one call and read back by one call and
+    // there is no third. Asserted per representation against the domain's own
+    // table, so that a crossing added or withdrawn is a figure to update here
+    // rather than a silent change in what this panel draws.
     for representation in clayspace_model::Representation::ALL {
+        let crossings = clayspace_model::Direction::from_representation(representation).len();
+        assert!(
+            crossings > 0,
+            "a {representation:?} layer reaches nothing, so its conversion \
+             panel has nothing to draw"
+        );
+        let expected = match representation {
+            clayspace_model::Representation::Sdf | clayspace_model::Representation::Voxel => 2,
+            clayspace_model::Representation::Mesh => 3,
+            clayspace_model::Representation::Multires => 1,
+        };
         assert_eq!(
-            clayspace_model::Direction::from_representation(representation).len(),
-            2,
-            "a {representation:?} layer does not reach both of the others"
+            crossings, expected,
+            "a {representation:?} layer offers {crossings} crossings"
         );
     }
 }
@@ -4262,6 +4280,70 @@ fn shelf_with_filter(
         run_shell_frame(&ctx, set, &mut queue, Vec::new());
     }
     (ctx, queue)
+}
+
+/// Every filter the column offers fits inside the shelf's own height.
+///
+/// The column holds one row per representation plus "available" and
+/// "favourites", so it grows whenever the domain does — and nothing else here
+/// would notice. Every other assertion about this column is about *which* rows
+/// are drawn, all of which pass just as well when the last of them is painted
+/// below the shelf's edge, over whatever the next region draws.
+///
+/// Measured off the rects the column records rather than off its own constants,
+/// so that a row height changed by hand is checked by this rather than agreed
+/// with by it.
+#[test]
+fn the_filter_column_fits_the_shelf_it_stands_in() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let set = state(strings, &scene, &materials, &report);
+
+    let (ctx, _) = shelf_with_filter(&set, shell::ShelfFilter::Available, &[]);
+    let rects: Vec<(shell::ShelfFilter, egui::Rect)> = shell::ShelfFilter::all()
+        .into_iter()
+        .map(|filter| {
+            let rect = ctx
+                .memory(|memory| {
+                    memory
+                        .data
+                        .get_temp::<egui::Rect>(shell::shelf_filter_chip_id(filter))
+                })
+                .unwrap_or_else(|| panic!("the shelf drew no row for {filter:?}"));
+            (filter, rect)
+        })
+        .collect();
+    assert_eq!(
+        rects.len(),
+        clayspace_model::Representation::ALL.len() + 2,
+        "the column is not one row per representation plus available and \
+         favourites"
+    );
+
+    let top = rects[0].1.top();
+    let (last, bottom) = rects
+        .last()
+        .map(|(filter, rect)| (*filter, rect.bottom()))
+        .expect("a last row");
+    let used = bottom - top;
+    assert!(
+        used <= shell::region::SHELF,
+        "the filter column runs {used} pixels inside a shelf that is {} — \
+         {last:?} is drawn past its edge",
+        shell::region::SHELF
+    );
+    // And they are still legible rather than merely inside: a column that fits
+    // by collapsing to nothing has traded one silent regression for another.
+    for (filter, rect) in &rects {
+        assert!(
+            rect.height() >= clayspace_view::design::type_scale::LABEL,
+            "{filter:?}'s row is {} tall, under the {} its own text is",
+            rect.height(),
+            clayspace_view::design::type_scale::LABEL
+        );
+    }
 }
 
 /// By default the shelf shows what the active layer can be sculpted with.

@@ -40,7 +40,7 @@ way back. See `openspec/changes/upgrade-engine-0-73-0/`.
 | Dab latency | 2.1 ms median, 4.2 ms p95 on the reference scene · budget 50 / 100 |
 | Startup to first document | 11.4 ms |
 | Engine | ClayCore 0.73.0, pinned to the release tag as a submodule |
-| Sculpting tools | 21 across three representations · 14 SDF, 13 voxel, 17 mesh |
+| Sculpting tools | 21 across three representations · 14 SDF, 13 voxel, 17 mesh · a fourth is described and not yet built |
 | Languages | English, Português do Brasil, Español latinoamericano |
 
 The timing figures are `benchmarks/baseline-linux-x86_64.json`: Linux x86_64 on
@@ -392,10 +392,14 @@ back](docs/images/convert.png)
 
 ClayCore carries SDF, voxel and mesh side by side, and the intended workflow
 uses more than one: **block out and hard-surface on SDF, free-form sculpt on
-voxels, refine on a mesh when the topology is one you want to keep.** Every
-representation reaches both of the others, so six crossings are offered — from
+voxels, refine on a mesh when the topology is one you want to keep.** Each of
+those three reaches both of the others, so six crossings are offered — from
 **File → Convert**, or from the row beside the representation cards, which
 offers exactly the ones the active layer declares.
+
+A fourth representation, the engine's subdivision hierarchy, is described in the
+domain and no layer can be one yet; its two crossings are declared and refused.
+See *Not built yet* in [docs/features.md](docs/features.md).
 
 ```mermaid
 graph LR

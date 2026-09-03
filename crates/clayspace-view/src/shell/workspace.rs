@@ -37,7 +37,7 @@ pub fn convert_to_id(target: Representation) -> egui::Id {
     egui::Id::new(("convert-to", target))
 }
 
-/// The icon a representation wears. Shape, never hue: the three are equals,
+/// The icon a representation wears. Shape, never hue: the four are equals,
 /// and a discriminator that is only a colour is one a colour-blind sculptor
 /// cannot read.
 pub(super) fn representation_icon(representation: Representation) -> Icon {
@@ -45,6 +45,7 @@ pub(super) fn representation_icon(representation: Representation) -> Icon {
         Representation::Sdf => Icon::FieldRepresentation,
         Representation::Voxel => Icon::VoxelRepresentation,
         Representation::Mesh => Icon::MeshRepresentation,
+        Representation::Multires => Icon::MultiresRepresentation,
     }
 }
 

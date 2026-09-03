@@ -267,6 +267,11 @@ pub struct Strings {
     pub state_no: &'static str,
     /// What is true of every mesh layer, and is the reason its brushes differ.
     pub mesh_topology_fixed: &'static str,
+    pub section_multires: &'static str,
+    /// What is true of every hierarchy: the level a brush writes on and the
+    /// level being drawn are two numbers, and detail cut at a fine one rides
+    /// on the form moved at a coarse one.
+    pub multires_two_levels: &'static str,
     pub section_resolution: &'static str,
     pub section_brush_controls: &'static str,
     pub section_armature: &'static str,
@@ -614,7 +619,11 @@ const PT_BR: Strings = Strings {
         "Borra a cor existente ao longo do traço",
         "Remove material sob o pincel",
     ],
-    tool_notes: ["Numa grelha, aplanar é dos dois lados: o material acima do plano sai e as concavidades abaixo dele enchem"],
+    tool_notes: [
+        "Numa grelha, aplanar é dos dois lados: o material acima do plano sai e as concavidades abaixo dele enchem",
+        "Numa hierarquia, suavizar escolhe a frequência: a forma, só o detalhe, ou a forma com o detalhe carregado intacto",
+        "Uma hierarquia guarda para onde o vértice foi, não de que cor ele é. Pinte a gaiola antes de subdividir, ou converta um nível em malha",
+    ],
     shape_names: [
         "Caixa",
         "Esfera",
@@ -652,11 +661,12 @@ const PT_BR: Strings = Strings {
         "Tamanho",
     ],
     insert_as_names: ["Novo subtool", "No subtool ativo"],
-    representation_names: ["Campo (SDF)", "Voxels", "Malha"],
+    representation_names: ["Campo (SDF)", "Voxels", "Malha", "Multirresolução"],
     representation_sentences: [
         "Campo de distância com sinal",
         "Grade de voxels",
         "Malha de polígonos",
+        "Hierarquia de subdivisão",
     ],
     section_representation: "REPRESENTAÇÃO",
     hint_representation_active: "o que a camada ativa contém",
@@ -768,6 +778,8 @@ libera em vez de congelar.",
     state_yes: "sim",
     state_no: "não",
     mesh_topology_fixed: "Topologia fixa: os pincéis movem os vértices que existem e não criam nem removem nenhum.",
+    section_multires: "MULTIRRESOLUÇÃO",
+    multires_two_levels: "O nível em que o pincel escreve e o nível desenhado são dois números. O detalhe cortado num nível fino anda junto com a forma movida num nível grosso.",
     section_resolution: "RESOLUÇÃO",
     section_brush_controls: "CONTROLES DE PINCEL",
     section_armature: "ARMADURA",
@@ -1029,7 +1041,11 @@ const EN_US: Strings = Strings {
         "Smears existing colour along the stroke",
         "Removes material under the brush",
     ],
-    tool_notes: ["On a grid, flatten is two-sided: material above the plane goes and hollows below it fill"],
+    tool_notes: [
+        "On a grid, flatten is two-sided: material above the plane goes and hollows below it fill",
+        "On a hierarchy, smooth picks a frequency: the form, the detail alone, or the form with the detail carried through unchanged",
+        "A hierarchy stores where a vertex went, not what colour it is. Paint the cage before subdividing, or bake a level back to a mesh",
+    ],
     shape_names: [
         "Box",
         "Sphere",
@@ -1067,8 +1083,13 @@ const EN_US: Strings = Strings {
         "Size",
     ],
     insert_as_names: ["New subtool", "Into the active subtool"],
-    representation_names: ["Field (SDF)", "Voxels", "Mesh"],
-    representation_sentences: ["Signed Distance Field", "Voxel Grid", "Polygon Mesh"],
+    representation_names: ["Field (SDF)", "Voxels", "Mesh", "Multires"],
+    representation_sentences: [
+        "Signed Distance Field",
+        "Voxel Grid",
+        "Polygon Mesh",
+        "Subdivision Hierarchy",
+    ],
     section_representation: "REPRESENTATION",
     hint_representation_active: "what the active layer holds",
     hint_representation_other: "this layer is not this — converting has a cost",
@@ -1178,6 +1199,8 @@ instead.",
     state_yes: "yes",
     state_no: "no",
     mesh_topology_fixed: "Fixed topology: the brushes move the vertices that are there and neither add nor remove any.",
+    section_multires: "MULTIRES",
+    multires_two_levels: "The level the brush writes on and the level being drawn are two numbers. Detail cut at a fine level rides on the form moved at a coarse one.",
     section_resolution: "RESOLUTION",
     section_brush_controls: "BRUSH CONTROLS",
     section_armature: "ARMATURE",
@@ -1439,7 +1462,11 @@ const ES_419: Strings = Strings {
         "Difumina el color existente a lo largo del trazo",
         "Elimina material bajo el pincel",
     ],
-    tool_notes: ["En una rejilla, aplanar es de dos lados: el material sobre el plano se va y los huecos bajo él se rellenan"],
+    tool_notes: [
+        "En una rejilla, aplanar es de dos lados: el material sobre el plano se va y los huecos bajo él se rellenan",
+        "En una jerarquía, suavizar elige la frecuencia: la forma, solo el detalle, o la forma con el detalle llevado intacto",
+        "Una jerarquía guarda adónde fue el vértice, no de qué color es. Pinta la caja antes de subdividir, o hornea un nivel a malla",
+    ],
     shape_names: [
         "Caja",
         "Esfera",
@@ -1477,11 +1504,12 @@ const ES_419: Strings = Strings {
         "Tamaño",
     ],
     insert_as_names: ["Nuevo subtool", "En el subtool activo"],
-    representation_names: ["Campo (SDF)", "Vóxeles", "Malla"],
+    representation_names: ["Campo (SDF)", "Vóxeles", "Malla", "Multirresolución"],
     representation_sentences: [
         "Campo de distancia con signo",
         "Rejilla de vóxeles",
         "Malla de polígonos",
+        "Jerarquía de subdivisión",
     ],
     section_representation: "REPRESENTACIÓN",
     hint_representation_active: "lo que contiene la capa activa",
@@ -1593,6 +1621,8 @@ lados. Con Ctrl, libera en vez de congelar.",
     state_yes: "sí",
     state_no: "no",
     mesh_topology_fixed: "Topología fija: los pinceles mueven los vértices que existen y no crean ni eliminan ninguno.",
+    section_multires: "MULTIRRESOLUCIÓN",
+    multires_two_levels: "El nivel en el que escribe el pincel y el nivel que se dibuja son dos números. El detalle cortado en un nivel fino viaja con la forma movida en uno grueso.",
     section_resolution: "RESOLUCIÓN",
     section_brush_controls: "CONTROLES DE PINCEL",
     // "Esqueleto", not "Armadura": armadura reads as armour outside of
@@ -2059,7 +2089,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 227] {
+    pub fn all(&self) -> [&'static str; 229] {
         [
             self.label_autosave_in,
             self.state_autosaved,
@@ -2086,6 +2116,8 @@ impl Strings {
             self.state_yes,
             self.state_no,
             self.mesh_topology_fixed,
+            self.section_multires,
+            self.multires_two_levels,
             self.section_representation,
             self.hint_representation_active,
             self.hint_representation_other,

@@ -935,6 +935,10 @@ fn representation_tag(representation: Representation) -> &'static str {
         Representation::Sdf => "SDF",
         Representation::Voxel => "VOX",
         Representation::Mesh => "MSH",
+        // Not "MRS": the letters have to be readable as a word a sculptor
+        // already has, and the word for this everywhere from ZBrush's SDiv to
+        // Blender's Multiresolution is subdivision.
+        Representation::Multires => "SUB",
     }
 }
 

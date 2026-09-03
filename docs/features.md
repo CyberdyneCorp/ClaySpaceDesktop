@@ -17,9 +17,15 @@ implementation. A tool with no engine counterpart is not offered.
 ## Sculpting tools
 
 All twenty-one are bound and each is covered by a before-and-after capture in
-`target/visual/`. Which of the three representations each one reaches is in the
+`target/visual/`. Which of the representations each one reaches is in the
 Layers column: fourteen have an SDF verb, thirteen a voxel one, and seventeen a
 mesh one.
+
+A fourth representation — a subdivision hierarchy — is declared in the domain
+and no layer can be one yet, so it is left out of the Layers column below rather
+than written into every row as a promise. Fifteen of the twenty-one name a verb
+on it: the sixteen mesh brushes less Pintar and Borrar, plus Máscara. See
+[Not built yet](#not-built-yet).
 
 | Tool | Engine verb | Layers | What it does |
 |---|---|---|---|
@@ -108,7 +114,7 @@ rather than resetting silently. Brush settings are held per tool *and* per
 representation: a size that suits a grid's cells is not the size that suits a
 field, so returning to a tool on a layer returns the settings it had there.
 
-Mesh layers carry the largest vocabulary of the three: the engine's sixteen
+Mesh layers carry the largest vocabulary: the engine's sixteen
 fixed-topology brushes, plus Máscara, which writes no vertices and paints the
 world-addressed field the sixteen consult. Some of the sixteen arrive as modes
 of a tool already on the shelf rather than as rows of their own — one tool
@@ -1993,8 +1999,8 @@ first one cannot be written without one to hand it.
 
 ClayCore carries SDF, voxel and mesh side by side, and the intended workflow
 uses more than one: **block out and hard-surface on SDF, free-form sculpt on
-voxels, refine on a mesh when the topology is one you want to keep.** Every
-representation reaches both of the others, so **six** crossings are offered from
+voxels, refine on a mesh when the topology is one you want to keep.** Each of
+those three reaches both of the others, so **six** crossings are offered from
 **Arquivo → Converter**, each from the active layer:
 
 | From | To | What it does |
@@ -2005,6 +2011,13 @@ representation reaches both of the others, so **six** crossings are offered from
 | voxel | mesh | The grid's exposed faces as merged quads, with the palette colour on the face |
 | mesh | voxel | Straight from the triangles in one sampling, so a feature thinner than a cell survives where a field detour loses it, and the vertex colours reach the palette |
 | mesh | SDF | Resamples the triangles onto a lattice as a volume item |
+
+Two more are declared in the domain and refused by the adapter, because nothing
+here builds a subdivision hierarchy yet: **mesh → multires**, which takes the
+mesh as a cage, and **multires → mesh**, which bakes a level. They are the only
+two crossings that sample nothing — a cage is the mesh's own vertices and a
+level is the hierarchy's own — so what they cost is stated as a refusal rather
+than as a tolerance. See [Not built yet](#not-built-yet).
 
 The two that end in a mesh are what makes **block out, then sculpt it as a
 mesh** a route through the application rather than a description of one. Until
@@ -2463,11 +2476,11 @@ inspectors — and, while either is up, the shapes and boolean sections — a br
 shelf, and a status area with a memory meter, the active backend and the
 working unit.
 
-**The three representations stand above the viewport, as equals.** One card
-each: an icon of a distinct shape, the representation's name, and a phrase
-saying what it is. The active one is raised and railed, in the same grammar the
-active layer row wears. The other two are shown rather than hidden, because the
-point of the bar is that a sculptor can see what the alternatives are — the
+**The representations stand above the viewport, as equals.** One card each: an
+icon of a distinct shape, the representation's name, and a phrase saying what it
+is. The active one is raised and railed, in the same grammar the active layer
+row wears. The others are shown rather than hidden, because the point of the bar
+is that a sculptor can see what the alternatives are — the
 interface used to say this in a three-letter tag on a layer row and a line of
 text at the far end of the viewport bar, and that line was half untranslated,
 drawing the engine's own word under a translated prefix.
@@ -2993,6 +3006,39 @@ total drag split into eight one-cell emissions moves nothing — so Mover on a
 grid holds the whole gesture and lands at pointer-up rather than following the
 pointer. [ClayCore#393](https://github.com/CyberdyneCorp/ClayCore/issues/393)
 asks for the transactional shape the SDF drag already has.
+
+**A subdivision hierarchy.** ClayCore 0.78.0 carries one — a cage, levels over
+it, and detail stored per level in a frame carried up from the level below, so
+wrinkles cut at level 4 ride on a jaw moved at level 1 instead of being smeared.
+`clayspace-model` describes it: a fourth `Representation`, its verb column
+(fifteen of the twenty-one tools, the sixteen mesh brushes less the two colour
+brushes plus Máscara), the two crossings that reach it, the two independent
+levels, and the stack of named, dialable, lockable passes that stands on it.
+`crates/claycore` wraps every entry point.
+
+**No layer can be one yet.** Nothing in `clayspace-engine` holds a
+`clay_multires`, so the crossing refuses, `apply_stroke` refuses, and the
+representation bar shows a card that nothing reaches. That is deliberate rather
+than half-finished: the domain is where "which tools reach a hierarchy" and
+"what a reorder costs" get decided, and deciding them against a table is what
+stopped "mesh layers are carried, not sculpted" outliving the fact it described.
+
+Three things about it are already settled and worth knowing before the adapter
+is written. **The two colour brushes are not offered**: a hierarchy stores where
+a vertex went and not what colour it is, so a paint stamp would move nothing,
+be dropped by the write-back, and evaporate with the level cache — paint the
+cage before subdividing, or bake a level back to a mesh. **Reordering a pass is
+free**: passes are additive and commute, so a reorder changes organisation and
+not geometry, and an interface that treated a list drag as an edit would
+re-evaluate millions of vertices for it. And **strength is composition, not a
+scale on the pen** — a stroke into a pass at half strength records its full
+contribution and the surface moves half as far, so raising the slider afterwards
+doubles what is on screen and replays no stroke.
+
+What is missing upstream is the undo record: neither the hierarchy's stroke nor
+its layered gesture crosses the C ABI, which `clay.h` states twice rather than
+leaving to be discovered, so one gesture cannot yet become one entry in this
+application's history.
 
 **A voxel Vinco.** The engine documents DamStandard on a grid as a *recipe* —
 a small-radius erode with tight falloff and dense spacing — rather than a

@@ -47,7 +47,7 @@ fn name(direction: Direction) -> String {
 }
 
 fn time(gpu: &Gpu, policy: &BackendPolicy, direction: Direction) -> Result<f64, Skip> {
-    let scene = Scene::for_representation(direction.from());
+    let scene = Scene::for_representation(direction.from()).ok_or(Skip::NoReferenceScene)?;
     let mut document = scene
         .build(policy.clone())
         .map_err(|_| Skip::SceneWouldNotBuild)?;

@@ -64,16 +64,35 @@ fn every_member_builds_the_size_it_says() {
     );
 }
 
+/// Every representation that has a member is measured on its own, and the one
+/// that has none says so rather than borrowing somebody else's.
+///
+/// The second half is the half worth having. A representation with no member is
+/// a family of figures nobody is taking, and the failure that matters is not
+/// "it has no member" — that is a deliberate state, stated in
+/// `Scene::for_representation` and reported every run as
+/// `Skip::NoReferenceScene` — but a member arriving that builds the wrong
+/// subject, which is what the equality below catches.
 #[test]
-fn every_representation_has_a_member() {
+fn every_member_measures_the_representation_it_claims() {
+    let mut unmeasured = Vec::new();
     for representation in Representation::ALL {
-        let scene = Scene::for_representation(representation);
-        assert_eq!(
-            scene.representation(),
-            representation,
-            "{representation:?} is measured on a scene of another representation"
-        );
+        match Scene::for_representation(representation) {
+            Some(scene) => assert_eq!(
+                scene.representation(),
+                representation,
+                "{representation:?} is measured on a scene of another representation"
+            ),
+            None => unmeasured.push(representation),
+        }
     }
+    assert_eq!(
+        unmeasured,
+        vec![Representation::Multires],
+        "the set of representations with no reference member has changed; if \
+         one gained a member, its baselines have to be recorded, and if one \
+         lost its member that is the silence this file exists to catch"
+    );
 }
 
 #[test]

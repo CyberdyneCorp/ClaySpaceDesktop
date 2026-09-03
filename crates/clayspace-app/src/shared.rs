@@ -202,6 +202,24 @@ impl SceneModel for SharedDocument {
         self.0.borrow().sculpt_layer_cost()
     }
 
+    fn apply_multires_level_op(
+        &mut self,
+        op: clayspace_model::MultiresLevelOp,
+    ) -> Result<(), ModelError> {
+        self.0.borrow_mut().apply_multires_level_op(op)
+    }
+
+    fn apply_multires_sculpt_layer_op(
+        &mut self,
+        op: clayspace_model::MultiresSculptLayerOp,
+    ) -> Result<(), ModelError> {
+        self.0.borrow_mut().apply_multires_sculpt_layer_op(op)
+    }
+
+    fn subdivision_cost(&self) -> Option<clayspace_model::SubdivisionCost> {
+        self.0.borrow().subdivision_cost()
+    }
+
     fn set_layer_protection(
         &mut self,
         key: LayerKey,
