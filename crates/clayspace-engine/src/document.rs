@@ -3186,29 +3186,64 @@ impl ClayDocument {
 
     /// Whether a region gesture would be shown while it is being made.
     ///
-    /// Two conditions, and the second is the interesting one. The layer has to
-    /// be a field the sculptor may edit — the transaction refuses a protected
-    /// one — and it has to be the **only visible field subtool**.
+    /// One condition now: the layer has to be a field the sculptor may edit,
+    /// because the transaction refuses a protected one.
     ///
-    /// That second condition is not a limitation of the preview but of what
-    /// the preview is *of*. The brick cache holds the hard union of every
+    /// It used to be two. The brick cache holds the hard union of every
     /// visible SDF layer and the engine attributes no brick to the layer it
-    /// came from, while a transaction previews one layer alone. With a second
-    /// field subtool in the document there is no way to compose the two
-    /// without evaluating the rest of the document per frame, which costs more
-    /// than the preview saves. So the gesture falls back to what it did
-    /// before — held whole, applied when the pointer comes up — which is
-    /// correct, just not live. Filed upstream as ClayCore#378.
+    /// came from, while a transaction previews one layer alone — so with a
+    /// second field subtool in the document the preview was the layer under
+    /// the brush and nothing else, and the rest of the scene would have
+    /// vanished for the length of the drag. The gesture fell back to being
+    /// held whole and applied on release: correct, just not live. It was filed
+    /// upstream as ClayCore#378 and ClayCore 0.78.0 answers it — the document
+    /// can now be evaluated over every visible SDF layer *except* one, which
+    /// is the other half of what the preview holds, and `crate::live` composes
+    /// the two. See [`Self::the_rest_beside_the_preview`].
     fn live_smooth_is_possible(&self) -> bool {
         let active = self.active_layer();
-        if active.representation != Representation::Sdf || !active.protection.is_editable() {
-            return false;
-        }
-        self.layers
+        active.representation == Representation::Sdf && active.protection.is_editable()
+    }
+
+    /// What the preview has to be drawn beside, or `None` where it is the
+    /// whole scene on its own.
+    ///
+    /// `None` is the ordinary document and the one every brush figure is
+    /// measured on, and it takes exactly the path it took before the gesture
+    /// could compose anything: there is no second subtool to lose, so nothing
+    /// is evaluated and nothing is composed.
+    ///
+    /// The boxes are the *other* subtools' bounds rather than the whole
+    /// scene's, so a preview lattice is widened over what is actually there
+    /// instead of over the empty space between two forms.
+    fn the_rest_beside_the_preview(&self) -> Option<crate::live::Rest> {
+        let active = self.active_layer().key;
+        let others: Vec<&Layer> = self
+            .layers
             .iter()
-            .filter(|layer| layer.visible && layer.representation == Representation::Sdf)
-            .count()
-            == 1
+            .filter(|layer| {
+                layer.key != active && layer.visible && layer.representation == Representation::Sdf
+            })
+            .collect();
+        if others.is_empty() {
+            return None;
+        }
+        let bounds = others
+            .iter()
+            .filter_map(|layer| self.document.layer_bounds(layer.id).ok().flatten())
+            .collect();
+        // Routed for the pointer-down pass, which is the whole form and the
+        // batch that dominates; a dab's composition is a couple of dozen
+        // bricks either way.
+        let backend = self
+            .policy
+            .refill_backend(self.surface_brick_count.max(1))
+            .cloned();
+        Some(crate::live::Rest::new(
+            self.active_layer().id,
+            bounds,
+            backend,
+        ))
     }
 
     /// Whether a Move drag can be previewed on the active layer.
@@ -3282,7 +3317,8 @@ impl ClayDocument {
         // difference between the two paths a sculptor could feel.
         let opening = self.engine_undo_depth().saturating_sub(before);
         let id = self.active_layer().id;
-        match crate::live::LiveSmooth::begin(&mut self.document, id, Self::BRICK_CONFIG) {
+        let rest = self.the_rest_beside_the_preview();
+        match crate::live::LiveSmooth::begin(&mut self.document, id, Self::BRICK_CONFIG, rest) {
             Ok(live) => {
                 self.live_smooth = Some(live);
                 self.live_opening_entries = opening;
@@ -3454,15 +3490,18 @@ impl ClayDocument {
         let Some(live) = live_smooth.as_mut() else {
             return Ok(EditOutcome::NOTHING);
         };
-        let dirty_bricks = live.dab(claycore::RelaxParams {
-            strength: brush.intensity,
-            radius_cells: 1,
-            iterations: 2,
-            centre: last.position,
-            region_radius: brush.size,
-            falloff: brush.size * 0.5,
-            mask,
-        })?;
+        let dirty_bricks = live.dab(
+            document,
+            claycore::RelaxParams {
+                strength: brush.intensity,
+                radius_cells: 1,
+                iterations: 2,
+                centre: last.position,
+                region_radius: brush.size,
+                falloff: brush.size * 0.5,
+                mask,
+            },
+        )?;
         Ok(EditOutcome {
             changed: true,
             dirty_bricks,

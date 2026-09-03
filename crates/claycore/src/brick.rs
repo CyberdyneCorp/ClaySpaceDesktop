@@ -205,8 +205,8 @@ impl BrickRequest {
     #[must_use]
     pub fn translated(&self, offset: [f32; 3]) -> Self {
         let mut raw = self.0;
-        for axis in 0..3 {
-            raw.origin[axis] += offset[axis];
+        for (origin, by) in raw.origin.iter_mut().zip(offset) {
+            *origin += by;
         }
         Self(raw)
     }

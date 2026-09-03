@@ -766,12 +766,31 @@ undone on the vertices. Nothing is interpolated, and
 `live_smooth::what_the_preview_showed_is_what_the_commit_installs` is what
 holds that to being exact rather than close.
 
-Two conditions, and the second is about what the preview is *of*. The layer has
-to be an editable field, and it has to be the **only visible field subtool**:
-the brick cache holds the hard union of every visible SDF layer and attributes
-no brick to the layer it came from, while a transaction previews one layer
-alone. With a second one in the document the gesture falls back to being held
-whole — correct, just not live.
+One condition: the layer has to be an editable field, because the transaction
+refuses a protected one.
+
+It used to be two. The brick cache holds the hard union of every visible SDF
+layer and attributes no brick to the layer it came from, while a transaction
+previews one layer alone — so with a second field subtool visible, the preview
+was the layer under the brush and nothing else, and the rest of the scene would
+have vanished for the length of the drag. The gesture fell back to being held
+whole rather than draw that: correct, just not live. It was filed upstream as
+ClayCore#378, and ClayCore 0.78.0 answers it. The document can now be evaluated
+over every visible SDF layer **except** one, which is exactly the other half of
+what the preview holds, so the rest of the scene is read once at pointer-down
+— the layers it excludes do not move while the artist drags — and composed with
+the preview by an elementwise **minimum**. That is exact rather than an
+approximation: field subtools compose by a hard union, so the smaller of the
+two distances at a sample *is* the document's distance there, and there is no
+seam to place.
+
+The reason this call and not the obvious one: hiding the other subtools,
+sampling, and showing them again is three edits, and a smooth commit correctly
+refuses a layer that moved since it began. The excluding evaluation edits
+nothing and records no undo entry, so it is legal in the middle of an open
+transaction — which is what
+`live_smooth::composing_the_rest_of_the_document_does_not_spoil_the_gesture_it_
+is_inside` holds it to.
 
 **Move is live too, and it is where the transaction pays most.** Mover does not
 bake; it warps. Each drag appends a `grab` to the deformer chain of every item

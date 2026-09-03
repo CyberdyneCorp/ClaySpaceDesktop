@@ -350,13 +350,9 @@ shape a mesh layer has always had. The next step is a per-chunk slot layout in
 that buffer, which is what `SurfaceGeometry` already does for the field side;
 it is not owed until a document holds a grid past about two million triangles.
 
-**Five numbered upstream issues are open:**
+**Four numbered upstream issues are open:**
 [#210](https://github.com/CyberdyneCorp/ClayCore/issues/210), an undo that
 cannot say what it changed;
-[#378](https://github.com/CyberdyneCorp/ClayCore/issues/378), a live brush
-preview that cannot be composed with the rest of the document — which is why a
-live Suavizar opens only where the layer being smoothed is the only visible
-field subtool, and falls back to the held gesture otherwise;
 [#321](https://github.com/CyberdyneCorp/ClayCore/issues/321), a layer with no
 combine operation, which is what a live subtool boolean waits on;
 [#364](https://github.com/CyberdyneCorp/ClayCore/issues/364), instance layers
@@ -364,7 +360,14 @@ with no constructor, which is what a cheap duplicate waits on; and
 [#365](https://github.com/CyberdyneCorp/ClayCore/issues/365), a voxel grid
 reachable only by name. Each costs latency or a cheaper implementation and none
 of them blocks anything — see *What is blocked, and what is not*. Every other
-issue filed from this work has been released, and
+issue filed from this work has been released.
+[#378](https://github.com/CyberdyneCorp/ClayCore/issues/378) — a live brush
+preview that could not be composed with the rest of the document, which is why
+a live Suavizar used to open only where the layer being smoothed was the only
+visible field subtool — was released in 0.78.0 and is now adopted: the document
+is evaluated over every visible SDF layer *except* the one under the brush,
+once at pointer-down, and the preview is composed with it by a minimum. See
+`crates/clayspace-engine/src/live.rs`.
 [#317](https://github.com/CyberdyneCorp/ClayCore/issues/317) is released and
 now linked: the readers it promised arrived with the 0.60.0 pin and the
 sidecar they retire is still here, which is a change of its own.
