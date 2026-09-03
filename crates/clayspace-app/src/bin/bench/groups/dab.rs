@@ -52,4 +52,10 @@ pub fn measure(policy: &BackendPolicy, run: &mut Run) {
         "dab.p95",
         Figure::ms(quantile(&samples, 0.95), accelerated.then_some(100.0)),
     );
+    // The two figures are reduced from one set of twenty-four dabs, so they
+    // carry the same spread. This group takes its own quantiles rather than
+    // going through `Run::timings`, which is why the spread is recorded by
+    // hand here.
+    run.spread("dab.median", &samples);
+    run.spread("dab.p95", &samples);
 }

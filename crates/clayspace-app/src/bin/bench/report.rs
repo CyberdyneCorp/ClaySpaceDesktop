@@ -7,16 +7,27 @@ use crate::run::Run;
 /// The conditions are printed by the caller, before anything is measured, so
 /// that a run which never finishes still says what it was measuring.
 pub fn report(run: &Run) {
-    println!("{:<40} {:>12}  {:<8} budget", "figure", "value", "unit");
+    println!(
+        "{:<40} {:>12}  {:<8} {:<10} samples",
+        "figure", "value", "unit", "budget"
+    );
     for (name, figure) in run.figures() {
         println!(
-            "{:<40} {:>12.2}  {:<8} {}",
+            "{:<40} {:>12.2}  {:<8} {:<10} {}",
             name,
             figure.value,
             figure.unit,
             figure
                 .budget
                 .map(|b| format!("<= {b}"))
+                .unwrap_or_else(|| "-".into()),
+            // Printed beside the number it was reduced from, so that a figure
+            // taken once is visibly a figure taken once. A blank here is the
+            // measurement saying it has one observation and no idea how far
+            // that one might have been from the next.
+            run.spreads()
+                .get(name)
+                .map(|spread| spread.describe())
                 .unwrap_or_else(|| "-".into())
         );
     }

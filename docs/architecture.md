@@ -226,6 +226,25 @@ Three things make the record trustworthy rather than merely present:
 - **Figures are reported, not asserted.** Only the specification's five carry
   budgets. Everything else is a tracked quantity compared against the recorded
   baseline; a new figure is not a new promise.
+- **A figure carries the spread it was reduced from.** A repeatable measurement
+  takes twelve samples and a one-shot three, and the file records the sample
+  count, the minimum, the median, the 95th percentile and the maximum beside
+  the one number the figure reports. Without it a baseline can say a figure was
+  19.04 ms and nothing at all about whether 21 ms is a regression or a Tuesday —
+  which is the weakness ClayCore's own device gate names in its release notes.
+  A comparison marks a change that lands inside the range the baseline's own
+  samples covered, and marks it rather than excusing it: a within-run range is
+  the smaller half of the noise, since the variance between runs is larger and
+  no single process can sample it. The section is additive, so a baseline
+  recorded before it existed still compares and simply cannot say how noisy it
+  was.
+
+The `conditions` also name the engine's **revision** — the vendored submodule's
+`git describe`, stamped into the binary by `claycore-sys` — and not only its
+version. Two builds can both say 0.78.0 and differ by a commit. A comparison
+across two engine pins is permitted, since that is the measurement an upgrade
+most needs, but it is announced above the table so that no percentage folds an
+engine change in silently.
 
 The whole suite is long enough to be worth filtering: `just bench-only brush`
 measures one group. A filtered run cannot record a baseline, since a baseline

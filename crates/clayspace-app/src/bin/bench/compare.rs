@@ -151,14 +151,38 @@ fn table(baseline: &Baseline, run: &Run) -> bool {
         let ratio = figure.value / value.max(f64::MIN_POSITIVE);
         let worse = figure.regressed_against(value);
         println!(
-            "{name:<40} {value:>10.2} {:>10.2} {:>8.0}%{}",
+            "{name:<40} {value:>10.2} {:>10.2} {:>8.0}%{}{}",
             figure.value,
             (ratio - 1.0) * 100.0,
-            if worse { "  REGRESSED" } else { "" }
+            if worse { "  REGRESSED" } else { "" },
+            inside_the_spread(baseline, name, figure.value)
         );
         regressed |= worse;
     }
     regressed
+}
+
+/// Whether this run's value lands inside the range the baseline's own samples
+/// covered, where the baseline recorded one.
+///
+/// Reported and **not** subtracted from the verdict, deliberately. A within-run
+/// spread is the smaller half of the noise — the run-to-run variance from a
+/// graphics card's clock state is larger, and no single process can sample it —
+/// so a range that happens to swallow a change is evidence the change is small,
+/// not proof it is nothing. Letting it silence a regression would trade a gate
+/// that sometimes cries wolf for one that sometimes says nothing, which is the
+/// worse of the two failures.
+///
+/// What it is for is the other direction: a 10 % move that lands inside a
+/// baseline whose twelve samples spanned 40 % was never a measurement anyone
+/// could act on, and now the table says so instead of leaving the reader to
+/// guess. That is exactly the adjudication ClayCore's own release notes say
+/// their gate could not make.
+fn inside_the_spread(baseline: &Baseline, name: &str, value: f64) -> &'static str {
+    match baseline.spread.get(name) {
+        Some(spread) if spread.covers(value) => "  (inside the baseline's own spread)",
+        _ => "",
+    }
 }
 
 /// The figures the baseline has and this run does not.
@@ -299,6 +323,7 @@ mod tests {
                 .iter()
                 .map(|(name, value)| (name.to_string(), *value))
                 .collect(),
+            spread: BTreeMap::new(),
             skipped: BTreeMap::new(),
             load_per_core: None,
         }
@@ -495,6 +520,28 @@ mod tests {
         theirs.revision = None;
         let note = across_engines(&conditions(), &theirs).expect("announced");
         assert!(note.contains("revision not recorded"), "{note}");
+    }
+
+    /// The adjudication the release notes say their own gate could not make.
+    /// It annotates and does not excuse: the verdict is the tolerance's, and a
+    /// within-run range is only the smaller half of the noise.
+    #[test]
+    fn a_change_inside_the_baselines_own_range_is_marked_as_such() {
+        let mut theirs = baseline(&[("brush.mesh.camada.mean", 19.0)]);
+        theirs.spread.insert(
+            "brush.mesh.camada.mean".into(),
+            crate::figures::Spread {
+                n: 12,
+                min: 17.0,
+                median: 19.0,
+                p95: 22.5,
+                max: 23.4,
+            },
+        );
+        assert!(!inside_the_spread(&theirs, "brush.mesh.camada.mean", 21.0).is_empty());
+        assert!(inside_the_spread(&theirs, "brush.mesh.camada.mean", 30.0).is_empty());
+        // A figure the baseline said nothing about is annotated with nothing.
+        assert!(inside_the_spread(&theirs, "dab.median", 21.0).is_empty());
     }
 
     #[test]
