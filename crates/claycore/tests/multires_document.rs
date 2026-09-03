@@ -283,3 +283,170 @@ fn the_hierarchys_bytes_are_the_hosts_to_place_and_they_come_back() {
         bytes.len()
     );
 }
+
+// -- the two seams a host builds the representation on ----------------------
+
+/// A hierarchy built over the layer's own cage, without the host copying it.
+///
+/// The route that matters for a host whose cage is already a document layer:
+/// `Multires::from_mesh` wants a `&Mesh` and a layer's mesh is the document's
+/// to lend, so the borrow that Rust will not hold twice is taken once inside
+/// the crate. What comes back has to be the *same* hierarchy the copy route
+/// builds, which is what is measured here rather than assumed: a level count,
+/// a vertex count and a detail checksum, all three against a hierarchy built
+/// the long way from the same triangles.
+#[test]
+fn a_hierarchy_is_built_over_a_layer_the_document_already_holds() {
+    let mesh = cage(4, 2.0, "over-a-layer");
+    let mut document = Document::new().expect("document");
+    let layer = document
+        .attach_mesh_layer(&mesh, &MeshLayerDesc::named("cage"))
+        .expect("the cage is a mesh layer");
+
+    let mut through_the_layer = document
+        .multires_from_mesh_layer(layer, MultiresDesc::default())
+        .expect("the layer's own mesh is a cage");
+    let mut through_a_copy =
+        Multires::from_mesh(&mesh, MultiresDesc::default()).expect("so is the copy");
+    for surface in [&mut through_the_layer, &mut through_a_copy] {
+        surface.add_level().expect("subdivide once");
+        surface.add_level().expect("subdivide twice");
+        wrinkle(surface);
+    }
+
+    assert_eq!(
+        through_the_layer.level_count(),
+        through_a_copy.level_count(),
+        "the same cage subdivides to the same depth whichever way it arrived"
+    );
+    assert_eq!(
+        through_the_layer.level_counts(2).expect("counts"),
+        through_a_copy.level_counts(2).expect("counts"),
+        "and to the same vertex and face counts"
+    );
+    assert_eq!(
+        through_the_layer.detail_checksum().expect("checksum"),
+        through_a_copy.detail_checksum().expect("checksum"),
+        "and the same dab lands on the same coefficients, which is the whole \
+         claim: the layer lent its mesh rather than a different one"
+    );
+    assert!(
+        relief(&mut through_the_layer) > 0.0,
+        "and the fixture actually sculpted something, so the equality above is \
+         not two empty hierarchies agreeing"
+    );
+}
+
+/// A layer that is not a mesh layer has no cage to lend.
+#[test]
+fn a_field_layer_is_not_a_cage_and_says_so_rather_than_building_nothing() {
+    let mut document = Document::new().expect("document");
+    let field = document.add_sdf_layer("campo").expect("an SDF layer");
+    let refused = document
+        .multires_from_mesh_layer(field, MultiresDesc::default())
+        .expect_err("a field layer holds no triangles");
+    assert_eq!(
+        refused.error.kind(),
+        claycore::ErrorKind::NotFound,
+        "the layer exists and its mesh does not, which is what NOT_FOUND says \
+         here: {refused}"
+    );
+}
+
+/// The bake back: a level's mesh takes the layer's place as one undo step.
+///
+/// This is the other half of the seam. A hierarchy's sculpt reaches a
+/// `.clayspace` only as the *triangles of one level*, and that is what
+/// crossing back out of the representation is — so the replacement has to land
+/// on the layer that is already there rather than on a new one beside it, or
+/// every reference the host holds to that row breaks.
+#[test]
+fn a_level_takes_the_cages_place_on_the_layer_it_came_from() {
+    let mesh = cage(4, 2.0, "bake-back");
+    let mut document = Document::new().expect("document");
+    let layer = document
+        .attach_mesh_layer(&mesh, &MeshLayerDesc::named("cage"))
+        .expect("the cage is a mesh layer");
+    document.enable_undo().expect("undo");
+
+    let mut surface = document
+        .multires_from_mesh_layer(layer, MultiresDesc::default())
+        .expect("a hierarchy");
+    surface.add_level().expect("subdivide once");
+    surface.add_level().expect("subdivide twice");
+    wrinkle(&mut surface);
+
+    let flat = document.read_mesh_layer("cage").expect("the cage").0;
+    let cage_vertices = flat.len();
+    let standing = flat.iter().map(|p| p[1].abs()).fold(0.0f32, f32::max);
+    assert_eq!(standing, 0.0, "the cage is a flat sheet before the bake");
+
+    let before = document.mesh_layer_revision(layer).expect("a revision");
+    let baked = surface.copy_level_mesh(2).expect("the finest level");
+    let baked_vertices = baked.vertex_count();
+    document
+        .replace_mesh_layer(layer, &baked, before)
+        .expect("the level replaces the cage");
+
+    let (positions, ..) = document.read_mesh_layer("cage").expect("the layer");
+    assert_eq!(
+        positions.len(),
+        baked_vertices,
+        "the layer holds the level's vertices now, not the cage's {cage_vertices}"
+    );
+    assert!(
+        positions.iter().map(|p| p[1].abs()).fold(0.0f32, f32::max) > 0.0,
+        "and the wrinkle came with them"
+    );
+    assert_ne!(
+        document.mesh_layer_revision(layer).expect("a revision"),
+        before,
+        "a wholesale replacement moves the revision, which is what tells a \
+         cache built over the old triangles that it is wrong"
+    );
+
+    // One step, and it puts the cage back.
+    assert!(document.undo().expect("undo"), "the bake is undoable");
+    let (back, ..) = document.read_mesh_layer("cage").expect("the layer");
+    assert_eq!(
+        back.len(),
+        cage_vertices,
+        "undoing the replacement restores the cage, which is what makes it one \
+         undo step rather than a layer swap the host has to unwind itself"
+    );
+}
+
+/// A replacement handed a revision the layer has moved past is refused.
+///
+/// The check exists for a host that did slow work off the layer and wants to
+/// commit it: if the layer was rebuilt while that work ran, committing would
+/// overwrite what the sculptor did in the meantime.
+#[test]
+fn a_replacement_that_did_not_see_the_last_one_is_refused_rather_than_applied() {
+    let mesh = cage(4, 2.0, "stale-commit");
+    let mut document = Document::new().expect("document");
+    let layer = document
+        .attach_mesh_layer(&mesh, &MeshLayerDesc::named("cage"))
+        .expect("the cage is a mesh layer");
+    let mut surface = document
+        .multires_from_mesh_layer(layer, MultiresDesc::default())
+        .expect("a hierarchy");
+    surface.add_level().expect("subdivide");
+
+    let stale = document.mesh_layer_revision(layer).expect("a revision");
+    let first = surface.copy_level_mesh(1).expect("level one");
+    document
+        .replace_mesh_layer(layer, &first, stale)
+        .expect("the first commit sees what it expects");
+
+    let second = surface.copy_level_mesh(1).expect("level one again");
+    let refused = document
+        .replace_mesh_layer(layer, &second, stale)
+        .expect_err("the layer has moved since");
+    assert_eq!(
+        refused.kind(),
+        claycore::ErrorKind::ForwardVersion,
+        "and it is refused as a version that has been overtaken rather than as \
+         a malformed argument: {refused}"
+    );
+}

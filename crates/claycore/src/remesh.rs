@@ -20,7 +20,7 @@ use claycore_sys as sys;
 
 use crate::descriptor::Descriptor;
 use crate::error::{check, Result};
-use crate::{Document, LayerId};
+use crate::{Document, LayerId, Mesh};
 
 /// How the sampling resolution is stated.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -468,5 +468,44 @@ impl Document {
             Ok(()) => Ok(report),
             Err(error) => Err(Box::new(RemeshRefusal { error, report })),
         }
+    }
+}
+
+impl Document {
+    /// Replaces a mesh layer's triangles wholesale, as one undo step.
+    ///
+    /// The commit half of the asynchronous rebuild [`Document::remesh_layer`]
+    /// does in one call, and the only route by which geometry produced outside
+    /// the document takes a layer's place without the layer changing identity.
+    /// A hierarchy baked back to a mesh arrives this way: the sculpt is the
+    /// hierarchy's and the row is the document's, and the two meet here.
+    ///
+    /// `expected` is what [`Document::mesh_layer_revision`] answered before the
+    /// work started, and zero skips the check — which is only right when
+    /// nothing could have touched the layer in between. A layer rebuilt since
+    /// is refused with [`ErrorKind::ForwardVersion`](crate::ErrorKind) rather
+    /// than overwritten, so work done while a slow rebuild ran is not lost.
+    ///
+    /// A refusal leaves the layer byte-identical.
+    pub fn replace_mesh_layer(
+        &mut self,
+        layer: LayerId,
+        replacement: &Mesh,
+        expected: u64,
+    ) -> Result<()> {
+        // SAFETY: a valid document, a layer id the entry point range-checks
+        // itself, and a mesh handle that is read and not retained — the
+        // document copies what it takes.
+        check(
+            unsafe {
+                sys::clay_document_replace_mesh_layer(
+                    self.as_ptr(),
+                    layer.0,
+                    replacement.as_ptr(),
+                    expected,
+                )
+            },
+            "clay_document_replace_mesh_layer",
+        )
     }
 }

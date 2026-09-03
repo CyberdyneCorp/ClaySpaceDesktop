@@ -106,7 +106,7 @@ use crate::memory::{
 };
 use crate::mesh::Mesh;
 use crate::mesh_sculpt::MeshStamp;
-use crate::{cstring, engine_text, raw_failure};
+use crate::{cstring, engine_text, raw_failure, Document, LayerId};
 
 // -- refusals ---------------------------------------------------------------
 
@@ -2510,5 +2510,72 @@ impl std::fmt::Debug for SculptLayerStroke<'_> {
             .field("target", &self.target_layer().ok())
             .field("stamps", &self.stamps().ok())
             .finish()
+    }
+}
+
+// -- a hierarchy over a layer the document already holds ---------------------
+
+impl Document {
+    /// Builds a hierarchy over one of this document's own mesh layers.
+    ///
+    /// Fused for the reason [`Document::rasterize_into_voxel_layer`] is fused:
+    /// the cage is a mesh the *document* owns and lends out, and Rust will not
+    /// let a borrow of it and a borrow of the document stand at once even
+    /// though the C boundary takes the mesh as `const` and copies it. So the
+    /// two pointers meet here, in the crate where `unsafe` lives, rather than
+    /// forcing the caller to copy a mesh it already has.
+    ///
+    /// The hierarchy that comes back **owns a copy** of the cage and has no
+    /// further connection to the layer: editing the layer's triangles
+    /// afterwards does not reach it, and the hierarchy is not written by
+    /// `clay_document_save`. That ownership boundary is the whole integration
+    /// cost of this tier and it is deliberate upstream — see the module doc.
+    ///
+    /// Refuses rather than repairs, exactly as [`Multires::from_mesh`] does.
+    pub fn multires_from_mesh_layer(
+        &mut self,
+        layer: LayerId,
+        desc: MultiresDesc,
+    ) -> std::result::Result<Multires, MultiresRefusal> {
+        let mut mesh = std::ptr::null_mut();
+        // SAFETY: a valid document and one out-parameter written only on
+        // success. The handle that comes back is the layer's own and is
+        // borrowed for the length of this call; it must not be wrapped in
+        // `Mesh`, which destroys what it holds on drop.
+        let found = check(
+            unsafe { sys::clay_document_mesh_layer_by_id(self.as_ptr(), layer.0, &mut mesh) },
+            "clay_document_mesh_layer_by_id",
+        );
+        if let Err(error) = found {
+            return Err(MultiresRefusal {
+                error,
+                reason: MultiresError::EmptyBase,
+            });
+        }
+        if mesh.is_null() {
+            return Err(MultiresRefusal {
+                error: raw_failure("clay_document_mesh_layer_by_id", ErrorKind::NotFound),
+                reason: MultiresError::EmptyBase,
+            });
+        }
+
+        let raw_desc = desc.to_raw();
+        let mut surface = std::ptr::null_mut();
+        let mut reason = 0i32;
+        // SAFETY: the mesh handle was just written by a successful call and
+        // belongs to this document, the descriptor carries its own
+        // struct_size, and both out-parameters are written on every path —
+        // `reason` including success, where it is CLAY_MULTIRES_OK.
+        let code =
+            unsafe { sys::clay_multires_from_mesh(mesh, &raw_desc, &mut surface, &mut reason) };
+        let reason = MultiresError::from_raw(reason);
+        check(code, "clay_multires_from_mesh")
+            .map_err(|error| MultiresRefusal { error, reason })?;
+        NonNull::new(surface)
+            .map(|raw| Multires { raw })
+            .ok_or_else(|| MultiresRefusal {
+                error: raw_failure("clay_multires_from_mesh", ErrorKind::Backend),
+                reason,
+            })
     }
 }
