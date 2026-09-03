@@ -85,23 +85,48 @@ struct ChunkGeometry {
     indices: Vec<u32>,
 }
 
+/// Where the engine says a layer stands, as the domain spells a placement.
+///
+/// The *per-axis* reader, always. The single-factor one refuses a layer
+/// carrying three different factors with `INVALID_ARGUMENT` rather than
+/// averaging them away, so a squashed subtool would answer nothing at all
+/// through it; the per-axis one reports the product of the layer's two scales,
+/// so a layer placed uniformly reads `(s, s, s)` and no caller has to branch.
+///
+/// A free function rather than a method because `from_file` asks it of a
+/// document that has no `ClayDocument` around it yet, and that is the call the
+/// question exists for: until ABI 0.74.0 a reopened layer had to be assumed to
+/// stand at the origin.
+fn placement_of(document: &Document, id: LayerId) -> Option<clayspace_model::Transform> {
+    let standing = document.layer_transform_nonuniform(id).ok()?;
+    Some(clayspace_model::Transform {
+        position: standing.position,
+        rotation_axis: standing.rotation_axis,
+        rotation_angle: standing.rotation_angle,
+        scale: standing.scale,
+    })
+}
+
 /// A layer the document holds, and what it is made of.
 struct Layer {
     id: LayerId,
     /// Where the whole layer stands.
     ///
-    /// Remembered here for the reason the object table exists: the ABI set a
-    /// layer transform and would not read one back. Both routes that set it —
-    /// the narrow `set_layer_transform` and the manipulator's own — write
-    /// this, so the two cannot disagree about where a layer is.
+    /// A **cache of the engine's answer**, and no longer a second account of
+    /// it. It was written here because the ABI set a layer transform and would
+    /// not read one back, so the only record of where a subtool stood was the
+    /// one the host kept — which is why every route that placed a layer also
+    /// snapshotted the whole stack against an undo depth, and why a document
+    /// reopened from a file came back believing every layer stood at the
+    /// origin however far it had been dragged.
     ///
-    /// ClayCore 0.78.0 ends the half of that which was a gap:
-    /// `Document::layer_transform_nonuniform` answers where a layer stands,
-    /// which is what `remember_layers` and `resync_layer_transforms` exist to
-    /// reconstruct after history moves. Retiring this mirror is a change of
-    /// its own — it is what those two and the rollback in `place_layer` are
-    /// built on — and until then this doc comment should not be read as
-    /// saying the question cannot be asked.
+    /// `clay_document_layer_transform_nonuniform` (ABI 0.74.0) answers the
+    /// question. `engine_layer_transform` asks it, `resync_layer_transforms`
+    /// refreshes this after history moves the engine, and `from_file` fills it
+    /// on open. This is kept because it is read per stroke segment — by
+    /// `carried_placement`, on the path a dab takes — and a round trip through
+    /// the ABI per segment to learn a number that has not changed is a cost
+    /// with nothing to buy.
     transform: clayspace_model::Transform,
     /// A stable handle the interface uses. Engine ids are not guaranteed to
     /// survive an edit, so the interface is given one that is.
@@ -874,15 +899,14 @@ pub struct ClayDocument {
     /// nothing, which leaves the table alone: correct, because it did not
     /// change.
     object_states: std::collections::BTreeMap<usize, Vec<PlacedObject>>,
-    /// Where each layer stood at each of the engine's undo depths.
-    ///
-    /// The same arrangement as `object_states` and for the same reason, one
-    /// level up: a layer's transform is written to the engine and cached here,
-    /// the engine reverts it on an undo and cannot say that it did. Without
-    /// this the cached copy stayed where the drag left it — the manipulator sat
-    /// where the form no longer was, and the next drag resolved from a number
-    /// undo had already taken back.
-    layer_states: std::collections::BTreeMap<usize, Vec<(LayerKey, clayspace_model::Transform)>>,
+    // There is no `layer_states` beside this, and there was until ABI 0.74.0.
+    // A layer's placement had exactly the object table's problem — written to
+    // the engine, cached here, reverted by an undo the engine could not report
+    // — and exactly the object table's answer, a snapshot per undo depth. The
+    // difference now is that `clay_document_layer_transform_nonuniform` reads
+    // the placement back, so `resync_layer_transforms` asks the engine instead
+    // of consulting a copy. A node's transform has no such reader (#69 covers
+    // the layer level only), which is why the object table is still here.
 }
 
 impl ClayDocument {
@@ -958,7 +982,6 @@ impl ClayDocument {
             selected_object: None,
             dragging: None,
             object_states: std::collections::BTreeMap::new(),
-            layer_states: std::collections::BTreeMap::new(),
         };
         model.refresh_stats();
         Ok(model)
@@ -7644,6 +7667,21 @@ impl ClayDocument {
                     // recorded, and the first stroke that wants otherwise
                     // writes through and makes both true.
                     symmetry: [false; 3],
+                    // Where it stands, read back rather than assumed.
+                    //
+                    // Until ABI 0.74.0 there was no call that answered this,
+                    // so every layer came back believing it stood at the
+                    // origin unturned and unscaled. On a field layer the
+                    // engine still evaluated the tape where the layer really
+                    // was, so the form was drawn correctly and everything the
+                    // host derives from the placement was wrong: the
+                    // whole-subtool manipulator sat in empty space, a mirrored
+                    // dab reflected through the world's plane instead of the
+                    // layer's, and a mask painted in world coordinates missed
+                    // the cells it was meant to protect. On a carried mesh or
+                    // a grid, where the *host* applies the placement, the
+                    // subtool itself came back at the origin.
+                    transform: placement_of(&document, *id).unwrap_or_default(),
                     // A layer that was never named comes back empty rather
                     // than absent, and an unnamed row in the stack is worse to
                     // work with than a numbered one.
@@ -7713,7 +7751,6 @@ impl ClayDocument {
             selected_object: None,
             dragging: None,
             object_states: std::collections::BTreeMap::new(),
-            layer_states: std::collections::BTreeMap::new(),
         };
 
         // Undo starts recording from here: opening is not something the user
@@ -9923,35 +9960,33 @@ impl ClayDocument {
     /// Called after an undo or a redo has moved the engine. A depth nothing
     /// recorded leaves the table alone, which is right: the entry that moved
     /// was not an object edit.
-    /// Records where every layer stands, keyed by the engine's current depth.
+    /// Brings the cached layer transforms back to what the engine holds.
     ///
-    /// One snapshot of the whole stack rather than one per layer: a document
-    /// holds a handful of layers, and a partial record would have to say which
-    /// of them the entry belonged to.
-    fn remember_layers(&mut self) {
-        let depth = self.engine_undo_depth();
-        let standing = self
-            .layers
-            .iter()
-            .map(|layer| (layer.key, layer.transform))
-            .collect();
-        self.layer_states.insert(depth, standing);
-    }
-
-    /// Brings the cached layer transforms back to the engine's current depth.
+    /// **This used to be a snapshot table.** Every route that placed a layer
+    /// recorded the whole stack against the engine's undo depth, and this
+    /// looked the depth up again after a step and copied the row back — six
+    /// call sites and a `BTreeMap` whose only purpose was to reconstruct an
+    /// answer nobody could ask for. `clay_document_layer_transform_nonuniform`
+    /// asks for it. So the engine is the one account of where a layer stands
+    /// and this reads it, which also means a placement made by any route the
+    /// application does not know about is followed rather than overwritten.
     ///
-    /// A depth nothing recorded leaves them alone, which is right: the entry
-    /// that moved was not a layer placement.
+    /// A layer the engine will not answer for is left alone. That is the same
+    /// judgement the table made for a depth it had not recorded: the cache is
+    /// a copy of an answer, and a copy of no answer is worse than the last
+    /// good one.
     fn resync_layer_transforms(&mut self) {
-        let depth = self.engine_undo_depth();
-        let Some(standing) = self.layer_states.get(&depth).cloned() else {
-            return;
-        };
-        for (key, transform) in standing {
-            if let Some(layer) = self.layers.iter_mut().find(|layer| layer.key == key) {
-                layer.transform = transform;
+        for index in 0..self.layers.len() {
+            let id = self.layers[index].id;
+            if let Some(standing) = self.engine_layer_transform(id) {
+                self.layers[index].transform = standing;
             }
         }
+    }
+
+    /// Where the engine says a layer stands.
+    fn engine_layer_transform(&self, id: LayerId) -> Option<clayspace_model::Transform> {
+        placement_of(&self.document, id)
     }
 
     fn resync_objects(&mut self) {
@@ -9987,14 +10022,6 @@ impl ClayDocument {
         // same lesson (`set_object_transform`); this is the layer's turn.
         let before = self.layer_bounds(key);
         let previous = self.layers[index].transform;
-        // Inside a gesture the group is already open and the stack was already
-        // recorded at its start; snapshotting per frame would key thirty states
-        // to one undo depth and keep only the last. The object table takes the
-        // same care for the same reason.
-        let gesturing = self.dragging.is_some();
-        if !gesturing {
-            self.remember_layers();
-        }
         self.write_layer_transform(id, transform)?;
         self.layers[index].transform = transform;
         let after = self.layer_bounds(key);
@@ -10009,9 +10036,6 @@ impl ClayDocument {
             self.write_layer_transform(id, previous)?;
             self.layers[index].transform = previous;
             return Err(refused);
-        }
-        if !gesturing {
-            self.remember_layers();
         }
         Ok(())
     }
@@ -10307,7 +10331,6 @@ impl ClayDocument {
         fill: impl FnOnce(&mut Self, LayerId) -> Result<NodeId, ModelError>,
     ) -> Result<(LayerKey, LayerId, NodeId), ModelError> {
         self.remember_objects_before();
-        self.remember_layers();
         self.document
             .begin_undo_group()
             .map_err(ModelError::engine)?;
@@ -10335,7 +10358,6 @@ impl ClayDocument {
     /// whole.
     fn settle_subtool(&mut self, layer: LayerId) -> Result<(), ModelError> {
         self.remember_objects_after();
-        self.remember_layers();
         self.refill(layer, &[])?;
         self.refresh_stats();
         Ok(())
@@ -11183,10 +11205,11 @@ impl ObjectModel for ClayDocument {
             self.end_target_drag();
         }
         // The table before the gesture, so an undo of the whole drag finds the
-        // state it started from rather than the state one frame in. The layer
-        // stack too: a drag on a whole subtool moves a layer and not a node.
+        // state it started from rather than the state one frame in. A drag on
+        // a whole subtool needs no such record: the engine holds where a layer
+        // stands and answers for it, so an undo restores the placement itself
+        // and `resync_layer_transforms` reads it back.
         self.remember_objects_before();
-        self.remember_layers();
         if self.document.begin_undo_group().is_ok() {
             self.dragging = Some(target);
         }
@@ -11198,7 +11221,6 @@ impl ObjectModel for ClayDocument {
         }
         let _ = self.document.end_undo_group();
         self.remember_objects_after();
-        self.remember_layers();
     }
 
     fn set_target_transform(
