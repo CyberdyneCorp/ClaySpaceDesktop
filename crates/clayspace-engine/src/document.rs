@@ -5343,11 +5343,15 @@ impl ClayDocument {
             for point in &mut positions {
                 *point = Self::into_world(&transform, *point);
             }
-            // Turned and not moved: a normal is a direction, and the scale is
-            // uniform so it needs no inverse-transpose.
+            // Through the inverse transpose and not the rotation alone. A
+            // layer transform took one factor until ABI 0.74.0 and takes
+            // three now, and a normal is the one thing a stretch does not
+            // carry the way it carries a point: measured on a meshed starting
+            // form at scale [1,4,1], the drawn vertex normals sat a mean 20.9
+            // degrees off the triangles they belong to, against 1.5 for the
+            // ordinary faceting floor.
             for normal in &mut normals {
-                *normal =
-                    Self::turned_by(transform.rotation_axis, transform.rotation_angle, *normal);
+                *normal = transform.normal_into_world(*normal);
             }
         }
         carried.append(&positions, &normals, &colors, &indices);
@@ -5433,13 +5437,12 @@ impl ClayDocument {
             .iter()
             .map(|point| Self::into_world(transform, *point))
             .collect();
-        // Turned and not moved: a normal is a direction, and a layer's scale
-        // is uniform so it needs no inverse-transpose.
+        // Through the inverse transpose, for the reason `append_mesh_layer`
+        // states: a stretched frame does not carry a normal the way it carries
+        // a point, and this is the path a grid and a hierarchy are drawn by.
         let turned: Vec<[f32; 3]> = normals
             .iter()
-            .map(|normal| {
-                Self::turned_by(transform.rotation_axis, transform.rotation_angle, *normal)
-            })
+            .map(|normal| transform.normal_into_world(*normal))
             .collect();
         carried.append(&placed, &turned, colors, indices);
     }

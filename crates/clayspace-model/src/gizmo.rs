@@ -391,6 +391,47 @@ impl Transform {
         std::array::from_fn(|i| turned[i] / self.factor(i))
     }
 
+    /// A *direction* of the frame this transform places, in the frame's own
+    /// coordinates.
+    ///
+    /// [`into_local`](Self::into_local) without the position, because a
+    /// direction has none — and *with* the division, because a direction is
+    /// not a rotation's to carry alone once the three factors part company. A
+    /// ray turned and not divided points somewhere else in a stretched frame:
+    /// measured, a subtool squashed 3:1 and hovered from a 45-degree view
+    /// missed its own surface entirely, and a pick that misses reads exactly
+    /// like a pointer that is not over the form.
+    pub fn direction_into_local(&self, direction: [f32; 3]) -> [f32; 3] {
+        let turned = self.turn_back(direction);
+        std::array::from_fn(|i| turned[i] / self.factor(i))
+    }
+
+    /// A *normal* of the frame this transform places, standing where it puts
+    /// it.
+    ///
+    /// Not [`into_world`](Self::into_world) without the position, and not a
+    /// rotation either. A surface normal transforms by the **inverse
+    /// transpose** of the map its surface goes through: for `R * diag(s)` that
+    /// is `R * diag(1/s)`, so the divisions are what keep a normal
+    /// perpendicular to a stretched surface. It is the same map as a direction
+    /// only while the three factors agree, which is why rotating alone went
+    /// unnoticed for as long as a layer took one factor.
+    ///
+    /// clay.h says it in one line for the layer transform the engine composes
+    /// itself — "rotating a normal is right for a similarity and tilts every
+    /// one of them off the surface under a squash" — and a host drawing
+    /// carried geometry has to make the same distinction, because it is
+    /// placing that geometry itself.
+    pub fn normal_into_world(&self, normal: [f32; 3]) -> [f32; 3] {
+        let unstretched: [f32; 3] = std::array::from_fn(|i| normal[i] / self.factor(i));
+        let turned = self.turn(unstretched);
+        // Renormalised, because a shading normal is read as a unit vector and
+        // the division above is not one. A zero-length normal — which the
+        // engine can hand back for a degenerate triangle — is left as it came
+        // rather than turned into a NaN.
+        normalize(turned).unwrap_or(turned)
+    }
+
     /// One component of the scale, floored so the frame is never singular.
     fn factor(&self, axis: usize) -> f32 {
         self.scale[axis].max(Self::LEAST_SCALE)
