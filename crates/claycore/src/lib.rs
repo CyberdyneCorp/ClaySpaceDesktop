@@ -17,8 +17,12 @@
 //!   this layer calls yet. The surface is deliberately kept whole rather than
 //!   trimmed to today's callers — the engine's entry points are what this
 //!   crate exists to expose — but a wrapper nobody runs is a SAFETY comment
-//!   nobody has checked, so `tests/abi_surface.rs` runs the ones the
-//!   application has not reached for.
+//!   nobody has checked. `tests/abi_surface.rs` runs the scattered ones the
+//!   application has not reached for; a tier large enough to have vocabulary
+//!   of its own gets a file named after it (`tests/multires.rs`,
+//!   `tests/surface_view.rs`, `tests/maintenance.rs`, `tests/memory.rs`),
+//!   because the assertions there are about what the tier *claims* and not
+//!   only about having been called.
 
 mod authoring;
 mod backend;
