@@ -515,6 +515,11 @@ impl Multires {
     }
 
     /// How many levels the hierarchy holds. One is a cage and nothing else.
+    /// The raw handle, for sibling modules in this crate only.
+    pub(crate) fn as_ptr(&mut self) -> *mut sys::clay_multires {
+        self.raw.as_ptr()
+    }
+
     pub fn level_count(&self) -> u32 {
         // SAFETY: valid handle; the call only reads, and answers zero for a
         // handle it cannot resolve rather than failing.

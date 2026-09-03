@@ -39,6 +39,7 @@ mod pick;
 mod reader;
 mod remesh;
 mod sculpt;
+mod surface_view;
 mod voxel;
 
 pub use authoring::{
@@ -85,6 +86,10 @@ pub use remesh::{
 pub use sculpt::{
     resolve_stroke, FlattenMode, FlattenParams, MoveParams, RelaxParams, TopologicalMoveParams,
     VolumeParams,
+};
+pub use surface_view::{
+    ChunkAck, ChunkCopy, ChunkInfo, ChunkOptions, ChunkReadback, ChunkRevisions, SurfaceKind,
+    SurfaceView,
 };
 pub use voxel::{
     Cell, ChunkRange, MaskedGrid, RepairReport, VoxelField, VoxelGrid, VoxelGridRef, VoxelHit,
