@@ -1465,12 +1465,27 @@ A whole drag is **one undo step**, however many frames it took.
 
 ### The manipulator on a whole subtool
 
-Under the layer stack, **Transformar camada** puts the same widget on the whole
-active layer: Mover, Girar and Escalar move, turn and uniformly scale
-everything the layer holds as one engine transform, and the drag is one undo
-step. Pressing the mode that is already in force puts the manipulator away.
-The control appears only where nothing smaller owns the widget — a cage that is
-up, a curve being authored and a selected object each already have it.
+At the head of the options bar, **Transformar** puts the same widget on the
+whole active layer: it moves, turns and uniformly scales everything the layer
+holds as one engine transform, and the drag is one undo step. Pressing the lit
+chip puts the manipulator away. It stood under the layer stack as three chips
+first and is one chip at the top of the window now, where a mode a sculptor has
+entered can be seen without looking for it.
+
+**W, E and R choose the mode** — Maya's keys and Unity's, and what a hand
+coming from either reaches for without being told. A key pressed with no widget
+up puts the whole subtool's manipulator up in that mode, as entering the move
+tool does there; where a cage, a curve or a placed object already owns the
+widget, the key changes *that* widget's mode and takes nothing away from it.
+The chip wears the mode's own shape — the arrow, the ring, the box — so which
+of the three is in force is readable without pressing anything, and its tooltip
+names the three keys from the shortcut table rather than from a string, so a
+rebound one is the one the interface reports.
+
+The chip is live only where nothing smaller owns the widget — a cage that is
+up, a curve being authored and a selected object each already have it — and
+greyed with the reason on it rather than taken away, because a chip that came
+and went at the head of the bar would shift every slider beside it.
 
 Its arms follow the one rule every manipulator here follows now — a share of
 the camera's distance, so the widget is the same size to the hand at every zoom
@@ -1493,6 +1508,76 @@ the constrained gesture, the form itself is the free one, as in ZBrush. The
 brush ring is not drawn meanwhile, since it would promise the wrong thing. Off
 the form a press still orbits, so the model can be turned to look at without
 leaving the mode; pressing the chip already in force leaves it.
+
+**And reaching for a brush leaves it.** Choosing a brush — from the shelf, or
+with the mask key — puts the whole-subtool manipulator away, because it is a
+mode and the sculptor has just said what they mean to do. Without it the next
+press dragged the subtool with nothing on screen having changed, which is the
+worst kind of surprise. A *selected object* keeps its own manipulator: choosing
+a brush does not unselect what is placed, and that widget follows the selection
+rather than the mode.
+
+**A stroke lands on the subtool where it is drawn.** A field layer's transform
+moves what the tape evaluates, so the form is drawn and picked where the
+manipulator put it — while the stamps a stroke deposits go into the layer's own
+frame, which the transform then moves *again*. Measured: a subtool dragged
+three units along X was sculpted three units past the pointer, and the surface
+under the brush never moved at all. So the gesture is carried back into the
+layer's frame before anything is derived from it, and the brush radius with it
+— the conversion a carried mesh has always made, now in the one place both
+field routes pass through, so the baked verbs and the stamping ones cannot
+disagree about where a stroke landed. The mirror follows, and rightly:
+reflected in the layer's own frame, symmetry is about the subtool's axis rather
+than the world's, which is exactly what the engine's layer mirror does to the
+items on the stamping route.
+
+**And a mask freezes the surface it was painted on.** The same root at the
+other end of it. A mask belongs to its layer and every consumer reads it where
+the layer's own content is — the gate on a stamp, the engine's stroke mask, the
+mesh sculptor — while the brush painted it where the form is *drawn*. On a
+moved subtool those are two places, so the frozen region sat beside the form it
+protected and the freeze quietly did nothing. Painting is carried into the
+layer's frame, and the readback the viewport uses to draw the frozen region is
+carried the other way, so what is drawn and what protects are the same cells.
+`subtools` holds all three: the stroke, the mirror and the mask, each measured
+against an unmoved dab so a threshold cannot pass on a stroke that stopped
+working for some other reason.
+
+**A grid moves with its subtool, and the host is what moves it.** ClayCore
+holds the placement for a voxel layer and honours it wherever the *document*
+answers — `clay_layer_bounds` on a grid moved three units along X reports
+`2.92…3.16` where it reported `-0.08…0.16`, composed exactly as the SDF arm
+composes it (ABI 0.52.3, ClayCore
+[#318](https://github.com/CyberdyneCorp/ClayCore/issues/318)). What the grid
+API has no room for is a placement of its own: `clay_voxel_grid_create` takes a
+cell size and nothing else, `clay_voxel_raycast` answers in the grid's own
+coordinates, and the chunk mesher hands back grid-space vertices. That is the
+same arrangement a carried mesh has, and it is composed the same way — in
+`append_voxel_layer` on the way out, in `pick_active_grid` on the way in (the
+ray carried into the cells and the hit carried back), in `stroke_voxel` for the
+gesture and the brush radius, and in `layer_bounds`, which places the measured
+box the manipulator and Frame All both read. Until it was, the whole-subtool
+manipulator on a voxel subtool moved the widget and left the form standing —
+precisely the gap a carried mesh had before the host began applying the
+placement itself.
+
+**And the mirror stands where the mirror is.** The engine reflects a layer's
+items through the plane where that layer's own coordinate is zero — "the layer
+transform moves the plane with the layer" — so a mirrored stroke on a moved
+subtool answers across the *subtool's* axis. The brush ring and the plane
+overlay were reflected and drawn through the world's instead, which put the
+mirrored ring a whole displacement away from the dab it promised and the orange
+wall somewhere nothing would land. Both take the active subtool's frame now,
+and the arithmetic they reflect through is the model's own `Transform` — the
+same `into_world`/`into_local` pair the engine adapter carries a stroke with,
+so the ring, the plane and the dab cannot drift apart. Sculpting a grid stays *coherent* while that is
+true, because what is drawn, what a ray picks and where a dab lands are all the
+same unmoved cells; what is missing is the move. The mask follows the same
+rule, and knows which case it is in — carried into the layer's frame on a field
+or a mesh, left alone on a grid, where carrying it would push the frozen region
+off the cells it protects. `subtools` measures the invariant that holds
+whatever the answer: a dab lands where the pointer found the surface, on a
+moved mesh and on a grid alike.
 
 **A moved subtool is re-meshed where it was as well as where it is.** The
 refill after a layer transform marked only the bricks the layer now occupies,
@@ -2409,12 +2494,29 @@ because the menus were the *only* way to the shapes panel, the cage, the
 deformations, the references and the curve, and a panel three menus deep is a
 panel a new sculptor never opens.
 
-**The options bar is headed by the brush it belongs to.** The active brush's
-ball and mark, its name, and what it does in one line stand at the head of the
-bar before a hairline rule and the sliders — ZBrush's arrangement, so a glance
-at the bar says *which* brush the intensity is for without looking down at the
-shelf. Sized so the bar fits the design's 1280 with the badge in place; below
-that it scrolls sideways rather than cutting the last control off.
+**The options bar is headed by what works the whole form.** The manipulator on
+the whole layer — one chip, its mode on W, E and R — and **Deformar…** stand at the head
+of the bar before a hairline rule and the sliders. Both are modes a sculptor
+enters and leaves rather than amounts, and a mode that cannot be seen is the
+most expensive thing this window can hide; the deformations chip is the same
+toggle the tool rail and the Dinâmica menu push, so the three cannot disagree.
+
+The active brush's badge stood here and does not now: the shelf along the
+bottom already draws which brush is in hand, lit and named, and the same fact
+twice on one screen is a row of pixels that says nothing new.
+
+**And the bar ends inside the window.** It did not: the badge, a wide gap at
+every group boundary and a size slider that spelled the same size twice —
+`Tamanho · 1,8 mm` beside a readout of `0,180` — added up to a bar a hundred
+and sixty pixels wider than the design's 1280, so Alpha stood off the right
+edge in every language and the only clue was a cut word. The groups are told
+apart by a hairline instead of by twenty pixels of air, each is as wide as its
+longest word rather than as wide as it was drawn first, and the size slider
+*reads* in the sculptor's unit while still editing engine units — one fact
+once, in the widest control on the bar. A test measures the last group's right
+edge against the window in all three languages, because the words are what
+overflowed. A window narrower than the bar still scrolls it sideways rather
+than cutting the last control off.
 
 The **material preview is the material**: the MatCap is a picture of a lit
 sphere, so the swatch shows that picture — the same recipe the viewport shades

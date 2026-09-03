@@ -451,6 +451,29 @@ pub(super) fn gizmo_mode_icon(mode: GizmoMode) -> Icon {
     }
 }
 
+/// A label and its chord, for a rail tooltip.
+pub(super) fn labelled_chord(state: &ShellState<'_>, label: &str, action: Action) -> String {
+    let chord = chord_text(state, action);
+    if chord.is_empty() {
+        label.to_owned()
+    } else {
+        format!("{label}  ·  {chord}")
+    }
+}
+
+/// The keyboard action that puts the manipulator into a mode.
+///
+/// W, E and R — Maya's keys and Unity's. Asked of the table rather than
+/// spelled into a tooltip, so a remapped binding is the one the interface
+/// names.
+pub(super) fn gizmo_mode_action(mode: GizmoMode) -> Action {
+    match mode {
+        GizmoMode::Move => Action::TransformMove,
+        GizmoMode::Rotate => Action::TransformTurn,
+        GizmoMode::Scale => Action::TransformScale,
+    }
+}
+
 /// The manipulator's three modes as one row of chips.
 ///
 /// One row wherever the manipulator can be worked — the cage section, the
@@ -705,6 +728,32 @@ pub(super) fn slider_named(
     range: std::ops::RangeInclusive<f32>,
     decimals: usize,
 ) -> Option<f32> {
+    slider_reading(
+        ui,
+        name,
+        label,
+        &format!("{value:.decimals$}"),
+        value,
+        range,
+        decimals,
+    )
+}
+
+/// The same, showing a reading of its own rather than the raw number.
+///
+/// For a value the sculptor thinks of in another unit: brush size is edited in
+/// engine units and read in millimetres, and spelling both — a label carrying
+/// the millimetres and a readout carrying the fraction — was the same fact
+/// twice, in the widest control on a bar that had run off the window.
+pub(super) fn slider_reading(
+    ui: &mut egui::Ui,
+    name: &str,
+    label: &str,
+    reading: &str,
+    value: f32,
+    range: std::ops::RangeInclusive<f32>,
+    decimals: usize,
+) -> Option<f32> {
     let mut edited = value;
     let mut changed = None;
     ui.horizontal(|ui| {
@@ -714,7 +763,7 @@ pub(super) fn slider_named(
                 .color(Tokens::text_dim()),
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            numeric(ui, format!("{edited:.decimals$}"));
+            numeric(ui, reading.to_owned());
         });
     });
     // Identified by its name, which for most sliders is the label — what a

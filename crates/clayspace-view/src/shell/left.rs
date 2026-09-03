@@ -27,7 +27,6 @@ pub fn remesh_button_id() -> egui::Id {
 pub fn left_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
     scene_section(ui, state);
     layers_section(ui, state, queue);
-    layer_transform_section(ui, state, queue);
 }
 
 /// The scene tree: every node, indented by its depth, with whether it shows.
@@ -184,90 +183,6 @@ pub fn new_layer_kind_id(representation: Representation) -> egui::Id {
     // By position rather than by name: `representation_name` is interface text
     // and an id built from one moves when a translation does.
     egui::Id::new(("new-layer-kind", representation as u8))
-}
-
-/// The id a whole-subtool manipulator chip carries, so a test can find it.
-///
-/// The same arrangement [`slider_id`] has and for the same reason: a control
-/// this panel draws is wiring that has to be exercised, and reaching it by
-/// coordinate reaches whatever landed above it instead.
-pub fn layer_transform_chip_id(mode: clayspace_model::GizmoMode) -> egui::Id {
-    // Keyed by the mode's position rather than by its name: `label()` is the
-    // domain's Portuguese word, and an id built from interface text is an id
-    // that moves when a translation does.
-    egui::Id::new(("layer-transform", mode as u8))
-}
-
-/// The manipulator that moves, turns and scales the whole active layer.
-///
-/// `GizmoTarget::Layer` has been implemented and tested in the document since
-/// the objects work landed, and nothing in the interface reached it: a whole
-/// form could be moved from a test and not from the application. This is the
-/// control that reaches it.
-///
-/// Drawn only where nothing smaller owns the widget. A cage that is up, a curve
-/// being authored and a selected object each already have the manipulator, and
-/// two of them over one selection is a press nobody can aim — which is the same
-/// rule `begin_gizmo_drag` applies on the other side.
-pub(super) fn layer_transform_section(
-    ui: &mut egui::Ui,
-    state: &ShellState<'_>,
-    queue: &mut CommandQueue,
-) {
-    let Some(key) = state.scene.active else {
-        return;
-    };
-    if state.selected_object.is_some() || state.lattice.active || state.curve.active {
-        return;
-    }
-
-    let s = state.strings;
-    if !heading(ui, s.section_layer_transform) {
-        return;
-    }
-    let on_this_layer = state.gizmo_target == Some(clayspace_model::GizmoTarget::Layer(key));
-    ui.horizontal_wrapped(|ui| {
-        for mode in GizmoMode::ALL {
-            let on = on_this_layer && state.gizmo_mode == mode;
-            // The same icon chips every other mode row draws — an arrow, a
-            // ring, a box — so the widget on a whole subtool reads as the one
-            // widget it is.
-            let response = icon_chip_recorded(
-                ui,
-                gizmo_mode_icon(mode),
-                s.gizmo_mode_name(mode),
-                on,
-                Tokens::panel(),
-                false,
-                true,
-            );
-            // Recorded where a test can find it, for the reason `slider_id`
-            // states: a control reached by pixel coordinate is a different
-            // control the next time a section lands above it.
-            ui.ctx().memory_mut(|memory| {
-                memory
-                    .data
-                    .insert_temp(layer_transform_chip_id(mode), response.rect)
-            });
-            if response.clicked() {
-                // Pressing the mode that is already in force puts the
-                // manipulator away, so a form can be looked at without one
-                // standing over the middle of it. The same bargain the object
-                // rows make, where clicking the selected row clears it.
-                queue.push(Command::SetGizmoTarget(
-                    (!on).then_some(clayspace_model::GizmoTarget::Layer(key)),
-                ));
-                if !on {
-                    queue.push(Command::SetGizmoMode(mode));
-                }
-            }
-        }
-    });
-    ui.label(
-        egui::RichText::new(s.hint_layer_transform)
-            .size(type_scale::LABEL)
-            .color(Tokens::text_dim()),
-    );
 }
 
 pub(super) fn layer_row(

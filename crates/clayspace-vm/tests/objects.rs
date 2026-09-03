@@ -1146,3 +1146,56 @@ fn a_refused_re_op_or_removal_is_stated_rather_than_silent() {
         );
     }
 }
+
+/// Reaching for a brush leaves the transform mode.
+///
+/// The whole-subtool manipulator is a mode: while it is up a press on the clay
+/// moves the form and leaves no stroke, and the brush ring is not drawn. So
+/// choosing a brush — from the shelf, or with the mask key — puts the widget
+/// away, rather than the next press dragging the subtool with nothing on
+/// screen having changed.
+#[test]
+fn choosing_a_brush_puts_the_whole_subtool_manipulator_away() {
+    for command in [
+        Command::SelectTool(clayspace_model::ToolKind::Padrao),
+        Command::ToggleMaskPainting,
+    ] {
+        let (mut vm, _) = viewmodel();
+        send(&mut vm, Command::InsertShape);
+        assert!(
+            matches!(*vm.target().get(), Some(GizmoTarget::Layer(_))),
+            "an inserted subtool should have the manipulator to begin with"
+        );
+
+        send(&mut vm, command.clone());
+        assert_eq!(
+            *vm.target().get(),
+            None,
+            "{command:?} left the whole-subtool manipulator up"
+        );
+    }
+}
+
+/// And a placed object keeps its own, because choosing a brush is not
+/// unselecting what is placed — the object's manipulator follows the
+/// selection, and the selection has not changed.
+#[test]
+fn choosing_a_brush_leaves_a_selected_objects_manipulator_alone() {
+    let (mut vm, _) = viewmodel();
+    place(&mut vm);
+    let target = *vm.target().get();
+    assert!(
+        matches!(target, Some(GizmoTarget::Object(_))),
+        "a placed object should have the manipulator to begin with, got {target:?}"
+    );
+
+    send(
+        &mut vm,
+        Command::SelectTool(clayspace_model::ToolKind::Padrao),
+    );
+    assert_eq!(
+        *vm.target().get(),
+        target,
+        "choosing a brush took the manipulator off a selected object"
+    );
+}

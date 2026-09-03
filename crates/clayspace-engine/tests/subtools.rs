@@ -99,6 +99,28 @@ fn protection(ghost: bool, locked: bool) -> Protection {
     Protection { ghost, locked }
 }
 
+/// The box the viewport's own triangles fall in, or nothing where a document
+/// draws none. What is *drawn*, as against what a layer says it holds.
+fn drawn_bounds(doc: &mut ClayDocument) -> Option<([f32; 3], [f32; 3])> {
+    let (positions, _, _, _, _) = doc.visible_mesh_geometry();
+    let first = *positions.first()?;
+    let mut min = first;
+    let mut max = first;
+    for point in &positions {
+        for axis in 0..3 {
+            min[axis] = min[axis].min(point[axis]);
+            max[axis] = max[axis].max(point[axis]);
+        }
+    }
+    Some((min, max))
+}
+
+/// Where the surface stands along a ray, or nothing.
+fn surface_at(doc: &ClayDocument, x: f32) -> Option<[f32; 3]> {
+    let (origin, direction) = ray_at(x);
+    doc.pick(origin, direction)
+}
+
 // -- activation --------------------------------------------------------------
 
 #[test]
@@ -421,4 +443,274 @@ fn removing_a_subtool_above_the_active_one_keeps_the_sculpt_target() {
          being worked, and the mask, the mirror and the rig go with it"
     );
     assert_ne!(doc.scene().active, Some(third));
+}
+
+/// A stroke on a moved subtool lands where the sculptor touched it.
+///
+/// The regression: a field layer's transform moves what the tape evaluates, so
+/// the form is drawn and picked where the manipulator put it — but the stroke
+/// went to the engine in world coordinates and the stamps were deposited in
+/// the layer's own frame, which the transform then moved *again*. A subtool
+/// dragged three units along X was sculpted three units past the pointer, and
+/// the surface under the brush never moved.
+#[test]
+fn a_stroke_lands_where_a_moved_subtool_is_drawn() {
+    let (mut doc, _first, second) = two_subtools();
+    doc.set_active_layer(second).expect("sculpt the moved one");
+
+    let before = surface_at(&doc, APART).expect("the moved form's near face");
+    dab(&mut doc, before).expect("a dab on the face the pointer found");
+    let after = surface_at(&doc, APART).expect("the moved form is still there");
+
+    // Padrão raises the surface along its normal, so the near face comes
+    // toward the eye. Anything else means the stamp went somewhere the
+    // sculptor was not pointing.
+    assert!(
+        after[2] < before[2] - 0.01,
+        "a dab on a subtool standing at x = {APART} left its face at {after:?}, \
+         where it was {before:?}: the stroke did not land under the pointer"
+    );
+}
+
+/// The mirror follows the subtool it is mirroring.
+///
+/// Symmetry is reflected in the layer's own frame — which is what the engine's
+/// layer mirror does to the items a stamping stroke deposits — so a dab to one
+/// side of a moved subtool's axis is answered on the other side of *that* axis
+/// and not on the other side of the world's.
+#[test]
+fn a_mirrored_stroke_answers_across_the_moved_subtools_own_axis() {
+    let (mut doc, _first, second) = two_subtools();
+    doc.set_active_layer(second).expect("sculpt the moved one");
+
+    // Off the subtool's axis by a third of its radius, on the near face.
+    const OFF: f32 = 0.2;
+    let left = surface_at(&doc, APART - OFF).expect("the near face, left of the axis");
+    let right_before = surface_at(&doc, APART + OFF).expect("and right of it");
+
+    let samples = [GestureSample {
+        position: left,
+        pressure: 1.0,
+        time: 0.0,
+    }];
+    doc.apply_stroke(
+        ToolKind::Padrao,
+        BrushSettings {
+            size: 0.3,
+            intensity: 1.0,
+            ..BrushSettings::default()
+        },
+        &samples,
+        [true, false, false],
+    )
+    .expect("a mirrored dab");
+
+    let right_after = surface_at(&doc, APART + OFF).expect("the reflection's side is still there");
+    assert!(
+        right_after[2] < right_before[2] - 0.01,
+        "a dab {OFF} left of a subtool standing at x = {APART} left the face \
+         {OFF} to its right at {right_after:?}, where it was {right_before:?}: \
+         the mirror is not reflecting across the subtool's own axis"
+    );
+}
+
+/// A mask painted on a moved subtool protects what is under the brush.
+///
+/// The same root as the stroke above, at the other end of it: a mask belongs
+/// to its layer and every consumer reads it where the layer's own content is —
+/// the gate on a stamp, the engine's stroke mask, the mesh sculptor — while
+/// the brush painted it where the form is *drawn*. On a moved subtool those
+/// are two places, so the frozen region sat beside the form it was meant to
+/// protect and the freeze quietly did nothing.
+#[test]
+fn a_mask_painted_on_a_moved_subtool_protects_what_is_under_the_brush() {
+    // What the dab does with nothing in its way, to measure the freeze
+    // against: a threshold on its own would pass on a stroke that had stopped
+    // working for some other reason.
+    let (mut doc, _first, second) = two_subtools();
+    doc.set_active_layer(second).expect("work the moved one");
+    let free_before = surface_at(&doc, APART).expect("the near face");
+    dab(&mut doc, free_before).expect("an unmasked dab");
+    let free = free_before[2] - surface_at(&doc, APART).expect("face")[2];
+    assert!(
+        free > 0.1,
+        "the unmasked dab moved the surface by {free}; there is nothing to \
+         measure a freeze against"
+    );
+
+    let (mut doc, _first, second) = two_subtools();
+    doc.set_active_layer(second).expect("work the moved one");
+    let hit = surface_at(&doc, APART).expect("the near face");
+    let samples = [GestureSample {
+        position: hit,
+        pressure: 1.0,
+        time: 0.0,
+    }];
+    doc.apply_stroke(
+        ToolKind::Mascara,
+        BrushSettings {
+            size: 0.6,
+            intensity: 1.0,
+            ..BrushSettings::default()
+        },
+        &samples,
+        [false; 3],
+    )
+    .expect("freeze the face under the pointer");
+
+    // It reads back where the sculptor painted it, which is what the viewport
+    // asks in order to draw the frozen region.
+    let frozen = doc.mask_at(&[hit]).expect("a mask to read")[0];
+    assert!(
+        frozen > 0.9,
+        "the mask reads {frozen} where it was painted; the frozen region is \
+         not where the brush was"
+    );
+
+    dab(&mut doc, hit).expect("a dab on the frozen face");
+    let moved = hit[2] - surface_at(&doc, APART).expect("face")[2];
+    assert!(
+        moved < free * 0.2,
+        "a dab on a frozen face of a subtool standing at x = {APART} moved the \
+         surface by {moved}, against {free} unfrozen: the mask did not protect it"
+    );
+}
+
+/// The same invariant on the other two representations: a dab lands where the
+/// pointer found the surface, whatever a layer transform does or does not
+/// reach.
+///
+/// The three do not agree about that, which is why this asks the pointer
+/// rather than assuming. A field layer's tape is moved by the engine and a
+/// carried mesh's vertices are moved by the host, so both stand where the
+/// manipulator put them. A grid is moved by neither — ClayCore cannot place
+/// one — so a voxel subtool stays where its cells are while the widget moves
+/// off it. In every case the surface a ray meets is the surface a dab must
+/// land on, and that is what is measured here.
+#[test]
+fn a_dab_lands_under_the_pointer_on_a_moved_mesh_and_on_a_moved_grid() {
+    // A carried mesh, moved: the pointer finds it where it was put.
+    let mut doc = document();
+    let key = doc
+        .convert_layer(clayspace_model::Direction::SdfToMesh, 0.08, 0)
+        .expect("a mesh subtool");
+    doc.set_active_layer(key).expect("work the mesh");
+    doc.set_layer_transform(key, [APART, 0.0, 0.0], 1.0)
+        .expect("move it");
+    let (origin, direction) = ray_at(APART);
+    let before = doc
+        .pick(origin, direction)
+        .expect("a moved mesh stands where the manipulator put it");
+    dab(&mut doc, before).expect("a dab on the face the pointer found");
+    let after = doc.pick(origin, direction).expect("still there");
+    assert!(
+        after[2] < before[2] - 0.005,
+        "a dab on a mesh subtool standing at x = {APART} left its face at \
+         {after:?}, where it was {before:?}"
+    );
+
+    // A grid, moved the same way: the host places its cells, so the pointer
+    // finds it where the manipulator put it and the dab lands there.
+    let mut doc = document();
+    doc.add_voxel_layer("Grade", 0.04).expect("a grid");
+    let key = doc.scene().active.expect("the grid is active");
+    dab(&mut doc, [0.0, 0.0, 0.0]).expect("something to sculpt");
+    doc.set_layer_transform(key, [APART, 0.0, 0.0], 1.0)
+        .expect("move it");
+    let (origin, direction) = ray_at(APART);
+    let before = doc
+        .pick(origin, direction)
+        .expect("a moved grid stands where the manipulator put it");
+    dab(&mut doc, before).expect("a dab on the face the pointer found");
+    let after = doc.pick(origin, direction).expect("still there");
+    assert!(
+        after[2] < before[2] - 0.005,
+        "a dab on a grid standing at x = {APART} left its face at {after:?}, \
+         where it was {before:?}"
+    );
+}
+
+/// A grid moves with its subtool: drawn, framed and picked where the
+/// manipulator put it.
+///
+/// The regression: ClayCore holds a voxel layer's placement and composes it
+/// wherever the *document* answers — `clay_layer_bounds` reports the moved box
+/// — but every voxel entry point is in the grid's own coordinates, so placing
+/// one is the host's to do, exactly as it is for a carried mesh. It was not
+/// done: the widget moved and the form stayed, and Frame All framed where the
+/// sculpt had been.
+#[test]
+fn a_moved_grid_is_drawn_framed_and_picked_where_it_was_put() {
+    let mut doc = document();
+    doc.add_voxel_layer("Grade", 0.04).expect("a grid");
+    let key = doc.scene().active.expect("the grid is active");
+    dab(&mut doc, [0.0, 0.0, 0.0]).expect("something to look at");
+
+    let drawn_before = drawn_bounds(&mut doc).expect("a grid draws triangles");
+    let framed_before = doc.layer_bounds(key).expect("and reports a box");
+    assert!(
+        doc.pick(ray_at(0.0).0, ray_at(0.0).1).is_some(),
+        "the grid should be pickable where it was built"
+    );
+
+    doc.set_layer_transform(key, [APART, 0.0, 0.0], 1.0)
+        .expect("move it");
+
+    let drawn = drawn_bounds(&mut doc).expect("a moved grid still draws");
+    assert!(
+        (drawn.0[0] - drawn_before.0[0] - APART).abs() < 0.05,
+        "a grid moved to x = {APART} draws at {drawn:?}, where it drew \
+         {drawn_before:?}: the placement did not reach what the viewport shows"
+    );
+    let framed = doc.layer_bounds(key).expect("and reports a box");
+    assert!(
+        (framed.0[0] - framed_before.0[0] - APART).abs() < 0.05,
+        "a grid moved to x = {APART} reports {framed:?}, where it reported \
+         {framed_before:?}: the manipulator and Frame All read this box"
+    );
+    assert!(
+        doc.pick(ray_at(APART).0, ray_at(APART).1).is_some(),
+        "a moved grid is not pickable where it is drawn"
+    );
+    assert!(
+        doc.pick(ray_at(0.0).0, ray_at(0.0).1).is_none(),
+        "a moved grid is still pickable where it no longer is"
+    );
+}
+
+/// And a mask on one freezes the cells under the brush, wherever it stands.
+#[test]
+fn a_mask_on_a_moved_grid_protects_what_is_under_the_brush() {
+    let mut doc = document();
+    doc.add_voxel_layer("Grade", 0.04).expect("a grid");
+    let key = doc.scene().active.expect("the grid is active");
+    dab(&mut doc, [0.0, 0.0, 0.0]).expect("something to freeze");
+    doc.set_layer_transform(key, [APART, 0.0, 0.0], 1.0)
+        .expect("move it");
+
+    let (origin, direction) = ray_at(APART);
+    let hit = doc
+        .pick(origin, direction)
+        .expect("the moved grid's near face");
+    doc.apply_stroke(
+        ToolKind::Mascara,
+        BrushSettings {
+            size: 0.5,
+            intensity: 1.0,
+            ..BrushSettings::default()
+        },
+        &[GestureSample {
+            position: hit,
+            pressure: 1.0,
+            time: 0.0,
+        }],
+        [false; 3],
+    )
+    .expect("freeze the face under the pointer");
+
+    let frozen = doc.mask_at(&[hit]).expect("a mask to read")[0];
+    assert!(
+        frozen > 0.9,
+        "the mask on a moved grid reads {frozen} where it was painted"
+    );
 }

@@ -312,6 +312,75 @@ impl Transform {
         let [x, y, z] = self.scale;
         (x - y).abs() < 1e-6 && (y - z).abs() < 1e-6
     }
+
+    /// A direction turned by this transform's rotation, and the way back.
+    ///
+    /// Rodrigues, because that is the pair the engine's boundary takes: a
+    /// transform here is an axis and an angle rather than a matrix, so this is
+    /// the same rotation the engine applies to a layer it moves itself.
+    pub fn turn(&self, v: [f32; 3]) -> [f32; 3] {
+        self.turned_by(self.rotation_angle, v)
+    }
+
+    pub fn turn_back(&self, v: [f32; 3]) -> [f32; 3] {
+        self.turned_by(-self.rotation_angle, v)
+    }
+
+    fn turned_by(&self, angle: f32, v: [f32; 3]) -> [f32; 3] {
+        let length = self.rotation_axis.iter().map(|a| a * a).sum::<f32>().sqrt();
+        if length <= f32::EPSILON || angle == 0.0 {
+            return v;
+        }
+        let k: [f32; 3] = std::array::from_fn(|i| self.rotation_axis[i] / length);
+        let (sin, cos) = angle.sin_cos();
+        let dot = k[0] * v[0] + k[1] * v[1] + k[2] * v[2];
+        let cross = [
+            k[1] * v[2] - k[2] * v[1],
+            k[2] * v[0] - k[0] * v[2],
+            k[0] * v[1] - k[1] * v[0],
+        ];
+        std::array::from_fn(|i| v[i] * cos + cross[i] * sin + k[i] * dot * (1.0 - cos))
+    }
+
+    /// A point of the frame this transform places, standing where it puts it.
+    pub fn into_world(&self, point: [f32; 3]) -> [f32; 3] {
+        let turned = self.turn(point);
+        let scale = self.uniform_scale().max(Self::LEAST_SCALE);
+        std::array::from_fn(|i| turned[i] * scale + self.position[i])
+    }
+
+    /// The way back: a world point in that frame's own coordinates.
+    pub fn into_local(&self, point: [f32; 3]) -> [f32; 3] {
+        let scale = self.uniform_scale().max(Self::LEAST_SCALE);
+        let moved: [f32; 3] = std::array::from_fn(|i| (point[i] - self.position[i]) / scale);
+        self.turn_back(moved)
+    }
+
+    /// A world point reflected through this frame's *own* plane normal to
+    /// `axis`, rather than through the world's.
+    ///
+    /// Which is where a mirrored stroke lands: the engine's layer mirror
+    /// reflects a layer's items through the plane where that local coordinate
+    /// is zero, and "the layer transform moves the plane with the layer". So
+    /// the ring the viewport draws for a reflected dab has to be reflected the
+    /// same way, or it stands somewhere no dab will land.
+    pub fn mirror_point(&self, axis: usize, point: [f32; 3]) -> [f32; 3] {
+        let mut local = self.into_local(point);
+        local[axis] = -local[axis];
+        self.into_world(local)
+    }
+
+    /// The same reflection for a direction: turned into the frame, flipped,
+    /// turned back — no position, because a direction has none.
+    pub fn mirror_direction(&self, axis: usize, v: [f32; 3]) -> [f32; 3] {
+        let mut local = self.turn_back(v);
+        local[axis] = -local[axis];
+        self.turn(local)
+    }
+
+    /// The floor under a scale, so a frame is never singular. A zero factor
+    /// has no inverse, and `into_local` divides by this.
+    const LEAST_SCALE: f32 = 1e-4;
 }
 
 impl Default for Transform {
@@ -1491,5 +1560,59 @@ mod transform_tests {
                 );
             }
         }
+    }
+
+    /// The frame's own mirror, which is what a mirrored stroke uses once a
+    /// subtool has been moved: reflected through the plane where the *layer's*
+    /// coordinate is zero, not the world's.
+    #[test]
+    fn a_placed_frame_mirrors_about_its_own_plane() {
+        let placed = Transform {
+            position: [3.0, 0.0, 0.0],
+            ..Transform::default()
+        };
+        let point = [3.2, 0.5, -1.0];
+        let mirrored = placed.mirror_point(0, point);
+        assert!(
+            (mirrored[0] - 2.8).abs() < 1e-5,
+            "a point a fifth to the right of a subtool at x = 3 mirrors to \
+             {mirrored:?}, and not to its other side"
+        );
+        assert_eq!(mirrored[1], point[1]);
+        assert_eq!(mirrored[2], point[2]);
+        // Twice is the point itself, whatever the frame.
+        let back = placed.mirror_point(0, mirrored);
+        assert!(back.iter().zip(point).all(|(a, b)| (a - b).abs() < 1e-5));
+    }
+
+    /// And with no placement it is the world's own mirror, which is what every
+    /// unmoved subtool has.
+    #[test]
+    fn an_unplaced_frame_mirrors_about_the_world() {
+        let plain = Transform::default();
+        assert_eq!(plain.mirror_point(0, [1.5, 2.0, -3.0]), [-1.5, 2.0, -3.0]);
+        assert_eq!(plain.mirror_direction(2, [0.0, 1.0, 1.0]), [0.0, 1.0, -1.0]);
+    }
+
+    /// A world point carried into a frame and back is where it started, which
+    /// is what every crossing between the viewport and a layer's own content
+    /// relies on.
+    #[test]
+    fn carrying_a_point_in_and_out_of_a_frame_is_the_point() {
+        let placed = Transform {
+            position: [1.0, -2.0, 0.5],
+            rotation_axis: [0.0, 1.0, 0.0],
+            rotation_angle: 0.7,
+            scale: [2.0; 3],
+        };
+        let point = [0.25, 3.0, -1.5];
+        let there_and_back = placed.into_world(placed.into_local(point));
+        assert!(
+            there_and_back
+                .iter()
+                .zip(point)
+                .all(|(a, b)| (a - b).abs() < 1e-4),
+            "carrying {point:?} through the frame gave {there_and_back:?}"
+        );
     }
 }

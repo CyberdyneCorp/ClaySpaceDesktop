@@ -333,6 +333,18 @@ impl ObjectViewModel {
         self.model.target_transform(target).map(|at| at.position)
     }
 
+    /// Where a whole subtool stands, for the drawing that has to agree with it.
+    ///
+    /// The manipulator reads this through `pivot`; the brush rings and the
+    /// mirror planes need the whole frame, because a mirrored dab lands
+    /// through the *layer's* plane and not the world's.
+    pub fn layer_placement(
+        &mut self,
+        key: clayspace_model::LayerKey,
+    ) -> Option<clayspace_model::Transform> {
+        self.model.target_transform(GizmoTarget::Layer(key))
+    }
+
     /// Whether the surface is behind the hand, so the viewport can say so.
     pub fn settling(&self) -> bool {
         self.settling
@@ -436,6 +448,21 @@ impl ObjectViewModel {
                 self.report(|model| model.remove_object(id));
                 self.target.set(None);
                 self.refresh();
+            }
+            // A brush chosen from the shelf says the sculptor means to sculpt,
+            // so the whole-subtool manipulator goes away. It is a *mode*: with
+            // it up a press on the clay moves the form and leaves no stroke,
+            // and the brush ring is not even drawn — so reaching for a brush
+            // and finding the next press dragging the subtool is the worst
+            // kind of surprise, one where nothing on screen has changed.
+            //
+            // Only the layer's own widget. A selected object keeps its
+            // manipulator, because choosing a brush does not unselect what is
+            // placed, and a cage's is the cage's to put away.
+            Command::SelectTool(_) | Command::ToggleMaskPainting => {
+                if matches!(*self.target.get(), Some(GizmoTarget::Layer(_))) {
+                    self.target.set(None);
+                }
             }
             Command::SetGizmoTarget(target) => {
                 self.target.set(*target);
