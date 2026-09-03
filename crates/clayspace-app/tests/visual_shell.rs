@@ -4382,10 +4382,24 @@ fn the_hierarchys_passes_are_drawn_under_the_layer_they_stand_on() {
             row.display_name()
         );
     }
-    assert!(
-        shell_rect(&ctx, shell::multires_form_row_id()).is_some(),
+    let form = shell_rect(&ctx, shell::multires_form_row_id()).expect(
         "and no row for the form under the passes, so a stroke can only ever \
-         go into whichever pass is active"
+         go into whichever pass is active",
+    );
+    // The form's row is one of the rows a sculptor chooses between, so it has
+    // to be one of them to look at: the same fill, the same rail and the same
+    // width. A regression test, and the picture is what asked for it — the row
+    // took only the width of its own word, so selecting the form drew a chip
+    // under a column of full-width rows rather than a selected row.
+    let pass_row =
+        shell_rect(&ctx, shell::multires_pass_row_id(passes[0].id)).expect("checked just above");
+    assert!(
+        (form.width() - pass_row.width()).abs() < 1.0,
+        "the form's row is {} wide against a pass row's {}, so the one row \
+         that says a stroke goes into the form under the passes is not drawn \
+         like the rows it stands with",
+        form.width(),
+        pass_row.width()
     );
     assert!(
         shell_rect(&ctx, shell::multires_add_pass_id()).is_some(),

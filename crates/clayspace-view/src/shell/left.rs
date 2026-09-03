@@ -783,8 +783,19 @@ fn multires_form_row(
                     } else {
                         Tokens::text_dim()
                     });
-                ui.selectable_label(selected, label)
-                    .on_hover_text(s.multires_form_hint)
+                let response = ui
+                    .selectable_label(selected, label)
+                    .on_hover_text(s.multires_form_hint);
+                // The rest of the panel, taken rather than left. A pass row
+                // reaches the trailing edge because its strength control is
+                // laid out from there; this row has nothing on its right, so
+                // a frame sized to its content stops after one word. The
+                // picture is what caught it: the fill and the raised tone that
+                // say "the next stroke lands here" came out as a chip under a
+                // column of full-width rows, on the one row a sculptor is
+                // choosing between.
+                ui.add_space(ui.available_width());
+                response
             })
             .inner
         });
