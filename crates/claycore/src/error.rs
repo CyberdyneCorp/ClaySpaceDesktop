@@ -32,6 +32,10 @@ pub enum ErrorKind {
     /// The backend does not implement this operation. Fall back; do not fail.
     Unsupported,
     Backend,
+    /// The user stopped it. An ordinary outcome of an interactive session
+    /// rather than a fault: a cancelled operation leaves everything it was
+    /// given exactly as it found it, so a caller unwinds rather than repairs.
+    Cancelled,
     /// A result code this build does not know, carried verbatim.
     Unknown(i32),
 }
@@ -49,6 +53,7 @@ impl ErrorKind {
             r::CLAY_ERROR_BUDGET_EXCEEDED => Self::BudgetExceeded,
             r::CLAY_ERROR_UNSUPPORTED => Self::Unsupported,
             r::CLAY_ERROR_BACKEND => Self::Backend,
+            r::CLAY_ERROR_CANCELLED => Self::Cancelled,
             other => Self::Unknown(other as i32),
         })
     }
@@ -63,6 +68,7 @@ impl ErrorKind {
             Self::BudgetExceeded => "memory budget exceeded",
             Self::Unsupported => "unsupported by this backend",
             Self::Backend => "backend error",
+            Self::Cancelled => "cancelled",
             Self::Unknown(_) => "unknown engine result",
         }
     }
