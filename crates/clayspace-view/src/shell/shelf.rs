@@ -367,16 +367,6 @@ pub(super) fn rail_button(
     response.on_hover_text(tooltip)
 }
 
-/// A label and its chord, for a rail tooltip.
-pub(super) fn labelled_chord(state: &ShellState<'_>, label: &str, action: Action) -> String {
-    let chord = chord_text(state, action);
-    if chord.is_empty() {
-        label.to_owned()
-    } else {
-        format!("{label}  ·  {chord}")
-    }
-}
-
 /// One entry on the rail: what it shows, what it says, and what it does.
 pub(super) struct RailEntry {
     icon: Icon,

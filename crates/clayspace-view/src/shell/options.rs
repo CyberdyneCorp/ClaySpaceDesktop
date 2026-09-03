@@ -1,15 +1,29 @@
-//! The tool options bar: the active brush, and the numbers that belong to it.
+//! The tool options bar: what the whole form is worked with, and the numbers
+//! the stroke is made under.
 //!
-//! Headed by the brush itself, which is ZBrush's arrangement: a glance at the
-//! bar says *which* brush the intensity is for without looking down at the
-//! shelf. What follows is the settings that change most often, and only those
-//! the active representation and the active tool actually read — the combine
+//! Headed by the two controls that act on the form rather than on a point of
+//! it — the manipulator on the whole layer, and the deformations — because
+//! they are modes a sculptor enters and leaves, and a mode belongs at the top
+//! of the window where its state can be seen without looking for it. The brush
+//! stood here once and does not now: the shelf along the bottom already draws
+//! which brush is in hand, lit and named, and the same fact twice on one screen
+//! is a row of pixels that says nothing new.
+//!
+//! What follows is the settings that change most often, and only those the
+//! active representation and the active tool actually read — the combine
 //! vocabulary is the field's alone, and the colour swatch appears for the two
 //! tools that write one.
+//!
+//! Every group is as wide as its longest word and no wider, and a hairline
+//! rather than twenty pixels of air stands between two of them: the bar was a
+//! hundred and sixty pixels wider than the window it is drawn in, which put
+//! Alpha off the right edge in every language. A window narrower than the bar
+//! still scrolls it sideways rather than cutting the last control off.
 
 use super::*;
 
-/// The tool options bar: the active brush's primary parameters, always visible.
+/// The tool options bar: what works the whole form, and the stroke's own
+/// numbers. Always visible, and sized to end inside the design's 1280.
 pub fn options_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
     let s = state.strings;
     ui.add_space(space::SNUG);
@@ -20,15 +34,9 @@ pub fn options_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.add_space(space::PANEL);
-                brush_badge(ui, state);
-                ui.add_space(space::ROOMY);
-                // A hairline between the brush and its settings, so the row reads
-                // as "this brush: these numbers" rather than as a run of sliders.
-                let (rule, _) =
-                    ui.allocate_exact_size(egui::vec2(1.0, size::BADGE), egui::Sense::hover());
-                ui.painter().rect_filled(rule, 0.0, Tokens::rule());
-                ui.add_space(space::ROOMY);
+                ui.add_space(space::SNUG);
+                form_controls(ui, state, queue);
+                bar_rule(ui);
                 ui.vertical(|ui| {
                     ui.set_width(OPTION_SLIDER_WIDTH);
                     if let Some(value) =
@@ -37,24 +45,29 @@ pub fn options_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
                         queue.push(Command::SetBrushIntensity(value));
                     }
                 });
-                ui.add_space(space::ROOMY);
+                ui.add_space(space::SNUG);
                 ui.vertical(|ui| {
                     ui.set_width(OPTION_SLIDER_WIDTH);
-                    // The label carries the size on the model; the slider keeps
-                    // editing engine units. A unit-aware slider whose range shifts
-                    // under the pointer when the unit is switched is one nobody
-                    // trusts, and the options bar has a fixed height that a second
-                    // row would overflow.
-                    let label = format!(
-                        "{} · {}",
+                    // The readout carries the size in the sculptor's unit; the
+                    // slider keeps editing engine units. A unit-aware slider
+                    // whose range shifts under the pointer when the unit is
+                    // switched is one nobody trusts. The label said the
+                    // millimetres and the readout beside it said the same size
+                    // as a fraction of the field — one fact twice, in the
+                    // widest control on a bar that had run off the window.
+                    if let Some(value) = slider_reading(
+                        ui,
                         s.label_size,
-                        state.units.format(state.brush.size)
-                    );
-                    if let Some(value) = slider(ui, &label, state.brush.size, 0.005..=1.0, 3) {
+                        s.label_size,
+                        &state.units.format(state.brush.size),
+                        state.brush.size,
+                        0.005..=1.0,
+                        3,
+                    ) {
                         queue.push(Command::SetBrushSize(value));
                     }
                 });
-                ui.add_space(space::ROOMY);
+                ui.add_space(space::SNUG);
                 ui.vertical(|ui| {
                     ui.set_width(OPTION_SLIDER_WIDTH);
                     if let Some(value) = slider(ui, s.label_flow, state.brush.flow, 0.01..=1.0, 2) {
@@ -70,11 +83,11 @@ pub fn options_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
                 // first and where a narrow window pushed half of it off the
                 // screen.
                 if state.tool.is_mask_tool() {
-                    ui.add_space(space::SECTION);
+                    bar_rule(ui);
                     mask_gesture_control(ui, state, queue);
                 }
 
-                ui.add_space(space::ROOMY);
+                ui.add_space(space::SNUG);
                 ui.vertical(|ui| {
                     ui.set_width(OPTION_SLIDER_WIDTH);
                     // Lazy-mouse lag, moved here from the brush-controls
@@ -92,7 +105,7 @@ pub fn options_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
                     }
                 });
 
-                ui.add_space(space::SECTION);
+                bar_rule(ui);
                 symmetry_control(ui, state, queue);
 
                 // The combine vocabulary is the SDF side's alone: cells are set or
@@ -100,7 +113,7 @@ pub fn options_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
                 // controls are absent rather than greyed because there is no
                 // representation-independent meaning for them to be disabled *from*.
                 if state.representation == Representation::Sdf {
-                    ui.add_space(space::SECTION);
+                    bar_rule(ui);
                     combine_controls(ui, state, queue);
                 }
 
@@ -111,18 +124,52 @@ pub fn options_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
                 // palette entry, so the swatch appears exactly where the value
                 // is consumed.
                 if state.tool.writes_colour() {
-                    ui.add_space(space::SECTION);
+                    bar_rule(ui);
                     colour_control(ui, state, queue);
                 }
 
-                ui.add_space(space::SECTION);
+                bar_rule(ui);
                 alpha_control(ui, state, queue);
+                ui.add_space(space::SNUG);
             });
         });
 }
 
-/// How wide the mask brush's three gestures need between them.
-const GESTURE_WIDTH: f32 = 190.0;
+/// The dim word over a group on the bar.
+///
+/// One helper rather than six copies of the same three lines: the mask
+/// gesture's heading was set in the monospaced face the readouts use and stood
+/// out from Simetria and Operação beside it, which is the kind of drift a
+/// shared helper is for.
+fn group_label(ui: &mut egui::Ui, text: &str) {
+    ui.label(
+        egui::RichText::new(text)
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    );
+}
+
+/// A hairline between two groups on the bar.
+///
+/// Groups were told apart by a wide gap, which cost twenty pixels a boundary
+/// and still read as one run of controls at a glance. A rule says the same
+/// thing in one pixel and says it better: what belongs to the stroke, what
+/// belongs to the mirror, what belongs to the join.
+fn bar_rule(ui: &mut egui::Ui) {
+    ui.add_space(space::TIGHT);
+    let (rule, _) = ui.allocate_exact_size(egui::vec2(1.0, BAR_RULE_HEIGHT), egui::Sense::hover());
+    ui.painter().rect_filled(rule, 0.0, Tokens::rule());
+    ui.add_space(space::TIGHT);
+}
+
+/// How tall a group separator stands: the height of a label over a control,
+/// so it ends where the controls it divides end rather than running past them.
+const BAR_RULE_HEIGHT: f32 = 36.0;
+
+/// How wide the mask brush's three gestures sit, where their words fit in it.
+/// `segmented` grows past this rather than cutting an entry, so it is a floor
+/// and not a promise — Retângulo needs more of it than Rectangle does.
+const GESTURE_WIDTH: f32 = 140.0;
 
 /// Which gesture the mask brush makes: a drag across the surface, a shape
 /// traced over the form, or a box dragged corner to corner.
@@ -130,7 +177,7 @@ fn mask_gesture_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut C
     let s = state.strings;
     ui.vertical(|ui| {
         ui.set_width(GESTURE_WIDTH);
-        numeric(ui, s.label_mask_gesture);
+        group_label(ui, s.label_mask_gesture);
         let response = ui.scope(|ui| {
             segmented(
                 ui,
@@ -159,11 +206,7 @@ fn symmetry_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comma
         // A dim label, as Operação and Junção beside it are. `numeric` is a
         // monospaced face for digits, and the heading over three axis chips
         // came out heavier than every other heading on the bar.
-        ui.label(
-            egui::RichText::new(s.label_symmetry)
-                .size(type_scale::LABEL)
-                .color(Tokens::text_dim()),
-        );
+        group_label(ui, s.label_symmetry);
         ui.horizontal(|ui| {
             for (index, axis) in Axis::ALL.iter().enumerate() {
                 let on = state.symmetry[index];
@@ -188,57 +231,143 @@ fn symmetry_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comma
     });
 }
 
-/// The id the options bar's brush badge is recorded under, for tests.
-pub fn brush_badge_id() -> egui::Id {
-    egui::Id::new("options-brush-badge")
+/// The id the whole-subtool manipulator chip carries, so a test can find it.
+///
+/// The same arrangement [`slider_id`] has and for the same reason: a control
+/// this bar draws is wiring that has to be exercised, and reaching it by
+/// coordinate reaches whatever landed beside it instead.
+pub fn layer_transform_chip_id() -> egui::Id {
+    egui::Id::new("layer-transform")
 }
 
-/// The active brush at the head of its own settings.
+/// The id the chip that opens the deformations carries.
+pub fn deform_chip_id() -> egui::Id {
+    egui::Id::new("options-deform")
+}
+
+/// What acts on the whole form: the manipulator on the active layer, and the
+/// deformations.
 ///
-/// ZBrush puts the brush where its numbers are, and a sculptor glancing at
-/// the bar sees *which* brush the intensity belongs to without looking down
-/// at the shelf. The same ball and the same mark the shelf draws, its name
-/// beside it, and what it does in one line under the name — the sentence the
-/// shelf only gives on hover, here where there is room for it.
-pub(super) fn brush_badge(ui: &mut egui::Ui, state: &ShellState<'_>) {
+/// At the head of the bar, where the brush badge was. Both are modes rather
+/// than amounts — one puts a widget up over the clay, the other opens the
+/// deformation panel — and a mode a sculptor is in and cannot see is the most
+/// expensive thing this window can hide.
+fn form_controls(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
     let s = state.strings;
-    let (rect, _) =
-        ui.allocate_exact_size(egui::vec2(size::BADGE, size::BADGE), egui::Sense::hover());
-    paint_sphere(ui, rect, Tokens::text_dim(), false);
-    glyphs::paint(ui.painter(), rect, state.tool, Tokens::ground());
-    ui.ctx()
-        .memory_mut(|memory| memory.data.insert_temp(brush_badge_id(), rect));
-    ui.add_space(space::TIGHT);
     ui.vertical(|ui| {
-        ui.set_width(BADGE_TEXT_WIDTH);
-        ui.add_space(space::TIGHT);
-        ui.label(
-            egui::RichText::new(s.tool(state.tool))
-                .size(type_scale::BODY)
-                .color(Tokens::text()),
-        );
-        // The first line on the badge and the whole sentence on hover: the
-        // badge is one row, and a caveat drawn into it would push the numbers
-        // off the bar.
-        let sentence = s.tool_sentence(state.tool, state.representation);
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(s.tool_hint(state.tool))
-                    .size(type_scale::LABEL)
-                    .color(Tokens::text_dim()),
-            )
-            .truncate(),
-        )
-        .on_hover_text(sentence);
+        // A dim label, as Simetria and Operação beside it are.
+        group_label(ui, s.label_transform);
+        ui.horizontal(|ui| {
+            layer_transform_chip(ui, state, queue);
+            deform_chip(ui, state, queue);
+        });
     });
 }
 
-/// How wide the badge's name and sentence may run before the sentence is cut.
-pub(super) const BADGE_TEXT_WIDTH: f32 = 132.0;
+/// The manipulator that moves, turns and scales the whole active layer.
+///
+/// One chip rather than three. It puts the widget up and takes it away, and
+/// W, E and R say which of the three modes it is in — Maya's keys and Unity's,
+/// so a hand coming from either already knows them. Three chips said the same
+/// thing three times and spent the head of the bar saying it; the chip wears
+/// the mode's own shape, so what the widget will do is still readable without
+/// pressing anything.
+///
+/// Live only where nothing smaller owns the widget. A cage that is up, a curve
+/// being authored and a selected object each already have the manipulator, and
+/// two of them over one selection is a press nobody can aim — which is the same
+/// rule `begin_gizmo_drag` applies on the other side. Greyed with the reason on
+/// it rather than taken away, because it stands at the head of the bar and a
+/// chip that came and went would shift every slider beside it.
+fn layer_transform_chip(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    let taken = state.selected_object.is_some() || state.lattice.active || state.curve.active;
+    let key = state.scene.active.filter(|_| !taken);
+    let on = key.is_some() && state.gizmo_target == key.map(clayspace_model::GizmoTarget::Layer);
+
+    // The mode's own shape and the mode's own word — the arrow, the ring, the
+    // box that every other mode row draws — so the widget on a whole subtool
+    // reads as the one widget it is, and the chip says which of the three the
+    // next press on the clay is in without being hovered.
+    let response = icon_chip_recorded(
+        ui,
+        gizmo_mode_icon(state.gizmo_mode),
+        s.gizmo_mode_name(state.gizmo_mode),
+        on,
+        Tokens::panel(),
+        false,
+        key.is_some(),
+    );
+    // Recorded where a test can find it, for the reason `slider_id` states: a
+    // control reached by pixel coordinate is a different control the next time
+    // something lands beside it.
+    ui.ctx().memory_mut(|memory| {
+        memory
+            .data
+            .insert_temp(layer_transform_chip_id(), response.rect)
+    });
+
+    let Some(key) = key else {
+        response.on_hover_text(if taken {
+            s.hint_transform_taken
+        } else {
+            s.hint_transform_needs_a_layer
+        });
+        return;
+    };
+    // The three modes with the key that reaches each, and under them what the
+    // widget does — the sentence the three chips used to carry between them.
+    // The keys come from the shortcut table rather than from this string, so a
+    // rebound one is the one the tooltip names.
+    let modes: Vec<String> = GizmoMode::ALL
+        .iter()
+        .map(|&mode| labelled_chord(state, s.gizmo_mode_name(mode), gizmo_mode_action(mode)))
+        .collect();
+    let hint = format!("{}\n{}", modes.join("\n"), s.hint_layer_transform);
+    if response.on_hover_text(hint).clicked() {
+        // Pressing the chip that is already lit puts the manipulator away, so
+        // a form can be looked at without one standing over the middle of it.
+        // The same bargain the object rows make, where clicking the selected
+        // row clears it.
+        queue.push(Command::SetGizmoTarget(
+            (!on).then_some(clayspace_model::GizmoTarget::Layer(key)),
+        ));
+    }
+}
+
+/// The whole-form deformations, opened from the head of the bar.
+///
+/// Lit while the panel is up, and the same chip closes it — the toggle the
+/// tool rail and the Dinâmica menu both push, so the three cannot disagree.
+fn deform_chip(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let response = icon_chip_recorded(
+        ui,
+        Icon::Taper,
+        state.strings.action_deform,
+        state.show_deform,
+        Tokens::panel(),
+        false,
+        true,
+    );
+    ui.ctx()
+        .memory_mut(|memory| memory.data.insert_temp(deform_chip_id(), response.rect));
+    if response.clicked() {
+        queue.push(Command::ToggleDeform);
+    }
+}
+
+/// How wide the combine vocabulary's two lists sit. Their longest words —
+/// Substituir and Quadrática — set them; narrower and the list cuts its own
+/// entries.
+const COMBINE_OP_WIDTH: f32 = 106.0;
+const COMBINE_BLEND_WIDTH: f32 = 94.0;
+
+/// How wide the alpha stamp's name and its buttons sit.
+pub(super) const ALPHA_CONTROL_WIDTH: f32 = 126.0;
 
 /// One of the bar's three sliders. Sized so the bar fits the design's 1280
-/// with the badge at its head; below that the bar scrolls.
-pub(super) const OPTION_SLIDER_WIDTH: f32 = 128.0;
+/// with the form controls at its head; below that the bar scrolls.
+pub(super) const OPTION_SLIDER_WIDTH: f32 = 96.0;
 
 /// The combine operation, its join profile, and how wide the join reaches.
 ///
@@ -254,15 +383,11 @@ pub(super) fn combine_controls(
     let settings = state.combine;
 
     ui.vertical(|ui| {
-        ui.set_width(130.0);
-        ui.label(
-            egui::RichText::new(s.label_combine)
-                .size(type_scale::LABEL)
-                .color(Tokens::text_dim()),
-        );
+        ui.set_width(COMBINE_OP_WIDTH);
+        group_label(ui, s.label_combine);
         egui::ComboBox::from_id_salt("combine-op")
             .selected_text(state.strings.combine_name(settings.op))
-            .width(130.0)
+            .width(COMBINE_OP_WIDTH)
             .show_ui(ui, |ui| {
                 for op in Combine::offered_for_strokes() {
                     if ui
@@ -286,15 +411,11 @@ pub(super) fn combine_controls(
 
     ui.add_space(space::SNUG);
     ui.vertical(|ui| {
-        ui.set_width(120.0);
-        ui.label(
-            egui::RichText::new(s.label_blend)
-                .size(type_scale::LABEL)
-                .color(Tokens::text_dim()),
-        );
+        ui.set_width(COMBINE_BLEND_WIDTH);
+        group_label(ui, s.label_blend);
         egui::ComboBox::from_id_salt("combine-blend")
             .selected_text(state.strings.blend_name(settings.blend))
-            .width(120.0)
+            .width(COMBINE_BLEND_WIDTH)
             .show_ui(ui, |ui| {
                 for blend in BlendProfile::ALL {
                     if ui
@@ -310,7 +431,7 @@ pub(super) fn combine_controls(
 
     ui.add_space(space::SNUG);
     ui.vertical(|ui| {
-        ui.set_width(130.0);
+        ui.set_width(OPTION_SLIDER_WIDTH);
         // The same number means the amplitude a stroke displaces by for the
         // relief family and the width of the join for every other operation,
         // so the label follows the operation rather than being fixed.
@@ -338,11 +459,7 @@ pub(super) fn colour_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &
 
     ui.vertical(|ui| {
         ui.set_width(COLOUR_CONTROL_WIDTH);
-        ui.label(
-            egui::RichText::new(s.label_colour)
-                .size(type_scale::LABEL)
-                .color(Tokens::text_dim()),
-        );
+        group_label(ui, s.label_colour);
         ui.horizontal(|ui| {
             // egui edits in sRGB bytes; the engine's palettes and vertex
             // colours are linear. Converting at the boundary rather than
@@ -398,7 +515,13 @@ pub(super) fn colour_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &
 }
 
 /// How wide the swatch, its hex and the recent row sit.
-pub(super) const COLOUR_CONTROL_WIDTH: f32 = 150.0;
+pub(super) const COLOUR_CONTROL_WIDTH: f32 = 132.0;
+
+/// The id the alpha group is recorded under, so a test can ask whether the
+/// bar still ends inside the window.
+pub fn alpha_control_id() -> egui::Id {
+    egui::Id::new("options-alpha")
+}
 
 /// The alpha stamp: which one is loaded, and whether this brush uses it.
 ///
@@ -412,13 +535,9 @@ pub(super) fn alpha_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &m
     let s = state.strings;
     let support = AlphaSupport::of(state.representation, state.combine.op);
 
-    ui.vertical(|ui| {
-        ui.set_width(180.0);
-        ui.label(
-            egui::RichText::new(s.label_alpha)
-                .size(type_scale::LABEL)
-                .color(Tokens::text_dim()),
-        );
+    let group = ui.vertical(|ui| {
+        ui.set_width(ALPHA_CONTROL_WIDTH);
+        group_label(ui, s.label_alpha);
 
         if !support.accepted() {
             // Cut to the bar's width, with the whole sentence on hover. The
@@ -457,5 +576,13 @@ pub(super) fn alpha_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &m
                 }
             }
         });
+    });
+    // The last group on the bar, and so the one a bar too wide for the window
+    // cuts first. Recorded where a test can measure it: the bar ran off the
+    // right edge once and the Alpha nobody could see was how it was noticed.
+    ui.ctx().memory_mut(|memory| {
+        memory
+            .data
+            .insert_temp(alpha_control_id(), group.response.rect)
     });
 }

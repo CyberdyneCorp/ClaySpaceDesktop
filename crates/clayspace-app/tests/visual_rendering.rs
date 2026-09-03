@@ -304,6 +304,7 @@ fn overlays_draw_behind_the_sculpt_and_can_be_turned_off() {
         Overlays {
             grid: false,
             symmetry_planes: [false; 3],
+            symmetry_frame: None,
         },
         3.0,
     );
@@ -315,6 +316,7 @@ fn overlays_draw_behind_the_sculpt_and_can_be_turned_off() {
         Overlays {
             grid: true,
             symmetry_planes: [false; 3],
+            symmetry_frame: None,
         },
         3.0,
     );
@@ -329,6 +331,7 @@ fn overlays_draw_behind_the_sculpt_and_can_be_turned_off() {
         Overlays {
             grid: true,
             symmetry_planes: [true, false, false],
+            symmetry_frame: None,
         },
         3.0,
     );
@@ -344,6 +347,7 @@ fn overlays_draw_behind_the_sculpt_and_can_be_turned_off() {
         Overlays {
             grid: false,
             symmetry_planes: [false; 3],
+            symmetry_frame: None,
         },
         3.0,
     );
@@ -370,6 +374,7 @@ fn overlays_stay_dimmer_than_the_sculpt() {
         Overlays {
             grid: true,
             symmetry_planes: [true, false, false],
+            symmetry_frame: None,
         },
         3.0,
     );
@@ -636,7 +641,7 @@ fn symmetry_shows_every_place_the_stroke_will_land() {
         .set_overlays(&harness.gpu, Overlays::default(), 2.0);
     harness.renderer.set_cursors(
         &harness.gpu,
-        &mirrored_cursors(pointer, [false; 3]),
+        &mirrored_cursors(pointer, [false; 3], None),
         metric(&camera),
     );
     let alone = harness.capture(&gpu_mesh, &camera, false, "16-symmetry-cursor-off");
@@ -647,12 +652,13 @@ fn symmetry_shows_every_place_the_stroke_will_land() {
         Overlays {
             grid: true,
             symmetry_planes: [true, false, false],
+            symmetry_frame: None,
         },
         2.0,
     );
     harness.renderer.set_cursors(
         &gpu,
-        &mirrored_cursors(pointer, [true, false, false]),
+        &mirrored_cursors(pointer, [true, false, false], None),
         metric(&camera),
     );
     let mirrored = harness.capture(&gpu_mesh, &camera, false, "16-symmetry-cursor-x");
@@ -668,12 +674,13 @@ fn symmetry_shows_every_place_the_stroke_will_land() {
         Overlays {
             grid: true,
             symmetry_planes: [true, true, false],
+            symmetry_frame: None,
         },
         2.0,
     );
     harness.renderer.set_cursors(
         &gpu,
-        &mirrored_cursors(pointer, [true, true, false]),
+        &mirrored_cursors(pointer, [true, true, false], None),
         metric(&camera),
     );
     let both = harness.capture(&gpu_mesh, &camera, false, "16-symmetry-cursor-xy");

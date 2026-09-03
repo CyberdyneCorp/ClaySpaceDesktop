@@ -403,6 +403,14 @@ pub struct Overlays {
     /// more than one can be on at once, and an overlay that could only show
     /// the first would quietly under-report the symmetry in force.
     pub symmetry_planes: [bool; 3],
+    /// Where the active subtool stands, when that is anywhere but the origin.
+    ///
+    /// The planes are the *layer's*, not the world's — the engine mirrors a
+    /// layer's items through the plane where that local coordinate is zero,
+    /// and the layer transform moves the plane with the layer. Drawn at the
+    /// origin regardless, the overlay said the mirror was somewhere a
+    /// reflected dab never landed.
+    pub symmetry_frame: Option<clayspace_model::Transform>,
 }
 
 impl Default for Overlays {
@@ -410,6 +418,7 @@ impl Default for Overlays {
         Self {
             grid: true,
             symmetry_planes: [false; 3],
+            symmetry_frame: None,
         }
     }
 }
@@ -437,14 +446,27 @@ pub struct BrushCursor {
 }
 
 impl BrushCursor {
-    /// This cursor reflected through the world plane normal to `axis`.
+    /// This cursor reflected through the plane normal to `axis` — the active
+    /// subtool's own, where it has been placed, and the world's otherwise.
     ///
-    /// The mirror is the document's: [`crate::SymmetryAxis`] planes pass
-    /// through the origin, which is what the layer mirror is set to.
-    pub fn mirror(self, axis: usize) -> Self {
+    /// The mirror is the document's, and the document's mirror is the
+    /// *layer's*: the engine reflects a layer's items through the plane where
+    /// that local coordinate is zero, and the layer transform moves the plane
+    /// with the layer. Reflected through the world's plane instead, the ring
+    /// stood a subtool's own displacement away from where the dab landed —
+    /// which on a subtool moved clear of the origin is off the form entirely.
+    pub fn mirror(self, axis: usize, frame: Option<&clayspace_model::Transform>) -> Self {
         let mut cursor = self;
-        cursor.position[axis] = -cursor.position[axis];
-        cursor.normal[axis] = -cursor.normal[axis];
+        match frame {
+            Some(frame) => {
+                cursor.position = frame.mirror_point(axis, cursor.position);
+                cursor.normal = frame.mirror_direction(axis, cursor.normal);
+            }
+            None => {
+                cursor.position[axis] = -cursor.position[axis];
+                cursor.normal[axis] = -cursor.normal[axis];
+            }
+        }
         cursor.mirrored = true;
         cursor
     }
@@ -454,7 +476,11 @@ impl BrushCursor {
 ///
 /// One ring per enabled combination — two mirrors give four, three give eight
 /// — because that is how many dabs the engine deposits.
-pub fn mirrored_cursors(cursor: BrushCursor, symmetry: [bool; 3]) -> Vec<BrushCursor> {
+pub fn mirrored_cursors(
+    cursor: BrushCursor,
+    symmetry: [bool; 3],
+    frame: Option<&clayspace_model::Transform>,
+) -> Vec<BrushCursor> {
     let mut cursors = vec![cursor];
     for (axis, enabled) in symmetry.iter().enumerate() {
         if !enabled {
@@ -464,7 +490,7 @@ pub fn mirrored_cursors(cursor: BrushCursor, symmetry: [bool; 3]) -> Vec<BrushCu
             cursors
                 .clone()
                 .into_iter()
-                .map(|existing| existing.mirror(axis)),
+                .map(|existing| existing.mirror(axis, frame)),
         );
     }
     cursors
@@ -3281,7 +3307,7 @@ mod tests {
 
     #[test]
     fn no_symmetry_leaves_one_ring() {
-        let cursors = mirrored_cursors(off_axis(), [false; 3]);
+        let cursors = mirrored_cursors(off_axis(), [false; 3], None);
         assert_eq!(cursors.len(), 1);
         assert!(
             !cursors[0].mirrored,
@@ -3298,7 +3324,7 @@ mod tests {
             ([true, true, false], 4),
             ([true, true, true], 8),
         ] {
-            let cursors = mirrored_cursors(off_axis(), symmetry);
+            let cursors = mirrored_cursors(off_axis(), symmetry, None);
             assert_eq!(
                 cursors.len(),
                 expected,
@@ -3312,7 +3338,7 @@ mod tests {
         // The document sets its layer mirror at offset 0.0, so the planes pass
         // through the origin. A cursor mirrored anywhere else would show the
         // stroke landing where it does not.
-        let cursors = mirrored_cursors(off_axis(), [true, false, false]);
+        let cursors = mirrored_cursors(off_axis(), [true, false, false], None);
         let mirror = cursors
             .iter()
             .find(|c| c.mirrored)
@@ -3327,9 +3353,39 @@ mod tests {
         );
     }
 
+    /// The mirror follows the subtool, because the stroke does.
+    ///
+    /// The regression: a subtool moved clear of the origin was mirrored by the
+    /// engine through its *own* plane while the ring was reflected through the
+    /// world's, so the reflected ring stood a whole displacement away from the
+    /// dab it was promising — on the far side of the form, or off it.
+    #[test]
+    fn a_mirror_follows_the_subtool_it_is_reflecting() {
+        let frame = clayspace_model::Transform {
+            position: [3.0, 0.0, 0.0],
+            ..clayspace_model::Transform::default()
+        };
+        let cursor = BrushCursor {
+            position: [3.3, 0.5, 0.7],
+            ..off_axis()
+        };
+        let cursors = mirrored_cursors(cursor, [true, false, false], Some(&frame));
+        let mirror = cursors
+            .iter()
+            .find(|c| c.mirrored)
+            .expect("a mirror was requested");
+        assert!(
+            (mirror.position[0] - 2.7).abs() < 1e-5,
+            "a ring three tenths right of a subtool standing at x = 3 mirrors \
+             to {:?}, and not to the other side of that subtool",
+            mirror.position
+        );
+        assert_eq!(mirror.radius, cursor.radius, "a mirror is the same size");
+    }
+
     #[test]
     fn exactly_one_ring_is_the_pointer() {
-        let cursors = mirrored_cursors(off_axis(), [true, true, true]);
+        let cursors = mirrored_cursors(off_axis(), [true, true, true], None);
         let originals = cursors.iter().filter(|c| !c.mirrored).count();
         assert_eq!(
             originals, 1,
@@ -3346,7 +3402,7 @@ mod tests {
     #[test]
     fn mirrors_are_drawn_dimmer_than_the_pointer() {
         let (pointer, _) = cursor_geometry(off_axis(), a_metric());
-        let (mirror, _) = cursor_geometry(off_axis().mirror(0), a_metric());
+        let (mirror, _) = cursor_geometry(off_axis().mirror(0, None), a_metric());
 
         let brightness = |v: &[Vertex]| v[0].color.iter().sum::<f32>();
         assert!(
@@ -3359,8 +3415,8 @@ mod tests {
     fn every_ring_is_drawn() {
         // The rings share one mesh, so the indices of the later ones have to be
         // rebased. Getting that wrong draws the first ring several times.
-        let one = mirrored_cursors(off_axis(), [false; 3]);
-        let four = mirrored_cursors(off_axis(), [true, true, false]);
+        let one = mirrored_cursors(off_axis(), [false; 3], None);
+        let four = mirrored_cursors(off_axis(), [true, true, false], None);
 
         let count = |cursors: &[BrushCursor]| {
             cursors
@@ -3384,6 +3440,7 @@ mod tests {
             Overlays {
                 grid: false,
                 symmetry_planes: [true, false, false],
+                symmetry_frame: None,
             },
             1.0,
         );
@@ -3391,6 +3448,7 @@ mod tests {
             Overlays {
                 grid: false,
                 symmetry_planes: [true; 3],
+                symmetry_frame: None,
             },
             1.0,
         );
@@ -3699,6 +3757,7 @@ mod tests {
             Overlays {
                 grid: false,
                 symmetry_planes: [false; 3],
+                symmetry_frame: None,
             },
             1.0,
         );
@@ -3711,6 +3770,7 @@ mod tests {
             Overlays {
                 grid: true,
                 symmetry_planes: [false; 3],
+                symmetry_frame: None,
             },
             1.0,
         );
@@ -3721,6 +3781,7 @@ mod tests {
             Overlays {
                 grid: true,
                 symmetry_planes: [true, false, false],
+                symmetry_frame: None,
             },
             1.0,
         );

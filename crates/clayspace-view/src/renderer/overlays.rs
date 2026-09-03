@@ -193,8 +193,15 @@ pub(super) fn overlay_geometry(overlays: Overlays, extent: f32) -> (Vec<Vertex>,
                     Vec3::new(extent, t, 0.0),
                 ),
             };
-            line(a, b, color);
-            line(c, d, color);
+            // Standing with the subtool they mirror, where it has been
+            // placed: the plane is the layer's own, and drawing it at the
+            // origin put it where no reflected dab would land.
+            let placed = |point: Vec3| match &overlays.symmetry_frame {
+                Some(frame) => Vec3::from(frame.into_world(point.into())),
+                None => point,
+            };
+            line(placed(a), placed(b), color);
+            line(placed(c), placed(d), color);
         }
     }
 
@@ -1023,10 +1030,48 @@ mod tests {
             Overlays {
                 grid: true,
                 symmetry_planes: [false; 3],
+                symmetry_frame: None,
             },
             extent,
         );
         vertices
+    }
+
+    /// The mirror plane stands with the subtool it mirrors.
+    ///
+    /// The regression: the plane was drawn at the origin whatever the layer
+    /// transform said, so a moved subtool showed its mirror somewhere no
+    /// reflected dab would land — and the sculptor's only clue was a ring that
+    /// did not match the wall.
+    #[test]
+    fn the_mirror_plane_stands_with_a_moved_subtool() {
+        let planes = |frame| {
+            let (vertices, _) = overlay_geometry(
+                Overlays {
+                    grid: false,
+                    symmetry_planes: [true, false, false],
+                    symmetry_frame: frame,
+                },
+                3.0,
+            );
+            vertices
+        };
+
+        let here = planes(None);
+        assert!(!here.is_empty(), "the X mirror drew nothing");
+        assert!(
+            here.iter().all(|v| v.position[0].abs() < 1e-5),
+            "an unplaced X mirror should stand on the plane x = 0"
+        );
+
+        let moved = planes(Some(clayspace_model::Transform {
+            position: [3.0, 0.0, 0.0],
+            ..clayspace_model::Transform::default()
+        }));
+        assert!(
+            moved.iter().all(|v| (v.position[0] - 3.0).abs() < 1e-4),
+            "a subtool standing at x = 3 should carry its mirror plane with it"
+        );
     }
 
     /// How far a colour still is from the ground it fades into.

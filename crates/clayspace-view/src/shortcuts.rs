@@ -94,10 +94,13 @@ pub enum Key {
     Digit3,
     Digit4,
     A,
+    E,
     F,
     M,
     N,
     O,
+    R,
+    W,
     Z,
     X,
     Y,
@@ -118,10 +121,13 @@ impl Key {
             Self::Digit3 => "3",
             Self::Digit4 => "4",
             Self::A => "A",
+            Self::E => "E",
             Self::F => "F",
             Self::M => "M",
             Self::N => "N",
             Self::O => "O",
+            Self::R => "R",
+            Self::W => "W",
             Self::Z => "Z",
             Self::X => "X",
             Self::Y => "Y",
@@ -165,13 +171,17 @@ pub enum Action {
     ToggleSkinPreview,
     ToggleArmatureEditing,
     RemoveZsphere,
+    /// The manipulator's three modes, from the keyboard.
+    TransformMove,
+    TransformTurn,
+    TransformScale,
     /// Clears the chrome away and leaves the sculpt.
     ToggleFocus,
     Quit,
 }
 
 impl Action {
-    pub const ALL: [Action; 24] = [
+    pub const ALL: [Action; 27] = [
         Self::NewDocument,
         Self::OpenDocument,
         Self::Save,
@@ -194,6 +204,9 @@ impl Action {
         Self::ToggleSkinPreview,
         Self::ToggleArmatureEditing,
         Self::RemoveZsphere,
+        Self::TransformMove,
+        Self::TransformTurn,
+        Self::TransformScale,
         Self::ToggleFocus,
         Self::Quit,
     ];
@@ -265,6 +278,14 @@ impl Default for Shortcuts {
         bind(Chord::plain(Key::S), Action::SymmetryZ);
         bind(Chord::plain(Key::BracketLeft), Action::BrushSmaller);
         bind(Chord::plain(Key::BracketRight), Action::BrushLarger);
+
+        // W, E and R are the manipulator's three modes — Maya's keys, Unity's
+        // keys, and what a hand coming from either reaches for without being
+        // told. One chip puts the widget up and these three say what it does,
+        // rather than three chips saying it three times.
+        bind(Chord::plain(Key::W), Action::TransformMove);
+        bind(Chord::plain(Key::E), Action::TransformTurn);
+        bind(Chord::plain(Key::R), Action::TransformScale);
 
         // `A` is Adaptive Skin preview in ZBrush, and anyone who has rigged
         // before will reach for it. Entering the mode takes the modifier
@@ -378,6 +399,28 @@ mod tests {
         assert_eq!(
             shortcuts.action(Chord::shift(Key::M)),
             Some(Action::NextMaterial)
+        );
+    }
+
+    /// W, E and R are the manipulator's three modes — Maya's keys and Unity's,
+    /// and what one chip in the options bar leaves to the keyboard. Written
+    /// down because the letters are worth more to a hand than to a table:
+    /// whoever needs three free keys next will find these and should move
+    /// their own binding instead.
+    #[test]
+    fn w_e_and_r_are_the_manipulator_modes() {
+        let shortcuts = Shortcuts::default();
+        assert_eq!(
+            shortcuts.action(Chord::plain(Key::W)),
+            Some(Action::TransformMove)
+        );
+        assert_eq!(
+            shortcuts.action(Chord::plain(Key::E)),
+            Some(Action::TransformTurn)
+        );
+        assert_eq!(
+            shortcuts.action(Chord::plain(Key::R)),
+            Some(Action::TransformScale)
         );
     }
 

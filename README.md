@@ -135,6 +135,7 @@ repository routinely does; see [Common tasks](#common-tasks).
 | Click **a form** | Make its subtool the one being sculpted — the next dab lands there, and the shelf offers that subtool's representation |
 | Click **a placed shape** | Select it — clicking the wall of a hole selects the shape that cut it — and activate the subtool it stands in |
 | Drag **the manipulator** | Move, turn or scale what is selected: a whole subtool, an object, a mesh or a curve |
+| `W` `E` `R` | Move, turn, scale — Maya's and Unity's keys; pressed with nothing selected, the widget goes up on the whole subtool |
 | `A` / `⇧A` | Skin preview / enter rigging — see [ZSphere armatures](#zsphere-armatures) |
 
 `⌘` here is the platform's primary modifier: Command on macOS, **Control on

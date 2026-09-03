@@ -39,11 +39,14 @@ fn key_for(code: KeyCode) -> Option<Key> {
         KeyCode::Digit3 => Key::Digit3,
         KeyCode::Digit4 => Key::Digit4,
         KeyCode::KeyA => Key::A,
+        KeyCode::KeyE => Key::E,
         KeyCode::KeyF => Key::F,
         KeyCode::KeyM => Key::M,
         KeyCode::KeyN => Key::N,
         KeyCode::KeyO => Key::O,
+        KeyCode::KeyR => Key::R,
         KeyCode::KeyS => Key::S,
+        KeyCode::KeyW => Key::W,
         KeyCode::KeyX => Key::X,
         KeyCode::KeyY => Key::Y,
         KeyCode::KeyZ => Key::Z,
@@ -67,6 +70,22 @@ mod tests {
             command,
             shift,
             ..Default::default()
+        }
+    }
+
+    /// The three physical keys the manipulator's modes are on. A key the
+    /// mapping has no name for reaches the table as nothing at all, which is
+    /// how W, E and R behaved before they were named here.
+    #[test]
+    fn w_e_and_r_reach_the_manipulator_modes() {
+        let shortcuts = Shortcuts::default();
+        for (code, action) in [
+            (KeyCode::KeyW, Action::TransformMove),
+            (KeyCode::KeyE, Action::TransformTurn),
+            (KeyCode::KeyR, Action::TransformScale),
+        ] {
+            let chord = chord_for(code, modifiers(false, false)).expect("a chord");
+            assert_eq!(shortcuts.action(chord), Some(action), "{code:?}");
         }
     }
 
@@ -138,11 +157,14 @@ mod tests {
             KeyCode::Digit3,
             KeyCode::Digit4,
             KeyCode::KeyA,
+            KeyCode::KeyE,
             KeyCode::KeyF,
             KeyCode::KeyM,
             KeyCode::KeyN,
             KeyCode::KeyO,
+            KeyCode::KeyR,
             KeyCode::KeyS,
+            KeyCode::KeyW,
             KeyCode::KeyX,
             KeyCode::KeyY,
             KeyCode::KeyZ,

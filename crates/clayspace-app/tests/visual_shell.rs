@@ -830,9 +830,14 @@ fn the_active_tool_is_the_only_brush_wearing_the_accent() {
     );
 }
 
-/// The options bar names the brush its numbers belong to, and changes with it.
+/// The options bar is headed by what works the whole form: the manipulator on
+/// the active layer, and the deformations.
+///
+/// The brush badge stood here and is gone — the shelf along the bottom already
+/// draws which brush is in hand, and the head of the bar is worth more to the
+/// two modes a sculptor enters and cannot otherwise see.
 #[test]
-fn the_options_bar_is_headed_by_the_active_brush() {
+fn the_options_bar_is_headed_by_what_works_the_whole_form() {
     let Some(harness) = Harness::new() else {
         return;
     };
@@ -841,37 +846,71 @@ fn the_options_bar_is_headed_by_the_active_brush() {
     let materials = ["MatCap Cinza 01"];
     let report = diagnostics();
 
-    let mut first = state(strings, &scene, &materials, &report);
-    first.tool = ToolKind::Padrao;
-    let a = capture_shell(&harness, &first, "68-options-standard");
-    let mut second = state(strings, &scene, &materials, &report);
-    second.tool = ToolKind::Mover;
-    let b = capture_shell(&harness, &second, "68-options-move");
+    let set = state(strings, &scene, &materials, &report);
+    capture_shell(&harness, &set, "68-options-form-controls");
 
-    // The badge is where the interface says it is, inside the options bar.
-    let badge = probe_shell(&first)
-        .memory(|memory| memory.data.get_temp::<egui::Rect>(shell::brush_badge_id()))
-        .expect("the options bar drew no brush badge");
-    assert!(
-        badge.top() >= region::MENU_BAR && badge.bottom() <= region::MENU_BAR + region::OPTIONS_BAR,
-        "the brush badge is not in the options bar: {badge:?}"
-    );
+    let ctx = probe_shell(&set);
+    let in_the_bar = |rect: egui::Rect, what: &str| {
+        assert!(
+            rect.top() >= region::MENU_BAR
+                && rect.bottom() <= region::MENU_BAR + region::OPTIONS_BAR,
+            "{what} is not in the options bar: {rect:?}"
+        );
+        assert!(
+            rect.left() < region::LEFT + region::RAIL,
+            "{what} is not at the head of the bar: {rect:?}"
+        );
+    };
+    let transform = shell_rect(&ctx, shell::layer_transform_chip_id())
+        .expect("the options bar drew no manipulator chip");
+    in_the_bar(transform, "the manipulator chip");
+    let deform = shell_rect(&ctx, shell::deform_chip_id())
+        .expect("the options bar drew no deformations chip");
+    in_the_bar(deform, "the deformations chip");
 
-    // And changing the brush changes the head of the bar: the mark and the
-    // name both. Measured over the badge's own rectangle, widened to the text.
-    let changed = support::differing_pixels_within(
-        &a,
-        &b,
-        badge.left() as u32,
-        badge.top() as u32,
-        (badge.right() + 200.0) as u32,
-        badge.bottom() as u32,
+    // And it is the toggle the rail and the menu both push, rather than a
+    // second control that opens a second panel.
+    capture_shell_after(
+        &harness,
+        &set,
+        "68-options-deform",
+        &[left_click(deform.center())],
+        |queue| {
+            assert_eq!(
+                queue.commands(),
+                [Command::ToggleDeform],
+                "the deformations chip did not open the deformations"
+            );
+        },
     );
-    assert!(
-        changed > 100,
-        "switching from Standard to Move changed {changed} pixels at the head \
-         of the options bar; the bar does not say which brush it belongs to"
-    );
+}
+
+/// The bar ends inside the window rather than running off it.
+///
+/// The regression: the head of the bar carried a brush badge, every group was
+/// told apart by a wide gap, and the size slider spelled the same size twice —
+/// so the last group, Alpha, stood past the right edge in every language and
+/// the sculptor's only clue was a cut word. Measured on the group that goes
+/// last, in all three languages, because the words are what overflowed.
+#[test]
+fn the_options_bar_ends_inside_the_window() {
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    for locale in [Locale::EnUs, Locale::PtBr, Locale::Es419] {
+        let strings = Strings::for_locale(locale);
+        let set = state(strings, &scene, &materials, &report);
+        let ctx = probe_shell(&set);
+        let alpha = shell_rect(&ctx, shell::alpha_control_id())
+            .expect("the options bar drew no alpha group");
+        assert!(
+            alpha.right() <= SHELL_WIDTH as f32,
+            "{}: the bar's last group ends at {} in a window {SHELL_WIDTH} wide",
+            locale.label(),
+            alpha.right()
+        );
+    }
 }
 
 /// The colour swatch is offered for the tools that read a colour and for no
@@ -904,21 +943,22 @@ fn the_colour_swatch_is_shown_where_a_colour_is_read() {
     );
     let swatched = capture_shell(&harness, &with, "69-options-colour");
 
-    // The bar is wider with the swatch in it, which is the whole assertion:
-    // the badge changes with the tool either way, so the difference has to be
-    // measured *past* the controls both bars carry.
+    // The bar is wider with the swatch in it, which is the whole assertion.
+    // Measured across the whole bar: nothing at its head says which brush is
+    // in hand any more, so a difference between these two bars is the swatch
+    // and what it pushed along.
     let changed = support::differing_pixels_within(
         &plain,
         &swatched,
-        520,
+        0,
         region::MENU_BAR as u32,
-        980,
+        SHELL_WIDTH,
         (region::MENU_BAR + region::OPTIONS_BAR) as u32,
     );
     assert!(
         changed > 200,
-        "choosing a colour tool changed {changed} pixels in the options bar's \
-         right-hand half; the swatch is not being offered"
+        "choosing a colour tool changed {changed} pixels in the options bar; \
+         the swatch is not being offered"
     );
 }
 
@@ -3072,17 +3112,14 @@ fn the_placing_sections_stand_in_the_right_panel_and_close_from_their_heading() 
     }
 }
 
-/// Where a whole-subtool manipulator chip is, asked of the interface that drew
-/// it. `None` where the section is not drawn at all.
-fn layer_transform_chip(
-    state: &ShellState<'_>,
-    mode: clayspace_model::GizmoMode,
-) -> Option<egui::Pos2> {
+/// Where the whole-subtool manipulator chip is, asked of the interface that
+/// drew it. `None` where the bar drew no such chip at all.
+fn layer_transform_chip(state: &ShellState<'_>) -> Option<egui::Pos2> {
     probe_shell(state)
         .memory(|memory| {
             memory
                 .data
-                .get_temp::<egui::Rect>(shell::layer_transform_chip_id(mode))
+                .get_temp::<egui::Rect>(shell::layer_transform_chip_id())
         })
         .map(|rect| rect.center())
 }
@@ -3091,8 +3128,11 @@ fn layer_transform_chip(
 /// reachable from no control at all — a whole form could be moved from a test
 /// and not from the application. This is the control, and a control that draws
 /// and is wired to nothing looks exactly like one that works.
+///
+/// One chip, which puts the widget up and takes it away again; the three modes
+/// are the keyboard's, and are asserted where the shortcut table is.
 #[test]
-fn the_subtool_manipulator_chips_put_the_widget_on_the_active_layer() {
+fn the_subtool_manipulator_chip_puts_the_widget_on_the_active_layer() {
     let Some(harness) = Harness::new() else {
         return;
     };
@@ -3102,47 +3142,75 @@ fn the_subtool_manipulator_chips_put_the_widget_on_the_active_layer() {
     let report = diagnostics();
     let set = state(strings, &scene, &materials, &report);
     let active = set.scene.active.expect("an active layer");
+    let at = layer_transform_chip(&set).expect("the options bar drew no manipulator chip");
 
-    for mode in clayspace_model::GizmoMode::ALL {
-        let at = layer_transform_chip(&set, mode)
-            .unwrap_or_else(|| panic!("the panel drew no {mode:?} chip"));
-        capture_shell_after(
-            &harness,
-            &set,
-            "91-subtool-manipulator",
-            &[click(at, egui::PointerButton::Primary)],
-            |queue| {
-                assert!(
-                    queue.commands().contains(&Command::SetGizmoTarget(Some(
-                        clayspace_model::GizmoTarget::Layer(active)
-                    ))),
-                    "{mode:?} did not put the manipulator on the active subtool: {:?}",
-                    queue.commands()
-                );
-                assert!(
-                    queue.commands().contains(&Command::SetGizmoMode(mode)),
-                    "{mode:?} did not set the mode it is labelled with"
-                );
-            },
-        );
-    }
+    capture_shell_after(
+        &harness,
+        &set,
+        "91-subtool-manipulator",
+        &[left_click(at)],
+        |queue| {
+            assert_eq!(
+                queue.commands(),
+                [Command::SetGizmoTarget(Some(
+                    clayspace_model::GizmoTarget::Layer(active)
+                ))],
+                "the chip did not put the manipulator on the active subtool"
+            );
+        },
+    );
+
+    // And lit, it is the way back: the same chip puts the widget away, so a
+    // form can be looked at without one standing over the middle of it.
+    let mut up = state(strings, &scene, &materials, &report);
+    up.gizmo_target = Some(clayspace_model::GizmoTarget::Layer(active));
+    let at = layer_transform_chip(&up).expect("the options bar drew no manipulator chip");
+    capture_shell_after(
+        &harness,
+        &up,
+        "91-subtool-manipulator-up",
+        &[left_click(at)],
+        |queue| {
+            assert_eq!(
+                queue.commands(),
+                [Command::SetGizmoTarget(None)],
+                "the lit chip did not put the manipulator away"
+            );
+        },
+    );
 }
 
-/// The manipulator on the whole layer is offered only where nothing smaller
-/// owns the widget: a selected object, a cage that is up and a curve being
-/// authored each already have it, and two manipulators over one selection is a
-/// press nobody can aim.
+/// The manipulator on the whole layer is live only where nothing smaller owns
+/// the widget: a selected object, a cage that is up and a curve being authored
+/// each already have it, and two manipulators over one selection is a press
+/// nobody can aim.
+///
+/// Greyed rather than taken away, because the chips stand at the head of the
+/// options bar: three that came and went would shift every slider beside them.
+/// So what is asserted is that pressing one says nothing to the document.
 #[test]
 fn the_subtool_manipulator_yields_to_whatever_owns_the_widget() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
     let strings = Strings::for_locale(Locale::PtBr);
     let scene = scene();
     let materials = ["MatCap Cinza 01"];
     let report = diagnostics();
 
     let plain = state(strings, &scene, &materials, &report);
-    assert!(
-        layer_transform_chip(&plain, clayspace_model::GizmoMode::Move).is_some(),
-        "nothing else owns the widget, so the subtool's manipulator is offered"
+    let at = layer_transform_chip(&plain).expect("the options bar drew no manipulator chip");
+    capture_shell_after(
+        &harness,
+        &plain,
+        "91-subtool-manipulator-free",
+        &[left_click(at)],
+        |queue| {
+            assert!(
+                !queue.is_empty(),
+                "nothing else owns the widget, so the subtool's manipulator is offered"
+            );
+        },
     );
 
     let mut with_object = state(strings, &scene, &materials, &report);
@@ -3150,24 +3218,31 @@ fn the_subtool_manipulator_yields_to_whatever_owns_the_widget() {
         layer: LayerKey(1),
         node: 2,
     });
-    assert!(
-        layer_transform_chip(&with_object, clayspace_model::GizmoMode::Move).is_none(),
-        "a selected object already has the manipulator"
-    );
-
     let mut with_cage = state(strings, &scene, &materials, &report);
     with_cage.lattice.active = true;
-    assert!(
-        layer_transform_chip(&with_cage, clayspace_model::GizmoMode::Move).is_none(),
-        "a cage that is up owns the widget"
-    );
-
     let mut with_curve = state(strings, &scene, &materials, &report);
     with_curve.curve.active = true;
-    assert!(
-        layer_transform_chip(&with_curve, clayspace_model::GizmoMode::Move).is_none(),
-        "a curve being authored owns the widget"
-    );
+
+    for (owner, set) in [
+        ("a selected object", &with_object),
+        ("a cage that is up", &with_cage),
+        ("a curve being authored", &with_curve),
+    ] {
+        let at = layer_transform_chip(set).expect("the options bar drew no manipulator chip");
+        capture_shell_after(
+            &harness,
+            set,
+            "91-subtool-manipulator-yielded",
+            &[left_click(at)],
+            |queue| {
+                assert!(
+                    queue.is_empty(),
+                    "{owner} already has the manipulator, and the chip emitted {:?}",
+                    queue.commands()
+                );
+            },
+        );
+    }
 }
 
 /// Where a control the layer stack drew is, asked of the interface that drew

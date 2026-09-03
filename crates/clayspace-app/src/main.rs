@@ -17,9 +17,9 @@ use clayspace_app::{
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
     AutosavePolicy, Detail, DetailPolicy, Diagnostics, ExchangeModel, ExportSettings,
-    ExportWarning, Format, FrameLog, ImportSettings, LayerKey, LayerOperation, RecentDocuments,
-    Recovery, RefFormat, RefPlane, Representation, SceneModel, SculptModel, SkinSettings,
-    StrokeModifiers, Units, ViewPresetKind,
+    ExportWarning, Format, FrameLog, GizmoMode, ImportSettings, LayerKey, LayerOperation,
+    RecentDocuments, Recovery, RefFormat, RefPlane, Representation, SceneModel, SculptModel,
+    SkinSettings, StrokeModifiers, Units, ViewPresetKind,
 };
 use clayspace_view::shell::{self, region, ArmatureState, ShellState};
 use clayspace_view::{
@@ -278,6 +278,9 @@ struct App {
     viewport: Option<egui::Rect>,
     /// The symmetry the overlays were last built for.
     overlay_symmetry: [bool; 3],
+    /// Where the mirror planes were last drawn, so a subtool that moves
+    /// rebuilds them and one that has not does not.
+    overlay_frame: Option<clayspace_model::Transform>,
     /// Whether the pointer is rigging rather than sculpting.
     rigging: bool,
     /// Whether the viewport draws the rig's skin or only its ZSpheres.
@@ -508,6 +511,7 @@ impl App {
             hover: None,
             viewport: None,
             overlay_symmetry: [false; 3],
+            overlay_frame: None,
             rigging: false,
             skin_preview: true,
             show_diagnostics: false,
@@ -2426,7 +2430,10 @@ impl App {
 
     /// The rings to draw: the pointer's, plus one for every place symmetry
     /// will also deposit the dab.
-    fn cursors(&self) -> Vec<BrushCursor> {
+    ///
+    /// `&mut` for the frame a mirrored ring is reflected through, which the
+    /// document answers.
+    fn cursors(&mut self) -> Vec<BrushCursor> {
         // No brush ring where a press cannot leave a stroke: the transform
         // mode, where a press on the clay moves it; a cage, where a press that
         // misses a control point orbits; and a drawn mask gesture, where a
@@ -2448,7 +2455,24 @@ impl App {
             radius: self.sculpt.brush().get().size,
             mirrored: false,
         };
-        mirrored_cursors(cursor, *self.sculpt.symmetry().get())
+        // Through the active subtool's own plane, which is the plane the
+        // engine mirrors its items through: "the layer transform moves the
+        // plane with the layer". Reflected through the world's instead, the
+        // ring stood the subtool's own displacement away from where the dab
+        // landed — on a form moved clear of the origin, off the form.
+        let frame = self.mirror_frame();
+        mirrored_cursors(cursor, *self.sculpt.symmetry().get(), frame.as_ref())
+    }
+
+    /// The frame a mirrored stroke is reflected through: the active subtool's
+    /// placement, or nothing where it stands at the origin unturned.
+    ///
+    /// `None` rather than an identity so the drawing keeps the plain path it
+    /// has always had, which is every subtool until one is dragged.
+    fn mirror_frame(&mut self) -> Option<clayspace_model::Transform> {
+        let key = self.scene.scene().get().active?;
+        let placement = self.objects.layer_placement(key)?;
+        (placement != clayspace_model::Transform::default()).then_some(placement)
     }
 
     /// Rebuilds the mirror-plane overlays when the symmetry changes.
@@ -2458,10 +2482,15 @@ impl App {
     /// bar as well as the keyboard and neither should need a nudge to show.
     fn sync_symmetry_overlay(&mut self) {
         let symmetry = self.active_symmetry();
-        if symmetry == self.overlay_symmetry {
+        // And where the mirror stands, which moves when the subtool does: the
+        // planes are the layer's, so dragging a form has to rebuild them even
+        // though the axes did not change.
+        let frame = self.mirror_frame();
+        if symmetry == self.overlay_symmetry && frame == self.overlay_frame {
             return;
         }
         self.overlay_symmetry = symmetry;
+        self.overlay_frame = frame;
         if let Some(graphics) = self.graphics.as_mut() {
             let gpu = graphics.gpu.clone();
             graphics.renderer.set_overlays(
@@ -2469,6 +2498,7 @@ impl App {
                 Overlays {
                     grid: true,
                     symmetry_planes: symmetry,
+                    symmetry_frame: frame,
                 },
                 3.0,
             );
@@ -3194,6 +3224,12 @@ impl App {
             Action::BrushLarger => Command::SetBrushSize(self.sculpt.brush().get().size * 1.25),
             Action::ToggleSkinPreview => Command::ToggleSkinPreview,
             Action::ToggleArmatureEditing => Command::ToggleArmatureEditing,
+            // Two commands rather than one, which is why these return here:
+            // the key says which mode, and puts the widget up on the active
+            // subtool if nothing has it yet.
+            Action::TransformMove => return self.transform_mode(GizmoMode::Move),
+            Action::TransformTurn => return self.transform_mode(GizmoMode::Rotate),
+            Action::TransformScale => return self.transform_mode(GizmoMode::Scale),
             // Handled here rather than as a command, like Sair above it: what
             // the chrome is doing reaches no document, and `Command` lives in
             // the layer below the view that owns the regions.
@@ -3203,6 +3239,37 @@ impl App {
             }
         };
         self.handle(command);
+    }
+
+    /// Sets the manipulator's mode from the keyboard, raising the widget on
+    /// the active subtool where nothing else has it.
+    ///
+    /// W, E and R are Maya's and Unity's keys, and pressing one there enters
+    /// the mode rather than merely arming it for later — so a key pressed with
+    /// no widget up puts the whole subtool's manipulator up in that mode,
+    /// which is what the one chip in the options bar toggles. Where a cage, a
+    /// curve or a placed object already owns the widget, the key changes that
+    /// widget's mode and takes nothing away from it.
+    fn transform_mode(&mut self, mode: GizmoMode) {
+        self.handle(Command::SetGizmoMode(mode));
+        if self.lattice.state().get().active
+            || self.curve.state().get().active
+            || self.objects.target().get().is_some()
+        {
+            return;
+        }
+        let Some(key) = self
+            .scene
+            .scene()
+            .get()
+            .active_layer()
+            .map(|layer| layer.key)
+        else {
+            return;
+        };
+        self.handle(Command::SetGizmoTarget(Some(
+            clayspace_model::GizmoTarget::Layer(key),
+        )));
     }
 
     /// Dispatches a command to whichever ViewModel owns it.

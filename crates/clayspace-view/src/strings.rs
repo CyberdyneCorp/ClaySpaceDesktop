@@ -208,10 +208,15 @@ pub struct Strings {
     pub hint_gizmo_rotate: &'static str,
     /// Why turning and scaling are refused on a selection of one.
     pub hint_gizmo_needs_two: &'static str,
-    /// The manipulator that acts on the whole active layer.
-    pub section_layer_transform: &'static str,
-    /// What that manipulator does, and how to put it away.
+    /// What acts on the whole form, at the head of the options bar.
+    pub label_transform: &'static str,
+    /// What the whole-layer manipulator does, and how to put it away.
     pub hint_layer_transform: &'static str,
+    /// Why the whole-layer manipulator is refused while something smaller
+    /// already has the widget.
+    pub hint_transform_taken: &'static str,
+    /// Why it is refused while no layer is active.
+    pub hint_transform_needs_a_layer: &'static str,
     /// The mask section of the inspector.
     pub section_mask: &'static str,
     /// How far Expandir, Contrair and Suavizar máscara reach.
@@ -721,9 +726,12 @@ libera em vez de congelar.",
     hint_gizmo_rotate: "O anel externo gira no plano da tela · Ctrl trava em 15°",
     hint_gizmo_needs_two:
         "Girar e Escalar agem em torno do meio da seleção · escolha dois pontos ou mais",
-    section_layer_transform: "TRANSFORMAR CAMADA",
+    label_transform: "Transformar",
     hint_layer_transform:
-        "Move, gira e escala a camada inteira · clique de novo para guardar o manipulador",
+        "Transforma a camada inteira · clique de novo para guardar o manipulador",
+    hint_transform_taken:
+        "A gaiola, a curva ou o objeto selecionado já tem o manipulador · feche-o para transformar a camada",
+    hint_transform_needs_a_layer: "Nenhuma camada ativa para transformar",
     section_mask: "MÁSCARA",
     label_mask_steps: "Passos",
     label_mask_cells: "Células congeladas",
@@ -1125,9 +1133,12 @@ instead.",
     hint_gizmo_rotate: "The outer ring turns in the screen plane · Ctrl snaps to 15°",
     hint_gizmo_needs_two:
         "Turn and Scale act about the middle of the selection · pick two points or more",
-    section_layer_transform: "TRANSFORM LAYER",
+    label_transform: "Transform",
     hint_layer_transform:
-        "Moves, turns and scales the whole layer · click again to put the manipulator away",
+        "Transforms the whole layer · click again to put the manipulator away",
+    hint_transform_taken:
+        "The cage, the curve or the selected object already has the manipulator · put it away to transform the layer",
+    hint_transform_needs_a_layer: "No active layer to transform",
     section_mask: "MASK",
     label_mask_steps: "Steps",
     label_mask_cells: "Frozen cells",
@@ -1534,9 +1545,12 @@ lados. Con Ctrl, libera en vez de congelar.",
     hint_gizmo_rotate: "El anillo exterior gira en el plano de la pantalla · Ctrl fija a 15°",
     hint_gizmo_needs_two:
         "Girar y Escalar actúan en torno al medio de la selección · elige dos puntos o más",
-    section_layer_transform: "TRANSFORMAR CAPA",
+    label_transform: "Transformar",
     hint_layer_transform:
-        "Mueve, gira y escala la capa entera · pulse de nuevo para guardar el manipulador",
+        "Transforma la capa entera · pulse de nuevo para guardar el manipulador",
+    hint_transform_taken:
+        "La jaula, la curva o el objeto seleccionado ya tiene el manipulador · ciérrelo para transformar la capa",
+    hint_transform_needs_a_layer: "Ninguna capa activa para transformar",
     section_mask: "MÁSCARA",
     label_mask_steps: "Passos",
     label_mask_cells: "Células congeladas",
@@ -2029,7 +2043,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 222] {
+    pub fn all(&self) -> [&'static str; 224] {
         [
             self.label_autosave_in,
             self.state_autosaved,
@@ -2127,8 +2141,10 @@ impl Strings {
             self.cage_switch_stay,
             self.hint_gizmo_rotate,
             self.hint_gizmo_needs_two,
-            self.section_layer_transform,
+            self.label_transform,
             self.hint_layer_transform,
+            self.hint_transform_taken,
+            self.hint_transform_needs_a_layer,
             self.action_paint_mask,
             self.label_mask_gesture,
             self.hint_mask_outline,
