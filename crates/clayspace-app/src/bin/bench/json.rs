@@ -25,6 +25,11 @@ pub struct Baseline {
     pub architecture: String,
     pub backend: String,
     pub engine: String,
+    /// Which build of that engine. Absent from every baseline recorded before
+    /// the field existed, and `None` there rather than an empty string: "this
+    /// run did not say" and "this run was built from a tree with no git" are
+    /// different claims and the second one has its own words.
+    pub revision: Option<String>,
     pub figures: BTreeMap<String, f64>,
     /// What that run did not measure, and why.
     pub skipped: BTreeMap<String, String>,
@@ -55,6 +60,7 @@ fn render(where_: &Conditions, load: Option<&Load>, run: &Run) -> String {
     ));
     out.push_str(&format!("    \"backend\": \"{}\",\n", where_.backend));
     out.push_str(&format!("    \"engine\": \"{}\",\n", where_.engine));
+    out.push_str(&format!("    \"revision\": \"{}\",\n", where_.revision));
     out.push_str(&format!(
         "    \"viewport\": [{}, {}]",
         where_.viewport.0, where_.viewport.1
@@ -117,6 +123,10 @@ fn parse(text: &str) -> Result<Baseline> {
         architecture: field(&conditions, "architecture")?.clone().into_string()?,
         backend: field(&conditions, "backend")?.clone().into_string()?,
         engine: field(&conditions, "engine")?.clone().into_string()?,
+        revision: match conditions.get("revision") {
+            Some(value) => Some(value.clone().into_string()?),
+            None => None,
+        },
         load_per_core: conditions
             .get("load_per_core")
             .and_then(|v| v.clone().into_number().ok()),
@@ -316,6 +326,7 @@ mod tests {
             architecture: "x86_64",
             backend: "cuda".into(),
             engine: "0.39.0".into(),
+            revision: "v0.39.0-0-gdeadbee".into(),
             viewport: (1280, 800),
         }
     }
@@ -337,6 +348,7 @@ mod tests {
         assert_eq!(read.architecture, "x86_64");
         assert_eq!(read.backend, "cuda");
         assert_eq!(read.engine, "0.39.0");
+        assert_eq!(read.revision.as_deref(), Some("v0.39.0-0-gdeadbee"));
         assert_eq!(read.figures["dab.median"], 2.4219);
         assert_eq!(read.figures["locality.key_ratio"], 0.75);
         assert_eq!(read.skipped["brush.mesh"], "no headless GPU");
@@ -401,6 +413,27 @@ mod tests {
 }"#;
         let read = parse(text).expect("parses");
         assert!(read.scenes.is_empty());
+    }
+
+    /// Every baseline committed before the revision was recorded. Read as
+    /// `None` rather than as an empty string, so the comparison can say "did
+    /// not record one" instead of comparing against nothing.
+    #[test]
+    fn a_baseline_from_before_the_revision_was_recorded_says_it_did_not() {
+        let text = r#"{
+  "conditions": {
+    "scenes": { "reference": "r1" },
+    "platform": "linux",
+    "architecture": "x86_64",
+    "backend": "cuda",
+    "engine": "0.52.2",
+    "viewport": [1280, 800]
+  },
+  "figures": { "dab.median": 2.1 }
+}"#;
+        let read = parse(text).expect("parses");
+        assert_eq!(read.engine, "0.52.2");
+        assert_eq!(read.revision, None);
     }
 
     #[test]

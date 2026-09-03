@@ -39,6 +39,19 @@ pub struct Conditions {
     pub backend: String,
     /// The engine actually linked.
     pub engine: String,
+    /// Which build of that engine, as `git describe` saw it.
+    ///
+    /// The version triple is not an identity. Two engines both saying 0.78.0
+    /// can differ by a commit, and a benchmark comparison across engine pins —
+    /// which `compare::unlike` deliberately permits, since the engine is the
+    /// thing being compared — has no other way to say *which* two builds it
+    /// was between. `claycore-sys`'s build script stamps this in from the
+    /// vendored submodule, so it travels with the binary rather than being
+    /// typed into a file by whoever recorded it.
+    ///
+    /// A source tree with no git says so rather than failing: the revision is
+    /// a diagnostic and not a requirement.
+    pub revision: String,
     /// Where the numbers came from — an offscreen target of this size.
     pub viewport: (u32, u32),
 }
@@ -46,12 +59,13 @@ pub struct Conditions {
 impl Conditions {
     pub fn describe(&self) -> String {
         format!(
-            "{} on {}/{}, backend {}, engine {}, {}x{}",
+            "{} on {}/{}, backend {}, engine {} ({}), {}x{}",
             self.scenes_described(),
             self.platform,
             self.architecture,
             self.backend,
             self.engine,
+            self.revision,
             self.viewport.0,
             self.viewport.1
         )
@@ -499,6 +513,7 @@ pub fn conditions(policy: &BackendPolicy, viewport: (u32, u32)) -> Conditions {
         architecture: std::env::consts::ARCH,
         backend: policy.active().to_string(),
         engine: clayspace_engine::claycore::version().to_string(),
+        revision: clayspace_engine::claycore::revision().to_string(),
         viewport,
     }
 }

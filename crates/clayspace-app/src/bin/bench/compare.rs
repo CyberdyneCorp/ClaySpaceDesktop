@@ -26,6 +26,9 @@ pub fn compare(
         return Ok(false);
     }
 
+    if let Some(note) = across_engines(where_, &baseline) {
+        println!("\n{note}");
+    }
     let regressed = table(&baseline, run);
     let missing = missing(&baseline, run);
     // Said after the table rather than before it: a regression on a busy box
@@ -37,6 +40,34 @@ pub fn compare(
         }
     }
     Ok(regressed || missing)
+}
+
+/// Says out loud when the two runs were taken against different engines.
+///
+/// `unlike` deliberately does **not** refuse on the engine: a comparison
+/// across two pins is the whole point of an upgrade measurement, and refusing
+/// it would leave the one question the gate is best placed to answer with no
+/// instrument. But an unannounced one is a trap — every percentage in the
+/// table below then folds an engine change into whatever was being tested — so
+/// it is named above the table rather than left for a reader to notice in the
+/// file.
+///
+/// The revision and not only the version, because two builds can both say
+/// 0.78.0 and differ by a commit, and the version alone cannot say which pair
+/// a figure came from.
+fn across_engines(where_: &Conditions, baseline: &Baseline) -> Option<String> {
+    let theirs = match baseline.revision.as_deref() {
+        Some(revision) => format!("{} ({revision})", baseline.engine),
+        None => format!("{} (revision not recorded)", baseline.engine),
+    };
+    let mine = format!("{} ({})", where_.engine, where_.revision);
+    (theirs != mine).then(|| {
+        format!(
+            "Note: the baseline was recorded against engine {theirs} and this run \
+             is engine {mine}. Every change below is that difference plus whatever \
+             else moved."
+        )
+    })
 }
 
 /// Why a regression reported here might be the machine rather than the code.
@@ -249,6 +280,7 @@ mod tests {
             architecture: "x86_64",
             backend: "cuda".into(),
             engine: "0.39.0".into(),
+            revision: "v0.39.0-0-gdeadbee".into(),
             viewport: (1280, 800),
         }
     }
@@ -262,6 +294,7 @@ mod tests {
             architecture: "x86_64".into(),
             backend: "cuda".into(),
             engine: "0.39.0".into(),
+            revision: Some("v0.39.0-0-gdeadbee".into()),
             figures: figures
                 .iter()
                 .map(|(name, value)| (name.to_string(), *value))
@@ -423,6 +456,45 @@ mod tests {
     #[test]
     fn a_like_run_is_compared() {
         assert_eq!(unlike(&conditions(), &baseline(&[])), None);
+    }
+
+    /// An engine change is not a refusal — the upgrade measurement this gate
+    /// is most useful for is exactly a comparison across two pins — but it is
+    /// never silent either.
+    #[test]
+    fn a_comparison_across_engine_pins_is_allowed_and_announced() {
+        let mut theirs = baseline(&[]);
+        theirs.engine = "0.73.0".into();
+        theirs.revision = Some("v0.73.0-0-gc0ffee".into());
+        assert_eq!(unlike(&conditions(), &theirs), None, "still comparable");
+        let note = across_engines(&conditions(), &theirs).expect("announced");
+        assert!(note.contains("0.73.0"), "{note}");
+        assert!(note.contains("0.39.0"), "{note}");
+    }
+
+    /// Two builds of the same version are two engines, and only the revision
+    /// can say so.
+    #[test]
+    fn the_same_version_from_a_different_commit_is_still_announced() {
+        let mut theirs = baseline(&[]);
+        theirs.revision = Some("v0.39.0-4-gfeedbee".into());
+        let note = across_engines(&conditions(), &theirs).expect("announced");
+        assert!(note.contains("gfeedbee"), "{note}");
+    }
+
+    #[test]
+    fn the_same_engine_says_nothing() {
+        assert_eq!(across_engines(&conditions(), &baseline(&[])), None);
+    }
+
+    /// A baseline older than the field is not silently treated as a match:
+    /// nothing in it says which build it was taken against.
+    #[test]
+    fn a_baseline_that_records_no_revision_is_announced_rather_than_assumed() {
+        let mut theirs = baseline(&[]);
+        theirs.revision = None;
+        let note = across_engines(&conditions(), &theirs).expect("announced");
+        assert!(note.contains("revision not recorded"), "{note}");
     }
 
     #[test]
