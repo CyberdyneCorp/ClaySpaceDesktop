@@ -57,10 +57,15 @@ impl Screen {
                 self.upload(gpu, document);
                 Ok(())
             }
-            // No member builds one, so nothing in this harness reaches here —
-            // and every group that could is already saying `NoReferenceScene`
-            // rather than reporting a figure it did not take.
-            Representation::Multires => Err(Skip::NoReferenceScene),
+            // A hierarchy is drawn from its display level's triangles, which
+            // arrive through the same whole-buffer rebuild a mesh takes — so
+            // it is the mesh branch, and the `multires` group builds its own
+            // subject rather than taking a `Scene` member (see that group for
+            // why one is deliberately not added).
+            Representation::Multires => {
+                self.upload(gpu, document);
+                Ok(())
+            }
         }
     }
 

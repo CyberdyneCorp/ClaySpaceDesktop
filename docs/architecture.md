@@ -202,9 +202,16 @@ number means at a normal framing.
 
 `just bench` measures one figure group per operation a sculptor can invoke —
 every brush on every representation it has a verb for, the layer operations,
-rigging and curves, placing and dragging an object, the six conversions,
+rigging and curves, placing and dragging an object, the eight conversions,
 consolidation, export, pre-bake repair, mask gating, undo and redo — beside the
-five the specification puts a budget on. The coverage is derived rather than listed: the brush loop is
+five the specification puts a budget on. A subdivision hierarchy has a group of
+its own, `multires`, covering the crossing that builds one, the level that
+deepens it, a stamp at the sculpt level against the same stamp into a pass, a
+composition change, a reorder, a merge and a bake, the save that carries the
+sculpt, and a cache release with the dab that pays for it. It builds its own
+cage rather than taking a reference member, because a new member changes
+`conditions.scenes` and every committed baseline would stop comparing the day
+it landed. The coverage is derived rather than listed: the brush loop is
 `Representation::ALL` against `ToolKind::for_representation`, which is the
 table the shelf itself presents from, so a tool added to the shelf is a tool
 measured.
