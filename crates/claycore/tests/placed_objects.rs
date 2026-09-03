@@ -360,20 +360,43 @@ fn a_local_object_reports_the_box_it_reaches() {
     );
 }
 
-/// The state that makes an `Option` the wrong return type: this is not
-/// "nothing to dirty", it is "dirty everything", and an ordinary cube reaches
-/// it through nothing more exotic than the operation a sculptor chose.
+/// An intersect is bounded by the layer it cuts, which it was not until
+/// ClayCore v0.78.0.
+///
+/// This was a tripwire. `item_influence_bound` reported `Everything` for any
+/// non-local op, and "not local" covered two things that do not behave alike:
+/// an intersect can only take material *away*, and only from inside what the
+/// layer already occupies, so `max(acc, item)` is bounded by the layer's own
+/// extent — while a spatial morph's radial weight saturates to exactly 1 past
+/// `r1`, so its result really is the item's field arbitrarily far from
+/// anything the layer holds. Collapsing the two cost a refill of the whole
+/// brick cache for an operation that could never have reached past the form.
+/// Upstream measured the same object, the same drag and the same scene
+/// differing only in the operation: 19.39 ms subtracting against 35.52 ms
+/// intersecting, none of it the intersect being harder to evaluate.
+///
+/// CyberdyneCorp/ClayCore#319, fixed in ABI 0.78.0. The bound is the layer's
+/// occupancy rather than the cutting item's, which is why a half-metre box
+/// intersected into a unit sphere answers with the sphere's box: everything
+/// the operation can still change lies inside it.
 #[test]
-fn an_intersecting_object_has_no_finite_bound() {
+fn an_intersecting_object_is_bounded_by_the_layer_it_cuts() {
     let (mut doc, layer) = form();
     let mut cut = Item::of(Primitive::Box { half: [0.5; 3] }).expect("box");
     cut.set_op(Op::Intersect).expect("op");
     let node = doc.add_item(layer, &cut).expect("place");
 
-    assert_eq!(
-        doc.node_influence_bound(layer, node).expect("bound"),
-        Influence::Everything,
-        "a non-local op anywhere in the subtree removes the finite bound"
+    let bound = doc.node_influence_bound(layer, node).expect("bound");
+    let Influence::Box { min, max } = bound else {
+        panic!("an intersect is bounded by the layer it cuts, got {bound:?}");
+    };
+    // The unit sphere the layer holds, and nothing wider: a bound that grew
+    // past the form would be sound but would give back the refill this fix
+    // exists to avoid.
+    assert!(
+        min.iter().all(|c| (-1.001..=-0.999).contains(c))
+            && max.iter().all(|c| (0.999..=1.001).contains(c)),
+        "expected the layer's own box, got {min:?} to {max:?}"
     );
 }
 
