@@ -30,6 +30,7 @@ mod descriptor;
 mod document;
 mod error;
 mod live;
+mod maintenance;
 mod mask;
 mod memory;
 mod mesh;
@@ -60,6 +61,7 @@ pub use live::{
     MoveTransaction, PreviewBrick, PreviewDelta, PreviewGrab, PreviewPending, SculptBudget,
     SculptDirty, SculptPolicy, SmoothTransaction,
 };
+pub use maintenance::{MaintenanceItem, MaintenanceKind, MaintenanceQueue, StrokeGuard};
 pub use mask::{ExtrudeSide, Mask, MaskExtrudeParams, MaskField, MaskLease, MaskRef, MaskSource};
 pub use memory::{
     BudgetError, MemoryCategory, MemoryClass, MemoryLedger, MemoryPin, MemoryReport, PinHold,
