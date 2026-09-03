@@ -633,12 +633,14 @@ fn multires_pass_name(
     response.context_menu(|ui| multires_pass_menu(ui, state, pass, queue));
 }
 
-/// What a pass's own menu offers: the three that take something away.
+/// What a pass's own menu offers: the lock, and the three that take something
+/// away.
 ///
 /// In a menu rather than on the row because the row has no width for them and
-/// because none of the three is reached often — a sculptor dials a pass many
+/// because none of the four is reached often — a sculptor dials a pass many
 /// times for every time they merge one. Deleting a layer already lives in a
-/// row's menu here, so this is where a sculptor looks.
+/// row's menu here, so this is where a sculptor looks. The lock stands above a
+/// separator because it is the one entry that takes nothing away.
 fn multires_pass_menu(
     ui: &mut egui::Ui,
     state: &ShellState<'_>,
@@ -673,7 +675,7 @@ fn multires_pass_menu(
     // Merging needs a pass below to merge into, so the entry is absent on the
     // bottom row rather than present and refusing.
     if pass.index > 0 {
-        let merge = ui.button(s.sculpt_merge_down);
+        let merge = ui.button(s.multires_merge);
         ui.ctx().memory_mut(|memory| {
             memory
                 .data
@@ -696,7 +698,7 @@ fn multires_pass_menu(
         queue.push(Command::MultiresSculptLayer(Op::BakeToBase { id: pass.id }));
         ui.close_menu();
     }
-    let remove = ui.button(s.sculpt_remove);
+    let remove = ui.button(s.multires_remove);
     ui.ctx().memory_mut(|memory| {
         memory
             .data
