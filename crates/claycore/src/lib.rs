@@ -65,10 +65,12 @@ pub use mesh_sculpt::{
     MeshSculptor, MeshStamp,
 };
 pub use multires::{
-    AddLevelPreflight, ArenaStats, Block, BlockInfo, BudgetError, EncodePreflight, MemoryCategory,
-    MemoryClass, MemoryLedger, MemoryPin, Multires, MultiresDesc, MultiresError, MultiresMemory,
-    MultiresRefusal, MultiresSculptor, PeakTelemetry, Pressure, Revisions, SculptMemoryProfile,
-    StampReport, SubdivisionRule, TrimReport,
+    AddLevelPreflight, ArenaStats, Block, BlockInfo, BudgetError, DetailStamp, DetailStampMode,
+    DetailStampReport, EncodePreflight, MemoryCategory, MemoryClass, MemoryLedger, MemoryPin,
+    Multires, MultiresDesc, MultiresError, MultiresMemory, MultiresRefusal, MultiresSculptor,
+    PeakTelemetry, Pressure, Revisions, SculptLayerId, SculptLayerInfo, SculptLayerKind,
+    SculptLayerRevisions, SculptLayerStats, SculptLayerStroke, SculptMemoryProfile, SmoothMode,
+    StampReport, SubdivisionRule, TrimReport, WriteDomain,
 };
 pub use pick::{Hit, Snapped};
 pub use reader::Reader;

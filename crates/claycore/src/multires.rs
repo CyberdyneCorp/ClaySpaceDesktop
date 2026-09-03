@@ -34,14 +34,54 @@
 //! changed, re-reads detail only when the *detail* changed, and redraws only
 //! when the *evaluated* surface moved. One counter cannot say which happened.
 //!
+//! **A stack of passes on top of all of it.** The hierarchy carries a sculpt
+//! layer stack — named, reorderable, dialable channels of detail summed over
+//! the level's own:
+//!
+//! ```text
+//! E(n) = B(n) + SUM over i of  s_i * m_i(v) * L_i(n, v)
+//! ```
+//!
+//! See [`SculptLayerId`] for the one thing about it a host must not get
+//! wrong.
+//!
+//! # Two stacks share a noun, and must not share a type
+//!
+//! [`crate::VoxelGrid`] has had a "sculpt layer" stack since long before this
+//! tier, and upstream spends the same word here **on purpose**: the artist's
+//! statement is identical — a named pass you keep, as against undo, which is a
+//! stack you pop — so the two read alike in a host's interface and neither
+//! reads like `MeshBrush::Layer`, which is a brush algorithm. That is a shared
+//! name and not a collision, and papering over it by inventing a third word
+//! would cost the host the one widget that can draw both stacks.
+//!
+//! What the two do **not** share is how a pass is addressed, and reusing one
+//! addressing for the other is a defect the C header documents itself against:
+//!
+//! | | the grid's stack | the hierarchy's stack |
+//! |---|---|---|
+//! | addressed by | `usize` position | [`SculptLayerId`], minted once |
+//! | a reorder | renumbers every position at or below it | renumbers nothing |
+//! | order | replays cell writes, so it *is* the result | additive, so it changes organisation and not geometry |
+//! | opened by | `begin_sculpt_layer` / `end_sculpt_layer` recording | an active layer plus a per-stroke [`WriteDomain`] |
+//!
+//! So the grid's stack keeps its bare `usize` and this one is addressed by a
+//! newtype that cannot be built from a stack position by accident. An index
+//! crosses this boundary in exactly one place —
+//! [`Multires::sculpt_layer_id_at`], which exists to walk the stack in draw
+//! order — and what it hands back is an id.
+//!
 //! # What is deliberately not here yet
 //!
-//! The sculpt-layer stack (`clay_multires_sculpt_layer_*` and its stroke
-//! transaction) and the projection pass (`clay_multires_project`) are left for
-//! the changes that adopt them. Both are large surfaces with vocabulary of
-//! their own — a sculpt layer is addressed by *id* and never by index, which
-//! the application's existing voxel pass stack is not — and a wrapper nothing
-//! runs is a SAFETY comment nobody has checked.
+//! The projection pass (`clay_multires_project`) is left for the change that
+//! adopts it, and a wrapper nothing runs is a SAFETY comment nobody has
+//! checked.
+//!
+//! Neither the level sculptor's stroke record nor the sculpt layer stroke's
+//! crosses the C ABI at all, which the header states twice rather than leaving
+//! to be discovered: [`SculptLayerStroke::commit`] reports how many entries
+//! the record held and nothing else, so one layered gesture cannot yet become
+//! one entry in a host's undo stack.
 //!
 //! Per-vertex detail coefficients do not cross the C ABI at all: what a host
 //! can ask about the detail field is its [checksum](Multires::detail_checksum)
@@ -58,13 +98,13 @@ use std::ptr::NonNull;
 
 use claycore_sys as sys;
 
-use crate::buffer::size_query_bytes;
+use crate::buffer::{size_query_bytes, size_query_string};
 use crate::descriptor::Descriptor;
-use crate::error::{check, ClayError, ErrorKind, Result};
+use crate::error::{check, ClayError, ErrorKind, RawResult, Result};
 use crate::mask::MaskField;
 use crate::mesh::Mesh;
 use crate::mesh_sculpt::MeshStamp;
-use crate::raw_failure;
+use crate::{cstring, raw_failure};
 
 /// A string the engine promises is never null, for any value.
 ///
@@ -1683,6 +1723,1257 @@ impl std::fmt::Debug for MultiresSculptor<'_> {
         f.debug_struct("MultiresSculptor")
             .field("surface", &self.surface)
             .field("defer_normals", &self.defer_normals().ok())
+            .finish()
+    }
+}
+
+// -- the sculpt layer stack -------------------------------------------------
+
+/// Which pass of a hierarchy's stack. **An id, never an index.**
+///
+/// This is a newtype rather than a `u64` for one reason, and it is the same
+/// reason the C header sets in capitals: a *position* in the stack is renamed
+/// by [`Multires::move_sculpt_layer`], which changes every position at or
+/// below the layer it moves, so a position written into a file, handed to a
+/// host or held across a drag names a different pass afterwards. An id is
+/// minted once from a counter that is itself serialized — a save, a load and a
+/// reorder leave every id exactly where the host left it.
+///
+/// [`crate::VoxelGrid`]'s stack is addressed by position and this one is not,
+/// which is why the two cannot share a type even though they share a word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct SculptLayerId(u64);
+
+impl SculptLayerId {
+    /// Not a layer: the level's own detail, under every pass.
+    ///
+    /// What an empty stack's active layer reads as, and what a host sets to
+    /// route the next stroke into the form beneath the passes — which is what
+    /// every stroke did before this stack existed.
+    pub const BASE: Self = Self(sys::CLAY_NO_SCULPT_LAYER as u64);
+
+    /// An id read back from a file or a side-car.
+    ///
+    /// The honest constructor, and the only one: there is deliberately no
+    /// `From<usize>`, because the value that would tempt a caller to write one
+    /// is a stack position, and the two are not interchangeable.
+    pub fn from_raw(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    /// The value to store beside the hierarchy's own bytes.
+    pub fn get(self) -> u64 {
+        self.0
+    }
+
+    pub fn is_base(self) -> bool {
+        self == Self::BASE
+    }
+}
+
+/// What kind of thing a pass stores.
+///
+/// Versioned from the first release though only one kind ships, because a
+/// reader that met a kind it did not know and *skipped* the layer would
+/// present a surface missing an artist's work while claiming to be complete.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SculptLayerKind {
+    /// Coefficients per vertex; the only kind this build writes or reads.
+    Sampled,
+    /// Reserved, and refused by this build's decoder.
+    Procedural,
+    /// A kind this build does not know, carried verbatim rather than guessed
+    /// at.
+    Unknown(i32),
+}
+
+impl SculptLayerKind {
+    fn from_raw(code: i32) -> Self {
+        use sys::clay_sculpt_layer_kind as k;
+        match code as sys::clay_sculpt_layer_kind::Type {
+            k::CLAY_SCULPT_LAYER_SAMPLED => Self::Sampled,
+            k::CLAY_SCULPT_LAYER_PROCEDURAL => Self::Procedural,
+            _ => Self::Unknown(code),
+        }
+    }
+}
+
+/// One pass, as a host lists it.
+///
+/// The name is not here. It crosses through
+/// [`Multires::sculpt_layer_name`] into a buffer the caller owns, because a
+/// pointer into an engine-owned string has no lifetime a host could reason
+/// about — the next rename, remove or reorder frees it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SculptLayerInfo {
+    pub id: SculptLayerId,
+    /// Bottom-first, and **valid only until the next structural change**. For
+    /// drawing a list in order, never for holding on to.
+    pub index: u32,
+    pub kind: SculptLayerKind,
+    /// Composition, not a scale on the pen: a stroke into a layer at 0.5
+    /// records its *full* contribution and the surface moves half as far, so
+    /// raising this to 1 afterwards doubles what is on screen and replays no
+    /// stroke.
+    pub strength: f32,
+    pub visible: bool,
+    /// Refuses a coefficient write and permits every property change — the
+    /// rule stated rather than discovered, because a lock that also froze the
+    /// name and the slider would make "lock" mean "hide from the interface".
+    pub locked: bool,
+    /// What [`Multires::sculpt_layer_name`] will ask for, terminator
+    /// included, so a host sizes one buffer from this rather than calling
+    /// twice.
+    pub name_bytes: u32,
+    /// Coefficients and mask, allocated.
+    pub bytes: u64,
+    /// A layer costs its *coverage* and not the model, which is what makes a
+    /// hundred passes over one cheek affordable.
+    pub coverage_vertices: u64,
+}
+
+impl SculptLayerInfo {
+    fn from_raw(raw: sys::clay_sculpt_layer_info) -> Self {
+        Self {
+            id: SculptLayerId(raw.id),
+            index: raw.index,
+            kind: SculptLayerKind::from_raw(raw.kind),
+            strength: raw.strength,
+            visible: raw.visible != 0,
+            locked: raw.locked != 0,
+            name_bytes: raw.name_bytes,
+            bytes: raw.bytes,
+            coverage_vertices: raw.coverage_vertices,
+        }
+    }
+}
+
+/// What composition actually did.
+///
+/// Measurements rather than assertions, and there is no other way to see
+/// either from outside: a correct implementation and a quadratic one produce
+/// the same surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SculptLayerStats {
+    /// What a strength change cost — the layer's allocated blocks, never the
+    /// level's.
+    pub blocks_recomposed: u64,
+    /// The (block, layer) pairs actually summed, so a stamp on top of a deep
+    /// stack can be *shown* not to sum every layer beneath it over unrelated
+    /// geometry.
+    pub layer_blocks_visited: u64,
+    /// Calls that recomposed at least one block.
+    pub compositions: u64,
+}
+
+impl SculptLayerStats {
+    fn from_raw(raw: sys::clay_sculpt_layer_stats) -> Self {
+        Self {
+            blocks_recomposed: raw.blocks_recomposed,
+            layer_blocks_visited: raw.layer_blocks_visited,
+            compositions: raw.compositions,
+        }
+    }
+}
+
+/// The stack's three counters, for the same reason the hierarchy has three:
+/// one counter cannot say which of three things happened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SculptLayerRevisions {
+    /// A rename, a change of active layer. Invalidates *nothing*, so a host
+    /// keyed on the two below does not re-evaluate a model because a layer was
+    /// renamed.
+    pub metadata: u64,
+    /// Strength, visibility, mask, order, add, remove.
+    pub composition: u64,
+    /// Coefficients written.
+    pub content: u64,
+}
+
+/// The refusal protocol the stack's entry points share.
+///
+/// Written once because it is the same four lines at twenty call sites and
+/// exactly one of them would read `reason` only on failure. The engine writes
+/// it on **every** path, including success, where it is `CLAY_MULTIRES_OK` —
+/// so it is read unconditionally here and the result code decides what to do
+/// with it.
+fn refusable(
+    operation: &'static str,
+    code: RawResult,
+    reason: i32,
+) -> std::result::Result<(), MultiresRefusal> {
+    let reason = MultiresError::from_raw(reason);
+    check(code, operation).map_err(|error| MultiresRefusal { error, reason })
+}
+
+impl Multires {
+    /// How many passes the stack holds. Zero is a surface with base detail and
+    /// nothing over it, which is what every hierarchy starts as.
+    pub fn sculpt_layer_count(&self) -> Result<usize> {
+        let mut count = 0usize;
+        // SAFETY: valid handle, out-parameter written on success.
+        check(
+            unsafe { sys::clay_multires_sculpt_layer_count(self.raw.as_ptr(), &mut count) },
+            "clay_multires_sculpt_layer_count",
+        )?;
+        Ok(count)
+    }
+
+    /// The id at a stack position, bottom-first.
+    ///
+    /// The one place a position crosses this boundary, and it exists to walk
+    /// the stack in draw order. What it answers is an *id*, which is what a
+    /// host keeps; past the end is a `NotFound`.
+    pub fn sculpt_layer_id_at(&self, index: usize) -> Result<SculptLayerId> {
+        let mut id = 0u64;
+        // SAFETY: valid handle; the index is range-checked by the entry point,
+        // which answers NOT_FOUND past the end rather than clamping.
+        check(
+            unsafe { sys::clay_multires_sculpt_layer_id_at(self.raw.as_ptr(), index, &mut id) },
+            "clay_multires_sculpt_layer_id_at",
+        )?;
+        Ok(SculptLayerId(id))
+    }
+
+    /// The whole stack, bottom-first — the loop a host draws its list with.
+    pub fn sculpt_layer_ids(&self) -> Result<Vec<SculptLayerId>> {
+        (0..self.sculpt_layer_count()?)
+            .map(|index| self.sculpt_layer_id_at(index))
+            .collect()
+    }
+
+    /// One pass's properties.
+    ///
+    /// An unknown id is a `NotFound` rather than a zeroed descriptor, and that
+    /// distinction is the entry point's own: a zeroed descriptor is
+    /// indistinguishable from a real layer at strength 0.
+    pub fn sculpt_layer_info(&self, id: SculptLayerId) -> Result<SculptLayerInfo> {
+        let mut raw = sys::clay_sculpt_layer_info::sized();
+        // SAFETY: valid handle and a versioned out-descriptor whose
+        // struct_size is written from the compiled type.
+        check(
+            unsafe { sys::clay_multires_sculpt_layer_info(self.raw.as_ptr(), id.get(), &mut raw) },
+            "clay_multires_sculpt_layer_info",
+        )?;
+        Ok(SculptLayerInfo::from_raw(raw))
+    }
+
+    /// A pass's name, copied out. An unnamed pass is an empty string.
+    pub fn sculpt_layer_name(&self, id: SculptLayerId) -> Result<String> {
+        let handle = self.raw.as_ptr();
+        size_query_string("clay_multires_sculpt_layer_name", |buffer, size| {
+            // SAFETY: the buffer protocol's two calls. `buffer` is either null
+            // — asking for the byte count including the terminator — or valid
+            // for writes of `*size` bytes, which is what the engine is told it
+            // has and what it checks before it copies.
+            unsafe { sys::clay_multires_sculpt_layer_name(handle, id.get(), buffer, size) }
+        })
+    }
+
+    /// Which pass the next sculpt write lands in.
+    ///
+    /// [`SculptLayerId::BASE`] is the level's own detail — the form under the
+    /// passes.
+    pub fn active_sculpt_layer(&self) -> Result<SculptLayerId> {
+        let mut id = 0u64;
+        // SAFETY: valid handle, out-parameter written on success.
+        check(
+            unsafe { sys::clay_multires_active_sculpt_layer(self.raw.as_ptr(), &mut id) },
+            "clay_multires_active_sculpt_layer",
+        )?;
+        Ok(SculptLayerId(id))
+    }
+
+    /// A new empty pass on top: full strength, visible, made active.
+    ///
+    /// Refused while a stroke holds the composition. `name` may be `None` for
+    /// an unnamed pass.
+    pub fn add_sculpt_layer(
+        &mut self,
+        name: Option<&str>,
+    ) -> std::result::Result<SculptLayerId, MultiresRefusal> {
+        let owned = name
+            .map(|name| cstring(name, "clay_multires_add_sculpt_layer"))
+            .transpose()
+            .map_err(|error| MultiresRefusal {
+                error,
+                reason: MultiresError::None,
+            })?;
+        let mut id = 0u64;
+        let mut reason = 0i32;
+        // SAFETY: valid handle; `name` is either null — which the entry point
+        // documents as an unnamed pass — or a NUL-terminated string borrowed
+        // for the duration of the call and copied by the engine; both
+        // out-parameters are written before they are read below.
+        let code = unsafe {
+            sys::clay_multires_add_sculpt_layer(
+                self.raw.as_ptr(),
+                owned.as_ref().map_or(std::ptr::null(), |n| n.as_ptr()),
+                &mut id,
+                &mut reason,
+            )
+        };
+        refusable("clay_multires_add_sculpt_layer", code, reason)?;
+        Ok(SculptLayerId(id))
+    }
+
+    /// Discards a pass.
+    ///
+    /// Re-evaluates the removed layer's *coverage* and nothing else: no stroke
+    /// is replayed, and no other layer's coefficients, strength or relative
+    /// order change.
+    pub fn remove_sculpt_layer(
+        &mut self,
+        id: SculptLayerId,
+    ) -> std::result::Result<(), MultiresRefusal> {
+        let mut reason = 0i32;
+        // SAFETY: valid handle, an id the entry point resolves or refuses, and
+        // an out-parameter written on every path.
+        let code = unsafe {
+            sys::clay_multires_remove_sculpt_layer(self.raw.as_ptr(), id.get(), &mut reason)
+        };
+        refusable("clay_multires_remove_sculpt_layer", code, reason)
+    }
+
+    /// Slides a pass to a stack position.
+    ///
+    /// **Organisation only, and this is a guarantee rather than a hope.** An
+    /// additive stack commutes, so a reorder cannot move a vertex: the engine
+    /// sums a block's contributors in id order precisely so that the surface
+    /// is invariant under exactly this call. A host that invents an ordering
+    /// rule here is solving a problem this representation does not have.
+    pub fn move_sculpt_layer(
+        &mut self,
+        id: SculptLayerId,
+        index: usize,
+    ) -> std::result::Result<(), MultiresRefusal> {
+        let mut reason = 0i32;
+        // SAFETY: valid handle, an id and an index both resolved or refused by
+        // the entry point, and an out-parameter written on every path.
+        let code = unsafe {
+            sys::clay_multires_move_sculpt_layer(self.raw.as_ptr(), id.get(), index, &mut reason)
+        };
+        refusable("clay_multires_move_sculpt_layer", code, reason)
+    }
+
+    /// Folds a pass into the one below it and discards it.
+    ///
+    /// **Defined by visual parity**: the evaluated surface before equals the
+    /// evaluated surface after, at any strength *including zero*. That is why
+    /// it is an entry point rather than host arithmetic — the naive form
+    /// `L' = L_l + (s_u·m_u)/(s_l·m_l)·L_u` divides by the lower layer's
+    /// strength, and zero is a state one slider reaches. The engine stores the
+    /// sum directly and sets the target's composition to the identity it
+    /// needs, so nothing divides by a strength.
+    ///
+    /// What is lost is real and is named rather than smoothed over: the merged
+    /// layer's slider no longer scales what the upper layer contributed
+    /// independently, which is what merging *means*.
+    pub fn merge_sculpt_layer_down(
+        &mut self,
+        id: SculptLayerId,
+    ) -> std::result::Result<(), MultiresRefusal> {
+        let mut reason = 0i32;
+        // SAFETY: valid handle, an id the entry point resolves or refuses, and
+        // an out-parameter written on every path.
+        let code = unsafe {
+            sys::clay_multires_merge_sculpt_layer_down(self.raw.as_ptr(), id.get(), &mut reason)
+        };
+        refusable("clay_multires_merge_sculpt_layer_down", code, reason)
+    }
+
+    /// The same statement with the *base* as the target: the level's own
+    /// detail, and the cage itself for a level-0 deformation.
+    ///
+    /// The pass stops being dialable and becomes the form. Visual parity
+    /// again, and at any strength including zero.
+    pub fn bake_sculpt_layer_to_base(
+        &mut self,
+        id: SculptLayerId,
+    ) -> std::result::Result<(), MultiresRefusal> {
+        let mut reason = 0i32;
+        // SAFETY: valid handle, an id the entry point resolves or refuses, and
+        // an out-parameter written on every path.
+        let code = unsafe {
+            sys::clay_multires_bake_sculpt_layer_to_base(self.raw.as_ptr(), id.get(), &mut reason)
+        };
+        refusable("clay_multires_bake_sculpt_layer_to_base", code, reason)
+    }
+
+    /// Renames a pass. Permitted on a locked layer and during a stroke: it
+    /// moves no vertex.
+    pub fn rename_sculpt_layer(
+        &mut self,
+        id: SculptLayerId,
+        name: &str,
+    ) -> std::result::Result<(), MultiresRefusal> {
+        let owned = cstring(name, "clay_multires_rename_sculpt_layer").map_err(|error| {
+            MultiresRefusal {
+                error,
+                reason: MultiresError::None,
+            }
+        })?;
+        let mut reason = 0i32;
+        // SAFETY: valid handle, a NUL-terminated string borrowed for the
+        // duration of the call and copied by the engine, and an out-parameter
+        // written on every path.
+        let code = unsafe {
+            sys::clay_multires_rename_sculpt_layer(
+                self.raw.as_ptr(),
+                id.get(),
+                owned.as_ptr(),
+                &mut reason,
+            )
+        };
+        refusable("clay_multires_rename_sculpt_layer", code, reason)
+    }
+
+    /// Dials a pass. 1 contributes fully, 0 contributes nothing, and neither
+    /// replays a stroke.
+    ///
+    /// A composition change, so it is refused while a stroke is open: a stamp
+    /// reads the evaluated surface, and a slider moved between two stamps
+    /// would author one gesture against two different surfaces.
+    pub fn set_sculpt_layer_strength(
+        &mut self,
+        id: SculptLayerId,
+        strength: f32,
+    ) -> std::result::Result<(), MultiresRefusal> {
+        let mut reason = 0i32;
+        // SAFETY: valid handle, a plain float, and an out-parameter written on
+        // every path.
+        let code = unsafe {
+            sys::clay_multires_set_sculpt_layer_strength(
+                self.raw.as_ptr(),
+                id.get(),
+                strength,
+                &mut reason,
+            )
+        };
+        refusable("clay_multires_set_sculpt_layer_strength", code, reason)
+    }
+
+    /// Hides or shows a pass.
+    ///
+    /// Invisible is *exactly* zero rather than nearly zero, so a host can
+    /// compare the two surfaces bit for bit.
+    pub fn set_sculpt_layer_visible(
+        &mut self,
+        id: SculptLayerId,
+        visible: bool,
+    ) -> std::result::Result<(), MultiresRefusal> {
+        let mut reason = 0i32;
+        // SAFETY: valid handle, a plain integer, and an out-parameter written
+        // on every path.
+        let code = unsafe {
+            sys::clay_multires_set_sculpt_layer_visible(
+                self.raw.as_ptr(),
+                id.get(),
+                i32::from(visible),
+                &mut reason,
+            )
+        };
+        refusable("clay_multires_set_sculpt_layer_visible", code, reason)
+    }
+
+    /// Locks or unlocks a pass.
+    ///
+    /// A lock refuses a *coefficient* write and permits every property
+    /// change — the point of it is that an artist can keep working over a
+    /// finished pass.
+    pub fn set_sculpt_layer_locked(
+        &mut self,
+        id: SculptLayerId,
+        locked: bool,
+    ) -> std::result::Result<(), MultiresRefusal> {
+        let mut reason = 0i32;
+        // SAFETY: valid handle, a plain integer, and an out-parameter written
+        // on every path.
+        let code = unsafe {
+            sys::clay_multires_set_sculpt_layer_locked(
+                self.raw.as_ptr(),
+                id.get(),
+                i32::from(locked),
+                &mut reason,
+            )
+        };
+        refusable("clay_multires_set_sculpt_layer_locked", code, reason)
+    }
+
+    /// Routes the next sculpt write. [`SculptLayerId::BASE`] sends it into the
+    /// form under the passes.
+    pub fn set_active_sculpt_layer(
+        &mut self,
+        id: SculptLayerId,
+    ) -> std::result::Result<(), MultiresRefusal> {
+        let mut reason = 0i32;
+        // SAFETY: valid handle, an id the entry point resolves or refuses —
+        // CLAY_NO_SCULPT_LAYER always resolving — and an out-parameter written
+        // on every path.
+        let code = unsafe {
+            sys::clay_multires_set_active_sculpt_layer(self.raw.as_ptr(), id.get(), &mut reason)
+        };
+        refusable("clay_multires_set_active_sculpt_layer", code, reason)
+    }
+
+    /// Writes one vertex's coefficients on a pass: tangent, bitangent and
+    /// normal in the vertex's own transported frame.
+    ///
+    /// The same three the base detail stores, because they are the same
+    /// quantity under a different owner. Writing marks the block, so the next
+    /// evaluation recomposes it and the levels above follow.
+    pub fn set_sculpt_layer_detail(
+        &mut self,
+        id: SculptLayerId,
+        level: u32,
+        vertex: u32,
+        tbn: [f32; 3],
+    ) -> std::result::Result<(), MultiresRefusal> {
+        let mut reason = 0i32;
+        // SAFETY: valid handle; `tbn` is three contiguous floats, which is
+        // what the entry point reads and all it reads; the level and vertex
+        // are range-checked by it; the out-parameter is written on every path.
+        let code = unsafe {
+            sys::clay_multires_set_sculpt_layer_detail(
+                self.raw.as_ptr(),
+                id.get(),
+                level,
+                vertex,
+                tbn.as_ptr(),
+                &mut reason,
+            )
+        };
+        refusable("clay_multires_set_sculpt_layer_detail", code, reason)
+    }
+
+    /// Reads them back. A vertex the pass never reached is three zeroes,
+    /// which is a coefficient of nothing rather than an absence.
+    pub fn sculpt_layer_detail(
+        &self,
+        id: SculptLayerId,
+        level: u32,
+        vertex: u32,
+    ) -> Result<[f32; 3]> {
+        let mut tbn = [0.0f32; 3];
+        // SAFETY: valid handle and a buffer valid for writes of exactly the
+        // three floats the entry point writes; level and vertex are
+        // range-checked by it.
+        check(
+            unsafe {
+                sys::clay_multires_sculpt_layer_detail(
+                    self.raw.as_ptr(),
+                    id.get(),
+                    level,
+                    vertex,
+                    tbn.as_mut_ptr(),
+                )
+            },
+            "clay_multires_sculpt_layer_detail",
+        )?;
+        Ok(tbn)
+    }
+
+    /// Where a *stored* pass contributes, and how much.
+    ///
+    /// A different question from the brush gate, which says where a brush
+    /// writes and is gone when the pointer comes up; this is serialized with
+    /// the layer. **Its identity is 1, not 0** — a mask the artist never
+    /// touched must not erase the pass it belongs to, so an absent block means
+    /// full weight. Writing exactly 1 releases the storage again.
+    pub fn set_sculpt_layer_mask(
+        &mut self,
+        id: SculptLayerId,
+        level: u32,
+        vertex: u32,
+        weight: f32,
+    ) -> std::result::Result<(), MultiresRefusal> {
+        let mut reason = 0i32;
+        // SAFETY: valid handle, a plain float, a range-checked level and
+        // vertex, and an out-parameter written on every path.
+        let code = unsafe {
+            sys::clay_multires_set_sculpt_layer_mask(
+                self.raw.as_ptr(),
+                id.get(),
+                level,
+                vertex,
+                weight,
+                &mut reason,
+            )
+        };
+        refusable("clay_multires_set_sculpt_layer_mask", code, reason)
+    }
+
+    /// Reads one back. An untouched vertex answers 1 — see above.
+    pub fn sculpt_layer_mask(&self, id: SculptLayerId, level: u32, vertex: u32) -> Result<f32> {
+        let mut weight = 0.0f32;
+        // SAFETY: valid handle and an out-parameter written on success; level
+        // and vertex are range-checked by the entry point.
+        check(
+            unsafe {
+                sys::clay_multires_sculpt_layer_mask(
+                    self.raw.as_ptr(),
+                    id.get(),
+                    level,
+                    vertex,
+                    &mut weight,
+                )
+            },
+            "clay_multires_sculpt_layer_mask",
+        )?;
+        Ok(weight)
+    }
+
+    /// A hash of every pass's coefficients and masks, and nothing derived from
+    /// them.
+    ///
+    /// Deliberately apart from [`detail_checksum`](Self::detail_checksum),
+    /// which still hashes the base detail only — so a host asks "did the form
+    /// change" and "did a pass change" separately, and a merge or a bake shows
+    /// up as both moving.
+    pub fn sculpt_layer_checksum(&self) -> Result<u64> {
+        let mut checksum = 0u64;
+        // SAFETY: valid handle, out-parameter written on success.
+        check(
+            unsafe { sys::clay_multires_sculpt_layer_checksum(self.raw.as_ptr(), &mut checksum) },
+            "clay_multires_sculpt_layer_checksum",
+        )?;
+        Ok(checksum)
+    }
+
+    /// The stack's three counters. Compare, do not add.
+    pub fn sculpt_layer_revision(&self) -> Result<SculptLayerRevisions> {
+        let mut out = SculptLayerRevisions::default();
+        // SAFETY: valid handle and three out-parameters, each of which the
+        // entry point allows to be null and none of which is.
+        check(
+            unsafe {
+                sys::clay_multires_sculpt_layer_revision(
+                    self.raw.as_ptr(),
+                    &mut out.metadata,
+                    &mut out.composition,
+                    &mut out.content,
+                )
+            },
+            "clay_multires_sculpt_layer_revision",
+        )?;
+        Ok(out)
+    }
+
+    /// What composition has done since the last [reset](Self::reset_sculpt_layer_stats).
+    pub fn sculpt_layer_stats(&self) -> Result<SculptLayerStats> {
+        let mut raw = sys::clay_sculpt_layer_stats::sized();
+        // SAFETY: valid handle and a versioned out-descriptor whose
+        // struct_size is written from the compiled type.
+        check(
+            unsafe { sys::clay_multires_sculpt_layer_stats(self.raw.as_ptr(), &mut raw) },
+            "clay_multires_sculpt_layer_stats",
+        )?;
+        Ok(SculptLayerStats::from_raw(raw))
+    }
+
+    pub fn reset_sculpt_layer_stats(&mut self) -> Result<()> {
+        // SAFETY: valid handle; the call only zeroes counters.
+        check(
+            unsafe { sys::clay_multires_reset_sculpt_layer_stats(self.raw.as_ptr()) },
+            "clay_multires_reset_sculpt_layer_stats",
+        )
+    }
+
+    /// Holds the composition for the length of a gesture a host drives itself,
+    /// stamp by stamp.
+    ///
+    /// [`SculptLayerStroke`] takes and releases this on its own, so a host
+    /// using the transaction never calls it. A host stamping through the plain
+    /// [`MultiresSculptor`] takes it for the same reason the transaction does:
+    /// a stamp reads the evaluated surface, and recomposing between stamps
+    /// costs the stack on every dab.
+    ///
+    /// **Balanced by the caller.** It is `held` rather than a guard because
+    /// the borrow a guard would take is the same one the sculptor already
+    /// holds, so a guard here would make the two mutually exclusive — which is
+    /// exactly the pairing it exists for.
+    pub fn hold_sculpt_layer_composition(&mut self, held: bool) -> Result<()> {
+        // SAFETY: valid handle and a plain integer.
+        check(
+            unsafe {
+                sys::clay_multires_hold_sculpt_layer_composition(self.raw.as_ptr(), i32::from(held))
+            },
+            "clay_multires_hold_sculpt_layer_composition",
+        )
+    }
+
+    /// A layered gesture over this hierarchy.
+    ///
+    /// Borrows it exclusively for the same reason [`sculptor`](Self::sculptor)
+    /// does: the transaction keeps a bare pointer to the surface, and using it
+    /// after the surface is gone would be a use-after-free.
+    pub fn sculpt_layer_stroke(&mut self) -> Result<SculptLayerStroke<'_>> {
+        let mut stroke = std::ptr::null_mut();
+        // SAFETY: valid handle and an out-parameter written only on success.
+        check(
+            unsafe {
+                sys::clay_multires_sculpt_layer_stroke_create(self.raw.as_ptr(), &mut stroke)
+            },
+            "clay_multires_sculpt_layer_stroke_create",
+        )?;
+        let raw = NonNull::new(stroke).ok_or_else(|| {
+            raw_failure(
+                "clay_multires_sculpt_layer_stroke_create",
+                ErrorKind::Backend,
+            )
+        })?;
+        Ok(SculptLayerStroke {
+            raw,
+            surface: self,
+            open: false,
+        })
+    }
+}
+
+// -- the layered stroke transaction -----------------------------------------
+
+/// Where a stroke lands, chosen by the caller rather than inferred.
+///
+/// Inferred would be wrong either way: "sculpt the pass I am working on" and
+/// "fix the form *under* the passes without disturbing them" are both
+/// ordinary, and neither is a default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WriteDomain {
+    /// The active layer if there is one, the base if not.
+    #[default]
+    Automatic,
+    /// The base: the cage at level 0, the level's own detail above it.
+    Geometry,
+    /// The active layer. Refuses to [begin](SculptLayerStroke::begin) when
+    /// there is none, rather than silently writing the form the caller asked
+    /// not to touch.
+    Detail,
+}
+
+impl WriteDomain {
+    fn to_raw(self) -> i32 {
+        use sys::clay_multires_write_domain as d;
+        (match self {
+            Self::Automatic => d::CLAY_MULTIRES_WRITE_AUTOMATIC,
+            Self::Geometry => d::CLAY_MULTIRES_WRITE_GEOMETRY,
+            Self::Detail => d::CLAY_MULTIRES_WRITE_DETAIL,
+        }) as i32
+    }
+}
+
+/// Which frequency a smooth acts on.
+///
+/// Three operations rather than one filter with a cutoff, and the split is
+/// *representational*: the hierarchy already stores the form and the detail
+/// apart, so these are three different arrays rather than three settings of
+/// one pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SmoothMode {
+    /// Positions; exactly [`MeshBrush::Smooth`](crate::MeshBrush::Smooth). A
+    /// plain Laplacian over pores removes the pores, which is rarely what was
+    /// asked.
+    #[default]
+    Geometry,
+    /// Coefficients in the target channel only.
+    DetailOnly,
+    /// The form, with the detail re-applied unchanged — the mode an artist
+    /// correcting anatomy under pores is asking for, and the one that is
+    /// impossible on a flat mesh.
+    PreserveDetail,
+}
+
+impl SmoothMode {
+    fn to_raw(self) -> i32 {
+        use sys::clay_multires_smooth_mode as m;
+        (match self {
+            Self::Geometry => m::CLAY_MULTIRES_SMOOTH_GEOMETRY,
+            Self::DetailOnly => m::CLAY_MULTIRES_SMOOTH_DETAIL_ONLY,
+            Self::PreserveDetail => m::CLAY_MULTIRES_SMOOTH_PRESERVE_DETAIL,
+        }) as i32
+    }
+}
+
+/// What a high-detail stamp's samples *mean*.
+///
+/// The C enumeration has a third value, `CLAY_DETAIL_STAMP_WEIGHT`, and it is
+/// deliberately absent here: it is the scalar alpha that already reaches every
+/// verb through [`MeshStamp::alpha`], the detail entry point *refuses* it, and
+/// a Rust enum that could express a value the only call taking it rejects
+/// would be an error this type is in a position to make unrepresentable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DetailStampMode {
+    /// One channel: a signed displacement along the vertex normal.
+    #[default]
+    Height,
+    /// Three channels, read in the vertex's own transported frame.
+    ///
+    /// **Never world space**, and that is not a preference: a world-space
+    /// stamp is orientation-dependent, so the same map applied to the same
+    /// feature on the left and right of a face produces two different shapes,
+    /// and across a curved surface it shears.
+    Vector,
+}
+
+impl DetailStampMode {
+    fn to_raw(self) -> i32 {
+        use sys::clay_detail_stamp_mode as m;
+        (match self {
+            Self::Height => m::CLAY_DETAIL_STAMP_HEIGHT,
+            Self::Vector => m::CLAY_DETAIL_STAMP_VECTOR,
+        }) as i32
+    }
+
+    /// How many planes the image must hold.
+    fn channels(self) -> usize {
+        match self {
+            Self::Height => 1,
+            Self::Vector => 3,
+        }
+    }
+}
+
+/// A height map or a tangent-space vector displacement, borrowed for one call.
+///
+/// **The image is planar and borrowed.** Three channels means three
+/// consecutive `width * height` planes, not interleaved triples, because a
+/// plane is exactly the buffer the existing alpha sampler reads. The engine
+/// decodes no images and copies nothing: the samples must outlive the call and
+/// nothing holds them afterwards, which is what the lifetime here says.
+#[derive(Debug, Clone, Copy)]
+pub struct DetailStamp<'a> {
+    pub mode: DetailStampMode,
+    /// `channels * width * height` samples, plane after plane.
+    pub image: &'a [f32],
+    pub width: i32,
+    pub height: i32,
+    /// World units per unit of sampled value. Signed, so one map deposits or
+    /// digs without a second image.
+    pub amplitude: f32,
+    /// What a height map's zero is. A map cut out of a photograph sits around
+    /// 0.5 and one authored as a displacement sits around 0, and guessing
+    /// wrong inflates or deflates the whole stamp.
+    pub bias: f32,
+    /// The square: the plane through `center` whose normal is `direction`,
+    /// oriented by `tangent` — any rough "up" works, it is re-orthogonalised —
+    /// of side `extent`. A zero `direction` or `tangent` takes the brush's
+    /// own, and a zero `extent` its diameter.
+    pub center: [f32; 3],
+    pub direction: [f32; 3],
+    pub tangent: [f32; 3],
+    pub extent: f32,
+}
+
+impl DetailStamp<'_> {
+    /// Whether the samples fill the planes claimed.
+    ///
+    /// Checked before the pointer is handed over, for the same reason
+    /// [`crate::AlphaStamp`]'s is: the engine reads
+    /// `channels * width * height` floats out of it, so a shorter slice is a
+    /// read past the end whatever the engine's own validation says about the
+    /// dimensions.
+    fn is_well_formed(&self) -> bool {
+        self.width >= 2
+            && self.height >= 2
+            && (self.width as i64) * (self.height as i64) * self.mode.channels() as i64
+                <= self.image.len() as i64
+    }
+
+    fn as_raw(&self) -> sys::clay_detail_stamp_desc {
+        let mut raw = sys::clay_detail_stamp_desc::sized();
+        raw.mode = self.mode.to_raw();
+        raw.image = self.image.as_ptr();
+        raw.width = self.width;
+        raw.height = self.height;
+        raw.amplitude = self.amplitude;
+        raw.bias = self.bias;
+        raw.center = self.center;
+        raw.direction = self.direction;
+        raw.tangent = self.tangent;
+        raw.extent = self.extent;
+        raw
+    }
+}
+
+/// Whether the level can carry what the stamp holds.
+///
+/// Reported rather than smoothed over: a 2048-sample map across a 5 mm square
+/// carries features finer than a level whose mean edge is 1 mm can represent,
+/// and applying it anyway produces a surface that looks like the map through a
+/// blur — which reads as a bug in the map, or in the brush, or in the artist's
+/// file, and is none of those.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct DetailStampReport {
+    /// The world size of one image sample.
+    pub sample_size: f32,
+    /// The level's mean edge length.
+    pub vertex_spacing: f32,
+    /// Samples per vertex spacing. Above 1 is too fine.
+    pub oversampling: f32,
+    pub under_resolved: bool,
+}
+
+impl DetailStampReport {
+    fn from_raw(raw: sys::clay_detail_stamp_report) -> Self {
+        Self {
+            sample_size: raw.sample_size,
+            vertex_spacing: raw.vertex_spacing,
+            oversampling: raw.oversampling,
+            under_resolved: raw.under_resolved != 0,
+        }
+    }
+}
+
+/// A gesture into one channel: begin, stamp, commit, cancel.
+///
+/// Why a transaction and not a loop of stamps — three reasons, none of which
+/// exists until a stack does:
+///
+/// - A stroke has to enter **one** layer, fixed at pointer-down rather than
+///   read again per dab, or a host that changes the active layer mid-stroke
+///   splits one gesture across two channels.
+/// - A stamp **reads** the evaluated surface, so the composition is held for
+///   the length of the stroke.
+/// - Cancel has to be **exact**. A layered write is `L += dE`, so the only
+///   exact restore is the recorded `before` values, which means the record has
+///   to exist from the first stamp rather than be reconstructed at the end.
+///
+/// Under symmetry every mirrored stamp is another stamp in the same
+/// transaction, so a mirrored stroke is one layer and one record whose
+/// coverage is the union of the two sides.
+///
+/// The record itself does not cross this ABI: [`commit`](Self::commit) reports
+/// how many entries it held so a host can see that the gesture coalesced, and
+/// that is all. One layered gesture cannot yet become one entry in a host's
+/// undo stack.
+pub struct SculptLayerStroke<'s> {
+    raw: NonNull<sys::clay_multires_sculpt_layer_stroke>,
+    surface: &'s mut Multires,
+    /// Whether a gesture is open, so [`Drop`] knows whether it has a
+    /// composition hold to give back. Tracked here rather than asked of the
+    /// engine because there is no entry point that answers it.
+    open: bool,
+}
+
+impl SculptLayerStroke<'_> {
+    /// The hierarchy this gesture writes into.
+    pub fn surface(&self) -> &Multires {
+        self.surface
+    }
+
+    /// The same, to read a block out between stamps.
+    ///
+    /// Every composition change reachable through it — strength, visibility,
+    /// mask, order, add, remove — is refused by the engine while the gesture
+    /// is open, and that refusal is deliberate rather than a limitation: a
+    /// slider moved between two stamps would author one gesture against two
+    /// different surfaces, and one that appeared to move and then silently
+    /// applied at commit would be the worse surprise.
+    pub fn surface_mut(&mut self) -> &mut Multires {
+        self.surface
+    }
+
+    /// Where the next [`begin`](Self::begin) will land the stroke.
+    ///
+    /// Set *before* begin. Changing it while a gesture is open does nothing:
+    /// the domain is resolved once, which is the whole of the first reason a
+    /// transaction exists.
+    pub fn set_write_domain(&mut self, domain: WriteDomain) -> Result<()> {
+        // SAFETY: valid handle and a plain integer the entry point
+        // range-checks.
+        check(
+            unsafe {
+                sys::clay_multires_sculpt_layer_stroke_set_write_domain(
+                    self.raw.as_ptr(),
+                    domain.to_raw(),
+                )
+            },
+            "clay_multires_sculpt_layer_stroke_set_write_domain",
+        )
+    }
+
+    /// Opens the gesture: fixes the target channel, holds the composition and
+    /// clears the record.
+    ///
+    /// Refuses — changing nothing — on a gesture that is already open, on a
+    /// locked target layer, and on [`WriteDomain::Detail`] with no active
+    /// layer. The refusal names which, because those are three different
+    /// sentences a host has to be able to say.
+    pub fn begin(&mut self) -> std::result::Result<(), MultiresRefusal> {
+        let mut reason = 0i32;
+        // SAFETY: valid handle and an out-parameter written on every path.
+        let code =
+            unsafe { sys::clay_multires_sculpt_layer_stroke_begin(self.raw.as_ptr(), &mut reason) };
+        refusable("clay_multires_sculpt_layer_stroke_begin", code, reason)?;
+        self.open = true;
+        Ok(())
+    }
+
+    /// The channel this gesture is writing. [`SculptLayerId::BASE`] is the
+    /// base detail.
+    pub fn target_layer(&self) -> Result<SculptLayerId> {
+        let mut id = 0u64;
+        // SAFETY: valid handle, out-parameter written on success.
+        check(
+            unsafe {
+                sys::clay_multires_sculpt_layer_stroke_target_layer(self.raw.as_ptr(), &mut id)
+            },
+            "clay_multires_sculpt_layer_stroke_target_layer",
+        )?;
+        Ok(SculptLayerId(id))
+    }
+
+    /// One stamp at the surface's sculpt level, into the target channel.
+    ///
+    /// The same sixteen verbs, the same falloffs, the same mask and the same
+    /// automasking, because it is the same code. `mask` is the freeze.
+    pub fn stamp(&mut self, stamp: MeshStamp<'_>, mask: Option<&MaskField>) -> Result<StampReport> {
+        let desc = stamp.as_raw();
+        self.report_of("clay_multires_sculpt_layer_stroke_stamp", |raw, report| {
+            // SAFETY: valid handle; `desc` carries its own struct_size and
+            // borrows any alpha samples from `stamp`, which outlives this
+            // call; the mask is either a valid handle or null, both of which
+            // the entry point allows; the report is a versioned
+            // out-descriptor.
+            unsafe {
+                sys::clay_multires_sculpt_layer_stroke_stamp(raw, &desc, mask_ptr(mask), report)
+            }
+        })
+    }
+
+    /// A height or vector-displacement stamp, through the brush's own weight —
+    /// so the falloff, the mask gate, the automasking and the alpha compose
+    /// with it exactly as they do with a verb.
+    ///
+    /// Answers the oversampling reading beside the stamp's own report.
+    ///
+    /// A malformed image is **refused** rather than dropped, which is the
+    /// opposite of what [`MeshStamp::alpha`] does with one — and deliberately:
+    /// an alpha is a modulation, so losing it leaves the verb doing what it
+    /// would have done anyway, while the image *is* this operation, and
+    /// dropping it would report a successful stamp that moved nothing for a
+    /// reason nobody was told. The check happens before the pointer is handed
+    /// over, because the engine reads `channels * width * height` floats out
+    /// of it whatever its own validation says about the dimensions.
+    pub fn stamp_detail(
+        &mut self,
+        detail: DetailStamp<'_>,
+        brush: MeshStamp<'_>,
+        mask: Option<&MaskField>,
+    ) -> Result<(DetailStampReport, StampReport)> {
+        if !detail.is_well_formed() {
+            return Err(raw_failure(
+                "clay_multires_sculpt_layer_stroke_stamp_detail",
+                ErrorKind::InvalidArgument,
+            ));
+        }
+        let stamp_desc = detail.as_raw();
+        let brush_desc = brush.as_raw();
+        let mut resolution = sys::clay_detail_stamp_report::sized();
+        let report = self.report_of(
+            "clay_multires_sculpt_layer_stroke_stamp_detail",
+            |raw, report| {
+                // SAFETY: valid handle; both descriptors carry their own
+                // struct_size and borrow from `detail` and `brush`, which
+                // outlive this call; `detail.image` is `channels * width *
+                // height` floats, checked above, which is what the entry point
+                // reads; the mask is nullable; both reports are versioned
+                // out-descriptors.
+                unsafe {
+                    sys::clay_multires_sculpt_layer_stroke_stamp_detail(
+                        raw,
+                        &stamp_desc,
+                        &brush_desc,
+                        mask_ptr(mask),
+                        &mut resolution,
+                        report,
+                    )
+                }
+            },
+        )?;
+        Ok((DetailStampReport::from_raw(resolution), report))
+    }
+
+    /// Smooths at a stated frequency. See [`SmoothMode`] for why there are
+    /// three of them rather than one filter with a cutoff.
+    pub fn smooth(
+        &mut self,
+        mode: SmoothMode,
+        brush: MeshStamp<'_>,
+        mask: Option<&MaskField>,
+    ) -> Result<StampReport> {
+        let desc = brush.as_raw();
+        self.report_of("clay_multires_sculpt_layer_stroke_smooth", |raw, report| {
+            // SAFETY: as `stamp`, plus a mode the entry point range-checks.
+            unsafe {
+                sys::clay_multires_sculpt_layer_stroke_smooth(
+                    raw,
+                    mode.to_raw(),
+                    &desc,
+                    mask_ptr(mask),
+                    report,
+                )
+            }
+        })
+    }
+
+    /// The target channel toward zero.
+    ///
+    /// Touches neither the base nor any other layer, which is what makes it an
+    /// eraser for *this* pass rather than a flattening brush.
+    pub fn erase(&mut self, brush: MeshStamp<'_>, mask: Option<&MaskField>) -> Result<StampReport> {
+        let desc = brush.as_raw();
+        self.report_of("clay_multires_sculpt_layer_stroke_erase", |raw, report| {
+            // SAFETY: as `stamp`.
+            unsafe {
+                sys::clay_multires_sculpt_layer_stroke_erase(raw, &desc, mask_ptr(mask), report)
+            }
+        })
+    }
+
+    /// The level's own detail toward zero: the form back toward the pure
+    /// subdivision, with every layer left alone. Refused at level 0, where the
+    /// cage has no pure subdivision to return to.
+    ///
+    /// Neither this nor [`erase`](Self::erase) is undo, and the difference is
+    /// worth stating because a host will be tempted to wire one to the other:
+    /// undo walks a step list backwards and restores what a gesture changed,
+    /// wherever it was; these move the surface toward a named target under the
+    /// cursor, and are themselves gestures.
+    pub fn restore(
+        &mut self,
+        brush: MeshStamp<'_>,
+        mask: Option<&MaskField>,
+    ) -> Result<StampReport> {
+        let desc = brush.as_raw();
+        self.report_of(
+            "clay_multires_sculpt_layer_stroke_restore",
+            |raw, report| {
+                // SAFETY: as `stamp`.
+                unsafe {
+                    sys::clay_multires_sculpt_layer_stroke_restore(
+                        raw,
+                        &desc,
+                        mask_ptr(mask),
+                        report,
+                    )
+                }
+            },
+        )
+    }
+
+    /// How many stamps this gesture has taken.
+    ///
+    /// Compare it against [`record_size`](Self::record_size): a hundred stamps
+    /// over one vertex is *one* entry, because the record's size follows the
+    /// vertices the stroke reached and not the stamps it took, and comparing
+    /// the two is the only way to see that from outside.
+    pub fn stamps(&self) -> Result<usize> {
+        self.count_of("clay_multires_sculpt_layer_stroke_stamps", |raw, out| {
+            // SAFETY: valid handle, out-parameter written on success.
+            unsafe { sys::clay_multires_sculpt_layer_stroke_stamps(raw, out) }
+        })
+    }
+
+    /// How many entries the record holds — the vertices this gesture reached.
+    pub fn record_size(&self) -> Result<usize> {
+        self.count_of(
+            "clay_multires_sculpt_layer_stroke_record_size",
+            |raw, out| {
+                // SAFETY: valid handle, out-parameter written on success.
+                unsafe { sys::clay_multires_sculpt_layer_stroke_record_size(raw, out) }
+            },
+        )
+    }
+
+    /// Closes the gesture: releases the composition hold and restores the
+    /// stack's active layer.
+    ///
+    /// A gesture that changed nothing produces an empty record rather than a
+    /// step, which is what the returned entry count says.
+    pub fn commit(&mut self) -> Result<usize> {
+        let mut entries = 0usize;
+        // SAFETY: valid handle, out-parameter written on success.
+        let code = unsafe {
+            sys::clay_multires_sculpt_layer_stroke_commit(self.raw.as_ptr(), &mut entries)
+        };
+        // Cleared before the result is examined: a commit that refused still
+        // reports whether the gesture is open, and leaving the flag set would
+        // have `Drop` cancel a gesture the engine has already closed.
+        self.open = false;
+        check(code, "clay_multires_sculpt_layer_stroke_commit")?;
+        Ok(entries)
+    }
+
+    /// Discards it.
+    ///
+    /// Restores the target channel **exactly** — the recorded `before` values,
+    /// not a recomputation — and leaves the composition and the active layer
+    /// as they were found.
+    pub fn cancel(&mut self) -> Result<()> {
+        // SAFETY: valid handle.
+        let code = unsafe { sys::clay_multires_sculpt_layer_stroke_cancel(self.raw.as_ptr()) };
+        self.open = false;
+        check(code, "clay_multires_sculpt_layer_stroke_cancel")
+    }
+
+    /// The three verbs' shared shape: a versioned report out, a stamp in.
+    fn report_of(
+        &mut self,
+        operation: &'static str,
+        call: impl FnOnce(
+            *mut sys::clay_multires_sculpt_layer_stroke,
+            *mut sys::clay_multires_stamp_report,
+        ) -> RawResult,
+    ) -> Result<StampReport> {
+        let mut report = sys::clay_multires_stamp_report::sized();
+        check(call(self.raw.as_ptr(), &mut report), operation)?;
+        Ok(StampReport::from_raw(report))
+    }
+
+    /// The two counters' shared shape.
+    fn count_of(
+        &self,
+        operation: &'static str,
+        call: impl FnOnce(*const sys::clay_multires_sculpt_layer_stroke, *mut usize) -> RawResult,
+    ) -> Result<usize> {
+        let mut count = 0usize;
+        check(call(self.raw.as_ptr(), &mut count), operation)?;
+        Ok(count)
+    }
+}
+
+/// A freeze, or nothing. Both are what the entry points accept.
+fn mask_ptr(mask: Option<&MaskField>) -> *const sys::clay_mask {
+    mask.map_or(std::ptr::null(), |m| m.as_ptr() as *const _)
+}
+
+impl Drop for SculptLayerStroke<'_> {
+    fn drop(&mut self) {
+        // A gesture still open here is a caller's bug — a `?` that returned
+        // between `begin` and `commit`, or a panic — and cancel is the only
+        // outcome that leaves anything readable behind. Committing would bank
+        // half a gesture, and destroying without either would leave the
+        // composition held on a surface with no transaction left to release
+        // it, which no later call can recover from. The result is discarded
+        // because a `Drop` has nobody to report to.
+        if self.open {
+            // SAFETY: owned handle, still valid; cancel restores the recorded
+            // `before` values and releases the hold.
+            let _ = unsafe { sys::clay_multires_sculpt_layer_stroke_cancel(self.raw.as_ptr()) };
+        }
+        // SAFETY: owned handle, released exactly once, and before the borrow
+        // of the surface it points at ends — so the surface it holds a bare
+        // pointer to is still alive here.
+        unsafe { sys::clay_multires_sculpt_layer_stroke_destroy(self.raw.as_ptr()) };
+    }
+}
+
+impl std::fmt::Debug for SculptLayerStroke<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SculptLayerStroke")
+            .field("open", &self.open)
+            .field("target", &self.target_layer().ok())
+            .field("stamps", &self.stamps().ok())
             .finish()
     }
 }
