@@ -862,24 +862,31 @@ mod the_manipulators_rules {
         );
     }
 
-    /// A placed object carries the three scale boxes, and a whole subtool does
-    /// not.
+    /// The three scale boxes are offered wherever a stretch can be applied,
+    /// and a whole subtool is now one of those places.
     ///
-    /// The engine's *node* transform takes a factor per axis and its *layer*
-    /// transform takes one, so the boxes are offered exactly where they can be
-    /// applied. This asserted the opposite for as long as nothing had bound
-    /// `clay_layer_set_transform_nonuniform`, on the reasoning that "an axis
-    /// box would measure a stretch the engine cannot apply".
+    /// This has been turned around twice, and the history is the point. It
+    /// first asserted that *nothing* carried the boxes, because nothing had
+    /// bound `clay_item_set_scale_nonuniform`. It then asserted a node did and
+    /// a layer did not, because `clay_document_set_layer_transform` took one
+    /// factor. ClayCore 0.74.0 gave the layer transform a per-axis form
+    /// (#373), so the remaining half of that sentence stopped being true too,
+    /// and the flag is now what it always described: whether the engine can
+    /// apply a stretch to what the manipulator is standing on.
     #[test]
-    fn the_boxes_are_offered_on_a_node_and_not_on_a_layer() {
+    fn the_boxes_are_offered_wherever_a_stretch_can_be_applied() {
         let boxes = |per_axis| {
             GizmoHandle::combined(per_axis)
                 .into_iter()
                 .filter(|(mode, _)| *mode == GizmoMode::Scale)
                 .count()
         };
-        assert_eq!(boxes(true), 3, "a placed object stretches per axis");
-        assert_eq!(boxes(false), 0, "a whole layer scales by one factor");
+        assert_eq!(boxes(true), 3, "a target the engine can stretch per axis");
+        assert_eq!(
+            boxes(false),
+            0,
+            "and none at all where it cannot, which is what the flag is for"
+        );
     }
 }
 

@@ -367,7 +367,7 @@ pub(super) fn selected_object_controls(
         .color(Tokens::text_dim()),
     );
     ui.label(
-        egui::RichText::new(s.hint_uniform_scale)
+        egui::RichText::new(s.hint_axis_scale)
             .size(type_scale::LABEL)
             .color(Tokens::text_dim()),
     );

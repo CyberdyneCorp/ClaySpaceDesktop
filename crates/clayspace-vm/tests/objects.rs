@@ -786,14 +786,22 @@ fn a_drag_with_nothing_selected_does_nothing() {
     assert!(calls.transforms.is_empty());
 }
 
-/// A placed object stretches per axis, and a whole subtool does not.
+/// A placed object stretches per axis, and so does a whole subtool.
 ///
-/// The engine's node transform takes a factor per axis and its layer transform
-/// takes one, so the boxes are offered exactly where they can be applied. This
-/// asserted the opposite — the centre handle alone on an object — for as long
-/// as nothing had bound `clay_layer_set_transform_nonuniform`.
+/// This assertion has been turned around twice and both turns were an engine
+/// capability the interface had not caught up with. It first said the centre
+/// handle alone, on everything, because nothing had bound
+/// `clay_item_set_scale_nonuniform`. It then said a node stretched and a layer
+/// did not, because `clay_document_set_layer_transform` took one factor.
+/// ClayCore 0.74.0 gave the layer transform a per-axis form (#373), so the
+/// remaining half went too, and the manipulator is now one widget with three
+/// boxes on it whatever it is pointed at.
+///
+/// Nothing is dropped: the flag is still a question with a false answer —
+/// pointed at nothing, there is no stretch to offer — which is what keeps the
+/// three boxes from being drawn over an empty selection.
 #[test]
-fn a_placed_object_stretches_per_axis_and_a_subtool_does_not() {
+fn a_placed_object_and_a_whole_subtool_both_stretch_per_axis() {
     let (mut vm, _) = viewmodel();
     place(&mut vm);
     assert!(
@@ -806,8 +814,15 @@ fn a_placed_object_stretches_per_axis_and_a_subtool_does_not() {
         Command::SetGizmoTarget(Some(GizmoTarget::Layer(clayspace_model::LayerKey(1)))),
     );
     assert!(
+        vm.per_axis_scale(),
+        "a whole subtool is a layer, and a layer's transform has taken three \
+         factors since ClayCore 0.74.0"
+    );
+
+    send(&mut vm, Command::SetGizmoTarget(None));
+    assert!(
         !vm.per_axis_scale(),
-        "a whole subtool is a layer, and a layer's transform takes one factor"
+        "pointed at nothing, there is no stretch to offer"
     );
 }
 
