@@ -1050,6 +1050,21 @@ form** is defined by visual parity — the surface after equals the surface
 before, at any strength including zero — so what they cost is the slider, not
 the shape.
 
+**The stack is drawn under the layer it stands on**, in the same shape a grid's
+passes take — a row per pass with an eye, a name and a strength — with the
+**form** as a row of its own beneath them. Which row is selected is the whole
+answer to where the next stroke goes: there is no separate three-way control,
+because a second way to say the same thing would disagree with the first the
+moment one of them moved.
+
+A pass is **reordered by dragging its name onto another row**, rather than by
+two arrows. On a grid the top of the stack wins where two passes overlap, so
+arrows say something about the result; here they would say something untrue.
+The lock, the merge, the bake and the removal live in the row's own menu, where
+deleting a layer already does — the left panel gives a nested row about two
+hundred pixels, and the first version of this row put a grip, two icons, a
+name, three buttons and a dial in them.
+
 **A lock refuses a stroke and permits every property change.** That is the
 engine's rule and it is the useful one: a lock exists so a sculptor can keep
 working over a finished pass, and one that also froze the name and the slider

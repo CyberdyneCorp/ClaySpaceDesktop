@@ -407,6 +407,10 @@ impl SculptViewModel {
             // neither is a brush setting: the shelf offers the same verbs
             // either way, so nothing this ViewModel holds follows it.
             | Command::MultiresLevel(_)
+            // And a pass is a property of the hierarchy's stack, not of the
+            // brush: the shelf offers the same verbs whichever pass a stroke
+            // is going into.
+            | Command::MultiresSculptLayer(_)
             | Command::SetLayerVisible(..)
             // Solo shows a subtool alone without making it the one a brush
             // lands on, so nothing this ViewModel holds follows it.

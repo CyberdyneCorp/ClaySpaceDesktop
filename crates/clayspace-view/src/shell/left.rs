@@ -105,6 +105,13 @@ pub(super) fn layers_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &
     if state.representation == Representation::Mesh {
         remesh_control(ui, state, queue);
     }
+    // And the hierarchy's: a new pass, what the stack costs, and why the
+    // composition controls are refusing while the pointer is down. Under the
+    // list because that is where the passes themselves are.
+    if state.representation == Representation::Multires {
+        ui.add_space(space::SNUG);
+        multires_pass_control(ui, state, queue);
+    }
 
     ui.add_space(space::SNUG);
     add_layer_control(ui, state, queue);
@@ -295,8 +302,506 @@ pub(super) fn layer_row(
         for pass in layer.sculpt_layers.iter().rev() {
             sculpt_layer_row(ui, state, pass, count, queue);
         }
+        // And the hierarchy's own stack, in the same place and for the same
+        // reason. A different stack with a different addressing, drawn beside
+        // the grid's rather than in a second idiom: a sculptor reading a layer
+        // row already knows where a pass lives. Never both at once — a layer
+        // is a grid or a hierarchy — so the two loops cannot interleave.
+        if let Some(hierarchy) = layer.multires.as_ref() {
+            multires_stack(ui, state, hierarchy, queue);
+        }
     }
     ui.add_space(space::HAIR);
+}
+
+/// The id a hierarchy's pass row is registered under, so a test can ask where
+/// a row went rather than measuring it off a capture.
+pub fn multires_pass_row_id(id: clayspace_model::MultiresSculptLayerId) -> egui::Id {
+    egui::Id::new(("multires-pass", id.raw()))
+}
+
+/// The same for the row that stands for the form under the passes.
+pub fn multires_form_row_id() -> egui::Id {
+    egui::Id::new("multires-form")
+}
+
+/// Where the offer of a new pass was drawn.
+pub fn multires_add_pass_id() -> egui::Id {
+    egui::Id::new("multires-add-pass")
+}
+
+/// And the offer to release what a stroke that undid itself left behind.
+pub fn multires_compact_id() -> egui::Id {
+    egui::Id::new("multires-compact")
+}
+
+/// A hierarchy's stack of passes, nested under the layer it stands on.
+///
+/// Top of the stack first, as the layer list itself is ordered — and then the
+/// **form**, which is not a pass and is drawn as one anyway. That row is the
+/// whole of the write domain as this application expresses it: `Automatic`
+/// resolves to the active pass, or to the form where none is active, so which
+/// row is selected *is* the answer to "where does the next stroke go". A
+/// separate three-way control beside these rows would be a second way to say
+/// the same thing, and the two would disagree the first time one of them
+/// moved.
+///
+/// The form is at the bottom because that is where it is: everything above it
+/// is stacked on it.
+fn multires_stack(
+    ui: &mut egui::Ui,
+    state: &ShellState<'_>,
+    hierarchy: &clayspace_model::MultiresState,
+    queue: &mut CommandQueue,
+) {
+    for pass in hierarchy.sculpt_layers.iter().rev() {
+        multires_pass_row(
+            ui,
+            state,
+            pass,
+            hierarchy.active_sculpt_layer == pass.id,
+            queue,
+        );
+    }
+    multires_form_row(ui, state, hierarchy.active_sculpt_layer.is_base(), queue);
+}
+
+/// Adding a pass, what the stack costs, and why it is refusing.
+///
+/// The offer is enabled and refused by the model rather than greyed out here,
+/// which is the arrangement every other control in this panel takes: the
+/// engine holds the composition for the length of a gesture and answers with a
+/// sentence, and a button greyed from this side would have to guess at the
+/// same rule and could come to disagree with it. What is drawn here instead is
+/// the *reason*, while it stands.
+///
+/// The bytes are shown and nothing is enforced against them, for the reason
+/// the grid's stack enforces nothing against its own: a cap that silently
+/// stopped recording would leave a pass on the surface and un-dialable. What a
+/// sculptor has instead is four levers — compact, dial, merge, remove — in
+/// increasing order of what they cost.
+fn multires_pass_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    use clayspace_model::MultiresSculptLayerOp as Op;
+
+    let s = state.strings;
+    ui.horizontal(|ui| {
+        let add = ui.button(format!("+  {}", s.multires_add_pass));
+        ui.ctx()
+            .memory_mut(|memory| memory.data.insert_temp(multires_add_pass_id(), add.rect));
+        if add.clicked() {
+            queue.push(Command::MultiresSculptLayer(Op::Add {
+                // Unnamed: `MultiresSculptLayer::display_name` numbers it off
+                // the row it is standing in, which is the number a sculptor is
+                // counting. A name minted here would be minted from an id, and
+                // ids are never reused — so a sculptor who made and deleted
+                // nine passes would meet "Passe 10" as their second.
+                name: String::new(),
+            }));
+        }
+        let Some(cost) = state.multires_cost else {
+            return;
+        };
+        // Offered only where there is something to release. Walking every
+        // stored block of every pass is proportional to the stack rather than
+        // to the dab, so this is a button and never something done for a
+        // sculptor between strokes.
+        if cost.layers > 0 {
+            let compact = ui.button(s.multires_compact);
+            ui.ctx()
+                .memory_mut(|memory| memory.data.insert_temp(multires_compact_id(), compact.rect));
+            if compact.clicked() {
+                queue.push(Command::MultiresSculptLayer(Op::Compact));
+            }
+        }
+    });
+    // On its own line rather than beside the buttons: the panel is two hundred
+    // pixels wide and the figure came off the end of it, reading "18.0 M".
+    if let Some(cost) = state.multires_cost.filter(|cost| cost.layers > 0) {
+        ui.label(
+            egui::RichText::new(format!(
+                "{} · {} {}",
+                bytes_label(cost.bytes),
+                thousands(cost.coverage_vertices as usize),
+                s.multires_vertices
+            ))
+            .size(type_scale::LABEL)
+            .color(if cost.worth_compacting() {
+                Tokens::accent()
+            } else {
+                Tokens::text_dim()
+            }),
+        );
+    }
+    // The state that reads as a set of controls that have stopped working,
+    // said where it is true. A stamp reads the evaluated surface, so a slider
+    // moved between two stamps would author one gesture against two different
+    // surfaces — the engine refuses rather than deferring, and this is that
+    // refusal arriving before it is met.
+    if state.multires_cost.is_some_and(|cost| cost.stroke_open) {
+        ui.label(
+            egui::RichText::new(s.multires_stroke_open)
+                .size(type_scale::LABEL)
+                .color(Tokens::accent()),
+        );
+    }
+}
+
+/// One pass on a hierarchy, indented under the layer it stands on.
+///
+/// Deliberately the same shape as [`sculpt_layer_row`] beside it, because a
+/// sculptor should not have to learn a second layer idiom to work a second
+/// representation. What differs is what the two stacks actually differ in:
+/// this one is addressed by an id rather than by a position, it carries a lock
+/// a grid's passes do not have, and its order is organisation rather than
+/// result — so it is reordered by dragging the row rather than by two arrows,
+/// which on a grid say something about which pass wins and here would say
+/// something untrue.
+///
+/// **The name is the drag handle**, which is what a layer list does everywhere
+/// else and what the width allows: the left panel gives a nested row about two
+/// hundred pixels, and the first version of this put a grip, two icons, a
+/// name, three glyph buttons and a dial in them. The picture is what caught
+/// it — the name came out as a single letter between two boxes, and two of the
+/// three glyphs were not in the font at all. So everything that is not reached
+/// often lives in the row's own menu, where deleting a layer already lives.
+fn multires_pass_row(
+    ui: &mut egui::Ui,
+    state: &ShellState<'_>,
+    pass: &clayspace_model::MultiresSculptLayer,
+    // Whether the next stroke lands here.
+    selected: bool,
+    queue: &mut CommandQueue,
+) {
+    use clayspace_model::MultiresSculptLayerOp as Op;
+
+    let row = egui::Frame::new()
+        .fill(if selected {
+            Tokens::raised()
+        } else {
+            Tokens::panel()
+        })
+        .inner_margin(egui::Margin::symmetric(
+            space::SNUG as i8,
+            space::HAIR as i8,
+        ))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.add_space(space::SNUG);
+                let eye = if pass.visible {
+                    Icon::Visible
+                } else {
+                    Icon::Hidden
+                };
+                if icons::button(ui, eye, pass.visible).clicked() {
+                    queue.push(Command::MultiresSculptLayer(Op::SetVisible {
+                        id: pass.id,
+                        visible: !pass.visible,
+                    }));
+                }
+                multires_pass_name(ui, state, pass, selected, queue);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let mut strength = pass.strength;
+                    let dial = ui.add(
+                        egui::DragValue::new(&mut strength)
+                            .speed(0.01)
+                            .range(0.0..=1.0)
+                            .fixed_decimals(2),
+                    );
+                    // The widget's own id, so a test can put the keyboard on
+                    // it. A click on a `DragValue` sets it to wherever the
+                    // pointer landed, so a test driven by clicking would pass
+                    // with the emission below deleted.
+                    ui.ctx().memory_mut(|memory| {
+                        memory
+                            .data
+                            .insert_temp(multires_strength_id(pass.id), dial.id)
+                    });
+                    if dial.changed() {
+                        queue.push(Command::MultiresSculptLayer(Op::SetStrength {
+                            id: pass.id,
+                            strength,
+                        }));
+                    }
+                    multires_pass_badges(ui, state, pass);
+                });
+            });
+        });
+
+    ui.ctx().memory_mut(|memory| {
+        memory
+            .data
+            .insert_temp(multires_pass_row_id(pass.id), row.response.rect)
+    });
+    if selected {
+        selection_rail(ui, row.response.rect);
+    }
+    // Dropped on this row: the dragged pass takes this one's place. A position
+    // and not an offset, because that is what the engine's move takes and what
+    // a list drag means — released over the third row, it becomes the third.
+    if let Some(dragged) = row
+        .response
+        .dnd_release_payload::<clayspace_model::MultiresSculptLayerId>()
+    {
+        if *dragged != pass.id {
+            queue.push(Command::MultiresSculptLayer(Op::Move {
+                id: *dragged,
+                to: pass.index,
+            }));
+        }
+    }
+}
+
+/// What a pass is, drawn as marks rather than as controls.
+///
+/// On the right and beside the dial, which is where a layer row already puts
+/// its lock and its ghost, and shown only where they are true — so the name
+/// begins in the same place on every row and a stack of ordinary passes is a
+/// clean column rather than a grid of grey icons. The lock is set from the
+/// row's menu for the same reason a layer's protection is.
+///
+/// The picture is what decided this. The first version put a lock button on
+/// every row: `icons::button` separates its two states by one tone step, and
+/// three rows of which one was locked were indistinguishable at sixteen
+/// pixels.
+fn multires_pass_badges(
+    ui: &mut egui::Ui,
+    state: &ShellState<'_>,
+    pass: &clayspace_model::MultiresSculptLayer,
+) {
+    let s = state.strings;
+    let badge = |ui: &mut egui::Ui, icon: Icon, hint: &str| {
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(size::ICON, size::ICON), egui::Sense::hover());
+        icons::paint(ui.painter(), rect, icon, Tokens::accent());
+        response.on_hover_text(hint.to_owned());
+    };
+    // A stored mask of the pass's own, which is a different thing from the
+    // freeze a brush is gated by: this one is saved with the pass and says
+    // where it contributes. See `Hierarchy::sculpt_layers` for why nothing in
+    // this application can light it yet.
+    if pass.masked {
+        badge(ui, Icon::MaskPaint, s.multires_mask);
+    }
+    if pass.locked {
+        badge(ui, Icon::Locked, s.multires_locked);
+    }
+}
+
+/// The pass's name: what selects it, what drags it, and what its menu hangs
+/// off.
+///
+/// One widget carrying all three because that is what a layer list is
+/// everywhere a sculptor has met one. `dnd_drag_source` adds a drag sense over
+/// the label and hands back both responses joined, so the click still selects
+/// and a drag still reorders — and because the sense is on the label rather
+/// than on the whole row, it does not swallow the strength control's own drag.
+fn multires_pass_name(
+    ui: &mut egui::Ui,
+    state: &ShellState<'_>,
+    pass: &clayspace_model::MultiresSculptLayer,
+    selected: bool,
+    queue: &mut CommandQueue,
+) {
+    use clayspace_model::MultiresSculptLayerOp as Op;
+
+    let s = state.strings;
+    let name = egui::RichText::new(pass.display_name())
+        .size(type_scale::LABEL)
+        // A pass with nothing stored on it is shown rather than hidden and
+        // reads as what it is: a sculptor who made one and has not used it yet
+        // needs to see it to send a stroke into it.
+        .color(if pass.is_empty() {
+            Tokens::text_dim()
+        } else {
+            Tokens::text()
+        });
+    let response = ui
+        .dnd_drag_source(multires_grip_id(pass.id), pass.id, |ui| {
+            ui.selectable_label(selected, name)
+        })
+        .response
+        .on_hover_text(format!(
+            "{} · {} {} · {}",
+            s.multires_pass_hint,
+            thousands(pass.coverage_vertices as usize),
+            s.multires_vertices,
+            bytes_label(pass.bytes)
+        ));
+    if response.clicked() {
+        queue.push(Command::MultiresSculptLayer(Op::SetActive { id: pass.id }));
+    }
+    response.context_menu(|ui| multires_pass_menu(ui, state, pass, queue));
+}
+
+/// What a pass's own menu offers: the three that take something away.
+///
+/// In a menu rather than on the row because the row has no width for them and
+/// because none of the three is reached often — a sculptor dials a pass many
+/// times for every time they merge one. Deleting a layer already lives in a
+/// row's menu here, so this is where a sculptor looks.
+fn multires_pass_menu(
+    ui: &mut egui::Ui,
+    state: &ShellState<'_>,
+    pass: &clayspace_model::MultiresSculptLayer,
+    queue: &mut CommandQueue,
+) {
+    use clayspace_model::MultiresSculptLayerOp as Op;
+
+    let s = state.strings;
+    // A lock guards the coefficients and nothing else — the name, the slider,
+    // the visibility and the mask all stay the sculptor's — so it is offered
+    // in both directions from the same entry. A lock a sculptor could not take
+    // off from where they put it on would be a trap.
+    let lock = ui.button(if pass.locked {
+        s.multires_unlock
+    } else {
+        s.multires_lock
+    });
+    ui.ctx().memory_mut(|memory| {
+        memory
+            .data
+            .insert_temp(multires_lock_id(pass.id), lock.rect)
+    });
+    if lock.clicked() {
+        queue.push(Command::MultiresSculptLayer(Op::SetLocked {
+            id: pass.id,
+            locked: !pass.locked,
+        }));
+        ui.close_menu();
+    }
+    ui.separator();
+    // Merging needs a pass below to merge into, so the entry is absent on the
+    // bottom row rather than present and refusing.
+    if pass.index > 0 {
+        let merge = ui.button(s.sculpt_merge_down);
+        ui.ctx().memory_mut(|memory| {
+            memory
+                .data
+                .insert_temp(multires_merge_id(pass.id), merge.rect)
+        });
+        if merge.clicked() {
+            queue.push(Command::MultiresSculptLayer(Op::MergeDown { id: pass.id }));
+            ui.close_menu();
+        }
+    }
+    // The same statement with the form under the passes as the target, which
+    // is the one every pass can make, including the bottom one.
+    let bake = ui.button(s.multires_bake);
+    ui.ctx().memory_mut(|memory| {
+        memory
+            .data
+            .insert_temp(multires_bake_id(pass.id), bake.rect)
+    });
+    if bake.clicked() {
+        queue.push(Command::MultiresSculptLayer(Op::BakeToBase { id: pass.id }));
+        ui.close_menu();
+    }
+    let remove = ui.button(s.sculpt_remove);
+    ui.ctx().memory_mut(|memory| {
+        memory
+            .data
+            .insert_temp(multires_remove_id(pass.id), remove.rect)
+    });
+    if remove.clicked() {
+        queue.push(Command::MultiresSculptLayer(Op::Remove { id: pass.id }));
+        ui.close_menu();
+    }
+}
+
+/// Where a pass's menu entries were drawn, so a test can ask rather than
+/// measure an offset off a capture.
+pub fn multires_lock_id(id: clayspace_model::MultiresSculptLayerId) -> egui::Id {
+    egui::Id::new(("multires-lock", id.raw()))
+}
+
+pub fn multires_merge_id(id: clayspace_model::MultiresSculptLayerId) -> egui::Id {
+    egui::Id::new(("multires-merge", id.raw()))
+}
+
+pub fn multires_bake_id(id: clayspace_model::MultiresSculptLayerId) -> egui::Id {
+    egui::Id::new(("multires-bake", id.raw()))
+}
+
+pub fn multires_remove_id(id: clayspace_model::MultiresSculptLayerId) -> egui::Id {
+    egui::Id::new(("multires-remove", id.raw()))
+}
+
+/// The id a pass's strength control registers itself under.
+pub fn multires_strength_id(id: clayspace_model::MultiresSculptLayerId) -> egui::Id {
+    egui::Id::new(("multires-strength", id.raw()))
+}
+
+/// The id a pass's drag handle is registered under.
+fn multires_grip_id(id: clayspace_model::MultiresSculptLayerId) -> egui::Id {
+    egui::Id::new(("multires-grip", id.raw()))
+}
+
+/// The row that stands for the form under the passes.
+///
+/// Drawn even where there are no passes, and that is deliberate: a hierarchy
+/// with an empty stack is being sculpted in its form, and a row saying so is
+/// how a sculptor learns there is anywhere else for a stroke to go before they
+/// need it.
+///
+/// Built like a pass row — the same frame, the same fill when selected, the
+/// same rail — and with the two icon slots left empty rather than filled, so
+/// its name lines up with theirs. The first version drew it as a bare label
+/// and it read as a stray caption under the stack rather than as the row a
+/// stroke can be sent to; the picture is what said so.
+fn multires_form_row(
+    ui: &mut egui::Ui,
+    state: &ShellState<'_>,
+    selected: bool,
+    queue: &mut CommandQueue,
+) {
+    let s = state.strings;
+    let row = egui::Frame::new()
+        .fill(if selected {
+            Tokens::raised()
+        } else {
+            Tokens::panel()
+        })
+        .inner_margin(egui::Margin::symmetric(
+            space::SNUG as i8,
+            space::HAIR as i8,
+        ))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.add_space(space::SNUG);
+                // Where a pass carries its eye. The form has none — it cannot
+                // be hidden, since hiding the surface under the passes is not
+                // a thing a hierarchy can do — so the slot is held rather than
+                // closed up, or the one row a sculptor is choosing between
+                // would be the one that does not line up with the others.
+                ui.add_space(size::ICON + ui.spacing().item_spacing.x);
+                let label = egui::RichText::new(s.multires_form)
+                    .size(type_scale::LABEL)
+                    .color(if selected {
+                        Tokens::text()
+                    } else {
+                        Tokens::text_dim()
+                    });
+                ui.selectable_label(selected, label)
+                    .on_hover_text(s.multires_form_hint)
+            })
+            .inner
+        });
+
+    ui.ctx().memory_mut(|memory| {
+        memory
+            .data
+            .insert_temp(multires_form_row_id(), row.response.rect)
+    });
+    if selected {
+        selection_rail(ui, row.response.rect);
+    }
+    if row.inner.clicked() {
+        queue.push(Command::MultiresSculptLayer(
+            clayspace_model::MultiresSculptLayerOp::SetActive {
+                id: clayspace_model::MultiresSculptLayerId::BASE,
+            },
+        ));
+    }
 }
 
 /// One recorded pass, indented under the layer it belongs to.

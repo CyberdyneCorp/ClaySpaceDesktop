@@ -920,9 +920,45 @@ impl App {
     /// changed.
     fn run_multires_level_op(&mut self, op: clayspace_model::MultiresLevelOp) {
         let redraws = op.changes_what_is_drawn();
-        if self.scene.apply_level_op(op).is_ok() && redraws {
+        if self.scene.apply_level_op(op).is_ok() {
+            // Marked whatever it moved. Both levels are stored *inside* the
+            // hierarchy's serialized bytes, so moving the sculpt level alone
+            // changes what a save would write even though it changes nothing
+            // that is drawn — and a document that did not know it had been
+            // touched would offer to close without it.
             self.document_vm.touched();
-            self.sync_geometry();
+            if redraws {
+                self.sync_geometry();
+            }
+        }
+        self.request_redraw();
+    }
+
+    /// Acts on the active hierarchy's stack of passes.
+    ///
+    /// Through the scene ViewModel, exactly as the levels are, and for the
+    /// same reason: the refusal is half the operation. A locked pass, a slider
+    /// moved before the pointer came up, a merge with nothing beneath it — all
+    /// three are sentences a sculptor acts on, and all three would be a
+    /// control that did nothing and said nothing if the outcome were dropped.
+    ///
+    /// Only three of the eleven redraw. An additive stack commutes, so sliding
+    /// a pass through it moves no vertex; a rename, a lock and a change of
+    /// which pass takes the next stroke move nothing either. Re-meshing for
+    /// those would be paying for a picture that has not changed — on a
+    /// representation where the picture is millions of vertices wide.
+    fn run_multires_pass_op(&mut self, op: clayspace_model::MultiresSculptLayerOp) {
+        let redraws = op.changes_the_surface();
+        if self.scene.apply_sculpt_layer_op(op).is_ok() {
+            // Every one of the eleven changes what a save would write — the
+            // names, the order, the strengths and the coefficients are all
+            // inside the hierarchy's serialized bytes — so the document is
+            // touched whether or not the picture moved. Only the three that
+            // move it re-mesh.
+            self.document_vm.touched();
+            if redraws {
+                self.sync_geometry();
+            }
         }
         self.request_redraw();
     }
@@ -3406,6 +3442,7 @@ impl App {
             Command::ToggleRepair => self.show_repair = !self.show_repair,
             Command::SculptLayer(op) => self.run_sculpt_layer_op(op.clone()),
             Command::MultiresLevel(op) => self.run_multires_level_op(*op),
+            Command::MultiresSculptLayer(op) => self.run_multires_pass_op(op.clone()),
             Command::ToggleDeform => self.show_deform = !self.show_deform,
             Command::ToggleReferences => self.show_references = !self.show_references,
             Command::LoadReference(plane) => self.load_reference(*plane),
@@ -3654,6 +3691,16 @@ impl App {
             // The engine's own preflight, asked per frame because it costs
             // microseconds and moves with every level added or removed.
             subdivision_cost: self.scene.subdivision_cost(),
+            // The stack's own figures, and whether the pointer is still down.
+            // The engine refuses a composition change while a gesture is open,
+            // so the controls read that rather than discovering it.
+            multires_cost: self
+                .scene
+                .scene()
+                .get()
+                .active_layer()
+                .and_then(|layer| layer.multires.as_ref())
+                .map(|hierarchy| hierarchy.cost(self.sculpt.is_stroking())),
             document_name: document_name.as_str(),
             modified: *self.document_vm.modified().get(),
             tool: *self.sculpt.tool().get(),
@@ -3676,10 +3723,19 @@ impl App {
             // re-shape, a re-combine, a removal and a refused transform each
             // wrote one and none of them reached the screen.
             tool_status: self
-                .references
+                // The document's own, first: a save or an open that failed is
+                // the most recent explicit action there is, and it is the one
+                // whose silence costs work rather than a click. This
+                // Observable has said "the last failure, for the interface to
+                // show" since it was written and nothing showed it — so a
+                // save refused because a hierarchy's side-car could not be
+                // written went to stderr, and the sculptor was left looking at
+                // a document that had failed to save and did not say so.
+                .document_vm
                 .notice()
                 .get()
                 .as_deref()
+                .or(self.references.notice().get().as_deref())
                 .or(self.mask.notice().get().as_deref())
                 .or(self.objects.notice().get().as_deref())
                 // The scene's, which `run_remesh` has claimed reaches the

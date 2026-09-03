@@ -295,6 +295,15 @@ pub enum Command {
     /// passes by position, and a hierarchy's are a different stack with
     /// different addressing.
     MultiresLevel(clayspace_model::MultiresLevelOp),
+    /// Acts on the active hierarchy's stack of passes.
+    ///
+    /// A *different* enum from [`Command::SculptLayer`] rather than a shared
+    /// one, and that is the whole point of it: a grid's stack is addressed by
+    /// position and a hierarchy's by an id the engine minted, because a
+    /// hierarchy's reorder renumbers every position at or below the pass it
+    /// moves. Pointing one command at the other stack would compile and would
+    /// address the wrong pass.
+    MultiresSculptLayer(clayspace_model::MultiresSculptLayerOp),
     /// Whether the deform panel is open.
     ToggleDeform,
     /// What that panel is set to.
@@ -463,6 +472,11 @@ impl Command {
                 // composition root's own path, where its refusal has
                 // somewhere to land.
                 | Self::MultiresLevel(_)
+                // Nor is a pass. Dialling one is a property of the stack that
+                // stays adjustable long after the strokes that filled it, and
+                // a sculptor whose next undo took back a slider rather than
+                // the work would have to choose between the two.
+                | Self::MultiresSculptLayer(_)
                 // Choosing how the *next* edit combines changes nothing yet;
                 // the stroke that follows is the entry.
                 | Self::SetCombine(_)
@@ -690,6 +704,7 @@ impl Command {
             Self::SetCombine(_) => "combine operation",
             Self::SculptLayer(op) => op.label(),
             Self::MultiresLevel(op) => op.label(),
+            Self::MultiresSculptLayer(op) => op.label(),
             Self::ToggleDeform => "deform panel",
             Self::SetDeform(_) => "deform settings",
             Self::RunDeform => "deform",

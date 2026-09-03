@@ -246,8 +246,9 @@ fn state<'a>(
         lattice: clayspace_model::LatticeState::default(),
         lattice_divisions: [3; 3],
         // The default capture holds no hierarchy, so there is nothing to
-        // price. The hierarchy capture below sets it.
+        // price and no stack to cost. The hierarchy captures below set both.
         subdivision_cost: None,
+        multires_cost: None,
         // A rig, mid-edit, so the capture shows the armature section and the
         // menu entries that depend on it rather than a row of grey.
         armature: clayspace_view::ArmatureState {
@@ -4286,6 +4287,443 @@ fn the_hierarchy_section_asks_for_the_level_rather_than_drawing_one() {
         asked.iter().any(|level| *level < 3),
         "the arrow key moved the sculpt level nowhere: it emitted {asked:?}"
     );
+}
+
+// -- the hierarchy's stack of passes -----------------------------------------
+
+/// Where the two icons at the head of a pass row sit, from the row's left edge.
+///
+/// Measured off the interface rather than guessed: the frame's own margin, the
+/// indent, and one icon's width apiece. They are constants and not registered
+/// ids because two icons are not worth two more public handles — and an offset
+/// that went stale would land on the other icon and fail loudly, which is the
+/// property that makes it safe.
+const EYE: f32 = 24.0;
+/// And where a name begins, which is the same on a pass row and on the form's,
+/// because the form holds the eye's slot empty rather than closing it up.
+const NAME: f32 = 46.0;
+
+/// A pass, as the layer stack shows one.
+fn pass(id: u64, index: usize, name: &str, strength: f32) -> clayspace_model::MultiresSculptLayer {
+    clayspace_model::MultiresSculptLayer {
+        id: clayspace_model::MultiresSculptLayerId::new(id),
+        index,
+        name: name.to_string(),
+        strength,
+        visible: true,
+        locked: false,
+        masked: false,
+        coverage_vertices: 12_480 * (index as u64 + 1),
+        bytes: 3 * 1024 * 1024 * (index + 1),
+    }
+}
+
+/// The fixture scene, with the active layer a hierarchy carrying `passes`.
+fn with_a_stack(
+    scene: &Scene,
+    passes: Vec<clayspace_model::MultiresSculptLayer>,
+    active: clayspace_model::MultiresSculptLayerId,
+) -> Scene {
+    let mut fixture = with_a_hierarchy(scene, 4);
+    let key = fixture.active.expect("the fixture has an active layer");
+    for layer in &mut fixture.layers {
+        if layer.key == key {
+            let hierarchy = layer.multires.as_mut().expect("a hierarchy");
+            hierarchy.sculpt_layers = passes.clone();
+            hierarchy.active_sculpt_layer = active;
+        }
+    }
+    fixture
+}
+
+/// The stack is drawn under the layer it stands on, with a row for the form.
+///
+/// Under the layer and not in a panel of its own, because a pass has no
+/// meaning apart from the surface it was cut into — the same arrangement a
+/// grid's passes take, so a sculptor working a second representation does not
+/// meet a second layer idiom.
+///
+/// The form's row is asserted alongside them because it is the whole of the
+/// write domain as this application expresses it: `Automatic` resolves to the
+/// active pass or to the form where none is active, so which row is selected
+/// *is* the answer to "where does the next stroke go". Without that row a
+/// sculptor who made one pass could never send a stroke anywhere else.
+#[test]
+fn the_hierarchys_passes_are_drawn_under_the_layer_they_stand_on() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let passes = vec![
+        pass(7, 0, "Volume", 1.0),
+        pass(11, 1, "", 0.6),
+        pass(12, 2, "Rugas", 0.35),
+    ];
+    let scene = with_a_stack(
+        &scene(),
+        passes.clone(),
+        clayspace_model::MultiresSculptLayerId::new(12),
+    );
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let mut set = state(strings, &scene, &materials, &report);
+    set.representation = clayspace_model::Representation::Multires;
+    set.multires_cost = Some(clayspace_model::MultiresSculptLayerCost {
+        layers: 3,
+        bytes: 18 * 1024 * 1024,
+        coverage_vertices: 74_880,
+        stroke_open: false,
+    });
+    let ctx = probe_shell(&set);
+
+    for row in &passes {
+        assert!(
+            shell_rect(&ctx, shell::multires_pass_row_id(row.id)).is_some(),
+            "the stack drew no row for {:?}, so a pass that exists cannot be \
+             dialled, hidden or removed",
+            row.display_name()
+        );
+    }
+    assert!(
+        shell_rect(&ctx, shell::multires_form_row_id()).is_some(),
+        "and no row for the form under the passes, so a stroke can only ever \
+         go into whichever pass is active"
+    );
+    assert!(
+        shell_rect(&ctx, shell::multires_add_pass_id()).is_some(),
+        "and no way to make one"
+    );
+    assert!(
+        shell_rect(&ctx, shell::multires_compact_id()).is_some(),
+        "and no way to release what a pass that undid itself left behind"
+    );
+}
+
+/// The rows ask; they do not act.
+///
+/// The half a sculptor meets. A stack can draw every row, every eye and every
+/// slider and be wired to nothing, and the two look identical in a capture —
+/// so each of the four is driven and the command it emits is read back.
+///
+/// The strength is driven by keyboard rather than by clicking the control,
+/// because a click on a `DragValue` sets it to wherever the pointer landed and
+/// would pass with the emission deleted.
+#[test]
+fn a_pass_row_asks_for_the_change_rather_than_making_it() {
+    use clayspace_model::MultiresSculptLayerOp as Op;
+
+    let strings = Strings::for_locale(Locale::EnUs);
+    let top = clayspace_model::MultiresSculptLayerId::new(12);
+    let scene = with_a_stack(
+        &scene(),
+        vec![pass(7, 0, "Volume", 1.0), pass(12, 1, "Rugas", 0.35)],
+        top,
+    );
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let mut set = state(strings, &scene, &materials, &report);
+    set.representation = clayspace_model::Representation::Multires;
+    set.multires_cost = Some(clayspace_model::MultiresSculptLayerCost {
+        layers: 2,
+        bytes: 9 * 1024 * 1024,
+        coverage_vertices: 37_440,
+        stroke_open: false,
+    });
+
+    let ctx = egui::Context::default();
+    shell::apply_theme(&ctx);
+    let mut queue = CommandQueue::new();
+    for _ in 0..2 {
+        run_shell_frame(&ctx, &set, &mut queue, Vec::new());
+    }
+
+    // The eye, at the left-hand end of the row after the grip.
+    // The eye, at the left-hand end of the row.
+    let row = shell_rect(&ctx, shell::multires_pass_row_id(top)).expect("no row for the top pass");
+    queue.drain();
+    run_shell_frame(
+        &ctx,
+        &set,
+        &mut queue,
+        left_click(egui::pos2(row.min.x + EYE, row.center().y)),
+    );
+    assert!(
+        queue.commands().iter().any(|command| matches!(
+            command,
+            Command::MultiresSculptLayer(Op::SetVisible { id, visible: false }) if *id == top
+        )),
+        "the eye drew and asked for nothing: {:?}",
+        queue.commands()
+    );
+
+    // And the lock, which lives in the row's own menu — where a layer's
+    // protection lives, and for the same reason: it is not reached often and
+    // the row has no width for a control that would be indistinguishable from
+    // its neighbour at sixteen pixels.
+    queue.drain();
+    run_shell_frame(
+        &ctx,
+        &set,
+        &mut queue,
+        right_click(egui::pos2(row.min.x + NAME, row.center().y)),
+    );
+    run_shell_frame(&ctx, &set, &mut queue, Vec::new());
+    let lock = shell_rect(&ctx, shell::multires_lock_id(top)).expect("the menu offered no lock");
+    queue.drain();
+    run_shell_frame(&ctx, &set, &mut queue, left_click(lock.center()));
+    assert!(
+        queue.commands().iter().any(|command| matches!(
+            command,
+            Command::MultiresSculptLayer(Op::SetLocked { id, locked: true }) if *id == top
+        )),
+        "the menu drew a lock and asked for nothing: {:?}",
+        queue.commands()
+    );
+
+    // The form's row, which is where a stroke goes when it must not touch a
+    // pass.
+    let form = shell_rect(&ctx, shell::multires_form_row_id()).expect("no row for the form");
+    queue.drain();
+    // Its name sits where a pass's does: the two icon slots are held empty so
+    // the row a sculptor is choosing between lines up with the ones above it.
+    run_shell_frame(
+        &ctx,
+        &set,
+        &mut queue,
+        left_click(egui::pos2(form.min.x + NAME, form.center().y)),
+    );
+    assert!(
+        queue.commands().iter().any(|command| matches!(
+            command,
+            Command::MultiresSculptLayer(Op::SetActive { id })
+                if id.is_base()
+        )),
+        "selecting the form asked for nothing: {:?}",
+        queue.commands()
+    );
+
+    // A new pass.
+    let add = shell_rect(&ctx, shell::multires_add_pass_id()).expect("no new-pass button");
+    queue.drain();
+    run_shell_frame(&ctx, &set, &mut queue, left_click(add.center()));
+    assert!(
+        queue
+            .commands()
+            .iter()
+            .any(|command| matches!(command, Command::MultiresSculptLayer(Op::Add { .. }))),
+        "the new-pass button drew and asked for nothing: {:?}",
+        queue.commands()
+    );
+
+    // And the strength, which is the whole claim of a pass: still dialable
+    // long after the stroke that filled it. Driven by keyboard for the reason
+    // the level sliders are — a click on a `DragValue` sets it to wherever the
+    // pointer landed and would pass with the emission deleted. Down and not
+    // left: a `DragValue` counts the vertical arrows and ignores the others.
+    queue.drain();
+    let dial = ctx
+        .memory(|memory| {
+            memory
+                .data
+                .get_temp::<egui::Id>(shell::multires_strength_id(top))
+        })
+        .expect("the row drew no strength control");
+    ctx.memory_mut(|memory| memory.request_focus(dial));
+    run_shell_frame(&ctx, &set, &mut queue, Vec::new());
+    queue.drain();
+    run_shell_frame(
+        &ctx,
+        &set,
+        &mut queue,
+        vec![egui::Event::Key {
+            key: egui::Key::ArrowDown,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        }],
+    );
+    let dialled: Vec<f32> = queue
+        .commands()
+        .iter()
+        .filter_map(|command| match command {
+            Command::MultiresSculptLayer(Op::SetStrength { id, strength }) if *id == top => {
+                Some(*strength)
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        dialled.iter().any(|value| *value < 0.35),
+        "the arrow key moved the pass's strength nowhere: it emitted {dialled:?}"
+    );
+}
+
+/// Sliding a pass by its name asks for a reorder.
+///
+/// A drag rather than two arrows, and the difference is not decoration: on a
+/// grid the top of the stack wins where two passes overlap, so arrows say
+/// something about the result. Here the stack is a *sum* — passes commute, and
+/// the engine defines a reorder as moving nothing — so the order is
+/// organisation, and the gesture for organising a list is dragging it.
+///
+/// The handle is the name and not the whole row because a drag source senses
+/// the drag over its whole area: a row that was one would steal the strength
+/// control's own drag, which is the one control on the row that is dragged
+/// rather than clicked.
+#[test]
+fn dragging_a_pass_by_its_name_asks_for_a_reorder() {
+    use clayspace_model::MultiresSculptLayerOp as Op;
+
+    let strings = Strings::for_locale(Locale::EnUs);
+    let bottom = clayspace_model::MultiresSculptLayerId::new(7);
+    let top = clayspace_model::MultiresSculptLayerId::new(12);
+    let scene = with_a_stack(
+        &scene(),
+        vec![pass(7, 0, "Volume", 1.0), pass(12, 1, "Rugas", 0.35)],
+        top,
+    );
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let mut set = state(strings, &scene, &materials, &report);
+    set.representation = clayspace_model::Representation::Multires;
+    set.multires_cost = Some(clayspace_model::MultiresSculptLayerCost {
+        layers: 2,
+        bytes: 9 * 1024 * 1024,
+        coverage_vertices: 37_440,
+        stroke_open: false,
+    });
+
+    let ctx = egui::Context::default();
+    shell::apply_theme(&ctx);
+    let mut queue = CommandQueue::new();
+    for _ in 0..2 {
+        run_shell_frame(&ctx, &set, &mut queue, Vec::new());
+    }
+    let from = shell_rect(&ctx, shell::multires_pass_row_id(top)).expect("no row for the top pass");
+    let onto =
+        shell_rect(&ctx, shell::multires_pass_row_id(bottom)).expect("no row for the bottom pass");
+
+    queue.drain();
+    // The name, which is the handle: past the frame's margin, the indent and
+    // the two icons.
+    let handle = egui::pos2(from.min.x + NAME, from.center().y);
+    for events in drag(handle, onto.center()) {
+        run_shell_frame(&ctx, &set, &mut queue, events);
+    }
+    assert!(
+        queue.commands().iter().any(|command| matches!(
+            command,
+            Command::MultiresSculptLayer(Op::Move { id, to: 0 }) if *id == top
+        )),
+        "the row dragged onto the one below it and asked for nothing: {:?}",
+        queue.commands()
+    );
+}
+
+/// The stack, drawn and looked at.
+#[test]
+fn the_hierarchys_stack_is_drawn() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = with_a_stack(
+        &scene(),
+        vec![pass(7, 0, "Volume", 1.0), pass(11, 1, "", 0.6), {
+            let mut locked = pass(12, 2, "Rugas", 0.35);
+            locked.locked = true;
+            locked
+        }],
+        clayspace_model::MultiresSculptLayerId::new(11),
+    );
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let mut set = state(strings, &scene, &materials, &report);
+    set.representation = clayspace_model::Representation::Multires;
+    set.subdivision_cost = Some(clayspace_model::SubdivisionCost {
+        level: 4,
+        vertices: 393_217,
+        faces: 393_216,
+        persistent_bytes: 12 * 1024 * 1024,
+        peak_bytes: 37 * 1024 * 1024,
+    });
+    set.multires_cost = Some(clayspace_model::MultiresSculptLayerCost {
+        layers: 3,
+        bytes: 18 * 1024 * 1024,
+        coverage_vertices: 74_880,
+        stroke_open: false,
+    });
+
+    let image = capture_shell(&harness, &set, "112-multires-stack");
+    assert!(image.width > 0 && image.height > 0);
+}
+
+/// And with the pointer still down, where the composition is refusing.
+#[test]
+fn the_stack_says_why_it_is_refusing_while_a_stroke_is_open() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = with_a_stack(
+        &scene(),
+        vec![pass(7, 0, "Volume", 1.0), pass(12, 1, "Rugas", 0.35)],
+        clayspace_model::MultiresSculptLayerId::new(12),
+    );
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let mut set = state(strings, &scene, &materials, &report);
+    set.representation = clayspace_model::Representation::Multires;
+    set.multires_cost = Some(clayspace_model::MultiresSculptLayerCost {
+        layers: 2,
+        bytes: 300 * 1024 * 1024,
+        coverage_vertices: 37_440,
+        stroke_open: true,
+    });
+
+    let image = capture_shell(&harness, &set, "113-multires-stack-held");
+    assert!(image.width > 0 && image.height > 0);
+}
+
+/// A save that could not write a hierarchy's sculpt says so where a sculptor
+/// is looking.
+///
+/// The refusal a hierarchy has that no other representation has. A
+/// `.clayspace` carries a hierarchy's cage and nothing standing on it, so the
+/// sculpt is written to a file beside it and a save that cannot write that
+/// file **fails** — and a failed save that says nothing is the one refusal in
+/// this application that costs work rather than a click.
+///
+/// The line is the same one that carries a refused level and a refused
+/// rebuild, beside the viewport, because a sculptor watching their form should
+/// not have to know which panel a refusal belongs to.
+#[test]
+fn a_save_that_could_not_write_the_sculpt_says_so() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = with_a_stack(
+        &scene(),
+        vec![pass(7, 0, "Volume", 1.0)],
+        clayspace_model::MultiresSculptLayerId::new(7),
+    );
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let mut set = state(strings, &scene, &materials, &report);
+    set.representation = clayspace_model::Representation::Multires;
+    set.multires_cost = Some(clayspace_model::MultiresSculptLayerCost {
+        layers: 1,
+        bytes: 6 * 1024 * 1024,
+        coverage_vertices: 12_480,
+        stroke_open: false,
+    });
+    set.tool_status = Some(
+        "não foi possível salvar: não foi possível escrever a hierarquia \
+         ao lado do documento: Permission denied (os error 13)",
+    );
+
+    let image = capture_shell(&harness, &set, "114-multires-sidecar-refused");
+    assert!(image.width > 0 && image.height > 0);
 }
 
 /// Every representation gets a section, and no two sections share a heading.

@@ -403,8 +403,10 @@ below — so a wrinkle cut at level 4 rides on a jaw moved at level 1 instead of
 being smeared. It arrives through a cage rather than from nothing, so its two
 crossings are the only ones that sample nothing at all, and the sculpt is saved
 in a file **beside** the document because the engine's format carries the cage
-and not what stands on it. See *Sculpting a subdivision hierarchy* in
-[docs/features.md](docs/features.md).
+and not what stands on it. It carries a stack of named passes under its layer
+row — a stroke goes into the one that is selected, and its strength stays
+dialable long after the pointer came up. See *Sculpting a subdivision hierarchy*
+in [docs/features.md](docs/features.md).
 
 ```mermaid
 graph LR

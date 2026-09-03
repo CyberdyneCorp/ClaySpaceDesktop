@@ -162,6 +162,28 @@ impl SceneViewModel {
         self.finish(outcome)
     }
 
+    /// Acts on the active hierarchy's stack of passes.
+    ///
+    /// Beside [`SceneViewModel::apply_level_op`] rather than inside
+    /// [`SceneViewModel::dispatch`], and for the same two reasons. The refusal
+    /// is half the operation — a locked pass, a slider moved while a stroke is
+    /// still open, a merge with nothing under it — and the composition root
+    /// has to know whether the picture moved, which for this stack is *three
+    /// operations out of eleven*: an additive stack commutes, so a reorder
+    /// moves no vertex, and a rename, a lock and a change of which pass is
+    /// active move nothing either.
+    ///
+    /// Through [`SceneViewModel::finish`], so the reason lands on the same
+    /// line every other scene refusal lands on and is cleared by the next
+    /// command that works.
+    pub fn apply_sculpt_layer_op(
+        &mut self,
+        op: clayspace_model::MultiresSculptLayerOp,
+    ) -> Result<(), ModelError> {
+        let outcome = self.model.apply_multires_sculpt_layer_op(op);
+        self.finish(outcome)
+    }
+
     /// What subdividing the active hierarchy once more would cost.
     ///
     /// Asked whenever the panel is drawn rather than held, because it moves
