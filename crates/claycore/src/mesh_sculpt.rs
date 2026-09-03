@@ -243,7 +243,7 @@ impl MeshStamp<'_> {
     /// The alpha pointer it carries borrows from `self`, so the result must
     /// not outlive the stamp it came from — every caller here passes it
     /// straight into one C call and drops it.
-    fn as_raw(&self) -> sys::clay_mesh_brush_desc {
+    pub(crate) fn as_raw(&self) -> sys::clay_mesh_brush_desc {
         // The engine's defaults first, then what this stamp means — which is
         // the arrangement `clay_mesh_brush_defaults` exists for: "so a host
         // fills in what it means and takes the rest".

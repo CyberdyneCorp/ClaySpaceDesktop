@@ -33,6 +33,7 @@ mod live;
 mod mask;
 mod mesh;
 mod mesh_sculpt;
+mod multires;
 mod pick;
 mod reader;
 mod remesh;
@@ -62,6 +63,12 @@ pub use mesh::{ImportBudget, Mesh, MeshLayerDesc, MeshParams, MeshValidity, Mesh
 pub use mesh_sculpt::{
     AlphaStamp, MeshBrush, MeshDeform, MeshDeformer, MeshDeltas, MeshFalloff, MeshHit, MeshLattice,
     MeshSculptor, MeshStamp,
+};
+pub use multires::{
+    AddLevelPreflight, ArenaStats, Block, BlockInfo, BudgetError, EncodePreflight, MemoryCategory,
+    MemoryClass, MemoryLedger, MemoryPin, Multires, MultiresDesc, MultiresError, MultiresMemory,
+    MultiresRefusal, MultiresSculptor, PeakTelemetry, Pressure, Revisions, SculptMemoryProfile,
+    StampReport, SubdivisionRule, TrimReport,
 };
 pub use pick::{Hit, Snapped};
 pub use reader::Reader;

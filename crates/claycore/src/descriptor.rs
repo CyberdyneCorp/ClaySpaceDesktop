@@ -65,6 +65,17 @@ descriptors! {
     sys::clay_voxel_remesh_params,
     sys::clay_voxel_remesh_estimate,
     sys::clay_voxel_remesh_report,
+    sys::clay_multires_desc,
+    sys::clay_multires_preflight,
+    sys::clay_multires_memory,
+    sys::clay_multires_block_info,
+    sys::clay_multires_stamp_report,
+    sys::clay_surface_preflight,
+    sys::clay_sculpt_memory_profile,
+    sys::clay_memory_ledger,
+    sys::clay_trim_report,
+    sys::clay_peak_telemetry,
+    sys::clay_brush_arena_stats,
 }
 
 #[cfg(test)]
