@@ -155,7 +155,12 @@ fn table(baseline: &Baseline, run: &Run) -> bool {
             figure.value,
             (ratio - 1.0) * 100.0,
             if worse { "  REGRESSED" } else { "" },
-            inside_the_spread(baseline, name, figure.value)
+            inside_the_spread(
+                baseline,
+                name,
+                figure.value,
+                worse || ratio.max(1.0 / ratio) > 1.1
+            )
         );
         regressed |= worse;
     }
@@ -178,7 +183,13 @@ fn table(baseline: &Baseline, run: &Run) -> bool {
 /// could act on, and now the table says so instead of leaving the reader to
 /// guess. That is exactly the adjudication ClayCore's own release notes say
 /// their gate could not make.
-fn inside_the_spread(baseline: &Baseline, name: &str, value: f64) -> &'static str {
+/// `notable` keeps the annotation where a reader is about to draw a conclusion.
+/// Most of a hundred and fifty rows sit inside the baseline's range, and a note
+/// on every one of them is a note nobody reads.
+fn inside_the_spread(baseline: &Baseline, name: &str, value: f64, notable: bool) -> &'static str {
+    if !notable {
+        return "";
+    }
     match baseline.spread.get(name) {
         Some(spread) if spread.covers(value) => "  (inside the baseline's own spread)",
         _ => "",
@@ -538,10 +549,12 @@ mod tests {
                 max: 23.4,
             },
         );
-        assert!(!inside_the_spread(&theirs, "brush.mesh.camada.mean", 21.0).is_empty());
-        assert!(inside_the_spread(&theirs, "brush.mesh.camada.mean", 30.0).is_empty());
+        assert!(!inside_the_spread(&theirs, "brush.mesh.camada.mean", 21.0, true).is_empty());
+        assert!(inside_the_spread(&theirs, "brush.mesh.camada.mean", 30.0, true).is_empty());
         // A figure the baseline said nothing about is annotated with nothing.
-        assert!(inside_the_spread(&theirs, "dab.median", 21.0).is_empty());
+        assert!(inside_the_spread(&theirs, "dab.median", 21.0, true).is_empty());
+        // Nor is a row nobody is about to draw a conclusion from.
+        assert!(inside_the_spread(&theirs, "brush.mesh.camada.mean", 19.1, false).is_empty());
     }
 
     #[test]
