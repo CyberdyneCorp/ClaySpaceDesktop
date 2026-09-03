@@ -368,3 +368,75 @@ fn the_queue_says_what_it_costs() {
         "eight entries cost less than none"
     );
 }
+
+// -- the gate across a gesture that is not a block --------------------------
+
+/// An interactive host's stroke is a field, not a scope: it opens on a press
+/// and closes on a release that arrives as a separate event. The owned form is
+/// the same gate for that shape.
+#[test]
+fn a_gesture_held_across_frames_gates_and_hands_the_queue_back() {
+    let queue = MaintenanceQueue::new().expect("queue");
+    let mut gesture = queue.into_stroke().expect("open a gesture");
+
+    assert!(gesture.in_stroke().expect("in stroke"));
+    for _ in 0..8 {
+        // Every dab of the drag, folded into one entry — the call the gate is
+        // built to keep cheap.
+        gesture
+            .request(MaintenanceKind::IndexRebuild, 4, 0)
+            .expect("request");
+    }
+    assert_eq!(gesture.len().expect("count"), 1);
+    assert!(
+        gesture.take_next().expect("take").is_none(),
+        "the gate handed out work with a finger on the glass"
+    );
+
+    let mut queue = gesture.end();
+    assert!(!queue.in_stroke().expect("in stroke"));
+    let item = queue
+        .take_next()
+        .expect("take")
+        .expect("the drag's request should be there once the gesture ended");
+    assert_eq!(item.kind, MaintenanceKind::IndexRebuild);
+    assert_eq!(item.requests, 8, "the fold lost count of the asking");
+}
+
+/// The shape a host actually holds: the gesture lives in a field, so an
+/// unwind past the frame that opened it does not end it — and the queue is
+/// still inside it, still gated, still drainable the moment the gesture does
+/// end. The `Drop` half is what makes "still inside it" safe rather than a
+/// leak, and it is observable one layer up, where the field goes away with the
+/// document that held it.
+#[test]
+fn a_gesture_held_in_a_field_survives_an_unwind_and_ends_drainable() {
+    let mut held = Some(
+        MaintenanceQueue::new()
+            .expect("queue")
+            .into_stroke()
+            .expect("open a gesture"),
+    );
+
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let gesture = held.as_mut().expect("a gesture is open");
+        gesture
+            .request(MaintenanceKind::NormalFlush, 1, 0)
+            .expect("request");
+        panic!("a stamp went wrong with a finger on the glass");
+    }));
+    assert!(panicked.is_err(), "the fixture did not panic");
+
+    let gesture = held.expect("the gesture outlived the unwind");
+    assert!(
+        gesture.in_stroke().expect("in stroke"),
+        "an unwind past a held gesture is not a pointer release"
+    );
+
+    let mut queue = gesture.end();
+    assert!(!queue.in_stroke().expect("in stroke"));
+    assert!(
+        queue.take_next().expect("take").is_some(),
+        "what the gesture recorded did not survive it"
+    );
+}

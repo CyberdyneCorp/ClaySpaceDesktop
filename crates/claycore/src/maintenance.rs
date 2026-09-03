@@ -49,6 +49,14 @@
 //! # }
 //! ```
 //!
+//! An interactive host has no such block. Its gesture opens on a pointer
+//! press, runs for as many frames as the artist drags, and closes on a release
+//! that arrives as a separate event, so the stroke is a *field* rather than a
+//! scope — and a guard held in a field beside the queue it borrows is a shape
+//! safe Rust does not have. [`MaintenanceQueue::into_stroke`] is that case:
+//! the same gate, with the queue moved into a [`StrokeScope`] that can be held
+//! across frames and still shuts on `Drop`.
+//!
 //! # Take and complete, rather than a callback
 //!
 //! The C++ form of this is `service(budget, run)` and a function pointer would
@@ -300,12 +308,63 @@ impl MaintenanceQueue {
     /// [`request`](Self::request) — which is the call the gate is built to keep
     /// cheap.
     pub fn stroke(&mut self) -> Result<StrokeGuard<'_>> {
+        self.begin_stroke()?;
+        Ok(StrokeGuard { queue: self })
+    }
+
+    /// Opens a stroke on a queue the returned value *owns*, and shuts it when
+    /// that value is dropped.
+    ///
+    /// The same gate as [`stroke`](Self::stroke), for the caller whose stroke
+    /// is not a Rust scope. An interactive host's gesture is not one: it opens
+    /// on a pointer press, runs for as many frames as the artist drags, and
+    /// closes on a release that arrives as a separate event — so there is no
+    /// block to put a borrowing guard in, and a guard held in a field beside
+    /// the queue it borrows is a shape safe Rust does not have.
+    ///
+    /// Moving the queue in is what makes that shape expressible, and it keeps
+    /// the property the gate is for: the stroke is shut by a `Drop` rather
+    /// than by a call someone has to remember, so a gesture that ends by
+    /// unwinding, by being abandoned, or by the document going away under it
+    /// leaves the queue drainable rather than shut forever.
+    ///
+    /// ```no_run
+    /// # use claycore::{MaintenanceKind, MaintenanceQueue};
+    /// # fn main() -> claycore::Result<()> {
+    /// // ... on a pointer press, frames before the release ...
+    /// let mut gesture = MaintenanceQueue::new()?.into_stroke()?;
+    /// gesture.request(MaintenanceKind::IndexRebuild, 0, 0)?;
+    /// assert!(gesture.take_next()?.is_none(), "not while a finger is down");
+    ///
+    /// // ... on the release, whenever it comes ...
+    /// let mut queue = gesture.end();
+    /// assert!(queue.take_next()?.is_some());
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// The queue is consumed rather than borrowed back on a refusal because
+    /// the entry point has exactly one: a null handle, which [`NonNull`] has
+    /// already ruled out.
+    pub fn into_stroke(mut self) -> Result<StrokeScope> {
+        self.begin_stroke()?;
+        Ok(StrokeScope { queue: Some(self) })
+    }
+
+    fn begin_stroke(&mut self) -> Result<()> {
         // SAFETY: an owned queue handle.
         check(
             unsafe { sys::clay_maintenance_queue_begin_stroke(self.raw.as_ptr()) },
             "clay_maintenance_queue_begin_stroke",
-        )?;
-        Ok(StrokeGuard { queue: self })
+        )
+    }
+
+    fn end_stroke(&mut self) {
+        // A failure here has nothing left to do about it, and both callers are
+        // a `Drop` where a panic during an unwind aborts the process. The only
+        // way this refuses is a null handle, which the type system rules out.
+        // SAFETY: an owned queue handle.
+        let _ = unsafe { sys::clay_maintenance_queue_end_stroke(self.raw.as_ptr()) };
     }
 
     /// Whether a stroke is open.
@@ -434,11 +493,7 @@ impl std::ops::DerefMut for StrokeGuard<'_> {
 
 impl Drop for StrokeGuard<'_> {
     fn drop(&mut self) {
-        // A failure here has nothing left to do about it, and a panic in a
-        // drop while unwinding aborts the process. The only way this refuses
-        // is a null handle, which the type system already rules out.
-        // SAFETY: an owned queue handle, valid for the guard's lifetime.
-        let _ = unsafe { sys::clay_maintenance_queue_end_stroke(self.queue.raw.as_ptr()) };
+        self.queue.end_stroke();
     }
 }
 
@@ -446,6 +501,75 @@ impl std::fmt::Debug for StrokeGuard<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StrokeGuard")
             .field("queued", &self.queue.len().unwrap_or(0))
+            .finish()
+    }
+}
+
+/// An open stroke on a queue this value owns, shut when it is dropped.
+///
+/// [`StrokeGuard`] is the form to reach for where a stroke is a block; this is
+/// the form for a host whose gesture spans frames and therefore has no block
+/// to be a guard's scope — see [`MaintenanceQueue::into_stroke`].
+///
+/// It derefs to the queue for the same reason the borrowing guard does: a
+/// stamp inside the gesture queues the rebuild it just made necessary, and the
+/// gate is what folds a drag's worth of those into one entry.
+pub struct StrokeScope {
+    /// `None` only between [`StrokeScope::end`] taking the queue back out and
+    /// the value being dropped, which is why both accessors go through
+    /// [`StrokeScope::queue`].
+    queue: Option<MaintenanceQueue>,
+}
+
+impl StrokeScope {
+    /// Shuts the stroke and hands the queue back, drainable again.
+    ///
+    /// The ordinary exit. [`Drop`] is the other one, and does the same thing
+    /// to the queue on its way past — what it cannot do is give it back.
+    pub fn end(mut self) -> MaintenanceQueue {
+        let mut queue = self
+            .queue
+            .take()
+            .expect("an open stroke holds its queue until it is ended");
+        queue.end_stroke();
+        queue
+    }
+
+    fn queue(&self) -> &MaintenanceQueue {
+        self.queue
+            .as_ref()
+            .expect("an open stroke holds its queue until it is ended")
+    }
+}
+
+impl std::ops::Deref for StrokeScope {
+    type Target = MaintenanceQueue;
+
+    fn deref(&self) -> &MaintenanceQueue {
+        self.queue()
+    }
+}
+
+impl std::ops::DerefMut for StrokeScope {
+    fn deref_mut(&mut self) -> &mut MaintenanceQueue {
+        self.queue
+            .as_mut()
+            .expect("an open stroke holds its queue until it is ended")
+    }
+}
+
+impl Drop for StrokeScope {
+    fn drop(&mut self) {
+        if let Some(queue) = self.queue.as_mut() {
+            queue.end_stroke();
+        }
+    }
+}
+
+impl std::fmt::Debug for StrokeScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StrokeScope")
+            .field("queued", &self.queue().len().unwrap_or(0))
             .finish()
     }
 }

@@ -66,7 +66,9 @@ pub use live::{
     MoveTransaction, PreviewBrick, PreviewDelta, PreviewGrab, PreviewPending, SculptBudget,
     SculptDirty, SculptPolicy, SmoothTransaction,
 };
-pub use maintenance::{MaintenanceItem, MaintenanceKind, MaintenanceQueue, StrokeGuard};
+pub use maintenance::{
+    MaintenanceItem, MaintenanceKind, MaintenanceQueue, StrokeGuard, StrokeScope,
+};
 pub use mask::{ExtrudeSide, Mask, MaskExtrudeParams, MaskField, MaskLease, MaskRef, MaskSource};
 pub use memory::{
     BudgetError, MemoryCategory, MemoryClass, MemoryLedger, MemoryPin, MemoryReport, PinHold,
