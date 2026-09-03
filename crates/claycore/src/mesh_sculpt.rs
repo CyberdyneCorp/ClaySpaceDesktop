@@ -822,12 +822,24 @@ impl MeshSculptor {
     /// The fourth consumer of a resolved stroke, beside SDF nodes, voxels and
     /// masks — one set of spacing, pressure, jitter and taper semantics for all
     /// four. `samples` is position, pressure and time per sample.
+    ///
+    /// `defer_normals` is **not** [`MeshSculptor::set_defer_normals`] and the
+    /// two must not be read as one switch. This one is scoped to the call: the
+    /// entry point sets the sculptor's flag to this argument for the length of
+    /// the stroke it is resolving, recomputes once at the end into `deltas`,
+    /// and restores whatever the flag was — because here the library knows
+    /// where the stroke ended. So it costs a caller no obligation, and it is
+    /// what de-duplicates the overlapping dabs of one resolved stroke. The
+    /// member flag is the other thing entirely: it spans calls, it is what
+    /// [`MeshSculptor::stamp`] and the two whole-form verbs read, and a caller
+    /// that sets it owes the flush itself.
     pub fn apply_stroke(
         &mut self,
         samples: &[[f32; 5]],
         preset: &crate::StrokePreset,
         stamp: MeshStamp<'_>,
         mask: Option<&MaskField>,
+        defer_normals: bool,
         deltas: Option<&mut MeshDeltas>,
     ) -> Result<usize> {
         if samples.is_empty() {
@@ -838,8 +850,7 @@ impl MeshSculptor {
         let mut applied = 0;
         // SAFETY: `samples` is `samples.len() * 5` floats, which is the layout
         // the entry point reads; both descriptors carry their own size; the
-        // mask and the frame are nullable and the deltas are null. Normals are
-        // not deferred, so the mesh is left consistent for the next read.
+        // mask and the frame are nullable and the deltas are null.
         check(
             unsafe {
                 sys::clay_mesh_sculptor_apply_stroke(
@@ -850,7 +861,7 @@ impl MeshSculptor {
                     &desc,
                     mask.map_or(std::ptr::null(), |m| m.as_ptr() as *const _),
                     std::ptr::null(),
-                    0,
+                    i32::from(defer_normals),
                     deltas.map_or(std::ptr::null_mut(), |d| d.raw.as_ptr()),
                     &mut applied,
                 )
@@ -858,6 +869,80 @@ impl MeshSculptor {
             "clay_mesh_sculptor_apply_stroke",
         )?;
         Ok(applied)
+    }
+
+    /// Whether stamps leave their normals for a flush instead of recomputing
+    /// them as they go.
+    pub fn defer_normals(&self) -> Result<bool> {
+        let mut defer = 0;
+        // SAFETY: valid handle, out-parameter written on success.
+        check(
+            unsafe { sys::clay_mesh_sculptor_defer_normals(self.raw.as_ptr(), &mut defer) },
+            "clay_mesh_sculptor_defer_normals",
+        )?;
+        Ok(defer != 0)
+    }
+
+    /// Leaves the normals of everything stamped from here on for a later
+    /// [`MeshSculptor::flush_normals`], instead of recomputing them per stamp.
+    ///
+    /// What it buys is the recompute of a gesture's overlapping dabs done once
+    /// instead of once per dab; what it costs is that the shading lags the
+    /// geometry until the flush, and the *obligation*:
+    ///
+    /// **A caller that defers must flush.** Nothing flushes on its own. The
+    /// sculptor does not know where a gesture ends, and guessing at it — a
+    /// timer, a stamp with no predecessor — would flush mid-drag, which is the
+    /// whole of what deferring exists to avoid. This wrapper does not guess
+    /// either: it is a plain switch, and the thing that makes the flush
+    /// unskippable belongs with whatever owns the gesture. In this workspace
+    /// that is `clayspace_engine`'s `LiveMesh`, which holds the record and the
+    /// handle as one value so that dropping it settles.
+    ///
+    /// The final state is exact either way. Deferring changes *when* the work
+    /// happens and nothing about the result, which is what keeps a committed
+    /// sculpt from being a function of machine speed.
+    ///
+    /// [`MeshSculptor::apply_stroke`]'s own argument is a different thing —
+    /// see it for why.
+    pub fn set_defer_normals(&mut self, defer: bool) -> Result<()> {
+        // SAFETY: valid handle.
+        check(
+            unsafe {
+                sys::clay_mesh_sculptor_set_defer_normals(self.raw.as_ptr(), i32::from(defer))
+            },
+            "clay_mesh_sculptor_set_defer_normals",
+        )
+    }
+
+    /// Recomputes the normals deferred since the last flush.
+    ///
+    /// Coalesced: the classes are sorted and made unique first, so a gesture
+    /// that passed over the same vertex forty times recomputes it once. That
+    /// de-duplication is the entire performance argument, and it is worth
+    /// exactly the overlap between the dabs of one deferred window.
+    ///
+    /// **`deltas` must be the record the stamps were noted into**, or the
+    /// deferred gesture's undo is not exact: the record captures a vertex's
+    /// normal the first time it is seen, so a flush into a *fresh* record
+    /// captures the already-moved normals as the "before" and the undo then
+    /// restores post-gesture shading. `None` is correct only where the stamps
+    /// recorded into no record either.
+    ///
+    /// A no-op where nothing was deferred, which is what makes it safe to call
+    /// on every exit rather than only on the ones that deferred something.
+    pub fn flush_normals(&mut self, deltas: Option<&mut MeshDeltas>) -> Result<()> {
+        // SAFETY: valid handle; the record is either a valid handle or null,
+        // both of which the entry point allows.
+        check(
+            unsafe {
+                sys::clay_mesh_sculptor_flush_normals(
+                    self.raw.as_ptr(),
+                    deltas.map_or(std::ptr::null_mut(), |d| d.raw.as_ptr()),
+                )
+            },
+            "clay_mesh_sculptor_flush_normals",
+        )
     }
 
     /// Where a ray meets this mesh, if it does.

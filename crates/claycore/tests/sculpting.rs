@@ -953,3 +953,260 @@ mod mesh_sculpting {
         );
     }
 }
+
+/// Normals a gesture deferred, and the obligation that comes with deferring.
+///
+/// The switch trades *when* the recompute happens for nothing at all about the
+/// result — but only for a caller that flushes, and only for one that flushes
+/// into the record the stamps were noted into. Both halves are measured here
+/// rather than taken on the header's word, because both are silent when they
+/// are wrong: a mesh shaded from where its vertices used to be reads as a
+/// lighting bug, and an undo that restores post-gesture shading reads as
+/// nothing at all until the form is turned to the light.
+mod deferred_normals {
+    use claycore::{MeshBrush, MeshDeltas, MeshSculptor, MeshStamp};
+
+    fn sphere_mesh() -> claycore::Mesh {
+        let (doc, _) = super::sphere_doc();
+        doc.mesh(claycore::MeshParams::default()).expect("mesh it")
+    }
+
+    fn normals(mesh: &claycore::Mesh) -> Vec<[f32; 3]> {
+        mesh.normals()
+            .expect("the fixture carries normals")
+            .to_vec()
+    }
+
+    fn positions(mesh: &claycore::Mesh) -> Vec<[f32; 3]> {
+        mesh.positions().to_vec()
+    }
+
+    /// The dab every test here stamps, so that "deferred" and "not" differ in
+    /// exactly one thing.
+    fn dab(center: [f32; 3]) -> MeshStamp<'static> {
+        MeshStamp {
+            verb: MeshBrush::Draw,
+            center,
+            radius: 0.5,
+            strength: 0.4,
+            ..MeshStamp::default()
+        }
+    }
+
+    /// Three overlapping dabs down one side, which is the shape the flush's
+    /// de-duplication is worth anything on: the same classes, three times.
+    const PATH: [[f32; 3]; 3] = [[0.0, 0.0, 1.0], [0.2, 0.05, 0.98], [0.4, 0.1, 0.9]];
+
+    fn stamp_path(sculptor: &mut MeshSculptor, deltas: Option<&mut MeshDeltas>) {
+        // One record across the three, the way a gesture holds one.
+        let mut deltas = deltas;
+        for at in PATH {
+            sculptor
+                .stamp(dab(at), None, deltas.as_deref_mut())
+                .expect("stamp");
+        }
+    }
+
+    /// What the gesture looks like with nothing deferred — the reference every
+    /// assertion below is against.
+    fn stamped_per_dab() -> claycore::Mesh {
+        let mut mesh = sphere_mesh();
+        let mut sculptor = MeshSculptor::new(&mut mesh, 1e-5).expect("a sculptor");
+        stamp_path(&mut sculptor, None);
+        drop(sculptor);
+        mesh
+    }
+
+    /// Deferring holds the shading back; the flush lets it go, and what it lets
+    /// go is *exactly* what recomputing per dab would have written.
+    #[test]
+    fn a_deferred_gesture_shades_from_where_the_vertices_were_until_it_is_flushed() {
+        let settled = stamped_per_dab();
+
+        let mut mesh = sphere_mesh();
+        let untouched = normals(&mesh);
+        let mut sculptor = MeshSculptor::new(&mut mesh, 1e-5).expect("a sculptor");
+        sculptor.set_defer_normals(true).expect("defer");
+        assert!(
+            sculptor.defer_normals().expect("read the flag back"),
+            "the flag did not survive being set, so nothing below is deferred"
+        );
+        stamp_path(&mut sculptor, None);
+        drop(sculptor);
+
+        assert_eq!(
+            positions(&mesh),
+            positions(&settled),
+            "deferring moved the vertices somewhere else, which is the one \
+             thing it is not allowed to change"
+        );
+        assert_eq!(
+            normals(&mesh),
+            untouched,
+            "a deferred dab recomputed a normal anyway; there is then nothing \
+             for the flush to be the only thing that does"
+        );
+        assert_ne!(
+            normals(&settled),
+            untouched,
+            "the reference gesture recomputed nothing either, so this fixture \
+             cannot tell a deferral from a no-op"
+        );
+
+        let mut sculptor = MeshSculptor::new(&mut mesh, 1e-5).expect("a second sculptor");
+        sculptor.flush_normals(None).expect("flush");
+        drop(sculptor);
+        // A sculptor built after the stamps has nothing deferred, so the mesh
+        // is still shaded from before them: the pending set belongs to the
+        // handle that deferred it, and this is what says so.
+        assert_eq!(
+            normals(&mesh),
+            untouched,
+            "a flush on a handle that deferred nothing recomputed something"
+        );
+    }
+
+    /// The same gesture, flushed by the handle that owes it.
+    #[test]
+    fn the_flush_writes_exactly_what_recomputing_per_dab_would_have() {
+        let settled = stamped_per_dab();
+
+        let mut mesh = sphere_mesh();
+        let mut sculptor = MeshSculptor::new(&mut mesh, 1e-5).expect("a sculptor");
+        sculptor.set_defer_normals(true).expect("defer");
+        stamp_path(&mut sculptor, None);
+        sculptor.flush_normals(None).expect("flush");
+        drop(sculptor);
+
+        assert_eq!(
+            normals(&mesh),
+            normals(&settled),
+            "the flush wrote different normals from the per-dab recompute, so \
+             deferring is not the same gesture done later"
+        );
+    }
+
+    /// The record half of the contract, and the reason the flush takes one at
+    /// all: an undo has to put the shading back as well as the vertices.
+    #[test]
+    fn a_gesture_flushed_into_its_own_record_reverts_bit_exactly() {
+        let mut mesh = sphere_mesh();
+        let before_positions = positions(&mesh);
+        let before_normals = normals(&mesh);
+
+        let mut deltas = MeshDeltas::new().expect("a record");
+        let mut sculptor = MeshSculptor::new(&mut mesh, 1e-5).expect("a sculptor");
+        sculptor.set_defer_normals(true).expect("defer");
+        stamp_path(&mut sculptor, Some(&mut deltas));
+        sculptor.flush_normals(Some(&mut deltas)).expect("flush");
+        deltas.revert(&mut sculptor).expect("revert");
+        drop(sculptor);
+
+        assert_eq!(
+            positions(&mesh),
+            before_positions,
+            "the record did not put the vertices back"
+        );
+        assert_eq!(
+            normals(&mesh),
+            before_normals,
+            "the record put the vertices back and left the shading where the \
+             gesture had moved it"
+        );
+    }
+
+    /// And the failure that makes the record argument load-bearing rather than
+    /// decorative: flushed into a *fresh* record, the gesture's own record has
+    /// never seen the recomputed normals, so reverting it restores the
+    /// vertices and leaves the shading the gesture wrote.
+    ///
+    /// Measured rather than reasoned about, because it is the exact mistake a
+    /// host makes by reaching for whichever record is nearest.
+    #[test]
+    fn a_gesture_flushed_into_someone_elses_record_does_not_revert_its_shading() {
+        let mut mesh = sphere_mesh();
+        let before_normals = normals(&mesh);
+
+        let mut deltas = MeshDeltas::new().expect("the gesture's record");
+        let mut elsewhere = MeshDeltas::new().expect("a record that is not it");
+        let mut sculptor = MeshSculptor::new(&mut mesh, 1e-5).expect("a sculptor");
+        sculptor.set_defer_normals(true).expect("defer");
+        stamp_path(&mut sculptor, Some(&mut deltas));
+        sculptor.flush_normals(Some(&mut elsewhere)).expect("flush");
+        deltas.revert(&mut sculptor).expect("revert");
+        drop(sculptor);
+
+        assert_ne!(
+            normals(&mesh),
+            before_normals,
+            "flushing into the wrong record reverted correctly anyway, which \
+             would mean the record argument does not matter — and every \
+             caller here is written as though it does"
+        );
+    }
+
+    /// The other switch, and the reason it is not this one: a resolved stroke
+    /// carries its own deferral, ends it itself, and gives the flag back the
+    /// way it found it — because there the library knows where the stroke
+    /// ended.
+    #[test]
+    fn a_resolved_stroke_settles_its_own_deferral_and_leaves_the_flag_alone() {
+        fn stroked(defer: bool) -> (Vec<[f32; 3]>, Vec<[f32; 3]>) {
+            let mut mesh = sphere_mesh();
+            let mut sculptor = MeshSculptor::new(&mut mesh, 1e-5).expect("a sculptor");
+            let samples: Vec<[f32; 5]> = PATH
+                .iter()
+                .enumerate()
+                .map(|(i, at)| [at[0], at[1], at[2], 1.0, i as f32])
+                .collect();
+            let applied = sculptor
+                .apply_stroke(
+                    &samples,
+                    &claycore::StrokePreset::default(),
+                    dab(PATH[0]),
+                    None,
+                    defer,
+                    None,
+                )
+                .expect("stroke");
+            assert!(applied > 0, "the stroke resolved to no stamps at all");
+            drop(sculptor);
+            (positions(&mesh), normals(&mesh))
+        }
+
+        let (settled_positions, settled_normals) = stroked(false);
+        let (deferred_positions, deferred_normals) = stroked(true);
+        assert_eq!(deferred_positions, settled_positions);
+        assert_eq!(
+            deferred_normals, settled_normals,
+            "a stroke told to defer left its normals behind, so it is not \
+             flushing at the end of the stroke it drove"
+        );
+
+        // And the half a host would be caught by: the argument does not leave
+        // the member flag turned on behind it, nor turn it off.
+        let mut mesh = sphere_mesh();
+        let mut sculptor = MeshSculptor::new(&mut mesh, 1e-5).expect("a sculptor");
+        sculptor.set_defer_normals(true).expect("defer");
+        let samples: Vec<[f32; 5]> = PATH
+            .iter()
+            .enumerate()
+            .map(|(i, at)| [at[0], at[1], at[2], 1.0, i as f32])
+            .collect();
+        sculptor
+            .apply_stroke(
+                &samples,
+                &claycore::StrokePreset::default(),
+                dab(PATH[0]),
+                None,
+                true,
+                None,
+            )
+            .expect("stroke");
+        assert!(
+            sculptor.defer_normals().expect("read the flag back"),
+            "the stroke's own argument overwrote the sculptor's flag instead \
+             of restoring it, so the two switches are not independent"
+        );
+    }
+}

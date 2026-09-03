@@ -3973,6 +3973,13 @@ impl ClayDocument {
                                 ..stamp
                             },
                             mask.as_deref(),
+                            // Not yet: the stroke resolver's deferral is
+                            // scoped to this call and settles itself, but
+                            // turning it on is a change to how a segment
+                            // shades while it is being made and belongs with
+                            // the sculptor-level switch rather than ahead of
+                            // it.
+                            false,
                             Some(&mut deltas),
                         )
                         .map_err(ModelError::engine)?
