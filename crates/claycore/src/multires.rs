@@ -22,7 +22,9 @@
 //! store with it. Everything that borrows from a hierarchy — a
 //! [`MultiresSculptor`] above all — carries a lifetime that cannot outlive it,
 //! because the C header is explicit that the surface must outlive the sculptor
-//! and the sculptor keeps a bare pointer to it.
+//! and the sculptor keeps a bare pointer to it. A lifetime alone is not the
+//! whole of that rule, though: see [`SurfaceMut`] for the half a `&mut` does
+//! not cover.
 //!
 //! **Two levels, not one.** Where the brush writes and what the host draws are
 //! independent numbers ([`Multires::set_sculpt_level`] against
@@ -935,9 +937,12 @@ impl Multires {
     /// A sculptor bound to this hierarchy.
     ///
     /// The hierarchy is borrowed for as long as the sculptor lives, which is
-    /// the ABI's own rule expressed in the type system: the sculptor keeps a
-    /// bare pointer to the surface and using it after the surface is gone
-    /// would be a use-after-free.
+    /// half of the ABI's own rule expressed in the type system: the sculptor
+    /// keeps a bare pointer to the surface and using it after the surface is
+    /// gone would be a use-after-free. The other half is [`SurfaceMut`] — an
+    /// exclusive borrow stops the surface being moved out from under the
+    /// pointer and does nothing at all about it being *replaced where it
+    /// stands*, which runs the same destructor from entirely safe code.
     pub fn sculptor(&mut self) -> Result<MultiresSculptor<'_>> {
         let mut sculptor = std::ptr::null_mut();
         // SAFETY: valid handle and an out-parameter written only on success.
@@ -955,7 +960,9 @@ impl Drop for Multires {
     fn drop(&mut self) {
         // SAFETY: owned handle, released exactly once. Every borrow of it —
         // a sculptor above all — carries a lifetime that ends before this
-        // does, so nothing else holds a pointer into it here.
+        // does, and nothing that borrows it can reach a `&mut Multires` to run
+        // this destructor early through (see `SurfaceMut`), so nothing else
+        // holds a pointer into it here.
         unsafe { sys::clay_multires_destroy(self.raw.as_ptr()) };
     }
 }
@@ -968,6 +975,98 @@ impl std::fmt::Debug for Multires {
             .field("display_level", &self.display_level().ok())
             .finish()
     }
+}
+
+// -- lending a hierarchy that something else points into ---------------------
+
+/// A hierarchy lent back by something that holds a bare pointer into it.
+///
+/// A [`MultiresSculptor`] and a [`SculptLayerStroke`] both keep an engine
+/// handle built from a reference *into* the surface, so the surface has to
+/// outlive them — the rule the C header states in one line and the reason both
+/// borrow their hierarchy exclusively. But an exclusive borrow only forbids
+/// the surface being *moved*; it does not forbid it being **replaced where it
+/// stands**. Handing out a `&mut Multires` therefore hands out
+/// `clay_multires_destroy`: `*sculptor.surface_mut() = other` — plain
+/// assignment, no `unsafe` anywhere near the caller — drops the hierarchy the
+/// live sculptor still points at, and the next stamp reads freed storage.
+/// Measured on the pinned engine, that is a SIGSEGV; for a stroke it is worse,
+/// because `Drop` cancels *into* the surface and so the crash needs no further
+/// call at all.
+///
+/// So the surface is lent through this instead. It reads like the hierarchy —
+/// every `&self` method arrives through [`Deref`] — and it forwards the
+/// `&mut self` ones a session legitimately makes between stamps. What it never
+/// yields is a `&mut Multires`, which is the one thing an owning wrapper with
+/// a destructor must not be reachable through while a raw pointer into it is
+/// live.
+///
+/// Four of the hierarchy's own methods are deliberately absent rather than
+/// forwarded. [`Multires::add_level`] and [`Multires::remove_highest_level`]
+/// rebuild the level set under a pointer that was bound to it; and
+/// [`Multires::sculptor`] and [`Multires::sculpt_layer_stroke`] would open a
+/// second live handle over a surface that already has one. Take all four
+/// before the session starts.
+pub struct SurfaceMut<'a> {
+    surface: &'a mut Multires,
+}
+
+impl std::ops::Deref for SurfaceMut<'_> {
+    type Target = Multires;
+
+    fn deref(&self) -> &Multires {
+        self.surface
+    }
+}
+
+impl std::fmt::Debug for SurfaceMut<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.surface.fmt(f)
+    }
+}
+
+/// Forwards one of the hierarchy's own `&mut self` methods.
+///
+/// A macro rather than twenty-four hand-written bodies, so the lent surface
+/// cannot drift from the thing it lends by a copy-and-paste.
+macro_rules! lends {
+    ($($name:ident($($arg:ident : $ty:ty),*) -> $ret:ty;)*) => {
+        impl SurfaceMut<'_> {
+            $(
+                #[doc = concat!("See [`Multires::", stringify!($name), "`].")]
+                pub fn $name(&mut self, $($arg: $ty),*) -> $ret {
+                    self.surface.$name($($arg),*)
+                }
+            )*
+        }
+    };
+}
+
+lends! {
+    set_sculpt_level(level: u32) -> Result<()>;
+    set_display_level(level: u32) -> Result<()>;
+    copy_level_mesh(level: u32) -> Result<Mesh>;
+    set_memory_profile(profile: SculptMemoryProfile) -> Result<()>;
+    drop_inactive_caches() -> Result<()>;
+    trim(pressure: Pressure, pin: Option<&MemoryPin>) -> Result<TrimReport>;
+    compact_sculpt_layers() -> Result<()>;
+    clear_dirty() -> Result<()>;
+    block_info(patch: u32, level: u32) -> Result<BlockInfo>;
+    copy_block(patch: u32, level: u32) -> Result<Block>;
+    add_sculpt_layer(name: Option<&str>) -> std::result::Result<SculptLayerId, MultiresRefusal>;
+    remove_sculpt_layer(id: SculptLayerId) -> std::result::Result<(), MultiresRefusal>;
+    move_sculpt_layer(id: SculptLayerId, index: usize) -> std::result::Result<(), MultiresRefusal>;
+    merge_sculpt_layer_down(id: SculptLayerId) -> std::result::Result<(), MultiresRefusal>;
+    bake_sculpt_layer_to_base(id: SculptLayerId) -> std::result::Result<(), MultiresRefusal>;
+    rename_sculpt_layer(id: SculptLayerId, name: &str) -> std::result::Result<(), MultiresRefusal>;
+    set_sculpt_layer_strength(id: SculptLayerId, strength: f32) -> std::result::Result<(), MultiresRefusal>;
+    set_sculpt_layer_visible(id: SculptLayerId, visible: bool) -> std::result::Result<(), MultiresRefusal>;
+    set_sculpt_layer_locked(id: SculptLayerId, locked: bool) -> std::result::Result<(), MultiresRefusal>;
+    set_active_sculpt_layer(id: SculptLayerId) -> std::result::Result<(), MultiresRefusal>;
+    set_sculpt_layer_detail(id: SculptLayerId, level: u32, vertex: u32, tbn: [f32; 3]) -> std::result::Result<(), MultiresRefusal>;
+    set_sculpt_layer_mask(id: SculptLayerId, level: u32, vertex: u32, weight: f32) -> std::result::Result<(), MultiresRefusal>;
+    reset_sculpt_layer_stats() -> Result<()>;
+    hold_sculpt_layer_composition(held: bool) -> Result<()>;
 }
 
 // -- the level sculptor -----------------------------------------------------
@@ -1053,8 +1152,14 @@ impl<'s> MultiresSculptor<'s> {
     /// [`seed_revision`](Self::seed_revision) taken before one is stale
     /// afterwards — and a stale seed makes the walk find nothing, which looks
     /// exactly like a fully masked stroke.
-    pub fn surface_mut(&mut self) -> &mut Multires {
-        self.surface
+    ///
+    /// Lent through a [`SurfaceMut`] rather than as a `&mut Multires`: this
+    /// sculptor holds a bare pointer into the surface, and a `&mut` to an
+    /// owning wrapper is a destructor safe code can run — see [`SurfaceMut`].
+    pub fn surface_mut(&mut self) -> SurfaceMut<'_> {
+        SurfaceMut {
+            surface: self.surface,
+        }
     }
 
     /// Starts a gesture.
@@ -1247,8 +1352,10 @@ impl<'s> MultiresSculptor<'s> {
 impl Drop for MultiresSculptor<'_> {
     fn drop(&mut self) {
         // SAFETY: owned handle, released exactly once, and before the borrow
-        // of the surface it points at ends — so the surface it holds a bare
-        // pointer to is still alive here.
+        // of the surface it points at ends. Nothing reachable from that borrow
+        // yields a `&mut Multires` (see `SurfaceMut`), so the surface this
+        // holds a bare pointer to cannot have been destroyed early and is
+        // still alive here.
         unsafe { sys::clay_multires_sculptor_destroy(self.raw.as_ptr()) };
     }
 }
@@ -2203,8 +2310,16 @@ impl SculptLayerStroke<'_> {
     /// slider moved between two stamps would author one gesture against two
     /// different surfaces, and one that appeared to move and then silently
     /// applied at commit would be the worse surprise.
-    pub fn surface_mut(&mut self) -> &mut Multires {
-        self.surface
+    ///
+    /// Lent through a [`SurfaceMut`], and here that matters more than it does
+    /// on the sculptor: this transaction's [`Drop`] cancels *into* the
+    /// surface, so a hierarchy replaced through a `&mut Multires` would be
+    /// read again on the way out of the scope that replaced it, with no
+    /// further call by the caller at all.
+    pub fn surface_mut(&mut self) -> SurfaceMut<'_> {
+        SurfaceMut {
+            surface: self.surface,
+        }
     }
 
     /// Where the next [`begin`](Self::begin) will land the stroke.
@@ -2497,8 +2612,10 @@ impl Drop for SculptLayerStroke<'_> {
             let _ = unsafe { sys::clay_multires_sculpt_layer_stroke_cancel(self.raw.as_ptr()) };
         }
         // SAFETY: owned handle, released exactly once, and before the borrow
-        // of the surface it points at ends — so the surface it holds a bare
-        // pointer to is still alive here.
+        // of the surface it points at ends. Nothing reachable from that borrow
+        // yields a `&mut Multires` (see `SurfaceMut`), so neither the cancel
+        // above nor this destroy can be writing into a surface that was
+        // replaced while the gesture was open.
         unsafe { sys::clay_multires_sculpt_layer_stroke_destroy(self.raw.as_ptr()) };
     }
 }
@@ -2577,5 +2694,48 @@ impl Document {
                 error: raw_failure("clay_multires_from_mesh", ErrorKind::Backend),
                 reason,
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The ratchet under [`SurfaceMut`].
+    ///
+    /// A hierarchy is an owning wrapper with a destructor, and `&mut` to one
+    /// is not a permission to *use* it — it is a permission to overwrite it,
+    /// which runs `clay_multires_destroy`. So a `&mut Multires` handed to safe
+    /// code by anything holding a bare pointer into that surface is a
+    /// use-after-free with no `unsafe` at the call site: measured on the
+    /// pinned engine, `*sculptor.surface_mut() = another;` then one stamp is a
+    /// SIGSEGV, and for a stroke the cancel in `Drop` reaches the freed
+    /// surface with no further call at all.
+    ///
+    /// The repair is a type — [`super::SurfaceMut`] — and the repair is only
+    /// as durable as the next person who writes an accessor. This reads the
+    /// module's own source and fails if any signature in it returns a mutable
+    /// reference to a hierarchy again, which is the shape the defect takes
+    /// whatever it is called.
+    ///
+    /// Skipped rather than failed where the source is not on disk, for the
+    /// reason the error table's ratchet is: a build from a package has the
+    /// compiled crate and not the file it came from.
+    #[test]
+    fn nothing_lends_a_hierarchy_that_could_be_replaced_through_the_borrow() {
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/multires.rs");
+        let Ok(text) = std::fs::read_to_string(&source) else {
+            return;
+        };
+        let lent: Vec<&str> = text
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with("pub fn ") || line.starts_with("fn "))
+            .filter(|line| line.contains("-> &mut Multires") || line.contains("mut Multires>"))
+            .collect();
+        assert!(
+            lent.is_empty(),
+            "a hierarchy is lent as `&mut Multires`, which is `clay_multires_destroy` \
+             reachable from safe code while a sculptor or a stroke still points into it — \
+             lend it through `SurfaceMut` instead: {lent:?}"
+        );
     }
 }

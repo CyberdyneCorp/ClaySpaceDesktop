@@ -90,11 +90,14 @@ fn hierarchy(levels: u32, name: &str) -> Multires {
 }
 
 fn positions(surface: &mut Multires, level: u32) -> Vec<[f32; 3]> {
-    surface
-        .copy_level_mesh(level)
-        .expect("a level is a mesh")
-        .positions()
-        .to_vec()
+    positions_of(&surface.copy_level_mesh(level).expect("a level is a mesh"))
+}
+
+/// The same, for a level already copied out — which is how a surface lent by
+/// an open gesture is read, since that lends the hierarchy and not a `&mut` to
+/// it.
+fn positions_of(mesh: &Mesh) -> Vec<[f32; 3]> {
+    mesh.positions().to_vec()
 }
 
 /// One Draw dab at a level, through a sculptor that is dropped afterwards.
@@ -1866,7 +1869,12 @@ fn a_cancel_restores_the_channel_exactly() {
     layered_dab(&mut stroke, [-0.4, 0.0, -0.4], 0.9);
     layered_dab(&mut stroke, [0.0, 0.0, 0.0], 0.9);
     assert_ne!(
-        positions(stroke.surface_mut(), 2),
+        positions_of(
+            &stroke
+                .surface_mut()
+                .copy_level_mesh(2)
+                .expect("a level is a mesh")
+        ),
         before,
         "the gesture is visible while it is open"
     );
@@ -1935,7 +1943,7 @@ fn a_composition_change_is_refused_while_a_gesture_is_open() {
         .expect("domain");
     stroke.begin().expect("open");
 
-    let held = stroke.surface_mut();
+    let mut held = stroke.surface_mut();
     assert_eq!(
         held.set_sculpt_layer_strength(pass, 0.5)
             .expect_err("a slider is composition")

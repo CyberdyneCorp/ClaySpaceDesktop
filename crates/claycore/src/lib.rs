@@ -85,7 +85,7 @@ pub use multires::{
     DetailStampReport, Multires, MultiresDesc, MultiresError, MultiresMemory, MultiresRefusal,
     MultiresSculptor, PeakTelemetry, Revisions, SculptLayerId, SculptLayerInfo, SculptLayerKind,
     SculptLayerRevisions, SculptLayerStats, SculptLayerStroke, SmoothMode, StampReport,
-    SubdivisionRule, WriteDomain,
+    SubdivisionRule, SurfaceMut, WriteDomain,
 };
 pub use pick::{Hit, Snapped};
 pub use reader::Reader;
