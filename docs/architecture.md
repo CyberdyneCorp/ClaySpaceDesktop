@@ -6,10 +6,13 @@ it is built and which decisions were forced rather than chosen.
 
 ## The engine underneath
 
-ClayCore is a headless C++20 library with a stable C ABI — about 190 entry
-points covering document and layer authoring, the stroke engine, voxel grids
-and their sculpting verbs, mask fields, the brick cache, picking, meshing,
-evaluation and file I/O. Three of its properties shape everything above.
+ClayCore is a headless C++20 library with a stable C ABI — 610 entry points at
+the pin this builds against, covering document and layer authoring, the stroke
+engine, voxel grids and their sculpting verbs, fixed-topology mesh sculpting,
+subdivision hierarchies and their pass stacks, mask fields, the brick cache,
+one chunked transport shared by three surface kinds, a memory ledger, a
+maintenance queue, picking, meshing, evaluation and file I/O. Three of its
+properties shape everything above.
 
 **Backends are runtime-registered and parity-gated.** CPU is compiled in
 unconditionally and *defines correctness*; Metal, Vulkan, CUDA and OpenCL
@@ -124,7 +127,24 @@ thread-local detail message read *at the point of failure* — before another
 call can overwrite it.
 
 **Buffers.** The size-query protocol is wrapped once rather than at each of the
-dozens of call sites that use it.
+dozens of call sites that use it. There are two of them — a byte-wise retry and
+an array-wise one — and neither is offered to a caller as a choice: a wrapper
+sizes from the engine's own count and hands back an owned buffer, so nothing
+above ever has to tell a short buffer from a bad argument, which are two
+different result codes that read alike at a call site.
+
+**Sequences that must happen in an order.** The engine has several pairs where
+the second half is the host's to remember: a gesture that must be closed, a
+maintenance gate that must be reopened, a memory pin that must be released, a
+deferred normal flush that must be handed *the same* undo record the stamps
+went into. Each of those is a value whose `Drop` does the second half, and each
+of the pairs it guards is unreachable except through it. Two of them are worth
+naming because their shape is not obvious. A hierarchy's sculptor borrows the
+surface for its own lifetime, which is the header's "the surface must outlive
+the sculptor" written as a lifetime rather than as a sentence. And a chunk
+acknowledgement is a *type* that only a completed copy can produce, carrying
+the revision that copy actually read — so acknowledging a chunk at a revision
+nobody read is not something a host can express.
 
 One entry point is emphatically not a size-query call, and treating it as one
 applied every stroke twice:
@@ -225,12 +245,14 @@ measured.
 
 Three things make the record trustworthy rather than merely present:
 
-- **A reference suite, revisioned per member.** One scene per representation,
+- **A reference suite, revisioned per member.** One scene per representation
+  the suite holds a member for — the field, the grid and the carried mesh —
   plus the ten-times variant for locality and a deliberately damaged grid for
-  the repairs. Each names its own revision in the baseline's `conditions`, and
-  a comparison against a baseline recorded on a different revision is refused
-  and says which member changed. `reference_suite.rs` checks each member still
-  builds the size its revision claims.
+  the repairs. A hierarchy has no member on purpose, for the reason above.
+  Each names its own revision in the baseline's `conditions`, and a comparison
+  against a baseline recorded on a different revision is refused and says which
+  member changed. `reference_suite.rs` checks each member still builds the size
+  its revision claims.
 - **A figure that stops being measured fails the gate.** A measurement that
   quietly returns early looks exactly like one that did not regress, which is
   the thing a performance gate exists to catch. So a measurement says *why* it

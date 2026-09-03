@@ -177,7 +177,7 @@ symmetry, undoes as one gesture and survives the document.
 
 ### Symmetry
 
-Symmetry about X, Y and Z reaches all three representations, and by two
+Symmetry about X, Y and Z reaches all four representations, and by two
 different mechanisms because the representations are two different things.
 
 **Symmetry belongs to the subtool, not to the document.** The toggles read and
@@ -222,11 +222,12 @@ told, and the starting form turns X on — so a snakehook with symmetry switched
 **off** came out on both sides at 1.4625. Every SDF stroke points the mirror
 now.
 
-On a **mesh** and on a **grid**, by mirroring the *stroke* and applying it
-again. There is nothing else to reach for: the layer mirror reflects a layer's
-items, and a mesh has vertices while a grid has cells. That is also what both
-references do in the same position. Measured in Blender 5.2, one Draw dab on a
-64×32 sphere:
+On a **mesh**, a **grid** and a **hierarchy**, by mirroring the *stroke* and
+applying it again. There is nothing else to reach for: the layer mirror
+reflects a layer's items, and a mesh has vertices, a grid has cells, and a
+hierarchy has displacements stored per level. That is also what both references
+do in the same position. Measured in Blender 5.2, one Draw dab on a 64×32
+sphere:
 
 | Symmetry | +x | −x | +y | −y | Max displacement |
 |---|---|---|---|---|---|
@@ -2542,7 +2543,7 @@ between them**: the locale came from `Locale::default()` at startup and was
 never asked about again, so `Locale::from_tag` — written for exactly this — was
 called by nothing.
 
-**The brush names are translated.** All twenty-one, on all three representations —
+**The brush names are translated.** All twenty-one, on all four representations —
 the shelf and the status bar's last action both read them from the interface's
 own table. They were `ToolKind::label()`, the domain's own Portuguese, shown
 whatever the language was. `ToolKind::label` keeps that Portuguese for the
@@ -3016,14 +3017,21 @@ absent on others.
   means the autosave beside it is offered back.
 - Recovered work is unsaved work. It does not take the recovery file's path,
   so the next save asks; and it is marked modified, because it is.
-- Which shapes were *placed* live in a side-car, `<name>.clay.objects`,
-  beside the document rather than inside it: the `.clay` format is the
-  engine's, and which nodes a sculptor put there is this application's own
-  bookkeeping. Send someone the `.clay` on its own and it opens and sculpts
-  with every boolean intact — the hole a cylinder cut is still a hole — but
-  none of its shapes is offered as an object any more, so none can be
-  selected, moved or re-combined. A row that will not parse costs that one
-  object and not the file.
+- Which shapes were *placed* live in a side-car,
+  `<name>.clayspace.objects`, beside the document rather than inside it: the
+  container is the engine's, and which nodes a sculptor put there is this
+  application's own bookkeeping. Send someone the `.clayspace` on its own and
+  it opens and sculpts with every boolean intact — the hole a cylinder cut is
+  still a hole — but none of its shapes is offered as an object any more, so
+  none can be selected, moved or re-combined. A row that will not parse costs
+  that one object and not the file.
+- A subdivision hierarchy's levels live in a second side-car,
+  `<name>.clayspace.multires`, and it is the other kind of side-car: what it
+  holds is the work rather than a record of it. So a save that cannot write it
+  **fails**, where a failed object table is reported and swallowed, and a
+  document that arrives without one comes back as the cage its layer holds
+  rather than as a hierarchy that has lost every level. See *Sculpting a
+  subdivision hierarchy*.
 - Session state lives in Application Support on macOS and `$XDG_STATE_HOME` on
   Linux. State, not cache: losing it costs work.
 - The **reference images** are session state too: each plane's file path and

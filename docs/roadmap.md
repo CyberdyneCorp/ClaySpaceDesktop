@@ -4,8 +4,9 @@ Where the project stands, what is left, and what is still undecided. Task
 counts come from the tasks files under `openspec/changes/`, which are the
 authority.
 
-**Seven changes.** `add-clayspace-desktop` stands at **107 of 109 tasks** —
-milestones 1 to 4 delivered, milestone 5 all but closed.
+**Thirty-three changes, twenty-five of them with every task ticked.**
+`add-clayspace-desktop` stands at **107 of 109 tasks** — milestones 1 to 4
+delivered, milestone 5 all but closed.
 `make-representations-first-class` is **complete**, and is what took the
 application from one vocabulary to three; its own summary is below.
 `place-and-transform-objects` is **complete**: a shape placed in the scene
@@ -26,12 +27,26 @@ and the shelf did not reach: a brush colour and a Pintar that changes a pixel,
 Mover and Planar on a grid, Argila and Vinco on a field, and Mover Topológico
 as a tool of its own.
 
-Engine pinned at ClayCore **0.73.0**, at the tag rather than at `main` — the
+And a fourth vocabulary. `a-hierarchy-the-domain-can-describe`,
+`a-hierarchy-that-is-sculpted-and-saved` and `a-stack-of-passes-on-a-hierarchy`
+are **complete** between them: the engine's subdivision hierarchy is a
+representation like the other three — crossed into from a mesh that becomes its
+cage, sculpted at a level independent of the one being drawn, carrying a stack
+of named passes whose strengths stay dialable, and saved in a side-car beside
+the document because the container carries the cage and nothing standing on it.
+`a-subtool-stretches-per-axis`, `a-preview-that-holds-the-whole-scene`,
+`memory-that-says-which-part` and `maintenance-between-strokes` are the rest of
+what the v0.78.0 pin made reachable.
+
+Engine pinned at ClayCore **0.78.0**, at the tag rather than at `main` — the
 tag is a release, `main` is where they are still working. On the reference
 scene a dab is 2.1 ms median against a 50 ms budget and startup to first
-document is 11.4 ms, recorded against 0.52.2 on Linux x86_64. The macOS
-baseline still reads 0.29.1 — 12.2 ms and 15.1 ms there — and nothing since
-has been re-measured on that machine. See *What is slow and why*.
+document is 11.4 ms, recorded against 0.52.2 on Linux x86_64. The twenty-three
+figures this pin added — the hierarchy's own group, the deferred normal flush
+measured against the same stroke without it, and the drain between two strokes
+— have no entry in any baseline and report as `new` until one is recorded. The
+macOS baseline still reads 0.29.1 — 12.2 ms and 15.1 ms there — and nothing
+since has been re-measured on that machine. See *What is slow and why*.
 
 ## Milestones
 
