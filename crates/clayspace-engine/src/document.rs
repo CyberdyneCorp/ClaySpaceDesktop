@@ -313,6 +313,118 @@ impl Layer {
 }
 
 /// A ClayCore document driven by the domain's vocabulary.
+/// A mesh gesture in flight: the record its stamps are written into, and the
+/// sculptor that owes those stamps a normal recomputation.
+///
+/// The two are one value because the engine's contract binds them, and binds
+/// them in a way that is silent when it is broken:
+///
+///   * nothing flushes on its own — the sculptor does not know where a gesture
+///     ends, and guessing at it would flush mid-drag, which is the whole of
+///     what deferring exists to avoid;
+///   * a host that defers **must** flush, or the form keeps the shading it had
+///     before the drag;
+///   * and the flush has to be handed the *same* record the stamps were noted
+///     into, or the gesture's undo puts the vertices back and leaves the
+///     shading where the gesture wrote it.
+///
+/// So the record is held beside the handle that owes it rather than beside the
+/// layer key, which makes the pairing the only one expressible — and makes
+/// `Drop` the last exit. A gesture that ends by unwinding out of a `?`, by
+/// being replaced when the pointer lands on another subtool, or by a document
+/// going away under it settles on the way past instead of leaving a mesh
+/// shaded from where its vertices used to be.
+struct LiveMesh {
+    layer: LayerKey,
+    /// Shared with `mesh_sculptors`, so an eviction or a layer removed during
+    /// the drag cannot take the flush's handle away from the gesture that owes
+    /// it. See [`crate::sculptors`].
+    sculptor: crate::sculptors::SharedSculptor,
+    /// `None` only between [`LiveMesh::finish`] taking the record out and the
+    /// value being dropped, which is why every reader goes through
+    /// [`LiveMesh::deltas`].
+    deltas: Option<claycore::MeshDeltas>,
+}
+
+impl LiveMesh {
+    fn new(
+        layer: LayerKey,
+        sculptor: crate::sculptors::SharedSculptor,
+        deltas: claycore::MeshDeltas,
+    ) -> Self {
+        Self {
+            layer,
+            sculptor,
+            deltas: Some(deltas),
+        }
+    }
+
+    /// The record the gesture's stamps are noted into.
+    fn deltas(&mut self) -> &mut claycore::MeshDeltas {
+        self.deltas
+            .as_mut()
+            .expect("a live gesture always holds its record until it is finished")
+    }
+
+    /// Recomputes whatever the sculptor deferred, into this record, and puts
+    /// the deferral back down.
+    ///
+    /// Idempotent, and cheap where nothing was deferred: the engine returns
+    /// immediately on an empty pending set, which is what makes it safe to
+    /// settle on every exit rather than only on the ones that deferred
+    /// something.
+    fn settle(&mut self) -> Result<(), ModelError> {
+        // `try_borrow_mut` rather than `borrow_mut`: this runs from `Drop`,
+        // and a panic there during an unwind aborts the process. A sculptor
+        // already borrowed is a caller settling from inside its own stamp,
+        // which is a bug in this file rather than something a user can reach.
+        let Ok(mut sculptor) = self.sculptor.try_borrow_mut() else {
+            debug_assert!(
+                false,
+                "a live gesture settled while its sculptor was borrowed"
+            );
+            return Err(ModelError::engine(
+                "a escultora estava em uso quando o gesto foi encerrado",
+            ));
+        };
+        sculptor
+            .flush_normals(self.deltas.as_mut())
+            .map_err(ModelError::engine)?;
+        sculptor
+            .set_defer_normals(false)
+            .map_err(ModelError::engine)
+    }
+
+    /// Ends the gesture and hands back what it recorded.
+    ///
+    /// Settles first, so the record handed on is the exact one — the flush
+    /// notes the normals it changed, and an undo has to put the shading back
+    /// as well as the vertices.
+    fn finish(mut self) -> (LayerKey, claycore::MeshDeltas) {
+        if let Err(e) = self.settle() {
+            // Reported rather than propagated: the gesture is over either way,
+            // and dropping the record here would lose the sculptor's work as
+            // well as its shading.
+            eprintln!("as normais adiadas não puderam ser recalculadas: {e}");
+        }
+        let deltas = self
+            .deltas
+            .take()
+            .expect("a live gesture always holds its record until it is finished");
+        (self.layer, deltas)
+    }
+}
+
+impl Drop for LiveMesh {
+    /// The last exit, and the reason this is a type rather than a call at the
+    /// end of each path that ends a stroke.
+    fn drop(&mut self) {
+        if let Err(e) = self.settle() {
+            eprintln!("as normais adiadas não puderam ser recalculadas: {e}");
+        }
+    }
+}
+
 /// One mesh gesture, and where it sits against the engine's own history.
 struct MeshGesture {
     layer: LayerKey,
@@ -457,6 +569,38 @@ impl CarriedBuffer {
 }
 
 pub struct ClayDocument {
+    // -- what must go before the document ------------------------------------
+    //
+    // Fields drop in declaration order, and these two hold BORROWED engine
+    // pointers into `document`'s own meshes: `MeshSculptor::for_layer` is
+    // handed the layer's `clay_mesh` and keeps it, and `LiveMesh::drop`
+    // recomputes the normals its gesture deferred, which reads that mesh. A
+    // document dropped mid-drag would otherwise free the meshes first and
+    // leave the flush reading storage that had gone — measured, a segmentation
+    // fault inside the engine rather than a refusal, because a borrowed handle
+    // has nothing left to check against.
+    //
+    // So they are declared here, above the thing they point into, and nothing
+    // that borrows from `document` may be declared below it.
+    /// The gesture being previewed on a mesh layer, and what it has moved.
+    ///
+    /// A dragging verb is laid down again from its anchor on every segment, so
+    /// what the last segment did has to be taken back first — this is the
+    /// record that takes it back. Promoted to the undo stack when the gesture
+    /// ends, so a drag is still one undo however many segments drew it.
+    ///
+    /// It carries the sculptor as well as the record: see [`LiveMesh`].
+    live_mesh: Option<LiveMesh>,
+    /// In a cell because a *pick* needs it and a pick is a question.
+    ///
+    /// The sculptor answers a raycast from its own tree and may refit it while
+    /// doing so, which is a mutation — but `SculptModel::pick` takes `&self`,
+    /// and widening that so every caller of a question must hold a mutable
+    /// borrow would be the tail wagging the dog. Casting the borrow away was
+    /// the other option and `forbid(unsafe_code)` refused it, correctly: the
+    /// C call takes a non-const sculptor because it really may write.
+    mesh_sculptors: std::cell::RefCell<crate::sculptors::Sculptors>,
+
     document: Document,
     layers: Vec<Layer>,
     active: usize,
@@ -470,13 +614,6 @@ pub struct ClayDocument {
     /// A measurement rather than bookkeeping: it is what says an edit costs
     /// the edit, and it is what a test can assert on without timing anything.
     meshed_chunks: usize,
-    /// The gesture being previewed on a mesh layer, and what it has moved.
-    ///
-    /// A dragging verb is laid down again from its anchor on every segment, so
-    /// what the last segment did has to be taken back first — this is the
-    /// record that takes it back. Promoted to the undo stack when the gesture
-    /// ends, so a drag is still one undo however many segments drew it.
-    live_mesh: Option<(LayerKey, claycore::MeshDeltas)>,
     /// Whether a gesture is open and should be previewed rather than banked.
     previewing: bool,
     /// Bumped by every preview, so the viewport knows to look again.
@@ -584,15 +721,6 @@ pub struct ClayDocument {
     /// The mesh sculptors built so far, bounded and least recently used
     /// first — see [`crate::sculptors`] for why there is more than one.
     ///
-    /// In a cell because a *pick* needs it and a pick is a question.
-    ///
-    /// The sculptor answers a raycast from its own tree and may refit it while
-    /// doing so, which is a mutation — but `SculptModel::pick` takes `&self`,
-    /// and widening that so every caller of a question must hold a mutable
-    /// borrow would be the tail wagging the dog. Casting the borrow away was
-    /// the other option and `forbid(unsafe_code)` refused it, correctly: the
-    /// C call takes a non-const sculptor because it really may write.
-    mesh_sculptors: std::cell::RefCell<crate::sculptors::Sculptors>,
     /// Mesh gestures, newest last, and the redo side of the same.
     ///
     /// A second history beside the engine's, which the design deferred and
@@ -3886,33 +4014,66 @@ impl ClayDocument {
         // stamping drag to a single undo: `MeshDeltas` coalesces, so a stroke
         // passing over the same vertex forty times still records where it
         // started, once.
-        let held = self
-            .live_mesh
-            .take()
-            .filter(|(layer, _)| *layer == key)
-            .map(|(_, deltas)| deltas);
-        let (mut deltas, previous) = match held {
-            Some(held) if tool.is_path_driven() => (
-                claycore::MeshDeltas::new().map_err(ModelError::engine)?,
-                Some(held),
-            ),
+        //
+        // A gesture that was open on another subtool is dropped here rather
+        // than carried, and dropping one settles it — see [`LiveMesh`].
+        let Some(sculptor) = self.sculptor_for(key) else {
+            return Ok(EditOutcome::NOTHING);
+        };
+        let held = self.live_mesh.take().filter(|live| live.layer == key);
+        let (mut live, mut previous) = match held {
+            Some(mut held) if tool.is_path_driven() => {
+                // Settled before it is handed over to be reverted, and this is
+                // the ordering the exactness rests on: the flush recomputes
+                // the segment's normals *into the record that is about to put
+                // them back*, so what the revert restores is what a gesture
+                // that deferred nothing would have left. Deferring across the
+                // boundary would leave the last segment's flush recomputing
+                // classes the earlier ones only ever moved and took back,
+                // which is a mesh shaded from geometry no longer there.
+                held.settle()?;
+                (
+                    LiveMesh::new(
+                        key,
+                        sculptor.clone(),
+                        claycore::MeshDeltas::new().map_err(ModelError::engine)?,
+                    ),
+                    Some(held),
+                )
+            }
             Some(held) => (held, None),
             None => (
-                claycore::MeshDeltas::new().map_err(ModelError::engine)?,
+                LiveMesh::new(
+                    key,
+                    sculptor.clone(),
+                    claycore::MeshDeltas::new().map_err(ModelError::engine)?,
+                ),
                 None,
             ),
         };
-        // Read before the sculptors are borrowed: the lease reads the document
+        // Read before the sculptor is borrowed: the lease reads the document
         // and both are shared borrows of `self`, so the two sit side by side.
         let mask = self.active_mask();
         let moved = {
-            let mut held = self.mesh_sculptors.borrow_mut();
-            let Some(sculptor) = held.get_mut(key) else {
-                return Ok(EditOutcome::NOTHING);
-            };
-            if let Some(previous) = &previous {
-                previous.revert(sculptor).map_err(ModelError::engine)?;
+            let mut sculptor = sculptor.borrow_mut();
+            if let Some(previous) = &mut previous {
+                previous
+                    .deltas()
+                    .revert(&mut sculptor)
+                    .map_err(ModelError::engine)?;
             }
+            // Normals held back for the length of this segment's engine calls.
+            //
+            // What it buys is the recompute of overlapping dabs done once
+            // instead of once per dab; what it costs is that the form shades
+            // from where its vertices were until the flush below. The flag is
+            // put back down by that flush and by nothing else, so no call
+            // outside this block — a whole-form deformer, a cage, an undo's
+            // revert — can find it standing.
+            sculptor
+                .set_defer_normals(true)
+                .map_err(ModelError::engine)?;
+            let deltas = live.deltas();
             // Every reflection the enabled axes call for, the unmirrored
             // stroke among them. Two axes give four dabs and three give eight,
             // which is what both references do — measured in Blender on a
@@ -3952,7 +4113,7 @@ impl ClayDocument {
                                 ..stamp
                             },
                             mask.as_deref(),
-                            Some(&mut deltas),
+                            Some(deltas),
                         )
                         .map_err(ModelError::engine)?
                 } else {
@@ -3973,14 +4134,18 @@ impl ClayDocument {
                                 ..stamp
                             },
                             mask.as_deref(),
-                            // Not yet: the stroke resolver's deferral is
-                            // scoped to this call and settles itself, but
-                            // turning it on is a change to how a segment
-                            // shades while it is being made and belongs with
-                            // the sculptor-level switch rather than ahead of
-                            // it.
-                            false,
-                            Some(&mut deltas),
+                            // The stroke resolver's own deferral, which is a
+                            // different thing from the flag above and is why
+                            // both are set: it is scoped to this call, and the
+                            // library recomputes once at the end of the stroke
+                            // it drove — into this same record — because there
+                            // it knows where the stroke ended. That is what
+                            // collapses a resolved stroke's overlapping dabs
+                            // into one recompute; the flag above is what does
+                            // the same for Grab's mirrored stamps, which no
+                            // resolver drives.
+                            true,
+                            Some(deltas),
                         )
                         .map_err(ModelError::engine)?
                 };
@@ -3993,22 +4158,30 @@ impl ClayDocument {
             moved
         };
 
+        // The flush the deferral above owes, into the record its stamps were
+        // noted into. `LiveMesh::settle` is the only thing in this crate that
+        // recomputes deferred normals, and `LiveMesh::drop` calls it too, so a
+        // `?` anywhere above leaves by this same door.
+        live.settle()?;
+
         // A gesture that reached nothing is not worth a place on the stack,
         // and putting one there would make an undo appear to do nothing.
-        let reached = deltas.vertex_count().map_err(ModelError::engine)? > 0;
+        let reached = live.deltas().vertex_count().map_err(ModelError::engine)? > 0;
         if self.previewing {
             // Held rather than banked. The gesture is still open, and every
             // segment replaces the last — one drag is one undo however many
             // segments drew it.
             if reached {
-                self.live_mesh = Some((key, deltas));
+                self.live_mesh = Some(live);
             }
             self.live_generation = self.live_generation.wrapping_add(1);
         } else if reached {
+            let engine_depth = self.engine_undo_depth();
+            let (layer, deltas) = live.finish();
             self.mesh_undo.push(MeshGesture {
-                layer: key,
+                layer,
                 deltas,
-                engine_depth: self.engine_undo_depth(),
+                engine_depth,
             });
             // A new edit ends the redo line, exactly as the engine's own does.
             self.mesh_redo.clear();
@@ -4109,8 +4282,7 @@ impl ClayDocument {
             ),
             None => (origin, direction),
         };
-        let mut held = self.mesh_sculptors.borrow_mut();
-        let Some(sculptor) = held.get_mut(key) else {
+        let Some(sculptor) = self.sculptor_for(key) else {
             // Not built yet, and a pick cannot build it — that costs an
             // adjacency pass and a pick happens every frame the pointer moves.
             // The first stroke builds it; until then the pointer finds nothing
@@ -4118,6 +4290,7 @@ impl ClayDocument {
             // than as a wrong answer.
             return None;
         };
+        let mut sculptor = sculptor.borrow_mut();
         sculptor
             .raycast(origin, direction)
             .ok()
@@ -4766,9 +4939,8 @@ impl ClayDocument {
     /// `None` where the active layer is not a sculpted mesh.
     pub fn mesh_quality(&self) -> Option<f32> {
         let key = self.active_layer().key;
-        let mut held = self.mesh_sculptors.borrow_mut();
-        held.get_mut(key)
-            .and_then(|sculptor| sculptor.quality().ok())
+        self.sculptor_for(key)
+            .and_then(|sculptor| sculptor.borrow_mut().quality().ok())
     }
 
     /// The engine's own undo depth, which is what the two histories order by.
@@ -4815,13 +4987,13 @@ impl ClayDocument {
         };
         self.ensure_mesh_sculptor(gesture.layer, &engine_name)?;
         {
-            let mut held = self.mesh_sculptors.borrow_mut();
-            let Some(sculptor) = held.get_mut(gesture.layer) else {
+            let Some(sculptor) = self.sculptor_for(gesture.layer) else {
                 return Ok(false);
             };
+            let mut sculptor = sculptor.borrow_mut();
             gesture
                 .deltas
-                .revert(sculptor)
+                .revert(&mut sculptor)
                 .map_err(ModelError::engine)?;
             sculptor.refit().map_err(ModelError::engine)?;
         }
@@ -4846,11 +5018,14 @@ impl ClayDocument {
         };
         self.ensure_mesh_sculptor(gesture.layer, &engine_name)?;
         {
-            let mut held = self.mesh_sculptors.borrow_mut();
-            let Some(sculptor) = held.get_mut(gesture.layer) else {
+            let Some(sculptor) = self.sculptor_for(gesture.layer) else {
                 return Ok(false);
             };
-            gesture.deltas.apply(sculptor).map_err(ModelError::engine)?;
+            let mut sculptor = sculptor.borrow_mut();
+            gesture
+                .deltas
+                .apply(&mut sculptor)
+                .map_err(ModelError::engine)?;
             sculptor.refit().map_err(ModelError::engine)?;
         }
         let layer = gesture.layer;
@@ -4875,8 +5050,20 @@ impl ClayDocument {
         const WELD: f32 = 1e-4;
         let sculptor = claycore::MeshSculptor::for_layer(&mut self.document, engine_name, WELD)
             .map_err(ModelError::engine)?;
-        self.mesh_sculptors.borrow_mut().insert(key, sculptor);
+        self.mesh_sculptors
+            .borrow_mut()
+            .insert(key, std::rc::Rc::new(std::cell::RefCell::new(sculptor)));
         Ok(())
+    }
+
+    /// The sculptor for a layer, shared, or `None` where none has been built.
+    ///
+    /// Handed out by reference count rather than borrowed, so that a caller
+    /// may keep it past the borrow it was taken under — which is what a
+    /// gesture holding one across the frames of a drag needs. Asking counts as
+    /// a use, exactly as [`crate::sculptors::Held::get_mut`] says.
+    fn sculptor_for(&self, key: LayerKey) -> Option<crate::sculptors::SharedSculptor> {
+        self.mesh_sculptors.borrow_mut().get_mut(key).cloned()
     }
 
     /// Builds the mesh sculptor for the active layer, if it needs one.
@@ -5459,10 +5646,11 @@ impl SculptModel for ClayDocument {
         // lease has to outlive the calls that consult it.
         let mask = self.active_mask();
         let moved = {
-            let mut held = self.mesh_sculptors.borrow_mut();
-            let Some(sculptor) = held.get_mut(key) else {
+            let Some(sculptor) = self.sculptor_for(key) else {
                 return Ok(EditOutcome::NOTHING);
             };
+            let mut sculptor = sculptor.borrow_mut();
+            let sculptor = &mut *sculptor;
             let moved = match operation {
                 clayspace_model::LayerOperation::Taper {
                     axis,
@@ -5681,11 +5869,16 @@ impl SculptModel for ClayDocument {
         // What the preview was holding becomes the edit. One record for the
         // whole drag, because every segment replaced the last rather than
         // adding to it.
-        if let Some((layer, deltas)) = self.live_mesh.take() {
+        //
+        // `finish` settles first: a gesture that deferred its normals owes the
+        // record the recomputation before the record becomes an undo entry.
+        if let Some(live) = self.live_mesh.take() {
+            let engine_depth = self.engine_undo_depth();
+            let (layer, deltas) = live.finish();
             self.mesh_undo.push(MeshGesture {
                 layer,
                 deltas,
-                engine_depth: self.engine_undo_depth(),
+                engine_depth,
             });
             self.mesh_redo.clear();
         }
@@ -8168,27 +8361,38 @@ impl ClayDocument {
             None => Self::cage_lattice(cage)?,
         };
 
-        let mut deltas = claycore::MeshDeltas::new().map_err(ModelError::engine)?;
+        let Some(sculptor) = self.sculptor_for(cage.layer) else {
+            return Ok(());
+        };
+        let mut live = LiveMesh::new(
+            cage.layer,
+            sculptor.clone(),
+            claycore::MeshDeltas::new().map_err(ModelError::engine)?,
+        );
         // What the last preview did, taken back before the cage is laid down
         // again from the mesh as it was. The lattice is *absolute* — offsets
         // from rest, evaluated against the original vertices — so applying it
         // over a surface a previous preview already bent would compound the
         // deformation on every pointer move.
-        let previous = self
+        let mut previous = self
             .live_mesh
             .take()
-            .filter(|(layer, _)| *layer == cage.layer)
-            .map(|(_, deltas)| deltas);
+            .filter(|held| held.layer == cage.layer);
         let moved = {
-            let mut held = self.mesh_sculptors.borrow_mut();
-            let Some(sculptor) = held.get_mut(cage.layer) else {
-                return Ok(());
-            };
-            if let Some(previous) = &previous {
-                previous.revert(sculptor).map_err(ModelError::engine)?;
+            let mut sculptor = sculptor.borrow_mut();
+            if let Some(previous) = &mut previous {
+                previous
+                    .deltas()
+                    .revert(&mut sculptor)
+                    .map_err(ModelError::engine)?;
             }
+            // Not deferred, and deliberately: the cage is one whole-mesh call
+            // per pointer move, so there is a single recompute either way and
+            // deferring would buy a stale shading for nothing. The record is
+            // still held beside the handle, so if that ever changes the flush
+            // is already guaranteed.
             sculptor
-                .apply_lattice(&lattice, Some(&mut deltas))
+                .apply_lattice(&lattice, Some(live.deltas()))
                 .map_err(ModelError::engine)?
         };
         if self.previewing {
@@ -8196,16 +8400,18 @@ impl ClayDocument {
             // replaces the last, so bending a form is one undo however many
             // times the sculptor adjusted a corner on the way.
             if moved > 0 {
-                self.live_mesh = Some((cage.layer, deltas));
+                self.live_mesh = Some(live);
             }
             // What tells the viewport to look again: a mesh layer is not in
             // the brick cache, so nothing else about this edit would.
             self.live_generation = self.live_generation.wrapping_add(1);
         } else if moved > 0 {
+            let engine_depth = self.engine_undo_depth();
+            let (layer, deltas) = live.finish();
             self.mesh_undo.push(MeshGesture {
-                layer: cage.layer,
+                layer,
                 deltas,
-                engine_depth: self.engine_undo_depth(),
+                engine_depth,
             });
             self.mesh_redo.clear();
         }
@@ -8354,19 +8560,24 @@ impl ClayDocument {
 
     /// Takes back whatever a preview is showing, leaving the form as it was.
     fn discard_cage_preview(&mut self) {
-        let Some((layer, deltas)) = self.live_mesh.take() else {
+        let Some(mut live) = self.live_mesh.take() else {
             return;
         };
+        // Settled before the revert, for the reason the stroke path settles
+        // before its own: what the record puts back has to include whatever
+        // the flush recomputed, or the offsets come off and the shading does
+        // not.
+        if let Err(e) = live.settle() {
+            eprintln!("as normais adiadas não puderam ser recalculadas: {e}");
+        }
         let reverted = {
-            // Against the sculptor for the layer the preview was laid on. The
-            // single slot this replaced was whatever had last been built, so a
-            // preview outliving a switch reverted its offsets into another
-            // subtool's vertices.
-            let mut held = self.mesh_sculptors.borrow_mut();
-            match held.get_mut(layer) {
-                Some(sculptor) => deltas.revert(sculptor),
-                None => Ok(()),
-            }
+            // Against the sculptor for the layer the preview was laid on,
+            // which the gesture carries itself: the single slot this replaced
+            // was whatever had last been built, so a preview outliving a
+            // switch reverted its offsets into another subtool's vertices.
+            let sculptor = live.sculptor.clone();
+            let mut sculptor = sculptor.borrow_mut();
+            live.deltas().revert(&mut sculptor)
         };
         if let Err(e) = reverted {
             eprintln!("a pré-visualização da gaiola não pôde ser desfeita: {e}");
@@ -10684,5 +10895,96 @@ impl ObjectModel for ClayDocument {
             node: node.get(),
         };
         self.object_index(id).map(|_| id)
+    }
+}
+
+#[cfg(test)]
+mod live_mesh_guard {
+    use super::*;
+
+    /// A gesture that deferred its normals and was never settled by anyone.
+    ///
+    /// Every path this crate takes through `stroke_mesh` settles before it
+    /// returns, so `Drop` is the exit nothing else covers: a `?` unwinding out
+    /// of a stamp, a mask lease refused, the gesture replaced when the pointer
+    /// lands on another subtool. There is no way to reach that from outside
+    /// the crate — which is exactly why it is tested from inside it, by
+    /// building the gesture, deferring, stamping, and simply letting the value
+    /// go out of scope.
+    #[test]
+    fn dropping_a_gesture_recomputes_what_it_deferred() {
+        let policy = crate::BackendPolicy::discover(None).expect("discover backends");
+        let mut document = ClayDocument::new(policy)
+            .and_then(ClayDocument::with_starting_form)
+            .expect("a document with a starting form");
+        document
+            .convert_layer(clayspace_model::Direction::SdfToMesh, 0.03, 0)
+            .expect("into a mesh");
+
+        let key = document.active_layer().key;
+        let engine_name = document.active_layer().engine_name.clone();
+        document
+            .ensure_mesh_sculptor(key, &engine_name)
+            .expect("a sculptor");
+        let sculptor = document.sculptor_for(key).expect("the sculptor just built");
+
+        let (before_positions, before_normals, ..) = document.visible_mesh_geometry();
+        assert!(!before_positions.is_empty(), "the fixture carries no mesh");
+
+        {
+            let mut live = LiveMesh::new(
+                key,
+                sculptor.clone(),
+                claycore::MeshDeltas::new().expect("a record"),
+            );
+            // Declared after `live`, so it is released first and the drop
+            // below can take the sculptor for itself.
+            let mut held = sculptor.borrow_mut();
+            held.set_defer_normals(true).expect("defer");
+            let moved = held
+                .stamp(
+                    claycore::MeshStamp {
+                        verb: claycore::MeshBrush::Draw,
+                        center: [0.0, 0.0, 1.0],
+                        radius: 0.5,
+                        strength: 0.5,
+                        ..claycore::MeshStamp::default()
+                    },
+                    None,
+                    Some(live.deltas()),
+                )
+                .expect("stamp");
+            assert!(moved > 0, "the stamp reached nothing to defer");
+            // Neither settled nor finished: the gesture ends by going out of
+            // scope, which is the whole subject of this test.
+        }
+
+        assert!(
+            !sculptor
+                .borrow()
+                .defer_normals()
+                .expect("read the flag back"),
+            "the dropped gesture left the sculptor deferring, so the next \
+             thing to stamp this mesh would defer with nobody owing a flush"
+        );
+
+        let (after_positions, after_normals, ..) = document.visible_mesh_geometry();
+        let mut moved = 0;
+        let mut stale = 0;
+        for i in 0..before_positions.len() {
+            if before_positions[i] != after_positions[i] {
+                moved += 1;
+                if before_normals[i] == after_normals[i] {
+                    stale += 1;
+                }
+            }
+        }
+        assert!(moved > 0, "nothing moved, so nothing was deferred");
+        assert!(
+            stale * 4 < moved,
+            "{stale} of {moved} moved vertices still carry the normal they \
+             had before the stamp: dropping the gesture did not recompute \
+             what it deferred"
+        );
     }
 }

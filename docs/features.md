@@ -693,6 +693,35 @@ nothing, because the layer's own triangles are what the viewport reads. At the
 default flow and a brush of 0.858 the field threshold is 1.03 world units —
 most of the way across a unit sphere.
 
+**A segment recomputes its normals once, not once per dab.** Normals follow
+the vertices, so a moved vertex with a stale normal shades wrong immediately —
+which is why ClayCore recomputes them per stamp by default. A segment of a mesh
+stroke is several engine calls, though: one per enabled mirror, and inside each
+one a resolved stroke's own stamps. So the segment defers, and recomputes the
+whole set once at the end, coalesced — a stroke passing over the same vertex
+forty times recomputes it once.
+
+There are two switches for this and they are not the same switch. A resolved
+stroke carries its own, scoped to the call, and the library settles it at the
+end of the stroke it drove, because there the library knows where the stroke
+ended. Mover reads the sculptor's own flag instead, since it is a single stamp
+per mirror and no resolver drives it — and *nothing flushes that on its own*.
+So the record a segment's stamps are noted into and the sculptor that owes them
+are held as one value, whose disposal recomputes: a segment that ends by
+unwinding out of a refusal, by being abandoned when the pointer lands on
+another subtool, or by the document going away under it settles on the way past
+rather than leaving a form shaded from where its vertices used to be. The flush
+is handed *that* record and no other, because a record captures a vertex's
+normal the first time it sees it — flushed into a fresh one, the undo would put
+the vertices back and leave the shading where the stroke wrote it.
+
+The deferral never outlives the segment that armed it. A dragging verb replays
+from its anchor, so what one segment did the next takes back; carrying a
+deferral across that boundary would leave the last segment recomputing classes
+the earlier ones only ever moved and reverted. Nothing on screen lags: the
+recompute happens before the call returns, and the viewport reads the layer's
+triangles after it.
+
 The bake-and-replace verbs are held whole on a field and **not** on a mesh:
 Suavizar, Relaxar, Planar and Polir sample a region into a volume there and
 segmenting that stacks a replacement per segment until the result crumbles,
