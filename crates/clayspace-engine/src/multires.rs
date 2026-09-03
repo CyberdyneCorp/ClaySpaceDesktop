@@ -159,6 +159,17 @@ impl Hierarchy {
         &mut self.surface
     }
 
+    /// What this hierarchy costs, in the currency the document's roll-up is in.
+    ///
+    /// A hierarchy is an owning handle held *beside* the document — the engine
+    /// cannot walk one, which is why `clay_document_memory` reports the whole
+    /// surface tier as zero and why the entry point that does not takes a
+    /// ledger from the host. Only this side knows which hierarchies belong to
+    /// which document, so only this side can fill it.
+    pub fn memory_ledger(&self) -> Result<claycore::MemoryLedger, ModelError> {
+        self.surface.memory_ledger().map_err(ModelError::engine)
+    }
+
     /// Where the brush writes, what is drawn, and how many levels there are.
     pub fn levels(&self) -> MultiresLevels {
         MultiresLevels {

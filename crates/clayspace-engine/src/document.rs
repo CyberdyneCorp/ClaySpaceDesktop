@@ -5831,12 +5831,25 @@ impl ClayDocument {
 
     /// The ledger for the surfaces this document is holding *beside* itself.
     ///
-    /// A [`claycore::MeshSculptor`] is an owning handle the host keeps next to
-    /// its document rather than inside it — the engine cannot walk one, so
+    /// A [`claycore::MeshSculptor`] and a [`crate::multires::Hierarchy`] are
+    /// both owning handles the host keeps next to its document rather than
+    /// inside it — the engine cannot walk either, so
     /// [`claycore::Document::memory`] reports the whole surface tier as zero
     /// and that is ownership rather than an omission. Only this side knows
-    /// which sculptors belong to this document, so only this side can fill the
+    /// which of them belong to this document, so only this side can fill the
     /// ledger, and the engine's API says so by taking one.
+    ///
+    /// **Both**, and that is the whole of what this walk is for. A mesh
+    /// sculpting session is held in one map and a hierarchy on its own layer,
+    /// so a roll-up that walks only the map answers for a hierarchy-holding
+    /// document exactly what it answers for an empty one: measured, an 8x8
+    /// cage subdivided six times reported `total 24444, rebuildable 0,
+    /// surfaces 0` at zero levels and at six alike, while the hierarchy beside
+    /// it held 26,233,592 bytes of which 15,742,640 were rebuildable. That is
+    /// the omission the entry point taking a ledger exists to prevent, and it
+    /// is worse than a small answer: `surfaces` is what tells "there are none"
+    /// from "the host never filled it", so zero there was a claim as well as a
+    /// figure.
     ///
     /// Returns how many surfaces were asked as well as what they answered,
     /// because zero surfaces and a zero ledger are the same number and
@@ -5847,18 +5860,26 @@ impl ClayDocument {
     /// the two category counts, so folding into a zeroed ledger would report
     /// every category as unfilled however many surfaces were added to it.
     pub fn surface_ledger(&self) -> Result<(usize, claycore::MemoryLedger), ModelError> {
-        let held = self.mesh_sculptors.borrow();
         let mut ledger: Option<claycore::MemoryLedger> = None;
         let mut surfaces = 0;
-        for sculptor in held.values() {
-            let one = sculptor
-                .borrow_mut()
-                .memory_ledger()
-                .map_err(ModelError::engine)?;
+        let mut fold = |one: claycore::MemoryLedger| {
             surfaces += 1;
             match ledger.as_mut() {
                 Some(into) => into.merge(&one),
                 None => ledger = Some(one),
+            }
+        };
+        for sculptor in self.mesh_sculptors.borrow().values() {
+            fold(
+                sculptor
+                    .borrow_mut()
+                    .memory_ledger()
+                    .map_err(ModelError::engine)?,
+            );
+        }
+        for layer in &self.layers {
+            if let Some(hierarchy) = layer.multires.as_ref() {
+                fold(hierarchy.memory_ledger()?);
             }
         }
         Ok((surfaces, ledger.unwrap_or_default()))
