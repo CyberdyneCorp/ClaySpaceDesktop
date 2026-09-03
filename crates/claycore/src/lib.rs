@@ -48,7 +48,8 @@ mod surface_view;
 mod voxel;
 
 pub use authoring::{
-    Blend, Influence, LayerInfo, LayerRepresentation, Op, Protection, UndoState, Undone,
+    Blend, Influence, LayerInfo, LayerRepresentation, LayerTransform, Op, Protection, UndoState,
+    Undone,
 };
 pub use backend::{backends, compiled_backends, Backend};
 pub use brick::{

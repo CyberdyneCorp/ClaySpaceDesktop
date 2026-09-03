@@ -90,10 +90,18 @@ struct Layer {
     id: LayerId,
     /// Where the whole layer stands.
     ///
-    /// Remembered here for the reason the object table exists: the ABI sets a
-    /// layer transform and does not read one back. Both routes that set it —
+    /// Remembered here for the reason the object table exists: the ABI set a
+    /// layer transform and would not read one back. Both routes that set it —
     /// the narrow `set_layer_transform` and the manipulator's own — write
     /// this, so the two cannot disagree about where a layer is.
+    ///
+    /// ClayCore 0.78.0 ends the half of that which was a gap:
+    /// `Document::layer_transform_nonuniform` answers where a layer stands,
+    /// which is what `remember_layers` and `resync_layer_transforms` exist to
+    /// reconstruct after history moves. Retiring this mirror is a change of
+    /// its own — it is what those two and the rollback in `place_layer` are
+    /// built on — and until then this doc comment should not be read as
+    /// saying the question cannot be asked.
     transform: clayspace_model::Transform,
     /// A stable handle the interface uses. Engine ids are not guaranteed to
     /// survive an edit, so the interface is given one that is.

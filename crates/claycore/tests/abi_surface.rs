@@ -796,3 +796,131 @@ fn an_exclusion_taken_inside_a_live_gesture_does_not_spoil_it() {
         "the gesture's own commit is the only entry this should have added"
     );
 }
+
+// -- a layer scales per axis, and answers where it is -------------------------
+//
+// The whole-layer half of a node's per-axis scale, which has been in the ABI
+// since 0.54.0. Reading a layer transform back is newer still: until 0.74.0
+// the boundary set one and would not answer one, so a host that wanted to know
+// where its own subtool stood had to remember what it had written.
+
+/// One sphere in one layer, for a transform to move around.
+fn one_layer_doc() -> (Document, claycore::LayerId) {
+    let mut doc = Document::new().expect("document");
+    let layer = doc.add_sdf_layer("Base").expect("layer");
+    doc.add_item(layer, &Item::sphere(0.5).expect("sphere"))
+        .expect("place");
+    (doc, layer)
+}
+
+#[test]
+fn a_layer_scales_per_axis() {
+    let (mut doc, layer) = one_layer_doc();
+    assert!(
+        !inside(&doc, [0.9, 0.0, 0.0]),
+        "the fixture already reaches"
+    );
+
+    doc.set_layer_transform_nonuniform(layer, [0.0; 3], [0.0, 1.0, 0.0], 0.0, [3.0, 1.0, 1.0])
+        .expect("stretch the layer along x");
+
+    assert!(
+        inside(&doc, [1.2, 0.0, 0.0]),
+        "the stretch did not reach along the axis it was applied to"
+    );
+    assert!(
+        !inside(&doc, [0.0, 0.6, 0.0]),
+        "a stretch along x widened the layer along y as well"
+    );
+}
+
+#[test]
+fn a_layer_answers_where_it_stands() {
+    let (mut doc, layer) = one_layer_doc();
+    doc.set_layer_transform(layer, [1.0, 2.0, 3.0], [0.0, 1.0, 0.0], 0.5, 2.0)
+        .expect("place the layer");
+
+    let read = doc.layer_transform(layer).expect("read it back");
+    assert_eq!(read.position, [1.0, 2.0, 3.0]);
+    assert!(
+        (read.scale - 2.0).abs() < 1e-5,
+        "the factor came back {}",
+        read.scale
+    );
+    assert!(
+        (read.rotation_angle - 0.5).abs() < 1e-5,
+        "the angle came back {}",
+        read.rotation_angle
+    );
+}
+
+/// The per-axis reader answers the *product* of the layer's two scales, so a
+/// layer placed through the uniform setter answers `(s, s, s)` rather than
+/// `(1, 1, 1)` with the factor hidden somewhere the caller cannot see. That is
+/// what lets one manipulator read this call and never branch.
+#[test]
+fn the_per_axis_reader_never_makes_a_manipulator_branch() {
+    let (mut doc, layer) = one_layer_doc();
+    doc.set_layer_transform(layer, [0.0; 3], [0.0, 1.0, 0.0], 0.0, 2.0)
+        .expect("place it uniformly");
+
+    let read = doc
+        .layer_transform_nonuniform(layer)
+        .expect("read it per axis");
+    for (axis, factor) in read.scale.iter().enumerate() {
+        assert!(
+            (factor - 2.0).abs() < 1e-5,
+            "the uniform factor is missing from axis {axis}: {:?}",
+            read.scale
+        );
+    }
+}
+
+/// And the refusal, which is the pair's whole point: one float cannot express
+/// three, the uniform factor alone describes a differently-shaped subtool, and
+/// a read-change-write through the uniform setter would round the artist's
+/// squash away.
+#[test]
+fn the_single_factor_reader_refuses_a_squashed_layer_rather_than_averaging_it() {
+    let (mut doc, layer) = one_layer_doc();
+    doc.set_layer_transform_nonuniform(layer, [0.0; 3], [0.0, 1.0, 0.0], 0.0, [3.0, 1.0, 1.0])
+        .expect("squash it");
+
+    let error = doc
+        .layer_transform(layer)
+        .expect_err("one float answered for three different ones");
+    assert_eq!(
+        error.kind(),
+        claycore::ErrorKind::InvalidArgument,
+        "the squashed layer was refused for some other reason: {error}"
+    );
+
+    // The per-axis reader is what a host asks instead, and it answers.
+    assert_eq!(
+        doc.layer_transform_nonuniform(layer)
+            .expect("read it per axis")
+            .scale,
+        [3.0, 1.0, 1.0]
+    );
+}
+
+/// Both setters write the *whole* transform — the ABI does no partial updates
+/// — so the uniform one collapses a per-axis scale rather than leaving it
+/// alone. Worth pinning, because a host that reaches for the narrower call to
+/// move a squashed subtool unsquashes it.
+#[test]
+fn the_uniform_setter_collapses_a_per_axis_scale() {
+    let (mut doc, layer) = one_layer_doc();
+    doc.set_layer_transform_nonuniform(layer, [0.0; 3], [0.0, 1.0, 0.0], 0.0, [3.0, 1.0, 1.0])
+        .expect("squash it");
+    doc.set_layer_transform(layer, [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], 0.0, 1.0)
+        .expect("move it with the narrower call");
+
+    assert_eq!(
+        doc.layer_transform_nonuniform(layer)
+            .expect("read it per axis")
+            .scale,
+        [1.0; 3],
+        "the uniform setter left a stretch it has no way to express"
+    );
+}
