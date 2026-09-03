@@ -316,6 +316,12 @@ So a multires representation needs a side-car in the shape of
 `clayspace_engine::objects`' table — and unlike that table, which is
 bookkeeping, this one *is* the work, so a failed write has to fail the save.
 The tripwire fails the day `clay_document_save` starts carrying the surface.
+**That side-car is now built**: `<path>.multires` beside the document, one file
+rewritten whole, priced by `clay_multires_preflight_encode` before it
+allocates, and failing the save when it cannot be written. A document opened
+without it comes back as the cage its layer holds rather than as a hierarchy
+that has silently lost every level. See *Sculpting a subdivision hierarchy* in
+`docs/features.md`.
 
 *Two of the five automask factors do not cross the ABI.* Cavity needs a field
 to measure cavity from and surface-group needs the document's group lattice,

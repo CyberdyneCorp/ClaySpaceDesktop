@@ -16,6 +16,7 @@ pub mod backend;
 pub mod document;
 mod live;
 mod maintenance;
+pub mod multires;
 pub mod objects;
 mod reference;
 mod sculptors;

@@ -397,15 +397,21 @@ those three reaches both of the others, so six crossings are offered — from
 **File → Convert**, or from the row beside the representation cards, which
 offers exactly the ones the active layer declares.
 
-A fourth representation, the engine's subdivision hierarchy, is described in the
-domain and no layer can be one yet; its two crossings are declared and refused.
-See *Not built yet* in [docs/features.md](docs/features.md).
+A fourth representation, the engine's subdivision hierarchy, joins them: a cage,
+levels over it, and detail stored per level in a frame carried up from the level
+below — so a wrinkle cut at level 4 rides on a jaw moved at level 1 instead of
+being smeared. It arrives through a cage rather than from nothing, so its two
+crossings are the only ones that sample nothing at all, and the sculpt is saved
+in a file **beside** the document because the engine's format carries the cage
+and not what stands on it. See *Sculpting a subdivision hierarchy* in
+[docs/features.md](docs/features.md).
 
 ```mermaid
 graph LR
     SDF["SDF field"]
     VOX["voxel grid"]
     MESH["fixed-topology mesh"]
+    MRES["subdivision hierarchy"]
 
     SDF -->|"rasterize into cells"| VOX
     SDF -->|"march into triangles"| MESH
@@ -413,10 +419,13 @@ graph LR
     VOX -->|"exposed faces as merged quads"| MESH
     MESH -->|"sample triangles onto a lattice"| SDF
     MESH -->|"straight from the triangles"| VOX
+    MESH -->|"take the mesh as a cage"| MRES
+    MRES -->|"bake the display level"| MESH
 
     style SDF fill:#2E3238,stroke:#C9C4BD,color:#C9C4BD
     style VOX fill:#2E3238,stroke:#C9C4BD,color:#C9C4BD
     style MESH fill:#2E3238,stroke:#C9C4BD,color:#C9C4BD
+    style MRES fill:#2E3238,stroke:#C9C4BD,color:#C9C4BD
 ```
 
 | From | To | What it does |
@@ -427,6 +436,8 @@ graph LR
 | voxel | mesh | The grid's exposed faces as merged quads, with the palette colour on the face |
 | mesh | voxel | Straight from the triangles in one sampling, so a feature thinner than a cell survives where a field detour loses it |
 | mesh | SDF | Resamples the triangles onto a lattice as a volume item |
+| mesh | multires | Takes the mesh **as the cage** of a subdivision hierarchy, vertex for vertex — refusing rather than repairing a mesh that cannot be one |
+| multires | mesh | Bakes the display level out as an ordinary mesh |
 
 **The panel states what the crossing costs before it runs**, computed from the
 cell size rather than written down, so the figures move as the slider moves:

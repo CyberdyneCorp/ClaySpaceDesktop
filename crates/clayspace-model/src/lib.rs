@@ -51,7 +51,7 @@ pub use curve::{CurveJoin, CurveModel, CurvePoint, CurveProfile, CurveState, FEW
 pub use detail::DetailPolicy;
 pub use diagnostics::{
     AoDiagnostics, Diagnostics, DiagnosticsModel, Fallback, MemoryDiagnostics, MeshDiagnostics,
-    RenderDiagnostics,
+    MultiresDiagnostics, RenderDiagnostics,
 };
 pub use document::{DocumentModel, OpenError};
 pub use exchange::{

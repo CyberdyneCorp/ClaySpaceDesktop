@@ -153,6 +153,13 @@ fn diagnostics() -> clayspace_model::Diagnostics {
             sculptors: 2,
             stale_seeds_rejected: 1,
         }),
+        // A document holding two hierarchies, one of which came back without
+        // its sculpt — the case the line exists for, since a `.clayspace`
+        // carries a hierarchy's cage and not the sculpt standing on it.
+        hierarchies: Some(clayspace_model::MultiresDiagnostics {
+            held: 2,
+            lost: vec!["Cabeça · hierarquia".into()],
+        }),
         // A document whose surfaces carry rather more than its edit list does,
         // which is the case the breakdown exists for: the plain roll-up would
         // report the 40 MB and leave the 96 MB of sculpting session out.

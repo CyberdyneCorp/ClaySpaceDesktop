@@ -21,11 +21,11 @@ All twenty-one are bound and each is covered by a before-and-after capture in
 Layers column: fourteen have an SDF verb, thirteen a voxel one, and seventeen a
 mesh one.
 
-A fourth representation — a subdivision hierarchy — is declared in the domain
-and no layer can be one yet, so it is left out of the Layers column below rather
-than written into every row as a promise. Fifteen of the twenty-one name a verb
-on it: the sixteen mesh brushes less Pintar and Borrar, plus Máscara. See
-[Not built yet](#not-built-yet).
+A fourth representation — a subdivision hierarchy — is left out of the Layers
+column below rather than written into every row, because its column is stated
+against the mesh's rather than as a list: fifteen of the twenty-one name a verb
+on it, the sixteen mesh brushes less Pintar and Borrar, plus Máscara. See
+[Sculpting a subdivision hierarchy](#sculpting-a-subdivision-hierarchy).
 
 | Tool | Engine verb | Layers | What it does |
 |---|---|---|---|
@@ -961,6 +961,69 @@ stretches them to the extreme. Nothing here retessellates, because that spends
 the retopology the import was for; the stretch is reported instead, so a
 sculptor learns the mesh wants retopology when it starts wanting it rather than
 at export.
+
+## Sculpting a subdivision hierarchy
+
+A fourth way to hold a surface, and the only one whose *whole* claim is a
+single sentence: a cage, subdivision levels over it, and detail stored per
+level **in a frame carried up from the level below**. Wrinkles cut at level 4
+and a jaw moved at level 1 are edits to two different arrays, and moving the
+jaw moves the frames the wrinkles are stored in — so the wrinkles ride on it
+rather than being smeared or re-projected. A mesh cannot express that; a mesh
+has one level and nothing under it to move.
+
+Measured, on a flat cage with a wrinkle cut at level 3 and the form under it
+dabbed five times at level 0: the wrinkle comes back **the same height to seven
+significant figures, on the same vertex, pointing forty-two degrees elsewhere**.
+A displacement stored in world space would come back at exactly no rotation at
+all, lying flat across a form that has rolled underneath it.
+
+**A hierarchy comes from a cage.** There is no call that makes an empty one, so
+it is not among the representations a new layer can be; it arrives through
+`mesh → multires`, which refuses rather than repairs. See
+[Crossing between representations](#crossing-between-representations).
+
+**Two levels, not one.** Where the brush writes and what the viewport draws are
+independent numbers, and that is the workflow rather than an implementation
+detail: dropping to the cage to move a jaw while still watching the pores is
+what the representation exists for. Moving the sculpt level **redraws nothing**.
+
+**Adding a level is priced, and refused rather than attempted.** A level
+multiplies faces by four, so a 20k-quad cage is 5.1M faces at level 4 and 20.5M
+at level 5. What is stated is the **peak** during the build rather than what
+remains after it, because on a constrained machine it is the high-water mark
+that ends the session. A refused level leaves the hierarchy exactly as deep as
+it was — the engine builds and then publishes, so there is nothing half-built
+to clear up.
+
+**A gesture is one undo, and it is exact.** It has to be recorded on this side,
+and unlike a mesh gesture there is no delta to record: `clay.h` states twice,
+unprompted, that the hierarchy's stroke record does not cross the C ABI. So
+what the history holds is the hierarchy's own serialized bytes on the other
+side of the step — 710 KB and 1.39 ms to take at level 4 over a 16×16 cage, and
+8.15 ms to put back. It goes into the same history a mesh gesture goes into,
+because two histories ordering themselves against the engine's depth cannot
+order themselves against each other.
+
+**The sculpt is saved beside the document.** This is the part worth knowing
+before trusting a file. A `.clayspace` carries a hierarchy's **cage and nothing
+standing on it** — the engine's own ownership boundary, stated in its header —
+so the sculpt is written to a `.multires` file beside it. A save that cannot
+write that file **fails**, which is the opposite of what the placed-object
+table beside it does: that table is bookkeeping and this is the work.
+
+Copy a document without its companion file and it still opens, with the row
+showing as the **mesh layer it now is** rather than as a hierarchy that has
+silently lost every level. That is visible where a sculptor already looks — the
+layer row, the workspace bar and the inspector all draw a mesh differently — and
+a record that was found and could not be reconstructed is named in the
+diagnostics report.
+
+**The two colour brushes are not offered.** A hierarchy stores where a vertex
+went and not what colour it is, so a paint stamp would move nothing, be dropped
+by the write-back, and evaporate with the level cache. Paint the cage before
+subdividing, or bake a level back to a mesh.
+
 
 ## Voxel layers
 
@@ -2011,13 +2074,19 @@ those three reaches both of the others, so **six** crossings are offered from
 | voxel | mesh | The grid's exposed faces as merged quads, with the palette colour on the face |
 | mesh | voxel | Straight from the triangles in one sampling, so a feature thinner than a cell survives where a field detour loses it, and the vertex colours reach the palette |
 | mesh | SDF | Resamples the triangles onto a lattice as a volume item |
+| mesh | multires | Takes the mesh **as the cage** of a subdivision hierarchy, vertex for vertex |
+| multires | mesh | Bakes the display level out as an ordinary mesh |
 
-Two more are declared in the domain and refused by the adapter, because nothing
-here builds a subdivision hierarchy yet: **mesh → multires**, which takes the
-mesh as a cage, and **multires → mesh**, which bakes a level. They are the only
-two crossings that sample nothing — a cage is the mesh's own vertices and a
-level is the hierarchy's own — so what they cost is stated as a refusal rather
-than as a tolerance. See [Not built yet](#not-built-yet).
+The last two are the only crossings that sample nothing — a cage is the mesh's
+own vertices and a level is the hierarchy's own — so what they cost is stated
+as a refusal rather than as a tolerance. `clay_multires_from_mesh` **refuses
+rather than repairs**: a non-manifold edge or a face with repeated or collinear
+corners comes back named, because a conversion that quietly welded a face would
+change retopology somebody paid for without saying so, and a cage is precisely
+the thing whose topology is the work. Marched output — which is what
+`SDF → mesh` produces — is refused on exactly that ground, so the route into a
+hierarchy is a cage that was modelled as one. See
+[Sculpting a subdivision hierarchy](#sculpting-a-subdivision-hierarchy).
 
 The two that end in a mesh are what makes **block out, then sculpt it as a
 mesh** a route through the application rather than a description of one. Until
@@ -3007,38 +3076,28 @@ grid holds the whole gesture and lands at pointer-up rather than following the
 pointer. [ClayCore#393](https://github.com/CyberdyneCorp/ClayCore/issues/393)
 asks for the transactional shape the SDF drag already has.
 
-**A subdivision hierarchy.** ClayCore 0.78.0 carries one — a cage, levels over
-it, and detail stored per level in a frame carried up from the level below, so
-wrinkles cut at level 4 ride on a jaw moved at level 1 instead of being smeared.
-`clayspace-model` describes it: a fourth `Representation`, its verb column
-(fifteen of the twenty-one tools, the sixteen mesh brushes less the two colour
-brushes plus Máscara), the two crossings that reach it, the two independent
-levels, and the stack of named, dialable, lockable passes that stands on it.
-`crates/claycore` wraps every entry point.
-
-**No layer can be one yet.** Nothing in `clayspace-engine` holds a
-`clay_multires`, so the crossing refuses, `apply_stroke` refuses, and the
-representation bar shows a card that nothing reaches. That is deliberate rather
-than half-finished: the domain is where "which tools reach a hierarchy" and
-"what a reorder costs" get decided, and deciding them against a table is what
-stopped "mesh layers are carried, not sculpted" outliving the fact it described.
-
-Three things about it are already settled and worth knowing before the adapter
-is written. **The two colour brushes are not offered**: a hierarchy stores where
-a vertex went and not what colour it is, so a paint stamp would move nothing,
-be dropped by the write-back, and evaporate with the level cache — paint the
-cage before subdividing, or bake a level back to a mesh. **Reordering a pass is
-free**: passes are additive and commute, so a reorder changes organisation and
-not geometry, and an interface that treated a list drag as an edit would
+**The stack of passes on a hierarchy.** A hierarchy carries named, dialable,
+lockable passes — the same statement a grid's passes make, with a different
+implementation underneath — and the domain describes them, addressed by an id
+that a reorder does not renumber. Nothing applies one yet: a stroke on a
+hierarchy goes into the form under the passes, which is what an empty stack
+means. Two things about them are already settled. **Reordering a pass is free**:
+passes are additive and commute, so a reorder changes organisation and not
+geometry, and an interface that treated a list drag as an edit would
 re-evaluate millions of vertices for it. And **strength is composition, not a
 scale on the pen** — a stroke into a pass at half strength records its full
-contribution and the surface moves half as far, so raising the slider afterwards
-doubles what is on screen and replays no stroke.
+contribution and the surface moves half as far, so raising the slider
+afterwards doubles what is on screen and replays no stroke.
 
-What is missing upstream is the undo record: neither the hierarchy's stroke nor
-its layered gesture crosses the C ABI, which `clay.h` states twice rather than
-leaving to be discovered, so one gesture cannot yet become one entry in this
-application's history.
+**Exporting a hierarchy exports its cage.** The engine combines a document's
+mesh layers on the way out, and a hierarchy's layer is a mesh layer holding the
+cage. Keeping its triangles in step with the display level means replacing them
+wholesale — one engine undo entry each — on every gesture or every save, and
+either puts a document edit inside something the sculptor did not ask to be an
+edit. Bake a level out to a mesh first; it is one crossing and it says what it
+gives up. A hierarchy is refused as a boolean operand for the same reason,
+rather than being routed through the mesh arm and quietly composing against a
+form nobody can see.
 
 **A voxel Vinco.** The engine documents DamStandard on a grid as a *recipe* —
 a small-radius erode with tight falloff and dense spacing — rather than a

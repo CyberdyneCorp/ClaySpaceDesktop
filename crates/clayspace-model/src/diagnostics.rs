@@ -81,6 +81,13 @@ pub struct Diagnostics {
     /// report taken with no document open carries `None`.
     pub mesh: Option<MeshDiagnostics>,
 
+    /// What the subdivision hierarchies cost, and which of them were lost.
+    ///
+    /// Optional for the reason [`Self::mesh`] is: it is the document's answer
+    /// rather than this build's, and a report taken with no document open
+    /// carries `None`.
+    pub hierarchies: Option<MultiresDiagnostics>,
+
     /// Where the document's memory is, and what it would cost to release it.
     ///
     /// Optional for the reason [`Self::mesh`] is: it is the document's answer
@@ -156,6 +163,35 @@ pub struct MeshDiagnostics {
     pub sculptors: usize,
     /// Stamps whose seed named a numbering that had been retired.
     pub stale_seeds_rejected: usize,
+}
+
+/// What the subdivision hierarchies in this document cost, and which of them
+/// did not survive being reopened.
+///
+/// Here for the reason [`MeshDiagnostics`] is here: the thing it reports is
+/// otherwise silent by construction. A `.clayspace` carries a hierarchy's cage
+/// and nothing standing on it — the engine's own ownership boundary, stated in
+/// the C header — so the sculpt travels in a file beside the document. Open
+/// the document without that file and every row comes back as the mesh layer
+/// the document says it is: the cage, flat, with nothing refusing and nothing
+/// warning. The representation changing is what a sculptor sees; this is what
+/// they can paste.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MultiresDiagnostics {
+    /// Hierarchies this document is holding.
+    ///
+    /// Beside the list below for the reason the sculptor count is beside the
+    /// rejection count: no losses over no hierarchies and no losses over four
+    /// are the same emptiness and different facts.
+    pub held: usize,
+    /// Rows whose sculpt this session could not put back, by name.
+    ///
+    /// A record was found for each of these and could not be honoured. A
+    /// side-car that is missing altogether is **not** here and cannot be:
+    /// nothing in a `.clayspace` distinguishes a document that never held a
+    /// hierarchy from one whose side-car went missing, which is the whole of
+    /// why the side-car is load-bearing rather than decorative.
+    pub lost: Vec<String>,
 }
 
 /// What the viewport drew, and what it cost.
@@ -294,6 +330,23 @@ impl Diagnostics {
                 ),
             );
         }
+        if let Some(hierarchies) = &self.hierarchies {
+            if hierarchies.held > 0 || !hierarchies.lost.is_empty() {
+                line(
+                    "hierarchies",
+                    &format!(
+                        "{} held, {} lost{}",
+                        hierarchies.held,
+                        hierarchies.lost.len(),
+                        if hierarchies.lost.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" ({})", hierarchies.lost.join(", "))
+                        }
+                    ),
+                );
+            }
+        }
         if let Some(memory) = &self.memory {
             // The breakdown before the total, deliberately: the total is the
             // part a reader already has an intuition for and the split is the
@@ -357,6 +410,7 @@ mod tests {
             stalls: Vec::new(),
             render: None,
             mesh: None,
+            hierarchies: None,
             memory: None,
         }
     }

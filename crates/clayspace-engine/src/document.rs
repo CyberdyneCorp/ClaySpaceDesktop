@@ -61,6 +61,68 @@ fn outward(point: [f32; 3]) -> [f32; 3] {
     [point[0] / length, point[1] / length, point[2] / length]
 }
 
+/// Where a ray first meets a triangle list, or nothing.
+///
+/// Möller-Trumbore, front and back faces alike: a sculptor working inside a
+/// form still means the surface under the pointer. The direction need not be a
+/// unit vector — the parameter is measured along whatever was handed in, and
+/// the point is derived from it rather than from a distance.
+fn nearest_triangle(
+    origin: [f32; 3],
+    direction: [f32; 3],
+    positions: &[[f32; 3]],
+    indices: &[u32],
+) -> Option<[f32; 3]> {
+    let sub = |a: [f32; 3], b: [f32; 3]| -> [f32; 3] { std::array::from_fn(|i| a[i] - b[i]) };
+    let cross = |a: [f32; 3], b: [f32; 3]| -> [f32; 3] {
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
+    };
+    let dot = |a: [f32; 3], b: [f32; 3]| -> f32 { a[0] * b[0] + a[1] * b[1] + a[2] * b[2] };
+
+    let mut nearest: Option<f32> = None;
+    for triangle in indices.chunks_exact(3) {
+        let (Some(a), Some(b), Some(c)) = (
+            positions.get(triangle[0] as usize),
+            positions.get(triangle[1] as usize),
+            positions.get(triangle[2] as usize),
+        ) else {
+            continue;
+        };
+        let (ab, ac) = (sub(*b, *a), sub(*c, *a));
+        let pvec = cross(direction, ac);
+        let det = dot(ab, pvec);
+        // Parallel to the plane, which includes a degenerate face.
+        if det.abs() < 1e-12 {
+            continue;
+        }
+        let inverse = 1.0 / det;
+        let tvec = sub(origin, *a);
+        let u = dot(tvec, pvec) * inverse;
+        if !(-1e-6..=1.0 + 1e-6).contains(&u) {
+            continue;
+        }
+        let qvec = cross(tvec, ab);
+        let v = dot(direction, qvec) * inverse;
+        if v < -1e-6 || u + v > 1.0 + 1e-6 {
+            continue;
+        }
+        let t = dot(ac, qvec) * inverse;
+        // Behind the eye is not in front of it.
+        if t <= 1e-6 {
+            continue;
+        }
+        if nearest.is_none_or(|best| t < best) {
+            nearest = Some(t);
+        }
+    }
+    let t = nearest?;
+    Some(std::array::from_fn(|i| origin[i] + direction[i] * t))
+}
+
 fn engine_blend(profile: BlendProfile) -> Blend {
     match profile {
         BlendProfile::Hard => Blend::Hard,
@@ -197,6 +259,21 @@ struct Layer {
     /// counts every drawn layer together, including the brush strokes this one
     /// is defined not to move.
     geometry_revision: u64,
+    /// The subdivision hierarchy standing on this layer's cage, where the
+    /// layer is one.
+    ///
+    /// **Beside the layer and not inside it**, because that is what the engine
+    /// offers: a `clay_multires` is a free-standing owning handle that took a
+    /// copy of the cage on the way in, and `clay_document_save` has never
+    /// heard of it. So a hierarchy row is a real mesh layer in the document —
+    /// which is where its name, its place in the stack, its transform, its
+    /// mask and its save come from — plus this. See [`crate::multires`] for
+    /// what follows from that, and for why the side-car beside the document is
+    /// the only thing in the world that knows this row was ever a hierarchy.
+    ///
+    /// `None` for every other representation, and for a hierarchy row only
+    /// between a document being read and its side-car being applied.
+    multires: Option<crate::multires::Hierarchy>,
     /// This layer's grid as triangles, one entry per chunk.
     ///
     /// Kept per chunk so an edit costs the edit. Meshing a grid whole after
@@ -304,6 +381,7 @@ impl Layer {
             mesh_bounds: None,
             geometry_revision: 0,
             voxel_chunks: std::collections::BTreeMap::new(),
+            multires: None,
             sculpt_layers: Vec::new(),
             symmetry: Self::STARTING_SYMMETRY,
             // A layer the engine has just made carries no mirror — axes
@@ -328,12 +406,14 @@ impl Layer {
             health: None,
             voxel: None,
             sculpt_layers: self.sculpt_layers.clone(),
-            // No `Layer` here holds a `clay_multires` yet, so there is nothing
-            // to report. `None` and not a default state: a hierarchy with one
-            // level and no passes is a real thing an interface would draw
-            // controls for, and every layer claiming to be one would be worse
-            // than none of them being.
-            multires: None,
+            // `None` and not a default state: a hierarchy with one level and
+            // no passes is a real thing an interface draws controls for, and
+            // every layer claiming to be one would be worse than none of them
+            // being. So this is filled exactly where a hierarchy is held.
+            multires: self
+                .multires
+                .as_ref()
+                .map(crate::multires::Hierarchy::state),
         }
     }
 
@@ -344,6 +424,265 @@ impl Layer {
 }
 
 /// A ClayCore document driven by the domain's vocabulary.
+/// Everything one segment of a stroke on carried geometry is made of.
+///
+/// One assembly serving both representations that carry their own vertices,
+/// because it *is* one assembly: `clay_multires_sculptor_apply_stroke` takes
+/// the same `clay_mesh_brush_desc` and the same `clay_stroke_preset` as
+/// `clay_mesh_sculptor_apply_stroke`, and the header says why in as many words
+/// — "the same verbs, the same falloffs, the same mask, the same alpha and the
+/// same automasking as a mesh layer, because it is the same code". A hierarchy
+/// spelling this out for itself would be sixteen brushes waiting to drift from
+/// the sixteen beside them, and every measurement written into the comments
+/// below would go on describing only one of the two.
+struct CarriedStroke<'a> {
+    /// Spacing, taper and jitter — and where a resolved stroke's radius and
+    /// strength actually come from.
+    preset: StrokePreset,
+    /// The descriptor a single stamp uses, and the one a resolver starts from.
+    stamp: claycore::MeshStamp<'a>,
+    /// The path, five floats to a sample.
+    points: Vec<[f32; 5]>,
+    /// The whole travel, which is what Grab carries its region by.
+    gesture: [f32; 3],
+}
+
+/// Builds one, from a gesture already carried into the geometry's own frame.
+///
+/// `brush` is sanitized and already divided by the subtool's scale, and
+/// `preset` is [`ClayDocument::preset`]'s — which this may still clamp, since
+/// the accumulation rule below is a fact about the verbs rather than about
+/// brushes.
+fn carried_stroke<'a>(
+    verb: claycore::MeshBrush,
+    brush: BrushSettings,
+    samples: &[GestureSample],
+    preset: StrokePreset,
+    alpha: Option<&'a Alpha>,
+    chosen: clayspace_model::Colour,
+) -> CarriedStroke<'a> {
+    // The shared preset, which is where a mesh stroke's radius and
+    // strength have to come from: the engine states that
+    // `clay_mesh_sculptor_apply_stroke` IGNORES the descriptor's radius
+    // and strength and takes each stamp's from the preset. This used to
+    // build its own carrying only `spacing`, so a mesh stroke ran at the
+    // engine's default radius of 0.25 whatever the brush said — measured,
+    // sizes 0.1, 0.5 and 1.0 all moved the same 944 vertices, and
+    // Intensidade was inert the same way.
+    //
+    // Spacing was also inverted here against every other path: the design
+    // reads flow as "more flow, stamps closer together", and this passed
+    // it straight through so more flow spread them further apart. On Move
+    // that is what decides whether a drag emits a second stamp at all, and
+    // a drag that emits one stamp has no motion to drag by.
+    let mut preset = preset;
+    // A mesh stroke does not build on itself, whatever the brush says.
+    //
+    // Not a preference: the mesh verbs that displace along a *per-vertex*
+    // normal read the normals the previous stamp just moved, so building
+    // up feeds a stamp's own output back into its next input. Measured
+    // against Blender's brushes on a matched sphere — same radius in world
+    // units, same strength, same stroke — as the mean angle between
+    // adjacent vertex normals, before against after:
+    //
+    //   verb     building up   clamped   Blender
+    //   Inflar      5.04x       1.18x     1.00x
+    //   Pinçar      9.41x       1.83x     1.00x
+    //   Vinco       3.71x       1.34x     1.00x
+    //   Padrão      1.11x       1.08x     1.00x
+    //
+    // Padrão is the control and barely moves either way: it uses the
+    // *region's* averaged normal, so there is nothing to feed back.
+    //
+    // Here rather than in `Shaping::default` because it is a fact about
+    // these verbs and not about brushes — the same reason `MAX_JITTER`
+    // lives beside the preset. The field and the grid are unaffected, and
+    // Acumular still means what it means there.
+    // A mesh stroke does not build on itself — except when it is
+    // *converging*.
+    //
+    // The clamp is here because the verbs that displace along a
+    // per-vertex normal read the normals the previous stamp just moved, so
+    // building up feeds a stamp's output into its own next input and the
+    // surface shreds. A smoothing verb has the opposite character: it
+    // averages toward the neighbourhood, so running it again moves less
+    // each time and converges. Clamping one of those means a sculptor can
+    // never smooth more than a single stamp's worth however long they rub,
+    // which is what "Suavizar does nothing" turned out to be — measured on
+    // a ridge 0.0676 proud of a unit sphere, four passes took it to 1.0670
+    // clamped and 1.0187 accumulating.
+    if !matches!(
+        verb,
+        claycore::MeshBrush::Smooth | claycore::MeshBrush::Relax | claycore::MeshBrush::Polish
+    ) {
+        preset.accumulation = claycore::Accumulation::Clamped;
+    }
+    // Where the gesture travelled, which is what a verb that pushes along
+    // the surface has to be told.
+    //
+    // `apply_stroke` derives a direction for GRAB and SNAKEHOOK from the
+    // motion between stamps and for nothing else — so NUDGE, which
+    // projects the drag into each vertex's tangent plane, was handed the
+    // descriptor's default of all zeroes and pushed material nowhere. It
+    // moved not one vertex at any size, intensity or stroke length, while
+    // Blender's equivalent moved 5% of the mesh on the same stroke.
+    //
+    // Harmless for the two verbs that ignore it, and right for a single
+    // stamp, which reads the descriptor's direction whatever the verb.
+    // The whole gesture, which is what Grab carries its region by, scaled
+    // by the intensity.
+    //
+    // Scaled here because the descriptor's `strength` weights the falloff
+    // rather than the displacement, so a Grab was carrying its region the
+    // gesture's whole length whatever Intensidade said. Blender's Grab
+    // carries it by the drag *times* the strength — measured, a 1.737 drag
+    // at 0.65 moves its furthest vertex 1.129, which is exactly the
+    // product — and matching that is what makes the slider mean the same
+    // thing in both.
+    let gesture = {
+        let (first, last) = (samples[0].position, samples[samples.len() - 1].position);
+        [
+            (last[0] - first[0]) * brush.intensity,
+            (last[1] - first[1]) * brush.intensity,
+            (last[2] - first[2]) * brush.intensity,
+        ]
+    };
+    // One stamp's worth of it, not the whole gesture. The engine resolves
+    // the path into stamps a spacing apart and applies the descriptor's
+    // direction at each one, so handing it the gesture's full travel
+    // applies that travel once per stamp — measured, a 0.9 drag pushed the
+    // surface 1.82 where Blender's Nudge pushed 0.16. A spacing is what
+    // the motion between two stamps actually is, which is the same
+    // quantity GRAB drags by.
+    let travel = {
+        let (first, last) = (samples[0].position, samples[samples.len() - 1].position);
+        let step = [last[0] - first[0], last[1] - first[1], last[2] - first[2]];
+        let length = step.iter().map(|axis| axis * axis).sum::<f32>().sqrt();
+        // Scaled by the intensity here because the engine does not: a
+        // stamp's strength weights the verbs that displace, and NUDGE
+        // moves by the vector it is handed. Measured before this, the
+        // Intensidade slider moved the surface 0.5753 at 0.2, at 0.65 and
+        // at 1.0 — the same number three times.
+        let stamp = preset.spacing * brush.size * brush.intensity * ClayDocument::NUDGE_PUSH;
+        if length > f32::EPSILON {
+            std::array::from_fn(|i| step[i] / length * stamp.min(length))
+        } else {
+            [0.0; 3]
+        }
+    };
+    let stamp = claycore::MeshStamp {
+        verb,
+        direction: travel,
+        center: samples[0].position,
+        // The radius is carried even though a resolved stroke replaces it
+        // per stamp, because the same descriptor is what a single stamp
+        // uses and one that disagreed with the preset would be a trap for
+        // the next caller.
+        radius: brush.size,
+        // The strength is not merely carried: a resolved stroke
+        // *multiplies* it by each stamp's own, so this is where a mesh
+        // stroke's sign lives.
+        //
+        // Which is why holding the invert key turns this over rather than
+        // the preset's strength. The preset's is contracted to [0, 1] and
+        // the stroke resolver drops any stamp whose strength is not
+        // positive, so a negative preset strength is not a dig — it is
+        // nothing at all, which is what it measured as: a full sweep with
+        // the key held moved no vertex and reported no change.
+        strength: if brush.invert {
+            -brush.intensity
+        } else {
+            brush.intensity
+        },
+        falloff: match brush.shaping.falloff {
+            clayspace_model::Falloff::Constant => claycore::MeshFalloff::Constant,
+            clayspace_model::Falloff::Linear => claycore::MeshFalloff::Linear,
+            clayspace_model::Falloff::Smooth => claycore::MeshFalloff::Smooth,
+            clayspace_model::Falloff::Gaussian => claycore::MeshFalloff::Gaussian,
+        },
+        // A stamp scaling the per-vertex weight, borrowed for the call.
+        // The same kernel the SDF alpha uses, so one texture reads
+        // identically on a mesh and on a field.
+        alpha: alpha.map(|alpha| claycore::AlphaStamp {
+            samples: &alpha.samples,
+            width: alpha.width as i32,
+            height: alpha.height as i32,
+            // All zeroes: the surface normal under the brush centre,
+            // which is what a detail stamp on a mesh wants.
+            direction: [0.0; 3],
+            tangent: [1.0, 0.0, 0.0],
+            // Zero: the brush's own diameter.
+            extent: 0.0,
+        }),
+        // What Paint blends toward. Left at the engine's white default
+        // before this, so the one brush whose whole job is colour had
+        // nothing to say: a white blend over a white mesh is a stroke that
+        // changes nothing. Smear reads no colour of its own — it drags the
+        // colour already there — so this is carried for both and read by
+        // one.
+        colour: chosen.rgb,
+        smooth_iterations: Some(ClayDocument::SMOOTH_PASSES),
+        // The grain, as the sculptor set it. It turns the stamp's
+        // in-plane axes about the direction it faces, which is why the
+        // fixed world-X tangent the alpha block hands over below is not
+        // the thing that decides a turned stamp's orientation — that
+        // tangent picks the plane's zero, and this turns the stamp within
+        // it. Zero, the default, is no rotation at all and is what every
+        // brush that has never been turned keeps sending.
+        stamp_azimuth: brush.shaping.azimuth,
+        // Filled in per mirror by the caller, because a seed is a place
+        // as much as it is a class: the pick that recorded one stood
+        // where the unmirrored stamp stands, and a reflected copy of it
+        // stands somewhere the walk cannot start from. See
+        // [`crate::seed`]. A hierarchy fills none at all — a class picked
+        // off the cage names a numbering the bound level does not share,
+        // and a seed spent against the wrong numbering is in bounds,
+        // wrong and silent.
+        seed: None,
+        // No automask. This application offers none of the five factors
+        // as a brush setting, so the default — no gate at all, which the
+        // engine documents as bit-identical to a descriptor from before
+        // automasking existed — is what every stamp sends and what every
+        // figure in the performance baseline was measured with.
+        //
+        // Named rather than defaulted for the reason below, and because
+        // ClayCore v0.78.0 is the release in which a factor set here
+        // started reaching the adaptive representation as well as this
+        // one. When a backface gate or a border gate is offered, this is
+        // the line it arrives on and `Shaping` is where it is chosen.
+        automask: claycore::Automask::default(),
+        // Every field is named now that the colour is one of them, so
+        // there is no `..MeshStamp::default()` here: a field added
+        // upstream should fail this call rather than be filled in
+        // silently with an engine default nobody chose.
+        // Flatten and Scrape mean "everything under this disc", and a
+        // surface walk refuses to flatten across a groove — which is not
+        // what either verb says.
+        geodesic: !matches!(
+            verb,
+            claycore::MeshBrush::Flatten | claycore::MeshBrush::Scrape
+        ),
+    };
+    let points: Vec<[f32; 5]> = samples
+        .iter()
+        .map(|s| {
+            [
+                s.position[0],
+                s.position[1],
+                s.position[2],
+                s.pressure,
+                s.time,
+            ]
+        })
+        .collect();
+    CarriedStroke {
+        preset,
+        stamp,
+        points,
+        gesture,
+    }
+}
+
 /// A mesh gesture in flight: the record its stamps are written into, and the
 /// sculptor that owes those stamps a normal recomputation.
 ///
@@ -456,12 +795,64 @@ impl Drop for LiveMesh {
     }
 }
 
-/// One mesh gesture, and where it sits against the engine's own history.
+/// Which way through the history a step is going.
+///
+/// A `MeshDeltas` needs to be told, because one record serves both directions.
+/// A hierarchy's record does not: it is a state, and putting a state back is
+/// the same operation whichever side it was reached from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Step {
+    Back,
+    Forward,
+}
+
+/// One gesture on geometry the host holds, and where it sits against the
+/// engine's own history.
+///
+/// Both representations the host carries are here rather than in two stacks
+/// beside each other, and that is not tidiness. Each record orders itself
+/// against the engine's history by the depth it was made at, and two stacks
+/// ordering themselves against the same depth cannot order themselves against
+/// each other — a session that sculpted a mesh subtool and a hierarchy in turn
+/// would have two records both answering "newest" and an undo would take back
+/// whichever was asked first.
 struct MeshGesture {
     layer: LayerKey,
-    deltas: claycore::MeshDeltas,
+    what: GestureRecord,
     /// The engine's undo depth when this was recorded. See `mesh_undo`.
     engine_depth: usize,
+}
+
+/// What it takes to put one gesture back.
+///
+/// The two are different in kind, and the difference is the ABI's rather than
+/// this application's.
+enum GestureRecord {
+    /// A fixed-topology mesh gesture, taken back by the engine's own exact
+    /// record: `MeshDeltas` notes a vertex's position, normal and colour the
+    /// first time a stamp sees it, so reverting is bit-exact and costs the
+    /// vertices the gesture touched.
+    Deltas(claycore::MeshDeltas),
+    /// A hierarchy gesture, taken back by putting the hierarchy's whole
+    /// serialized state back.
+    ///
+    /// **There is no delta record for one.** clay.h says so twice, unprompted
+    /// — of `clay_multires_sculptor_apply_stroke` and of the layered stroke
+    /// transaction alike: *"the record itself does not cross this ABI yet,
+    /// which is stated here rather than left to be discovered"*, and a host
+    /// that wants a layered gesture in an undo stack is pointed at pyclay or
+    /// the C++ `SculptLayerDelta`. Of the three ways out — reconstructing a
+    /// delta from `dirty_blocks` and `copy_block`, which the ABI offers no way
+    /// to write back through; keeping the gesture's transaction open, whose
+    /// exact cancel is the one thing that *is* offered but which has no
+    /// resolved-stroke verb on it; and holding the bytes — only the third is
+    /// exact and reachable.
+    ///
+    /// So this is what it says: the hierarchy as it stood on the other side of
+    /// this step. Measured on the pinned engine, that is 710 KB and 1.39 ms to
+    /// take at level 4 over a 16×16 cage, and 8.15 ms to put back. The bytes
+    /// are what [`crate::multires::HISTORY_BYTES`] bounds.
+    Hierarchy(Vec<u8>),
 }
 
 /// One crossing, and the layer whose presence in the scene follows it.
@@ -838,6 +1229,16 @@ pub struct ClayDocument {
     /// affordable — and carrying them is what lets a restored grid draw without
     /// waiting for the next edit to dirty it.
     retired: std::collections::HashMap<LayerId, Layer>,
+    /// Rows whose hierarchy this session could not put back, by name.
+    ///
+    /// A `.clayspace` carries a hierarchy's cage and nothing standing on it,
+    /// so the side-car beside it is the only thing that knows a row was ever a
+    /// hierarchy. When a record for a row is found and cannot be honoured, the
+    /// row opens as the mesh layer the document says it is — which is honest,
+    /// and is quiet. This is what makes it loud: the names reach the
+    /// diagnostics report, which is the text a sculptor pastes when they ask
+    /// why their sculpt came back flat.
+    hierarchies_lost: Vec<String>,
     /// The layer being shown alone, while one is.
     solo: Option<Solo>,
     /// Visibility batches the history hops rather than stops on, newest last,
@@ -970,6 +1371,7 @@ impl ClayDocument {
             crossing_redo: Vec::new(),
             suppressed: std::collections::HashSet::new(),
             retired: std::collections::HashMap::new(),
+            hierarchies_lost: Vec::new(),
             solo: None,
             visibility_undo: Vec::new(),
             visibility_redo: Vec::new(),
@@ -1497,14 +1899,8 @@ impl ClayDocument {
             Direction::MeshToSdf => self.mesh_to_sdf(&name, cell_size),
             Direction::SdfToMesh => self.sdf_to_mesh(&name, cell_size),
             Direction::VoxelToMesh => self.voxels_to_mesh(&name),
-            // The domain has both hierarchy crossings and this adapter has
-            // neither: nothing here holds a `clay_multires`, so there is
-            // nothing to build one into and nothing to bake one out of. The
-            // undo group above is already open, and it closes below on this
-            // path exactly as it does on a refusal from any of the six.
-            Direction::MeshToMultires | Direction::MultiresToMesh => Err(ModelError::engine(
-                "esta versão ainda não constrói uma hierarquia de subdivisão",
-            )),
+            Direction::MeshToMultires => self.mesh_to_multires(&name),
+            Direction::MultiresToMesh => self.multires_to_mesh(&name),
         };
         // The source leaves and the result takes its row here rather than
         // after the group: it keeps the entries adjacent, which is what lets
@@ -2107,6 +2503,80 @@ impl ClayDocument {
         self.attach_meshed_layer(mesh, name)
     }
 
+    /// The active mesh layer, taken as the cage of a subdivision hierarchy.
+    ///
+    /// The one crossing that samples nothing: the cage *is* the mesh, kept
+    /// vertex for vertex as level 0. What it does instead of losing accuracy
+    /// is refuse — `clay_multires_from_mesh` will not repair a non-manifold
+    /// edge or weld away a degenerate face, because a conversion that quietly
+    /// mended a cage would change retopology somebody paid for without saying
+    /// so, and a cage is precisely the thing whose topology is the work.
+    ///
+    /// The row that comes out carries the cage *the hierarchy welded*, taken
+    /// back off it as level 0, rather than the triangles that went in. Those
+    /// two can differ — a cage is welded on the way in — and the row has to
+    /// hold what the hierarchy is actually standing on, or the layer saved to
+    /// the file and the layer the sculpt is stored against would be two
+    /// different meshes.
+    fn mesh_to_multires(&mut self, name: &str) -> Result<LayerKey, ModelError> {
+        let source = self.active_layer();
+        if !source.carries_geometry {
+            return Err(ModelError::Conversion(Refusal::SourceEmpty));
+        }
+        let id = source.id;
+        let mut hierarchy = self
+            .document
+            .multires_from_mesh_layer(id, crate::multires::Hierarchy::desc())
+            .map_err(
+                |refused| match crate::multires::cage_fault(refused.reason) {
+                    Some(fault) => ModelError::Conversion(Refusal::NotACage { fault }),
+                    None if refused.reason == claycore::MultiresError::EmptyBase => {
+                        ModelError::Conversion(Refusal::SourceEmpty)
+                    }
+                    None => ModelError::engine(refused.to_string()),
+                },
+            )?;
+        let cage = hierarchy.copy_level_mesh(0).map_err(ModelError::engine)?;
+        let key = self.attach_meshed_layer(cage, name)?;
+        if let Ok(index) = self.index_of(key) {
+            self.layers[index].representation = Representation::Multires;
+            self.layers[index].multires = Some(crate::multires::Hierarchy::holding(hierarchy));
+        }
+        // A hierarchy is drawn from its display level and never from the cage
+        // its layer holds, so the box every manipulator sizes itself to comes
+        // from there too.
+        self.refresh_multires_bounds(key);
+        // The mesh sculptor `attach_meshed_layer` armed is for the cage, and
+        // nothing sculpts the cage directly once a hierarchy stands on it: a
+        // stamp goes through the hierarchy's own sculptor at the bound level.
+        // Left standing it would answer the pick with the cage's triangles.
+        self.mesh_sculptors.borrow_mut().forget(key);
+        Ok(key)
+    }
+
+    /// The active hierarchy's display level, baked into an ordinary mesh.
+    ///
+    /// A level *is* a mesh, so nothing is resampled here either. What goes is
+    /// everything under the level — the cage, the levels between, and the
+    /// detail stored per level in its own transported frame — so afterwards
+    /// the vertices are where they were and there is nothing beneath them left
+    /// to move.
+    fn multires_to_mesh(&mut self, name: &str) -> Result<LayerKey, ModelError> {
+        let index = self.active;
+        let Some(hierarchy) = self.layers[index].multires.as_mut() else {
+            return Err(ModelError::Conversion(Refusal::SourceEmpty));
+        };
+        let level = hierarchy.levels().display;
+        let baked = hierarchy
+            .surface_mut()
+            .copy_level_mesh(level)
+            .map_err(ModelError::engine)?;
+        if baked.index_count() == 0 {
+            return Err(ModelError::Conversion(Refusal::SourceEmpty));
+        }
+        self.attach_meshed_layer(baked, name)
+    }
+
     /// Attaches a mesh this application produced as a new layer.
     ///
     /// The same call an import uses, so a converted mesh and an imported one
@@ -2178,7 +2648,12 @@ impl ClayDocument {
         // to refill for one — the viewport draws it through the carried-layer
         // path instead. Marking it dirty would ask the cache to mark a layer
         // whose field is empty.
-        if self.active_layer().representation == Representation::Mesh {
+        // A hierarchy's layer is a mesh layer too — it holds the cage — so it
+        // has no bricks and no field for the same reason.
+        if matches!(
+            self.active_layer().representation,
+            Representation::Mesh | Representation::Multires
+        ) {
             self.refresh_stats();
             return Ok(key);
         }
@@ -3889,216 +4364,19 @@ impl ClayDocument {
         // Read for the same reason, one line later: the sculptor borrows the
         // document and this does not.
         let chosen = self.colour.current().sanitized();
-        // The shared preset, which is where a mesh stroke's radius and
-        // strength have to come from: the engine states that
-        // `clay_mesh_sculptor_apply_stroke` IGNORES the descriptor's radius
-        // and strength and takes each stamp's from the preset. This used to
-        // build its own carrying only `spacing`, so a mesh stroke ran at the
-        // engine's default radius of 0.25 whatever the brush said — measured,
-        // sizes 0.1, 0.5 and 1.0 all moved the same 944 vertices, and
-        // Intensidade was inert the same way.
-        //
-        // Spacing was also inverted here against every other path: the design
-        // reads flow as "more flow, stamps closer together", and this passed
-        // it straight through so more flow spread them further apart. On Move
-        // that is what decides whether a drag emits a second stamp at all, and
-        // a drag that emits one stamp has no motion to drag by.
-        let mut preset = self.preset(brush, tool);
-        // A mesh stroke does not build on itself, whatever the brush says.
-        //
-        // Not a preference: the mesh verbs that displace along a *per-vertex*
-        // normal read the normals the previous stamp just moved, so building
-        // up feeds a stamp's own output back into its next input. Measured
-        // against Blender's brushes on a matched sphere — same radius in world
-        // units, same strength, same stroke — as the mean angle between
-        // adjacent vertex normals, before against after:
-        //
-        //   verb     building up   clamped   Blender
-        //   Inflar      5.04x       1.18x     1.00x
-        //   Pinçar      9.41x       1.83x     1.00x
-        //   Vinco       3.71x       1.34x     1.00x
-        //   Padrão      1.11x       1.08x     1.00x
-        //
-        // Padrão is the control and barely moves either way: it uses the
-        // *region's* averaged normal, so there is nothing to feed back.
-        //
-        // Here rather than in `Shaping::default` because it is a fact about
-        // these verbs and not about brushes — the same reason `MAX_JITTER`
-        // lives beside the preset. The field and the grid are unaffected, and
-        // Acumular still means what it means there.
-        // A mesh stroke does not build on itself — except when it is
-        // *converging*.
-        //
-        // The clamp is here because the verbs that displace along a
-        // per-vertex normal read the normals the previous stamp just moved, so
-        // building up feeds a stamp's output into its own next input and the
-        // surface shreds. A smoothing verb has the opposite character: it
-        // averages toward the neighbourhood, so running it again moves less
-        // each time and converges. Clamping one of those means a sculptor can
-        // never smooth more than a single stamp's worth however long they rub,
-        // which is what "Suavizar does nothing" turned out to be — measured on
-        // a ridge 0.0676 proud of a unit sphere, four passes took it to 1.0670
-        // clamped and 1.0187 accumulating.
-        if !matches!(
+        let CarriedStroke {
+            preset,
+            stamp,
+            points,
+            gesture,
+        } = carried_stroke(
             verb,
-            claycore::MeshBrush::Smooth | claycore::MeshBrush::Relax | claycore::MeshBrush::Polish
-        ) {
-            preset.accumulation = claycore::Accumulation::Clamped;
-        }
-        // Where the gesture travelled, which is what a verb that pushes along
-        // the surface has to be told.
-        //
-        // `apply_stroke` derives a direction for GRAB and SNAKEHOOK from the
-        // motion between stamps and for nothing else — so NUDGE, which
-        // projects the drag into each vertex's tangent plane, was handed the
-        // descriptor's default of all zeroes and pushed material nowhere. It
-        // moved not one vertex at any size, intensity or stroke length, while
-        // Blender's equivalent moved 5% of the mesh on the same stroke.
-        //
-        // Harmless for the two verbs that ignore it, and right for a single
-        // stamp, which reads the descriptor's direction whatever the verb.
-        // The whole gesture, which is what Grab carries its region by, scaled
-        // by the intensity.
-        //
-        // Scaled here because the descriptor's `strength` weights the falloff
-        // rather than the displacement, so a Grab was carrying its region the
-        // gesture's whole length whatever Intensidade said. Blender's Grab
-        // carries it by the drag *times* the strength — measured, a 1.737 drag
-        // at 0.65 moves its furthest vertex 1.129, which is exactly the
-        // product — and matching that is what makes the slider mean the same
-        // thing in both.
-        let gesture = {
-            let (first, last) = (samples[0].position, samples[samples.len() - 1].position);
-            [
-                (last[0] - first[0]) * brush.intensity,
-                (last[1] - first[1]) * brush.intensity,
-                (last[2] - first[2]) * brush.intensity,
-            ]
-        };
-        // One stamp's worth of it, not the whole gesture. The engine resolves
-        // the path into stamps a spacing apart and applies the descriptor's
-        // direction at each one, so handing it the gesture's full travel
-        // applies that travel once per stamp — measured, a 0.9 drag pushed the
-        // surface 1.82 where Blender's Nudge pushed 0.16. A spacing is what
-        // the motion between two stamps actually is, which is the same
-        // quantity GRAB drags by.
-        let travel = {
-            let (first, last) = (samples[0].position, samples[samples.len() - 1].position);
-            let step = [last[0] - first[0], last[1] - first[1], last[2] - first[2]];
-            let length = step.iter().map(|axis| axis * axis).sum::<f32>().sqrt();
-            // Scaled by the intensity here because the engine does not: a
-            // stamp's strength weights the verbs that displace, and NUDGE
-            // moves by the vector it is handed. Measured before this, the
-            // Intensidade slider moved the surface 0.5753 at 0.2, at 0.65 and
-            // at 1.0 — the same number three times.
-            let stamp = preset.spacing * brush.size * brush.intensity * Self::NUDGE_PUSH;
-            if length > f32::EPSILON {
-                std::array::from_fn(|i| step[i] / length * stamp.min(length))
-            } else {
-                [0.0; 3]
-            }
-        };
-        let stamp = claycore::MeshStamp {
-            verb,
-            direction: travel,
-            center: samples[0].position,
-            // The radius is carried even though a resolved stroke replaces it
-            // per stamp, because the same descriptor is what a single stamp
-            // uses and one that disagreed with the preset would be a trap for
-            // the next caller.
-            radius: brush.size,
-            // The strength is not merely carried: a resolved stroke
-            // *multiplies* it by each stamp's own, so this is where a mesh
-            // stroke's sign lives.
-            //
-            // Which is why holding the invert key turns this over rather than
-            // the preset's strength. The preset's is contracted to [0, 1] and
-            // the stroke resolver drops any stamp whose strength is not
-            // positive, so a negative preset strength is not a dig — it is
-            // nothing at all, which is what it measured as: a full sweep with
-            // the key held moved no vertex and reported no change.
-            strength: if brush.invert {
-                -brush.intensity
-            } else {
-                brush.intensity
-            },
-            falloff: match brush.shaping.falloff {
-                clayspace_model::Falloff::Constant => claycore::MeshFalloff::Constant,
-                clayspace_model::Falloff::Linear => claycore::MeshFalloff::Linear,
-                clayspace_model::Falloff::Smooth => claycore::MeshFalloff::Smooth,
-                clayspace_model::Falloff::Gaussian => claycore::MeshFalloff::Gaussian,
-            },
-            // A stamp scaling the per-vertex weight, borrowed for the call.
-            // The same kernel the SDF alpha uses, so one texture reads
-            // identically on a mesh and on a field.
-            alpha: alpha.map(|alpha| claycore::AlphaStamp {
-                samples: &alpha.samples,
-                width: alpha.width as i32,
-                height: alpha.height as i32,
-                // All zeroes: the surface normal under the brush centre,
-                // which is what a detail stamp on a mesh wants.
-                direction: [0.0; 3],
-                tangent: [1.0, 0.0, 0.0],
-                // Zero: the brush's own diameter.
-                extent: 0.0,
-            }),
-            // What Paint blends toward. Left at the engine's white default
-            // before this, so the one brush whose whole job is colour had
-            // nothing to say: a white blend over a white mesh is a stroke that
-            // changes nothing. Smear reads no colour of its own — it drags the
-            // colour already there — so this is carried for both and read by
-            // one.
-            colour: chosen.rgb,
-            smooth_iterations: Some(Self::SMOOTH_PASSES),
-            // The grain, as the sculptor set it. It turns the stamp's
-            // in-plane axes about the direction it faces, which is why the
-            // fixed world-X tangent the alpha block hands over below is not
-            // the thing that decides a turned stamp's orientation — that
-            // tangent picks the plane's zero, and this turns the stamp within
-            // it. Zero, the default, is no rotation at all and is what every
-            // brush that has never been turned keeps sending.
-            stamp_azimuth: brush.shaping.azimuth,
-            // Filled in per mirror below, because a seed is a place as much
-            // as it is a class: the pick that recorded one stood where the
-            // unmirrored stamp stands, and a reflected copy of it stands
-            // somewhere the walk cannot start from. See [`crate::seed`].
-            seed: None,
-            // No automask. This application offers none of the five factors
-            // as a brush setting, so the default — no gate at all, which the
-            // engine documents as bit-identical to a descriptor from before
-            // automasking existed — is what every stamp sends and what every
-            // figure in the performance baseline was measured with.
-            //
-            // Named rather than defaulted for the reason below, and because
-            // ClayCore v0.78.0 is the release in which a factor set here
-            // started reaching the adaptive representation as well as this
-            // one. When a backface gate or a border gate is offered, this is
-            // the line it arrives on and `Shaping` is where it is chosen.
-            automask: claycore::Automask::default(),
-            // Every field is named now that the colour is one of them, so
-            // there is no `..MeshStamp::default()` here: a field added
-            // upstream should fail this call rather than be filled in
-            // silently with an engine default nobody chose.
-            // Flatten and Scrape mean "everything under this disc", and a
-            // surface walk refuses to flatten across a groove — which is not
-            // what either verb says.
-            geodesic: !matches!(
-                verb,
-                claycore::MeshBrush::Flatten | claycore::MeshBrush::Scrape
-            ),
-        };
-        let points: Vec<[f32; 5]> = samples
-            .iter()
-            .map(|s| {
-                [
-                    s.position[0],
-                    s.position[1],
-                    s.position[2],
-                    s.pressure,
-                    s.time,
-                ]
-            })
-            .collect();
+            brush,
+            samples,
+            self.preset(brush, tool),
+            alpha,
+            chosen,
+        );
 
         // Recorded per gesture, because that is the unit a sculptor thinks in
         // and the unit `mesh-sculpting` specifies: one gesture, one undo.
@@ -4300,7 +4578,7 @@ impl ClayDocument {
             let (layer, deltas) = live.finish();
             self.mesh_undo.push(MeshGesture {
                 layer,
-                deltas,
+                what: GestureRecord::Deltas(deltas),
                 engine_depth,
             });
             // A new edit ends the redo line, exactly as the engine's own does.
@@ -4315,6 +4593,241 @@ impl ClayDocument {
             // layer's own triangles.
             dirty_bricks: 0,
         })
+    }
+
+    /// A stroke on a hierarchy, at the level the brush is bound to.
+    ///
+    /// The verbs are the mesh's verbs and the descriptor is the mesh's
+    /// descriptor — see [`carried_stroke`] — so what is different here is
+    /// entirely about the two things a hierarchy has that a mesh layer does
+    /// not: a level the stamp binds to, and no undo record.
+    ///
+    /// **No seed, and the reason is measured rather than assumed.** A mesh
+    /// stroke hands the engine the weld class its pick landed on so the
+    /// surface walk starts at the finger instead of searching the mesh, and
+    /// the class travels with a token naming the numbering it came from. A
+    /// hierarchy renumbers that space on **every bind** — measured on the
+    /// pinned engine, the token reads 1, then 3 after one dab, then 4, 5, 6, 7
+    /// as caches are dropped, trimmed and levels rebound — and this
+    /// application binds a fresh sculptor per segment, because the wrapper
+    /// borrows the surface for the sculptor's whole life and a gesture spans
+    /// frames. So there is never a numbering that outlives the pick, and a
+    /// seed carried across one would be *in bounds*, wrong and silent: the
+    /// walk starts nowhere near the brush, `geodesic_region` comes back empty,
+    /// and the dab is lost rather than misplaced. `seed: None` is the correct
+    /// answer here and not a stub.
+    ///
+    /// **What is held and compared instead** is what a host actually caches
+    /// across a rebuild: the triangles the viewport draws and the number that
+    /// says they are stale. See [`crate::multires::Hierarchy::watched`], which
+    /// is the engine's evaluated counter and this side's own generation
+    /// together, because the engine's alone restarts at one every time a
+    /// hierarchy is put back from bytes.
+    ///
+    /// **The record.** The ABI carries no delta for a hierarchy gesture, so the
+    /// hierarchy's own serialized bytes are taken once, on the first segment
+    /// that reaches the surface. They are two things at once: what a dragging
+    /// verb is laid down again from, and what the gesture enters the undo
+    /// history as. See [`GestureRecord::Hierarchy`].
+    fn stroke_multires(
+        &mut self,
+        tool: ToolKind,
+        brush: BrushSettings,
+        samples: &[GestureSample],
+        symmetry: [bool; 3],
+    ) -> Result<EditOutcome, ModelError> {
+        let Some(verb) = mesh_verb(tool) else {
+            return Ok(EditOutcome::NOTHING);
+        };
+        let index = self.active;
+        let key = self.layers[index].key;
+
+        // The gesture carried into the hierarchy's own coordinates, and the
+        // brush with it — the same conversion a carried mesh makes, for the
+        // same reason: the layer transform moves where the form is drawn and
+        // the hierarchy holds its vertices where they were built.
+        let placement = self.carried_placement(key);
+        let carried = Self::carried_samples(&placement, samples);
+        let samples = carried.as_deref().unwrap_or(samples);
+        let mut brush = brush.sanitized();
+        if let Some(transform) = &placement {
+            brush.size /= transform.largest_scale();
+        }
+        // Both read before anything is borrowed mutably.
+        let alpha = self.alpha_for(brush, Combine::Relief).cloned();
+        let chosen = self.colour.current().sanitized();
+        let preset = self.preset(brush, tool);
+
+        // Taken out of the layer for the length of the stroke, because the
+        // freeze is read off `self` and the hierarchy is inside it — and a
+        // shared borrow of the document and an exclusive borrow of one of its
+        // layers cannot stand together. Put back on every path below,
+        // including the failing ones, which is why the work is a block whose
+        // result is unwrapped afterwards rather than a run of `?`.
+        let Some(mut hierarchy) = self.layers[index].multires.take() else {
+            return Ok(EditOutcome::NOTHING);
+        };
+        let stroked = self.stroke_into(
+            &mut hierarchy,
+            verb,
+            tool,
+            brush,
+            samples,
+            symmetry,
+            preset,
+            alpha.as_ref(),
+            chosen,
+        );
+        self.layers[index].multires = Some(hierarchy);
+        let moved = stroked?;
+
+        // What is drawn moved, so the box every manipulator sizes itself to
+        // has moved with it.
+        self.refresh_multires_bounds(key);
+        if self.previewing {
+            // Held rather than banked, exactly as a mesh gesture is: the
+            // gesture is still open and every segment replaces the last, so
+            // one drag is one undo however many segments drew it.
+            self.live_generation = self.live_generation.wrapping_add(1);
+        } else {
+            self.bank_multires_gesture(key);
+        }
+        Ok(EditOutcome {
+            // A hierarchy is not in the brick cache, so nothing was dirtied
+            // and nothing needs re-meshing — the viewport reads the display
+            // level's own triangles.
+            changed: moved > 0,
+            dirty_bricks: 0,
+        })
+    }
+
+    /// The engine half of [`ClayDocument::stroke_multires`], with the
+    /// hierarchy held apart from the document.
+    ///
+    /// Split out so the layer gets its hierarchy back whatever happens here,
+    /// and so this function is one thing: take the last segment back, record
+    /// where the gesture started, and stamp.
+    #[allow(clippy::too_many_arguments)]
+    fn stroke_into(
+        &self,
+        hierarchy: &mut crate::multires::Hierarchy,
+        verb: claycore::MeshBrush,
+        tool: ToolKind,
+        brush: BrushSettings,
+        samples: &[GestureSample],
+        symmetry: [bool; 3],
+        preset: StrokePreset,
+        alpha: Option<&Alpha>,
+        chosen: clayspace_model::Colour,
+    ) -> Result<u64, ModelError> {
+        // A dragging verb is laid down again from its anchor on every segment,
+        // so what the last one did is taken back first — or the preview stacks
+        // segment on segment. The take-back is the recorded bytes, which is the
+        // only exact one the ABI offers: measured on the pinned engine, 8.15 ms
+        // to put back a level-4 hierarchy over a 16x16 cage.
+        if tool.is_path_driven() && hierarchy.gesture_is_open() {
+            hierarchy.replay_from_the_anchor()?;
+        }
+        hierarchy.open_gesture()?;
+
+        let CarriedStroke {
+            preset,
+            stamp,
+            points,
+            gesture,
+        } = carried_stroke(verb, brush, samples, preset, alpha, chosen);
+        // Read before the sculptor is taken: the lease reads the document.
+        let mask = self.active_mask();
+
+        let mut sculptor = hierarchy
+            .surface_mut()
+            .sculptor()
+            .map_err(ModelError::engine)?;
+        // Clears the record `MeshBrush::Layer` measures its ceiling against,
+        // so a second stroke over the same place deposits from the surface as
+        // that stroke found it rather than from where the last one stopped.
+        sculptor.begin_stroke().map_err(ModelError::engine)?;
+        let mut moved = 0;
+        for mirror in mirrors(symmetry) {
+            let moved_here = if verb == claycore::MeshBrush::Grab {
+                // One stamp at the point the gesture took hold of, carrying
+                // that region by the whole drag. Not a resolved stroke, for
+                // the reason `stroke_mesh` spells out: a stroke walks the
+                // path and takes the brush centre with it, so a drag that
+                // leaves the surface reaches no material at all.
+                sculptor
+                    .stamp(
+                        claycore::MeshStamp {
+                            direction: mirror.vector(gesture),
+                            center: mirror.point(stamp.center),
+                            ..stamp
+                        },
+                        mask.as_deref(),
+                    )
+                    .map_err(ModelError::engine)?
+                    .moved_vertices
+            } else {
+                let path: Vec<[f32; 5]> = points
+                    .iter()
+                    .map(|sample| {
+                        let at = mirror.point([sample[0], sample[1], sample[2]]);
+                        [at[0], at[1], at[2], sample[3], sample[4]]
+                    })
+                    .collect();
+                sculptor
+                    .apply_stroke(
+                        &path,
+                        &preset,
+                        claycore::MeshStamp {
+                            direction: mirror.vector(stamp.direction),
+                            center: mirror.point(stamp.center),
+                            ..stamp
+                        },
+                        mask.as_deref(),
+                        // The resolver's own deferral: it recomputes once at
+                        // the end of the stroke it drove, where it knows the
+                        // stroke ended, which is what collapses a resolved
+                        // stroke's overlapping dabs into one recompute.
+                        true,
+                    )
+                    .map_err(ModelError::engine)?
+                    .1
+                    .moved_vertices
+            };
+            moved += moved_here;
+        }
+        // No refit and no index rebuild. A hierarchy's level mesh is rebuilt
+        // from the authoritative detail whenever it is read, so there is no
+        // tree of this side's that a stamp leaves stale — the fixed sculptor
+        // inside the level is the engine's own and lives and dies with the
+        // bind.
+        Ok(moved)
+    }
+
+    /// Banks the open hierarchy gesture on the active layer, if there is one.
+    ///
+    /// Into the same stack a mesh gesture goes into, ordered against the
+    /// engine's history by the same depth. See [`MeshGesture`] for why the two
+    /// cannot be two stacks.
+    fn bank_multires_gesture(&mut self, key: LayerKey) {
+        let Ok(index) = self.index_of(key) else {
+            return;
+        };
+        let Some(hierarchy) = self.layers[index].multires.as_mut() else {
+            return;
+        };
+        let Some(bytes) = hierarchy.close_gesture() else {
+            return;
+        };
+        let engine_depth = self.engine_undo_depth();
+        self.mesh_undo.push(MeshGesture {
+            layer: key,
+            what: GestureRecord::Hierarchy(bytes),
+            engine_depth,
+        });
+        // A new edit ends the redo line, exactly as the engine's own does.
+        self.mesh_redo.clear();
+        self.trim_gesture_history();
     }
 
     /// Where a ray meets the active layer's grid.
@@ -4360,6 +4873,48 @@ impl ClayDocument {
             None => met,
         })
     }
+    /// Where a ray meets the active hierarchy's display level.
+    ///
+    /// Walked rather than traced through a partition, and that is a decision
+    /// rather than an omission. The other two representations are picked
+    /// through a tree the engine keeps: a grid's own raycast, and a mesh
+    /// layer's `MeshSculptor`, whose adjacency and BVH are built once and
+    /// survive every stroke because a mesh's topology never changes. Neither
+    /// holds here. A hierarchy's level mesh is *regenerated* from the
+    /// authoritative detail whenever the surface moves, so a tree over it
+    /// would have to be rebuilt after every dab — the weld is the expensive
+    /// part, and paying it per dab to save a walk per frame is the wrong way
+    /// round.
+    ///
+    /// So the walk is over the triangles the viewport was already handed,
+    /// which cost nothing to have: roughly 24,000 of them at level 3 over a
+    /// 16x16 cage. It is linear, and a hierarchy deep enough for that to show
+    /// is one where a partition rebuilt per dab would show far more.
+    fn pick_active_multires(&self, origin: [f32; 3], direction: [f32; 3]) -> Option<[f32; 3]> {
+        let key = self.active_layer().key;
+        // The ray carried into the hierarchy's own coordinates and the answer
+        // carried back out, as every carried representation does it.
+        let placement = self.carried_placement(key);
+        let (start, along) = match &placement {
+            Some(transform) => (
+                Self::into_local(transform, origin),
+                Self::turned_by(
+                    transform.rotation_axis,
+                    -transform.rotation_angle,
+                    direction,
+                ),
+            ),
+            None => (origin, direction),
+        };
+        let index = self.index_of(key).ok()?;
+        let (positions, indices) = self.layers[index].multires.as_ref()?.drawn_triangles()?;
+        let met = nearest_triangle(start, along, positions, indices)?;
+        Some(match &placement {
+            Some(transform) => Self::into_world(transform, met),
+            None => met,
+        })
+    }
+
     /// A gesture written in a moved mesh subtool's own coordinates.
     ///
     /// `None` where the subtool stands at the origin unturned, which is the
@@ -4621,10 +5176,13 @@ impl ClayDocument {
         for (index, representation, name) in drawn {
             let layer = self.layers[index].key;
             let first = carried.indices.len() as u32;
-            if representation == Representation::Voxel {
-                self.append_voxel_layer(index, &mut carried);
-            } else {
-                self.append_mesh_layer(layer, &name, &mut carried);
+            match representation {
+                Representation::Voxel => self.append_voxel_layer(index, &mut carried),
+                // From the display level, never from the cage the layer holds:
+                // the sculpt stands off the cage and drawing the cage would
+                // draw the form as it was before anybody touched it.
+                Representation::Multires => self.append_multires_layer(index, &mut carried),
+                _ => self.append_mesh_layer(layer, &name, &mut carried),
             }
             // A layer that contributed nothing gets no span: an empty range is
             // an empty draw call, and a cue that has to skip it is a cue with
@@ -4677,6 +5235,24 @@ impl ClayDocument {
             }
         }
         carried.append(&positions, &normals, &colors, &indices);
+    }
+
+    /// Appends one hierarchy's display level, standing where its layer
+    /// transform puts it.
+    ///
+    /// The level mesh is held on the hierarchy and re-copied only when the
+    /// surface has moved under it — `clay_multires_copy_level_mesh` is 3.16 ms
+    /// for level 4's 98,817 vertices on the pinned engine, which is a cost a
+    /// resting frame must not pay and a frame after a dab must.
+    fn append_multires_layer(&mut self, index: usize, carried: &mut CarriedBuffer) {
+        let placement = self.carried_placement(self.layers[index].key);
+        let Some(hierarchy) = self.layers[index].multires.as_mut() else {
+            return;
+        };
+        let Some((positions, normals, colors, indices)) = hierarchy.level_mesh() else {
+            return;
+        };
+        Self::append_placed(carried, &placement, positions, normals, colors, indices);
     }
 
     /// Appends one voxel layer's triangles to the carried buffer.
@@ -5028,11 +5604,41 @@ impl ClayDocument {
                 .unwrap_or(0);
             sum.wrapping_add(counted)
         });
+        // And every hierarchy's own evaluated revision, which the engine moves
+        // whenever the drawn surface moved for any reason at all. Without it
+        // the number sits still through a dab on a hierarchy: a hierarchy is
+        // not in the brick cache, its layer's triangles are the cage and the
+        // cage does not move, and nothing else here counts anything a stamp
+        // touched — so the surface would change and the viewport would go on
+        // drawing what it uploaded last.
+        let hierarchies = self.layers.iter().fold(0u64, |sum, layer| {
+            let Some(hierarchy) = layer.multires.as_ref() else {
+                return sum;
+            };
+            let (evaluated, generation) = hierarchy.watched();
+            let levels = hierarchy.levels();
+            sum.wrapping_add(evaluated)
+                .wrapping_mul(31)
+                // This side's own generation, because the engine's counter
+                // restarts at one whenever a hierarchy is put back from bytes
+                // — so an undo and the redo after it would leave the same
+                // number over two different surfaces. See
+                // `crate::multires::Hierarchy::generation`.
+                .wrapping_add(generation)
+                .wrapping_mul(31)
+                // The display level too. Moving it re-meshes nothing inside the
+                // engine — the levels are all there — so no revision moves,
+                // and the viewport would keep the level it had.
+                .wrapping_add(u64::from(levels.display))
+                .wrapping_mul(31)
+                .wrapping_add(u64::from(levels.count))
+        });
         let meshes = (self.mesh_undo.len() as u64) << 32 | self.mesh_redo.len() as u64;
         meshes
             .wrapping_mul(31)
             .wrapping_add(grids)
             .wrapping_add(carried)
+            .wrapping_add(hierarchies.wrapping_mul(4_000_037))
             // A preview banks nothing, so without this the number would sit
             // still while the drag was visibly moving the surface.
             .wrapping_add(self.live_generation.wrapping_mul(1_000_003))
@@ -5438,36 +6044,15 @@ impl ClayDocument {
             .is_some_and(|gesture| gesture.engine_depth == self.engine_undo_depth())
     }
 
-    /// Takes back one mesh gesture, bit exactly.
+    /// Takes back one carried gesture, bit exactly.
     fn undo_mesh_gesture(&mut self) -> Result<bool, ModelError> {
         let Some(gesture) = self.mesh_undo.pop() else {
             return Ok(false);
         };
-        let engine_name = self
-            .layers
-            .iter()
-            .find(|layer| layer.key == gesture.layer)
-            .map(|layer| layer.engine_name.clone());
-        let Some(engine_name) = engine_name else {
-            // The layer it belongs to is gone, so there is nothing to put
-            // back. Dropping the record is the whole of the answer.
+        let Some(gesture) = self.step_gesture(gesture, Step::Back)? else {
             return Ok(true);
         };
-        self.ensure_mesh_sculptor(gesture.layer, &engine_name)?;
-        {
-            let Some(sculptor) = self.sculptor_for(gesture.layer) else {
-                return Ok(false);
-            };
-            let mut sculptor = sculptor.borrow_mut();
-            gesture
-                .deltas
-                .revert(&mut sculptor)
-                .map_err(ModelError::engine)?;
-            sculptor.refit().map_err(ModelError::engine)?;
-        }
-        let layer = gesture.layer;
         self.mesh_redo.push(gesture);
-        self.refresh_mesh_bounds(layer);
         Ok(true)
     }
 
@@ -5476,30 +6061,100 @@ impl ClayDocument {
         let Some(gesture) = self.mesh_redo.pop() else {
             return Ok(false);
         };
-        let engine_name = self
-            .layers
-            .iter()
-            .find(|layer| layer.key == gesture.layer)
-            .map(|layer| layer.engine_name.clone());
-        let Some(engine_name) = engine_name else {
+        let Some(gesture) = self.step_gesture(gesture, Step::Forward)? else {
             return Ok(true);
         };
-        self.ensure_mesh_sculptor(gesture.layer, &engine_name)?;
-        {
-            let Some(sculptor) = self.sculptor_for(gesture.layer) else {
-                return Ok(false);
-            };
-            let mut sculptor = sculptor.borrow_mut();
-            gesture
-                .deltas
-                .apply(&mut sculptor)
-                .map_err(ModelError::engine)?;
-            sculptor.refit().map_err(ModelError::engine)?;
-        }
-        let layer = gesture.layer;
         self.mesh_undo.push(gesture);
-        self.refresh_mesh_bounds(layer);
         Ok(true)
+    }
+
+    /// Applies one carried gesture in a direction, and hands back the record
+    /// the other stack should hold.
+    ///
+    /// `None` where the layer the record belongs to has left the document:
+    /// there is nothing to put back, and dropping the record is the whole of
+    /// the answer.
+    ///
+    /// The two representations differ in what "the other stack's record" is,
+    /// and it is worth naming. A `MeshDeltas` is *symmetric* — the same record
+    /// reverts and re-applies — so it travels unchanged. A hierarchy's record
+    /// is one **state**, so the record that goes the other way has to be the
+    /// state this step is leaving: it is taken here, on the way past, which is
+    /// why one blob is held per step rather than a before and an after.
+    fn step_gesture(
+        &mut self,
+        gesture: MeshGesture,
+        step: Step,
+    ) -> Result<Option<MeshGesture>, ModelError> {
+        let Ok(index) = self.index_of(gesture.layer) else {
+            return Ok(None);
+        };
+        let MeshGesture {
+            layer,
+            what,
+            engine_depth,
+        } = gesture;
+        let what = match what {
+            GestureRecord::Deltas(deltas) => {
+                let engine_name = self.layers[index].engine_name.clone();
+                self.ensure_mesh_sculptor(layer, &engine_name)?;
+                let Some(sculptor) = self.sculptor_for(layer) else {
+                    return Ok(None);
+                };
+                {
+                    let mut sculptor = sculptor.borrow_mut();
+                    let stepped = match step {
+                        Step::Back => deltas.revert(&mut sculptor),
+                        Step::Forward => deltas.apply(&mut sculptor),
+                    };
+                    stepped.map_err(ModelError::engine)?;
+                    sculptor.refit().map_err(ModelError::engine)?;
+                }
+                self.refresh_mesh_bounds(layer);
+                GestureRecord::Deltas(deltas)
+            }
+            GestureRecord::Hierarchy(bytes) => {
+                let Some(hierarchy) = self.layers[index].multires.as_mut() else {
+                    return Ok(None);
+                };
+                // Taken before the restore rather than after: what the other
+                // stack owes is the state this step is leaving.
+                let leaving = hierarchy.bytes(0)?;
+                hierarchy.restore(&bytes)?;
+                self.refresh_multires_bounds(layer);
+                GestureRecord::Hierarchy(leaving)
+            }
+        };
+        Ok(Some(MeshGesture {
+            layer,
+            what,
+            engine_depth,
+        }))
+    }
+
+    /// Drops the oldest hierarchy records until the history fits its budget.
+    ///
+    /// A hierarchy's record is its whole serialized state, which is exact and
+    /// is not small — see [`GestureRecord::Hierarchy`]. Bounded rather than
+    /// unbounded, and from the *old* end, so what a session loses is the
+    /// ability to walk back past a point rather than the ability to take back
+    /// what it just did.
+    fn trim_gesture_history(&mut self) {
+        let weigh = |stack: &[MeshGesture]| -> usize {
+            stack
+                .iter()
+                .map(|gesture| match &gesture.what {
+                    GestureRecord::Hierarchy(bytes) => bytes.len(),
+                    GestureRecord::Deltas(_) => 0,
+                })
+                .sum()
+        };
+        while weigh(&self.mesh_undo) + weigh(&self.mesh_redo) > crate::multires::HISTORY_BYTES {
+            if self.mesh_undo.is_empty() {
+                break;
+            }
+            self.mesh_undo.remove(0);
+        }
     }
 
     /// Builds the sculptor for a mesh layer, or keeps the one already built.
@@ -6038,16 +6693,7 @@ impl SculptModel for ClayDocument {
             }
             Representation::Voxel => self.stroke_voxel(tool, brush, samples, symmetry),
             Representation::Mesh => self.stroke_mesh(tool, brush, samples, symmetry),
-            // The domain has the fourth representation and this adapter does
-            // not hold one yet: `add_layer` refuses it, no crossing builds one,
-            // and no `Layer` carries a `clay_multires`. A refusal here rather
-            // than a fourth branch guessing at a hierarchy that cannot exist —
-            // and it is reachable only if some other part of this file starts
-            // making them without wiring the stroke, which is exactly the
-            // silence worth a sentence.
-            Representation::Multires => Err(ModelError::engine(
-                "esta versão ainda não esculpe uma hierarquia de subdivisão",
-            )),
+            Representation::Multires => self.stroke_multires(tool, brush, samples, symmetry),
         }
     }
 
@@ -6215,7 +6861,7 @@ impl SculptModel for ClayDocument {
         if deltas.vertex_count().map_err(ModelError::engine)? > 0 {
             self.mesh_undo.push(MeshGesture {
                 layer: key,
-                deltas,
+                what: GestureRecord::Deltas(deltas),
                 engine_depth: self.engine_undo_depth(),
             });
             self.mesh_redo.clear();
@@ -6243,6 +6889,14 @@ impl SculptModel for ClayDocument {
         // engine picks a grid itself.
         if self.active_representation() == Representation::Voxel {
             return self.pick_active_grid(origin, direction);
+        }
+        // And a hierarchy is in neither, for the third time. It is picked
+        // against the level the viewport is drawing rather than against the
+        // cage its layer holds: the sculpt stands off the cage, so a ray
+        // stopped at the cage would put the brush ring under the surface by
+        // however much detail there is.
+        if self.active_representation() == Representation::Multires {
+            return self.pick_active_multires(origin, direction);
         }
         // Against the cache rather than the document: the cost is the ray's
         // path through the band rather than a march against the whole tape.
@@ -6371,10 +7025,27 @@ impl SculptModel for ClayDocument {
             let (layer, deltas) = live.finish();
             self.mesh_undo.push(MeshGesture {
                 layer,
-                deltas,
+                what: GestureRecord::Deltas(deltas),
                 engine_depth,
             });
             self.mesh_redo.clear();
+        }
+        // And the hierarchy's, which is held on the layer rather than beside
+        // the document: a hierarchy gesture has no `MeshDeltas` to hold, so
+        // there is nothing here for `live_mesh` to have been carrying.
+        let hierarchies: Vec<LayerKey> = self
+            .layers
+            .iter()
+            .filter(|layer| {
+                layer
+                    .multires
+                    .as_ref()
+                    .is_some_and(crate::multires::Hierarchy::gesture_is_open)
+            })
+            .map(|layer| layer.key)
+            .collect();
+        for key in hierarchies {
+            self.bank_multires_gesture(key);
         }
         // The pointer is up. Whatever the drag made necessary, and this
         // document can afford, is done now — on a budget, because this is the
@@ -7171,6 +7842,76 @@ impl SceneModel for ClayDocument {
         }
     }
 
+    /// Moves the active hierarchy's levels, or changes how many it has.
+    ///
+    /// Three of the four move a number and cost nothing. The fourth allocates,
+    /// and it is the one this method exists to price: a level multiplies faces
+    /// by four, so a 20k-quad cage is 5.1M faces at level 4 and 20.5M at level
+    /// 5 — and it is the **peak** during the build rather than what remains
+    /// after it that ends a session on a constrained machine.
+    ///
+    /// `clay_multires_add_level` is build-then-publish: it prices the level
+    /// against the budget the hierarchy was built with, refuses over it, and
+    /// leaves the hierarchy exactly as deep as it was. The refusal is asked for
+    /// here as well, one call earlier, so that what a sculptor reads is a
+    /// [`Refusal`] naming the peak and the budget rather than an engine result
+    /// code — and so the interface can grey the control before it is pressed.
+    fn apply_multires_level_op(
+        &mut self,
+        op: clayspace_model::MultiresLevelOp,
+    ) -> Result<(), ModelError> {
+        use clayspace_model::MultiresLevelOp as Op;
+
+        let key = self.active_layer().key;
+        let index = self.active;
+        if self.layers[index].multires.is_none() {
+            // Named rather than generic, exactly as a grid's pass stack is: a
+            // sculptor on a field or a mesh needs to know that levels are a
+            // hierarchy's, not that "this failed".
+            return Err(ModelError::Unavailable(
+                clayspace_model::Unavailable::NoVerbHere {
+                    active: self.layers[index].representation,
+                    verbs: clayspace_model::Verbs {
+                        sdf: None,
+                        voxel: None,
+                        mesh: None,
+                        multires: Some("clay_multires_add_level"),
+                    },
+                    note: None,
+                },
+            ));
+        }
+        if let Some(refusal) = self.layers[index].protection.refusal() {
+            return Err(ModelError::engine(refusal));
+        }
+        let hierarchy = self.layers[index]
+            .multires
+            .as_mut()
+            .expect("checked just above");
+        match op {
+            Op::SetSculptLevel(level) => hierarchy.set_sculpt_level(level)?,
+            Op::SetDisplayLevel(level) => hierarchy.set_display_level(level)?,
+            Op::AddLevel => {
+                let level = hierarchy.add_level()?;
+                // What an artist means by subdividing is to work finer, so
+                // both numbers move to the level that arrived — which is also
+                // what the engine does, so a host that left the display where
+                // it was would draw a surface the engine had moved on from.
+                hierarchy.set_display_level(level)?;
+                hierarchy.set_sculpt_level(level)?;
+            }
+            Op::RemoveHighestLevel => hierarchy.remove_highest_level()?,
+        }
+        // The drawn level changed, or the surface under it did.
+        self.refresh_multires_bounds(key);
+        self.refresh_stats();
+        Ok(())
+    }
+
+    fn subdivision_cost(&self) -> Option<clayspace_model::SubdivisionCost> {
+        self.active_layer().multires.as_ref()?.subdivision_cost()
+    }
+
     fn remove_layer(&mut self, key: LayerKey) -> Result<(), ModelError> {
         let index = self.index_of(key)?;
         if self.layers.len() == 1 {
@@ -7317,7 +8058,15 @@ impl SceneModel for ClayDocument {
         // manipulator on a mesh sized to a default and Frame All framing
         // nothing. Placed, because the vertices are remembered where the engine
         // holds them and the layer transform moves them.
-        if layer.representation == Representation::Mesh {
+        //
+        // A hierarchy answers from the same field and for the same reason. Its
+        // layer holds the cage and carries no SDF content either, and what is
+        // cached there is the *display level's* box — see
+        // `refresh_multires_bounds` for why it cannot be the cage's.
+        if matches!(
+            layer.representation,
+            Representation::Mesh | Representation::Multires
+        ) {
             let measured = layer.mesh_bounds?;
             return Some(match self.carried_placement(key) {
                 Some(transform) => Self::placed_box(&transform, measured),
@@ -7689,6 +8438,117 @@ impl ClayDocument {
         }
     }
 
+    /// Writes every hierarchy this document holds, beside the document.
+    ///
+    /// Priced before it allocates — see [`crate::multires::Hierarchy::bytes`]
+    /// — and written whole, so a document that has lost its last hierarchy
+    /// leaves no side-car behind to promote a mesh layer back into one on the
+    /// next open.
+    fn write_hierarchies(&self, path: &std::path::Path) -> Result<(), ModelError> {
+        let held: Vec<crate::multires::Saved> = self
+            .layers
+            .iter()
+            .enumerate()
+            .filter_map(|(position, layer)| {
+                let hierarchy = layer.multires.as_ref()?;
+                Some(
+                    hierarchy
+                        .bytes(0)
+                        .map(|bytes| crate::multires::Saved { position, bytes }),
+                )
+            })
+            .collect::<Result<_, _>>()?;
+        let sidecar = crate::multires::sidecar_for(path);
+        crate::multires::write_hierarchies(&sidecar, &held).map_err(|e| {
+            ModelError::engine(format!(
+                "as hierarquias não puderam ser gravadas em {sidecar:?}: {e}"
+            ))
+        })
+    }
+
+    /// Puts every hierarchy the side-car holds back on the row it belongs to.
+    ///
+    /// A record naming a row that is not there, or one the engine will not
+    /// reconstruct, drops **that row** and keeps the rest — the rule
+    /// [`crate::objects::read_table`] states, and right here for the same
+    /// reason: one unreadable record must not cost a document. What is
+    /// different is what a dropped record means. A dropped object row loses
+    /// which shape can be picked up again; a dropped hierarchy loses every
+    /// level above the cage, so the row is left as the mesh layer it
+    /// demonstrably now is and the loss is named where a sculptor can read it.
+    fn read_hierarchies(&mut self, path: &std::path::Path) {
+        let saved = crate::multires::read_hierarchies(&crate::multires::sidecar_for(path));
+        for record in saved {
+            let Some(layer) = self.layers.get_mut(record.position) else {
+                self.hierarchies_lost
+                    .push(format!("linha {}", record.position + 1));
+                continue;
+            };
+            match claycore::Multires::deserialize(&record.bytes) {
+                Ok(surface) => {
+                    layer.representation = Representation::Multires;
+                    layer.multires = Some(crate::multires::Hierarchy::holding(surface));
+                }
+                Err(e) => {
+                    eprintln!(
+                        "a hierarquia da camada {:?} não pôde ser reconstruída: {e}",
+                        layer.name
+                    );
+                    self.hierarchies_lost.push(layer.name.clone());
+                }
+            }
+        }
+        // A row that the document says is a mesh layer, that the side-car did
+        // not mention, and that this session has no hierarchy for, is a mesh
+        // layer. That is the honest answer and it is also the silent one, so
+        // the only rows named as lost are the ones a record was found for and
+        // could not be honoured — a side-car that is missing altogether says
+        // nothing here, because nothing in the file distinguishes a document
+        // that never held a hierarchy from one whose side-car went missing.
+    }
+
+    /// Releases every hierarchy's rebuildable level caches.
+    ///
+    /// The host's answer to memory pressure for this representation. A
+    /// hierarchy's levels are cached per level and the caches are *derived*:
+    /// the engine reproduces the surface bit-identically when it rebuilds one,
+    /// so releasing them costs time and no work. `MemoryDiagnostics`'s
+    /// `rebuildable` is the figure this acts on.
+    ///
+    /// It is here rather than on a timer because dropping a cache the next dab
+    /// will rebuild is a cost with nothing to buy — this is for the moment the
+    /// operating system says there is no more, which this application does not
+    /// yet listen for. Until it does, the caller is the regression test that
+    /// proves a dab still lands across one: the release **moves the numbering
+    /// the level's weld classes are in**, which is exactly the case ClayCore
+    /// v0.78.0 fixed and describes as not a crash — the stamp writing into
+    /// released storage, the level rebuilt from the authoritative detail
+    /// before it was read back, and the dab simply not there.
+    pub fn release_hierarchy_caches(&mut self) -> Result<(), ModelError> {
+        for layer in &mut self.layers {
+            let Some(hierarchy) = layer.multires.as_mut() else {
+                continue;
+            };
+            hierarchy
+                .surface_mut()
+                .drop_inactive_caches()
+                .map_err(ModelError::engine)?;
+        }
+        Ok(())
+    }
+
+    /// What the hierarchies cost this session, and which of them were lost.
+    pub fn multires_diagnostics(&self) -> clayspace_model::MultiresDiagnostics {
+        clayspace_model::MultiresDiagnostics {
+            held: self
+                .layers
+                .iter()
+                .filter(|layer| layer.multires.is_some())
+                .count(),
+            lost: self.hierarchies_lost.clone(),
+        }
+    }
+
     /// The spacing a collapse samples at.
     ///
     /// Taken from the brick cache, which is the one place that knows the scale
@@ -7731,6 +8591,19 @@ impl DocumentModel for ClayDocument {
         if let Err(e) = crate::objects::write_table(&sidecar, &self.objects) {
             eprintln!("os objetos colocados não puderam ser registrados em {sidecar:?}: {e}");
         }
+        // The hierarchies, beside it — and this one **fails the save**.
+        //
+        // Read that against the four lines above it, because the two look like
+        // the same thing and are not. The object table is bookkeeping: the
+        // sculpture is in the `.clay` and losing which of its shapes can be
+        // picked up again is not losing the work, so a failure there is
+        // reported and swallowed. Here the side-car *is* the work. A
+        // `.clayspace` carries a hierarchy's cage and nothing standing on it —
+        // the C header says so in writing — so a save whose side-car did not
+        // land has written a file that looks complete and holds a flat sheet
+        // where a sculpt was. Telling a sculptor their document did not save
+        // is much the lesser harm.
+        self.write_hierarchies(path)?;
         Ok(())
     }
 
@@ -7745,6 +8618,13 @@ impl DocumentModel for ClayDocument {
         // not a failed open: the sculpture is all there, and what is lost is
         // which of its shapes can be picked up again.
         opened.objects = crate::objects::read_table(&crate::objects::sidecar_for(path));
+        // The hierarchies are *not* overlaid here, unlike the objects. They
+        // are applied inside `from_file`, before the passes that measure each
+        // layer, because a hierarchy changes what the row **is**: the engine
+        // reports its layer as a mesh layer, so until the side-car is read
+        // there is nothing anywhere that knows the row was ever a hierarchy,
+        // and every pass that asks a layer what representation it is would
+        // have got the wrong answer.
         opened.object_states.clear();
         opened.remember_objects_after();
         *self = opened;
@@ -7898,6 +8778,7 @@ impl ClayDocument {
             crossing_redo: Vec::new(),
             suppressed: std::collections::HashSet::new(),
             retired: std::collections::HashMap::new(),
+            hierarchies_lost: Vec::new(),
             solo: None,
             visibility_undo: Vec::new(),
             visibility_redo: Vec::new(),
@@ -7958,18 +8839,40 @@ impl ClayDocument {
                 .map_err(|e| unreadable(e.to_string()))?;
         }
 
+        // The hierarchies, before anything below asks a layer what it is.
+        //
+        // This is the one side-car that changes a row's representation rather
+        // than decorating it, so it cannot be overlaid after the fact the way
+        // the object table is: `clay_document_layer_info` reports a
+        // hierarchy's layer as a **mesh** layer, because that is what it is —
+        // it holds the cage — and there is no `LayerRepresentation` value for
+        // a hierarchy at all. So until this runs, nothing anywhere knows the
+        // row was ever one.
+        model.read_hierarchies(path);
+
         // And where every carried mesh's triangles are, for the same reason:
         // that box is cached on the layer and a layer rebuilt from a file
         // starts without one, so a reopened mesh subtool would report no
-        // extent and take a manipulator sized to a default.
-        let carried: Vec<LayerKey> = model
+        // extent and take a manipulator sized to a default. A hierarchy is
+        // measured from the level it draws rather than from the cage its layer
+        // holds, which is the other reason the side-car has to have been read
+        // by now.
+        let carried: Vec<(LayerKey, Representation)> = model
             .layers
             .iter()
-            .filter(|layer| layer.representation == Representation::Mesh)
-            .map(|layer| layer.key)
+            .filter(|layer| {
+                matches!(
+                    layer.representation,
+                    Representation::Mesh | Representation::Multires
+                )
+            })
+            .map(|layer| (layer.key, layer.representation))
             .collect();
-        for key in carried {
-            model.refresh_mesh_bounds(key);
+        for (key, representation) in carried {
+            match representation {
+                Representation::Multires => model.refresh_multires_bounds(key),
+                _ => model.refresh_mesh_bounds(key),
+            }
         }
 
         // Every rig the document carries, each onto the subtool that holds it.
@@ -8072,6 +8975,15 @@ impl ExchangeModel for ClayDocument {
         };
         // Combined rather than `mesh`: the field alone would silently leave
         // every imported reference layer out of the file.
+        //
+        // A hierarchy contributes its **cage**, which is what its layer holds,
+        // and not the level it is drawn at. That is a known gap rather than an
+        // oversight: keeping the layer's triangles in step with the display
+        // level would mean a wholesale geometry replacement — one engine undo
+        // entry each — on every gesture or every save, and either would put a
+        // document edit inside something a sculptor did not ask to be an edit.
+        // The route that exports a sculpt is the crossing that bakes a level
+        // out to a mesh, which is one step and says what it gives up.
         let mesh = self
             .document
             .mesh_combined(params)
@@ -8080,9 +8992,15 @@ impl ExchangeModel for ClayDocument {
     }
 
     fn has_mesh_layers(&self) -> bool {
-        self.layers
-            .iter()
-            .any(|layer| layer.representation == Representation::Mesh)
+        // A hierarchy's row counts: its layer *is* a mesh layer — it holds the
+        // cage — so it is one of the layers `mesh_combined` reaches and one of
+        // the things this question is asked in order to decide about.
+        self.layers.iter().any(|layer| {
+            matches!(
+                layer.representation,
+                Representation::Mesh | Representation::Multires
+            )
+        })
     }
 }
 
@@ -8975,7 +9893,7 @@ impl ClayDocument {
             let (layer, deltas) = live.finish();
             self.mesh_undo.push(MeshGesture {
                 layer,
-                deltas,
+                what: GestureRecord::Deltas(deltas),
                 engine_depth,
             });
             self.mesh_redo.clear();
@@ -10335,6 +11253,25 @@ impl ClayDocument {
         self.layers[index].mesh_bounds = measured;
     }
 
+    /// The same question for a hierarchy, answered from what is *drawn*.
+    ///
+    /// Not from the cage. A hierarchy's layer holds the cage and the sculpt
+    /// stands off it — that is the whole of the representation — so the box a
+    /// manipulator sizes itself to and Frame All frames is the display level's,
+    /// and the cage's would be the box the form had before anybody touched it.
+    /// Written into the same field a mesh layer's box lives in, because it is
+    /// the same question about the same row.
+    fn refresh_multires_bounds(&mut self, key: LayerKey) {
+        let Ok(index) = self.index_of(key) else {
+            return;
+        };
+        let Some(hierarchy) = self.layers[index].multires.as_mut() else {
+            return;
+        };
+        let measured = hierarchy.bounds();
+        self.layers[index].mesh_bounds = measured;
+    }
+
     /// The engine half of a placement: the item, then where it goes.
     ///
     /// Split out so the undo group around it has one thing to bracket and one
@@ -10775,11 +11712,16 @@ impl ClayDocument {
                 .document
                 .mesh_layer_as_volume(&engine_name, Self::bake_volume(cell))
                 .map_err(ModelError::engine),
-            // No hierarchy stands in a document this adapter builds; see the
-            // stroke dispatch. When one does, the operand is a level baked to a
-            // mesh and then this same mesh route.
+            // Refused rather than routed through the mesh arm beside it, and
+            // the difference is the whole point: a hierarchy's *layer* holds
+            // the cage, so `mesh_layer_as_volume` on it would sample the form
+            // as it stood before anybody sculpted — a boolean against a
+            // subtool the sculptor can see, using geometry they cannot. The
+            // route that works is to bake a level out first, which is one
+            // crossing and says what it costs.
             Representation::Multires => Err(ModelError::engine(
-                "uma hierarquia de subdivisão ainda não entra numa booleana",
+                "uma hierarquia de subdivisão não entra numa booleana; \
+                 converta um nível para malha primeiro",
             )),
         }
     }
