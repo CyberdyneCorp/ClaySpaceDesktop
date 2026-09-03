@@ -184,13 +184,19 @@ pub struct MultiresDiagnostics {
     /// rejection count: no losses over no hierarchies and no losses over four
     /// are the same emptiness and different facts.
     pub held: usize,
-    /// Rows whose sculpt this session could not put back, by name.
+    /// What this session could not put back, by name.
     ///
-    /// A record was found for each of these and could not be honoured. A
-    /// side-car that is missing altogether is **not** here and cannot be:
+    /// A row where a record was found and could not be honoured; and,
+    /// where the file itself could not be parsed into records at all, the
+    /// file — a damaged side-car cannot say which rows it was holding, since
+    /// that is what being damaged means, so it is named as one loss rather
+    /// than as none.
+    ///
+    /// A side-car that is missing **altogether** is not here and cannot be:
     /// nothing in a `.clayspace` distinguishes a document that never held a
     /// hierarchy from one whose side-car went missing, which is the whole of
-    /// why the side-car is load-bearing rather than decorative.
+    /// why the side-car is load-bearing rather than decorative. A side-car
+    /// that is *present and damaged* is a different fact and is named.
     pub lost: Vec<String>,
 }
 

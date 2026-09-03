@@ -605,6 +605,17 @@ pub struct Saved {
     pub bytes: Vec<u8>,
 }
 
+impl std::fmt::Debug for Saved {
+    /// The blob's *length*, never the blob: a derived `Debug` here would put
+    /// a megabyte of detail into whatever printed it.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Saved")
+            .field("position", &self.position)
+            .field("bytes", &self.bytes.len())
+            .finish()
+    }
+}
+
 /// Writes every hierarchy the document holds, one after another.
 ///
 /// Each record is an ASCII line naming the layer and the length, then that
@@ -632,6 +643,39 @@ pub fn write_hierarchies(path: &std::path::Path, hierarchies: &[Saved]) -> std::
     std::fs::write(path, out)
 }
 
+/// What a side-car held, and what of it this build could not read.
+///
+/// The two are reported together and not folded into one, because a shorter
+/// list is exactly what a caller cannot notice: a document whose side-car lost
+/// its tail reopens with the rows it could reconstruct and nothing anywhere
+/// saying the others were ever there. `records` is what came back; `faults` is
+/// what stopped it, so the caller can say so where a sculptor reads it.
+#[derive(Debug, Default)]
+pub struct SideCar {
+    pub records: Vec<Saved>,
+    /// Empty for a file read whole — and for a file that is not there at all,
+    /// which is not a fault: nothing in a `.clayspace` distinguishes a
+    /// document that never held a hierarchy from one whose side-car went
+    /// missing, and inventing a loss for every ordinary document would make
+    /// the report say nothing by saying it always.
+    pub faults: Vec<SideCarFault>,
+}
+
+/// Why a side-car stopped being readable, and where.
+#[derive(Debug)]
+pub enum SideCarFault {
+    /// The file is there and could not be read at all — a permission, a
+    /// device, an interrupted read.
+    Unreadable(std::io::Error),
+    /// Its first line is not a header this build knows. A file from a later
+    /// format, or one something else has written over.
+    UnknownFormat,
+    /// A record's line or body stops before it ends. Everything from there on
+    /// is gone, and how many rows that was cannot be known — the count that
+    /// *is* known is how many were read first.
+    Truncated { read: usize },
+}
+
 /// Reads the hierarchies back, dropping any record this build cannot make
 /// sense of.
 ///
@@ -641,33 +685,66 @@ pub fn write_hierarchies(path: &std::path::Path, hierarchies: &[Saved]) -> std::
 /// dropped row means — a lost hierarchy is a lost sculpt rather than lost
 /// bookkeeping — so the caller is told which layers it did not get rather than
 /// being handed a shorter list to notice for itself.
-pub fn read_hierarchies(path: &std::path::Path) -> Vec<Saved> {
-    let Ok(bytes) = std::fs::read(path) else {
-        return Vec::new();
+///
+/// Which is why this answers with a [`SideCar`] and not a `Vec`. Three of the
+/// four ways this file can fail — unreadable, a header this build does not
+/// know, a tail that stops mid-record — produce no record at all to hang a
+/// name on, so before this they left through the same door as a document that
+/// never had a hierarchy: measured, a `.multires` one byte short reopened
+/// every row as the mesh layer it demonstrably was, with `held: 0, lost: []`
+/// in the diagnostics report and every level above the cage gone. The loss is
+/// unrecoverable either way — a truncated blob is a blob the engine would
+/// refuse too — but the difference between a loss named and a loss silent is
+/// the whole reason the report exists.
+pub fn read_hierarchies(path: &std::path::Path) -> SideCar {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        // Absent is not damaged, and is the ordinary case: most documents
+        // never held a hierarchy and so have no side-car beside them.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return SideCar::default(),
+        Err(e) => {
+            return SideCar {
+                records: Vec::new(),
+                faults: vec![SideCarFault::Unreadable(e)],
+            }
+        }
     };
     let Some(mut rest) = bytes.strip_prefix(HEADER) else {
-        return Vec::new();
+        return SideCar {
+            records: Vec::new(),
+            faults: vec![SideCarFault::UnknownFormat],
+        };
     };
     let mut saved = Vec::new();
+    let mut faults = Vec::new();
+    // Every way out of this loop but the end of the file is the same fact —
+    // the file stops making sense here, so this record and everything after it
+    // is gone — and it is reported as one, because guessing how many rows that
+    // was would be inventing a number.
     while !rest.is_empty() {
         let Some(newline) = rest.iter().position(|byte| *byte == b'\n') else {
+            faults.push(SideCarFault::Truncated { read: saved.len() });
             break;
         };
         let Ok(line) = std::str::from_utf8(&rest[..newline]) else {
+            faults.push(SideCarFault::Truncated { read: saved.len() });
             break;
         };
         let mut fields = line.split_whitespace();
         let (Some(position), Some(length)) = (fields.next(), fields.next()) else {
+            faults.push(SideCarFault::Truncated { read: saved.len() });
             break;
         };
         let (Ok(position), Ok(length)) = (position.parse::<usize>(), length.parse::<usize>())
         else {
+            faults.push(SideCarFault::Truncated { read: saved.len() });
             break;
         };
         let body = &rest[newline + 1..];
         if body.len() < length {
             // The tail is short, so this record and everything that would have
             // followed it are gone. Stopping rather than guessing.
+            faults.push(SideCarFault::Truncated { read: saved.len() });
             break;
         }
         saved.push(Saved {
@@ -676,5 +753,8 @@ pub fn read_hierarchies(path: &std::path::Path) -> Vec<Saved> {
         });
         rest = &body[length..];
     }
-    saved
+    SideCar {
+        records: saved,
+        faults,
+    }
 }

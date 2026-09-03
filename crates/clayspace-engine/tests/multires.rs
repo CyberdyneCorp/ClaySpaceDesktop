@@ -445,6 +445,108 @@ fn a_damaged_record_costs_one_row_and_says_which() {
     let _ = std::fs::remove_file(&sidecar);
 }
 
+/// A side-car damaged so badly it parses into no records at all still says so.
+///
+/// The three shapes that produce no record — a tail that stops mid-record, a
+/// header this build does not know, and a file that cannot be read — used to
+/// leave through the same door as a document that never had a hierarchy: an
+/// empty list, nothing to name, and `held: 0, lost: []` in the report a
+/// sculptor pastes when they ask why their sculpt came back flat. Measured
+/// before this was repaired, removing **one byte** from the side-car of a
+/// two-hierarchy document reopened the second row as its cage with the
+/// diagnostics reading `held: 1, lost: []` — the caller handed a shorter list
+/// and told nothing, which is exactly what `read_hierarchies` documents itself
+/// as not doing.
+///
+/// The levels are gone either way; a truncated blob is one the engine would
+/// refuse too. What this holds is that the loss is *named*.
+#[test]
+fn a_side_car_that_parses_into_nothing_is_still_a_loss_that_is_named() {
+    for (what, damage) in [
+        (
+            "truncated",
+            Box::new(|bytes: Vec<u8>| bytes[..bytes.len() - 1].to_vec())
+                as Box<dyn Fn(Vec<u8>) -> Vec<u8>>,
+        ),
+        (
+            "unknown-format",
+            Box::new(|bytes: Vec<u8>| {
+                let mut damaged = b"clayspace-multires 2\n".to_vec();
+                damaged.extend_from_slice(
+                    &bytes[bytes.iter().position(|b| *b == b'\n').unwrap() + 1..],
+                );
+                damaged
+            }),
+        ),
+    ] {
+        let (mut document, _) = with_a_hierarchy(what, 2);
+        assert!(dab(&mut document, [0.0, 0.0, 0.0], 0.5), "sculpt something");
+        let sculpted = relief(&mut document);
+        assert!(sculpted > 1e-3, "the fixture has something to lose");
+
+        let path = scratch(what, "clayspace");
+        document.save(&path).expect("save");
+        let sidecar = clayspace_engine::multires::sidecar_for(&path);
+        let bytes = std::fs::read(&sidecar).expect("read the side-car");
+        std::fs::write(&sidecar, damage(bytes)).expect("write it back damaged");
+
+        let policy = BackendPolicy::discover(None).expect("backends");
+        let mut reopened = ClayDocument::new(policy).expect("a document");
+        reopened.open(&path).expect("the document still opens");
+        assert_eq!(
+            reopened
+                .scene()
+                .layers
+                .last()
+                .expect("the row the crossing left")
+                .representation,
+            Representation::Mesh,
+            "{what}: the row is the cage, which is what is actually there"
+        );
+        assert!(
+            relief(&mut reopened) < 1e-6,
+            "{what}: and the sculpt above it is gone"
+        );
+        let report = reopened.multires_diagnostics();
+        assert_eq!(report.held, 0, "{what}: no hierarchy was recovered");
+        assert_eq!(
+            report.lost.len(),
+            1,
+            "{what}: a side-car was there and could not be read, and the report \
+             says so rather than reading like a document that never held one: \
+             {report:?}"
+        );
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&sidecar);
+    }
+}
+
+/// A side-car that is not there at all names nothing, and that is deliberate.
+///
+/// The other half of the rule above, held so the repair cannot drift into
+/// reporting a loss for every ordinary document: nothing in a `.clayspace`
+/// distinguishes one that never held a hierarchy from one whose side-car went
+/// missing, so an absent file is not damage and has nothing to name.
+#[test]
+fn a_side_car_that_was_never_there_names_nothing() {
+    let (mut document, _) = with_a_hierarchy("absent-side-car", 1);
+    let path = scratch("absent-side-car", "clayspace");
+    document.save(&path).expect("save");
+    let sidecar = clayspace_engine::multires::sidecar_for(&path);
+    std::fs::remove_file(&sidecar).expect("take the side-car away");
+
+    let policy = BackendPolicy::discover(None).expect("backends");
+    let mut reopened = ClayDocument::new(policy).expect("a document");
+    reopened.open(&path).expect("the document still opens");
+    let report = reopened.multires_diagnostics();
+    assert_eq!(report.held, 0);
+    assert!(
+        report.lost.is_empty(),
+        "an absent side-car is the ordinary case and not a loss: {report:?}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
 // -- the revision -----------------------------------------------------------
 
 /// A dab lands after the caches between it and the last one were released.

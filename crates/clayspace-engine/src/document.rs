@@ -8654,9 +8654,31 @@ impl ClayDocument {
     /// which shape can be picked up again; a dropped hierarchy loses every
     /// level above the cage, so the row is left as the mesh layer it
     /// demonstrably now is and the loss is named where a sculptor can read it.
+    ///
+    /// Named for a record that could not be honoured **and** for a file that
+    /// could not be parsed into records at all. The second was silent before:
+    /// a `.multires` one byte short, or with a header this build does not
+    /// know, produced an empty list that reads exactly like a document which
+    /// never held a hierarchy, so every level above every cage went and the
+    /// report said `0 lost`. A damaged file cannot say which rows it was
+    /// holding — that is what being damaged means — so it is named as the file
+    /// rather than by row.
     fn read_hierarchies(&mut self, path: &std::path::Path) {
-        let saved = crate::multires::read_hierarchies(&crate::multires::sidecar_for(path));
-        for record in saved {
+        let side_car = crate::multires::read_hierarchies(&crate::multires::sidecar_for(path));
+        for fault in &side_car.faults {
+            self.hierarchies_lost.push(match fault {
+                crate::multires::SideCarFault::Unreadable(e) => {
+                    format!("o arquivo de hierarquias não pôde ser lido: {e}")
+                }
+                crate::multires::SideCarFault::UnknownFormat => {
+                    "o arquivo de hierarquias está num formato desconhecido".to_string()
+                }
+                crate::multires::SideCarFault::Truncated { read } => format!(
+                    "o arquivo de hierarquias termina no meio de um registro, depois de {read}"
+                ),
+            });
+        }
+        for record in side_car.records {
             let Some(layer) = self.layers.get_mut(record.position) else {
                 self.hierarchies_lost
                     .push(format!("linha {}", record.position + 1));
