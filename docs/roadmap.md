@@ -297,9 +297,10 @@ a field. Reconstructing the resolver host-side would put field math in this
 application, which the layering forbids and which the engine's own note asks
 callers not to do.
 
-**A limit ClayCore v0.78.0 states about itself is now held as a tripwire
-here**, because it bears on work this application is about to do and it is not
-a filed defect — it is the shape of the ABI, stated rather than discovered.
+**Two limits ClayCore v0.78.0 states about itself are now held as tripwires
+here**, because both bear on work this application is about to do and neither
+is a filed defect — they are the shape of the ABI, stated rather than
+discovered.
 
 *A `.clayspace` does not carry a multires hierarchy.* The release calls this
 "the largest integration cost" in it, and it is: a `clay_multires` is a
@@ -315,6 +316,22 @@ So a multires representation needs a side-car in the shape of
 `clayspace_engine::objects`' table — and unlike that table, which is
 bookkeeping, this one *is* the work, so a failed write has to fail the save.
 The tripwire fails the day `clay_document_save` starts carrying the surface.
+
+*Two of the five automask factors do not cross the ABI.* Cavity needs a field
+to measure cavity from and surface-group needs the document's group lattice,
+both callbacks on the C++ side that a flat descriptor cannot carry, so setting
+their bits from C is inert rather than an error — "unchanged from v0.73.0", in
+the release's own words. `claycore::Automask` surfaces all five anyway, on the
+principle that a factor which silently does nothing is worse hidden than named,
+and `claycore/tests/mesh_automask.rs` measures the pair: 62,576 vertices
+reached with no automask and 62,576 with cavity at full strength, every
+position identical to the last bit. The three that do cross are held beside
+them — a backface gate takes a sphere's antipode from −0.846 back to −1.000,
+and four rings of boundary fade take a sheet's corner from 0.600 to 0.000. This
+application sets none of them: `stroke_mesh` sends `Automask::default()` by
+name, which is why v0.78.0's fix to the adaptive sculptor's dropped automask
+changes nothing here. When a backface gate is offered as a brush setting,
+`Shaping` is where it is chosen and those three are the ones available.
 
 Every other issue filed from this work has been released and taken up —
 including [#71](https://github.com/CyberdyneCorp/ClayCore/issues/71), which was

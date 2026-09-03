@@ -4049,6 +4049,18 @@ impl ClayDocument {
             // unmirrored stamp stands, and a reflected copy of it stands
             // somewhere the walk cannot start from. See [`crate::seed`].
             seed: None,
+            // No automask. This application offers none of the five factors
+            // as a brush setting, so the default — no gate at all, which the
+            // engine documents as bit-identical to a descriptor from before
+            // automasking existed — is what every stamp sends and what every
+            // figure in the performance baseline was measured with.
+            //
+            // Named rather than defaulted for the reason below, and because
+            // ClayCore v0.78.0 is the release in which a factor set here
+            // started reaching the adaptive representation as well as this
+            // one. When a backface gate or a border gate is offered, this is
+            // the line it arrives on and `Shaping` is where it is chosen.
+            automask: claycore::Automask::default(),
             // Every field is named now that the colour is one of them, so
             // there is no `..MeshStamp::default()` here: a field added
             // upstream should fail this call rather than be filled in

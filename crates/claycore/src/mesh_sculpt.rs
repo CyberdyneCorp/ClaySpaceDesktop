@@ -144,6 +144,84 @@ impl MeshFalloff {
     }
 }
 
+/// The gates a brush applies to *itself*.
+///
+/// Not the freeze a sculptor paints — that is a [`Mask`](crate::Mask), and it
+/// is a separate factor. These are the rules a brush follows without being
+/// told: do not cross onto a face pointing the other way, do not drag the
+/// mesh's open border, stay in the polygroup this stroke started in, protect
+/// the crevices. The engine composes them into the per-vertex weight by
+/// multiplication and applies them last, so a stamp asking for none of them is
+/// bit-identical to one from before automasking existed — which is why
+/// [`Default`] is "none" and why an existing call site needs no change.
+///
+/// **Three of the five factors cross the C ABI and two do not.** Cavity needs
+/// a field to measure cavity from and surface-group needs the document's group
+/// lattice, and both are callbacks on the C++ side that a flat descriptor
+/// cannot carry. The header is explicit that setting their bits from C is
+/// *inert rather than an error*, and ClayCore v0.78.0 names the pair among its
+/// known limits, unchanged from v0.73.0. They are surfaced here anyway, and
+/// deliberately: a factor that silently does nothing is worse hidden than
+/// named, and `two_of_the_five_automask_factors_are_declared_and_inert` in
+/// `tests/mesh_automask.rs` is the tripwire that says so out loud and fails
+/// the day the descriptor carrying their inputs lands.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Automask {
+    /// How far the surface may turn from the brush's own facing before the
+    /// gate closes, in **radians** — full strength up to this angle, zero at
+    /// twice it.
+    ///
+    /// `None` leaves the factor off entirely. `Some(0.0)` asks for it at the
+    /// engine's own default angle, which is what a zero in the descriptor
+    /// reads as.
+    pub normal_angle: Option<f32>,
+    /// Reach only what the stroke's own starting region is connected to.
+    pub topology_connected: bool,
+    /// How many rings of fade to leave at an open border. `None` leaves the
+    /// factor off.
+    pub boundary_rings: Option<i32>,
+    /// How much of the measured cavity to apply, in `0..=1`.
+    ///
+    /// **Inert from C.** See the type's own note: the input this measures
+    /// against does not cross the ABI, so the bit is accepted and nothing
+    /// happens. Kept so the vocabulary is complete and the gap is nameable.
+    pub cavity_strength: Option<f32>,
+    /// Stay inside the polygroup the stroke started in.
+    ///
+    /// **Inert from C**, for the same reason as [`Self::cavity_strength`].
+    pub surface_group: bool,
+}
+
+impl Automask {
+    /// Writes the four descriptor fields this covers.
+    ///
+    /// The bit set is assembled from what is actually asked for rather than
+    /// carried as a separate field, so a caller cannot set a factor's bit and
+    /// leave its parameter unset, or vice versa.
+    fn write_into(&self, raw: &mut sys::clay_mesh_brush_desc) {
+        let mut factors = 0u32;
+        if let Some(angle) = self.normal_angle {
+            factors |= sys::clay_automask_factor::CLAY_AUTOMASK_NORMAL_ANGLE;
+            raw.automask_normal_angle = angle;
+        }
+        if self.topology_connected {
+            factors |= sys::clay_automask_factor::CLAY_AUTOMASK_TOPOLOGY_CONNECTED;
+        }
+        if let Some(rings) = self.boundary_rings {
+            factors |= sys::clay_automask_factor::CLAY_AUTOMASK_BOUNDARY;
+            raw.automask_boundary_rings = rings;
+        }
+        if let Some(strength) = self.cavity_strength {
+            factors |= sys::clay_automask_factor::CLAY_AUTOMASK_CAVITY;
+            raw.automask_cavity_strength = strength;
+        }
+        if self.surface_group {
+            factors |= sys::clay_automask_factor::CLAY_AUTOMASK_SURFACE_GROUP;
+        }
+        raw.automask_factors = factors;
+    }
+}
+
 /// One mesh stamp.
 #[derive(Debug, Clone, Copy)]
 pub struct MeshStamp<'a> {
@@ -196,6 +274,11 @@ pub struct MeshStamp<'a> {
     /// knows the answer and should say so — see [`MeshSeed`] for why the class
     /// alone is not enough to say it with.
     pub seed: Option<MeshSeed>,
+    /// The gates the brush applies to itself.
+    ///
+    /// [`Automask::default()`] is no gate at all, which the engine documents
+    /// as bit-identical to a descriptor from before automasking existed.
+    pub automask: Automask,
     /// A scalar stamp scaling this brush's per-vertex weight.
     ///
     /// Borrowed for the duration of the call — the engine copies nothing — so
@@ -257,6 +340,7 @@ impl Default for MeshStamp<'_> {
             smooth_iterations: None,
             stamp_azimuth: 0.0,
             seed: None,
+            automask: Automask::default(),
             alpha: None,
         }
     }
@@ -298,6 +382,7 @@ impl MeshStamp<'_> {
         raw.direction = self.direction;
         raw.geodesic = i32::from(self.geodesic);
         raw.stamp_azimuth = self.stamp_azimuth;
+        self.automask.write_into(&mut raw);
         // The class and the token travel together or not at all. Without a
         // seed the engine searches: a linear scan, and the wrong thing to do
         // per stamp on a large mesh — but a wrong seed is worse than a slow
