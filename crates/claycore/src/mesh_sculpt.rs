@@ -658,6 +658,11 @@ impl MeshSculptor {
 
     /// Welded classes: fewer than the vertex count exactly where the mesh has
     /// seams, which is how a host can tell it imported a split model.
+    /// The raw handle, for sibling modules in this crate only.
+    pub(crate) fn as_ptr(&self) -> *mut sys::clay_mesh_sculptor {
+        self.raw.as_ptr()
+    }
+
     pub fn class_count(&self) -> Result<usize> {
         let mut count = 0;
         // SAFETY: as above.

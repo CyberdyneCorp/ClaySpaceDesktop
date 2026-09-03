@@ -31,6 +31,7 @@ mod document;
 mod error;
 mod live;
 mod mask;
+mod memory;
 mod mesh;
 mod mesh_sculpt;
 mod multires;
@@ -59,18 +60,21 @@ pub use live::{
     SculptDirty, SculptPolicy, SmoothTransaction,
 };
 pub use mask::{ExtrudeSide, Mask, MaskExtrudeParams, MaskField, MaskLease, MaskRef, MaskSource};
+pub use memory::{
+    BudgetError, MemoryCategory, MemoryClass, MemoryLedger, MemoryPin, MemoryReport, PinHold,
+    Pressure, SculptMemoryProfile, SurfacePreflight, TrimReport,
+};
 pub use mesh::{ImportBudget, Mesh, MeshLayerDesc, MeshParams, MeshValidity, Mesher, VertexLayout};
 pub use mesh_sculpt::{
     AlphaStamp, MeshBrush, MeshDeform, MeshDeformer, MeshDeltas, MeshFalloff, MeshHit, MeshLattice,
     MeshSculptor, MeshStamp,
 };
 pub use multires::{
-    AddLevelPreflight, ArenaStats, Block, BlockInfo, BudgetError, DetailStamp, DetailStampMode,
-    DetailStampReport, EncodePreflight, MemoryCategory, MemoryClass, MemoryLedger, MemoryPin,
-    Multires, MultiresDesc, MultiresError, MultiresMemory, MultiresRefusal, MultiresSculptor,
-    PeakTelemetry, Pressure, Revisions, SculptLayerId, SculptLayerInfo, SculptLayerKind,
-    SculptLayerRevisions, SculptLayerStats, SculptLayerStroke, SculptMemoryProfile, SmoothMode,
-    StampReport, SubdivisionRule, TrimReport, WriteDomain,
+    AddLevelPreflight, ArenaStats, Block, BlockInfo, DetailStamp, DetailStampMode,
+    DetailStampReport, Multires, MultiresDesc, MultiresError, MultiresMemory, MultiresRefusal,
+    MultiresSculptor, PeakTelemetry, Revisions, SculptLayerId, SculptLayerInfo, SculptLayerKind,
+    SculptLayerRevisions, SculptLayerStats, SculptLayerStroke, SmoothMode, StampReport,
+    SubdivisionRule, WriteDomain,
 };
 pub use pick::{Hit, Snapped};
 pub use reader::Reader;
@@ -102,6 +106,26 @@ pub(crate) fn raw_failure(operation: &'static str, kind: ErrorKind) -> ClayError
         Err(e) => e,
         Ok(()) => unreachable!("a failure code is not a success code"),
     }
+}
+
+/// A string the engine promises is never null, for any value.
+///
+/// The `*_text` entry points are documented as total: they answer "unknown"
+/// for a value this build does not know rather than returning NULL. Shared
+/// because three modules now name enumerations the engine can spell and this
+/// crate cannot — a second transcription of a static table is a second thing
+/// that can drift out of step with the header.
+pub(crate) fn engine_text(ptr: *const std::ffi::c_char) -> &'static str {
+    if ptr.is_null() {
+        return "unknown";
+    }
+    // SAFETY: a non-null pointer to a NUL-terminated string literal in the
+    // library's own static storage — these entry points return a `const char*`
+    // chosen from a fixed table, so it is valid for the life of the process
+    // and `'static` is the honest lifetime.
+    unsafe { std::ffi::CStr::from_ptr(ptr) }
+        .to_str()
+        .unwrap_or("unknown")
 }
 
 /// An interior NUL cannot reach the engine, so it is rejected here rather than

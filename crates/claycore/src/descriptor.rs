@@ -80,6 +80,10 @@ descriptors! {
     sys::clay_trim_report,
     sys::clay_peak_telemetry,
     sys::clay_brush_arena_stats,
+    sys::clay_memory_report,
+    sys::clay_chunk_options,
+    sys::clay_chunk_readback,
+    sys::clay_maintenance_item,
 }
 
 #[cfg(test)]
