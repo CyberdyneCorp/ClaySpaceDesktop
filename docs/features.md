@@ -986,15 +986,21 @@ it is not among the representations a new layer can be; it arrives through
 **Two levels, not one.** Where the brush writes and what the viewport draws are
 independent numbers, and that is the workflow rather than an implementation
 detail: dropping to the cage to move a jaw while still watching the pores is
-what the representation exists for. Moving the sculpt level **redraws nothing**.
+what the representation exists for. Both are controls in the hierarchy's
+inspector section, and moving the sculpt level **redraws nothing**. While the
+two are apart the section says so, because a dab landing on a coarse level
+while a fine one is drawn is otherwise read as a brush that has stopped
+working.
 
 **Adding a level is priced, and refused rather than attempted.** A level
 multiplies faces by four, so a 20k-quad cage is 5.1M faces at level 4 and 20.5M
-at level 5. What is stated is the **peak** during the build rather than what
-remains after it, because on a constrained machine it is the high-water mark
-that ends the session. A refused level leaves the hierarchy exactly as deep as
-it was — the engine builds and then publishes, so there is nothing half-built
-to clear up.
+at level 5. The face count and the **peak** during the build stand beside the
+Subdividir button — the peak rather than what remains after it, because on a
+constrained machine it is the high-water mark that ends the session. A refused
+level leaves the hierarchy exactly as deep as it was — the engine builds and
+then publishes, so there is nothing half-built to clear up — and the reason
+arrives beside the viewport, on the same line that says why a tool cannot be
+used.
 
 **A gesture is one undo, and it is exact.** It has to be recorded on this side,
 and unlike a mesh gesture there is no delta to record: `clay.h` states twice,
@@ -1023,7 +1029,6 @@ diagnostics report.
 went and not what colour it is, so a paint stamp would move nothing, be dropped
 by the write-back, and evaporate with the level cache. Paint the cage before
 subdividing, or bake a level back to a mesh.
-
 
 ## Voxel layers
 

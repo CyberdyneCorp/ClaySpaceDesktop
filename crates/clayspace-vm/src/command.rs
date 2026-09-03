@@ -286,6 +286,15 @@ pub enum Command {
     SetCombine(clayspace_model::CombineSettings),
     /// Acts on a recorded pass of the active voxel layer.
     SculptLayer(clayspace_model::SculptLayerOp),
+    /// Moves the active hierarchy's levels, or changes how many it has.
+    ///
+    /// One command carrying the operation rather than four, as
+    /// [`Command::SculptLayer`] is one: the four differ in what they cost and
+    /// in whether they redraw, and `MultiresLevelOp` is where that is stated.
+    /// Deliberately not `SculptLayer`'s enum — that one addresses a grid's
+    /// passes by position, and a hierarchy's are a different stack with
+    /// different addressing.
+    MultiresLevel(clayspace_model::MultiresLevelOp),
     /// Whether the deform panel is open.
     ToggleDeform,
     /// What that panel is set to.
@@ -448,6 +457,12 @@ impl Command {
                 // rather than an entry in a history — so it takes the
                 // composition root's own path like the other layer work.
                 | Self::SculptLayer(_)
+                // A level is not undo either, and for a nearer reason: three
+                // of the four move a number and the fourth allocates, and
+                // none of them is an entry the engine records. It takes the
+                // composition root's own path, where its refusal has
+                // somewhere to land.
+                | Self::MultiresLevel(_)
                 // Choosing how the *next* edit combines changes nothing yet;
                 // the stroke that follows is the entry.
                 | Self::SetCombine(_)
@@ -674,6 +689,7 @@ impl Command {
             Self::FillVoids => "fill voids",
             Self::SetCombine(_) => "combine operation",
             Self::SculptLayer(op) => op.label(),
+            Self::MultiresLevel(op) => op.label(),
             Self::ToggleDeform => "deform panel",
             Self::SetDeform(_) => "deform settings",
             Self::RunDeform => "deform",

@@ -906,6 +906,27 @@ impl App {
         self.request_redraw();
     }
 
+    /// Moves the active hierarchy's levels, or changes how many it has.
+    ///
+    /// Through the scene ViewModel rather than the document directly, because
+    /// the refusal is half the operation: adding a level is priced against a
+    /// budget and refused over it rather than attempted, and a button that
+    /// does nothing and says nothing is what this route exists to avoid.
+    ///
+    /// Only the operations that change what is drawn cost a redraw of the
+    /// surface. Moving the *sculpt* level moves where the next stamp lands and
+    /// nothing else — that is the whole reason a hierarchy carries two numbers
+    /// — so re-meshing for it would be paying for a picture that has not
+    /// changed.
+    fn run_multires_level_op(&mut self, op: clayspace_model::MultiresLevelOp) {
+        let redraws = op.changes_what_is_drawn();
+        if self.scene.apply_level_op(op).is_ok() && redraws {
+            self.document_vm.touched();
+            self.sync_geometry();
+        }
+        self.request_redraw();
+    }
+
     /// Asks for a PNG and loads it as the alpha stamp.
     ///
     /// PNG alone in the filter, because PNG alone is read — a dialog offering
@@ -3384,6 +3405,7 @@ impl App {
             Command::RunConversion => self.run_conversion(),
             Command::ToggleRepair => self.show_repair = !self.show_repair,
             Command::SculptLayer(op) => self.run_sculpt_layer_op(op.clone()),
+            Command::MultiresLevel(op) => self.run_multires_level_op(*op),
             Command::ToggleDeform => self.show_deform = !self.show_deform,
             Command::ToggleReferences => self.show_references = !self.show_references,
             Command::LoadReference(plane) => self.load_reference(*plane),
@@ -3629,6 +3651,9 @@ impl App {
             curve_radius: *self.curve.radius().get(),
             lattice: self.lattice.state().get().clone(),
             lattice_divisions: *self.lattice.divisions().get(),
+            // The engine's own preflight, asked per frame because it costs
+            // microseconds and moves with every level added or removed.
+            subdivision_cost: self.scene.subdivision_cost(),
             document_name: document_name.as_str(),
             modified: *self.document_vm.modified().get(),
             tool: *self.sculpt.tool().get(),
@@ -3657,6 +3682,11 @@ impl App {
                 .as_deref()
                 .or(self.mask.notice().get().as_deref())
                 .or(self.objects.notice().get().as_deref())
+                // The scene's, which `run_remesh` has claimed reaches the
+                // screen since it was written and did not: nothing read this
+                // Observable, so a rebuild refused for an unusable resolution
+                // — and now a level refused for its peak — went to stderr.
+                .or(self.scene.refusal().get().as_deref())
                 .or(self.sculpt.tool_status().get().as_deref()),
             symmetry: self.active_symmetry(),
             scene: &scene,

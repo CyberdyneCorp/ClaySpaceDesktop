@@ -403,6 +403,10 @@ impl SculptViewModel {
             | Command::SetDeform(_)
             | Command::RunDeform
             | Command::SculptLayer(_)
+            // A level moves where a brush writes and what is drawn, and
+            // neither is a brush setting: the shelf offers the same verbs
+            // either way, so nothing this ViewModel holds follows it.
+            | Command::MultiresLevel(_)
             | Command::SetLayerVisible(..)
             // Solo shows a subtool alone without making it the one a brush
             // lands on, so nothing this ViewModel holds follows it.

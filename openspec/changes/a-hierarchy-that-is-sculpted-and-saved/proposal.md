@@ -64,10 +64,31 @@ be silent if they were got wrong:
   own serialized bytes, in the same stack a mesh gesture goes into so the two
   order against each other, bounded by bytes so an unbounded record cannot eat
   a session.
+- **The two levels are controls, and the refusal reaches the screen.** The
+  hierarchy's inspector section offers the sculpt level, the display level and
+  one more level with what it would peak at, and says when the two levels are
+  apart. The refusal arrives on the options bar's one "why that did not happen"
+  line — which `SceneViewModel` has been setting and nothing has been reading,
+  so a rebuild refused for an unusable resolution went to stderr.
 - **A level is priced and refused.** `clay_multires_preflight_add_level` states
   the **peak** during the build rather than what remains after it, the refusal
   arrives as a `Refusal` a sculptor can read, and the hierarchy is exactly as
   deep as it was afterwards — build-then-publish.
+
+## Where this bends `an-undo-costs-the-edit`, and why
+
+That change's invariant is that a history step re-meshes the region it actually
+changed and not the whole of any layer, taken from the engine rather than
+derived. A hierarchy honours the first half of it exactly — a step on one
+touches no brick, so nothing of the *field* is refilled and nothing of any
+other subtool is — and cannot honour the second, because the only exact record
+the ABI offers is the whole surface. Putting it back therefore re-copies the
+level being drawn: 8.15 ms and 3.16 ms at level 4 over a 16x16 cage, bounded by
+the surface rather than by the history.
+
+Stated here rather than left to be found. The alternative is a representation
+whose strokes cannot be taken back at all, which is worse than an undo that
+costs a surface.
 
 ## What this deliberately does not do
 

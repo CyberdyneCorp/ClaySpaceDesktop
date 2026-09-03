@@ -272,6 +272,22 @@ pub struct Strings {
     /// level being drawn are two numbers, and detail cut at a fine one rides
     /// on the form moved at a coarse one.
     pub multires_two_levels: &'static str,
+    /// How many levels the hierarchy holds, the cage among them.
+    pub label_multires_levels: &'static str,
+    /// The level a stamp lands on.
+    pub label_multires_sculpt_level: &'static str,
+    /// The level the viewport draws.
+    pub label_multires_display_level: &'static str,
+    /// Said while the two are apart, because that is the state a sculptor
+    /// otherwise reads as a brush that has stopped working: a dab landing on a
+    /// coarse level shows on a fine one softened by every level between.
+    pub hint_multires_levels_apart: &'static str,
+    /// One more level.
+    pub multires_subdivide: &'static str,
+    /// What the figure beside that button is: the high-water mark **during**
+    /// the build rather than what remains after it, which is the number that
+    /// ends a session on a constrained machine.
+    pub multires_peak: &'static str,
     pub section_resolution: &'static str,
     pub section_brush_controls: &'static str,
     pub section_armature: &'static str,
@@ -780,6 +796,12 @@ libera em vez de congelar.",
     mesh_topology_fixed: "Topologia fixa: os pincéis movem os vértices que existem e não criam nem removem nenhum.",
     section_multires: "MULTIRRESOLUÇÃO",
     multires_two_levels: "O nível em que o pincel escreve e o nível desenhado são dois números. O detalhe cortado num nível fino anda junto com a forma movida num nível grosso.",
+    label_multires_levels: "Níveis",
+    label_multires_sculpt_level: "Nível de escultura",
+    label_multires_display_level: "Nível exibido",
+    hint_multires_levels_apart: "Você está esculpindo num nível diferente do que vê.",
+    multires_subdivide: "Subdividir",
+    multires_peak: "no pico",
     section_resolution: "RESOLUÇÃO",
     section_brush_controls: "CONTROLES DE PINCEL",
     section_armature: "ARMADURA",
@@ -1201,6 +1223,12 @@ instead.",
     mesh_topology_fixed: "Fixed topology: the brushes move the vertices that are there and neither add nor remove any.",
     section_multires: "MULTIRES",
     multires_two_levels: "The level the brush writes on and the level being drawn are two numbers. Detail cut at a fine level rides on the form moved at a coarse one.",
+    label_multires_levels: "Levels",
+    label_multires_sculpt_level: "Sculpt level",
+    label_multires_display_level: "Display level",
+    hint_multires_levels_apart: "You are sculpting on a different level from the one you are seeing.",
+    multires_subdivide: "Subdivide",
+    multires_peak: "at the peak",
     section_resolution: "RESOLUTION",
     section_brush_controls: "BRUSH CONTROLS",
     section_armature: "ARMATURE",
@@ -1623,6 +1651,12 @@ lados. Con Ctrl, libera en vez de congelar.",
     mesh_topology_fixed: "Topología fija: los pinceles mueven los vértices que existen y no crean ni eliminan ninguno.",
     section_multires: "MULTIRRESOLUCIÓN",
     multires_two_levels: "El nivel en el que escribe el pincel y el nivel que se dibuja son dos números. El detalle cortado en un nivel fino viaja con la forma movida en uno grueso.",
+    label_multires_levels: "Niveles",
+    label_multires_sculpt_level: "Nivel de escultura",
+    label_multires_display_level: "Nivel mostrado",
+    hint_multires_levels_apart: "Estás esculpiendo en un nivel distinto del que ves.",
+    multires_subdivide: "Subdividir",
+    multires_peak: "en el pico",
     section_resolution: "RESOLUCIÓN",
     section_brush_controls: "CONTROLES DE PINCEL",
     // "Esqueleto", not "Armadura": armadura reads as armour outside of
@@ -2089,7 +2123,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 229] {
+    pub fn all(&self) -> [&'static str; 235] {
         [
             self.label_autosave_in,
             self.state_autosaved,
@@ -2118,6 +2152,12 @@ impl Strings {
             self.mesh_topology_fixed,
             self.section_multires,
             self.multires_two_levels,
+            self.label_multires_levels,
+            self.label_multires_sculpt_level,
+            self.label_multires_display_level,
+            self.hint_multires_levels_apart,
+            self.multires_subdivide,
+            self.multires_peak,
             self.section_representation,
             self.hint_representation_active,
             self.hint_representation_other,

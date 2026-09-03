@@ -59,6 +59,7 @@ use widgets::*;
 use windows::*;
 
 pub use booleans::boolean_op_chip_id;
+pub use inspector::multires::subdivide_button_id;
 pub use left::{
     layer_convert_id, layer_row_id, left_panel, new_layer_button_id, new_layer_kind_id,
     new_layer_kind_menu_id, optimize_button_id,
@@ -205,6 +206,14 @@ pub struct ShellState<'a> {
     pub lattice: clayspace_model::LatticeState,
     /// What a fresh cage would be built with.
     pub lattice_divisions: [i32; 3],
+    /// What subdividing the active hierarchy once more would cost.
+    ///
+    /// Handed in rather than derived, as the crossing's cost and the boolean's
+    /// are: it is the engine's own preflight, and a View that worked out its
+    /// own answer from a face count could disagree with the figure the refusal
+    /// is actually stated against. `None` where the active layer is not a
+    /// hierarchy.
+    pub subdivision_cost: Option<clayspace_model::SubdivisionCost>,
     pub strings: &'a Strings,
     /// The bindings in force, so a menu item can show the chord that does the
     /// same thing. Borrowed rather than copied because remapping replaces the

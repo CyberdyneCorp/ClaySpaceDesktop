@@ -245,6 +245,9 @@ fn state<'a>(
         voxel_blur: clayspace_model::SmoothBlur::default(),
         lattice: clayspace_model::LatticeState::default(),
         lattice_divisions: [3; 3],
+        // The default capture holds no hierarchy, so there is nothing to
+        // price. The hierarchy capture below sets it.
+        subdivision_cost: None,
         // A rig, mid-edit, so the capture shows the armature section and the
         // menu entries that depend on it rather than a row of grey.
         armature: clayspace_view::ArmatureState {
@@ -4141,6 +4144,150 @@ fn a_narrow_bar_gives_up_its_phrases_first() {
 
 // -- the contextual inspector ------------------------------------------------
 
+/// The fixture scene with its active layer turned into a hierarchy `levels`
+/// deep, both of its numbers at the top.
+fn with_a_hierarchy(scene: &Scene, levels: u32) -> Scene {
+    let mut fixture = scene.clone();
+    let active = fixture.active.expect("the fixture has an active layer");
+    for layer in &mut fixture.layers {
+        if layer.key == active {
+            layer.representation = clayspace_model::Representation::Multires;
+            layer.multires = Some(clayspace_model::MultiresState {
+                levels: clayspace_model::MultiresLevels {
+                    count: levels,
+                    sculpt: levels - 1,
+                    display: levels - 1,
+                },
+                ..clayspace_model::MultiresState::just_the_cage()
+            });
+        }
+    }
+    fixture
+}
+
+/// The hierarchy's section draws both of its levels, and offers the next one
+/// with what it would cost.
+///
+/// The two numbers are the whole reason this representation is not a mode, and
+/// the price is the whole reason the offer is not a plain button: a level
+/// multiplies faces by four, and the engine refuses one over budget rather
+/// than attempting it. A control that asked for a level without saying what it
+/// would take would be asking a sculptor to find out by running out of memory.
+#[test]
+fn the_hierarchy_section_draws_both_levels_and_prices_the_next_one() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = with_a_hierarchy(&scene(), 4);
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let mut set = state(strings, &scene, &materials, &report);
+    set.representation = clayspace_model::Representation::Multires;
+    set.subdivision_cost = Some(clayspace_model::SubdivisionCost {
+        level: 4,
+        vertices: 393_217,
+        faces: 393_216,
+        persistent_bytes: 12 * 1024 * 1024,
+        peak_bytes: 37 * 1024 * 1024,
+    });
+    let ctx = probe_shell(&set);
+
+    for label in [
+        strings.label_multires_sculpt_level,
+        strings.label_multires_display_level,
+    ] {
+        assert!(
+            shell_rect(&ctx, shell::slider_id(label)).is_some(),
+            "the hierarchy's section drew no {label:?} control, so one of the \
+             two numbers has no way to be moved"
+        );
+    }
+    assert!(
+        shell_rect(&ctx, shell::readout_id(strings.label_multires_levels)).is_some(),
+        "and no count of how many levels there are to move between"
+    );
+    assert!(
+        shell_rect(&ctx, shell::subdivide_button_id()).is_some(),
+        "and no offer of one more"
+    );
+}
+
+/// The offer of a level is a command, and the level controls are commands.
+///
+/// The half a sculptor meets: the section can draw all three and still be
+/// wired to nothing. Pressing Subdivide has to *ask*, because the answer may
+/// be a refusal — the engine prices the level against its budget and declines
+/// over it — and a button that swallowed that would leave a control that does
+/// nothing and says nothing.
+#[test]
+fn the_hierarchy_section_asks_for_the_level_rather_than_drawing_one() {
+    let strings = Strings::for_locale(Locale::EnUs);
+    let scene = with_a_hierarchy(&scene(), 4);
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let mut set = state(strings, &scene, &materials, &report);
+    set.representation = clayspace_model::Representation::Multires;
+
+    let ctx = egui::Context::default();
+    shell::apply_theme(&ctx);
+    let mut queue = CommandQueue::new();
+    for _ in 0..2 {
+        run_shell_frame(&ctx, &set, &mut queue, Vec::new());
+    }
+    let button = shell_rect(&ctx, shell::subdivide_button_id()).expect("no Subdivide button");
+    queue.drain();
+    run_shell_frame(&ctx, &set, &mut queue, left_click(button.center()));
+    assert!(
+        queue.commands().iter().any(|command| matches!(
+            command,
+            Command::MultiresLevel(clayspace_model::MultiresLevelOp::AddLevel)
+        )),
+        "Subdivide drew and asked for nothing: {:?}",
+        queue.commands()
+    );
+
+    // And the sculpt level, driven the way the mask's step slider is: focus
+    // arrives by keyboard, because a click on a slider sets it to wherever it
+    // landed and would pass with the key handling deleted.
+    queue.drain();
+    let widget = ctx
+        .memory(|memory| {
+            memory
+                .data
+                .get_temp::<egui::Id>(shell::slider_widget_id(strings.label_multires_sculpt_level))
+        })
+        .expect("the inspector drew no sculpt level slider");
+    ctx.memory_mut(|memory| memory.request_focus(widget));
+    run_shell_frame(&ctx, &set, &mut queue, Vec::new());
+    queue.drain();
+    run_shell_frame(
+        &ctx,
+        &set,
+        &mut queue,
+        vec![egui::Event::Key {
+            key: egui::Key::ArrowLeft,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        }],
+    );
+    let asked: Vec<u32> = queue
+        .commands()
+        .iter()
+        .filter_map(|command| match command {
+            Command::MultiresLevel(clayspace_model::MultiresLevelOp::SetSculptLevel(level)) => {
+                Some(*level)
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        asked.iter().any(|level| *level < 3),
+        "the arrow key moved the sculpt level nowhere: it emitted {asked:?}"
+    );
+}
+
 /// Every representation gets a section, and no two sections share a heading.
 ///
 /// A regression test. The voxel display controls stood under `section_geometry`
@@ -4171,6 +4318,10 @@ fn each_representation_has_a_section_of_its_own_name() {
         }
     }
 
+    // A hierarchy's section reads its levels off the active layer, so the
+    // scene it is asked about has to carry one.
+    let hierarchy = with_a_hierarchy(&scene, 4);
+
     for (representation, section, fixture) in [
         (
             clayspace_model::Representation::Sdf,
@@ -4186,6 +4337,11 @@ fn each_representation_has_a_section_of_its_own_name() {
             clayspace_model::Representation::Mesh,
             strings.section_mesh,
             &scene,
+        ),
+        (
+            clayspace_model::Representation::Multires,
+            strings.section_multires,
+            &hierarchy,
         ),
     ] {
         let mut set = state(strings, fixture, &materials, &report);

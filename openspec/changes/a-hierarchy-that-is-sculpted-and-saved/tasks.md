@@ -68,15 +68,27 @@
 - [x] 7.2 The refusal stated against the **peak**, and available before the
       button is pressed
 
-## 8. Evidence
+## 8. The controls, and the refusal
 
-- [x] 8.1 The property the tier exists for: sculpt fine, move the form
+- [x] 8.1 `Command::MultiresLevel`, one command carrying the operation
+- [x] 8.2 `SceneViewModel::apply_level_op`, which sets the refusal rather than
+      swallowing it
+- [x] 8.3 The scene's refusal joins the options bar's one "why that did not
+      happen" line, which `run_remesh` has claimed since it was written and
+      which nothing read
+- [x] 8.4 The hierarchy's inspector section draws both levels and offers the
+      next one with the **peak** beside it, in three languages
+- [x] 8.5 Only the operations that change what is drawn cost a redraw
+
+## 9. Evidence
+
+- [x] 9.1 The property the tier exists for: sculpt fine, move the form
       underneath, and the detail is the same height on the same vertex
       pointing somewhere else
-- [x] 8.2 A save and a reopen reproduce the sculpt, both levels included
-- [x] 8.3 A missing side-car, and a damaged record
-- [x] 8.4 A dab lands after the caches under it were released
-- [x] 8.5 One gesture is one undo, exact, and the viewport is told
-- [x] 8.6 A level over budget is refused and costs nothing
-- [x] 8.7 Marched output is refused as a cage, with the fault named
-- [x] 8.8 `docs/features.md`
+- [x] 9.2 A save and a reopen reproduce the sculpt, both levels included
+- [x] 9.3 A missing side-car, and a damaged record
+- [x] 9.4 A dab lands after the caches under it were released
+- [x] 9.5 One gesture is one undo, exact, and the viewport is told
+- [x] 9.6 A level over budget is refused and costs nothing
+- [x] 9.7 Marched output is refused as a cage, with the fault named
+- [x] 9.8 `docs/features.md`

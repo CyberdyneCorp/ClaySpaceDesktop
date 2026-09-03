@@ -16,13 +16,12 @@
 //! drawing a control for a value nothing reads is worse than leaving the space
 //! empty — it is an interface that lies about what the program does.
 //!
-//! One item on that list has stopped being unexpressible. ClayCore 0.78.0's
-//! hierarchy has a subdivision level per surface — two of them, since where the
-//! brush writes and what is drawn are independent — and `clayspace_model`
-//! describes both. There is still no control here for them, because no layer
-//! can be a hierarchy yet and the shell carries neither number: the hierarchy's
-//! section states the contract and draws nothing, which is this module's own
-//! rule applied to itself rather than an omission.
+//! One item on that list has stopped being unexpressible, and now has its
+//! control. ClayCore 0.78.0's hierarchy has a subdivision level per surface —
+//! two of them, since where the brush writes and what is drawn are independent
+//! — and both are per-layer state a hierarchy row carries, so both are drawn.
+//! It is the only entry on that list this rule ever excluded for want of an
+//! engine rather than for want of something to say.
 //!
 //! What is genuinely here is small, and three of the four representations carry
 //! most of their story elsewhere on purpose:
@@ -42,7 +41,7 @@
 use super::*;
 
 mod mesh;
-mod multires;
+pub mod multires;
 mod sdf;
 mod voxel;
 
@@ -52,6 +51,6 @@ pub fn representation_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: 
         Representation::Sdf => sdf::show(ui, state),
         Representation::Voxel => voxel::show(ui, state, queue),
         Representation::Mesh => mesh::show(ui, state),
-        Representation::Multires => multires::show(ui, state),
+        Representation::Multires => multires::show(ui, state, queue),
     }
 }

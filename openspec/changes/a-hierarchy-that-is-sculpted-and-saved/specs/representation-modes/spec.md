@@ -54,11 +54,31 @@ constrained machine it is the high-water mark that ends the session.
 
 A refused level SHALL leave the hierarchy exactly as deep as it was.
 
-#### Scenario: The cost is available before the button is pressed
+#### Scenario: The cost is beside the offer
 - **WHEN** a hierarchy is the active layer
-- **THEN** what one more level would occupy is available without adding one
+- **THEN** what one more level would occupy is shown beside the control that
+  would add it, without adding one
 
 #### Scenario: A level that does not fit is refused
 - **WHEN** the user asks for a level whose peak exceeds the budget
 - **THEN** the request is refused with the peak and the budget stated, and the
   hierarchy holds the levels it held before
+
+#### Scenario: The refusal reaches the screen
+- **WHEN** an operation on the active layer is refused
+- **THEN** the reason is shown beside the viewport rather than only recorded
+
+### Requirement: A hierarchy's two levels are controls
+The application SHALL offer the sculpt level and the display level as separate
+controls on the active hierarchy, and SHALL say when the two are apart —
+because a dab landing on a coarse level while a fine one is drawn reads as a
+brush that has stopped working.
+
+#### Scenario: Both levels can be moved
+- **WHEN** a hierarchy is the active layer
+- **THEN** the level the brush writes on and the level being drawn are each
+  offered, and moving one does not move the other
+
+#### Scenario: Working apart from what is drawn is said
+- **WHEN** the sculpt level and the display level differ
+- **THEN** the interface says so
