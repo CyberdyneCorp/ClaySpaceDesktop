@@ -4967,13 +4967,12 @@ impl ClayDocument {
         let (start, along) = match &placement {
             Some(transform) => (
                 Self::into_local(transform, origin),
-                // Turned and not scaled: only the ray's direction matters, and
-                // the distance the hit reports is measured along it.
-                Self::turned_by(
-                    transform.rotation_axis,
-                    -transform.rotation_angle,
-                    direction,
-                ),
+                // Turned *and* divided, which is the same map `into_local`
+                // makes on a point without the position. Only the bearing
+                // matters — the distance the hit reports is measured along
+                // whatever this is — but a bearing is not a rotation's to
+                // carry alone once the three factors part company.
+                Self::direction_into_local(transform, direction),
             ),
             None => (origin, direction),
         };
@@ -5014,11 +5013,7 @@ impl ClayDocument {
         let (start, along) = match &placement {
             Some(transform) => (
                 Self::into_local(transform, origin),
-                Self::turned_by(
-                    transform.rotation_axis,
-                    -transform.rotation_angle,
-                    direction,
-                ),
+                Self::direction_into_local(transform, direction),
             ),
             None => (origin, direction),
         };
@@ -5065,11 +5060,7 @@ impl ClayDocument {
         let (origin, direction) = match &placement {
             Some(transform) => (
                 Self::into_local(transform, origin),
-                Self::turned_by(
-                    transform.rotation_axis,
-                    -transform.rotation_angle,
-                    direction,
-                ),
+                Self::direction_into_local(transform, direction),
             ),
             None => (origin, direction),
         };
@@ -10201,16 +10192,13 @@ impl ClayDocument {
             if moved.iter().all(|axis| *axis == 0.0) {
                 continue;
             }
-            let turned = Self::turned_by(transform.rotation_axis, -transform.rotation_angle, moved);
-            // Component by component, because the frame this displacement is
-            // being carried into may stretch each axis by a different amount —
-            // the same division `Transform::into_local` makes, on a vector
-            // rather than on a point.
+            // Turned back and divided component by component, because the
+            // frame this displacement is being carried into may stretch each
+            // axis by a different amount — the same division
+            // `Transform::into_local` makes, on a vector rather than a point,
+            // and now the same call the three pick paths make.
             carried
-                .set_offset(
-                    coordinate,
-                    std::array::from_fn(|i| turned[i] / transform.scale[i].max(1e-4)),
-                )
+                .set_offset(coordinate, Self::direction_into_local(transform, moved))
                 .map_err(ModelError::engine)?;
         }
         Ok(carried)
@@ -11395,20 +11383,6 @@ impl ClayDocument {
         self.carried_placement(self.active_layer().key)
     }
 
-    /// A vector turned by an axis-angle rotation.
-    ///
-    /// The model owns the arithmetic: the viewport mirrors a brush ring
-    /// through the same frame this carries a stroke into, and two
-    /// implementations of one rotation are two that can drift.
-    fn turned_by(axis: [f32; 3], angle: f32, v: [f32; 3]) -> [f32; 3] {
-        let frame = clayspace_model::Transform {
-            rotation_axis: axis,
-            rotation_angle: angle,
-            ..clayspace_model::Transform::default()
-        };
-        frame.turn(v)
-    }
-
     /// A point of a carried layer, standing where the layer transform puts it.
     fn into_world(transform: &clayspace_model::Transform, point: [f32; 3]) -> [f32; 3] {
         transform.into_world(point)
@@ -11417,6 +11391,20 @@ impl ClayDocument {
     /// The way back: a world point in the layer's own coordinates.
     fn into_local(transform: &clayspace_model::Transform, point: [f32; 3]) -> [f32; 3] {
         transform.into_local(point)
+    }
+
+    /// The same for a direction: turned back and divided, without a position.
+    ///
+    /// The three pick paths all want this and all had the rotation alone,
+    /// which was the whole of it while a layer transform took one factor. A
+    /// ray divided on its origin and not on its bearing points somewhere else
+    /// in a stretched frame, and a pick that misses reads exactly like a
+    /// pointer that is not over the form.
+    fn direction_into_local(
+        transform: &clayspace_model::Transform,
+        direction: [f32; 3],
+    ) -> [f32; 3] {
+        transform.direction_into_local(direction)
     }
 
     /// The box that holds a box once every corner of it has been moved.
