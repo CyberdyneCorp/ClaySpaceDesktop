@@ -676,6 +676,54 @@ fn two_gestures_are_two_undos() {
     assert_eq!(drawn(&mut document), flat);
 }
 
+/// A gesture that reached nothing is not an undo step.
+///
+/// A press that lands off the form, on a fully frozen region, or at an
+/// intensity that moves nothing, still opens and closes a gesture — and the
+/// record a hierarchy gesture banks is the whole serialized surface, taken
+/// before the first stamp because after it there is nothing left to take it
+/// from. Banking one regardless meant a stray click bought an undo step that
+/// undoes nothing: measured, three presses well off a hierarchy each reporting
+/// `changed: false` took the document from two undo steps to five, and the
+/// three Ctrl+Zs after them each reported success while the surface did not
+/// move. They also each cost a place in a history bounded in bytes and trimmed
+/// from the *old* end, so what they displace is real edits.
+///
+/// The mesh path has said so since it was written — "a gesture that reached
+/// nothing is not worth a place on the stack, and putting one there would make
+/// an undo appear to do nothing" — and this is that rule on the other
+/// representation that banks a gesture of its own.
+#[test]
+fn a_gesture_that_reached_nothing_is_not_an_undo_step() {
+    let (mut document, _) = with_a_hierarchy("empty-gesture", 2);
+    assert!(dab(&mut document, [0.0, 0.0, 0.0], 0.5), "one real edit");
+    let sculpted = drawn(&mut document);
+
+    for _ in 0..3 {
+        assert!(
+            !dab(&mut document, [500.0, 500.0, 500.0], 0.05),
+            "the fixture's miss reached the surface, so it measures nothing"
+        );
+    }
+    assert_eq!(
+        drawn(&mut document),
+        sculpted,
+        "and none of them moved anything"
+    );
+
+    assert!(
+        document.undo().expect("undo"),
+        "the one real edit comes back"
+    );
+    assert_ne!(
+        drawn(&mut document),
+        sculpted,
+        "the first undo after three missed presses did nothing visible, which \
+         is three steps of a sculptor's history spent on presses that did not \
+         reach the form"
+    );
+}
+
 // -- the preflight ----------------------------------------------------------
 
 /// A level that will not fit is refused, and the hierarchy is as deep as it was.

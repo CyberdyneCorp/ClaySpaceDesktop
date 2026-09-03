@@ -4743,7 +4743,7 @@ impl ClayDocument {
         // has selected. The two are different entry points and not a flag —
         // see [`ClayDocument::stamp_into_a_pass`].
         if hierarchy.stamps_into_a_pass() {
-            return Self::stamp_into_a_pass(
+            let moved = Self::stamp_into_a_pass(
                 hierarchy,
                 verb,
                 &stamp,
@@ -4751,7 +4751,9 @@ impl ClayDocument {
                 gesture,
                 symmetry,
                 mask.as_deref(),
-            );
+            )?;
+            hierarchy.note_gesture_moved(moved);
+            return Ok(moved);
         }
 
         let mut sculptor = hierarchy
@@ -4817,6 +4819,12 @@ impl ClayDocument {
         // tree of this side's that a stamp leaves stale — the fixed sculptor
         // inside the level is the engine's own and lives and dies with the
         // bind.
+        drop(sculptor);
+        // What this segment reached, so the gesture knows whether it is worth
+        // an undo step. A stroke that returned early above notes nothing and
+        // so banks nothing, which is the right answer for a refused gesture:
+        // it is not that the record is missing, it is that there is no edit.
+        hierarchy.note_gesture_moved(moved);
         Ok(moved)
     }
 

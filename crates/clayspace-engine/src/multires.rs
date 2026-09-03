@@ -126,14 +126,24 @@ pub struct Hierarchy {
     /// This is monotone across every restore, which is the half the engine's
     /// counter cannot be.
     generation: u64,
-    /// The hierarchy's bytes as they stood before the gesture in progress.
+    /// The gesture in progress, if a segment has reached the surface.
+    open: Option<OpenGesture>,
+}
+
+/// A gesture that is open, and what it has done so far.
+struct OpenGesture {
+    /// The hierarchy's bytes as they stood before it.
     ///
-    /// Taken once, on the first segment that reaches the surface, and used for
-    /// two things that are the same thing: a dragging verb is laid down again
-    /// from its anchor on every segment and needs the last one taken back
-    /// first, and the gesture as a whole needs an exact record to enter the
-    /// undo history with.
-    open: Option<Vec<u8>>,
+    /// Taken once, on the first segment, and used for two things that are the
+    /// same thing: a dragging verb is laid down again from its anchor on every
+    /// segment and needs the last one taken back first, and the gesture as a
+    /// whole needs an exact record to enter the undo history with.
+    bytes: Vec<u8>,
+    /// How many vertices it has moved, as it stands.
+    ///
+    /// Because a gesture that reached nothing must not become an undo step —
+    /// see [`Hierarchy::close_gesture`].
+    moved: u64,
 }
 
 impl Hierarchy {
@@ -396,25 +406,64 @@ impl Hierarchy {
     /// it, and hands back the bytes a replaying segment must restore from.
     pub fn open_gesture(&mut self) -> Result<(), ModelError> {
         if self.open.is_none() {
-            self.open = Some(self.bytes(0)?);
+            self.open = Some(OpenGesture {
+                bytes: self.bytes(0)?,
+                moved: 0,
+            });
         }
         Ok(())
     }
 
+    /// What the segment just stamped did, added to what the gesture has done.
+    ///
+    /// Told rather than asked, because there is nothing to ask: the stamp
+    /// count is the engine's answer to the call that made it and the hierarchy
+    /// keeps no running total of its own.
+    pub fn note_gesture_moved(&mut self, moved: u64) {
+        if let Some(open) = self.open.as_mut() {
+            open.moved += moved;
+        }
+    }
+
     /// Takes the open gesture back to where it started, for a dragging verb
     /// that lays itself down again from its anchor.
+    ///
+    /// The count goes back with the surface. Every segment of a dragging verb
+    /// lays the whole gesture down again from the anchor, so what the last one
+    /// moved has just been undone and counting it twice would say a gesture
+    /// reached something after it had been taken back.
     pub fn replay_from_the_anchor(&mut self) -> Result<(), ModelError> {
-        let Some(bytes) = self.open.take() else {
+        let Some(open) = self.open.take() else {
             return Ok(());
         };
-        self.restore(&bytes)?;
-        self.open = Some(bytes);
+        self.restore(&open.bytes)?;
+        self.open = Some(OpenGesture {
+            bytes: open.bytes,
+            moved: 0,
+        });
         Ok(())
     }
 
     /// The record the gesture leaves behind, and the gesture closed.
+    ///
+    /// `None` for a gesture that moved nothing, which is the mesh path's rule
+    /// and is right here for the same reason it is right there: a stray click
+    /// that reached no material would otherwise bank an undo step that undoes
+    /// nothing, and the first Ctrl+Z after a missed press would do nothing
+    /// visible. Measured before this, three clicks off the form took a
+    /// hierarchy document from two undo steps to five, each of the three
+    /// reporting `changed: false`.
+    ///
+    /// The record it discards was not free — the bytes are taken before the
+    /// first stamp, because after it there is nothing left to take them from —
+    /// but a serialize nobody keeps costs one stroke, where a record nobody
+    /// wanted costs a place in a history bounded in bytes and trimmed from the
+    /// old end, which is where the real edits are.
     pub fn close_gesture(&mut self) -> Option<Vec<u8>> {
-        self.open.take()
+        self.open
+            .take()
+            .filter(|open| open.moved > 0)
+            .map(|open| open.bytes)
     }
 
     pub fn gesture_is_open(&self) -> bool {
