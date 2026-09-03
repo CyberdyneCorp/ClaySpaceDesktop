@@ -979,3 +979,88 @@ fn one_undo_gives_the_consumed_operands_back_as_they_were() {
          nothing to measure"
     );
 }
+
+// -- what the cache is left holding ------------------------------------------
+
+/// How many bricks the cache still has waiting to be filled.
+///
+/// Zero after any operation that has settled. A number above it means a caller
+/// marked the cache dirty and returned without draining, which does not show as
+/// an error anywhere — the viewport simply draws the surface as it was until
+/// something unrelated happens to drain.
+fn waiting(doc: &ClayDocument) -> u64 {
+    doc.cache()
+        .stats()
+        .expect("the cache reports its own state")
+        .dirty_bricks
+}
+
+/// A boolean settles the cache before it returns.
+///
+/// It used to settle it three times: `retire_operands` hid each operand through
+/// `set_layer_visible`, which ends in a whole-layer refill, and then
+/// `settle_subtool` refilled the result over a region that is the *union* of
+/// the two operand boxes — so bricks the hides had just filled were dirtied and
+/// filled again. Measured on the reference scene, the two hides were 5.5 s of a
+/// 12 s operation.
+///
+/// The hides now mark and leave the draining to the settle. That is only sound
+/// while the settle actually happens, which is what this holds: if the deferred
+/// mark ever stops being drained, the cache disagrees with the document and
+/// nothing says so.
+#[test]
+fn a_boolean_leaves_no_brick_waiting() {
+    let mut doc = document();
+    let base = a_sphere(&mut doc);
+    let tool = a_cylinder(&mut doc, [0.0; 3]);
+
+    doc.run_boolean(settings(base, tool, BooleanOp::Subtract))
+        .expect("a bore through the sphere");
+
+    assert_eq!(
+        waiting(&doc),
+        0,
+        "the boolean returned with bricks still marked; the deferred hides were \
+         never drained"
+    );
+}
+
+/// And so does one that consumes its operands, which takes the other branch.
+#[test]
+fn a_consuming_boolean_leaves_no_brick_waiting() {
+    let mut doc = document();
+    let base = a_sphere(&mut doc);
+    let tool = a_cylinder(&mut doc, [0.0; 3]);
+    let mut consuming = settings(base, tool, BooleanOp::Subtract);
+    consuming.consume = true;
+
+    doc.run_boolean(consuming)
+        .expect("a bore through the sphere");
+
+    assert_eq!(waiting(&doc), 0, "the consuming branch left bricks marked");
+}
+
+/// A borrowed visibility pattern settles the cache on both of its exits.
+///
+/// `with_only_visible` writes every layer's flag, runs a body, and puts the
+/// flags back — two batches, and the batch is where the drain now lives. A body
+/// that fails takes the early exit, and the flags that did land have marked
+/// their layers either way.
+#[test]
+fn a_failed_body_leaves_no_brick_waiting() {
+    let mut doc = document();
+    let shown = a_sphere(&mut doc);
+    a_cylinder(&mut doc, [0.0; 3]);
+
+    let refused: Result<(), ModelError> = doc.with_only_visible(&[shown], |_| {
+        Err(ModelError::Boolean(BooleanRefusal::NotAPair))
+    });
+    assert!(refused.is_err(), "the body was supposed to refuse");
+
+    assert_eq!(
+        waiting(&doc),
+        0,
+        "the restore ran but left the cache marked, so the viewport keeps the \
+         borrowed visibility until something else drains"
+    );
+}
