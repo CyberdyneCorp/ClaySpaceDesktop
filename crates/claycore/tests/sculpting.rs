@@ -712,4 +712,157 @@ mod mesh_sculpting {
                 .unwrap_or_else(|e| panic!("{verb:?} was refused: {e}"));
         }
     }
+
+    /// What the token buys, in one arrangement: a seed picked on the near
+    /// face of the sphere, handed to a stamp centred on the far face.
+    ///
+    /// The seed is farther from the centre than the radius, so the surface
+    /// walk answers an *empty* region and the dab is lost whole — and "nothing
+    /// moved" reads exactly like a fully masked stroke. That is the failure,
+    /// and it is silent. A stale token turns it into a rejection and a scan:
+    /// one stamp slower, and the dab lands.
+    ///
+    /// The three tests below send this dab the same wrong class three times,
+    /// claimed three different ways, and get three different outcomes.
+    fn far_side_dab(sculptor: &mut MeshSculptor, seed: Option<claycore::MeshSeed>) -> usize {
+        sculptor
+            .stamp(
+                MeshStamp {
+                    verb: MeshBrush::Draw,
+                    center: [0.0, 0.0, 1.0],
+                    radius: 0.5,
+                    strength: 0.2,
+                    seed,
+                    ..MeshStamp::default()
+                },
+                None,
+                None,
+            )
+            .expect("stamp")
+    }
+
+    /// A class picked on the near face, and the token it was picked in.
+    fn near_face_seed(mesh: &mut claycore::Mesh) -> claycore::MeshSeed {
+        let mut picked = MeshSculptor::new(mesh, 1e-5).expect("the sculptor that picked");
+        let hit = picked
+            .raycast([0.0, 0.0, -5.0], [0.0, 0.0, 1.0])
+            .expect("raycast")
+            .expect("the ray missed the fixture");
+        assert_eq!(
+            hit.seed_revision,
+            picked.seed_revision().expect("the sculptor's own token"),
+            "a hit's token has to be the token of the sculptor that answered it, or \
+             the two halves cannot be checked against each other at all"
+        );
+        hit.seed()
+    }
+
+    #[test]
+    fn a_seed_from_a_retired_class_space_is_rejected_and_the_stamp_scans() {
+        let mut mesh = sphere_mesh();
+        let stale = near_face_seed(&mut mesh);
+
+        // A second sculptor over the same mesh renumbers its weld classes.
+        // This is what a host reaches by evicting a cached sculptor, by
+        // removing a layer, or by reconciling after an undo — none of which
+        // the artist does on purpose and none of which the seed can see.
+        let mut sculptor = MeshSculptor::new(&mut mesh, 1e-5).expect("the sculptor stamped on");
+        assert_ne!(
+            sculptor.seed_revision().expect("the new token"),
+            stale.revision,
+            "a second sculptor kept the first one's class space, so this test is no \
+             longer holding a stale seed"
+        );
+        assert_eq!(
+            sculptor.stale_seeds_rejected().expect("the counter"),
+            0,
+            "a sculptor that has stamped nothing has rejected nothing"
+        );
+
+        let moved = far_side_dab(&mut sculptor, Some(stale));
+
+        assert_eq!(
+            sculptor.stale_seeds_rejected().expect("the counter"),
+            1,
+            "the stale token was taken at face value; this counter is the only thing \
+             that can tell a refused seed from one that was accepted and happened to \
+             be harmless"
+        );
+        assert!(
+            moved > 0,
+            "the dab was lost whole. Rejecting a stale seed costs a scan, not the \
+             stamp — that is the entire trade"
+        );
+    }
+
+    /// The failure the token exists to end, still reachable on demand: a zero
+    /// token claims nothing, so the engine keeps the bounds check it always
+    /// had, the wrong class passes it, and the dab is spent on nothing.
+    ///
+    /// This is what every stamp in this crate did before the field crossed the
+    /// ABI, and what one still does when its caller has not picked. It is
+    /// asserted rather than merely allowed because it is the compatibility
+    /// contract: zero must keep behaving exactly this way.
+    #[test]
+    fn a_seed_claiming_no_class_space_keeps_the_bounds_check_and_loses_the_dab() {
+        let mut mesh = sphere_mesh();
+        let wrong_class = near_face_seed(&mut mesh).class;
+
+        let mut sculptor = MeshSculptor::new(&mut mesh, 1e-5).expect("a sculptor");
+        let unclaimed = claycore::MeshSeed {
+            class: wrong_class,
+            revision: 0,
+        };
+
+        assert_eq!(
+            far_side_dab(&mut sculptor, Some(unclaimed)),
+            0,
+            "the walk reached the far face from a seed on the near one, so this \
+             fixture is no longer demonstrating an empty region"
+        );
+        assert_eq!(
+            sculptor.stale_seeds_rejected().expect("the counter"),
+            0,
+            "a seed that claims no class space cannot be stale — there is nothing \
+             to compare it against"
+        );
+    }
+
+    /// And the other direction: a token from this sculptor's own class space
+    /// is current, so it is not rejected — the seed is simply wrong, which the
+    /// engine neither detects nor pretends to. Nor is a stamp that seeds
+    /// nothing at all.
+    #[test]
+    fn a_current_token_and_no_seed_at_all_are_neither_of_them_stale() {
+        let mut mesh = sphere_mesh();
+        let wrong_class = near_face_seed(&mut mesh).class;
+
+        let mut sculptor = MeshSculptor::new(&mut mesh, 1e-5).expect("a sculptor");
+        let current = claycore::MeshSeed {
+            class: wrong_class,
+            revision: sculptor.seed_revision().expect("this sculptor's token"),
+        };
+
+        assert_eq!(
+            far_side_dab(&mut sculptor, Some(current)),
+            0,
+            "a current token does not make a wrong seed right, and the engine does \
+             not claim it does"
+        );
+        assert_eq!(
+            sculptor.stale_seeds_rejected().expect("the counter"),
+            0,
+            "a token this sculptor issued itself was counted as stale"
+        );
+
+        assert!(
+            far_side_dab(&mut sculptor, None) > 0,
+            "an unseeded dab scans, and a scan finds the far face"
+        );
+        assert_eq!(
+            sculptor.stale_seeds_rejected().expect("the counter"),
+            0,
+            "a stamp that seeds nothing has no token to be stale"
+        );
+    }
 }

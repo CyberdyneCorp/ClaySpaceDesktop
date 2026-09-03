@@ -3823,6 +3823,13 @@ impl ClayDocument {
             // one.
             colour: chosen.rgb,
             smooth_iterations: Some(Self::SMOOTH_PASSES),
+            // Told to search. This path picks through `pick_active_mesh`,
+            // which throws the hit's seed away at the moment it was picked, so
+            // there is nothing here to claim — and claiming nothing is what
+            // keeps the engine's own bounds check and the behaviour this had
+            // before the seed crossed the ABI. Carrying the pick's seed to
+            // here is a change of its own, in the crate that holds the pick.
+            seed: None,
             // Every field is named now that the colour is one of them, so
             // there is no `..MeshStamp::default()` here: a field added
             // upstream should fail this call rather than be filled in

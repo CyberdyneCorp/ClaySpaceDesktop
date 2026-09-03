@@ -173,6 +173,13 @@ pub struct MeshStamp<'a> {
     /// at the scale of the brush — on a dense mesh that is a change a sculptor
     /// cannot see.
     pub smooth_iterations: Option<i32>,
+    /// Where the surface walk starts, and the class space that was picked in.
+    ///
+    /// `None` tells the engine to search, which is a linear scan and the wrong
+    /// thing to do per stamp on a large mesh. A caller that has already picked
+    /// knows the answer and should say so — see [`MeshSeed`] for why the class
+    /// alone is not enough to say it with.
+    pub seed: Option<MeshSeed>,
     /// A scalar stamp scaling this brush's per-vertex weight.
     ///
     /// Borrowed for the duration of the call — the engine copies nothing — so
@@ -232,6 +239,7 @@ impl Default for MeshStamp<'_> {
             geodesic: true,
             colour: [1.0; 3],
             smooth_iterations: None,
+            seed: None,
             alpha: None,
         }
     }
@@ -272,11 +280,21 @@ impl MeshStamp<'_> {
         raw.falloff = self.falloff.to_raw();
         raw.direction = self.direction;
         raw.geodesic = i32::from(self.geodesic);
-        // Told to search rather than seeded. A caller that has already picked
-        // knows the class and should say so — searching is a linear scan and
-        // is the wrong thing to do per stamp on a large mesh — but a wrong
-        // seed is worse than a slow one.
-        raw.seed_class = sys::CLAY_MESH_NO_CLASS;
+        // The class and the token travel together or not at all. Without a
+        // seed the engine searches: a linear scan, and the wrong thing to do
+        // per stamp on a large mesh — but a wrong seed is worse than a slow
+        // one, and a zero token is how a caller says it claims nothing and
+        // keeps the bounds check that was always there.
+        match self.seed {
+            Some(seed) => {
+                raw.seed_class = seed.class;
+                raw.seed_revision = seed.revision;
+            }
+            None => {
+                raw.seed_class = sys::CLAY_MESH_NO_CLASS;
+                raw.seed_revision = 0;
+            }
+        }
         raw.color = self.colour;
         if let Some(iterations) = self.smooth_iterations {
             raw.smooth_iterations = iterations.clamp(1, 64);
@@ -573,6 +591,29 @@ impl std::fmt::Debug for MeshDeltas {
     }
 }
 
+/// Where a stamp's surface walk starts.
+///
+/// The class and the token it was numbered in, and the pair is the point: a
+/// seed is an INDEX, and an index outlives the numbering it was taken from. A
+/// class picked against one sculptor is comfortably in bounds against the
+/// next, so a bounds check sees nothing — and what a stale seed costs is not a
+/// slightly misplaced dab. The surface walk returns an *empty* region when the
+/// seed lies farther than the radius from the centre, so the stamp is lost
+/// whole and "nothing moved" reads exactly like a fully masked stroke.
+///
+/// So the two are one value here rather than two fields a caller could carry
+/// half of. Sending the token turns that silence into a rejected seed and a
+/// scan — one stamp slower, and correct — which
+/// [`MeshSculptor::stale_seeds_rejected`] counts so a host sees it happen
+/// rather than infers it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MeshSeed {
+    /// The weld class to start the walk at.
+    pub class: u32,
+    /// The class space that class was picked in.
+    pub revision: u64,
+}
+
 /// Where a ray met a mesh.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MeshHit {
@@ -581,6 +622,22 @@ pub struct MeshHit {
     pub normal: [f32; 3],
     /// The weld class the ray landed on, ready to seed a stamp's surface walk.
     pub seed_class: u32,
+    /// The class space [`Self::seed_class`] was picked in.
+    ///
+    /// Handed back beside the class rather than fetched separately, because
+    /// keeping one without the other is keeping the half that cannot be
+    /// checked.
+    pub seed_revision: u64,
+}
+
+impl MeshHit {
+    /// The seed this hit picked, ready to hand to a stamp.
+    pub fn seed(&self) -> MeshSeed {
+        MeshSeed {
+            class: self.seed_class,
+            revision: self.seed_revision,
+        }
+    }
 }
 
 /// A mesh layer's vertices, with the adjacency a brush needs.
@@ -669,6 +726,44 @@ impl MeshSculptor {
         check(
             unsafe { sys::clay_mesh_sculptor_class_count(self.raw.as_ptr(), &mut count) },
             "clay_mesh_sculptor_class_count",
+        )?;
+        Ok(count)
+    }
+
+    /// The token this sculptor's weld classes are numbered in.
+    ///
+    /// Constant for the life of the handle: the adjacency is built once and
+    /// nothing rebuilds it, so vertices moving under a stroke leave the token
+    /// alone and a seed picked at pointer-down stays valid for every stamp of
+    /// the gesture — which is exactly when re-picking would be wasted work.
+    /// What retires a token is a *new* sculptor, which is why this is worth
+    /// storing beside a class rather than assuming.
+    ///
+    /// [`MeshHit`] hands the same token back beside the class it picked, so a
+    /// caller that picks needs this only where it seeds a stamp without one.
+    pub fn seed_revision(&self) -> Result<u64> {
+        let mut revision = 0u64;
+        // SAFETY: valid handle, out-parameter written on success.
+        check(
+            unsafe { sys::clay_mesh_sculptor_seed_revision(self.raw.as_ptr(), &mut revision) },
+            "clay_mesh_sculptor_seed_revision",
+        )?;
+        Ok(revision)
+    }
+
+    /// How many stamps rejected a seed because its token did not match, over
+    /// the life of this sculptor.
+    ///
+    /// The number that makes a rejection observable. Without it a seed that
+    /// was refused and one that was accepted and happened to be harmless are
+    /// the same event from outside, and neither a host nor a test can tell
+    /// them apart.
+    pub fn stale_seeds_rejected(&self) -> Result<usize> {
+        let mut count = 0;
+        // SAFETY: as above.
+        check(
+            unsafe { sys::clay_mesh_sculptor_stale_seeds_rejected(self.raw.as_ptr(), &mut count) },
+            "clay_mesh_sculptor_stale_seeds_rejected",
         )?;
         Ok(count)
     }
@@ -774,6 +869,7 @@ impl MeshSculptor {
             position: hit.position,
             normal: hit.normal,
             seed_class: hit.seed_class,
+            seed_revision: hit.seed_revision,
         }))
     }
 

@@ -74,7 +74,7 @@ pub use memory::{
 pub use mesh::{ImportBudget, Mesh, MeshLayerDesc, MeshParams, MeshValidity, Mesher, VertexLayout};
 pub use mesh_sculpt::{
     AlphaStamp, MeshBrush, MeshDeform, MeshDeformer, MeshDeltas, MeshFalloff, MeshHit, MeshLattice,
-    MeshSculptor, MeshStamp,
+    MeshSculptor, MeshSeed, MeshStamp,
 };
 pub use multires::{
     AddLevelPreflight, ArenaStats, Block, BlockInfo, DetailStamp, DetailStampMode,
