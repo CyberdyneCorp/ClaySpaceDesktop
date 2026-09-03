@@ -2365,6 +2365,36 @@ impl ClayDocument {
         Ok(outcome)
     }
 
+    /// Which of the field's three routes a tool takes, once the gesture is in
+    /// the layer's own frame.
+    fn field_stroke(
+        &mut self,
+        tool: ToolKind,
+        brush: BrushSettings,
+        samples: &[GestureSample],
+        symmetry: [bool; 3],
+    ) -> Result<EditOutcome, ModelError> {
+        match tool {
+            // The verbs that rewrite the field rather than adding an item.
+            // The layer mirror cannot reach those, so their strokes are
+            // reflected instead — see `baked_stroke`.
+            ToolKind::Mover
+            | ToolKind::MoverTopologico
+            | ToolKind::Suavizar
+            | ToolKind::Relaxar
+            | ToolKind::Planar
+            | ToolKind::Polir => self.baked_stroke(tool, brush, samples, symmetry),
+            // Pulls a lobe out along the path, as items — so the layer
+            // mirror does reach it, and pointing the mirror is the whole
+            // of what symmetry means here.
+            ToolKind::Puxar => {
+                self.point_the_mirror(symmetry)?;
+                self.snakehook_stroke(brush, samples)
+            }
+            _ => self.stroke_sdf(tool, brush, samples, symmetry),
+        }
+    }
+
     /// Applies a stroke to an SDF layer.
     fn stroke_sdf(
         &mut self,
@@ -2454,14 +2484,19 @@ impl ClayDocument {
         // when the sculptor has not asked for less, and `strength` scales it
         // from there. For every other op it is the width of the join, and the
         // sculptor's own zero means a hard one.
+        // The panel's join width is a world distance and the stamp is placed
+        // in the layer's own frame, so a scaled subtool takes it scaled — the
+        // same conversion `apply_stroke` makes to the brush radius. `size` is
+        // already in that frame, having come through it.
+        let carried_scale = self
+            .carried_placement(self.active_layer().key)
+            .map(|transform| transform.uniform_scale().max(1e-4))
+            .unwrap_or(1.0);
+        let join = combine.radius / carried_scale;
         let distance = if combine.op.displaces_along_the_normal() {
-            lift * if combine.radius > 0.0 {
-                combine.radius
-            } else {
-                size
-            }
+            lift * if join > 0.0 { join } else { size }
         } else {
-            combine.radius
+            join
         };
         stamp
             .set_blend(engine_blend(combine.blend), distance)
@@ -3271,7 +3306,28 @@ impl ClayDocument {
         brush: BrushSettings,
         samples: &[GestureSample],
     ) -> Result<EditOutcome, ModelError> {
-        let brush = brush.sanitized();
+        // In the layer's own frame, as a sculpting stroke is, because that is
+        // the frame every consumer of this mask actually reads it in.
+        //
+        // The ABI calls the lattice world-addressed — `clay_mask_sample` takes
+        // "a world position" — and `clay_mesh_sculptor_apply_stroke` even
+        // takes a `mesh_to_world` for mapping local vertices onto it. But the
+        // field stroke composes no layer transform when it gates a stamp:
+        // measured, a stamp at layer-local zero on a layer standing at x = 3
+        // is gated against the cells at zero and not against the ones at
+        // three. We pass NULL for that `mesh_to_world`, so the mesh sculptor
+        // reads it in the layer's frame too, and the readback below is carried
+        // to match. One frame for all four, which is what makes the freeze
+        // mean the same thing everywhere; painted in world coordinates it sat
+        // beside the form it was meant to protect on any moved subtool, and
+        // did nothing at all.
+        let placement = self.active_content_placement();
+        let carried = Self::carried_samples(&placement, samples);
+        let samples = carried.as_deref().unwrap_or(samples);
+        let mut brush = brush.sanitized();
+        if let Some(transform) = &placement {
+            brush.size /= transform.uniform_scale().max(1e-4);
+        }
         let preset = self.preset(brush, ToolKind::Mascara);
         let stroke: Vec<claycore::StrokeSample> = samples
             .iter()
@@ -3953,15 +4009,35 @@ impl ClayDocument {
     /// unnormalized direction still gets the right point.
     fn pick_active_grid(&self, origin: [f32; 3], direction: [f32; 3]) -> Option<[f32; 3]> {
         let layer = self.active_layer();
+        // The ray in the grid's own coordinates, and the hit carried back out
+        // of them — `clay_voxel_raycast` knows nothing of the layer transform,
+        // the same reason the drawing places the cells itself. Without the
+        // pair, a moved grid was drawn in one place and picked in another.
+        let placement = self.carried_placement(layer.key);
+        let (start, along) = match &placement {
+            Some(transform) => (
+                Self::into_local(transform, origin),
+                // Turned and not scaled: only the ray's direction matters, and
+                // the distance the hit reports is measured along it.
+                Self::turned_by(
+                    transform.rotation_axis,
+                    -transform.rotation_angle,
+                    direction,
+                ),
+            ),
+            None => (origin, direction),
+        };
         let (_, grid) = self.document.voxel_reader(&layer.engine_name).ok()?;
-        let hit = grid.raycast(origin, direction).ok().flatten()?;
-        let length = direction.iter().map(|axis| axis * axis).sum::<f32>().sqrt();
+        let hit = grid.raycast(start, along).ok().flatten()?;
+        let length = along.iter().map(|axis| axis * axis).sum::<f32>().sqrt();
         if length <= f32::EPSILON {
             return None;
         }
-        Some(std::array::from_fn(|i| {
-            origin[i] + direction[i] / length * hit.distance
-        }))
+        let met: [f32; 3] = std::array::from_fn(|i| start[i] + along[i] / length * hit.distance);
+        Some(match &placement {
+            Some(transform) => Self::into_world(transform, met),
+            None => met,
+        })
     }
     /// A gesture written in a moved mesh subtool's own coordinates.
     ///
@@ -4280,10 +4356,21 @@ impl ClayDocument {
     /// Two sources for one layer and only ever one of them: the smooth surface
     /// where one has been built, and the per-chunk boxes otherwise.
     fn append_voxel_layer(&self, index: usize, carried: &mut CarriedBuffer) {
+        // Standing where its layer transform puts it, which is the host's to
+        // do: the engine holds the placement and composes it wherever the
+        // *document* answers — `clay_layer_bounds` on a moved grid reports the
+        // moved box — but every voxel entry point is in the grid's own
+        // coordinates, so a grid is drawn where its cells are unless this
+        // places it. Without this the manipulator on a voxel subtool moved the
+        // widget and left the form standing, which is exactly what a carried
+        // mesh did before `append_mesh_layer` placed one.
+        let placement = self.carried_placement(self.layers[index].key);
         // The smooth picture, where one has been built. Whole-grid and so a
         // single splice, unlike the chunked boxes below.
         if let Some((_, smooth)) = self.voxel_smooth.get(&self.layers[index].key) {
-            carried.append(
+            Self::append_placed(
+                carried,
+                &placement,
                 &smooth.positions,
                 &smooth.normals,
                 &smooth.colors,
@@ -4295,13 +4382,46 @@ impl ClayDocument {
         // mesh, so concatenating them is the whole of the join — there is no
         // seam to weld, unlike the brick cache's.
         for chunk in self.layers[index].voxel_chunks.values() {
-            carried.append(
+            Self::append_placed(
+                carried,
+                &placement,
                 &chunk.positions,
                 &chunk.normals,
                 &chunk.colors,
                 &chunk.indices,
             );
         }
+    }
+
+    /// Appends geometry, moved by a placement where there is one.
+    ///
+    /// The copy is what a placement costs, so an unplaced layer — every grid
+    /// until one is dragged — appends the engine's own buffers untouched.
+    fn append_placed(
+        carried: &mut CarriedBuffer,
+        placement: &Option<clayspace_model::Transform>,
+        positions: &[[f32; 3]],
+        normals: &[[f32; 3]],
+        colors: &[[f32; 3]],
+        indices: &[u32],
+    ) {
+        let Some(transform) = placement else {
+            carried.append(positions, normals, colors, indices);
+            return;
+        };
+        let placed: Vec<[f32; 3]> = positions
+            .iter()
+            .map(|point| Self::into_world(transform, *point))
+            .collect();
+        // Turned and not moved: a normal is a direction, and a layer's scale
+        // is uniform so it needs no inverse-transpose.
+        let turned: Vec<[f32; 3]> = normals
+            .iter()
+            .map(|normal| {
+                Self::turned_by(transform.rotation_axis, transform.rotation_angle, *normal)
+            })
+            .collect();
+        carried.append(&placed, &turned, colors, indices);
     }
 
     /// Brings one voxel layer's cached chunks in line with its grid.
@@ -4508,6 +4628,19 @@ impl ClayDocument {
     /// entirely — which is the common case, and the case where sampling every
     /// vertex of the surface would be pure waste.
     pub fn mask_at(&self, points: &[[f32; 3]]) -> Option<Vec<f32>> {
+        // The points are where the surface is *drawn*; the mask is stored
+        // where the layer's own content is. On a moved subtool those are two
+        // places, so the question is carried back the way the stroke that
+        // painted it was — otherwise the viewport draws the frozen region
+        // beside the form it protects.
+        let placement = self.active_content_placement();
+        let carried: Option<Vec<[f32; 3]>> = placement.as_ref().map(|transform| {
+            points
+                .iter()
+                .map(|p| Self::into_local(transform, *p))
+                .collect()
+        });
+        let points = carried.as_deref().unwrap_or(points);
         let mask = self.active_mask()?;
         if mask.is_empty().unwrap_or(true) {
             return None;
@@ -4882,6 +5015,24 @@ impl ClayDocument {
         samples: &[GestureSample],
         symmetry: [bool; 3],
     ) -> Result<EditOutcome, ModelError> {
+        // In the grid's own coordinates, as the field and mesh routes are in
+        // theirs: every voxel entry point addresses cells from the grid's
+        // origin, and the layer transform is the host's to compose. Carried
+        // before the drag branch as well as the stamping loop, so a gesture
+        // that spans both is measured in one frame.
+        let placement = self.carried_placement(self.active_layer().key);
+        let carried = Self::carried_samples(&placement, samples);
+        let samples = carried.as_deref().unwrap_or(samples);
+        let brush = match &placement {
+            // A subtool scaled to half its size wants half the radius against
+            // the cells it actually holds.
+            Some(transform) => BrushSettings {
+                size: brush.size / transform.uniform_scale().max(1e-4),
+                ..brush
+            },
+            None => brush,
+        };
+
         // A drag is one instruction over the whole gesture rather than a stamp
         // per sample, and its own state has to survive between segments, so it
         // takes its own route rather than an arm in the loop below.
@@ -5158,25 +5309,38 @@ impl SculptModel for ClayDocument {
         }
 
         match self.active_representation() {
-            Representation::Sdf => match tool {
-                // The verbs that rewrite the field rather than adding an item.
-                // The layer mirror cannot reach those, so their strokes are
-                // reflected instead — see `baked_stroke`.
-                ToolKind::Mover
-                | ToolKind::MoverTopologico
-                | ToolKind::Suavizar
-                | ToolKind::Relaxar
-                | ToolKind::Planar
-                | ToolKind::Polir => self.baked_stroke(tool, brush, samples, symmetry),
-                // Pulls a lobe out along the path, as items — so the layer
-                // mirror does reach it, and pointing the mirror is the whole
-                // of what symmetry means here.
-                ToolKind::Puxar => {
-                    self.point_the_mirror(symmetry)?;
-                    self.snakehook_stroke(brush, samples)
-                }
-                _ => self.stroke_sdf(tool, brush, samples, symmetry),
-            },
+            // A field layer's transform moves what the tape evaluates, so the
+            // form is drawn where the manipulator put it and a ray picks it
+            // there — while the stamps a stroke deposits go into the layer's
+            // own frame, which the transform then moves *again*. Measured: a
+            // subtool dragged three units along X was sculpted three units
+            // past the pointer and the surface under the brush never moved.
+            // So the gesture is carried back into that frame before anything
+            // at all is derived from it, and the brush with it — a subtool
+            // scaled to half its size wants half the radius against the items
+            // it actually holds. The same conversion a carried mesh has always
+            // made, in the one place both field routes pass through, so the
+            // baked verbs and the stamping ones cannot disagree about where a
+            // stroke landed.
+            //
+            // The mirror follows, and rightly: reflected in the layer's own
+            // frame, symmetry is about the subtool's axis rather than the
+            // world's, which is what the engine's own layer mirror does to the
+            // items on the stamping route.
+            Representation::Sdf => {
+                let key = self.active_layer().key;
+                let placement = self.carried_placement(key);
+                let carried = Self::carried_samples(&placement, samples);
+                let samples = carried.as_deref().unwrap_or(samples);
+                let brush = match &placement {
+                    Some(transform) => BrushSettings {
+                        size: brush.size / transform.uniform_scale().max(1e-4),
+                        ..brush
+                    },
+                    None => brush,
+                };
+                self.field_stroke(tool, brush, samples, symmetry)
+            }
             Representation::Voxel => self.stroke_voxel(tool, brush, samples, symmetry),
             Representation::Mesh => self.stroke_mesh(tool, brush, samples, symmetry),
         }
@@ -6379,8 +6543,18 @@ impl SceneModel for ClayDocument {
         // layer's SDF extent, which a voxel layer does not have — it reported
         // nothing for one however much material was in it, so Frame All framed
         // the default box over a sculpt that was somewhere else.
+        //
+        // Placed, as the mesh arm below is: the cells are measured where the
+        // grid holds them and the layer transform is what stands them
+        // somewhere. Unplaced, this was the box the whole-subtool manipulator
+        // sized and centred itself on, so the widget sat on a moved grid's old
+        // position and Frame All framed where the sculpt had been.
         if layer.representation == Representation::Voxel {
-            return layer.voxel_bounds;
+            let measured = layer.voxel_bounds?;
+            return Some(match self.carried_placement(key) {
+                Some(transform) => Self::placed_box(&transform, measured),
+                None => measured,
+            });
         }
         // And a carried mesh says where it is itself, for the same reason: it
         // holds no SDF content either, so the engine reported nothing for one
@@ -9237,40 +9411,41 @@ impl ClayDocument {
         (transform != clayspace_model::Transform::default()).then_some(transform)
     }
 
+    /// Where the *active* layer's content stands against the world, when that
+    /// is anywhere but where the layer holds it.
+    ///
+    /// All three representations now, and the same answer for each: the
+    /// transform moves an SDF layer's tape, the host moves a carried mesh's
+    /// vertices and a grid's cells, so on any of them a world point is carried
+    /// in before it can address the layer's own content. It answered "nowhere"
+    /// on a grid while a grid could not be moved, which was right then and
+    /// would put a mask off its cells now.
+    fn active_content_placement(&self) -> Option<clayspace_model::Transform> {
+        self.carried_placement(self.active_layer().key)
+    }
+
     /// A vector turned by an axis-angle rotation.
     ///
-    /// Rodrigues, because that is the pair the ABI takes: `clay_document_set_layer_transform`
-    /// is given an axis and an angle, so this is the same rotation the engine
-    /// applies to a layer it *can* move, and a mesh subtool turns the way an
-    /// SDF one does.
+    /// The model owns the arithmetic: the viewport mirrors a brush ring
+    /// through the same frame this carries a stroke into, and two
+    /// implementations of one rotation are two that can drift.
     fn turned_by(axis: [f32; 3], angle: f32, v: [f32; 3]) -> [f32; 3] {
-        let length = axis.iter().map(|a| a * a).sum::<f32>().sqrt();
-        if length <= f32::EPSILON || angle == 0.0 {
-            return v;
-        }
-        let k: [f32; 3] = std::array::from_fn(|i| axis[i] / length);
-        let (sin, cos) = angle.sin_cos();
-        let dot = k[0] * v[0] + k[1] * v[1] + k[2] * v[2];
-        let cross = [
-            k[1] * v[2] - k[2] * v[1],
-            k[2] * v[0] - k[0] * v[2],
-            k[0] * v[1] - k[1] * v[0],
-        ];
-        std::array::from_fn(|i| v[i] * cos + cross[i] * sin + k[i] * dot * (1.0 - cos))
+        let frame = clayspace_model::Transform {
+            rotation_axis: axis,
+            rotation_angle: angle,
+            ..clayspace_model::Transform::default()
+        };
+        frame.turn(v)
     }
 
-    /// A point of a carried mesh, standing where the layer transform puts it.
+    /// A point of a carried layer, standing where the layer transform puts it.
     fn into_world(transform: &clayspace_model::Transform, point: [f32; 3]) -> [f32; 3] {
-        let turned = Self::turned_by(transform.rotation_axis, transform.rotation_angle, point);
-        let scale = transform.uniform_scale().max(1e-4);
-        std::array::from_fn(|i| turned[i] * scale + transform.position[i])
+        transform.into_world(point)
     }
 
-    /// The way back: a world point in the mesh's own coordinates.
+    /// The way back: a world point in the layer's own coordinates.
     fn into_local(transform: &clayspace_model::Transform, point: [f32; 3]) -> [f32; 3] {
-        let scale = transform.uniform_scale().max(1e-4);
-        let moved: [f32; 3] = std::array::from_fn(|i| (point[i] - transform.position[i]) / scale);
-        Self::turned_by(transform.rotation_axis, -transform.rotation_angle, moved)
+        transform.into_local(point)
     }
 
     /// The box that holds a box once every corner of it has been moved.
