@@ -600,6 +600,13 @@ pub struct ClayDocument {
     /// the other option and `forbid(unsafe_code)` refused it, correctly: the
     /// C call takes a non-const sculptor because it really may write.
     mesh_sculptors: std::cell::RefCell<crate::sculptors::Sculptors>,
+    /// What the last pick against a mesh layer learned, for the stroke that
+    /// follows it.
+    ///
+    /// In a cell for the reason the sculptors are: it is written by a pick,
+    /// and a pick is a question. See [`crate::seed`] for why a class is kept
+    /// with the numbering it was picked in rather than on its own.
+    pub(crate) picked_seed: std::cell::Cell<Option<crate::seed::PickedSeed>>,
 
     document: Document,
     layers: Vec<Layer>,
@@ -925,6 +932,7 @@ impl ClayDocument {
             meshed_chunks: 0,
             surface_brick_count: 0,
             mesh_sculptors: std::cell::RefCell::default(),
+            picked_seed: std::cell::Cell::default(),
             mesh_undo: Vec::new(),
             mesh_redo: Vec::new(),
             crossing_undo: Vec::new(),
@@ -3972,12 +3980,10 @@ impl ClayDocument {
             // and it is visible only through an alpha, which this path hands
             // a fixed world-X tangent to today.
             stamp_azimuth: 0.0,
-            // Told to search. This path picks through `pick_active_mesh`,
-            // which throws the hit's seed away at the moment it was picked, so
-            // there is nothing here to claim — and claiming nothing is what
-            // keeps the engine's own bounds check and the behaviour this had
-            // before the seed crossed the ABI. Carrying the pick's seed to
-            // here is a change of its own, in the crate that holds the pick.
+            // Filled in per mirror below, because a seed is a place as much
+            // as it is a class: the pick that recorded one stood where the
+            // unmirrored stamp stands, and a reflected copy of it stands
+            // somewhere the walk cannot start from. See [`crate::seed`].
             seed: None,
             // Every field is named now that the colour is one of them, so
             // there is no `..MeshStamp::default()` here: a field added
@@ -4061,6 +4067,15 @@ impl ClayDocument {
         // Read before the sculptor is borrowed: the lease reads the document
         // and both are shared borrows of `self`, so the two sit side by side.
         let mask = self.active_mask();
+        // What the pick already worked out, if it is still worth anything to
+        // this call. Asked once for the two shapes a mesh stroke takes: Grab
+        // makes one stamp at the descriptor's own radius, and everything else
+        // resolves a path whose stamps take theirs from the preset. Either
+        // answer may be `None`, which is the scan every stamp here did before
+        // — slower, and never wrong.
+        let picked = self.picked_seed.get();
+        let stamp_seed = picked.and_then(|it| it.for_stamp(key, stamp.center, stamp.radius));
+        let stroke_seed = picked.and_then(|it| it.for_stroke(key, &points, &preset));
         let moved = {
             let mut sculptor = sculptor.borrow_mut();
             if let Some(previous) = &mut previous {
@@ -4117,6 +4132,7 @@ impl ClayDocument {
                             claycore::MeshStamp {
                                 direction: mirror.vector(gesture),
                                 center: mirror.point(stamp.center),
+                                seed: mirror.is_identity().then_some(stamp_seed).flatten(),
                                 ..stamp
                             },
                             mask.as_deref(),
@@ -4138,6 +4154,7 @@ impl ClayDocument {
                             claycore::MeshStamp {
                                 direction: mirror.vector(stamp.direction),
                                 center: mirror.point(stamp.center),
+                                seed: mirror.is_identity().then_some(stroke_seed).flatten(),
                                 ..stamp
                             },
                             mask.as_deref(),
@@ -4304,14 +4321,21 @@ impl ClayDocument {
             return None;
         };
         let mut sculptor = sculptor.borrow_mut();
-        sculptor
-            .raycast(origin, direction)
-            .ok()
-            .flatten()
-            .map(|hit| match &placement {
-                Some(transform) => Self::into_world(transform, hit.position),
-                None => hit.position,
-            })
+        let hit = sculptor.raycast(origin, direction).ok().flatten()?;
+        // What the ray already learned, kept for the stroke that follows it.
+        // The class it names and the numbering that class belongs to travel
+        // together — see [`crate::seed`] for what carrying one without the
+        // other costs — and the position is kept in the mesh's own space,
+        // which is the space a stamp's centre arrives in.
+        self.picked_seed.set(Some(crate::seed::PickedSeed {
+            layer: key,
+            at: hit.position,
+            seed: hit.seed(),
+        }));
+        Some(match &placement {
+            Some(transform) => Self::into_world(transform, hit.position),
+            None => hit.position,
+        })
     }
 
     /// What is wrong with the active voxel layer, before anything is repaired.
@@ -4958,6 +4982,37 @@ impl ClayDocument {
         let key = self.active_layer().key;
         self.sculptor_for(key)
             .and_then(|sculptor| sculptor.borrow_mut().quality().ok())
+    }
+
+    /// Stamps that were handed a seed from a numbering that had been retired,
+    /// and scanned instead.
+    ///
+    /// Summed over the sculptors this document is holding, which is what makes
+    /// it a live reading rather than a session total: a sculptor rebuilt after
+    /// an eviction starts its own count at zero, and the figure falls with it.
+    /// That is the honest shape for a diagnostic — it answers "is this
+    /// happening to the meshes in hand", which is the question a reader
+    /// watching a brush behave oddly is actually asking.
+    ///
+    /// Zero is the normal reading and says nothing is wrong. A figure that
+    /// climbs says a pick's seed keeps outliving the numbering it was taken
+    /// in — the engine catching, one stamp at a time, what it was given the
+    /// token to catch. See [`crate::seed`] for what it would cost if it could
+    /// not.
+    pub fn stale_seeds_rejected(&self) -> usize {
+        self.mesh_sculptors
+            .borrow()
+            .values()
+            .filter_map(|sculptor| sculptor.borrow().stale_seeds_rejected().ok())
+            .sum()
+    }
+
+    /// How many mesh sculptors are held, so the figure above can be read.
+    ///
+    /// A count of zero and a rejection count of zero are the same number and
+    /// different facts.
+    pub fn mesh_sculptors_held(&self) -> usize {
+        self.mesh_sculptors.borrow().len()
     }
 
     // -- work that is not required for correctness ---------------------------
@@ -6420,6 +6475,15 @@ const POINT_KIND: claycore::PointType = claycore::PointType::Spline;
 struct Mirror([bool; 3]);
 
 impl Mirror {
+    /// Whether this is the stroke as it was drawn, rather than a reflection.
+    ///
+    /// Asked by anything that is true of the place the sculptor pointed at and
+    /// not of its copies — the pick's own seed being the one that matters, since
+    /// a class reflected through the origin names a class on the other side.
+    fn is_identity(self) -> bool {
+        !self.0.iter().any(|axis| *axis)
+    }
+
     /// A point reflected through the planes this mirror names.
     ///
     /// Through the mesh's own origin, which is where both references put the
@@ -7613,6 +7677,7 @@ impl ClayDocument {
             meshed_chunks: 0,
             surface_brick_count: 0,
             mesh_sculptors: std::cell::RefCell::default(),
+            picked_seed: std::cell::Cell::default(),
             mesh_undo: Vec::new(),
             mesh_redo: Vec::new(),
             crossing_undo: Vec::new(),

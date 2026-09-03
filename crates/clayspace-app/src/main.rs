@@ -2289,6 +2289,13 @@ impl App {
                 .diagnostics(graphics.surface.framebuffer())
         });
         report.stalls = self.stalls.lines();
+        report.mesh = Some(
+            self.document
+                .with(|document| clayspace_model::MeshDiagnostics {
+                    sculptors: document.mesh_sculptors_held(),
+                    stale_seeds_rejected: document.stale_seeds_rejected(),
+                }),
+        );
         report
     }
 

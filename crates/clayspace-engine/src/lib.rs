@@ -19,6 +19,7 @@ mod maintenance;
 pub mod objects;
 mod reference;
 mod sculptors;
+mod seed;
 
 pub use alpha::read_alpha;
 pub use backend::{BackendPolicy, Operation, SelectionReason, UnavailableBackend};

@@ -272,6 +272,8 @@ pub struct Strings {
     pub section_diagnostics: &'static str,
     /// The rendering section of the diagnostics report.
     pub section_rendering: &'static str,
+    /// The mesh-sculpting section of the diagnostics report.
+    pub section_mesh_sculpting: &'static str,
 
     // Labels
     pub label_intensity: &'static str,
@@ -766,6 +768,7 @@ libera em vez de congelar.",
     section_armature: "ARMADURA",
     section_diagnostics: "DIAGNÓSTICO",
     section_rendering: "RENDERIZAÇÃO",
+    section_mesh_sculpting: "ESCULTURA EM MALHA",
 
     label_intensity: "Intensidade",
     label_size: "Tamanho",
@@ -1173,6 +1176,7 @@ instead.",
     section_armature: "ARMATURE",
     section_diagnostics: "DIAGNOSTICS",
     section_rendering: "RENDERING",
+    section_mesh_sculpting: "MESH SCULPTING",
 
     label_intensity: "Intensity",
     label_size: "Size",
@@ -1588,6 +1592,7 @@ lados. Con Ctrl, libera en vez de congelar.",
     section_armature: "ESQUELETO",
     section_diagnostics: "DIAGNÓSTICO",
     section_rendering: "RENDERIZAÇÃO",
+    section_mesh_sculpting: "ESCULTURA EN MALLA",
 
     label_intensity: "Intensidad",
     label_size: "Tamaño",
@@ -2043,7 +2048,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 224] {
+    pub fn all(&self) -> [&'static str; 225] {
         [
             self.label_autosave_in,
             self.state_autosaved,
@@ -2170,6 +2175,7 @@ impl Strings {
             self.section_armature,
             self.section_diagnostics,
             self.section_rendering,
+            self.section_mesh_sculpting,
             self.label_intensity,
             self.label_size,
             self.label_flow,

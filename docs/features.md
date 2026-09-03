@@ -2813,6 +2813,20 @@ The stall list is one line per operation, keeping the worst time and counting
 the occurrences — a list with one line per stall is dominated by whatever runs
 most often, which is the operation least worth looking at.
 
+**Escultura em malha** carries two numbers: how many mesh sculptors the
+document is holding, and how many stamps were handed a seed naming a class
+space that had been retired. A mesh brush is told which weld class to start its
+surface walk from, and that class is an index into a numbering the application
+throws away whenever it rebuilds a sculptor — an eviction, a removed subtool,
+an undo, a re-mesh. An index from a retired numbering is still in bounds, so
+nothing refuses it: the walk starts somewhere else, comes back empty, and the
+brush does nothing at all, which looks exactly like a stroke over a frozen
+mask. The class travels with a token naming the numbering it came from, so the
+engine catches it and falls back to a scan — one stamp slower, and correct.
+This is the count of those catches. Zero is the ordinary reading; the two
+numbers are shown together because zero over no sculptors and zero over four
+are the same number and different facts.
+
 **Ajuda → Atribuições** shows the attribution manifest, which is generated
 from `cargo metadata` and embedded in the binary rather than shipped beside it.
 

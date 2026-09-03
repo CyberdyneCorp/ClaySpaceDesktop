@@ -355,6 +355,9 @@ pub fn diagnostics_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &m
             if d.render.is_some() && heading(ui, s.section_rendering) {
                 diagnostics_render(ui, d);
             }
+            if d.mesh.is_some() && heading(ui, s.section_mesh_sculpting) {
+                diagnostics_mesh(ui, d);
+            }
 
             ui.add_space(space::SNUG);
             ui.horizontal(|ui| {
@@ -422,6 +425,26 @@ pub(super) fn diagnostics_backend(ui: &mut egui::Ui, d: &Diagnostics) {
             );
         }
     }
+}
+
+/// What mesh sculpting has had to correct for itself.
+///
+/// Two numbers, and they are here because what they count is otherwise
+/// invisible:
+/// a brush handed a seed from a numbering that has been retired reaches
+/// nothing, and a stroke that reached nothing looks exactly like a stroke over
+/// a frozen mask. Reported at zero for the same reason the fallbacks are —
+/// silence would read as a broken panel rather than as a quiet session.
+pub(super) fn diagnostics_mesh(ui: &mut egui::Ui, d: &Diagnostics) {
+    let Some(mesh) = &d.mesh else {
+        return;
+    };
+    readout(ui, "Esculturas em malha", format!("{}", mesh.sculptors));
+    readout(
+        ui,
+        "Sementes recusadas",
+        format!("{}", mesh.stale_seeds_rejected),
+    );
 }
 
 /// What the viewport drew, and what the device charged for it.

@@ -145,6 +145,12 @@ fn diagnostics() -> clayspace_model::Diagnostics {
             lines: 0,
             uploaded_bytes: 1_146_880,
         }),
+        // A session that has held two mesh subtools and had one seed refused,
+        // so the line is drawn with something in it rather than at its floor.
+        mesh: Some(clayspace_model::MeshDiagnostics {
+            sculptors: 2,
+            stale_seeds_rejected: 1,
+        }),
     }
 }
 

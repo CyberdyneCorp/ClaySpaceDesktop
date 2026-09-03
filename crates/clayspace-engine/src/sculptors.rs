@@ -77,6 +77,19 @@ impl<T> Held<T> {
         self.held.last_mut().map(|(_, sculptor)| sculptor)
     }
 
+    /// Every sculptor held, in no order a caller should depend on.
+    ///
+    /// For reading a figure off all of them at once — the stale-seed count —
+    /// rather than for reaching one, which is what `get_mut` is.
+    pub(crate) fn values(&self) -> impl Iterator<Item = &T> {
+        self.held.iter().map(|(_, held)| held)
+    }
+
+    /// How many are held.
+    pub(crate) fn len(&self) -> usize {
+        self.held.len()
+    }
+
     /// Whether one has been built for a layer, without counting as a use.
     pub(crate) fn holds(&self, layer: LayerKey) -> bool {
         self.held.iter().any(|(key, _)| *key == layer)

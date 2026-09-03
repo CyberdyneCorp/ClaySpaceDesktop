@@ -65,6 +65,40 @@ pub struct Diagnostics {
     /// the window is, and one that could not be produced until the GPU was up
     /// would be no use for diagnosing a GPU that did not come up.
     pub render: Option<RenderDiagnostics>,
+
+    /// What mesh sculpting has had to correct for itself.
+    ///
+    /// Optional because it is the document's answer rather than this build's,
+    /// and the report is assembled by the layer that knows the build. A
+    /// report taken with no document open carries `None`.
+    pub mesh: Option<MeshDiagnostics>,
+}
+
+/// What mesh sculpting has had to correct for itself.
+///
+/// One figure so far, and it is here rather than in a log because the thing it
+/// reports is otherwise **silent by construction**. A mesh brush is told which
+/// weld class to start its surface walk from, and a class is an index into a
+/// numbering that this application retires whenever it rebuilds a sculptor —
+/// an eviction, a removed subtool, an undo, a re-mesh. An index from a retired
+/// numbering is still in bounds, so nothing refuses it; the walk simply starts
+/// somewhere else and comes back empty, and the sculptor sees a brush that did
+/// nothing. That is indistinguishable from a fully masked stroke from every
+/// side but this one.
+///
+/// The engine catches it because the class travels with a token naming the
+/// numbering it came from, and falls back to a scan. This is the count of
+/// those catches: zero is the ordinary reading, and a figure that climbs says
+/// the mechanism is earning its place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MeshDiagnostics {
+    /// Mesh sculptors the document is holding.
+    ///
+    /// Beside the count below because zero rejections over no sculptors and
+    /// zero rejections over four are the same number and different facts.
+    pub sculptors: usize,
+    /// Stamps whose seed named a numbering that had been retired.
+    pub stale_seeds_rejected: usize,
 }
 
 /// What the viewport drew, and what it cost.
@@ -193,6 +227,15 @@ impl Diagnostics {
                 line("gpu", "timestamps unavailable on this adapter");
             }
         }
+        if let Some(mesh) = &self.mesh {
+            line(
+                "mesh sculptors",
+                &format!(
+                    "{} held, {} stale seeds rejected",
+                    mesh.sculptors, mesh.stale_seeds_rejected
+                ),
+            );
+        }
         out
     }
 }
@@ -219,6 +262,7 @@ mod tests {
             renderer: Some("Apple M3 Max (Metal)".into()),
             stalls: Vec::new(),
             render: None,
+            mesh: None,
         }
     }
 
@@ -282,6 +326,26 @@ mod tests {
     #[test]
     fn a_smooth_session_says_so_rather_than_staying_silent() {
         assert!(sample().to_report().contains("none over one frame"));
+    }
+
+    /// The figure is silent-by-construction, so it is reported even at zero:
+    /// a reader has to be able to tell "nothing was rejected" from "this build
+    /// does not report it", and a line that only appears when something is
+    /// wrong cannot.
+    #[test]
+    fn the_stale_seed_count_is_reported_at_zero_as_well() {
+        let mut diagnostics = sample();
+        diagnostics.mesh = Some(MeshDiagnostics {
+            sculptors: 2,
+            stale_seeds_rejected: 0,
+        });
+        let text = diagnostics.to_report();
+        assert!(text.contains("2 held, 0 stale seeds rejected"), "{text}");
+    }
+
+    #[test]
+    fn a_report_taken_with_no_document_omits_the_mesh_line() {
+        assert!(!sample().to_report().contains("mesh sculptors"));
     }
 
     #[test]

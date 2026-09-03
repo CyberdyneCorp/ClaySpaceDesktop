@@ -397,6 +397,10 @@ impl BackendPolicy {
             renderer: None,
             stalls: Vec::new(),
             render: None,
+            // The document's answer, not this build's; the composition root
+            // fills it from whatever document is open, exactly as it does the
+            // renderer and the stalls.
+            mesh: None,
         }
     }
 }
