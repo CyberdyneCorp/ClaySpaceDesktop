@@ -3974,12 +3974,14 @@ impl ClayDocument {
             // one.
             colour: chosen.rgb,
             smooth_iterations: Some(Self::SMOOTH_PASSES),
-            // No rotation at all, which is what every stamp here has always
-            // sent. Turning the grain with the direction of travel — a rake —
-            // is a change in the stroke resolver rather than in the wrapper,
-            // and it is visible only through an alpha, which this path hands
-            // a fixed world-X tangent to today.
-            stamp_azimuth: 0.0,
+            // The grain, as the sculptor set it. It turns the stamp's
+            // in-plane axes about the direction it faces, which is why the
+            // fixed world-X tangent the alpha block hands over below is not
+            // the thing that decides a turned stamp's orientation — that
+            // tangent picks the plane's zero, and this turns the stamp within
+            // it. Zero, the default, is no rotation at all and is what every
+            // brush that has never been turned keeps sending.
+            stamp_azimuth: brush.shaping.azimuth,
             // Filled in per mirror below, because a seed is a place as much
             // as it is a class: the pick that recorded one stood where the
             // unmirrored stamp stands, and a reflected copy of it stands

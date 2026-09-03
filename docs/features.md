@@ -123,9 +123,17 @@ brush count and the tool count differ. *Sculpting a mesh layer* has the detail.
 | Tamanho | stroke radius, in document units | 0.005–1 |
 | Fluxo | stamp spacing | 0.01–1 |
 | Ruído | positional jitter | 0–1 |
+| Grão | how far each stamp is turned about its own facing | 0–360° |
 | Borda | falloff: Dura, Linear, Suave, Gaussiana | — |
 | Acumular | buildup against clamped accumulation | on/off |
 | Suavização | lazy-mouse lag | 0–0.95 |
+
+**Grão** is the engine's `stamp_azimuth`, and it is what makes a rake, a
+chisel, clay strips and a turned stamp one number rather than four brushes. It
+is observable only where the footprint has something to orient: a round brush
+looks the same at every angle by construction, so the dial reads as inert until
+a stamp is loaded. A whole turn comes back to none rather than stopping at the
+end of its travel, because an angle has no ends.
 
 Settings are held **per tool**: switching away and back returns what you left,
 not a default. Values are clamped to what the engine accepts rather than

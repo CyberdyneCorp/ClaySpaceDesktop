@@ -910,6 +910,23 @@ pub struct Shaping {
     pub smoothing: f32,
     /// Mirror each stamp about the stroke — "Espelhamento".
     pub mirror: bool,
+    /// How far each stamp is turned about its own facing, in RADIANS — the
+    /// grain, "Grão".
+    ///
+    /// Maps to the engine's `stamp_azimuth`, which turns a stamp's in-plane
+    /// axes about the direction it faces. It is what makes a rake, a chisel,
+    /// clay strips and a turned alpha one number rather than four brushes.
+    ///
+    /// **Observable only where the stamp has something to orient.** A round
+    /// footprint looks the same at every angle by construction, so this reads
+    /// as inert until a stamp is loaded. It belongs with the rest of what
+    /// shapes a stroke rather than with its size and strength, which is where
+    /// a sculptor changes it — occasionally, and not mid-line.
+    ///
+    /// Zero is *no rotation at all* rather than a rotation by zero, and the
+    /// engine branches on that, so zero is the default and what every brush
+    /// that has never been turned keeps sending.
+    pub azimuth: f32,
 }
 
 impl Default for Shaping {
@@ -924,6 +941,7 @@ impl Default for Shaping {
             accumulate: true,
             smoothing: 0.25,
             mirror: false,
+            azimuth: 0.0,
         }
     }
 }
@@ -976,6 +994,18 @@ impl Default for BrushSettings {
     }
 }
 
+/// An angle brought inside one turn, and never a NaN.
+///
+/// `rem_euclid` answers NaN for a NaN and for an infinity, and the engine
+/// builds a rotation basis out of this — so the one value that cannot be
+/// allowed through is the one an unchecked division would produce.
+fn turn_of(radians: f32) -> f32 {
+    if !radians.is_finite() {
+        return 0.0;
+    }
+    radians.rem_euclid(std::f32::consts::TAU)
+}
+
 impl BrushSettings {
     /// Clamps to the ranges the engine accepts.
     ///
@@ -989,6 +1019,11 @@ impl BrushSettings {
             shaping: Shaping {
                 noise: self.shaping.noise.clamp(0.0, 1.0),
                 smoothing: self.shaping.smoothing.clamp(0.0, 0.95),
+                // A whole turn is the same grain as none, so the angle is
+                // brought back inside one rather than clamped at the ends —
+                // a clamp would make a dial run out of travel where an angle
+                // has none to run out of.
+                azimuth: turn_of(self.shaping.azimuth),
                 ..self.shaping
             },
             alpha: self.alpha,
@@ -1325,5 +1360,60 @@ mod tests {
         );
         assert!(settings.intensity <= 1.0);
         assert!(settings.flow > 0.0);
+    }
+
+    /// The grain survives being sanitized, and it is asserted at a quarter
+    /// turn rather than at zero on purpose.
+    ///
+    /// A default survives a field that has been dropped exactly as well as one
+    /// that has been carried — which is how upstream's own round trip missed
+    /// this very field going missing, every preset in their reference set
+    /// having an azimuth of zero. So the value under test is one nothing would
+    /// produce by accident.
+    #[test]
+    fn a_turned_brush_is_still_turned_after_it_is_sanitized() {
+        let quarter = std::f32::consts::FRAC_PI_2;
+        let settings = BrushSettings {
+            shaping: Shaping {
+                azimuth: quarter,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+        .sanitized();
+        assert_eq!(settings.shaping.azimuth, quarter);
+    }
+
+    /// A whole turn is no turn, and it comes back as the zero the engine
+    /// treats specially rather than as a number just short of one revolution.
+    #[test]
+    fn a_whole_turn_of_grain_comes_back_to_none() {
+        let settings = BrushSettings {
+            shaping: Shaping {
+                azimuth: std::f32::consts::TAU,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+        .sanitized();
+        assert_eq!(settings.shaping.azimuth, 0.0);
+    }
+
+    /// And a grain that is not a number at all becomes none, because the
+    /// engine builds a rotation basis out of it and a NaN there is a stamp
+    /// with no orientation rather than a stamp at a strange one.
+    #[test]
+    fn a_grain_that_is_not_a_number_is_no_grain() {
+        for wrong in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let settings = BrushSettings {
+                shaping: Shaping {
+                    azimuth: wrong,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+            .sanitized();
+            assert_eq!(settings.shaping.azimuth, 0.0, "{wrong} survived");
+        }
     }
 }

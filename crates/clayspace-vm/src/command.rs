@@ -174,6 +174,12 @@ pub enum Command {
     SetBrushIntensity(f32),
     SetBrushFlow(f32),
     SetBrushNoise(f32),
+    /// How far each stamp is turned about its own facing, in radians.
+    ///
+    /// The grain. Radians rather than degrees because that is what the engine
+    /// takes and what the domain carries; the dial is the View's own reading
+    /// of it.
+    SetBrushAzimuth(f32),
     SetBrushFalloff(Falloff),
     SetBrushAccumulate(bool),
     /// Whether the active tool's brush is modulated by the loaded stamp.
@@ -519,6 +525,7 @@ impl Command {
                 | Self::SetBrushIntensity(_)
                 | Self::SetBrushFlow(_)
                 | Self::SetBrushNoise(_)
+                | Self::SetBrushAzimuth(_)
                 | Self::SetBrushFalloff(_)
                 | Self::SetBrushAccumulate(_)
                 | Self::SetBrushAlpha(_)
@@ -604,6 +611,7 @@ impl Command {
             Self::SetBrushIntensity(_) => "brush intensity",
             Self::SetBrushFlow(_) => "brush flow",
             Self::SetBrushNoise(_) => "brush noise",
+            Self::SetBrushAzimuth(_) => "brush grain",
             Self::SetBrushFalloff(_) => "brush edge",
             Self::SetBrushAccumulate(_) => "brush accumulation",
             Self::SetBrushAlpha(_) => "brush stamp",

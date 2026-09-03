@@ -429,6 +429,48 @@ fn brush_settings_are_clamped_rather_than_refused() {
     );
 }
 
+/// The grain reaches the brush and is remembered per tool like everything
+/// else on it.
+///
+/// A quarter turn rather than the default, because a default is what a
+/// dropped field looks like: it arrives correct whether anything carried it
+/// or not. Upstream lost this very field to a round trip made entirely of
+/// zeroes.
+#[test]
+fn the_grain_is_a_brush_setting_like_any_other() {
+    let (mut vm, _) = fixture();
+    let quarter = std::f32::consts::FRAC_PI_2;
+    vm.dispatch(Command::SetBrushAzimuth(quarter))
+        .expect("grain");
+    assert_eq!(vm.brush().get().shaping.azimuth, quarter);
+
+    vm.dispatch(Command::SelectTool(ToolKind::Suavizar))
+        .expect("select");
+    assert_eq!(
+        vm.brush().get().shaping.azimuth,
+        0.0,
+        "a tool that was never turned should not inherit another's grain"
+    );
+
+    vm.dispatch(Command::SelectTool(ToolKind::Padrao))
+        .expect("select");
+    assert_eq!(
+        vm.brush().get().shaping.azimuth,
+        quarter,
+        "switching away and back must return the grain the sculptor left"
+    );
+}
+
+/// A whole turn is no turn, and it is brought back rather than clamped: an
+/// angle has no ends to run out of travel at.
+#[test]
+fn a_grain_dialled_all_the_way_round_comes_back_to_none() {
+    let (mut vm, _) = fixture();
+    vm.dispatch(Command::SetBrushAzimuth(std::f32::consts::TAU))
+        .expect("grain");
+    assert_eq!(vm.brush().get().shaping.azimuth, 0.0);
+}
+
 // -- history -----------------------------------------------------------------
 
 #[test]

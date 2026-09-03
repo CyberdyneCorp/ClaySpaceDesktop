@@ -276,6 +276,8 @@ pub struct Strings {
     pub section_mesh_sculpting: &'static str,
 
     // Labels
+    /// How far a stamp is turned about its own facing — the grain.
+    pub label_grain: &'static str,
     pub label_intensity: &'static str,
     pub label_size: &'static str,
     pub label_flow: &'static str,
@@ -770,6 +772,7 @@ libera em vez de congelar.",
     section_rendering: "RENDERIZAÇÃO",
     section_mesh_sculpting: "ESCULTURA EM MALHA",
 
+    label_grain: "Grão",
     label_intensity: "Intensidade",
     label_size: "Tamanho",
     label_flow: "Fluxo",
@@ -1178,6 +1181,7 @@ instead.",
     section_rendering: "RENDERING",
     section_mesh_sculpting: "MESH SCULPTING",
 
+    label_grain: "Grain",
     label_intensity: "Intensity",
     label_size: "Size",
     label_flow: "Flow",
@@ -1594,6 +1598,7 @@ lados. Con Ctrl, libera en vez de congelar.",
     section_rendering: "RENDERIZAÇÃO",
     section_mesh_sculpting: "ESCULTURA EN MALLA",
 
+    label_grain: "Grano",
     label_intensity: "Intensidad",
     label_size: "Tamaño",
     label_flow: "Flujo",
@@ -2048,7 +2053,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 225] {
+    pub fn all(&self) -> [&'static str; 226] {
         [
             self.label_autosave_in,
             self.state_autosaved,
@@ -2176,6 +2181,7 @@ impl Strings {
             self.section_diagnostics,
             self.section_rendering,
             self.section_mesh_sculpting,
+            self.label_grain,
             self.label_intensity,
             self.label_size,
             self.label_flow,

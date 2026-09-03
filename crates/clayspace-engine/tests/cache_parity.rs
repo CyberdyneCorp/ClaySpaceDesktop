@@ -126,6 +126,7 @@ fn every_brush_the_interface_can_produce_moves_the_cache() {
                         accumulate: true,
                         smoothing: 0.25,
                         mirror: false,
+                        azimuth: 0.0,
                     },
                     alpha: false,
                 };

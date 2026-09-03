@@ -307,6 +307,7 @@ impl SculptViewModel {
             Command::SetBrushIntensity(value) => self.edit_brush(|b| b.intensity = value),
             Command::SetBrushFlow(value) => self.edit_brush(|b| b.flow = value),
             Command::SetBrushNoise(value) => self.edit_brush(|b| b.shaping.noise = value),
+            Command::SetBrushAzimuth(value) => self.edit_brush(|b| b.shaping.azimuth = value),
             Command::SetBrushFalloff(falloff) => self.edit_brush(|b| b.shaping.falloff = falloff),
             Command::SetBrushAccumulate(on) => self.edit_brush(|b| b.shaping.accumulate = on),
             Command::SetBrushAlpha(on) => self.edit_brush(|b| b.alpha = on),
