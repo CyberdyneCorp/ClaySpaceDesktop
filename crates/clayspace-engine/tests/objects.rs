@@ -564,8 +564,7 @@ fn both_ways_of_moving_a_layer_agree() {
     assert_eq!(read_back.position, [0.0, -1.5, 0.0]);
 }
 
-/// Scale is uniform on a layer as on an object, because the engine's
-/// transforms take one factor.
+/// The centre handle takes all three axes, on a layer as on an object.
 #[test]
 fn scaling_a_layer_scales_all_of_it() {
     let mut document = document();
@@ -1168,4 +1167,124 @@ fn a_stretched_object_reopens_stretched() {
         "the stretch did not survive the round trip"
     );
     let _ = std::fs::remove_file(&path);
+}
+
+/// A box on one axis of a whole subtool's manipulator stretches that axis and
+/// leaves the other two where they were.
+///
+/// The gesture end to end rather than the setter: the drag the widget resolves
+/// is what reaches the layer, so this is the assertion that the three handles
+/// produce the scale they claim to. `GizmoDrag::factor` reads a ratio of
+/// distances from the pivot, so a pull from one unit out to three is a factor
+/// of three, and `resolve` applies it to the grabbed axis alone.
+#[test]
+fn a_scale_box_stretches_one_axis_of_a_whole_subtool() {
+    let mut document = document();
+    let key = document.scene().active.expect("an active layer");
+    let target = GizmoTarget::Layer(key);
+    let current = document.target_transform(target).expect("a transform");
+    assert_eq!(current.scale, [1.0; 3], "a layer starts unstretched");
+
+    let gesture = drag(
+        GizmoMode::Scale,
+        GizmoHandle::Axis(0),
+        [0.0; 3],
+        [1.0, 0.0, 0.0],
+    );
+    let stretched = gesture.resolve(current, [3.0, 0.0, 0.0], false);
+    assert_eq!(
+        stretched.scale,
+        [3.0, 1.0, 1.0],
+        "the box on x asked for a stretch on some other axis"
+    );
+
+    document
+        .set_target_transform(target, stretched)
+        .expect("stretch the subtool");
+
+    let read_back = document.target_transform(target).expect("a transform");
+    assert_eq!(
+        read_back.scale,
+        [3.0, 1.0, 1.0],
+        "the stretch did not survive the trip through the engine"
+    );
+
+    // And it reached the field. The starting form is a unit sphere at the
+    // origin: stretched three times in x it encloses a point at 2.0 along x,
+    // and still does not reach 2.0 along y.
+    assert!(
+        inside(&document, [2.0, 0.0, 0.0]),
+        "the subtool was stretched three times in x and 2.0 along x is still \
+         outside it — the per-axis layer scale never reached the field"
+    );
+    assert!(
+        !inside(&document, [0.0, 2.0, 0.0]),
+        "stretching x reached y, so a layer's scale is not per axis at all"
+    );
+}
+
+/// The centre handle still takes all three, which is what makes it worth
+/// having beside the boxes.
+#[test]
+fn the_centre_handle_scales_a_whole_subtool_evenly() {
+    let mut document = document();
+    let key = document.scene().active.expect("an active layer");
+    let target = GizmoTarget::Layer(key);
+    let current = document.target_transform(target).expect("a transform");
+
+    let gesture = drag(
+        GizmoMode::Scale,
+        GizmoHandle::Centre,
+        [0.0; 3],
+        [1.0, 0.0, 0.0],
+    );
+    let scaled = gesture.resolve(current, [2.0, 0.0, 0.0], false);
+    assert_eq!(
+        scaled.scale, [2.0; 3],
+        "the centre handle took one axis only"
+    );
+
+    document
+        .set_target_transform(target, scaled)
+        .expect("scale the subtool");
+    assert!(
+        inside(&document, [0.0, 1.5, 0.0]) && inside(&document, [1.5, 0.0, 0.0]),
+        "an even scale did not reach every axis"
+    );
+}
+
+/// A move does not unsquash what it moves.
+///
+/// The ABI does no partial updates: each of the two layer setters writes the
+/// whole transform, so a uniform call made anywhere on this path would round
+/// a squash away as a side effect of a drag that had nothing to do with it.
+#[test]
+fn moving_a_squashed_subtool_leaves_it_squashed() {
+    let mut document = document();
+    let key = document.scene().active.expect("an active layer");
+    let target = GizmoTarget::Layer(key);
+    let current = document.target_transform(target).expect("a transform");
+
+    document
+        .set_target_transform(
+            target,
+            Transform {
+                scale: [2.0, 1.0, 0.5],
+                ..current
+            },
+        )
+        .expect("squash it");
+
+    // The narrow route, which is the one that takes a single factor: standing
+    // a subtool somewhere must not be a way to unsquash it either.
+    document
+        .set_layer_transform(key, [0.0, 1.0, 0.0], 1.0)
+        .expect("stand it somewhere");
+    let read_back = document.target_transform(target).expect("a transform");
+    assert_eq!(read_back.position, [0.0, 1.0, 0.0]);
+    assert_eq!(
+        read_back.scale, [1.0; 3],
+        "the narrow route takes one factor and says so; it writes a whole \
+         transform and the squash goes with it"
+    );
 }

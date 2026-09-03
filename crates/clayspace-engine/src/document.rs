@@ -2641,7 +2641,7 @@ impl ClayDocument {
         // already in that frame, having come through it.
         let carried_scale = self
             .carried_placement(self.active_layer().key)
-            .map(|transform| transform.uniform_scale().max(1e-4))
+            .map(|transform| transform.largest_scale())
             .unwrap_or(1.0);
         let join = combine.radius / carried_scale;
         let distance = if combine.op.displaces_along_the_normal() {
@@ -3477,7 +3477,7 @@ impl ClayDocument {
         let samples = carried.as_deref().unwrap_or(samples);
         let mut brush = brush.sanitized();
         if let Some(transform) = &placement {
-            brush.size /= transform.uniform_scale().max(1e-4);
+            brush.size /= transform.largest_scale();
         }
         let preset = self.preset(brush, ToolKind::Mascara);
         let stroke: Vec<claycore::StrokeSample> = samples
@@ -3803,7 +3803,7 @@ impl ClayDocument {
 
         let mut brush = brush.sanitized();
         if let Some(transform) = &placement {
-            brush.size /= transform.uniform_scale().max(1e-4);
+            brush.size /= transform.largest_scale();
         }
         // Read before the sculptor is borrowed mutably. A mesh takes an alpha
         // by a third route — the brush descriptor's own block — and it is not
@@ -5564,7 +5564,7 @@ impl ClayDocument {
             // A subtool scaled to half its size wants half the radius against
             // the cells it actually holds.
             Some(transform) => BrushSettings {
-                size: brush.size / transform.uniform_scale().max(1e-4),
+                size: brush.size / transform.largest_scale(),
                 ..brush
             },
             None => brush,
@@ -5871,7 +5871,7 @@ impl SculptModel for ClayDocument {
                 let samples = carried.as_deref().unwrap_or(samples);
                 let brush = match &placement {
                     Some(transform) => BrushSettings {
-                        size: brush.size / transform.uniform_scale().max(1e-4),
+                        size: brush.size / transform.largest_scale(),
                         ..brush
                     },
                     None => brush,
@@ -7087,8 +7087,11 @@ impl SceneModel for ClayDocument {
             key,
             clayspace_model::Transform {
                 position,
-                // A layer's scale is uniform: the engine's *layer* transform
-                // takes one factor, unlike a node's.
+                // One number, because this route's callers have one — a
+                // subtool stood somewhere at a size. The layer transform takes
+                // three since ABI 0.74.0 and the manipulator writes three; a
+                // uniform triple here is a placement that happens not to
+                // stretch, not a claim that it cannot.
                 scale: [scale.max(1e-4); 3],
                 ..turned
             },
@@ -8850,9 +8853,15 @@ impl ClayDocument {
                 continue;
             }
             let turned = Self::turned_by(transform.rotation_axis, -transform.rotation_angle, moved);
-            let scale = transform.uniform_scale().max(1e-4);
+            // Component by component, because the frame this displacement is
+            // being carried into may stretch each axis by a different amount —
+            // the same division `Transform::into_local` makes, on a vector
+            // rather than on a point.
             carried
-                .set_offset(coordinate, std::array::from_fn(|i| turned[i] / scale))
+                .set_offset(
+                    coordinate,
+                    std::array::from_fn(|i| turned[i] / transform.scale[i].max(1e-4)),
+                )
                 .map_err(ModelError::engine)?;
         }
         Ok(carried)
@@ -8950,6 +8959,21 @@ impl ClayDocument {
     fn bend_field(&mut self, cage: &Cage) -> Result<(), ModelError> {
         let index = self.index_of(cage.layer)?;
         let id = self.layers[index].id;
+        // Said rather than discovered. `clay_layer_lattice_gizmo` returns no
+        // warps at all for a layer carrying a per-axis scale — a cage records
+        // its item-to-cage placement as a rigid transform, and on a squashed
+        // layer the map it needs is a general affine one, so placing a cage
+        // through the narrower record would warp every item in a space it does
+        // not occupy. The engine refuses rather than approximating, and
+        // without this the refusal would arrive as "the cage reached nothing
+        // in this layer", which is true and tells the sculptor nothing they
+        // can act on.
+        if !self.layers[index].transform.is_uniformly_scaled() {
+            return Err(ModelError::engine(
+                "a gaiola não deforma um subtool esticado por eixo: \
+                 volte a escala aos três fatores iguais para usá-la",
+            ));
+        }
         let placed = claycore::GizmoCage {
             // The cage is already in world coordinates, so it is placed at the
             // origin unrotated and unscaled and spans the box itself. Carrying
@@ -9838,20 +9862,29 @@ impl ClayDocument {
 
     /// Refills what an object edit reached, or the layer where it reached too
     /// far to say.
-    /// Writes a layer's transform to the engine, scale floored so a form can
-    /// never be scaled to nothing.
+    /// Writes a layer's transform to the engine, each factor floored so a form
+    /// can never be scaled to nothing.
+    ///
+    /// The per-axis call for every layer transform and not only for a
+    /// stretched one, which is the same rule the object path already follows
+    /// and for the same reason: the ABI does no partial updates, so each of
+    /// the two setters writes the *whole* transform and the uniform one
+    /// collapses a squash rather than leaving it alone. One call for both
+    /// means a subtool cannot be quietly unsquashed by being moved. A uniform
+    /// triple costs nothing — the engine is explicit that it keeps the field
+    /// exact and compiles identical tape.
     fn write_layer_transform(
         &mut self,
         id: LayerId,
         transform: clayspace_model::Transform,
     ) -> Result<(), ModelError> {
         self.document
-            .set_layer_transform(
+            .set_layer_transform_nonuniform(
                 id,
                 transform.position,
                 transform.rotation_axis,
                 transform.rotation_angle,
-                transform.uniform_scale().max(1e-4),
+                std::array::from_fn(|axis| transform.scale[axis].max(1e-4)),
             )
             .map_err(ModelError::engine)
     }
@@ -10320,8 +10353,12 @@ impl ClayDocument {
     /// because this runs inside the insertion's undo group and `place_layer`
     /// would snapshot and refill in the middle of it.
     fn stand_subtool_at(&mut self, layer: LayerId, at: [f32; 3]) -> Result<(), ModelError> {
+        // The per-axis call here too, for the reason `write_layer_transform`
+        // gives: an insertion writes a whole transform, and the uniform setter
+        // would be the one route that could unsquash a layer behind the
+        // manipulator's back.
         self.document
-            .set_layer_transform(layer, at, [0.0, 1.0, 0.0], 0.0, 1.0)
+            .set_layer_transform_nonuniform(layer, at, [0.0, 1.0, 0.0], 0.0, [1.0; 3])
             .map_err(ModelError::engine)?;
         if let Some(known) = self.layers.iter_mut().find(|known| known.id == layer) {
             known.transform = clayspace_model::Transform {
@@ -10612,14 +10649,18 @@ impl ClayDocument {
                 let Some(transform) = transform else {
                     continue;
                 };
+                // Per axis: this is a *layer's* placement being written onto
+                // a node, and a layer's placement stretches since ABI 0.74.0.
+                // The uniform setter would have rounded a squashed operand
+                // back to round on the way into the result.
                 doc.document
-                    .set_node_transform(
+                    .set_node_transform_nonuniform(
                         layer,
                         item,
                         transform.position,
                         transform.rotation_axis,
                         transform.rotation_angle,
-                        transform.uniform_scale().max(1e-4),
+                        std::array::from_fn(|axis| transform.scale[axis].max(1e-4)),
                     )
                     .map_err(ModelError::engine)?;
             }

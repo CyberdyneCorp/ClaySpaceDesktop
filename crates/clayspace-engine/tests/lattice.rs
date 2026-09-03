@@ -880,3 +880,60 @@ fn the_axis_pointing_at_the_camera_can_still_be_scaled() {
         "a scale along the axis facing the eye moved {moved}"
     );
 }
+
+/// A squashed subtool is refused the cage in words, rather than by the cage
+/// reaching nothing.
+///
+/// `clay_layer_lattice_gizmo` returns no warps at all for a layer carrying a
+/// per-axis scale, and the header is explicit that this is a refusal rather
+/// than an approximation: a cage records its item-to-cage placement as a rigid
+/// transform, and on a squashed layer the map it needs is a general affine
+/// one — the layer's diagonal sits *between* the two placements — so placing a
+/// cage through the narrower record would warp every item in a space it does
+/// not occupy, silently.
+///
+/// Before the per-axis layer transform was written there was no way to reach
+/// this. Now there is, and without saying so the sculptor would be told "the
+/// cage reached nothing in this layer", which is true and names nothing they
+/// can undo.
+#[test]
+fn the_cage_refuses_a_subtool_that_has_been_stretched_per_axis() {
+    use clayspace_model::{GizmoTarget, ObjectModel, SceneModel, Transform};
+
+    let mut document = sphere();
+    let key = document.scene().active.expect("an active layer");
+    let target = GizmoTarget::Layer(key);
+    let standing = document.target_transform(target).expect("a transform");
+    document
+        .set_target_transform(
+            target,
+            Transform {
+                scale: [2.0, 1.0, 1.0],
+                ..standing
+            },
+        )
+        .expect("squash the subtool");
+
+    document.begin_lattice([4, 4, 4]).expect("a cage");
+    lift(&mut document, 2, 0.5);
+    let refused = document
+        .apply_lattice()
+        .expect_err("a squashed layer took the cage");
+    let said = refused.to_string();
+    assert!(
+        said.contains("esticado por eixo"),
+        "the refusal said {said:?}, which does not name the stretch that \
+         caused it"
+    );
+
+    // And the same cage works once the stretch is gone, so the refusal is
+    // about the squash and not about the cage.
+    document
+        .set_target_transform(target, standing)
+        .expect("unsquash it");
+    document.begin_lattice([4, 4, 4]).expect("a cage");
+    lift(&mut document, 2, 0.5);
+    document
+        .apply_lattice()
+        .expect("an unstretched subtool still takes the cage");
+}
