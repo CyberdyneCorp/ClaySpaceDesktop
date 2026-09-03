@@ -297,6 +297,25 @@ a field. Reconstructing the resolver host-side would put field math in this
 application, which the layering forbids and which the engine's own note asks
 callers not to do.
 
+**A limit ClayCore v0.78.0 states about itself is now held as a tripwire
+here**, because it bears on work this application is about to do and it is not
+a filed defect — it is the shape of the ABI, stated rather than discovered.
+
+*A `.clayspace` does not carry a multires hierarchy.* The release calls this
+"the largest integration cost" in it, and it is: a `clay_multires` is a
+free-standing owning handle that took a **copy** of the cage on the way in, so
+the document it was built from does not know it exists.
+`clay_multires_serialize` is the only route the sculpt has to disk and where
+those bytes go is the host's decision. Measured in
+`claycore/tests/multires_document.rs`: the same document saved either side of a
+dab on the hierarchy built from its cage comes out at 812 bytes both times and
+byte for byte identical, while the hierarchy's own blob is 13,128 bytes; reopen
+the file and the cage is there, flat, with nothing refusing and nothing warning.
+So a multires representation needs a side-car in the shape of
+`clayspace_engine::objects`' table — and unlike that table, which is
+bookkeeping, this one *is* the work, so a failed write has to fail the save.
+The tripwire fails the day `clay_document_save` starts carrying the surface.
+
 Every other issue filed from this work has been released and taken up —
 including [#71](https://github.com/CyberdyneCorp/ClayCore/issues/71), which was
 the macOS CI blocker.
