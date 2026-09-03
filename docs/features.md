@@ -2481,11 +2481,23 @@ speaks — it stores a quaternion and calls the axis and angle *a* representativ
 rather than the representation, so three Euler angles would be one of several
 answers and would change when nothing had moved.
 
-**A placed object stretches per axis.** The manipulator's three scale boxes are
-offered on it: a box on an axis stretches that axis, the centre handle takes
-all three. A whole subtool still scales uniformly, because the engine's *layer*
-transform takes one factor where its *node* transform takes three — the handles
-are offered exactly where they can be applied.
+**A placed object stretches per axis, and so does a whole subtool.** The
+manipulator's three scale boxes are offered on both: a box on an axis stretches
+that axis, the centre handle takes all three. The handles are offered exactly
+where they can be applied, and since ClayCore 0.74.0 that is everywhere the
+manipulator can stand — `clay_document_set_layer_transform_nonuniform` (#373)
+gave the *layer* transform the per-axis form the *node* transform has had since
+0.54.0, so the widget stopped being two different widgets depending on what it
+was pointed at.
+
+Two things a stretched subtool costs, both stated rather than discovered. Its
+**deformation cage is refused**: `clay_layer_lattice_gizmo` returns no warps at
+all for a layer carrying a per-axis scale, because a cage records its
+item-to-cage placement as a rigid transform and on a squashed layer the map it
+needs is a general affine one — so the application says so in words rather than
+letting the cage reach nothing. And a document carrying one is written at
+**`.clayspace` container minor 16**, which a build older than ClayCore v0.78.0
+*refuses* rather than misreads.
 
 They were hidden on everything but a deformation cage for as long as nothing
 had bound `clay_layer_set_transform_nonuniform`, which the engine has carried
@@ -2500,6 +2512,41 @@ did. What is lost is exactness — the value becomes a bound on the distance,
 short by at most the ratio of the largest axis to the smallest and never an
 overestimate — which matters to a consumer reading it *as* a distance and to
 nothing else. A uniform value compiles to identical tape.
+
+**A world length carried into a squashed subtool takes the largest of the three
+factors**, not their mean. A brush radius and a join width are world distances
+and the layer's own content is addressed in the layer's own coordinates, so
+five sites divide one by the other — and a subtool squashed three to one has no
+single divisor. The engine settles it rather than the application guessing: an
+evaluated distance is multiplied back by the *smallest* component so the field
+never overestimates, and the dual of that, for a radius mapped the other way,
+is the largest, "so a gesture never reaches outside the region it named". The
+mean is the obvious answer and would let the brush reach past its own ring on
+the wide axis, which is a dab landing where the sculptor was not pointing.
+
+**A reopened subtool comes back where it stood**, which it did not before.
+Until ABI 0.74.0 the boundary set a layer transform and would not read one
+back, so opening a document had no way to learn where a saved subtool was and
+assumed the origin, unturned and unscaled. On a field subtool the engine went
+on evaluating the tape where the layer really was, so the *form* was drawn
+correctly and everything derived from the placement was not: the whole-subtool
+manipulator sat in empty space, a mirrored dab reflected through the world's
+plane rather than the layer's, and a mask painted in world coordinates missed
+the cells it was meant to protect. On a carried mesh or a grid — where the
+application applies the placement itself — the subtool came back at the origin.
+`clay_document_layer_transform_nonuniform` answers the question, so opening a
+document asks it.
+
+The same reader retired a mechanism. Every route that placed a layer used to
+record where the whole stack stood against the engine's undo depth, from six
+call sites, for one reason: the engine reverted a layer transform on an undo
+and could not say that it had. It can say so now, so the history reads the
+engine instead of consulting a copy — which also means a placement made by a
+route the application does not know about is followed rather than overwritten.
+The per-axis reader is the one to ask with: the single-factor reader *refuses*
+a layer carrying three different factors rather than averaging them away, while
+the per-axis one reports the product of the layer's two scales, so a uniformly
+placed layer reads (s, s, s) and one manipulator never has to branch.
 
 **The floor dissolves rather than ending.** The grid fades out before it
 reaches its own extent, so it draws no rectangle around the scene, and each

@@ -337,9 +337,12 @@ bright.
 While the manipulator is on a *placed object* its transform stands in the
 viewport's lower-leading corner — position, an axis and one angle for rotation,
 and scale — because a widget shows that something moved and never by how much.
-A placed object stretches per axis; a whole subtool scales uniformly, because
-the engine's layer transform takes one factor where its node transform takes
-three.
+A placed object stretches per axis, and so does a whole subtool: the engine's
+layer transform has taken a factor per axis since ClayCore 0.74.0, so the
+manipulator is one widget with the same three boxes on it wherever it stands.
+A `.clayspace` written by this build carries that stretch, at container minor
+16 — which a build older than v0.78.0 refuses to open rather than misreading,
+the direction the format is designed to fail in.
 
 **When a subtool has become costly to evaluate** the objects panel says so and
 offers to consolidate it, with the cost of doing that stated.
