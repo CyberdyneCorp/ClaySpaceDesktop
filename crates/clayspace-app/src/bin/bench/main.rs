@@ -145,6 +145,7 @@ fn measure_everything(policy: &BackendPolicy, run: &mut Run) {
     run.group("object", |run| groups::objects::measure(policy, run));
     run.group("subtool", |run| groups::subtool::measure(policy, run));
     run.group("multires", |run| groups::multires::measure(policy, run));
+    run.group("normals", groups::normals::measure);
     run.group("authoring", |run| groups::authoring::measure(policy, run));
     run.group("convert", |run| groups::convert::measure(policy, run));
     run.group("bake", |run| groups::bake::measure(policy, run));

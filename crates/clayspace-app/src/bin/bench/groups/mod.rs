@@ -15,6 +15,7 @@ pub mod locality;
 pub mod mask;
 pub mod memory;
 pub mod multires;
+pub mod normals;
 pub mod objects;
 pub mod operations;
 pub mod render;
