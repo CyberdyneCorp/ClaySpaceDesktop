@@ -176,6 +176,40 @@ impl BrickRequest {
     pub fn key(&self) -> BrickKey {
         self.0.key
     }
+
+    /// The same request with its lattice moved to `offset`, for evaluating a
+    /// document against a cache whose lattice is not the document's.
+    ///
+    /// A host previewing one layer keeps a cache of its own whose brick `K`
+    /// sits at `offset + K * span` in the world rather than at `K * span` —
+    /// `clayspace_engine::live` explains why that relabelling is the only way
+    /// to draw a transaction's samples without a second implementation of the
+    /// field. The requests such a cache hands out carry *its* origin, which
+    /// names the wrong world position for
+    /// [`BrickCache::eval_excluding`](crate::BrickCache::eval_excluding) or
+    /// any other call that reads a document. This is the copy that names the
+    /// right one.
+    ///
+    /// Only the origin moves. `key` and `generation` are carried across
+    /// untouched and an evaluation reads neither: the engine derives a
+    /// request's world box from `origin`, `spacing` and `dims`, checks the
+    /// band, and never re-derives it from the key. So a translated copy
+    /// evaluates exactly the brick it names and nothing else has to agree.
+    ///
+    /// **Evaluate with the copy and submit the original.** Submit checks
+    /// `generation`, which the copy still carries, so a translated request
+    /// would be *accepted* — and it would store the samples for one world
+    /// position under the key of another. The two halves are separate here
+    /// for the same reason
+    /// [`eval_excluding`](crate::BrickCache::eval_excluding) does not submit.
+    #[must_use]
+    pub fn translated(&self, offset: [f32; 3]) -> Self {
+        let mut raw = self.0;
+        for axis in 0..3 {
+            raw.origin[axis] += offset[axis];
+        }
+        Self(raw)
+    }
 }
 
 /// Samples read back from the cache.

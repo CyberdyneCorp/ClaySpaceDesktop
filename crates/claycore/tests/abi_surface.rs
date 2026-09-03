@@ -714,6 +714,76 @@ fn a_brick_refill_can_leave_a_layer_out_and_hands_the_samples_back() {
     );
 }
 
+/// A cache whose lattice is not the document's still evaluates the document,
+/// by moving the request rather than the cache.
+///
+/// This is what a live preview needs. Its cache is *relabelled* — brick `K`
+/// is stored at `K * span` and drawn at `offset + K * span` — so the requests
+/// it hands out name the wrong world position for anything that reads a
+/// document. Translating a copy names the right one; the original still
+/// carries the generation `submit` checks, so the evaluation and the storage
+/// stay two halves that cannot be confused for each other.
+#[test]
+fn a_translated_request_evaluates_where_it_was_moved_to() {
+    let (doc, left, _right) = two_layer_doc();
+    let mut cache = claycore::BrickCache::new(claycore::BrickConfig {
+        dim: 8,
+        voxel_size: 0.1,
+        band_voxels: 3,
+        memory_budget: None,
+        colors: false,
+    })
+    .expect("cache");
+    cache
+        .mark_dirty([-0.6, -0.6, -0.6], [0.6, 0.6, 0.6])
+        .expect("dirty the lattice around its own origin");
+    let (requests, _) = cache.take_dirty(64).expect("drain");
+    assert!(!requests.is_empty(), "the fixture dirtied nothing");
+
+    // With the left sphere excluded there is nothing at the origin, so these
+    // bricks are entirely outside every surface that is left.
+    let here = cache
+        .eval_excluding(&doc, left, None, &requests)
+        .expect("the document without the left sphere");
+    assert!(
+        here.values.iter().all(|d| *d >= 0.0),
+        "a sample at the origin stood inside a surface, with the only thing \
+         standing there excluded"
+    );
+
+    // The same bricks, read two units to the right, where the other sphere is.
+    let offset = [2.0, 0.0, 0.0];
+    let moved: Vec<_> = requests.iter().map(|r| r.translated(offset)).collect();
+    let there = cache
+        .eval_excluding(&doc, left, None, &moved)
+        .expect("the same bricks, evaluated where they are drawn");
+    assert!(
+        there.values.iter().any(|d| *d <= 0.0),
+        "the translated bricks cover the right sphere and not one of their \
+         samples was inside it"
+    );
+
+    // Only the origin moved: the key is what the cache stores the samples
+    // under, and a translated request that renamed its brick would file the
+    // answer under the wrong one.
+    for (original, moved) in requests.iter().zip(&moved) {
+        assert_eq!(original.key(), moved.key());
+    }
+
+    // And the pairing the whole thing exists for: evaluate with the copies,
+    // submit the originals. The generation survives the translation, so the
+    // cache takes them.
+    let outcomes = cache
+        .submit(&requests, &there.values, None)
+        .expect("submit the originals with the translated answers");
+    assert!(
+        outcomes
+            .iter()
+            .all(|o| *o == claycore::BrickSubmit::Accepted),
+        "the cache refused requests it had just handed out: {outcomes:?}"
+    );
+}
+
 /// The refusal reaches the brick-cache half too — same rule, same reason.
 #[test]
 fn the_brick_half_refuses_an_unknown_layer_and_accepts_a_hidden_one() {
