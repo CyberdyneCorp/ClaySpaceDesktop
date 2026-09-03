@@ -17,6 +17,7 @@
 //! O(vertices) build the session pays once. Creating one per stroke would pay
 //! it per stroke, which is the shape a latency budget exists to forbid.
 
+use std::num::NonZeroU32;
 use std::ptr::NonNull;
 
 use claycore_sys as sys;
@@ -179,12 +180,28 @@ pub struct Automask {
     pub topology_connected: bool,
     /// How many rings of fade to leave at an open border. `None` leaves the
     /// factor off.
-    pub boundary_rings: Option<i32>,
+    ///
+    /// **Non-zero, because zero cannot cross this ABI.** The engine's own
+    /// vocabulary has a rings count of zero meaning a hard stop at the border
+    /// itself rather than a fade into it — a distinct setting, and one
+    /// `clay_c.cpp` discards: it copies the field only `if
+    /// (d.automask_boundary_rings > 0)`, so a zero written here would leave
+    /// the engine's default of **two rings of fade** standing with the factor
+    /// bit set and nothing saying so. Measured on a 16x16 sheet, `Some(0)`
+    /// used to move the surface by exactly what `Some(2)` did, to the bit. A
+    /// host that needs the hard stop has to gate the border itself.
+    pub boundary_rings: Option<NonZeroU32>,
     /// How much of the measured cavity to apply, in `0..=1`.
     ///
     /// **Inert from C.** See the type's own note: the input this measures
     /// against does not cross the ABI, so the bit is accepted and nothing
     /// happens. Kept so the vocabulary is complete and the gap is nameable.
+    ///
+    /// A strength of zero is the factor contributing nothing, which is what
+    /// the factor being absent already means — so it is written as absent. The
+    /// descriptor cannot carry it either way: `clay_c.cpp` copies the field
+    /// only `if (d.automask_cavity_strength > 0.0f)`, so a zero asked for here
+    /// would arrive as the engine's default of full strength.
     pub cavity_strength: Option<f32>,
     /// Stay inside the polygroup the stroke started in.
     ///
@@ -209,9 +226,15 @@ impl Automask {
         }
         if let Some(rings) = self.boundary_rings {
             factors |= sys::clay_automask_factor::CLAY_AUTOMASK_BOUNDARY;
-            raw.automask_boundary_rings = rings;
+            raw.automask_boundary_rings = rings.get() as i32;
         }
-        if let Some(strength) = self.cavity_strength {
+        // Only where the engine will keep it. Both of these fields are copied
+        // across a `> 0` guard on the other side, so writing a factor's bit
+        // beside a parameter that guard discards is exactly the state this
+        // function's own contract says cannot happen: the bit set and the
+        // parameter unset, with the engine's default standing in for what was
+        // asked for.
+        if let Some(strength) = self.cavity_strength.filter(|s| *s > 0.0) {
             factors |= sys::clay_automask_factor::CLAY_AUTOMASK_CAVITY;
             raw.automask_cavity_strength = strength;
         }
@@ -1165,5 +1188,70 @@ impl std::fmt::Debug for MeshSculptor {
             .field("vertices", &self.vertex_count().ok())
             .field("classes", &self.class_count().ok())
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A factor's bit is set only where the parameter beside it will survive
+    /// the crossing.
+    ///
+    /// `clay_c.cpp` copies `automask_boundary_rings` and
+    /// `automask_cavity_strength` into the engine's settings only where each
+    /// is greater than zero, and leaves its own default standing otherwise —
+    /// two rings of fade, and full cavity strength. So a descriptor carrying a
+    /// bit beside a zero does not ask for nothing, it asks for whatever the
+    /// engine already had, with the bit set so nothing looks wrong. Measured
+    /// on a 16x16 unit sheet before this was repaired, one Draw stamp under
+    /// `boundary_rings: Some(0)` moved the surface to the bit exactly as
+    /// `Some(2)` did, and sat on the wrong side of `Some(1)`.
+    ///
+    /// Rings are a `NonZeroU32` now, so half of this is the type's; the other
+    /// half is a strength of zero, which is written as the factor being absent
+    /// because a factor contributing nothing and an absent factor are the same
+    /// surface.
+    #[test]
+    fn no_factor_bit_is_set_beside_a_parameter_the_abi_would_discard() {
+        let asked = [
+            Automask {
+                cavity_strength: Some(0.0),
+                ..Automask::default()
+            },
+            Automask {
+                cavity_strength: Some(-1.0),
+                ..Automask::default()
+            },
+            Automask {
+                cavity_strength: Some(0.5),
+                boundary_rings: NonZeroU32::new(3),
+                ..Automask::default()
+            },
+            Automask {
+                boundary_rings: NonZeroU32::new(1),
+                ..Automask::default()
+            },
+        ];
+        for automask in asked {
+            let mut raw = sys::clay_mesh_brush_desc::sized();
+            automask.write_into(&mut raw);
+            if raw.automask_factors & sys::clay_automask_factor::CLAY_AUTOMASK_CAVITY != 0 {
+                assert!(
+                    raw.automask_cavity_strength > 0.0,
+                    "the cavity bit is set beside {}, which the engine discards for its own \
+                     default of full strength",
+                    raw.automask_cavity_strength
+                );
+            }
+            if raw.automask_factors & sys::clay_automask_factor::CLAY_AUTOMASK_BOUNDARY != 0 {
+                assert!(
+                    raw.automask_boundary_rings > 0,
+                    "the boundary bit is set beside {} rings, which the engine discards for its \
+                     own default of two",
+                    raw.automask_boundary_rings
+                );
+            }
+        }
     }
 }

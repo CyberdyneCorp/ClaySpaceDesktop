@@ -220,7 +220,7 @@ fn a_boundary_gate_holds_the_open_border_a_dab_is_dragged_across() {
         [-1.0, 0.0, -1.0],
         1.0,
         Automask {
-            boundary_rings: Some(4),
+            boundary_rings: std::num::NonZeroU32::new(4),
             ..Automask::default()
         },
     );
