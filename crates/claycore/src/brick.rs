@@ -192,6 +192,29 @@ pub struct BrickSamples {
     pub padded_dim: i32,
 }
 
+/// Float samples an evaluation produced, in the shape [`BrickCache::submit`]
+/// takes: `dim^3` values per request in the grids' own order, x fastest, with
+/// no apron.
+///
+/// Distinct from [`BrickSamples`], which is what a cache hands *back* — those
+/// are the engine's own half-precision bits with an apron, for a GPU upload.
+pub struct BrickValues {
+    pub values: Vec<f32>,
+    /// Present exactly when the cache is configured to carry colour, because
+    /// a colour cache requires colours on submit.
+    pub colors: Option<Vec<f32>>,
+}
+
+impl std::fmt::Debug for BrickValues {
+    /// Summarised for the same reason [`BrickSamples`] is.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BrickValues")
+            .field("samples", &self.values.len())
+            .field("has_colors", &self.colors.is_some())
+            .finish()
+    }
+}
+
 impl std::fmt::Debug for BrickSamples {
     /// Summarised rather than dumped: a read of a few bricks is already tens
     /// of thousands of samples.
@@ -662,6 +685,90 @@ impl BrickCache {
             .iter()
             .filter(|o| **o == BrickSubmit::Accepted)
             .count())
+    }
+
+    /// Evaluates a drained batch over every visible SDF layer except one, and
+    /// hands the samples back rather than submitting them.
+    ///
+    /// The brick-cache half of [`Document::eval_points_excluding`], and what a
+    /// host actually fills a preview atlas from. Same requests, same fixed
+    /// per-brick slots at the same stride: brick *i* still occupies
+    /// `values[i * dim^3 ..]`.
+    ///
+    /// # Why this one does not submit
+    ///
+    /// [`Self::refill`] fuses evaluate-and-submit so a caller cannot submit
+    /// results for requests it did not evaluate. Here the fusion would be the
+    /// bug: these values are the document *minus* a layer, and storing them in
+    /// a cache that stands for the whole document would put a hole in it that
+    /// nothing afterwards could see. The caller composes them with its own
+    /// preview — a minimum, which is exact for a hard union — and submits the
+    /// composed result, so the two halves are deliberately separate and the
+    /// values come back in the shape [`Self::submit`] takes.
+    ///
+    /// This also takes no seed and leaves none, which is the engine's decision
+    /// rather than this wrapper's. A seed is a brick's value for *this*
+    /// document, and a value computed without one of the layers is not that;
+    /// storing it would hand the next whole-document refill a seed with a
+    /// layer missing from it, silently, since a seeded answer is bit-identical
+    /// to a walked one by contract. So this is priced like a stroke's first
+    /// dab rather than its tenth — which is the right price for a call a host
+    /// takes once at pointer-down, because the layers it excludes do not move
+    /// while the artist drags.
+    ///
+    /// The document is not edited and no undo entry is recorded, so this is
+    /// safe to call at any point inside a live transaction. An unknown layer
+    /// is refused with [`ErrorKind::NotFound`](crate::ErrorKind::NotFound); a
+    /// hidden layer, or one carrying no SDF content, succeeds.
+    pub fn eval_excluding(
+        &self,
+        doc: &Document,
+        excluded: LayerId,
+        backend: Option<&Backend>,
+        requests: &[BrickRequest],
+    ) -> Result<BrickValues> {
+        let per_brick = self.config.samples_per_brick(0);
+        let mut values = vec![0.0f32; per_brick * requests.len()];
+        let mut colors = self
+            .config
+            .colors
+            .then(|| vec![0.0f32; per_brick * requests.len() * 3]);
+        if requests.is_empty() {
+            return Ok(BrickValues { values, colors });
+        }
+
+        let raw: Vec<sys::clay_brick_request> = requests.iter().map(|r| r.0).collect();
+        let (colors_ptr, colors_cap) = match colors.as_mut() {
+            Some(buf) => (buf.as_mut_ptr(), buf.len()),
+            None => (std::ptr::null_mut(), 0),
+        };
+
+        let name = backend
+            .map(|b| crate::cstring(b.as_str(), "clay_brick_cache_eval_requests_excluding"))
+            .transpose()?;
+        let name_ptr = name.as_ref().map_or(std::ptr::null(), |s| s.as_ptr());
+
+        // SAFETY: `raw` and `values` are sized to the request count and the
+        // configured brick volume, exactly as `refill` sizes them; colours are
+        // declined with a null pointer and a zero capacity together, which is
+        // what the entry point requires of the pair.
+        check(
+            unsafe {
+                sys::clay_brick_cache_eval_requests_excluding(
+                    doc.as_ptr(),
+                    excluded.0,
+                    name_ptr,
+                    raw.as_ptr(),
+                    raw.len(),
+                    values.as_mut_ptr(),
+                    values.len(),
+                    colors_ptr,
+                    colors_cap,
+                )
+            },
+            "clay_brick_cache_eval_requests_excluding",
+        )?;
+        Ok(BrickValues { values, colors })
     }
 
     /// Stores samples the caller produced, instead of evaluating a document.

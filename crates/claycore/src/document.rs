@@ -629,6 +629,157 @@ impl Document {
         )?;
         Ok(distances)
     }
+
+    /// Unit-length field gradients at the same points.
+    ///
+    /// The tetrahedron trick rather than raw differences, so these are surface
+    /// normals and not gradients that happen to point the right way.
+    pub fn eval_gradients(
+        &self,
+        backend: Option<&Backend>,
+        points: &[[f32; 3]],
+    ) -> Result<Vec<[f32; 3]>> {
+        let mut gradients = vec![[0.0f32; 3]; points.len()];
+        if points.is_empty() {
+            return Ok(gradients);
+        }
+
+        let name = backend
+            .map(|b| cstring(b.as_str(), "clay_eval_gradients"))
+            .transpose()?;
+        let name_ptr = name.as_ref().map_or(std::ptr::null(), |s| s.as_ptr());
+
+        // SAFETY: input and output are each `points.len() * 3` contiguous
+        // floats — `[f32; 3]` has no padding.
+        check(
+            unsafe {
+                sys::clay_eval_gradients(
+                    self.raw.as_ptr(),
+                    name_ptr,
+                    points.as_ptr() as *const f32,
+                    points.len(),
+                    gradients.as_mut_ptr() as *mut f32,
+                )
+            },
+            "clay_eval_gradients",
+        )?;
+        Ok(gradients)
+    }
+
+    /// The field of every visible SDF layer except one.
+    ///
+    /// The third question, beside "the whole document" and "one layer": what
+    /// the document would evaluate to if this layer had been removed from it.
+    ///
+    /// # Why it exists
+    ///
+    /// A live sculpt transaction previews one layer, which is what makes a dab
+    /// cost what it touches rather than what the artist has already made. A
+    /// host drawing only that preview is drawing the layer alone, and every
+    /// other visible field subtool vanishes for the length of the gesture.
+    /// With this, a host evaluates the rest of the document *once* at
+    /// pointer-down — the layers it excluded do not move while the artist
+    /// drags — and composes that with its preview per frame.
+    ///
+    /// Composing is a minimum, and it is exact: visible SDF layers hard-union,
+    /// and the union of two fields *is* the smaller of the two distances. So
+    /// `min(excluding(L), your preview of L)` is the field the whole document
+    /// would evaluate to and not an approximation of it. There is no blend
+    /// parameter to match and no seam to hide.
+    ///
+    /// # Why not hide the layer and sample the rest
+    ///
+    /// Because that is three edits, and an edit taken inside a
+    /// [`SmoothTransaction`](crate::SmoothTransaction) is one the commit
+    /// correctly refuses. This call edits nothing and records no undo entry,
+    /// so it is safe at any point inside a transaction. That is the other half
+    /// of why it exists.
+    ///
+    /// # Refusals
+    ///
+    /// An unknown layer is refused with [`ErrorKind::NotFound`] rather than
+    /// read as "exclude nothing" — a host whose layer id went stale would
+    /// otherwise be handed the whole document and would draw the excluded
+    /// layer twice, once from here and once from its own preview, which is the
+    /// exact defect this call exists to prevent and which looks like a shading
+    /// artefact rather than a bug.
+    ///
+    /// A *hidden* layer, or one carrying no SDF content, succeeds: it
+    /// contributes nothing to the union already, so excluding it is a no-op,
+    /// and refusing would make a host branch on state it has no reason to
+    /// track.
+    ///
+    /// [`ErrorKind::NotFound`]: crate::ErrorKind::NotFound
+    pub fn eval_points_excluding(
+        &self,
+        excluded: LayerId,
+        backend: Option<&Backend>,
+        points: &[[f32; 3]],
+    ) -> Result<Vec<f32>> {
+        // An empty batch is still asked, unlike `eval_points`, because the
+        // layer id is checked whether or not there is a point to evaluate and
+        // a stale id is the one thing the caller cannot check for itself.
+        let mut distances = vec![0.0f32; points.len()];
+        let name = backend
+            .map(|b| cstring(b.as_str(), "clay_eval_points_excluding"))
+            .transpose()?;
+        let name_ptr = name.as_ref().map_or(std::ptr::null(), |s| s.as_ptr());
+
+        // SAFETY: as `eval_points`, with the excluded layer passed by value.
+        // An empty slice's pointer is dangling but well-aligned and non-null,
+        // which is what the engine reads for a zero count.
+        check(
+            unsafe {
+                sys::clay_eval_points_excluding(
+                    self.raw.as_ptr(),
+                    excluded.0,
+                    name_ptr,
+                    points.as_ptr() as *const f32,
+                    points.len(),
+                    distances.as_mut_ptr(),
+                    std::ptr::null_mut(),
+                )
+            },
+            "clay_eval_points_excluding",
+        )?;
+        Ok(distances)
+    }
+
+    /// [`Self::eval_gradients`] over every visible SDF layer except one.
+    ///
+    /// Same contract as [`Self::eval_points_excluding`] in every respect: it
+    /// edits nothing, records no undo entry and is safe inside a transaction;
+    /// an unknown layer is refused and a hidden one is not.
+    pub fn eval_gradients_excluding(
+        &self,
+        excluded: LayerId,
+        backend: Option<&Backend>,
+        points: &[[f32; 3]],
+    ) -> Result<Vec<[f32; 3]>> {
+        // As above: the layer id is checked even with nothing to evaluate.
+        let mut gradients = vec![[0.0f32; 3]; points.len()];
+        let name = backend
+            .map(|b| cstring(b.as_str(), "clay_eval_gradients_excluding"))
+            .transpose()?;
+        let name_ptr = name.as_ref().map_or(std::ptr::null(), |s| s.as_ptr());
+
+        // SAFETY: as `eval_gradients`, with the excluded layer passed by
+        // value, and an empty slice's pointer as above.
+        check(
+            unsafe {
+                sys::clay_eval_gradients_excluding(
+                    self.raw.as_ptr(),
+                    excluded.0,
+                    name_ptr,
+                    points.as_ptr() as *const f32,
+                    points.len(),
+                    gradients.as_mut_ptr() as *mut f32,
+                )
+            },
+            "clay_eval_gradients_excluding",
+        )?;
+        Ok(gradients)
+    }
 }
 
 impl Drop for Document {

@@ -53,7 +53,7 @@ pub use authoring::{
 pub use backend::{backends, compiled_backends, Backend};
 pub use brick::{
     BrickCache, BrickConfig, BrickKey, BrickMeshParams, BrickMeshRange, BrickRequest, BrickSamples,
-    BrickState, BrickStats, BrickSubmit,
+    BrickState, BrickStats, BrickSubmit, BrickValues,
 };
 pub use brush::{Accumulation, BrushParams, BrushShape, Falloff, StrokePreset, StrokeSample};
 pub use consolidate::{ConsolidationCost, ConsolidationParams, FieldReport};

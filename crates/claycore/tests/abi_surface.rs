@@ -508,3 +508,291 @@ fn an_armature_edit_moves_the_subtree_it_names() {
          that should have carried it there"
     );
 }
+
+// -- the document without one layer ------------------------------------------
+//
+// The third question, beside "the whole document" and "one layer". A live
+// sculpt transaction previews one layer, so a host drawing only that preview
+// is drawing the layer alone and every other visible field subtool vanishes
+// for the length of the gesture. These answer what the rest of the document
+// evaluates to, once at pointer-down, and neither of them edits anything.
+
+/// Two spheres in two layers, far enough apart to be told from each other.
+fn two_layer_doc() -> (Document, claycore::LayerId, claycore::LayerId) {
+    let mut doc = Document::new().expect("document");
+    let left = doc.add_sdf_layer("Left").expect("left layer");
+    doc.add_item(left, &Item::sphere(0.5).expect("sphere"))
+        .expect("place the left sphere");
+
+    let right = doc.add_sdf_layer("Right").expect("right layer");
+    let mut moved = Item::sphere(0.5).expect("sphere");
+    moved
+        .set_position([2.0, 0.0, 0.0])
+        .expect("stand it to the right");
+    doc.add_item(right, &moved).expect("place the right sphere");
+
+    (doc, left, right)
+}
+
+#[test]
+fn excluding_a_layer_answers_what_the_document_would_be_without_it() {
+    let (doc, left, right) = two_layer_doc();
+    let at = [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]];
+
+    let whole = doc.eval_points(None, &at).expect("the whole document");
+    assert!(
+        whole[0] < 0.0 && whole[1] < 0.0,
+        "the fixture built nothing"
+    );
+
+    let without_right = doc
+        .eval_points_excluding(right, None, &at)
+        .expect("without the right sphere");
+    assert_eq!(
+        without_right[0], whole[0],
+        "excluding a layer changed the field somewhere it does not reach"
+    );
+    assert!(
+        without_right[1] > 0.0,
+        "the right sphere was excluded and its own centre is still inside it"
+    );
+
+    let without_left = doc
+        .eval_points_excluding(left, None, &at)
+        .expect("without the left sphere");
+    assert!(
+        without_left[0] > 0.0 && without_left[1] < 0.0,
+        "excluding the left layer took the wrong sphere away"
+    );
+
+    // The composition the calls exist for: visible SDF layers hard-union, so
+    // the minimum of the two exclusions is not an approximation of the whole
+    // document — it is the whole document.
+    for (i, point) in at.iter().enumerate() {
+        let one = doc
+            .eval_points_excluding(right, None, &[*point])
+            .expect("rest")[0];
+        let other = doc
+            .eval_points_excluding(left, None, &[*point])
+            .expect("rest")[0];
+        assert!(
+            (one.min(other) - whole[i]).abs() < 1e-5,
+            "min of the two exclusions disagreed with the whole document at \
+             {point:?}: {one} / {other} against {}",
+            whole[i]
+        );
+    }
+}
+
+#[test]
+fn the_gradients_follow_the_same_exclusion() {
+    let (doc, _left, right) = two_layer_doc();
+    // Between the two spheres and nearer the right one, so the nearest surface
+    // — and therefore the direction the field grows in — is a different one
+    // depending on whether the right layer is in the document.
+    let at = [[1.3, 0.0, 0.0]];
+
+    let whole = doc.eval_gradients(None, &at).expect("the whole document")[0];
+    let without = doc
+        .eval_gradients_excluding(right, None, &at)
+        .expect("without the right sphere")[0];
+
+    assert!(
+        whole[0] < -0.5,
+        "the right sphere is the nearer surface and the whole document's \
+         normal points {whole:?}"
+    );
+    assert!(
+        without[0] > 0.5,
+        "excluding the nearer sphere left the normal facing it: {without:?}"
+    );
+}
+
+/// The two refusals are different on purpose, and a wrapper that smoothed the
+/// difference over would be hiding the thing these calls exist to prevent.
+///
+/// An unknown layer is refused rather than read as "exclude nothing": a host
+/// whose id went stale would otherwise be handed the whole document and would
+/// draw the excluded layer twice, once from here and once from its own
+/// preview, which looks like a shading artefact rather than a bug.
+#[test]
+fn an_unknown_layer_is_refused_rather_than_excluding_nothing() {
+    let (mut doc, _left, right) = two_layer_doc();
+    doc.remove_layer(right).expect("retire the right layer");
+
+    let at = [[0.0, 0.0, 0.0]];
+    for outcome in [
+        doc.eval_points_excluding(right, None, &at).err(),
+        doc.eval_points_excluding(right, None, &[]).err(),
+        doc.eval_gradients_excluding(right, None, &at).err(),
+    ] {
+        let error = outcome.expect("a retired layer id was accepted");
+        assert_eq!(
+            error.kind(),
+            claycore::ErrorKind::NotFound,
+            "a retired layer id was refused for some other reason: {error}"
+        );
+    }
+}
+
+/// And the other direction. A hidden layer contributes nothing to the union
+/// already, so excluding it is a no-op — refusing would make a host branch on
+/// state it has no reason to track.
+#[test]
+fn a_hidden_layer_and_a_layer_with_no_field_are_both_excluded_without_complaint() {
+    let (mut doc, _left, right) = two_layer_doc();
+    doc.set_layer_visible(right, false).expect("hide it");
+
+    let at = [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]];
+    let whole = doc.eval_points(None, &at).expect("the whole document");
+    let without = doc
+        .eval_points_excluding(right, None, &at)
+        .expect("excluding a hidden layer is not a refusal");
+    assert_eq!(
+        without, whole,
+        "excluding a layer that was already contributing nothing changed the field"
+    );
+    doc.eval_gradients_excluding(right, None, &at)
+        .expect("nor is it for gradients");
+
+    // A layer carrying no SDF content at all, which is the other half of the
+    // same rule.
+    let empty = doc.add_sdf_layer("Empty").expect("an empty layer");
+    doc.eval_points_excluding(empty, None, &at)
+        .expect("a layer with nothing in it is excluded like any other");
+}
+
+#[test]
+fn a_brick_refill_can_leave_a_layer_out_and_hands_the_samples_back() {
+    let (doc, left, right) = two_layer_doc();
+    let mut cache = claycore::BrickCache::new(claycore::BrickConfig {
+        dim: 8,
+        voxel_size: 0.1,
+        band_voxels: 3,
+        memory_budget: None,
+        colors: false,
+    })
+    .expect("cache");
+    cache
+        .mark_dirty([1.4, -0.6, -0.6], [2.6, 0.6, 0.6])
+        .expect("dirty the right sphere");
+    let (requests, _) = cache.take_dirty(64).expect("drain");
+    assert!(!requests.is_empty(), "the fixture dirtied nothing");
+
+    let rest = cache
+        .eval_excluding(&doc, right, None, &requests)
+        .expect("the document without the right sphere");
+    assert!(
+        rest.values.iter().all(|d| *d > 0.0),
+        "every sample around the excluded sphere should stand outside every \
+         surface that is left, and one did not"
+    );
+    assert!(
+        rest.colors.is_none(),
+        "a distance-only cache asked for colours"
+    );
+
+    // The same drain evaluated whole does reach the surface, which is what
+    // says the exclusion is the reason and not the region.
+    let whole = cache
+        .eval_excluding(&doc, left, None, &requests)
+        .expect("the document without the far sphere");
+    assert!(
+        whole.values.iter().any(|d| *d <= 0.0),
+        "these bricks cover the right sphere and none of their samples is inside it"
+    );
+
+    // Nothing was submitted: the values are the document minus a layer, and a
+    // cache that stands for the whole document must not be told they are it.
+    let states = cache
+        .states(&requests.iter().map(|r| r.key()).collect::<Vec<_>>())
+        .expect("states");
+    assert!(
+        states.iter().all(|s| *s == claycore::BrickState::Missing),
+        "an excluding evaluation stored something: the cache stands for the \
+         whole document, and these values are the document minus a layer"
+    );
+}
+
+/// The refusal reaches the brick-cache half too — same rule, same reason.
+#[test]
+fn the_brick_half_refuses_an_unknown_layer_and_accepts_a_hidden_one() {
+    let (mut doc, _left, right) = two_layer_doc();
+    let mut cache = claycore::BrickCache::new(claycore::BrickConfig {
+        dim: 8,
+        voxel_size: 0.1,
+        band_voxels: 3,
+        memory_budget: None,
+        colors: false,
+    })
+    .expect("cache");
+    cache
+        .mark_dirty([-0.6, -0.6, -0.6], [0.6, 0.6, 0.6])
+        .expect("dirty the left sphere");
+    let (requests, _) = cache.take_dirty(64).expect("drain");
+
+    doc.set_layer_visible(right, false).expect("hide it");
+    cache
+        .eval_excluding(&doc, right, None, &requests)
+        .expect("a hidden layer is excluded without complaint");
+
+    doc.remove_layer(right).expect("retire it");
+    let error = cache
+        .eval_excluding(&doc, right, None, &requests)
+        .expect_err("a retired layer id was accepted");
+    assert_eq!(
+        error.kind(),
+        claycore::ErrorKind::NotFound,
+        "a retired layer id was refused for some other reason: {error}"
+    );
+}
+
+/// The other half of why these exist, and the half a doc comment cannot prove
+/// on its own: they are safe inside a live transaction.
+///
+/// The route a host would otherwise take — hide the layer, sample the rest,
+/// show it again — is three edits, and an edit taken inside a smooth gesture
+/// is one the commit correctly refuses. These edit nothing and record no undo
+/// entry, so the gesture they were taken inside of still commits.
+#[test]
+fn an_exclusion_taken_inside_a_live_gesture_does_not_spoil_it() {
+    let (mut doc, left, right) = two_layer_doc();
+    doc.enable_undo().expect("enable undo");
+    let before = doc.undo_state().expect("undo state").undo_depth;
+
+    let mut tx =
+        claycore::SmoothTransaction::begin(&mut doc, left, claycore::SculptPolicy::at(0.05))
+            .expect("open a live smooth on the left sphere");
+
+    // What a host takes once at pointer-down: the rest of the document, to
+    // compose with the preview it is about to draw.
+    let rest = doc
+        .eval_points_excluding(left, None, &[[2.0, 0.0, 0.0]])
+        .expect("the rest of the document, mid-gesture");
+    assert!(
+        rest[0] < 0.0,
+        "the rest of the document should still hold the right sphere"
+    );
+    doc.eval_gradients_excluding(right, None, &[[1.3, 0.0, 0.0]])
+        .expect("gradients too");
+
+    tx.update(claycore::RelaxParams {
+        strength: 1.0,
+        radius_cells: 1,
+        iterations: 1,
+        centre: [0.5, 0.0, 0.0],
+        region_radius: 0.25,
+        falloff: 0.12,
+        mask: None,
+    })
+    .expect("a dab");
+
+    tx.commit()
+        .expect("the commit was refused, so something between begin and here edited the layer");
+
+    assert_eq!(
+        doc.undo_state().expect("undo state").undo_depth,
+        before + 1,
+        "the gesture's own commit is the only entry this should have added"
+    );
+}
