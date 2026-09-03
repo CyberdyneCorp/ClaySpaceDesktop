@@ -4740,6 +4740,119 @@ fn a_save_that_could_not_write_the_sculpt_says_so() {
     assert!(image.width > 0 && image.height > 0);
 }
 
+/// The two levels held apart, which is the state the tier exists for.
+///
+/// Every other capture of a hierarchy has them equal, and equal is the one
+/// arrangement that says nothing: a surface sculpted and drawn at the same
+/// level is a plain mesh with extra vocabulary. The picture worth keeping is
+/// the working one — coarse to move around in, fine to cut into — because it
+/// is also the one that reads as a broken brush if the interface does not say
+/// what is happening, and the line that says so is only drawn here.
+///
+/// Both badges are on the stack for the same reason: a lock and a stored mask
+/// are drawn as marks rather than as controls, and marks nobody has looked at
+/// are marks nobody can tell apart.
+#[test]
+fn the_two_levels_are_drawn_apart_and_the_gap_is_named() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let mut scene = with_a_stack(
+        &scene(),
+        vec![pass(7, 0, "Volume", 1.0), {
+            let mut masked = pass(11, 1, "Rugas", 0.8);
+            masked.masked = true;
+            masked.locked = true;
+            masked
+        }],
+        clayspace_model::MultiresSculptLayerId::new(11),
+    );
+    // Sculpting at the finest level while drawing three levels below it, which
+    // is what a sculptor does to keep a fine cut interactive.
+    let active = scene.active.expect("the fixture has an active layer");
+    for layer in &mut scene.layers {
+        if layer.key == active {
+            let hierarchy = layer.multires.as_mut().expect("a hierarchy");
+            hierarchy.levels = clayspace_model::MultiresLevels {
+                count: 5,
+                sculpt: 4,
+                display: 1,
+            };
+        }
+    }
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let mut set = state(strings, &scene, &materials, &report);
+    set.representation = clayspace_model::Representation::Multires;
+    set.subdivision_cost = Some(clayspace_model::SubdivisionCost {
+        level: 5,
+        vertices: 1_572_865,
+        faces: 1_572_864,
+        persistent_bytes: 48 * 1024 * 1024,
+        peak_bytes: 149 * 1024 * 1024,
+    });
+    set.multires_cost = Some(clayspace_model::MultiresSculptLayerCost {
+        layers: 2,
+        bytes: 24 * 1024 * 1024,
+        coverage_vertices: 37_440,
+        stroke_open: false,
+    });
+
+    let image = capture_shell(&harness, &set, "115-multires-levels-apart");
+    assert!(image.width > 0 && image.height > 0);
+}
+
+/// A level the engine will not build, said in the engine's own arithmetic.
+///
+/// The third of the hierarchy's refusals, and the one a sculptor meets by
+/// pressing a button rather than by an accident of the machine. The sentence
+/// is taken from the domain's own `Display` rather than typed here, so a
+/// capture cannot go on showing a phrasing the application has stopped using
+/// — which is exactly what a hand-written fixture string would do.
+///
+/// The price stays beside the button while the refusal stands. That is
+/// deliberate: the peak is what the refusal is about, and hiding it at the
+/// moment it is being explained would leave the sentence unsupported.
+#[test]
+fn a_level_the_budget_refuses_says_so_beside_the_viewport() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = with_a_stack(
+        &scene(),
+        vec![pass(7, 0, "Volume", 1.0)],
+        clayspace_model::MultiresSculptLayerId::BASE,
+    );
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+    let refusal = clayspace_model::Refusal::LevelOverBudget {
+        peak_bytes: 2_384 * 1024 * 1024,
+        budget_bytes: 1_024 * 1024 * 1024,
+    }
+    .to_string();
+    let mut set = state(strings, &scene, &materials, &report);
+    set.representation = clayspace_model::Representation::Multires;
+    set.subdivision_cost = Some(clayspace_model::SubdivisionCost {
+        level: 5,
+        vertices: 6_291_457,
+        faces: 6_291_456,
+        persistent_bytes: 780 * 1024 * 1024,
+        peak_bytes: 2_384 * 1024 * 1024,
+    });
+    set.multires_cost = Some(clayspace_model::MultiresSculptLayerCost {
+        layers: 1,
+        bytes: 3 * 1024 * 1024,
+        coverage_vertices: 12_480,
+        stroke_open: false,
+    });
+    set.tool_status = Some(&refusal);
+
+    let image = capture_shell(&harness, &set, "116-multires-level-refused");
+    assert!(image.width > 0 && image.height > 0);
+}
+
 /// Every representation gets a section, and no two sections share a heading.
 ///
 /// A regression test. The voxel display controls stood under `section_geometry`
