@@ -3823,6 +3823,12 @@ impl ClayDocument {
             // one.
             colour: chosen.rgb,
             smooth_iterations: Some(Self::SMOOTH_PASSES),
+            // No rotation at all, which is what every stamp here has always
+            // sent. Turning the grain with the direction of travel — a rake —
+            // is a change in the stroke resolver rather than in the wrapper,
+            // and it is visible only through an alpha, which this path hands
+            // a fixed world-X tangent to today.
+            stamp_azimuth: 0.0,
             // Told to search. This path picks through `pick_active_mesh`,
             // which throws the hit's seed away at the moment it was picked, so
             // there is nothing here to claim — and claiming nothing is what

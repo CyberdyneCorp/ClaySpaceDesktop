@@ -173,6 +173,22 @@ pub struct MeshStamp<'a> {
     /// at the scale of the brush — on a dense mesh that is a change a sculptor
     /// cannot see.
     pub smooth_iterations: Option<i32>,
+    /// How far the stamp's in-plane axes are turned about its own facing, in
+    /// radians.
+    ///
+    /// The grain. It is what makes a rake, a chisel, clay strips, a
+    /// directional scratch and a rotated alpha one axis over a frame rather
+    /// than five code paths: a stroke resolver that knows the direction of
+    /// travel sets this, and no verb has to know that it did.
+    ///
+    /// Zero is *no rotation at all* rather than a rotation by zero, and the
+    /// engine branches on that: turning a basis by cos 0 and sin 0 leaves a
+    /// `-0.0` where an unrotated axis has `+0.0`. Zero is therefore the
+    /// default and what every existing caller keeps sending.
+    ///
+    /// Observable only through an alpha or a directional kernel — a round
+    /// brush has nothing to orient.
+    pub stamp_azimuth: f32,
     /// Where the surface walk starts, and the class space that was picked in.
     ///
     /// `None` tells the engine to search, which is a linear scan and the wrong
@@ -239,6 +255,7 @@ impl Default for MeshStamp<'_> {
             geodesic: true,
             colour: [1.0; 3],
             smooth_iterations: None,
+            stamp_azimuth: 0.0,
             seed: None,
             alpha: None,
         }
@@ -280,6 +297,7 @@ impl MeshStamp<'_> {
         raw.falloff = self.falloff.to_raw();
         raw.direction = self.direction;
         raw.geodesic = i32::from(self.geodesic);
+        raw.stamp_azimuth = self.stamp_azimuth;
         // The class and the token travel together or not at all. Without a
         // seed the engine searches: a linear scan, and the wrong thing to do
         // per stamp on a large mesh — but a wrong seed is worse than a slow

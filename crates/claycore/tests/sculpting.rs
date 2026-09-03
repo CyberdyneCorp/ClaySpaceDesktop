@@ -865,4 +865,91 @@ mod mesh_sculpting {
             "a stamp that seeds nothing has no token to be stale"
         );
     }
+
+    /// The stamp's grain turns with the azimuth, and it is observable only
+    /// where there is something to orient.
+    ///
+    /// The upstream lesson is why this uses a quarter turn and not zero: their
+    /// own round-trip test could not catch the field being dropped, because
+    /// every preset in their reference set had an azimuth of zero and a
+    /// default round-trips to the default whether the schema knows the field
+    /// or not. A test written at the default value tests nothing.
+    ///
+    /// There is no brush preset persistence in this workspace to carry an
+    /// azimuth through — `clay_brush_preset_serialize` is unbound and nothing
+    /// above this crate saves a brush — so the round trip that exists to be
+    /// tested is the descriptor's: a quarter turn set here has to reach the
+    /// engine and move vertices that an unturned stamp left alone.
+    #[test]
+    fn a_quarter_turn_of_the_grain_lands_a_directional_alpha_somewhere_else() {
+        /// A hard edge down the middle of the stamp: half of it deposits
+        /// nothing, half of it deposits everything. A round kernel has no
+        /// orientation, so a ridge is what makes the grain visible at all.
+        fn ridge() -> Vec<f32> {
+            const SIDE: usize = 16;
+            (0..SIDE * SIDE)
+                .map(|i| if i % SIDE < SIDE / 2 { 0.0 } else { 1.0 })
+                .collect()
+        }
+
+        fn stamped(azimuth: f32, alpha: Option<&[f32]>) -> Vec<[f32; 3]> {
+            let mut mesh = sphere_mesh();
+            let mut sculptor = MeshSculptor::new(&mut mesh, 1e-5).expect("a sculptor");
+            let moved = sculptor
+                .stamp(
+                    MeshStamp {
+                        verb: MeshBrush::Draw,
+                        center: [0.0, 0.0, -1.0],
+                        radius: 0.6,
+                        strength: 0.5,
+                        stamp_azimuth: azimuth,
+                        alpha: alpha.map(|samples| claycore::AlphaStamp {
+                            samples,
+                            width: 16,
+                            height: 16,
+                            // The surface normal under the centre, and a rough
+                            // world-X up: the frame the grain then turns in.
+                            direction: [0.0; 3],
+                            tangent: [1.0, 0.0, 0.0],
+                            extent: 0.0,
+                        }),
+                        ..MeshStamp::default()
+                    },
+                    None,
+                    None,
+                )
+                .expect("stamp");
+            assert!(moved > 0, "the stamp at azimuth {azimuth} reached nothing");
+            mesh.positions().to_vec()
+        }
+
+        let moved_apart = |a: &[[f32; 3]], b: &[[f32; 3]]| {
+            a.iter()
+                .zip(b)
+                .filter(|(p, q)| (0..3).any(|i| (p[i] - q[i]).abs() > 1e-6))
+                .count()
+        };
+
+        let ridge = ridge();
+        let unturned = stamped(0.0, Some(&ridge));
+        let quartered = stamped(std::f32::consts::FRAC_PI_2, Some(&ridge));
+        assert!(
+            moved_apart(&unturned, &quartered) > 0,
+            "a quarter turn left the alpha exactly where it was, which is what a \
+             dropped field looks like"
+        );
+
+        // And the other half of the contract: the grain orients the stamp's
+        // in-plane axes, so a round brush with nothing in those axes has
+        // nothing to turn.
+        assert_eq!(
+            moved_apart(
+                &stamped(0.0, None),
+                &stamped(std::f32::consts::FRAC_PI_2, None)
+            ),
+            0,
+            "the azimuth moved a stamp that carries no directional kernel, so it is \
+             doing something other than turning the grain"
+        );
+    }
 }
