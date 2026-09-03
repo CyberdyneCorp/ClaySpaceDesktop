@@ -211,7 +211,14 @@ composition change, a reorder, a merge and a bake, the save that carries the
 sculpt, and a cache release with the dab that pays for it. It builds its own
 cage rather than taking a reference member, because a new member changes
 `conditions.scenes` and every committed baseline would stop comparing the day
-it landed. The coverage is derived rather than listed: the brush loop is
+it landed.
+
+Two groups price a seam rather than an operation. `normals` runs one resolved
+stroke with the deferred normal flush and the same stroke without it, which is
+the only way that pair exists — the application defers unconditionally and has
+no switch to turn off — and reports the ratio. `maintenance` prices the moment
+between two strokes: the budgeted drain a gesture's end performs, against the
+same call with nothing queued. The coverage is derived rather than listed: the brush loop is
 `Representation::ALL` against `ToolKind::for_representation`, which is the
 table the shelf itself presents from, so a tool added to the shelf is a tool
 measured.

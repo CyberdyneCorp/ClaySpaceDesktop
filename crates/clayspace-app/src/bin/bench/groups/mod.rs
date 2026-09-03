@@ -12,6 +12,7 @@ pub mod convert;
 pub mod dab;
 pub mod history;
 pub mod locality;
+pub mod maintenance;
 pub mod mask;
 pub mod memory;
 pub mod multires;
