@@ -13,6 +13,16 @@
 //! `a_stroke_does_not_carry_the_chain_into_each_stamp` is what fails, and
 //! `clayspace_model::AlphaSupport` is what changes back.
 //!
+//! **Re-checked at ClayCore v0.78.0 and unchanged.** #392 appears nowhere in
+//! that release — not in its fixes, not in its known limits, and no entry
+//! point answering it is among the 146 the ABI gained. What the release does
+//! say about alphas is a *different* defect and the two must not collapse into
+//! one sentence: "a stroke still duplicates its alpha's samples per stamp —
+//! roughly 800 MB of blob for a 200-stamp stroke carrying a 1024x1024 alpha.
+//! Filed, not fixed here." That is memory, and it is about a stroke that
+//! carries an alpha correctly. This file is about one that does not carry it
+//! at all. Both are open; only the second is what `AlphaSupport` refuses for.
+//!
 //! **The second test proved this with the wrong variable until #392 was
 //! written**, and the correction is worth reading before trusting either.
 //! It swept the *amplitude* with a zero alpha `direction` — and

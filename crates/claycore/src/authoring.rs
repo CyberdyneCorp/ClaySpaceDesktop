@@ -131,6 +131,24 @@ pub struct LayerInfo {
     pub protection: Protection,
 }
 
+/// Where a layer stands.
+///
+/// Generic in its scale so the two readers share one shape: `f32` from
+/// [`Document::layer_transform`], `[f32; 3]` from
+/// [`Document::layer_transform_nonuniform`]. One type rather than two, because
+/// a manipulator that reads either wants the same four things back and the
+/// only difference between them is how many numbers the scale takes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LayerTransform<S> {
+    pub position: [f32; 3],
+    /// Unit length. A layer with no rotation answers an arbitrary axis and a
+    /// zero angle, so read the two together.
+    pub rotation_axis: [f32; 3],
+    /// Radians.
+    pub rotation_angle: f32,
+    pub scale: S,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Protection {
     pub ghost: bool,
@@ -894,17 +912,6 @@ impl Document {
             .collect())
     }
 
-    /// The layers this document holds, discovered by probing.
-    ///
-    /// The C ABI has no enumeration: a host knows the layers it created and,
-    /// after `clay_document_load`, knows nothing. So this asks `clay_layer_bounds`
-    /// for consecutive ids and keeps the ones that answer, stopping after a run
-    /// of misses long enough to clear any gap left by a removal.
-    ///
-    /// It recovers ids and nothing else. Names, visibility, representation and
-    /// stack order have no getters, so a document that comes back from disk
-    /// comes back anonymous and in creation order rather than the order it was
-    /// saved in. Filed as ClayCore #69; when enumeration lands this goes.
     /// Every layer, in **stack order** — index 0 is evaluated first.
     ///
     /// Until ClayCore 0.29.0 there was no enumeration at all, and this probed
@@ -912,7 +919,12 @@ impl Document {
     /// run of eight misses before giving up. That guessed: a document with
     /// nine removals in a row came back short, and the order was the id order
     /// rather than the evaluation order — so a reopened document could
-    /// evaluate differently from the one saved. See ClayCore #69.
+    /// evaluate differently from the one saved. See ClayCore #69, which
+    /// enumeration closed: this asks `clay_document_layer_count` and
+    /// `clay_document_layer_at`, and [`Self::layer_info`] and
+    /// [`Self::layer_name`] answer for what each layer is. Re-checked at
+    /// v0.78.0 — what is still write-only is a *node*, one level down, which
+    /// is `tests/claycore_repros.rs` and a different ask.
     pub fn layer_ids(&self) -> Result<Vec<LayerId>> {
         let mut count: usize = 0;
         // SAFETY: a valid handle and one out-parameter.
@@ -1030,6 +1042,145 @@ impl Document {
             },
             "clay_document_set_layer_transform",
         )
+    }
+
+    /// Places a whole layer, with a scale per axis.
+    ///
+    /// The whole-layer half of [`Self::set_node_transform_nonuniform`], which
+    /// has placed a *node* per axis since ABI 0.54.0. A ZBrush-style gizmo
+    /// scales per axis — the three boxes on the arms — on a placed object and
+    /// on a whole subtool alike, and a layer that took one factor is why a
+    /// host had to hide those boxes in scale mode for the subtool case.
+    ///
+    /// Composed innermost in the layer's own frame, before its rotation and
+    /// translation, exactly as a node's is in its own:
+    ///
+    /// ```text
+    /// world = layer.xform * diag(layer_scale) * node.xform * diag(node_scale)
+    /// ```
+    ///
+    /// so `[1.0; 3]` is the identity and a document that never calls this
+    /// compiles byte-identical tape.
+    ///
+    /// # What a non-uniform scale costs
+    ///
+    /// The evaluated distance is multiplied back by the product of the
+    /// smallest component of each per-axis scale in the composition, which
+    /// never overestimates the true distance — so the field stays a
+    /// conservative bound, stays 1-Lipschitz, and the safe step scale does not
+    /// move. What goes is *exactness*: the tape reports itself inexact, as it
+    /// does for any non-uniform scale. A world radius mapped inward is divided
+    /// by the *largest* component instead — the dual, so a gesture never
+    /// reaches outside the region it named.
+    ///
+    /// One thing is refused rather than approximated:
+    /// [`Document::lattice_gizmo`](crate::Document::lattice_gizmo) returns no
+    /// warps for a layer carrying a per-axis scale. A cage records its
+    /// item-to-cage placement as a rigid transform, and on a squashed layer
+    /// the map it needs is a general affine one — the layer's diagonal sits
+    /// *between* the two placements — so placing a cage through the narrower
+    /// record would warp every item in a space it does not occupy, silently. A
+    /// host that gets nothing back should offer the uniform gizmo.
+    ///
+    /// This call and [`Self::set_layer_transform`] each write the *whole*
+    /// transform. The ABI does no partial updates, so the uniform one collapses
+    /// a per-axis scale rather than leaving it alone, and a caller that wants
+    /// to move a squashed layer without unsquashing it comes here.
+    pub fn set_layer_transform_nonuniform(
+        &mut self,
+        layer: LayerId,
+        position: [f32; 3],
+        rotation_axis: [f32; 3],
+        rotation_angle: f32,
+        scale: [f32; 3],
+    ) -> Result<()> {
+        // SAFETY: valid handle and three three-float inputs.
+        check(
+            unsafe {
+                sys::clay_document_set_layer_transform_nonuniform(
+                    self.as_ptr(),
+                    layer.0,
+                    position.as_ptr(),
+                    rotation_axis.as_ptr(),
+                    rotation_angle,
+                    scale.as_ptr(),
+                )
+            },
+            "clay_document_set_layer_transform_nonuniform",
+        )
+    }
+
+    /// Where a layer stands, when one factor can say it.
+    ///
+    /// New in ABI 0.74.0, and it answers a question the boundary could not
+    /// previously be asked: until this, the ABI set a layer transform and did
+    /// not read one back, so a host that wanted to know where its own subtool
+    /// was had to remember what it had written.
+    ///
+    /// Refuses a layer carrying three different factors with
+    /// [`ErrorKind::InvalidArgument`], exactly as the node-level reader
+    /// refuses a squashed node: one float cannot express three, the uniform
+    /// factor alone describes a differently-shaped subtool, and a
+    /// read-change-write through [`Self::set_layer_transform`] would round the
+    /// artist's squash away. A manipulator that does not want to branch reads
+    /// [`Self::layer_transform_nonuniform`] instead.
+    ///
+    /// [`ErrorKind::InvalidArgument`]: crate::ErrorKind::InvalidArgument
+    pub fn layer_transform(&self, layer: LayerId) -> Result<LayerTransform<f32>> {
+        let (mut position, mut rotation_axis) = ([0.0f32; 3], [0.0f32; 3]);
+        let (mut rotation_angle, mut scale) = (0.0f32, 0.0f32);
+        // SAFETY: valid handle; every out-parameter is valid for one write of
+        // its type, and the two arrays are three floats each as declared.
+        check(
+            unsafe {
+                sys::clay_document_layer_transform(
+                    self.as_ptr(),
+                    layer.0,
+                    position.as_mut_ptr(),
+                    rotation_axis.as_mut_ptr(),
+                    &mut rotation_angle,
+                    &mut scale,
+                )
+            },
+            "clay_document_layer_transform",
+        )?;
+        Ok(LayerTransform {
+            position,
+            rotation_axis,
+            rotation_angle,
+            scale,
+        })
+    }
+
+    /// Where a layer stands, per axis.
+    ///
+    /// Answers the *product* of the layer's two scales, so a layer placed
+    /// through [`Self::set_layer_transform`] answers `(s, s, s)` rather than
+    /// `(1, 1, 1)` with the factor hidden somewhere the caller cannot see —
+    /// which is what lets one manipulator read this and never branch.
+    pub fn layer_transform_nonuniform(&self, layer: LayerId) -> Result<LayerTransform<[f32; 3]>> {
+        let (mut position, mut rotation_axis) = ([0.0f32; 3], [0.0f32; 3]);
+        let (mut rotation_angle, mut scale) = (0.0f32, [0.0f32; 3]);
+        // SAFETY: as above, with a three-float scale out-parameter.
+        check(
+            unsafe {
+                sys::clay_document_layer_transform_nonuniform(
+                    self.as_ptr(),
+                    layer.0,
+                    position.as_mut_ptr(),
+                    rotation_axis.as_mut_ptr(),
+                    &mut rotation_angle,
+                    scale.as_mut_ptr(),
+                )
+            },
+            "clay_document_layer_transform_nonuniform",
+        )?;
+        Ok(LayerTransform {
+            position,
+            rotation_axis,
+            rotation_angle,
+            scale,
+        })
     }
 
     /// Mirrors a layer about the given axes, with a seam blend width.

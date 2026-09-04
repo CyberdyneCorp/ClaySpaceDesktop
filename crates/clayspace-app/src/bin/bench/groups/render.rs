@@ -52,6 +52,8 @@ pub fn measure(policy: &BackendPolicy, run: &mut Run) {
     // budget rather than judged against one that does not describe it.
     run.insert("frame.median", Figure::ms(quantile(&frames, 0.5), None));
     run.insert("frame.p95", Figure::ms(quantile(&frames, 0.95), None));
+    run.spread("frame.median", &frames);
+    run.spread("frame.p95", &frames);
 }
 
 /// What each viewport size costs, per pass.
@@ -100,14 +102,12 @@ pub fn measure_passes(policy: &BackendPolicy, run: &mut Run) {
             renderer.set_occlusion(occlusion);
             let frames = sweep(&gpu, &renderer, &target, &mut camera, geometry.mesh());
             let leaf = if occlusion { "frame" } else { "ao_off.frame" };
-            run.insert(
-                format!("render.{name}.{leaf}.median"),
-                Figure::ms(quantile(&frames, 0.5), None),
-            );
-            run.insert(
-                format!("render.{name}.{leaf}.p95"),
-                Figure::ms(quantile(&frames, 0.95), None),
-            );
+            for quantile_name in ["median", "p95"] {
+                let figure = format!("render.{name}.{leaf}.{quantile_name}");
+                let at = if quantile_name == "median" { 0.5 } else { 0.95 };
+                run.spread(&figure, &frames);
+                run.insert(figure, Figure::ms(quantile(&frames, at), None));
+            }
         }
 
         // With occlusion back on, which is what the pass figures describe.
@@ -183,10 +183,9 @@ pub fn measure_msaa(policy: &BackendPolicy, run: &mut Run) {
 
         let samples = target.framebuffer().samples();
         let frames = sweep(&gpu, &renderer, &target, &mut camera, geometry.mesh());
-        run.insert(
-            format!("msaa.{samples}x.frame.median"),
-            Figure::ms(quantile(&frames, 0.5), None),
-        );
+        let figure = format!("msaa.{samples}x.frame.median");
+        run.spread(&figure, &frames);
+        run.insert(figure, Figure::ms(quantile(&frames, 0.5), None));
     }
 }
 

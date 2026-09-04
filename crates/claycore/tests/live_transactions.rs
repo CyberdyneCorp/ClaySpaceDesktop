@@ -282,6 +282,10 @@ fn the_smooth_commit_installs_the_layer_as_one_volume() {
     // through the visual gate it is also 7.82 roughness against 5.74 on one
     // backend (ClayCore#379), which is why the application previews with the
     // transaction and lays the stroke down with the bake it always used.
+    //
+    // Re-checked at v0.78.0: #379 is not in that release's fixes, its known
+    // limits or its 146 new entry points, so the consolidation is still what
+    // a commit does and the application still declines it.
     let (mut doc, layer) = sphere();
     for at in [-0.6f32, -0.2, 0.2, 0.6] {
         let mut stamp = Item::sphere(0.3).expect("stamp");

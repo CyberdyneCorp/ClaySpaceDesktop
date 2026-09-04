@@ -119,6 +119,15 @@ through those — and are listed in the check with the reason.
   is exactly the previous behaviour, so nothing regresses. Filed as
   [ClayCore#378](https://github.com/CyberdyneCorp/ClayCore/issues/378), with
   the three routes that would close it.
+
+  **Closed since.** ClayCore 0.78.0 shipped
+  `clay_brick_cache_eval_requests_excluding`, and the engine pin at v0.78.0
+  adopts it: the rest of the document is evaluated once at pointer-down, over
+  every visible SDF layer except the one being previewed, and composed with the
+  preview by an elementwise minimum — exact, because visible field subtools are
+  a hard union. The gate is gone, and
+  `a_second_field_subtool_falls_back_to_the_gesture_being_held` is now
+  `a_second_field_subtool_is_still_drawn_while_the_first_is_smoothed`.
 - **Move keeps the path it has.** `clay_sdf_move_*` is wrapped and tested, and
   measured it collapses a ten-segment drag's deformer chain from **10 to 1**.
   It is not adopted for the interactive drag, because the transaction writes

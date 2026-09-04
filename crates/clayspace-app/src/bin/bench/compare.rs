@@ -26,6 +26,9 @@ pub fn compare(
         return Ok(false);
     }
 
+    if let Some(note) = across_engines(where_, &baseline) {
+        println!("\n{note}");
+    }
     let regressed = table(&baseline, run);
     let missing = missing(&baseline, run);
     // Said after the table rather than before it: a regression on a busy box
@@ -37,6 +40,34 @@ pub fn compare(
         }
     }
     Ok(regressed || missing)
+}
+
+/// Says out loud when the two runs were taken against different engines.
+///
+/// `unlike` deliberately does **not** refuse on the engine: a comparison
+/// across two pins is the whole point of an upgrade measurement, and refusing
+/// it would leave the one question the gate is best placed to answer with no
+/// instrument. But an unannounced one is a trap — every percentage in the
+/// table below then folds an engine change into whatever was being tested — so
+/// it is named above the table rather than left for a reader to notice in the
+/// file.
+///
+/// The revision and not only the version, because two builds can both say
+/// 0.78.0 and differ by a commit, and the version alone cannot say which pair
+/// a figure came from.
+fn across_engines(where_: &Conditions, baseline: &Baseline) -> Option<String> {
+    let theirs = match baseline.revision.as_deref() {
+        Some(revision) => format!("{} ({revision})", baseline.engine),
+        None => format!("{} (revision not recorded)", baseline.engine),
+    };
+    let mine = format!("{} ({})", where_.engine, where_.revision);
+    (theirs != mine).then(|| {
+        format!(
+            "Note: the baseline was recorded against engine {theirs} and this run \
+             is engine {mine}. Every change below is that difference plus whatever \
+             else moved."
+        )
+    })
 }
 
 /// Why a regression reported here might be the machine rather than the code.
@@ -120,14 +151,49 @@ fn table(baseline: &Baseline, run: &Run) -> bool {
         let ratio = figure.value / value.max(f64::MIN_POSITIVE);
         let worse = figure.regressed_against(value);
         println!(
-            "{name:<40} {value:>10.2} {:>10.2} {:>8.0}%{}",
+            "{name:<40} {value:>10.2} {:>10.2} {:>8.0}%{}{}",
             figure.value,
             (ratio - 1.0) * 100.0,
-            if worse { "  REGRESSED" } else { "" }
+            if worse { "  REGRESSED" } else { "" },
+            inside_the_spread(
+                baseline,
+                name,
+                figure.value,
+                worse || ratio.max(1.0 / ratio) > 1.1
+            )
         );
         regressed |= worse;
     }
     regressed
+}
+
+/// Whether this run's value lands inside the range the baseline's own samples
+/// covered, where the baseline recorded one.
+///
+/// Reported and **not** subtracted from the verdict, deliberately. A within-run
+/// spread is the smaller half of the noise — the run-to-run variance from a
+/// graphics card's clock state is larger, and no single process can sample it —
+/// so a range that happens to swallow a change is evidence the change is small,
+/// not proof it is nothing. Letting it silence a regression would trade a gate
+/// that sometimes cries wolf for one that sometimes says nothing, which is the
+/// worse of the two failures.
+///
+/// What it is for is the other direction: a 10 % move that lands inside a
+/// baseline whose twelve samples spanned 40 % was never a measurement anyone
+/// could act on, and now the table says so instead of leaving the reader to
+/// guess. That is exactly the adjudication ClayCore's own release notes say
+/// their gate could not make.
+/// `notable` keeps the annotation where a reader is about to draw a conclusion.
+/// Most of a hundred and fifty rows sit inside the baseline's range, and a note
+/// on every one of them is a note nobody reads.
+fn inside_the_spread(baseline: &Baseline, name: &str, value: f64, notable: bool) -> &'static str {
+    if !notable {
+        return "";
+    }
+    match baseline.spread.get(name) {
+        Some(spread) if spread.covers(value) => "  (inside the baseline's own spread)",
+        _ => "",
+    }
 }
 
 /// The figures the baseline has and this run does not.
@@ -249,6 +315,7 @@ mod tests {
             architecture: "x86_64",
             backend: "cuda".into(),
             engine: "0.39.0".into(),
+            revision: "v0.39.0-0-gdeadbee".into(),
             viewport: (1280, 800),
         }
     }
@@ -262,10 +329,12 @@ mod tests {
             architecture: "x86_64".into(),
             backend: "cuda".into(),
             engine: "0.39.0".into(),
+            revision: Some("v0.39.0-0-gdeadbee".into()),
             figures: figures
                 .iter()
                 .map(|(name, value)| (name.to_string(), *value))
                 .collect(),
+            spread: BTreeMap::new(),
             skipped: BTreeMap::new(),
             load_per_core: None,
         }
@@ -423,6 +492,69 @@ mod tests {
     #[test]
     fn a_like_run_is_compared() {
         assert_eq!(unlike(&conditions(), &baseline(&[])), None);
+    }
+
+    /// An engine change is not a refusal — the upgrade measurement this gate
+    /// is most useful for is exactly a comparison across two pins — but it is
+    /// never silent either.
+    #[test]
+    fn a_comparison_across_engine_pins_is_allowed_and_announced() {
+        let mut theirs = baseline(&[]);
+        theirs.engine = "0.73.0".into();
+        theirs.revision = Some("v0.73.0-0-gc0ffee".into());
+        assert_eq!(unlike(&conditions(), &theirs), None, "still comparable");
+        let note = across_engines(&conditions(), &theirs).expect("announced");
+        assert!(note.contains("0.73.0"), "{note}");
+        assert!(note.contains("0.39.0"), "{note}");
+    }
+
+    /// Two builds of the same version are two engines, and only the revision
+    /// can say so.
+    #[test]
+    fn the_same_version_from_a_different_commit_is_still_announced() {
+        let mut theirs = baseline(&[]);
+        theirs.revision = Some("v0.39.0-4-gfeedbee".into());
+        let note = across_engines(&conditions(), &theirs).expect("announced");
+        assert!(note.contains("gfeedbee"), "{note}");
+    }
+
+    #[test]
+    fn the_same_engine_says_nothing() {
+        assert_eq!(across_engines(&conditions(), &baseline(&[])), None);
+    }
+
+    /// A baseline older than the field is not silently treated as a match:
+    /// nothing in it says which build it was taken against.
+    #[test]
+    fn a_baseline_that_records_no_revision_is_announced_rather_than_assumed() {
+        let mut theirs = baseline(&[]);
+        theirs.revision = None;
+        let note = across_engines(&conditions(), &theirs).expect("announced");
+        assert!(note.contains("revision not recorded"), "{note}");
+    }
+
+    /// The adjudication the release notes say their own gate could not make.
+    /// It annotates and does not excuse: the verdict is the tolerance's, and a
+    /// within-run range is only the smaller half of the noise.
+    #[test]
+    fn a_change_inside_the_baselines_own_range_is_marked_as_such() {
+        let mut theirs = baseline(&[("brush.mesh.camada.mean", 19.0)]);
+        theirs.spread.insert(
+            "brush.mesh.camada.mean".into(),
+            crate::figures::Spread {
+                n: 12,
+                min: 17.0,
+                median: 19.0,
+                p95: 22.5,
+                max: 23.4,
+            },
+        );
+        assert!(!inside_the_spread(&theirs, "brush.mesh.camada.mean", 21.0, true).is_empty());
+        assert!(inside_the_spread(&theirs, "brush.mesh.camada.mean", 30.0, true).is_empty());
+        // A figure the baseline said nothing about is annotated with nothing.
+        assert!(inside_the_spread(&theirs, "dab.median", 21.0, true).is_empty());
+        // Nor is a row nobody is about to draw a conclusion from.
+        assert!(inside_the_spread(&theirs, "brush.mesh.camada.mean", 19.1, false).is_empty());
     }
 
     #[test]

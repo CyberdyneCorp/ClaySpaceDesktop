@@ -179,6 +179,14 @@ fn level_one_refuses_gradient_normals() {
     // face-shaded *because* of this, so a release that started downgrading
     // instead of refusing should show up here rather than as a shading
     // difference nobody traced back.
+    //
+    // Re-checked at ClayCore v0.78.0, and not to be confused with that
+    // release's gradient work. "Metal answers a gradient on the device"
+    // (#426, #243) is about `clay_eval_gradients` running on the backend the
+    // caller selected instead of silently on the CPU — same values, different
+    // speed. This is a mip level declining to compute gradient normals at all,
+    // which is a refusal rather than a route, and the mesher this goes through
+    // takes no backend argument.
     let document = settled();
     let coarse = document
         .drawable_coarse_keys()

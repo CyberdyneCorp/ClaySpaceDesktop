@@ -174,6 +174,12 @@ pub enum Command {
     SetBrushIntensity(f32),
     SetBrushFlow(f32),
     SetBrushNoise(f32),
+    /// How far each stamp is turned about its own facing, in radians.
+    ///
+    /// The grain. Radians rather than degrees because that is what the engine
+    /// takes and what the domain carries; the dial is the View's own reading
+    /// of it.
+    SetBrushAzimuth(f32),
     SetBrushFalloff(Falloff),
     SetBrushAccumulate(bool),
     /// Whether the active tool's brush is modulated by the loaded stamp.
@@ -280,6 +286,24 @@ pub enum Command {
     SetCombine(clayspace_model::CombineSettings),
     /// Acts on a recorded pass of the active voxel layer.
     SculptLayer(clayspace_model::SculptLayerOp),
+    /// Moves the active hierarchy's levels, or changes how many it has.
+    ///
+    /// One command carrying the operation rather than four, as
+    /// [`Command::SculptLayer`] is one: the four differ in what they cost and
+    /// in whether they redraw, and `MultiresLevelOp` is where that is stated.
+    /// Deliberately not `SculptLayer`'s enum — that one addresses a grid's
+    /// passes by position, and a hierarchy's are a different stack with
+    /// different addressing.
+    MultiresLevel(clayspace_model::MultiresLevelOp),
+    /// Acts on the active hierarchy's stack of passes.
+    ///
+    /// A *different* enum from [`Command::SculptLayer`] rather than a shared
+    /// one, and that is the whole point of it: a grid's stack is addressed by
+    /// position and a hierarchy's by an id the engine minted, because a
+    /// hierarchy's reorder renumbers every position at or below the pass it
+    /// moves. Pointing one command at the other stack would compile and would
+    /// address the wrong pass.
+    MultiresSculptLayer(clayspace_model::MultiresSculptLayerOp),
     /// Whether the deform panel is open.
     ToggleDeform,
     /// What that panel is set to.
@@ -442,6 +466,17 @@ impl Command {
                 // rather than an entry in a history — so it takes the
                 // composition root's own path like the other layer work.
                 | Self::SculptLayer(_)
+                // A level is not undo either, and for a nearer reason: three
+                // of the four move a number and the fourth allocates, and
+                // none of them is an entry the engine records. It takes the
+                // composition root's own path, where its refusal has
+                // somewhere to land.
+                | Self::MultiresLevel(_)
+                // Nor is a pass. Dialling one is a property of the stack that
+                // stays adjustable long after the strokes that filled it, and
+                // a sculptor whose next undo took back a slider rather than
+                // the work would have to choose between the two.
+                | Self::MultiresSculptLayer(_)
                 // Choosing how the *next* edit combines changes nothing yet;
                 // the stroke that follows is the entry.
                 | Self::SetCombine(_)
@@ -519,6 +554,7 @@ impl Command {
                 | Self::SetBrushIntensity(_)
                 | Self::SetBrushFlow(_)
                 | Self::SetBrushNoise(_)
+                | Self::SetBrushAzimuth(_)
                 | Self::SetBrushFalloff(_)
                 | Self::SetBrushAccumulate(_)
                 | Self::SetBrushAlpha(_)
@@ -604,6 +640,7 @@ impl Command {
             Self::SetBrushIntensity(_) => "brush intensity",
             Self::SetBrushFlow(_) => "brush flow",
             Self::SetBrushNoise(_) => "brush noise",
+            Self::SetBrushAzimuth(_) => "brush grain",
             Self::SetBrushFalloff(_) => "brush edge",
             Self::SetBrushAccumulate(_) => "brush accumulation",
             Self::SetBrushAlpha(_) => "brush stamp",
@@ -666,6 +703,8 @@ impl Command {
             Self::FillVoids => "fill voids",
             Self::SetCombine(_) => "combine operation",
             Self::SculptLayer(op) => op.label(),
+            Self::MultiresLevel(op) => op.label(),
+            Self::MultiresSculptLayer(op) => op.label(),
             Self::ToggleDeform => "deform panel",
             Self::SetDeform(_) => "deform settings",
             Self::RunDeform => "deform",

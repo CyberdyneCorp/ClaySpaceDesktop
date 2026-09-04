@@ -44,6 +44,19 @@ pub enum Skip {
     /// answer with, and a grid was given a `voxel_bounds` of its own for
     /// exactly this reason while a mesh was not. Every run says so.
     NoRegionToConvertInto,
+    /// This representation has no reference member to measure on.
+    ///
+    /// Stated rather than left out because the two are not the same thing. The
+    /// brush group derives itself from `Representation::ALL` crossed with the
+    /// verb table, so a representation added to the domain mints its whole
+    /// family of figure names the day it lands — and if `reference.rs` has no
+    /// member that builds one, those figures would simply not appear, which is
+    /// the silence a performance gate exists to catch. This says out loud, on
+    /// every run, that the family is unmeasured and why.
+    ///
+    /// It is a property of the code and not of the machine, so it fails the
+    /// gate the moment a baseline recorded *with* the member goes missing it.
+    NoReferenceScene,
 }
 
 impl Skip {
@@ -78,6 +91,7 @@ impl Skip {
             Self::CacheUnreadable => "the brick cache would not report its statistics",
             Self::NoGestureForTool => "no gesture this harness can synthesise",
             Self::NotOnThisRepresentation => "not reachable on this representation",
+            Self::NoReferenceScene => "no reference member for this representation",
             Self::NoGpuTimestamps => "the adapter reports no GPU timestamps",
             Self::ViewportTooLarge => "the device will not allocate a target this large",
             Self::NoRegionToConvertInto => "the source layer states no bounds to convert within",

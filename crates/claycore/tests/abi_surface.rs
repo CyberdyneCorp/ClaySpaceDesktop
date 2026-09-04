@@ -508,3 +508,489 @@ fn an_armature_edit_moves_the_subtree_it_names() {
          that should have carried it there"
     );
 }
+
+// -- the document without one layer ------------------------------------------
+//
+// The third question, beside "the whole document" and "one layer". A live
+// sculpt transaction previews one layer, so a host drawing only that preview
+// is drawing the layer alone and every other visible field subtool vanishes
+// for the length of the gesture. These answer what the rest of the document
+// evaluates to, once at pointer-down, and neither of them edits anything.
+
+/// Two spheres in two layers, far enough apart to be told from each other.
+fn two_layer_doc() -> (Document, claycore::LayerId, claycore::LayerId) {
+    let mut doc = Document::new().expect("document");
+    let left = doc.add_sdf_layer("Left").expect("left layer");
+    doc.add_item(left, &Item::sphere(0.5).expect("sphere"))
+        .expect("place the left sphere");
+
+    let right = doc.add_sdf_layer("Right").expect("right layer");
+    let mut moved = Item::sphere(0.5).expect("sphere");
+    moved
+        .set_position([2.0, 0.0, 0.0])
+        .expect("stand it to the right");
+    doc.add_item(right, &moved).expect("place the right sphere");
+
+    (doc, left, right)
+}
+
+#[test]
+fn excluding_a_layer_answers_what_the_document_would_be_without_it() {
+    let (doc, left, right) = two_layer_doc();
+    let at = [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]];
+
+    let whole = doc.eval_points(None, &at).expect("the whole document");
+    assert!(
+        whole[0] < 0.0 && whole[1] < 0.0,
+        "the fixture built nothing"
+    );
+
+    let without_right = doc
+        .eval_points_excluding(right, None, &at)
+        .expect("without the right sphere");
+    assert_eq!(
+        without_right[0], whole[0],
+        "excluding a layer changed the field somewhere it does not reach"
+    );
+    assert!(
+        without_right[1] > 0.0,
+        "the right sphere was excluded and its own centre is still inside it"
+    );
+
+    let without_left = doc
+        .eval_points_excluding(left, None, &at)
+        .expect("without the left sphere");
+    assert!(
+        without_left[0] > 0.0 && without_left[1] < 0.0,
+        "excluding the left layer took the wrong sphere away"
+    );
+
+    // The composition the calls exist for: visible SDF layers hard-union, so
+    // the minimum of the two exclusions is not an approximation of the whole
+    // document — it is the whole document.
+    for (i, point) in at.iter().enumerate() {
+        let one = doc
+            .eval_points_excluding(right, None, &[*point])
+            .expect("rest")[0];
+        let other = doc
+            .eval_points_excluding(left, None, &[*point])
+            .expect("rest")[0];
+        assert!(
+            (one.min(other) - whole[i]).abs() < 1e-5,
+            "min of the two exclusions disagreed with the whole document at \
+             {point:?}: {one} / {other} against {}",
+            whole[i]
+        );
+    }
+}
+
+#[test]
+fn the_gradients_follow_the_same_exclusion() {
+    let (doc, _left, right) = two_layer_doc();
+    // Between the two spheres and nearer the right one, so the nearest surface
+    // — and therefore the direction the field grows in — is a different one
+    // depending on whether the right layer is in the document.
+    let at = [[1.3, 0.0, 0.0]];
+
+    let whole = doc.eval_gradients(None, &at).expect("the whole document")[0];
+    let without = doc
+        .eval_gradients_excluding(right, None, &at)
+        .expect("without the right sphere")[0];
+
+    assert!(
+        whole[0] < -0.5,
+        "the right sphere is the nearer surface and the whole document's \
+         normal points {whole:?}"
+    );
+    assert!(
+        without[0] > 0.5,
+        "excluding the nearer sphere left the normal facing it: {without:?}"
+    );
+}
+
+/// The two refusals are different on purpose, and a wrapper that smoothed the
+/// difference over would be hiding the thing these calls exist to prevent.
+///
+/// An unknown layer is refused rather than read as "exclude nothing": a host
+/// whose id went stale would otherwise be handed the whole document and would
+/// draw the excluded layer twice, once from here and once from its own
+/// preview, which looks like a shading artefact rather than a bug.
+#[test]
+fn an_unknown_layer_is_refused_rather_than_excluding_nothing() {
+    let (mut doc, _left, right) = two_layer_doc();
+    doc.remove_layer(right).expect("retire the right layer");
+
+    let at = [[0.0, 0.0, 0.0]];
+    for outcome in [
+        doc.eval_points_excluding(right, None, &at).err(),
+        doc.eval_points_excluding(right, None, &[]).err(),
+        doc.eval_gradients_excluding(right, None, &at).err(),
+    ] {
+        let error = outcome.expect("a retired layer id was accepted");
+        assert_eq!(
+            error.kind(),
+            claycore::ErrorKind::NotFound,
+            "a retired layer id was refused for some other reason: {error}"
+        );
+    }
+}
+
+/// And the other direction. A hidden layer contributes nothing to the union
+/// already, so excluding it is a no-op — refusing would make a host branch on
+/// state it has no reason to track.
+#[test]
+fn a_hidden_layer_and_a_layer_with_no_field_are_both_excluded_without_complaint() {
+    let (mut doc, _left, right) = two_layer_doc();
+    doc.set_layer_visible(right, false).expect("hide it");
+
+    let at = [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]];
+    let whole = doc.eval_points(None, &at).expect("the whole document");
+    let without = doc
+        .eval_points_excluding(right, None, &at)
+        .expect("excluding a hidden layer is not a refusal");
+    assert_eq!(
+        without, whole,
+        "excluding a layer that was already contributing nothing changed the field"
+    );
+    doc.eval_gradients_excluding(right, None, &at)
+        .expect("nor is it for gradients");
+
+    // A layer carrying no SDF content at all, which is the other half of the
+    // same rule.
+    let empty = doc.add_sdf_layer("Empty").expect("an empty layer");
+    doc.eval_points_excluding(empty, None, &at)
+        .expect("a layer with nothing in it is excluded like any other");
+}
+
+#[test]
+fn a_brick_refill_can_leave_a_layer_out_and_hands_the_samples_back() {
+    let (doc, left, right) = two_layer_doc();
+    let mut cache = claycore::BrickCache::new(claycore::BrickConfig {
+        dim: 8,
+        voxel_size: 0.1,
+        band_voxels: 3,
+        memory_budget: None,
+        colors: false,
+    })
+    .expect("cache");
+    cache
+        .mark_dirty([1.4, -0.6, -0.6], [2.6, 0.6, 0.6])
+        .expect("dirty the right sphere");
+    let (requests, _) = cache.take_dirty(64).expect("drain");
+    assert!(!requests.is_empty(), "the fixture dirtied nothing");
+
+    let rest = cache
+        .eval_excluding(&doc, right, None, &requests)
+        .expect("the document without the right sphere");
+    assert!(
+        rest.values.iter().all(|d| *d > 0.0),
+        "every sample around the excluded sphere should stand outside every \
+         surface that is left, and one did not"
+    );
+    assert!(
+        rest.colors.is_none(),
+        "a distance-only cache asked for colours"
+    );
+
+    // The same drain evaluated whole does reach the surface, which is what
+    // says the exclusion is the reason and not the region.
+    let whole = cache
+        .eval_excluding(&doc, left, None, &requests)
+        .expect("the document without the far sphere");
+    assert!(
+        whole.values.iter().any(|d| *d <= 0.0),
+        "these bricks cover the right sphere and none of their samples is inside it"
+    );
+
+    // Nothing was submitted: the values are the document minus a layer, and a
+    // cache that stands for the whole document must not be told they are it.
+    let states = cache
+        .states(&requests.iter().map(|r| r.key()).collect::<Vec<_>>())
+        .expect("states");
+    assert!(
+        states.iter().all(|s| *s == claycore::BrickState::Missing),
+        "an excluding evaluation stored something: the cache stands for the \
+         whole document, and these values are the document minus a layer"
+    );
+}
+
+/// A cache whose lattice is not the document's still evaluates the document,
+/// by moving the request rather than the cache.
+///
+/// This is what a live preview needs. Its cache is *relabelled* — brick `K`
+/// is stored at `K * span` and drawn at `offset + K * span` — so the requests
+/// it hands out name the wrong world position for anything that reads a
+/// document. Translating a copy names the right one; the original still
+/// carries the generation `submit` checks, so the evaluation and the storage
+/// stay two halves that cannot be confused for each other.
+#[test]
+fn a_translated_request_evaluates_where_it_was_moved_to() {
+    let (doc, left, _right) = two_layer_doc();
+    let mut cache = claycore::BrickCache::new(claycore::BrickConfig {
+        dim: 8,
+        voxel_size: 0.1,
+        band_voxels: 3,
+        memory_budget: None,
+        colors: false,
+    })
+    .expect("cache");
+    cache
+        .mark_dirty([-0.6, -0.6, -0.6], [0.6, 0.6, 0.6])
+        .expect("dirty the lattice around its own origin");
+    let (requests, _) = cache.take_dirty(64).expect("drain");
+    assert!(!requests.is_empty(), "the fixture dirtied nothing");
+
+    // With the left sphere excluded there is nothing at the origin, so these
+    // bricks are entirely outside every surface that is left.
+    let here = cache
+        .eval_excluding(&doc, left, None, &requests)
+        .expect("the document without the left sphere");
+    assert!(
+        here.values.iter().all(|d| *d >= 0.0),
+        "a sample at the origin stood inside a surface, with the only thing \
+         standing there excluded"
+    );
+
+    // The same bricks, read two units to the right, where the other sphere is.
+    let offset = [2.0, 0.0, 0.0];
+    let moved: Vec<_> = requests.iter().map(|r| r.translated(offset)).collect();
+    let there = cache
+        .eval_excluding(&doc, left, None, &moved)
+        .expect("the same bricks, evaluated where they are drawn");
+    assert!(
+        there.values.iter().any(|d| *d <= 0.0),
+        "the translated bricks cover the right sphere and not one of their \
+         samples was inside it"
+    );
+
+    // Only the origin moved: the key is what the cache stores the samples
+    // under, and a translated request that renamed its brick would file the
+    // answer under the wrong one.
+    for (original, moved) in requests.iter().zip(&moved) {
+        assert_eq!(original.key(), moved.key());
+    }
+
+    // And the pairing the whole thing exists for: evaluate with the copies,
+    // submit the originals. The generation survives the translation, so the
+    // cache takes them.
+    let outcomes = cache
+        .submit(&requests, &there.values, None)
+        .expect("submit the originals with the translated answers");
+    assert!(
+        outcomes
+            .iter()
+            .all(|o| *o == claycore::BrickSubmit::Accepted),
+        "the cache refused requests it had just handed out: {outcomes:?}"
+    );
+}
+
+/// The refusal reaches the brick-cache half too — same rule, same reason.
+#[test]
+fn the_brick_half_refuses_an_unknown_layer_and_accepts_a_hidden_one() {
+    let (mut doc, _left, right) = two_layer_doc();
+    let mut cache = claycore::BrickCache::new(claycore::BrickConfig {
+        dim: 8,
+        voxel_size: 0.1,
+        band_voxels: 3,
+        memory_budget: None,
+        colors: false,
+    })
+    .expect("cache");
+    cache
+        .mark_dirty([-0.6, -0.6, -0.6], [0.6, 0.6, 0.6])
+        .expect("dirty the left sphere");
+    let (requests, _) = cache.take_dirty(64).expect("drain");
+
+    doc.set_layer_visible(right, false).expect("hide it");
+    cache
+        .eval_excluding(&doc, right, None, &requests)
+        .expect("a hidden layer is excluded without complaint");
+
+    doc.remove_layer(right).expect("retire it");
+    let error = cache
+        .eval_excluding(&doc, right, None, &requests)
+        .expect_err("a retired layer id was accepted");
+    assert_eq!(
+        error.kind(),
+        claycore::ErrorKind::NotFound,
+        "a retired layer id was refused for some other reason: {error}"
+    );
+}
+
+/// The other half of why these exist, and the half a doc comment cannot prove
+/// on its own: they are safe inside a live transaction.
+///
+/// The route a host would otherwise take — hide the layer, sample the rest,
+/// show it again — is three edits, and an edit taken inside a smooth gesture
+/// is one the commit correctly refuses. These edit nothing and record no undo
+/// entry, so the gesture they were taken inside of still commits.
+#[test]
+fn an_exclusion_taken_inside_a_live_gesture_does_not_spoil_it() {
+    let (mut doc, left, right) = two_layer_doc();
+    doc.enable_undo().expect("enable undo");
+    let before = doc.undo_state().expect("undo state").undo_depth;
+
+    let mut tx =
+        claycore::SmoothTransaction::begin(&mut doc, left, claycore::SculptPolicy::at(0.05))
+            .expect("open a live smooth on the left sphere");
+
+    // What a host takes once at pointer-down: the rest of the document, to
+    // compose with the preview it is about to draw.
+    let rest = doc
+        .eval_points_excluding(left, None, &[[2.0, 0.0, 0.0]])
+        .expect("the rest of the document, mid-gesture");
+    assert!(
+        rest[0] < 0.0,
+        "the rest of the document should still hold the right sphere"
+    );
+    doc.eval_gradients_excluding(right, None, &[[1.3, 0.0, 0.0]])
+        .expect("gradients too");
+
+    tx.update(claycore::RelaxParams {
+        strength: 1.0,
+        radius_cells: 1,
+        iterations: 1,
+        centre: [0.5, 0.0, 0.0],
+        region_radius: 0.25,
+        falloff: 0.12,
+        mask: None,
+    })
+    .expect("a dab");
+
+    tx.commit()
+        .expect("the commit was refused, so something between begin and here edited the layer");
+
+    assert_eq!(
+        doc.undo_state().expect("undo state").undo_depth,
+        before + 1,
+        "the gesture's own commit is the only entry this should have added"
+    );
+}
+
+// -- a layer scales per axis, and answers where it is -------------------------
+//
+// The whole-layer half of a node's per-axis scale, which has been in the ABI
+// since 0.54.0. Reading a layer transform back is newer still: until 0.74.0
+// the boundary set one and would not answer one, so a host that wanted to know
+// where its own subtool stood had to remember what it had written.
+
+/// One sphere in one layer, for a transform to move around.
+fn one_layer_doc() -> (Document, claycore::LayerId) {
+    let mut doc = Document::new().expect("document");
+    let layer = doc.add_sdf_layer("Base").expect("layer");
+    doc.add_item(layer, &Item::sphere(0.5).expect("sphere"))
+        .expect("place");
+    (doc, layer)
+}
+
+#[test]
+fn a_layer_scales_per_axis() {
+    let (mut doc, layer) = one_layer_doc();
+    assert!(
+        !inside(&doc, [0.9, 0.0, 0.0]),
+        "the fixture already reaches"
+    );
+
+    doc.set_layer_transform_nonuniform(layer, [0.0; 3], [0.0, 1.0, 0.0], 0.0, [3.0, 1.0, 1.0])
+        .expect("stretch the layer along x");
+
+    assert!(
+        inside(&doc, [1.2, 0.0, 0.0]),
+        "the stretch did not reach along the axis it was applied to"
+    );
+    assert!(
+        !inside(&doc, [0.0, 0.6, 0.0]),
+        "a stretch along x widened the layer along y as well"
+    );
+}
+
+#[test]
+fn a_layer_answers_where_it_stands() {
+    let (mut doc, layer) = one_layer_doc();
+    doc.set_layer_transform(layer, [1.0, 2.0, 3.0], [0.0, 1.0, 0.0], 0.5, 2.0)
+        .expect("place the layer");
+
+    let read = doc.layer_transform(layer).expect("read it back");
+    assert_eq!(read.position, [1.0, 2.0, 3.0]);
+    assert!(
+        (read.scale - 2.0).abs() < 1e-5,
+        "the factor came back {}",
+        read.scale
+    );
+    assert!(
+        (read.rotation_angle - 0.5).abs() < 1e-5,
+        "the angle came back {}",
+        read.rotation_angle
+    );
+}
+
+/// The per-axis reader answers the *product* of the layer's two scales, so a
+/// layer placed through the uniform setter answers `(s, s, s)` rather than
+/// `(1, 1, 1)` with the factor hidden somewhere the caller cannot see. That is
+/// what lets one manipulator read this call and never branch.
+#[test]
+fn the_per_axis_reader_never_makes_a_manipulator_branch() {
+    let (mut doc, layer) = one_layer_doc();
+    doc.set_layer_transform(layer, [0.0; 3], [0.0, 1.0, 0.0], 0.0, 2.0)
+        .expect("place it uniformly");
+
+    let read = doc
+        .layer_transform_nonuniform(layer)
+        .expect("read it per axis");
+    for (axis, factor) in read.scale.iter().enumerate() {
+        assert!(
+            (factor - 2.0).abs() < 1e-5,
+            "the uniform factor is missing from axis {axis}: {:?}",
+            read.scale
+        );
+    }
+}
+
+/// And the refusal, which is the pair's whole point: one float cannot express
+/// three, the uniform factor alone describes a differently-shaped subtool, and
+/// a read-change-write through the uniform setter would round the artist's
+/// squash away.
+#[test]
+fn the_single_factor_reader_refuses_a_squashed_layer_rather_than_averaging_it() {
+    let (mut doc, layer) = one_layer_doc();
+    doc.set_layer_transform_nonuniform(layer, [0.0; 3], [0.0, 1.0, 0.0], 0.0, [3.0, 1.0, 1.0])
+        .expect("squash it");
+
+    let error = doc
+        .layer_transform(layer)
+        .expect_err("one float answered for three different ones");
+    assert_eq!(
+        error.kind(),
+        claycore::ErrorKind::InvalidArgument,
+        "the squashed layer was refused for some other reason: {error}"
+    );
+
+    // The per-axis reader is what a host asks instead, and it answers.
+    assert_eq!(
+        doc.layer_transform_nonuniform(layer)
+            .expect("read it per axis")
+            .scale,
+        [3.0, 1.0, 1.0]
+    );
+}
+
+/// Both setters write the *whole* transform — the ABI does no partial updates
+/// — so the uniform one collapses a per-axis scale rather than leaving it
+/// alone. Worth pinning, because a host that reaches for the narrower call to
+/// move a squashed subtool unsquashes it.
+#[test]
+fn the_uniform_setter_collapses_a_per_axis_scale() {
+    let (mut doc, layer) = one_layer_doc();
+    doc.set_layer_transform_nonuniform(layer, [0.0; 3], [0.0, 1.0, 0.0], 0.0, [3.0, 1.0, 1.0])
+        .expect("squash it");
+    doc.set_layer_transform(layer, [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], 0.0, 1.0)
+        .expect("move it with the narrower call");
+
+    assert_eq!(
+        doc.layer_transform_nonuniform(layer)
+            .expect("read it per axis")
+            .scale,
+        [1.0; 3],
+        "the uniform setter left a stretch it has no way to express"
+    );
+}

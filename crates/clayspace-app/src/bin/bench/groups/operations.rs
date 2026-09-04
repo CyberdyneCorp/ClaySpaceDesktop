@@ -38,7 +38,10 @@ pub fn measure(policy: &BackendPolicy, run: &mut Run) {
             if !run.wants_group(&prefix) {
                 continue;
             }
-            let scene = scene_for(representation, operation);
+            let Some(scene) = scene_for(representation, operation) else {
+                run.skip(prefix, Skip::NoReferenceScene);
+                continue;
+            };
             let samples: Result<Vec<f64>, Skip> = (0..Record::OneShot.samples())
                 .map(|_| time(&gpu, policy, scene, operation))
                 .collect();
@@ -67,9 +70,9 @@ fn name(representation: Representation, operation: LayerOperation) -> String {
 /// The representation's own, except for the two pre-bake repairs: a solid grid
 /// has no holes to close and no voids to fill, so on the plain voxel member
 /// they would time the check and report it as the repair.
-fn scene_for(representation: Representation, operation: LayerOperation) -> Scene {
+fn scene_for(representation: Representation, operation: LayerOperation) -> Option<Scene> {
     match operation {
-        LayerOperation::CloseHoles { .. } | LayerOperation::FillVoids => Scene::VoxelPocked,
+        LayerOperation::CloseHoles { .. } | LayerOperation::FillVoids => Some(Scene::VoxelPocked),
         _ => Scene::for_representation(representation),
     }
 }
@@ -103,7 +106,7 @@ mod tests {
     fn a_repair_is_measured_on_the_member_that_needs_repairing() {
         assert_eq!(
             scene_for(Representation::Voxel, LayerOperation::FillVoids),
-            Scene::VoxelPocked
+            Some(Scene::VoxelPocked)
         );
         assert_eq!(
             scene_for(
@@ -113,7 +116,7 @@ mod tests {
                     max: [1.0; 3]
                 }
             ),
-            Scene::VoxelReference
+            Some(Scene::VoxelReference)
         );
     }
 

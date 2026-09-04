@@ -458,8 +458,28 @@ fn op_add_honours_the_stroke_presets_strength() {
 /// then call the reader that applies", and the readers that apply exist for an
 /// armature and for a stroke's points. There is none for a plain item.
 ///
-/// Asserted as it is today, so the release that closes the gap fails here and
-/// the workaround can be deleted rather than left to rot.
+/// **Re-checked at ClayCore v0.78.0, and what the re-check found is that this
+/// test cannot fail.** It asserts what *can* be read and never that the
+/// readers are absent, so it passes on both sides of the change it was written
+/// to catch — and the change already happened. `clay_layer_node_transform`,
+/// `clay_layer_node_transform_nonuniform`, `clay_layer_node_params` and
+/// `clay_layer_node_op_blend` are declared in the pinned
+/// `vendor/ClayCore/bindings/c/clay.h` and generated into `claycore-sys`; they
+/// landed with #317 at the 0.60.0 pin and are simply not wrapped in
+/// `claycore`. So what keeps `clayspace_engine::objects`'s table beside every
+/// saved document is a wrapper nobody has written, not an ABI that cannot
+/// answer, and retiring it is a change of its own — `docs/roadmap.md` records
+/// both the closure and this test's inertness.
+///
+/// v0.78.0 does add transform readback of its own, and the distinction matters
+/// because the two are one word apart: `clay_document_layer_transform` and its
+/// per-axis sibling are #373, they are about a **layer**, and this repository
+/// took them up in this same upgrade — the host-side mirror of every layer
+/// transform is gone. A *node* is one level down and is untouched by that.
+///
+/// Left asserting what it asserts rather than deleted, because the printed
+/// numbers below are the measurement the object table was justified with and
+/// are worth keeping until the table goes.
 #[test]
 fn a_placed_node_reports_its_primitive_and_nothing_else() {
     let (mut doc, layer) = sphere();

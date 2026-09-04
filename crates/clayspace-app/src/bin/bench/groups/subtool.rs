@@ -369,7 +369,8 @@ fn resolved(gpu: &Gpu, policy: &BackendPolicy) -> Result<f64, Skip> {
 /// nothing else in this suite. Activation is the third: it is an engine
 /// operation on a click, so the 16 ms bound applies to it as written.
 fn budgeted(run: &mut Run, prefix: &str, samples: Vec<f64>) {
-    for (name, figure) in Record::Repeatable.figures(prefix, samples) {
+    for (name, figure) in Record::Repeatable.figures(prefix, &samples) {
+        run.spread(&name, &samples);
         run.insert(
             name,
             Figure {

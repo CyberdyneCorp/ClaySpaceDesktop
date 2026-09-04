@@ -906,6 +906,63 @@ impl App {
         self.request_redraw();
     }
 
+    /// Moves the active hierarchy's levels, or changes how many it has.
+    ///
+    /// Through the scene ViewModel rather than the document directly, because
+    /// the refusal is half the operation: adding a level is priced against a
+    /// budget and refused over it rather than attempted, and a button that
+    /// does nothing and says nothing is what this route exists to avoid.
+    ///
+    /// Only the operations that change what is drawn cost a redraw of the
+    /// surface. Moving the *sculpt* level moves where the next stamp lands and
+    /// nothing else — that is the whole reason a hierarchy carries two numbers
+    /// — so re-meshing for it would be paying for a picture that has not
+    /// changed.
+    fn run_multires_level_op(&mut self, op: clayspace_model::MultiresLevelOp) {
+        let redraws = op.changes_what_is_drawn();
+        if self.scene.apply_level_op(op).is_ok() {
+            // Marked whatever it moved. Both levels are stored *inside* the
+            // hierarchy's serialized bytes, so moving the sculpt level alone
+            // changes what a save would write even though it changes nothing
+            // that is drawn — and a document that did not know it had been
+            // touched would offer to close without it.
+            self.document_vm.touched();
+            if redraws {
+                self.sync_geometry();
+            }
+        }
+        self.request_redraw();
+    }
+
+    /// Acts on the active hierarchy's stack of passes.
+    ///
+    /// Through the scene ViewModel, exactly as the levels are, and for the
+    /// same reason: the refusal is half the operation. A locked pass, a slider
+    /// moved before the pointer came up, a merge with nothing beneath it — all
+    /// three are sentences a sculptor acts on, and all three would be a
+    /// control that did nothing and said nothing if the outcome were dropped.
+    ///
+    /// Only three of the eleven redraw. An additive stack commutes, so sliding
+    /// a pass through it moves no vertex; a rename, a lock and a change of
+    /// which pass takes the next stroke move nothing either. Re-meshing for
+    /// those would be paying for a picture that has not changed — on a
+    /// representation where the picture is millions of vertices wide.
+    fn run_multires_pass_op(&mut self, op: clayspace_model::MultiresSculptLayerOp) {
+        let redraws = op.changes_the_surface();
+        if self.scene.apply_sculpt_layer_op(op).is_ok() {
+            // Every one of the eleven changes what a save would write — the
+            // names, the order, the strengths and the coefficients are all
+            // inside the hierarchy's serialized bytes — so the document is
+            // touched whether or not the picture moved. Only the three that
+            // move it re-mesh.
+            self.document_vm.touched();
+            if redraws {
+                self.sync_geometry();
+            }
+        }
+        self.request_redraw();
+    }
+
     /// Asks for a PNG and loads it as the alpha stamp.
     ///
     /// PNG alone in the filter, because PNG alone is read — a dialog offering
@@ -2289,6 +2346,21 @@ impl App {
                 .diagnostics(graphics.surface.framebuffer())
         });
         report.stalls = self.stalls.lines();
+        report.mesh = Some(
+            self.document
+                .with(|document| clayspace_model::MeshDiagnostics {
+                    sculptors: document.mesh_sculptors_held(),
+                    stale_seeds_rejected: document.stale_seeds_rejected(),
+                }),
+        );
+        report.hierarchies = Some(
+            self.document
+                .with(|document| document.multires_diagnostics()),
+        );
+        // The surfaces this application holds are folded in on the way, which
+        // is what keeps the figure from being the document's memory with the
+        // largest thing in it left out — see `ClayDocument::memory`.
+        report.memory = self.document.with(|document| document.memory_diagnostics());
         report
     }
 
@@ -3369,6 +3441,8 @@ impl App {
             Command::RunConversion => self.run_conversion(),
             Command::ToggleRepair => self.show_repair = !self.show_repair,
             Command::SculptLayer(op) => self.run_sculpt_layer_op(op.clone()),
+            Command::MultiresLevel(op) => self.run_multires_level_op(*op),
+            Command::MultiresSculptLayer(op) => self.run_multires_pass_op(op.clone()),
             Command::ToggleDeform => self.show_deform = !self.show_deform,
             Command::ToggleReferences => self.show_references = !self.show_references,
             Command::LoadReference(plane) => self.load_reference(*plane),
@@ -3614,6 +3688,19 @@ impl App {
             curve_radius: *self.curve.radius().get(),
             lattice: self.lattice.state().get().clone(),
             lattice_divisions: *self.lattice.divisions().get(),
+            // The engine's own preflight, asked per frame because it costs
+            // microseconds and moves with every level added or removed.
+            subdivision_cost: self.scene.subdivision_cost(),
+            // The stack's own figures, and whether the pointer is still down.
+            // The engine refuses a composition change while a gesture is open,
+            // so the controls read that rather than discovering it.
+            multires_cost: self
+                .scene
+                .scene()
+                .get()
+                .active_layer()
+                .and_then(|layer| layer.multires.as_ref())
+                .map(|hierarchy| hierarchy.cost(self.sculpt.is_stroking())),
             document_name: document_name.as_str(),
             modified: *self.document_vm.modified().get(),
             tool: *self.sculpt.tool().get(),
@@ -3635,14 +3722,14 @@ impl App {
             // An object refusal was the same Observable nobody read: a
             // re-shape, a re-combine, a removal and a refused transform each
             // wrote one and none of them reached the screen.
-            tool_status: self
-                .references
-                .notice()
-                .get()
-                .as_deref()
-                .or(self.mask.notice().get().as_deref())
-                .or(self.objects.notice().get().as_deref())
-                .or(self.sculpt.tool_status().get().as_deref()),
+            tool_status: tool_status(ToolStatusSources {
+                document: self.document_vm.notice().get().as_deref(),
+                reference: self.references.notice().get().as_deref(),
+                mask: self.mask.notice().get().as_deref(),
+                object: self.objects.notice().get().as_deref(),
+                scene: self.scene.refusal().get().as_deref(),
+                sculpt: self.sculpt.tool_status().get().as_deref(),
+            }),
             symmetry: self.active_symmetry(),
             scene: &scene,
             renaming: self
@@ -4442,6 +4529,48 @@ impl ApplicationHandler for App {
     }
 }
 
+/// Every source that can explain "why that did not happen", in the order the
+/// options bar prefers them.
+///
+/// Named rather than positional because the order *is* the behaviour: four of
+/// these six were Observables that nothing read, and each was found the same
+/// way — an action refused, a sentence written, and no sentence on screen. A
+/// tuple of six `Option<&str>` would let a reorder pass review unnoticed.
+struct ToolStatusSources<'a> {
+    /// A save or an open that failed. First because it is the most recent
+    /// explicit action there is, and the one whose silence costs work rather
+    /// than a click: a save refused because a hierarchy's side-car could not
+    /// be written went to stderr, and the sculptor was left looking at a
+    /// document that had failed to save and did not say so.
+    document: Option<&'a str>,
+    /// A PNG that will not load, which is a sentence naming what is wrong with
+    /// *that* file.
+    reference: Option<&'a str>,
+    /// Extruding on a layer that has no field to extrude from.
+    mask: Option<&'a str>,
+    /// A re-shape, a re-combine, a removal or a refused transform.
+    object: Option<&'a str>,
+    /// A rebuild refused for an unusable resolution, and now a level refused
+    /// for its peak. `run_remesh` has claimed this reaches the screen since it
+    /// was written and it did not.
+    scene: Option<&'a str>,
+    /// A standing condition rather than an explicit action, so it comes last.
+    sculpt: Option<&'a str>,
+}
+
+/// The options bar's one "why that did not happen" line.
+///
+/// A refusal raised by an explicit action beats a standing condition, and the
+/// document's own beats every other explicit one.
+fn tool_status<'a>(from: ToolStatusSources<'a>) -> Option<&'a str> {
+    from.document
+        .or(from.reference)
+        .or(from.mask)
+        .or(from.object)
+        .or(from.scene)
+        .or(from.sculpt)
+}
+
 fn next_matcap(current: MatCap) -> MatCap {
     let all = MatCap::ALL;
     let index = all.iter().position(|m| *m == current).unwrap_or(0);
@@ -4450,9 +4579,95 @@ fn next_matcap(current: MatCap) -> MatCap {
 
 #[cfg(test)]
 mod tests {
-    use super::{gizmo_geometry_update, GizmoGeometryUpdate};
+    use super::{gizmo_geometry_update, tool_status, GizmoGeometryUpdate, ToolStatusSources};
     use clayspace_model::Representation;
     use clayspace_vm::Command;
+
+    /// Nothing to explain, which is the state the options bar is in almost
+    /// always.
+    fn quiet() -> ToolStatusSources<'static> {
+        ToolStatusSources {
+            document: None,
+            reference: None,
+            mask: None,
+            object: None,
+            scene: None,
+            sculpt: None,
+        }
+    }
+
+    /// A save that failed reaches the options bar.
+    ///
+    /// It did not. `DocumentVm::notice` has said "the last failure, for the
+    /// interface to show" since it was written, and the chain that builds the
+    /// options bar never read it — so a save refused because a hierarchy's
+    /// side-car could not be written printed to stderr, which no sculptor is
+    /// looking at, and the document silently stayed unsaved. Removing
+    /// `document` from `tool_status` fails here.
+    #[test]
+    fn a_failed_save_reaches_the_options_bar() {
+        assert_eq!(
+            tool_status(ToolStatusSources {
+                document: Some("the side-car could not be written"),
+                ..quiet()
+            }),
+            Some("the side-car could not be written")
+        );
+    }
+
+    /// A refused rebuild reaches the options bar.
+    ///
+    /// The same hole in a second Observable: `run_remesh` has claimed this
+    /// reaches the screen since it was written and nothing read it, so a
+    /// rebuild refused for an unusable resolution — and now a level refused
+    /// for its peak, which is this branch's own new refusal — went to stderr
+    /// and the click looked like it had done nothing. Removing `scene` from
+    /// `tool_status` fails here.
+    #[test]
+    fn a_refused_rebuild_reaches_the_options_bar() {
+        assert_eq!(
+            tool_status(ToolStatusSources {
+                scene: Some("that resolution will not fit"),
+                ..quiet()
+            }),
+            Some("that resolution will not fit")
+        );
+    }
+
+    /// An explicit refusal beats a standing condition, and the document's beats
+    /// every other explicit one.
+    ///
+    /// The order is the behaviour: a sculptor who has just been told a save
+    /// failed must not have that replaced by a tool note that was already true
+    /// before the click.
+    #[test]
+    fn the_most_recent_explicit_refusal_is_the_one_shown() {
+        assert_eq!(
+            tool_status(ToolStatusSources {
+                document: Some("save"),
+                reference: Some("reference"),
+                mask: Some("mask"),
+                object: Some("object"),
+                scene: Some("scene"),
+                sculpt: Some("standing"),
+            }),
+            Some("save")
+        );
+        assert_eq!(
+            tool_status(ToolStatusSources {
+                scene: Some("scene"),
+                sculpt: Some("standing"),
+                ..quiet()
+            }),
+            Some("scene")
+        );
+    }
+
+    /// Six silences say nothing rather than an empty line.
+    #[test]
+    fn nothing_refused_says_nothing() {
+        assert_eq!(tool_status(quiet()), None);
+    }
 
     #[test]
     fn an_sdf_gizmo_settles_when_the_drag_ends() {

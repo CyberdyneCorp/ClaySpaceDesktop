@@ -39,6 +39,19 @@ pub struct Conditions {
     pub backend: String,
     /// The engine actually linked.
     pub engine: String,
+    /// Which build of that engine, as `git describe` saw it.
+    ///
+    /// The version triple is not an identity. Two engines both saying 0.78.0
+    /// can differ by a commit, and a benchmark comparison across engine pins —
+    /// which `compare::unlike` deliberately permits, since the engine is the
+    /// thing being compared — has no other way to say *which* two builds it
+    /// was between. `claycore-sys`'s build script stamps this in from the
+    /// vendored submodule, so it travels with the binary rather than being
+    /// typed into a file by whoever recorded it.
+    ///
+    /// A source tree with no git says so rather than failing: the revision is
+    /// a diagnostic and not a requirement.
+    pub revision: String,
     /// Where the numbers came from — an offscreen target of this size.
     pub viewport: (u32, u32),
 }
@@ -46,12 +59,13 @@ pub struct Conditions {
 impl Conditions {
     pub fn describe(&self) -> String {
         format!(
-            "{} on {}/{}, backend {}, engine {}, {}x{}",
+            "{} on {}/{}, backend {}, engine {} ({}), {}x{}",
             self.scenes_described(),
             self.platform,
             self.architecture,
             self.backend,
             self.engine,
+            self.revision,
             self.viewport.0,
             self.viewport.1
         )
@@ -123,12 +137,25 @@ impl Scene {
         }
     }
 
-    /// The member to measure a given representation on.
-    pub fn for_representation(representation: Representation) -> Scene {
+    /// The member to measure a given representation on, where there is one.
+    ///
+    /// `None` for the hierarchy, and that answer is the point of the `Option`
+    /// rather than an omission to be filled in later. A member is a *subject* —
+    /// a build recipe with a recorded size and a revision, against which two
+    /// runs are declared comparable — and adding one is not free: it changes
+    /// `conditions.scenes`, which is the first thing `compare::unlike` refuses
+    /// on, so every committed baseline stops comparing the day it lands.
+    ///
+    /// So it arrives with the change that can measure it, and until then the
+    /// groups that derive themselves from `Representation::ALL` say
+    /// `Skip::NoReferenceScene` on every run instead of quietly reporting
+    /// nothing.
+    pub fn for_representation(representation: Representation) -> Option<Scene> {
         match representation {
-            Representation::Sdf => Self::Reference,
-            Representation::Voxel => Self::VoxelReference,
-            Representation::Mesh => Self::MeshReference,
+            Representation::Sdf => Some(Self::Reference),
+            Representation::Voxel => Some(Self::VoxelReference),
+            Representation::Mesh => Some(Self::MeshReference),
+            Representation::Multires => None,
         }
     }
 
@@ -451,6 +478,11 @@ impl Scene {
             Representation::Sdf => Some(document.surface_brick_count()),
             Representation::Voxel => document.occupied_cells(),
             Representation::Mesh => Some(document.visible_mesh_geometry().3.len() / 3),
+            // Unreachable while no member builds one — `representation()` is
+            // this enum's own answer and none of the five says so — and left
+            // as a refusal rather than a `_` arm so that a member added
+            // without a size to check it against fails here.
+            Representation::Multires => None,
         }
     }
 
@@ -481,6 +513,7 @@ pub fn conditions(policy: &BackendPolicy, viewport: (u32, u32)) -> Conditions {
         architecture: std::env::consts::ARCH,
         backend: policy.active().to_string(),
         engine: clayspace_engine::claycore::version().to_string(),
+        revision: clayspace_engine::claycore::revision().to_string(),
         viewport,
     }
 }

@@ -26,11 +26,26 @@
 //! layer whose triangles went out from under one is a refusal rather than a
 //! read of freed storage — and [`Sculptors::forget`] is how this side keeps a
 //! refusal from being reachable in the first place.
+//!
+//! **Shared rather than owned.** What is held is a handle behind an `Rc`, not
+//! a sculptor, because a gesture in flight has to be able to keep the one it
+//! is stamping with. A mesh gesture that defers its normals owes a flush to
+//! the handle that deferred them, and taking the handle away — an eviction, a
+//! layer removed under the drag — would leave the mesh shaded from where its
+//! vertices used to be with nothing left to put it right. The gesture holds a
+//! second reference, so the flush it owes cannot be separated from the thing
+//! that owes it.
+
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use clayspace_model::LayerKey;
 
+/// One mesh layer's sculptor, shared with whatever gesture is using it.
+pub(crate) type SharedSculptor = Rc<RefCell<claycore::MeshSculptor>>;
+
 /// The sculptors a document holds, least recently used first.
-pub(crate) type Sculptors = Held<claycore::MeshSculptor>;
+pub(crate) type Sculptors = Held<SharedSculptor>;
 
 /// What is held is a type parameter so that the policy above — which one is
 /// dropped, and when — can be exercised without an engine. A `MeshSculptor`
@@ -60,6 +75,19 @@ impl<T> Held<T> {
         let entry = self.held.remove(at);
         self.held.push(entry);
         self.held.last_mut().map(|(_, sculptor)| sculptor)
+    }
+
+    /// Every sculptor held, in no order a caller should depend on.
+    ///
+    /// For reading a figure off all of them at once — the stale-seed count —
+    /// rather than for reaching one, which is what `get_mut` is.
+    pub(crate) fn values(&self) -> impl Iterator<Item = &T> {
+        self.held.iter().map(|(_, held)| held)
+    }
+
+    /// How many are held.
+    pub(crate) fn len(&self) -> usize {
+        self.held.len()
     }
 
     /// Whether one has been built for a layer, without counting as a use.

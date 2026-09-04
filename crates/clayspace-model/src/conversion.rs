@@ -28,23 +28,52 @@ pub enum Direction {
     SdfToMesh,
     /// The grid's exposed faces as triangles, likewise.
     VoxelToMesh,
+    /// Takes the mesh **as the cage** of a subdivision hierarchy.
+    ///
+    /// The one crossing here that samples nothing. Every other direction lays
+    /// the source onto a lattice or reads one off, and pays for it in half a
+    /// cell of movement and a feature size that vanishes; this one keeps the
+    /// vertices it was given, exactly, as level 0. What it does instead is
+    /// *refuse*: `clay_multires_from_mesh` will not repair a non-manifold edge
+    /// or weld a degenerate face, because a conversion that quietly welds a
+    /// face changes the retopology somebody paid for without saying so — and a
+    /// cage is precisely the thing whose topology is the work.
+    ///
+    /// It builds one level, and that level is the cage. Subdividing is a
+    /// separate act with a separate price — see
+    /// [`crate::multires::SubdivisionCost`] — because the first level costs
+    /// nothing and the fifth can cost twenty million faces, and one number
+    /// covering both would describe neither.
+    MeshToMultires,
+    /// Bakes a level of the hierarchy into an ordinary mesh.
+    ///
+    /// A level *is* a mesh — positions, the cage's attributes subdivided over
+    /// their own connectivity, quads and their triangulation — so nothing is
+    /// resampled here either. What goes is everything under the level: the
+    /// cage, the levels between, and the detail stored per level in its own
+    /// transported frame. Afterwards the vertices are where they were and there
+    /// is nothing beneath them to move.
+    MultiresToMesh,
 }
 
 impl Direction {
-    pub const ALL: [Direction; 6] = [
+    pub const ALL: [Direction; 8] = [
         Self::SdfToVoxel,
         Self::VoxelToSdf,
         Self::MeshToVoxel,
         Self::MeshToSdf,
         Self::SdfToMesh,
         Self::VoxelToMesh,
+        Self::MeshToMultires,
+        Self::MultiresToMesh,
     ];
 
     pub fn from(self) -> Representation {
         match self {
             Self::SdfToVoxel | Self::SdfToMesh => Representation::Sdf,
             Self::VoxelToSdf | Self::VoxelToMesh => Representation::Voxel,
-            Self::MeshToVoxel | Self::MeshToSdf => Representation::Mesh,
+            Self::MeshToVoxel | Self::MeshToSdf | Self::MeshToMultires => Representation::Mesh,
+            Self::MultiresToMesh => Representation::Multires,
         }
     }
 
@@ -52,7 +81,8 @@ impl Direction {
         match self {
             Self::SdfToVoxel | Self::MeshToVoxel => Representation::Voxel,
             Self::VoxelToSdf | Self::MeshToSdf => Representation::Sdf,
-            Self::SdfToMesh | Self::VoxelToMesh => Representation::Mesh,
+            Self::SdfToMesh | Self::VoxelToMesh | Self::MultiresToMesh => Representation::Mesh,
+            Self::MeshToMultires => Representation::Multires,
         }
     }
 
@@ -113,6 +143,19 @@ impl Direction {
     /// the crossing, not after.
     pub fn ends_in_fixed_topology(self) -> bool {
         self.to() == Representation::Mesh
+    }
+
+    /// Whether the crossing lays the source onto a sampling lattice at all.
+    ///
+    /// The other side of [`Direction::chooses_resolution`], and it is not its
+    /// negation. Reading a grid back chooses no resolution because the grid
+    /// already has one — it was sampled, just not here. The two hierarchy
+    /// crossings are the only ones where nothing is sampled anywhere along the
+    /// way: a cage is the mesh's own vertices and a level is the hierarchy's
+    /// own, so what comes out is exact and what it costs is stated in
+    /// refusals rather than in tolerances.
+    pub fn is_exact(self) -> bool {
+        matches!(self, Self::MeshToMultires | Self::MultiresToMesh)
     }
 }
 
@@ -188,6 +231,27 @@ pub struct RepairReport {
     pub airtight: bool,
 }
 
+/// What is wrong with a mesh that stops it being a subdivision cage.
+///
+/// The engine's own list, less the empty case, which is
+/// [`Refusal::SourceEmpty`] here because it is the same fact about a source
+/// whichever crossing asks. Kept apart from [`Refusal`] rather than flattened
+/// into it because these two are *repairable* — by the sculptor, in the
+/// modelling application the mesh came from — and every other refusal here is
+/// answered by moving a slider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CageFault {
+    /// An edge shared by more than two faces, or a vertex fan that does not
+    /// close.
+    NonManifold,
+    /// A face with repeated or collinear corners.
+    DegenerateFace,
+}
+
+impl CageFault {
+    pub const ALL: [CageFault; 2] = [Self::NonManifold, Self::DegenerateFace];
+}
+
 /// Why a conversion was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Refusal {
@@ -203,6 +267,22 @@ pub enum Refusal {
         needs: Representation,
         active: Representation,
     },
+    /// The mesh cannot stand as a subdivision cage as it is.
+    ///
+    /// Named rather than folded into [`Refusal::SourceEmpty`] because the
+    /// answer is different in kind: an empty source needs something in it, and
+    /// this needs the *same* geometry mended. A sculptor told "that will not
+    /// convert" goes looking for a setting; one told which edge is shared by
+    /// three faces goes back to the mesh.
+    NotACage { fault: CageFault },
+    /// Subdividing again would cost more than the budget allows.
+    ///
+    /// The figure is the **peak** rather than what remains, because on a
+    /// constrained device it is the high-water mark during the build that ends
+    /// the session, not the steady state after it.
+    LevelOverBudget { peak_bytes: u64, budget_bytes: u64 },
+    /// The hierarchy is already as deep as this build will take it.
+    DepthLimit { levels: u32 },
 }
 
 impl std::fmt::Display for Refusal {
@@ -226,6 +306,29 @@ impl std::fmt::Display for Refusal {
                 "that crossing starts from a {} layer; this one is {}",
                 needs.label(),
                 active.label()
+            ),
+            Self::NotACage { fault } => match fault {
+                CageFault::NonManifold => f.write_str(
+                    "this mesh has an edge shared by more than two faces, so it \
+                     cannot be a subdivision cage",
+                ),
+                CageFault::DegenerateFace => f.write_str(
+                    "this mesh has a face with repeated or collinear corners, so \
+                     it cannot be a subdivision cage",
+                ),
+            },
+            Self::LevelOverBudget {
+                peak_bytes,
+                budget_bytes,
+            } => write!(
+                f,
+                "that level peaks at {} MB, past the {} MB budget",
+                peak_bytes / (1024 * 1024),
+                budget_bytes / (1024 * 1024)
+            ),
+            Self::DepthLimit { levels } => write!(
+                f,
+                "this hierarchy is {levels} levels deep, which is as far as it goes"
             ),
         }
     }
@@ -288,6 +391,13 @@ impl Cost {
             cells,
             // Nothing carries the edit list across. The SDF side *is* its
             // history, and neither cells nor vertices hold one.
+            //
+            // A hierarchy's levels are the same claim read on the other
+            // representation: what stands behind the surface and can be gone
+            // back to. `MultiresToMesh` keeps the vertices and loses every
+            // level under them, which is this field saying so; `MeshToMultires`
+            // has none to lose, since a mesh's own past is in the file it was
+            // imported from.
             keeps_history: false,
             // Only the directions that do not quantise onto a lattice.
             keeps_sharp_edges: !direction.chooses_resolution(),
@@ -329,9 +439,114 @@ mod tests {
     }
 
     #[test]
-    fn a_mesh_can_reach_both_of_the_others() {
+    fn a_mesh_can_reach_every_other_representation() {
         let from_mesh = Direction::from_representation(Representation::Mesh);
-        assert_eq!(from_mesh.len(), 2, "a mesh converts two ways");
+        assert_eq!(from_mesh.len(), Representation::ALL.len() - 1);
+        let reached: std::collections::BTreeSet<&str> =
+            from_mesh.iter().map(|d| d.to().label()).collect();
+        assert_eq!(reached.len(), from_mesh.len(), "two crossings land alike");
+    }
+
+    /// A hierarchy is reachable from a mesh and reaches a mesh, and that is the
+    /// whole of it.
+    ///
+    /// Not an oversight and not a first instalment. `clay_multires_from_mesh`
+    /// takes a `clay_mesh` and `clay_multires_copy_level_mesh` hands one back —
+    /// those are the two calls that exist. A field or a grid reaching a
+    /// hierarchy directly would be this crossing with a march or a marching
+    /// pass hidden inside it, which is two crossings priced as one, and pricing
+    /// a crossing honestly is what this module is for.
+    #[test]
+    fn a_hierarchy_is_reached_through_a_mesh_and_no_other_way() {
+        assert_eq!(
+            Direction::from_representation(Representation::Multires),
+            vec![Direction::MultiresToMesh]
+        );
+        let into: Vec<Direction> = Direction::ALL
+            .into_iter()
+            .filter(|d| d.to() == Representation::Multires)
+            .collect();
+        assert_eq!(into, vec![Direction::MeshToMultires]);
+    }
+
+    /// The two hierarchy crossings move no surface and lose no feature, and
+    /// they are the only two that can say so.
+    ///
+    /// The point is not that they are free — one of them throws away every
+    /// level under the one it bakes — but that what they cost is *not* a
+    /// tolerance. Stating half a cell of movement for a crossing that copies
+    /// vertices would be an invention, and stating none for one that samples is
+    /// the defect `chooses_resolution`'s own comment records.
+    #[test]
+    fn a_crossing_through_a_cage_samples_nothing() {
+        for direction in [Direction::MeshToMultires, Direction::MultiresToMesh] {
+            assert!(direction.is_exact());
+            assert!(!direction.chooses_resolution());
+            assert!(!direction.needs_region());
+            let cost = Cost::of(direction, 0.02, [1.0; 3]);
+            assert_eq!(cost.surface_movement, 0.0);
+            assert_eq!(cost.vanishing_feature, 0.0);
+            assert_eq!(cost.cells, 0);
+            assert!(cost.keeps_sharp_edges);
+        }
+        for direction in Direction::ALL {
+            assert_eq!(
+                direction.is_exact(),
+                matches!(
+                    direction,
+                    Direction::MeshToMultires | Direction::MultiresToMesh
+                ),
+                "{direction:?} claims to be exact"
+            );
+        }
+    }
+
+    /// Building a cage keeps the retopology it was handed; baking a level ends
+    /// one.
+    ///
+    /// The asymmetry is the feature. Every other crossing into a mesh produces
+    /// the sampling lattice's own grid — dense, uniform, no edge loop following
+    /// anything — which is the input a retopology pass replaces. A cage is the
+    /// opposite: it is somebody's retopology, kept exactly, which is why the
+    /// engine refuses a mesh it would have to mend.
+    #[test]
+    fn a_cage_keeps_its_topology_and_a_baked_level_settles_into_one() {
+        assert!(!Direction::MeshToMultires.ends_in_fixed_topology());
+        assert!(Direction::MultiresToMesh.ends_in_fixed_topology());
+    }
+
+    /// A cage that cannot be built says which fault it is, and the two faults
+    /// read differently.
+    #[test]
+    fn a_refused_cage_names_the_fault_rather_than_the_crossing() {
+        let sentences: std::collections::BTreeSet<String> = CageFault::ALL
+            .into_iter()
+            .map(|fault| Refusal::NotACage { fault }.to_string())
+            .collect();
+        assert_eq!(
+            sentences.len(),
+            CageFault::ALL.len(),
+            "two cage faults are refused in the same words"
+        );
+        for sentence in &sentences {
+            assert!(
+                sentence.contains("cage"),
+                "a cage refusal has to say what it was being asked to be: {sentence}"
+            );
+        }
+    }
+
+    /// A level past the budget is refused in the currency the engine refuses in
+    /// — the peak, which is what ends a session — and says both numbers.
+    #[test]
+    fn a_level_past_the_budget_names_the_peak_and_the_budget() {
+        let error = Refusal::LevelOverBudget {
+            peak_bytes: 900 * 1024 * 1024,
+            budget_bytes: 512 * 1024 * 1024,
+        }
+        .to_string();
+        assert!(error.contains("900 MB"), "{error}");
+        assert!(error.contains("512 MB"), "{error}");
     }
 
     /// The reason the numbers are computed: they have to follow the slider.

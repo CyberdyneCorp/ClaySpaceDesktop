@@ -126,6 +126,7 @@ fn every_brush_the_interface_can_produce_moves_the_cache() {
                         accumulate: true,
                         smoothing: 0.25,
                         mirror: false,
+                        azimuth: 0.0,
                     },
                     alpha: false,
                 };
@@ -191,6 +192,9 @@ fn the_engine_still_disagrees_about_jitter() {
     // The reason `MAX_JITTER` exists, asserted rather than described. This is
     // the test that should fail first when ClayCore fixes the brick path —
     // and its failure is the signal to raise the ceiling and give Ruído back.
+    //
+    // Re-checked at ClayCore v0.78.0 and unchanged: the word "jitter" does not
+    // appear in that release at all, in its fixes or in its known limits.
     let _ = document();
 
     let _document = document();

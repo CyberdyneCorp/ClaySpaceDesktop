@@ -150,6 +150,15 @@ impl AlphaSupport {
     /// operations that build a shape rather than displace one have nothing for
     /// it to modulate.
     pub fn of(representation: crate::Representation, op: crate::Combine) -> Self {
+        // Everything but a field takes one, and for the hierarchy that is a
+        // measured answer rather than an inherited one. A stamp there is the
+        // fixed sculptor's stamp over the active level's own mesh, so the
+        // alpha is `clay_mesh_brush_desc`'s and modulates the per-vertex
+        // weight exactly as it does on a mesh layer. A hierarchy in fact takes
+        // *more* than a mesh does — `clay_multires_sculpt_layer_stroke_stamp_
+        // detail` reads a height map or a tangent-space vector displacement
+        // through the same brush weight — but a richer yes is still a yes, and
+        // this type answers whether the loaded stamp reaches the stroke.
         if representation != crate::Representation::Sdf {
             return Self::Accepted;
         }

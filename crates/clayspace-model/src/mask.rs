@@ -79,8 +79,22 @@ impl ExtrudeSettings {
 /// the engine refuses it with "this layer has no field to extrude from". Asked
 /// before the entry is offered, so what a sculptor meets is a grey menu item
 /// with a reason rather than a click that does nothing — which is what it was.
+///
+/// A hierarchy is refused for exactly the mesh's reason and not for a new one:
+/// `clay_document_mask_extrude` samples a *layer's field*, and a hierarchy has
+/// none.
+///
+/// An exhaustive `match` rather than a `matches!`, which is what it was. Either
+/// spelling reads the same today; they differ on the day a fifth representation
+/// arrives, when one of them answers for it by falling off the end and the
+/// other stops compiling until somebody decides. This question is not one to
+/// inherit an answer to: the wrong default here offers a menu item that pulls a
+/// wall off a layer with nothing to pull it from.
 pub fn can_extrude(representation: Representation) -> bool {
-    !matches!(representation, Representation::Mesh)
+    match representation {
+        Representation::Sdf | Representation::Voxel => true,
+        Representation::Mesh | Representation::Multires => false,
+    }
 }
 
 /// What can be done to a mask, as opposed to through one.
@@ -189,6 +203,23 @@ pub trait MaskModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The extrude reaches a field and a grid, and neither of the two that
+    /// carry vertices — because it samples a field, and neither of them has
+    /// one. Written over `Representation::ALL` so that a representation added
+    /// without an answer here fails rather than inheriting one.
+    #[test]
+    fn the_wall_is_pulled_off_a_field_and_never_off_vertices() {
+        for representation in Representation::ALL {
+            let expected = matches!(representation, Representation::Sdf | Representation::Voxel);
+            assert_eq!(
+                can_extrude(representation),
+                expected,
+                "extruding a mask on {}",
+                representation.label()
+            );
+        }
+    }
 
     #[test]
     fn a_mask_with_no_painted_cells_is_not_active() {

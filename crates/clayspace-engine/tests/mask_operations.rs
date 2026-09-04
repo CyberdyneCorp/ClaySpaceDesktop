@@ -519,6 +519,10 @@ fn extrudar_on_a_mesh_says_what_to_do_instead() {
     // which samples a field a mesh layer does not have, nor a mesh-sculptor
     // equivalent. The refusal has to name the way round rather than being a
     // click that does nothing.
+    //
+    // Re-checked at ClayCore v0.78.0: the only mask entry points that release
+    // adds are the hierarchy's own per-pass ones, so there is still nothing to
+    // extrude a mesh's mask with and the refusal still has to teach.
     let mut document = masked();
     document
         .convert_layer(Direction::SdfToMesh, 0.05, 0)

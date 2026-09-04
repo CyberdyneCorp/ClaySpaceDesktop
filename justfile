@@ -135,10 +135,11 @@ budget:
 # -- measuring ---------------------------------------------------------------
 
 # The whole table takes several minutes: it measures every brush on every
-# representation, every layer operation, the six conversions, consolidation,
-# export, repair, masking and undo, and several of those rebuild a reference
-# scene between samples. `just bench-only <prefix>` is there for when a
-# question is about one group.
+# representation, every layer operation, the eight conversions, the
+# subdivision hierarchy, consolidation, export, repair, masking and undo, and
+# several of those rebuild a reference scene between samples. `just bench-only
+# <prefix>` is there for when a question is about one group — `multires`,
+# `normals` and `maintenance` are the three newest and each takes seconds.
 
 # Run the benchmark and print the table.
 bench:
@@ -171,6 +172,40 @@ bench-record platform=os():
     cargo run -q -p {{app}} --release --bin bench -- \
         --json benchmarks/baseline-{{ if platform == "macos" { "macos-aarch64" } else { "linux-x86_64" } }}.json
     @echo "baseline re-recorded — commit it with the reason"
+
+# -- measuring across two engine pins ----------------------------------------
+
+# An engine upgrade is measured against the pin it replaces, and neither side
+# of that measurement is the committed baseline: the A side is a build of this
+# application against the old engine, which is not this working tree. So the
+# two recipes below take a path rather than deriving one. Reaching for
+# `bench-record` instead is the mistake they exist to prevent — it writes over
+# `benchmarks/`, so an A/B run would silently replace the file every future run
+# is judged against, with a number from an experiment.
+#
+# The shape of an A/B: record the old pin's side from its own checkout with
+# `bench-to`, come back here, and `bench-against` that file. Do both on a quiet
+# machine — a run recorded beside other work stays wrong for every comparison
+# after it — and do each side several times rather than once, because the
+# variance between two runs of an unchanged tree is larger than the spread
+# inside either of them. The file now carries that spread, so a change landing
+# inside the baseline's own range is marked in the table.
+
+# Record a whole run to a path of your own, leaving the committed baseline alone.
+bench-to file:
+    cargo run -q -p {{app}} --release --bin bench -- --json {{file}}
+
+# The comparison is *permitted* across engine pins and announced above the
+# table rather than refused: refusing would leave an upgrade with no instrument
+# at all, and the conditions carry both the engine version and the vendored
+# submodule's revision, since two builds can both say 0.78.0 and differ by a
+# commit. Every figure key added on this side and absent on the other reports
+# as `new` and cannot be compared — that is not a fault, it is what a new
+# measurement is.
+
+# Compare this build against a baseline recorded elsewhere, e.g. another pin.
+bench-against file:
+    cargo run -q -p {{app}} --release --bin bench -- --baseline {{file}}
 
 # -- packaging ---------------------------------------------------------------
 

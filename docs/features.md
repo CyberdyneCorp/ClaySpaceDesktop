@@ -17,9 +17,15 @@ implementation. A tool with no engine counterpart is not offered.
 ## Sculpting tools
 
 All twenty-one are bound and each is covered by a before-and-after capture in
-`target/visual/`. Which of the three representations each one reaches is in the
+`target/visual/`. Which of the representations each one reaches is in the
 Layers column: fourteen have an SDF verb, thirteen a voxel one, and seventeen a
 mesh one.
+
+A fourth representation — a subdivision hierarchy — is left out of the Layers
+column below rather than written into every row, because its column is stated
+against the mesh's rather than as a list: fifteen of the twenty-one name a verb
+on it, the sixteen mesh brushes less Pintar and Borrar, plus Máscara. See
+[Sculpting a subdivision hierarchy](#sculpting-a-subdivision-hierarchy).
 
 | Tool | Engine verb | Layers | What it does |
 |---|---|---|---|
@@ -108,7 +114,7 @@ rather than resetting silently. Brush settings are held per tool *and* per
 representation: a size that suits a grid's cells is not the size that suits a
 field, so returning to a tool on a layer returns the settings it had there.
 
-Mesh layers carry the largest vocabulary of the three: the engine's sixteen
+Mesh layers carry the largest vocabulary: the engine's sixteen
 fixed-topology brushes, plus Máscara, which writes no vertices and paints the
 world-addressed field the sixteen consult. Some of the sixteen arrive as modes
 of a tool already on the shelf rather than as rows of their own — one tool
@@ -123,9 +129,17 @@ brush count and the tool count differ. *Sculpting a mesh layer* has the detail.
 | Tamanho | stroke radius, in document units | 0.005–1 |
 | Fluxo | stamp spacing | 0.01–1 |
 | Ruído | positional jitter | 0–1 |
+| Grão | how far each stamp is turned about its own facing | 0–360° |
 | Borda | falloff: Dura, Linear, Suave, Gaussiana | — |
 | Acumular | buildup against clamped accumulation | on/off |
 | Suavização | lazy-mouse lag | 0–0.95 |
+
+**Grão** is the engine's `stamp_azimuth`, and it is what makes a rake, a
+chisel, clay strips and a turned stamp one number rather than four brushes. It
+is observable only where the footprint has something to orient: a round brush
+looks the same at every angle by construction, so the dial reads as inert until
+a stamp is loaded. A whole turn comes back to none rather than stopping at the
+end of its travel, because an angle has no ends.
 
 Settings are held **per tool**: switching away and back returns what you left,
 not a default. Values are clamped to what the engine accepts rather than
@@ -163,7 +177,7 @@ symmetry, undoes as one gesture and survives the document.
 
 ### Symmetry
 
-Symmetry about X, Y and Z reaches all three representations, and by two
+Symmetry about X, Y and Z reaches all four representations, and by two
 different mechanisms because the representations are two different things.
 
 **Symmetry belongs to the subtool, not to the document.** The toggles read and
@@ -208,11 +222,12 @@ told, and the starting form turns X on — so a snakehook with symmetry switched
 **off** came out on both sides at 1.4625. Every SDF stroke points the mirror
 now.
 
-On a **mesh** and on a **grid**, by mirroring the *stroke* and applying it
-again. There is nothing else to reach for: the layer mirror reflects a layer's
-items, and a mesh has vertices while a grid has cells. That is also what both
-references do in the same position. Measured in Blender 5.2, one Draw dab on a
-64×32 sphere:
+On a **mesh**, a **grid** and a **hierarchy**, by mirroring the *stroke* and
+applying it again. There is nothing else to reach for: the layer mirror
+reflects a layer's items, and a mesh has vertices, a grid has cells, and a
+hierarchy has displacements stored per level. That is also what both references
+do in the same position. Measured in Blender 5.2, one Draw dab on a 64×32
+sphere:
 
 | Symmetry | +x | −x | +y | −y | Max displacement |
 |---|---|---|---|---|---|
@@ -693,6 +708,35 @@ nothing, because the layer's own triangles are what the viewport reads. At the
 default flow and a brush of 0.858 the field threshold is 1.03 world units —
 most of the way across a unit sphere.
 
+**A segment recomputes its normals once, not once per dab.** Normals follow
+the vertices, so a moved vertex with a stale normal shades wrong immediately —
+which is why ClayCore recomputes them per stamp by default. A segment of a mesh
+stroke is several engine calls, though: one per enabled mirror, and inside each
+one a resolved stroke's own stamps. So the segment defers, and recomputes the
+whole set once at the end, coalesced — a stroke passing over the same vertex
+forty times recomputes it once.
+
+There are two switches for this and they are not the same switch. A resolved
+stroke carries its own, scoped to the call, and the library settles it at the
+end of the stroke it drove, because there the library knows where the stroke
+ended. Mover reads the sculptor's own flag instead, since it is a single stamp
+per mirror and no resolver drives it — and *nothing flushes that on its own*.
+So the record a segment's stamps are noted into and the sculptor that owes them
+are held as one value, whose disposal recomputes: a segment that ends by
+unwinding out of a refusal, by being abandoned when the pointer lands on
+another subtool, or by the document going away under it settles on the way past
+rather than leaving a form shaded from where its vertices used to be. The flush
+is handed *that* record and no other, because a record captures a vertex's
+normal the first time it sees it — flushed into a fresh one, the undo would put
+the vertices back and leave the shading where the stroke wrote it.
+
+The deferral never outlives the segment that armed it. A dragging verb replays
+from its anchor, so what one segment did the next takes back; carrying a
+deferral across that boundary would leave the last segment recomputing classes
+the earlier ones only ever moved and reverted. Nothing on screen lags: the
+recompute happens before the call returns, and the viewport reads the layer's
+triangles after it.
+
 The bake-and-replace verbs are held whole on a field and **not** on a mesh:
 Suavizar, Relaxar, Planar and Polir sample a region into a volume there and
 segmenting that stacks a replacement per segment until the result crumbles,
@@ -729,12 +773,31 @@ undone on the vertices. Nothing is interpolated, and
 `live_smooth::what_the_preview_showed_is_what_the_commit_installs` is what
 holds that to being exact rather than close.
 
-Two conditions, and the second is about what the preview is *of*. The layer has
-to be an editable field, and it has to be the **only visible field subtool**:
-the brick cache holds the hard union of every visible SDF layer and attributes
-no brick to the layer it came from, while a transaction previews one layer
-alone. With a second one in the document the gesture falls back to being held
-whole — correct, just not live.
+One condition: the layer has to be an editable field, because the transaction
+refuses a protected one.
+
+It used to be two. The brick cache holds the hard union of every visible SDF
+layer and attributes no brick to the layer it came from, while a transaction
+previews one layer alone — so with a second field subtool visible, the preview
+was the layer under the brush and nothing else, and the rest of the scene would
+have vanished for the length of the drag. The gesture fell back to being held
+whole rather than draw that: correct, just not live. It was filed upstream as
+ClayCore#378, and ClayCore 0.78.0 answers it. The document can now be evaluated
+over every visible SDF layer **except** one, which is exactly the other half of
+what the preview holds, so the rest of the scene is read once at pointer-down
+— the layers it excludes do not move while the artist drags — and composed with
+the preview by an elementwise **minimum**. That is exact rather than an
+approximation: field subtools compose by a hard union, so the smaller of the
+two distances at a sample *is* the document's distance there, and there is no
+seam to place.
+
+The reason this call and not the obvious one: hiding the other subtools,
+sampling, and showing them again is three edits, and a smooth commit correctly
+refuses a layer that moved since it began. The excluding evaluation edits
+nothing and records no undo entry, so it is legal in the middle of an open
+transaction — which is what
+`live_smooth::composing_the_rest_of_the_document_does_not_spoil_the_gesture_it_
+is_inside` holds it to.
 
 **Move is live too, and it is where the transaction pays most.** Mover does not
 bake; it warps. Each drag appends a `grab` to the deformer chain of every item
@@ -899,6 +962,146 @@ stretches them to the extreme. Nothing here retessellates, because that spends
 the retopology the import was for; the stretch is reported instead, so a
 sculptor learns the mesh wants retopology when it starts wanting it rather than
 at export.
+
+## Sculpting a subdivision hierarchy
+
+A fourth way to hold a surface, and the only one whose *whole* claim is a
+single sentence: a cage, subdivision levels over it, and detail stored per
+level **in a frame carried up from the level below**. Wrinkles cut at level 4
+and a jaw moved at level 1 are edits to two different arrays, and moving the
+jaw moves the frames the wrinkles are stored in — so the wrinkles ride on it
+rather than being smeared or re-projected. A mesh cannot express that; a mesh
+has one level and nothing under it to move.
+
+Measured, on a flat cage with a wrinkle cut at level 3 and the form under it
+dabbed five times at level 0: the wrinkle comes back **the same height to seven
+significant figures, on the same vertex, pointing forty-two degrees elsewhere**.
+A displacement stored in world space would come back at exactly no rotation at
+all, lying flat across a form that has rolled underneath it.
+
+**A hierarchy comes from a cage.** There is no call that makes an empty one, so
+it is not among the representations a new layer can be; it arrives through
+`mesh → multires`, which refuses rather than repairs. See
+[Crossing between representations](#crossing-between-representations).
+
+**Two levels, not one.** Where the brush writes and what the viewport draws are
+independent numbers, and that is the workflow rather than an implementation
+detail: dropping to the cage to move a jaw while still watching the pores is
+what the representation exists for. Both are controls in the hierarchy's
+inspector section, and moving the sculpt level **redraws nothing**. While the
+two are apart the section says so, because a dab landing on a coarse level
+while a fine one is drawn is otherwise read as a brush that has stopped
+working.
+
+**Adding a level is priced, and refused rather than attempted.** A level
+multiplies faces by four, so a 20k-quad cage is 5.1M faces at level 4 and 20.5M
+at level 5. The face count and the **peak** during the build stand beside the
+Subdividir button — the peak rather than what remains after it, because on a
+constrained machine it is the high-water mark that ends the session. A refused
+level leaves the hierarchy exactly as deep as it was — the engine builds and
+then publishes, so there is nothing half-built to clear up — and the reason
+arrives beside the viewport, on the same line that says why a tool cannot be
+used.
+
+**A gesture is one undo, and it is exact.** It has to be recorded on this side,
+and unlike a mesh gesture there is no delta to record: `clay.h` states twice,
+unprompted, that the hierarchy's stroke record does not cross the C ABI. So
+what the history holds is the hierarchy's own serialized bytes on the other
+side of the step — 710 KB and 1.39 ms to take at level 4 over a 16×16 cage, and
+8.15 ms to put back. It goes into the same history a mesh gesture goes into,
+because two histories ordering themselves against the engine's depth cannot
+order themselves against each other.
+
+**The sculpt is saved beside the document.** This is the part worth knowing
+before trusting a file. A `.clayspace` carries a hierarchy's **cage and nothing
+standing on it** — the engine's own ownership boundary, stated in its header —
+so the sculpt is written to a `.multires` file beside it. A save that cannot
+write that file **fails**, which is the opposite of what the placed-object
+table beside it does: that table is bookkeeping and this is the work.
+
+Copy a document without its companion file and it still opens, with the row
+showing as the **mesh layer it now is** rather than as a hierarchy that has
+silently lost every level. That is visible where a sculptor already looks — the
+layer row, the workspace bar and the inspector all draw a mesh differently — and
+a record that was found and could not be reconstructed is named in the
+diagnostics report.
+
+**A stack of passes, dialable long afterwards.** A hierarchy carries named
+passes the way a grid does, and the word is shared on purpose — but the two
+stacks share no addressing at all. A hierarchy's pass is named by an id the
+engine minted and never by its position, because a reorder renumbers every
+position at or below the pass it moves.
+
+A new pass takes the next stroke; the row for **the form** under the passes
+sends it back into the surface itself, which is how a sculptor corrects the
+anatomy under a set of wrinkles without disturbing them. Measured, on a flat
+cage at level 2: a dab into a pass stands 0.900 proud of a sheet that was flat
+at 0.000, its slider at zero returns the sheet to 0.000 **exactly**, and back
+at one it returns the 0.900 — with no stroke replayed. Hiding it is the same
+statement in one click.
+
+Three properties follow from the stack being a *sum* rather than a sequence.
+**Reordering is free** — passes commute, so a list drag is organisation and
+never geometry, and an interface that treated it as an edit would re-evaluate
+millions of vertices for a drag that changed a list. **Strength is composition,
+not a scale on the pen**: a stroke into a pass at half strength records its
+full contribution and the surface moves half as far, so raising the slider
+afterwards doubles what is on screen. And a **merge** or a **bake into the
+form** is defined by visual parity — the surface after equals the surface
+before, at any strength including zero — so what they cost is the slider, not
+the shape.
+
+**The stack is drawn under the layer it stands on**, in the same shape a grid's
+passes take — a row per pass with an eye, a name and a strength — with the
+**form** as a row of its own beneath them. Which row is selected is the whole
+answer to where the next stroke goes: there is no separate three-way control,
+because a second way to say the same thing would disagree with the first the
+moment one of them moved.
+
+A pass is **reordered by dragging its name onto another row**, rather than by
+two arrows. On a grid the top of the stack wins where two passes overlap, so
+arrows say something about the result; here they would say something untrue.
+The lock, the merge, the bake and the removal live in the row's own menu, where
+deleting a layer already does — the left panel gives a nested row about two
+hundred pixels, and the first version of this row put a grip, two icons, a
+name, three buttons and a dial in them.
+
+**A lock refuses a stroke and permits every property change.** That is the
+engine's rule and it is the useful one: a lock exists so a sculptor can keep
+working over a finished pass, and one that also froze the name and the slider
+would mean "hide from the interface". A lock can always be taken off from the
+row that shows it.
+
+**The composition is held while the pointer is down.** A stamp reads the
+evaluated surface, so a slider moved between two stamps would author one
+gesture against two different surfaces. Those changes are refused for the
+length of the gesture rather than deferred to its end — a control that appeared
+to move and then silently applied later is the worse surprise. A rename, a lock
+and a change of which pass takes the next stroke move no vertex and go through.
+
+**A pass is not undo.** Dialling one is a property of the stack that stays
+adjustable long after the strokes that filled it, so it is not an entry in the
+history: a sculptor whose next undo took back a slider rather than the work
+would have to choose between the two.
+
+**A pass stroke is stamped rather than resolved.** The layered transaction the
+engine offers carries stamps and no stroke resolver, so what a resolved stroke
+does with the preset's jitter and taper does not happen inside a pass. The
+samples arriving are already about one dab's travel apart, so the coverage is
+the same; a pass stroke is that much more even than the same stroke into the
+form.
+
+**A pass's own mask is reported and not authored.** The engine stores a
+per-vertex weight with each pass, whose identity is 1, and there is no call
+that says whether one is stored — only a reader per vertex. Nothing in this
+application writes one either: the freeze a sculptor paints is a volume rather
+than a per-vertex weight. So the row carries the badge and the badge does not
+light.
+
+**The two colour brushes are not offered.** A hierarchy stores where a vertex
+went and not what colour it is, so a paint stamp would move nothing, be dropped
+by the write-back, and evaporate with the level cache. Paint the cage before
+subdividing, or bake a level back to a mesh.
 
 ## Voxel layers
 
@@ -1885,12 +2088,60 @@ keeps its own note of where each rebuild sits in the history. Without it, a
 sculptor who rebuilds, dislikes the result, undoes and carries on gets *the mesh
 changed its vertex or index count under this sculptor* on their next dab.
 
+## The work between two strokes
+
+Some work makes the *next* interaction cheaper and *this* one slower. Rebuilding
+the ray-query tree a mesh subtool is picked and sculpted through is the one this
+application produces: every dab **refits** it, which keeps it a valid partition
+of the same triangles at a cost proportional to the brush rather than to the
+mesh, and after enough refitting the partition stops being a *good* one even
+though it stays correct. Queries get slower and nothing says so.
+
+**None of it is correctness**, and that is what decides where it happens. A
+rebuild declined, deferred forever or never made leaves the form exactly where
+it is; what it costs is a slower pick. So it is never taken in the middle of a
+drag, and the engine does not take it at all — it holds a *request*, because its
+own measurement is that a rebuild produced a better tree in one of five
+deformations and a dramatically worse one in two. The application is the one
+that decides, and it decides at the only moment where a stall belongs to
+nobody: the pointer coming up.
+
+**The queue refuses to be drained while a pointer is down**, and that is a
+mechanism rather than a rule somebody has to remember. A gesture holds the
+queue for as long as it is open, so there is nothing for a drain to take work
+from — and it holds it in a way that gives it back when the gesture is thrown
+away as well as when it is finished, because a drag abandoned halfway would
+otherwise stop the application doing maintenance for the rest of the session.
+
+**Eight milliseconds**, which is half the sixteen the specification allows an
+engine operation to hold the interface thread, at a moment that already pays for
+a surface refresh and a mip chain. Work that does not fit is left where it is
+rather than done anyway, and it is still there next time with a count of how
+often it has been asked for — which is how a job the application keeps starving
+becomes visible instead of silent. What a rebuild costs is **measured on the
+machine it runs on**: the engine carries no model of anybody's hardware and says
+so, so the first one is timed and every request after it is weighed against that
+figure rather than against a guess.
+
+**A gesture holds a memory pin.** A trim gives back what can be rebuilt, and the
+engine prices what that costs the interaction after it rather than asserting it
+— between 0.62 and 2.04 times as long at the gentlest pressure, and between 13
+and 182 times at the hardest, growing with the model. Landing that in the middle
+of a drag is the one place the cost is certain to be paid by the sculptor, so
+while a pointer is down a trim reports what it *would* have released and
+releases nothing. The pin is taken and given back at exactly the two moments the
+gate is, which is what keeps them from coming apart.
+
+Nothing in the application trims yet — a trim reaches a hierarchy or an adaptive
+surface, and neither is held here. What the pin buys before then is that the
+first one cannot be written without one to hand it.
+
 ## Crossing between representations
 
 ClayCore carries SDF, voxel and mesh side by side, and the intended workflow
 uses more than one: **block out and hard-surface on SDF, free-form sculpt on
-voxels, refine on a mesh when the topology is one you want to keep.** Every
-representation reaches both of the others, so **six** crossings are offered from
+voxels, refine on a mesh when the topology is one you want to keep.** Each of
+those three reaches both of the others, so **six** crossings are offered from
 **Arquivo → Converter**, each from the active layer:
 
 | From | To | What it does |
@@ -1901,6 +2152,19 @@ representation reaches both of the others, so **six** crossings are offered from
 | voxel | mesh | The grid's exposed faces as merged quads, with the palette colour on the face |
 | mesh | voxel | Straight from the triangles in one sampling, so a feature thinner than a cell survives where a field detour loses it, and the vertex colours reach the palette |
 | mesh | SDF | Resamples the triangles onto a lattice as a volume item |
+| mesh | multires | Takes the mesh **as the cage** of a subdivision hierarchy, vertex for vertex |
+| multires | mesh | Bakes the display level out as an ordinary mesh |
+
+The last two are the only crossings that sample nothing — a cage is the mesh's
+own vertices and a level is the hierarchy's own — so what they cost is stated
+as a refusal rather than as a tolerance. `clay_multires_from_mesh` **refuses
+rather than repairs**: a non-manifold edge or a face with repeated or collinear
+corners comes back named, because a conversion that quietly welded a face would
+change retopology somebody paid for without saying so, and a cage is precisely
+the thing whose topology is the work. Marched output — which is what
+`SDF → mesh` produces — is refused on exactly that ground, so the route into a
+hierarchy is a cage that was modelled as one. See
+[Sculpting a subdivision hierarchy](#sculpting-a-subdivision-hierarchy).
 
 The two that end in a mesh are what makes **block out, then sculpt it as a
 mesh** a route through the application rather than a description of one. Until
@@ -2279,7 +2543,7 @@ between them**: the locale came from `Locale::default()` at startup and was
 never asked about again, so `Locale::from_tag` — written for exactly this — was
 called by nothing.
 
-**The brush names are translated.** All twenty-one, on all three representations —
+**The brush names are translated.** All twenty-one, on all four representations —
 the shelf and the status bar's last action both read them from the interface's
 own table. They were `ToolKind::label()`, the domain's own Portuguese, shown
 whatever the language was. `ToolKind::label` keeps that Portuguese for the
@@ -2359,11 +2623,11 @@ inspectors — and, while either is up, the shapes and boolean sections — a br
 shelf, and a status area with a memory meter, the active backend and the
 working unit.
 
-**The three representations stand above the viewport, as equals.** One card
-each: an icon of a distinct shape, the representation's name, and a phrase
-saying what it is. The active one is raised and railed, in the same grammar the
-active layer row wears. The other two are shown rather than hidden, because the
-point of the bar is that a sculptor can see what the alternatives are — the
+**The representations stand above the viewport, as equals.** One card each: an
+icon of a distinct shape, the representation's name, and a phrase saying what it
+is. The active one is raised and railed, in the same grammar the active layer
+row wears. The others are shown rather than hidden, because the point of the bar
+is that a sculptor can see what the alternatives are — the
 interface used to say this in a three-letter tag on a layer row and a line of
 text at the far end of the viewport bar, and that line was half untranslated,
 drawing the engine's own word under a translated prefix.
@@ -2396,11 +2660,23 @@ speaks — it stores a quaternion and calls the axis and angle *a* representativ
 rather than the representation, so three Euler angles would be one of several
 answers and would change when nothing had moved.
 
-**A placed object stretches per axis.** The manipulator's three scale boxes are
-offered on it: a box on an axis stretches that axis, the centre handle takes
-all three. A whole subtool still scales uniformly, because the engine's *layer*
-transform takes one factor where its *node* transform takes three — the handles
-are offered exactly where they can be applied.
+**A placed object stretches per axis, and so does a whole subtool.** The
+manipulator's three scale boxes are offered on both: a box on an axis stretches
+that axis, the centre handle takes all three. The handles are offered exactly
+where they can be applied, and since ClayCore 0.74.0 that is everywhere the
+manipulator can stand — `clay_document_set_layer_transform_nonuniform` (#373)
+gave the *layer* transform the per-axis form the *node* transform has had since
+0.54.0, so the widget stopped being two different widgets depending on what it
+was pointed at.
+
+Two things a stretched subtool costs, both stated rather than discovered. Its
+**deformation cage is refused**: `clay_layer_lattice_gizmo` returns no warps at
+all for a layer carrying a per-axis scale, because a cage records its
+item-to-cage placement as a rigid transform and on a squashed layer the map it
+needs is a general affine one — so the application says so in words rather than
+letting the cage reach nothing. And a document carrying one is written at
+**`.clayspace` container minor 16**, which a build older than ClayCore v0.78.0
+*refuses* rather than misreads.
 
 They were hidden on everything but a deformation cage for as long as nothing
 had bound `clay_layer_set_transform_nonuniform`, which the engine has carried
@@ -2415,6 +2691,41 @@ did. What is lost is exactness — the value becomes a bound on the distance,
 short by at most the ratio of the largest axis to the smallest and never an
 overestimate — which matters to a consumer reading it *as* a distance and to
 nothing else. A uniform value compiles to identical tape.
+
+**A world length carried into a squashed subtool takes the largest of the three
+factors**, not their mean. A brush radius and a join width are world distances
+and the layer's own content is addressed in the layer's own coordinates, so
+five sites divide one by the other — and a subtool squashed three to one has no
+single divisor. The engine settles it rather than the application guessing: an
+evaluated distance is multiplied back by the *smallest* component so the field
+never overestimates, and the dual of that, for a radius mapped the other way,
+is the largest, "so a gesture never reaches outside the region it named". The
+mean is the obvious answer and would let the brush reach past its own ring on
+the wide axis, which is a dab landing where the sculptor was not pointing.
+
+**A reopened subtool comes back where it stood**, which it did not before.
+Until ABI 0.74.0 the boundary set a layer transform and would not read one
+back, so opening a document had no way to learn where a saved subtool was and
+assumed the origin, unturned and unscaled. On a field subtool the engine went
+on evaluating the tape where the layer really was, so the *form* was drawn
+correctly and everything derived from the placement was not: the whole-subtool
+manipulator sat in empty space, a mirrored dab reflected through the world's
+plane rather than the layer's, and a mask painted in world coordinates missed
+the cells it was meant to protect. On a carried mesh or a grid — where the
+application applies the placement itself — the subtool came back at the origin.
+`clay_document_layer_transform_nonuniform` answers the question, so opening a
+document asks it.
+
+The same reader retired a mechanism. Every route that placed a layer used to
+record where the whole stack stood against the engine's undo depth, from six
+call sites, for one reason: the engine reverted a layer transform on an undo
+and could not say that it had. It can say so now, so the history reads the
+engine instead of consulting a copy — which also means a placement made by a
+route the application does not know about is followed rather than overwritten.
+The per-axis reader is the one to ask with: the single-factor reader *refuses*
+a layer carrying three different factors rather than averaging them away, while
+the per-axis one reports the product of the layer's two scales, so a uniformly
+placed layer reads (s, s, s) and one manipulator never has to branch.
 
 **The floor dissolves rather than ending.** The grid fades out before it
 reaches its own extent, so it draws no rectangle around the scene, and each
@@ -2706,14 +3017,21 @@ absent on others.
   means the autosave beside it is offered back.
 - Recovered work is unsaved work. It does not take the recovery file's path,
   so the next save asks; and it is marked modified, because it is.
-- Which shapes were *placed* live in a side-car, `<name>.clay.objects`,
-  beside the document rather than inside it: the `.clay` format is the
-  engine's, and which nodes a sculptor put there is this application's own
-  bookkeeping. Send someone the `.clay` on its own and it opens and sculpts
-  with every boolean intact — the hole a cylinder cut is still a hole — but
-  none of its shapes is offered as an object any more, so none can be
-  selected, moved or re-combined. A row that will not parse costs that one
-  object and not the file.
+- Which shapes were *placed* live in a side-car,
+  `<name>.clayspace.objects`, beside the document rather than inside it: the
+  container is the engine's, and which nodes a sculptor put there is this
+  application's own bookkeeping. Send someone the `.clayspace` on its own and
+  it opens and sculpts with every boolean intact — the hole a cylinder cut is
+  still a hole — but none of its shapes is offered as an object any more, so
+  none can be selected, moved or re-combined. A row that will not parse costs
+  that one object and not the file.
+- A subdivision hierarchy's levels live in a second side-car,
+  `<name>.clayspace.multires`, and it is the other kind of side-car: what it
+  holds is the work rather than a record of it. So a save that cannot write it
+  **fails**, where a failed object table is reported and swallowed, and a
+  document that arrives without one comes back as the cage its layer holds
+  rather than as a hierarchy that has lost every level. See *Sculpting a
+  subdivision hierarchy*.
 - Session state lives in Application Support on macOS and `$XDG_STATE_HOME` on
   Linux. State, not cache: losing it costs work.
 - The **reference images** are session state too: each plane's file path and
@@ -2735,6 +3053,43 @@ One button puts the lot on the clipboard.
 The stall list is one line per operation, keeping the worst time and counting
 the occurrences — a list with one line per stall is dominated by whatever runs
 most often, which is the operation least worth looking at.
+
+**Escultura em malha** carries two numbers: how many mesh sculptors the
+document is holding, and how many stamps were handed a seed naming a class
+space that had been retired. A mesh brush is told which weld class to start its
+surface walk from, and that class is an index into a numbering the application
+throws away whenever it rebuilds a sculptor — an eviction, a removed subtool,
+an undo, a re-mesh. An index from a retired numbering is still in bounds, so
+nothing refuses it: the walk starts somewhere else, comes back empty, and the
+brush does nothing at all, which looks exactly like a stroke over a frozen
+mask. The class travels with a token naming the numbering it came from, so the
+engine catches it and falls back to a scan — one stamp slower, and correct.
+This is the count of those catches. Zero is the ordinary reading; the two
+numbers are shown together because zero over no sculptors and zero over four
+are the same number and different facts.
+
+**Memória** carries three figures and not one, because a total answers the
+wrong question. A sculptor who has just been told memory is short is not asking
+how big the document is; they are asking which part they are allowed to let go
+of. *Trabalho* is their own work and is never released, *reconstruível*
+reconstructs identically and costs only a stall, and *desfazer* is undo depth,
+which is a policy rather than a fact about the sculpture. All three come from
+the engine's own arithmetic over its category lines rather than from a sum
+taken here, so a line added upstream and left unclassified cannot make them
+disagree with the total.
+
+The fourth row is *superfícies*, and it is the honesty check. A mesh-sculpting
+session is a handle this application holds **beside** its document rather than
+inside it, so `clay_document_memory` reports the whole surface tier as zero —
+correctly, since it cannot walk what it does not own. Measured on the starting
+form crossed to a mesh and dabbed once, the plain roll-up says 8.5 MB and the
+session beside it is another 8.4 MB: a host that stopped at the plain figure
+would publish half the truth, and the gap only widens with the mesh. So the
+application asks each session what it costs, merges the ledgers — only it knows
+which sessions belong to this document, which is why the engine merges none —
+and calls `clay_document_memory_with_surfaces`. The row says how many sessions
+were asked as well as what they came to, so a surface tier of zero reads as
+*there are none* rather than as *nobody asked*.
 
 **Ajuda → Atribuições** shows the attribution manifest, which is generated
 from `cargo metadata` and embedded in the binary rather than shipped beside it.
@@ -2805,6 +3160,16 @@ total drag split into eight one-cell emissions moves nothing — so Mover on a
 grid holds the whole gesture and lands at pointer-up rather than following the
 pointer. [ClayCore#393](https://github.com/CyberdyneCorp/ClayCore/issues/393)
 asks for the transactional shape the SDF drag already has.
+
+**Exporting a hierarchy exports its cage.** The engine combines a document's
+mesh layers on the way out, and a hierarchy's layer is a mesh layer holding the
+cage. Keeping its triangles in step with the display level means replacing them
+wholesale — one engine undo entry each — on every gesture or every save, and
+either puts a document edit inside something the sculptor did not ask to be an
+edit. Bake a level out to a mesh first; it is one crossing and it says what it
+gives up. A hierarchy is refused as a boolean operand for the same reason,
+rather than being routed through the mesh arm and quietly composing against a
+form nobody can see.
 
 **A voxel Vinco.** The engine documents DamStandard on a grid as a *recipe* —
 a small-radius erode with tight falloff and dense spacing — rather than a

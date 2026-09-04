@@ -59,9 +59,12 @@ use widgets::*;
 use windows::*;
 
 pub use booleans::boolean_op_chip_id;
+pub use inspector::multires::subdivide_button_id;
 pub use left::{
-    layer_convert_id, layer_row_id, left_panel, new_layer_button_id, new_layer_kind_id,
-    new_layer_kind_menu_id, optimize_button_id,
+    layer_convert_id, layer_row_id, left_panel, multires_add_pass_id, multires_bake_id,
+    multires_compact_id, multires_form_row_id, multires_lock_id, multires_merge_id,
+    multires_pass_row_id, multires_remove_id, multires_strength_id, new_layer_button_id,
+    new_layer_kind_id, new_layer_kind_menu_id, optimize_button_id,
 };
 pub use menus::menu_bar;
 pub use options::{alpha_control_id, deform_chip_id, layer_transform_chip_id, options_bar};
@@ -205,6 +208,24 @@ pub struct ShellState<'a> {
     pub lattice: clayspace_model::LatticeState,
     /// What a fresh cage would be built with.
     pub lattice_divisions: [i32; 3],
+    /// What subdividing the active hierarchy once more would cost.
+    ///
+    /// Handed in rather than derived, as the crossing's cost and the boolean's
+    /// are: it is the engine's own preflight, and a View that worked out its
+    /// own answer from a face count could disagree with the figure the refusal
+    /// is actually stated against. `None` where the active layer is not a
+    /// hierarchy.
+    pub subdivision_cost: Option<clayspace_model::SubdivisionCost>,
+    /// What the active hierarchy's stack of passes costs, and whether a stroke
+    /// is holding it open right now.
+    ///
+    /// The stack itself is read off the layer summary, as a grid's is — a pass
+    /// has no meaning apart from the surface it stands on. This is the part
+    /// that is not on the summary: whether a gesture is open is a fact about
+    /// the pointer rather than about the document, and it is what decides
+    /// whether the composition controls are refusing. `None` where the active
+    /// layer is not a hierarchy.
+    pub multires_cost: Option<clayspace_model::MultiresSculptLayerCost>,
     pub strings: &'a Strings,
     /// The bindings in force, so a menu item can show the chord that does the
     /// same thing. Borrowed rather than copied because remapping replaces the
@@ -935,6 +956,10 @@ fn representation_tag(representation: Representation) -> &'static str {
         Representation::Sdf => "SDF",
         Representation::Voxel => "VOX",
         Representation::Mesh => "MSH",
+        // Not "MRS": the letters have to be readable as a word a sculptor
+        // already has, and the word for this everywhere from ZBrush's SDiv to
+        // Blender's Multiresolution is subdivision.
+        Representation::Multires => "SUB",
     }
 }
 

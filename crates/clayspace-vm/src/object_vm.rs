@@ -301,11 +301,18 @@ impl ObjectViewModel {
     /// Whether the manipulator offers a scale box per axis on what it is
     /// pointed at.
     ///
-    /// The engine's *node* transform takes a factor per axis — since ABI
-    /// 0.54.0, through `clay_layer_set_transform_nonuniform` — and its *layer*
-    /// transform takes one. So a placed object stretches and a whole subtool
-    /// does not, and a curve's control points are a point set that scales per
-    /// axis the way a cage's do.
+    /// True on everything it can be pointed at, and it says so as a match
+    /// rather than as a constant because that is the shape of the question:
+    /// this answers "can the engine apply a stretch here", and the answer has
+    /// been no for one of the three until now.
+    ///
+    /// A placed object is a node and has stretched since ABI 0.54.0. A curve's
+    /// control points are a point set, which scales per axis the way a cage's
+    /// do. A whole subtool is a layer, and a layer's transform took one factor
+    /// until ABI 0.74.0 — `clay_document_set_layer_transform_nonuniform`
+    /// (#373) is what changed, so the boxes are hidden on a subtool no longer.
+    /// The manipulator is one widget with three boxes on it whatever it stands
+    /// on, which is what ZBrush's Gizmo 3D and Maya's scale tool both are.
     ///
     /// This replaced a `handles()` that answered with a mode-specific list.
     /// The manipulator stopped being mode-specific when it became one widget
@@ -315,8 +322,8 @@ impl ObjectViewModel {
     /// picture and the hit test both read.
     pub fn per_axis_scale(&self) -> bool {
         match self.target.get() {
-            Some(GizmoTarget::Object(_)) | Some(GizmoTarget::Curve) => true,
-            Some(GizmoTarget::Layer(_)) | None => false,
+            Some(GizmoTarget::Object(_) | GizmoTarget::Curve | GizmoTarget::Layer(_)) => true,
+            None => false,
         }
     }
 

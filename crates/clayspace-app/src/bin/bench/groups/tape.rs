@@ -31,16 +31,19 @@ pub fn measure(policy: &BackendPolicy, run: &mut Run) {
     let mut points = Vec::new();
     for prior in [0usize, 96] {
         match dab_after(&gpu, policy, prior) {
-            Ok(median) => points.push(median),
+            Ok(samples) => points.push(samples),
             Err(why) => return run.skip("tape", why),
         }
     }
 
-    let [fresh, worked] = points[..] else {
+    let [fresh_samples, worked_samples] = &points[..] else {
         return run.skip("tape", Skip::EditRefused);
     };
+    let (fresh, worked) = (median(fresh_samples), median(worked_samples));
     run.insert("tape.dab_on_fresh", Figure::ms(fresh, None));
+    run.spread("tape.dab_on_fresh", fresh_samples);
     run.insert("tape.dab_after_96_edits", Figure::ms(worked, None));
+    run.spread("tape.dab_after_96_edits", worked_samples);
     // How much the same edit costs once the document has been used. Budgeted
     // at 5x, which is roughly where it sits today: the point is to notice the
     // slope changing, not to pretend it is flat.
@@ -50,8 +53,18 @@ pub fn measure(policy: &BackendPolicy, run: &mut Run) {
     );
 }
 
-/// The median cost of a dab on a document that has already had `prior` of them.
-fn dab_after(gpu: &Gpu, policy: &BackendPolicy, prior: usize) -> Result<f64, Skip> {
+/// The middle of a set of samples, sorted here rather than by the caller.
+fn median(samples: &[f64]) -> f64 {
+    let mut sorted = samples.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).expect("no NaN"));
+    quantile(&sorted, 0.5)
+}
+
+/// What each of twelve dabs cost on a document that has already had `prior`.
+///
+/// The samples rather than their middle: the ratio below wants one number, and
+/// the baseline wants to be able to say how far apart the twelve were.
+fn dab_after(gpu: &Gpu, policy: &BackendPolicy, prior: usize) -> Result<Vec<f64>, Skip> {
     let mut document = ClayDocument::new(policy.clone()).map_err(|_| Skip::SceneWouldNotBuild)?;
     document
         .add_starting_sphere(1.0)
@@ -95,6 +108,5 @@ fn dab_after(gpu: &Gpu, policy: &BackendPolicy, prior: usize) -> Result<f64, Ski
             .map_err(|_| Skip::SurfaceWouldNotMesh)?;
         times.push(ms(started.elapsed()));
     }
-    times.sort_by(|a, b| a.partial_cmp(b).expect("no NaN"));
-    Ok(quantile(&times, 0.5))
+    Ok(times)
 }

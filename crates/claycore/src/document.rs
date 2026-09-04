@@ -507,6 +507,25 @@ impl Drop for Item {
     }
 }
 
+/// The version a `.clayspace` container declares in its own first eight bytes.
+///
+/// The container is `"CLAY"`, a `u16` major and a `u16` minor, little-endian,
+/// and then chunks — which is the whole of the header and the only part of the
+/// format this crate reads for itself. It is here because the C ABI has no
+/// entry point that answers "what was this file written at", and the answer is
+/// the difference between a document an older build refuses and one it opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct FormatVersion {
+    pub major: u16,
+    pub minor: u16,
+}
+
+impl std::fmt::Display for FormatVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}", self.major, self.minor)
+    }
+}
+
 /// A sculpting document: layers, the items in them, and the field they define.
 pub struct Document {
     raw: NonNull<sys::clay_document>,
@@ -554,7 +573,76 @@ impl Document {
             .ok_or_else(|| raw_failure("clay_document_load", ErrorKind::Io))
     }
 
+    /// The `.clayspace` container version this build writes, and the only one
+    /// it can write.
+    ///
+    /// **This is a decision the C ABI makes for its callers, and naming it
+    /// here is the point of the constant.** ClayCore v0.78.0 took the scene
+    /// and container formats to minor 16 for a layer's per-axis scale, and
+    /// item 1 of its upgrade notes says that a host exchanging documents with
+    /// an older build should write at minor 15 instead — where the field is
+    /// dropped and a squashed layer comes back at the identity triple, so the
+    /// document opens and the loss is visible rather than fatal.
+    ///
+    /// **There is no way to take that advice from here.** The minor to write
+    /// at is a parameter on the C++ `scene::serialize_document`, and it is not
+    /// on `io::save_clayspace`, which has no such parameter at all, and it is
+    /// not on `clay_document_save`, which takes a path and nothing else. So a
+    /// document written through this ABI is written at
+    /// [`Self::FORMAT`], whatever the host would have preferred.
+    ///
+    /// That is also the choice this workspace would make. It has followed the
+    /// engine's current minor through 7, 8, 11, 14 and 15 — each the same
+    /// shape, a field inside a back-to-back record — and it exchanges
+    /// documents with no older build: the format is the engine's, the engine
+    /// is vendored and pinned here, and a `.clayspace` this application writes
+    /// is opened by this application. What minor 16 costs is that a document
+    /// written now is *refused* by a build that predates v0.78.0 rather than
+    /// misread, which is the direction the format was designed to fail in.
+    ///
+    /// [`Self::format_of`] reads what a file actually says, so the constant is
+    /// checkable rather than asserted.
+    pub const FORMAT: FormatVersion = FormatVersion {
+        major: 1,
+        minor: 16,
+    };
+
+    /// What a `.clayspace` file's own header says it was written at.
+    ///
+    /// Reads the eight-byte container header directly, because the ABI has no
+    /// entry point for the question: `clay_document_load` either opens a file
+    /// or refuses it, and a host that wants to say *why* a refusal happened —
+    /// or to record in a diagnostic what a document it just wrote came out as
+    /// — has nowhere else to ask.
+    ///
+    /// [`ErrorKind::InvalidArgument`] where the magic is not `"CLAY"`, which
+    /// is the same judgement the engine's own loader makes on the same four
+    /// bytes.
+    ///
+    /// [`ErrorKind::InvalidArgument`]: crate::ErrorKind::InvalidArgument
+    pub fn format_of(path: impl AsRef<Path>) -> Result<FormatVersion> {
+        use std::io::Read;
+        const OPERATION: &str = "clay_document_load";
+        let mut header = [0u8; 8];
+        std::fs::File::open(path.as_ref())
+            .and_then(|mut file| file.read_exact(&mut header))
+            .map_err(|e| match e.kind() {
+                std::io::ErrorKind::NotFound => raw_failure(OPERATION, ErrorKind::NotFound),
+                _ => raw_failure(OPERATION, ErrorKind::Io),
+            })?;
+        if &header[0..4] != b"CLAY" {
+            return Err(raw_failure(OPERATION, ErrorKind::InvalidArgument));
+        }
+        Ok(FormatVersion {
+            major: u16::from_le_bytes([header[4], header[5]]),
+            minor: u16::from_le_bytes([header[6], header[7]]),
+        })
+    }
+
     /// Writes the document to a `.clayspace` file.
+    ///
+    /// At [`Self::FORMAT`], which is the only minor this ABI can write — see
+    /// that constant for what the alternative would have bought.
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
         let path = path.as_ref();
         let c_path = cstring(path.to_string_lossy().as_ref(), "clay_document_save")?;
@@ -628,6 +716,157 @@ impl Document {
             "clay_eval_points",
         )?;
         Ok(distances)
+    }
+
+    /// Unit-length field gradients at the same points.
+    ///
+    /// The tetrahedron trick rather than raw differences, so these are surface
+    /// normals and not gradients that happen to point the right way.
+    pub fn eval_gradients(
+        &self,
+        backend: Option<&Backend>,
+        points: &[[f32; 3]],
+    ) -> Result<Vec<[f32; 3]>> {
+        let mut gradients = vec![[0.0f32; 3]; points.len()];
+        if points.is_empty() {
+            return Ok(gradients);
+        }
+
+        let name = backend
+            .map(|b| cstring(b.as_str(), "clay_eval_gradients"))
+            .transpose()?;
+        let name_ptr = name.as_ref().map_or(std::ptr::null(), |s| s.as_ptr());
+
+        // SAFETY: input and output are each `points.len() * 3` contiguous
+        // floats — `[f32; 3]` has no padding.
+        check(
+            unsafe {
+                sys::clay_eval_gradients(
+                    self.raw.as_ptr(),
+                    name_ptr,
+                    points.as_ptr() as *const f32,
+                    points.len(),
+                    gradients.as_mut_ptr() as *mut f32,
+                )
+            },
+            "clay_eval_gradients",
+        )?;
+        Ok(gradients)
+    }
+
+    /// The field of every visible SDF layer except one.
+    ///
+    /// The third question, beside "the whole document" and "one layer": what
+    /// the document would evaluate to if this layer had been removed from it.
+    ///
+    /// # Why it exists
+    ///
+    /// A live sculpt transaction previews one layer, which is what makes a dab
+    /// cost what it touches rather than what the artist has already made. A
+    /// host drawing only that preview is drawing the layer alone, and every
+    /// other visible field subtool vanishes for the length of the gesture.
+    /// With this, a host evaluates the rest of the document *once* at
+    /// pointer-down — the layers it excluded do not move while the artist
+    /// drags — and composes that with its preview per frame.
+    ///
+    /// Composing is a minimum, and it is exact: visible SDF layers hard-union,
+    /// and the union of two fields *is* the smaller of the two distances. So
+    /// `min(excluding(L), your preview of L)` is the field the whole document
+    /// would evaluate to and not an approximation of it. There is no blend
+    /// parameter to match and no seam to hide.
+    ///
+    /// # Why not hide the layer and sample the rest
+    ///
+    /// Because that is three edits, and an edit taken inside a
+    /// [`SmoothTransaction`](crate::SmoothTransaction) is one the commit
+    /// correctly refuses. This call edits nothing and records no undo entry,
+    /// so it is safe at any point inside a transaction. That is the other half
+    /// of why it exists.
+    ///
+    /// # Refusals
+    ///
+    /// An unknown layer is refused with [`ErrorKind::NotFound`] rather than
+    /// read as "exclude nothing" — a host whose layer id went stale would
+    /// otherwise be handed the whole document and would draw the excluded
+    /// layer twice, once from here and once from its own preview, which is the
+    /// exact defect this call exists to prevent and which looks like a shading
+    /// artefact rather than a bug.
+    ///
+    /// A *hidden* layer, or one carrying no SDF content, succeeds: it
+    /// contributes nothing to the union already, so excluding it is a no-op,
+    /// and refusing would make a host branch on state it has no reason to
+    /// track.
+    ///
+    /// [`ErrorKind::NotFound`]: crate::ErrorKind::NotFound
+    pub fn eval_points_excluding(
+        &self,
+        excluded: LayerId,
+        backend: Option<&Backend>,
+        points: &[[f32; 3]],
+    ) -> Result<Vec<f32>> {
+        // An empty batch is still asked, unlike `eval_points`, because the
+        // layer id is checked whether or not there is a point to evaluate and
+        // a stale id is the one thing the caller cannot check for itself.
+        let mut distances = vec![0.0f32; points.len()];
+        let name = backend
+            .map(|b| cstring(b.as_str(), "clay_eval_points_excluding"))
+            .transpose()?;
+        let name_ptr = name.as_ref().map_or(std::ptr::null(), |s| s.as_ptr());
+
+        // SAFETY: as `eval_points`, with the excluded layer passed by value.
+        // An empty slice's pointer is dangling but well-aligned and non-null,
+        // which is what the engine reads for a zero count.
+        check(
+            unsafe {
+                sys::clay_eval_points_excluding(
+                    self.raw.as_ptr(),
+                    excluded.0,
+                    name_ptr,
+                    points.as_ptr() as *const f32,
+                    points.len(),
+                    distances.as_mut_ptr(),
+                    std::ptr::null_mut(),
+                )
+            },
+            "clay_eval_points_excluding",
+        )?;
+        Ok(distances)
+    }
+
+    /// [`Self::eval_gradients`] over every visible SDF layer except one.
+    ///
+    /// Same contract as [`Self::eval_points_excluding`] in every respect: it
+    /// edits nothing, records no undo entry and is safe inside a transaction;
+    /// an unknown layer is refused and a hidden one is not.
+    pub fn eval_gradients_excluding(
+        &self,
+        excluded: LayerId,
+        backend: Option<&Backend>,
+        points: &[[f32; 3]],
+    ) -> Result<Vec<[f32; 3]>> {
+        // As above: the layer id is checked even with nothing to evaluate.
+        let mut gradients = vec![[0.0f32; 3]; points.len()];
+        let name = backend
+            .map(|b| cstring(b.as_str(), "clay_eval_gradients_excluding"))
+            .transpose()?;
+        let name_ptr = name.as_ref().map_or(std::ptr::null(), |s| s.as_ptr());
+
+        // SAFETY: as `eval_gradients`, with the excluded layer passed by
+        // value, and an empty slice's pointer as above.
+        check(
+            unsafe {
+                sys::clay_eval_gradients_excluding(
+                    self.raw.as_ptr(),
+                    excluded.0,
+                    name_ptr,
+                    points.as_ptr() as *const f32,
+                    points.len(),
+                    gradients.as_mut_ptr() as *mut f32,
+                )
+            },
+            "clay_eval_gradients_excluding",
+        )?;
+        Ok(gradients)
     }
 }
 
@@ -1264,5 +1503,93 @@ impl Document {
             "clay_voxel_to_layer",
         )?;
         Ok(LayerId(layer))
+    }
+}
+
+#[cfg(test)]
+mod format_tests {
+    use super::*;
+
+    /// The ratchet, and it is the whole reason the constant is written down.
+    ///
+    /// [`Document::FORMAT`] is a copy of something upstream owns, and a copy
+    /// is only as good as the last time someone compared it. This reads the
+    /// pinned engine's own headers and fails when either the container's minor
+    /// or the scene payload's has moved past what this build claims to write —
+    /// which is the one way a format bump can be caught before a document
+    /// written here is refused by something that was expected to open it.
+    ///
+    /// Skipped rather than failed where the headers are not on disk: a package
+    /// build has the generated bindings and not the vendored source, and a
+    /// test that cannot run is not a test that failed.
+    #[test]
+    fn the_constant_is_the_minor_the_pinned_engine_writes() {
+        let vendor = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vendor/ClayCore");
+        let declared = |file: &str, name: &str| -> Option<u16> {
+            let text = std::fs::read_to_string(vendor.join(file)).ok()?;
+            let after = text.split_once(&format!("{name} = "))?.1;
+            after
+                .split(|c: char| !c.is_ascii_digit())
+                .find(|word| !word.is_empty())?
+                .parse()
+                .ok()
+        };
+
+        let Some(container) = declared("include/clay/io/clayspace.h", "kClaySpaceMinor") else {
+            return;
+        };
+        assert_eq!(
+            container,
+            Document::FORMAT.minor,
+            "the engine writes .clayspace minor {container} and Document::FORMAT says {}; \
+             the pin moved and the constant did not",
+            Document::FORMAT.minor
+        );
+
+        // The two travel together by the engine's own static assertion — "the
+        // container minor and the scene payload layout version must move
+        // together" — so checking both is checking that the assertion still
+        // holds for the pin this build links.
+        let Some(scene) = declared("include/clay/scene/commands.h", "kSceneMinor") else {
+            return;
+        };
+        assert_eq!(
+            scene, container,
+            "the scene payload is at minor {scene} and the container at {container}"
+        );
+    }
+
+    #[test]
+    fn a_file_this_build_writes_says_the_minor_this_build_claims() {
+        let mut document = Document::new().expect("a document");
+        let layer = document.add_sdf_layer("a").expect("a layer");
+        let item = Item::of(Primitive::Sphere { radius: 1.0 }).expect("a sphere");
+        document.add_item(layer, &item).expect("the sphere lands");
+
+        let path = std::env::temp_dir().join("claycore-format-minor.clayspace");
+        document.save(&path).expect("it writes");
+        let written = Document::format_of(&path).expect("the header reads");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(
+            written,
+            Document::FORMAT,
+            "the file says {written} and this build claims to write {}",
+            Document::FORMAT
+        );
+    }
+
+    #[test]
+    fn a_file_that_is_not_a_document_is_refused_rather_than_read() {
+        let path = std::env::temp_dir().join("claycore-format-not-a-document.clayspace");
+        std::fs::write(&path, b"not a clayspace file at all").expect("it writes");
+        let refused =
+            Document::format_of(&path).expect_err("eight readable bytes are not a header");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(refused.kind(), ErrorKind::InvalidArgument);
+
+        let missing = Document::format_of(std::env::temp_dir().join("claycore-format-absent"))
+            .expect_err("a file that is not there");
+        assert_eq!(missing.kind(), ErrorKind::NotFound);
     }
 }

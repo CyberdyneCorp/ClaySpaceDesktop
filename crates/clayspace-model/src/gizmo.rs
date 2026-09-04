@@ -303,8 +303,34 @@ impl Transform {
     ///
     /// The mean of the three rather than any single component, so a target
     /// that was scaled uniformly reports exactly what it was given.
+    ///
+    /// This is a *readout*. A world length carried into a squashed frame wants
+    /// [`Self::largest_scale`] instead, for the reason stated there.
     pub fn uniform_scale(&self) -> f32 {
         self.scale.iter().sum::<f32>() / 3.0
+    }
+
+    /// The factor a world *length* is divided by to reach this frame.
+    ///
+    /// The largest component, which is the engine's own rule and not a choice
+    /// made here: a distance evaluated through a per-axis scale is multiplied
+    /// back by the **smallest** component, so that the field never
+    /// overestimates and stays 1-Lipschitz — and the dual of that, for a
+    /// radius mapped the other way, is the **largest**, "so a gesture never
+    /// reaches outside the region it named". `clay_layer_move_surface` takes
+    /// the layer's factor into that rule, and a brush radius carried into a
+    /// squashed subtool's own coordinates is the same question one level up.
+    ///
+    /// The mean would have been the obvious answer and is the wrong one: on a
+    /// subtool squashed three to one it makes the brush reach past its own
+    /// ring on the wide axis, which is a dab landing where the sculptor was
+    /// not pointing.
+    pub fn largest_scale(&self) -> f32 {
+        self.scale
+            .iter()
+            .copied()
+            .fold(f32::MIN, f32::max)
+            .max(Self::LEAST_SCALE)
     }
 
     /// Whether the three factors agree, which is what keeps the field exact.
@@ -343,17 +369,72 @@ impl Transform {
     }
 
     /// A point of the frame this transform places, standing where it puts it.
+    ///
+    /// Scale innermost, then the rotation, then the position — the order the
+    /// engine composes a layer in: `world = xform * diag(scale) * point`. It
+    /// made no difference while the three factors agreed, because a uniform
+    /// scale commutes with a rotation. It makes every difference once they do
+    /// not: turning first and stretching after would squash a turned subtool
+    /// along the *world's* axes rather than its own, so the drawn form and the
+    /// evaluated one would part company the moment a subtool was both turned
+    /// and squashed.
     pub fn into_world(&self, point: [f32; 3]) -> [f32; 3] {
-        let turned = self.turn(point);
-        let scale = self.uniform_scale().max(Self::LEAST_SCALE);
-        std::array::from_fn(|i| turned[i] * scale + self.position[i])
+        let scaled: [f32; 3] = std::array::from_fn(|i| point[i] * self.factor(i));
+        let turned = self.turn(scaled);
+        std::array::from_fn(|i| turned[i] + self.position[i])
     }
 
     /// The way back: a world point in that frame's own coordinates.
     pub fn into_local(&self, point: [f32; 3]) -> [f32; 3] {
-        let scale = self.uniform_scale().max(Self::LEAST_SCALE);
-        let moved: [f32; 3] = std::array::from_fn(|i| (point[i] - self.position[i]) / scale);
-        self.turn_back(moved)
+        let moved: [f32; 3] = std::array::from_fn(|i| point[i] - self.position[i]);
+        let turned = self.turn_back(moved);
+        std::array::from_fn(|i| turned[i] / self.factor(i))
+    }
+
+    /// A *direction* of the frame this transform places, in the frame's own
+    /// coordinates.
+    ///
+    /// [`into_local`](Self::into_local) without the position, because a
+    /// direction has none — and *with* the division, because a direction is
+    /// not a rotation's to carry alone once the three factors part company. A
+    /// ray turned and not divided points somewhere else in a stretched frame:
+    /// measured, a subtool squashed 3:1 and hovered from a 45-degree view
+    /// missed its own surface entirely, and a pick that misses reads exactly
+    /// like a pointer that is not over the form.
+    pub fn direction_into_local(&self, direction: [f32; 3]) -> [f32; 3] {
+        let turned = self.turn_back(direction);
+        std::array::from_fn(|i| turned[i] / self.factor(i))
+    }
+
+    /// A *normal* of the frame this transform places, standing where it puts
+    /// it.
+    ///
+    /// Not [`into_world`](Self::into_world) without the position, and not a
+    /// rotation either. A surface normal transforms by the **inverse
+    /// transpose** of the map its surface goes through: for `R * diag(s)` that
+    /// is `R * diag(1/s)`, so the divisions are what keep a normal
+    /// perpendicular to a stretched surface. It is the same map as a direction
+    /// only while the three factors agree, which is why rotating alone went
+    /// unnoticed for as long as a layer took one factor.
+    ///
+    /// clay.h says it in one line for the layer transform the engine composes
+    /// itself — "rotating a normal is right for a similarity and tilts every
+    /// one of them off the surface under a squash" — and a host drawing
+    /// carried geometry has to make the same distinction, because it is
+    /// placing that geometry itself.
+    pub fn normal_into_world(&self, normal: [f32; 3]) -> [f32; 3] {
+        let unstretched: [f32; 3] = std::array::from_fn(|i| normal[i] / self.factor(i));
+        let turned = self.turn(unstretched);
+        // Renormalised, because a shading normal is read as a unit vector and
+        // the division above is not one. A zero-length normal — which the
+        // engine can hand back for a degenerate triangle — is left as it came
+        // rather than turned into a NaN.
+        normalize(turned).unwrap_or(turned)
+    }
+
+    /// One component of the scale, floored so the frame is never singular.
+    fn factor(&self, axis: usize) -> f32 {
+        self.scale[axis].max(Self::LEAST_SCALE)
     }
 
     /// A world point reflected through this frame's *own* plane normal to
@@ -1369,6 +1450,10 @@ mod tests {
 mod transform_tests {
     use super::*;
 
+    fn close(a: [f32; 3], b: [f32; 3]) -> bool {
+        (0..3).all(|i| (a[i] - b[i]).abs() < 1e-4)
+    }
+
     fn drag(mode: GizmoMode, handle: GizmoHandle, anchor: [f32; 3]) -> GizmoDrag {
         GizmoDrag {
             mode,
@@ -1614,5 +1699,81 @@ mod transform_tests {
                 .all(|(a, b)| (a - b).abs() < 1e-4),
             "carrying {point:?} through the frame gave {there_and_back:?}"
         );
+    }
+
+    /// The frame stretches per axis, and the round trip still lands.
+    ///
+    /// The uniform case above could not tell scale-then-rotate from
+    /// rotate-then-scale, because a uniform scale commutes with a rotation.
+    /// This one can: a turned frame that squashes one axis is exactly where
+    /// the two orders part company.
+    #[test]
+    fn a_squashed_frame_carries_a_point_in_and_out_of_itself() {
+        let placed = Transform {
+            position: [1.0, -2.0, 0.5],
+            rotation_axis: [0.0, 1.0, 0.0],
+            rotation_angle: 0.7,
+            scale: [2.0, 1.0, 0.5],
+        };
+        let point = [0.25, 3.0, -1.5];
+        let there_and_back = placed.into_world(placed.into_local(point));
+        assert!(
+            close(there_and_back, point),
+            "carrying {point:?} through a squashed frame gave {there_and_back:?}"
+        );
+    }
+
+    /// The stretch is applied in the frame's own axes, not the world's.
+    ///
+    /// `world = rotation * diag(scale) * point`, which is how the engine
+    /// composes a layer. A frame turned a quarter turn about y and stretched
+    /// three times along its own x puts its own unit x three units away —
+    /// along the world's −z, because that is where the frame's x now points.
+    /// Stretching after the turn would have sent it three units along the
+    /// world's x instead, so the drawn form and the evaluated one would part
+    /// company on any subtool that was both turned and squashed.
+    #[test]
+    fn a_stretch_is_along_the_frames_own_axis() {
+        let placed = Transform {
+            position: [0.0; 3],
+            rotation_axis: [0.0, 1.0, 0.0],
+            rotation_angle: std::f32::consts::FRAC_PI_2,
+            scale: [3.0, 1.0, 1.0],
+        };
+        let stood = placed.into_world([1.0, 0.0, 0.0]);
+        assert!(
+            close(stood, [0.0, 0.0, -3.0]),
+            "the frame's own x, stretched three times, stands at {stood:?}"
+        );
+        let across = placed.into_world([0.0, 0.0, 1.0]);
+        assert!(
+            close(across, [1.0, 0.0, 0.0]),
+            "stretching the frame's x reached its z: {across:?}"
+        );
+    }
+
+    /// A world length carried into a squashed frame is divided by the largest
+    /// factor, which is the engine's own rule and not a choice made here.
+    ///
+    /// The mean would be the obvious answer and is the wrong one: on a subtool
+    /// squashed three to one it lets the brush reach past its own ring on the
+    /// wide axis, which is a dab landing where the sculptor was not pointing.
+    #[test]
+    fn a_radius_carried_inward_takes_the_largest_factor() {
+        let squashed = Transform {
+            scale: [3.0, 1.0, 0.5],
+            ..Transform::default()
+        };
+        assert_eq!(squashed.largest_scale(), 3.0);
+        assert!(
+            squashed.largest_scale() > squashed.uniform_scale(),
+            "the mean is what this exists not to be"
+        );
+        // And it is never zero, however flat the frame is asked to be.
+        let flat = Transform {
+            scale: [0.0; 3],
+            ..Transform::default()
+        };
+        assert!(flat.largest_scale() > 0.0);
     }
 }

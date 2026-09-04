@@ -14,6 +14,7 @@ use std::io::{Error, ErrorKind, Result};
 
 use clayspace_app::Conditions;
 
+use crate::figures::Spread;
 use crate::load::Load;
 use crate::run::Run;
 
@@ -25,7 +26,20 @@ pub struct Baseline {
     pub architecture: String,
     pub backend: String,
     pub engine: String,
+    /// Which build of that engine. Absent from every baseline recorded before
+    /// the field existed, and `None` there rather than an empty string: "this
+    /// run did not say" and "this run was built from a tree with no git" are
+    /// different claims and the second one has its own words.
+    pub revision: Option<String>,
     pub figures: BTreeMap<String, f64>,
+    /// What the samples behind each figure looked like, for the figures whose
+    /// measurement took more than one.
+    ///
+    /// Empty for every baseline recorded before the section existed, which is
+    /// not an error and not a claim of zero variance — it means that run could
+    /// not say. A comparison against one of those reads exactly as it did
+    /// before.
+    pub spread: BTreeMap<String, Spread>,
     /// What that run did not measure, and why.
     pub skipped: BTreeMap<String, String>,
     /// The one-minute load per core the recording machine was under, where the
@@ -55,6 +69,7 @@ fn render(where_: &Conditions, load: Option<&Load>, run: &Run) -> String {
     ));
     out.push_str(&format!("    \"backend\": \"{}\",\n", where_.backend));
     out.push_str(&format!("    \"engine\": \"{}\",\n", where_.engine));
+    out.push_str(&format!("    \"revision\": \"{}\",\n", where_.revision));
     out.push_str(&format!(
         "    \"viewport\": [{}, {}]",
         where_.viewport.0, where_.viewport.1
@@ -75,6 +90,29 @@ fn render(where_: &Conditions, load: Option<&Load>, run: &Run) -> String {
     out.push_str("  \"figures\": {\n");
     out.push_str(&figures.join(",\n"));
     out.push_str("\n  },\n");
+
+    // A sibling section rather than a nested object per figure, so that
+    // `figures` stays exactly the flat name-to-number map every committed
+    // baseline already holds and every reader of one already expects. A
+    // parser that does not know this key ignores it; a reader of an older
+    // file finds it absent. Neither direction needs a format version.
+    let spread: Vec<String> = run
+        .spreads()
+        .iter()
+        .map(|(name, s)| {
+            format!(
+                "    \"{name}\": {{ \"n\": {}, \"min\": {:.4}, \"median\": {:.4}, \
+                 \"p95\": {:.4}, \"max\": {:.4} }}",
+                s.n, s.min, s.median, s.p95, s.max
+            )
+        })
+        .collect();
+    out.push_str("  \"spread\": {\n");
+    out.push_str(&spread.join(",\n"));
+    if !spread.is_empty() {
+        out.push('\n');
+    }
+    out.push_str("  },\n");
 
     let skipped: Vec<String> = run
         .skips()
@@ -117,6 +155,10 @@ fn parse(text: &str) -> Result<Baseline> {
         architecture: field(&conditions, "architecture")?.clone().into_string()?,
         backend: field(&conditions, "backend")?.clone().into_string()?,
         engine: field(&conditions, "engine")?.clone().into_string()?,
+        revision: match conditions.get("revision") {
+            Some(value) => Some(value.clone().into_string()?),
+            None => None,
+        },
         load_per_core: conditions
             .get("load_per_core")
             .and_then(|v| v.clone().into_number().ok()),
@@ -126,6 +168,13 @@ fn parse(text: &str) -> Result<Baseline> {
             .into_iter()
             .map(|(key, value)| Ok((key, value.into_number()?)))
             .collect::<Result<_>>()?,
+        // Absent in a baseline recorded before the spread was kept. Empty
+        // there rather than refused: an older baseline still compares, it
+        // simply cannot say how noisy it was.
+        spread: match root.get("spread") {
+            Some(value) => spreads(value.clone())?,
+            None => BTreeMap::new(),
+        },
         // Absent in a baseline recorded before skips were reported, which is
         // not an error: it means that run skipped nothing it told us about.
         skipped: match root.get("skipped") {
@@ -133,6 +182,32 @@ fn parse(text: &str) -> Result<Baseline> {
             None => BTreeMap::new(),
         },
     })
+}
+
+/// The `spread` section: one five-number summary per figure name.
+fn spreads(value: Value) -> Result<BTreeMap<String, Spread>> {
+    value
+        .into_object()?
+        .into_iter()
+        .map(|(name, value)| {
+            let entry = value.into_object()?;
+            let number = |key: &str| -> Result<f64> {
+                field(&entry, key)
+                    .and_then(|value| value.clone().into_number())
+                    .map_err(|_| bad(format!("the spread for {name} has no {key}")))
+            };
+            Ok((
+                name.clone(),
+                Spread {
+                    n: number("n")? as usize,
+                    min: number("min")?,
+                    median: number("median")?,
+                    p95: number("p95")?,
+                    max: number("max")?,
+                },
+            ))
+        })
+        .collect()
 }
 
 fn field<'a>(object: &'a BTreeMap<String, Value>, key: &str) -> Result<&'a Value> {
@@ -316,6 +391,7 @@ mod tests {
             architecture: "x86_64",
             backend: "cuda".into(),
             engine: "0.39.0".into(),
+            revision: "v0.39.0-0-gdeadbee".into(),
             viewport: (1280, 800),
         }
     }
@@ -323,6 +399,7 @@ mod tests {
     fn run() -> Run {
         let mut run = Run::new(None);
         run.insert("dab.median", Figure::ms(2.4219, Some(50.0)));
+        run.spread("dab.median", &[1.9, 2.4219, 3.1, 5.0]);
         run.insert("locality.key_ratio", Figure::ratio(0.75, Some(2.0), 1.5));
         run.skip("brush.mesh", Skip::NoHeadlessGpu);
         run
@@ -337,9 +414,53 @@ mod tests {
         assert_eq!(read.architecture, "x86_64");
         assert_eq!(read.backend, "cuda");
         assert_eq!(read.engine, "0.39.0");
+        assert_eq!(read.revision.as_deref(), Some("v0.39.0-0-gdeadbee"));
         assert_eq!(read.figures["dab.median"], 2.4219);
         assert_eq!(read.figures["locality.key_ratio"], 0.75);
         assert_eq!(read.skipped["brush.mesh"], "no headless GPU");
+        let spread = read.spread["dab.median"];
+        assert_eq!(spread.n, 4);
+        assert_eq!(spread.min, 1.9);
+        assert_eq!(spread.max, 5.0);
+        // A figure whose measurement took one observation states none, rather
+        // than a range of width zero that would read as a quiet machine.
+        assert!(!read.spread.contains_key("locality.key_ratio"));
+    }
+
+    /// Every baseline committed before the section existed. It must still
+    /// compare, and it must not be read as "the samples never moved".
+    #[test]
+    fn a_baseline_from_before_the_spread_was_kept_still_reads() {
+        let text = r#"{
+  "conditions": {
+    "scenes": { "reference": "r1" },
+    "platform": "linux",
+    "architecture": "x86_64",
+    "backend": "cuda",
+    "engine": "0.52.2",
+    "viewport": [1280, 800]
+  },
+  "figures": { "dab.median": 2.1 }
+}"#;
+        let read = parse(text).expect("parses");
+        assert!(read.spread.is_empty());
+    }
+
+    #[test]
+    fn a_spread_missing_a_number_is_an_error_rather_than_a_zero() {
+        let text = r#"{
+  "conditions": {
+    "scenes": { "reference": "r1" },
+    "platform": "linux",
+    "architecture": "x86_64",
+    "backend": "cuda",
+    "engine": "0.52.2",
+    "viewport": [1280, 800]
+  },
+  "figures": { "dab.median": 2.1 },
+  "spread": { "dab.median": { "n": 12, "min": 1.0, "max": 3.0 } }
+}"#;
+        assert!(parse(text).is_err());
     }
 
     #[test]
@@ -401,6 +522,27 @@ mod tests {
 }"#;
         let read = parse(text).expect("parses");
         assert!(read.scenes.is_empty());
+    }
+
+    /// Every baseline committed before the revision was recorded. Read as
+    /// `None` rather than as an empty string, so the comparison can say "did
+    /// not record one" instead of comparing against nothing.
+    #[test]
+    fn a_baseline_from_before_the_revision_was_recorded_says_it_did_not() {
+        let text = r#"{
+  "conditions": {
+    "scenes": { "reference": "r1" },
+    "platform": "linux",
+    "architecture": "x86_64",
+    "backend": "cuda",
+    "engine": "0.52.2",
+    "viewport": [1280, 800]
+  },
+  "figures": { "dab.median": 2.1 }
+}"#;
+        let read = parse(text).expect("parses");
+        assert_eq!(read.engine, "0.52.2");
+        assert_eq!(read.revision, None);
     }
 
     #[test]

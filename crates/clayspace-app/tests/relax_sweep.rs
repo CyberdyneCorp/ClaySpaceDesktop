@@ -261,6 +261,10 @@ fn how_wide_the_kernel_has_to_be() {
     // a round trip that corrugates the surface on its own, filed as ClayCore
     // #67.
     //
+    // Re-checked at ClayCore v0.78.0: #67 is not named in that release, and
+    // `clay_item_volume_relax` is not among the entry points it adds or
+    // changes, so the round trip still costs what it cost.
+    //
     // So what is pinned here is the shape of the problem rather than a target:
     // if a kernel ever beats the round trip's own cost, the verb has started
     // doing something the round trip is hiding, and this test should become an

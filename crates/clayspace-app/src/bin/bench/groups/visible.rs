@@ -57,6 +57,15 @@ impl Screen {
                 self.upload(gpu, document);
                 Ok(())
             }
+            // A hierarchy is drawn from its display level's triangles, which
+            // arrive through the same whole-buffer rebuild a mesh takes — so
+            // it is the mesh branch, and the `multires` group builds its own
+            // subject rather than taking a `Scene` member (see that group for
+            // why one is deliberately not added).
+            Representation::Multires => {
+                self.upload(gpu, document);
+                Ok(())
+            }
         }
     }
 

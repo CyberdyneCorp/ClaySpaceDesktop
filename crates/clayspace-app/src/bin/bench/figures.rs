@@ -79,6 +79,73 @@ impl Figure {
     }
 }
 
+/// What a figure's samples looked like, beside the one number it reports.
+///
+/// The gap this closes is the one ClayCore's own v0.78.0 release notes name in
+/// their device gate: "`sdf_stroke_bricks` cannot tell a 1.1x from noise. It
+/// takes one observation per point and records no spread." This harness took
+/// twelve samples of a repeatable measurement and three of a one-shot, reduced
+/// each set to one or two numbers, and then dropped the samples on the floor —
+/// so a baseline could state that a figure was 19.04 ms and nothing at all
+/// about whether 21 ms was a regression or a Tuesday.
+///
+/// Five numbers rather than a standard deviation, because these are not normal
+/// and are not meant to be: a gesture's segments rise across the stroke by
+/// construction (see [`Record::figures`]), so a spread here is a *range* that
+/// says how far apart the cheapest and the dearest sample were, not a
+/// dispersion about a centre. `n` is part of it because a range over three
+/// samples and a range over twelve are different claims.
+///
+/// **This is within-run spread and it is not the whole answer.** The variance
+/// that dominates is between runs — a cold graphics card measured 11.9 ms
+/// against a boosted one's 7.8 for the same figure, which is why
+/// `groups::warmup` exists — and one process cannot sample that. The way to
+/// see it is to run the whole harness several times per pin and read the
+/// medians against each other. What this buys is the floor under that: a
+/// change smaller than the spread of either side was never distinguishable to
+/// begin with, and now the file says so.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Spread {
+    /// How many samples the figure was reduced from.
+    pub n: usize,
+    pub min: f64,
+    pub median: f64,
+    pub p95: f64,
+    pub max: f64,
+}
+
+impl Spread {
+    /// Summarises a sample set, or `None` where there was nothing to sample.
+    pub fn of(samples: &[f64]) -> Option<Self> {
+        if samples.is_empty() {
+            return None;
+        }
+        let mut sorted = samples.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).expect("no NaN"));
+        Some(Self {
+            n: sorted.len(),
+            min: sorted[0],
+            median: quantile(&sorted, 0.5),
+            p95: quantile(&sorted, 0.95),
+            max: sorted[sorted.len() - 1],
+        })
+    }
+
+    /// Whether a value sits inside the range these samples covered.
+    ///
+    /// The question a comparison wants and could not previously ask: a run
+    /// reporting 21 ms against a baseline of 19 has not necessarily got worse
+    /// if the baseline's own twelve samples ran from 17 to 23.
+    pub fn covers(&self, value: f64) -> bool {
+        value >= self.min && value <= self.max
+    }
+
+    /// `12x 17.10-23.40`, for the report table.
+    pub fn describe(&self) -> String {
+        format!("{}x {:.2}-{:.2}", self.n, self.min, self.max)
+    }
+}
+
 pub fn ms(d: Duration) -> f64 {
     d.as_secs_f64() * 1000.0
 }
@@ -173,7 +240,8 @@ impl Record {
     /// A median is the robust statistic when the samples are one quantity
     /// measured repeatedly. These are a gesture's worth of different dabs, and
     /// what a sculptor pays for the gesture is their sum.
-    pub fn figures(self, prefix: &str, mut samples: Vec<f64>) -> Vec<(String, Figure)> {
+    pub fn figures(self, prefix: &str, samples: &[f64]) -> Vec<(String, Figure)> {
+        let mut samples = samples.to_vec();
         samples.sort_by(|a, b| a.partial_cmp(b).expect("no NaN"));
         if std::env::var_os("CLAYSPACE_BENCH_SAMPLES").is_some() {
             let each: Vec<String> = samples.iter().map(|s| format!("{s:.2}")).collect();
@@ -211,7 +279,7 @@ mod tests {
     /// mesh brush's p95 moved by 30 % while its median moved by 10 %.
     #[test]
     fn a_tail_is_judged_more_loosely_than_the_figure_beside_it() {
-        let figures = Record::Repeatable.figures("brush.mesh.camada", vec![10.0; 12]);
+        let figures = Record::Repeatable.figures("brush.mesh.camada", &[10.0; 12]);
         let tolerances: Vec<f64> = figures.iter().map(|(_, f)| f.tolerance).collect();
         assert_eq!(tolerances, vec![1.5, 2.0]);
     }
@@ -223,7 +291,7 @@ mod tests {
         let measured = vec![
             4.72, 5.60, 5.63, 8.16, 8.17, 8.23, 8.68, 12.47, 14.79, 15.03, 16.28, 18.91, 21.68,
         ];
-        let figures = Record::Repeatable.figures("brush.sdf.padrao", measured.clone());
+        let figures = Record::Repeatable.figures("brush.sdf.padrao", &measured);
         assert_eq!(figures[0].0, "brush.sdf.padrao.mean");
         assert!(
             (figures[0].1.value - 11.41).abs() < 0.01,
@@ -236,10 +304,37 @@ mod tests {
 
     #[test]
     fn a_one_shot_reports_one_figure_and_no_tail() {
-        let figures = Record::OneShot.figures("convert.sdf_to_voxel", vec![1.0, 2.0, 3.0]);
+        let figures = Record::OneShot.figures("convert.sdf_to_voxel", &[1.0, 2.0, 3.0]);
         assert_eq!(figures.len(), 1);
         assert_eq!(figures[0].0, "convert.sdf_to_voxel.ms");
         assert_eq!(figures[0].1.value, 2.0);
+    }
+
+    /// The claim the whole spread exists to make: a change inside the range
+    /// the baseline's own samples covered is not distinguishable from the
+    /// noise that baseline was recorded in.
+    #[test]
+    fn a_spread_says_whether_a_value_is_inside_what_was_already_seen() {
+        let spread = Spread::of(&[17.1, 18.0, 19.0, 20.2, 23.4]).expect("five samples");
+        assert_eq!(spread.n, 5);
+        assert_eq!(spread.min, 17.1);
+        assert_eq!(spread.max, 23.4);
+        assert_eq!(spread.median, 19.0);
+        assert!(spread.covers(21.0));
+        assert!(!spread.covers(24.0));
+    }
+
+    #[test]
+    fn a_measurement_with_no_samples_states_no_spread() {
+        assert_eq!(Spread::of(&[]), None);
+    }
+
+    /// Unsorted in, sorted out — every caller in the harness hands over the
+    /// samples in the order they were taken.
+    #[test]
+    fn a_spread_does_not_care_what_order_the_samples_arrived_in() {
+        let spread = Spread::of(&[9.0, 1.0, 5.0]).expect("three samples");
+        assert_eq!((spread.min, spread.median, spread.max), (1.0, 5.0, 9.0));
     }
 
     #[test]

@@ -30,12 +30,85 @@
 //! vertices the engine meshes. Nothing is interpolated and nothing is
 //! averaged: the samples that reach the mesher are the samples the transaction
 //! computed.
+//!
+//! ## Drawing the rest of the document beside it
+//!
+//! A transaction previews **one layer**, and the viewport meshes the preview
+//! instead of the document's own cache — so for as long as a second field
+//! subtool was visible, everything but the layer being smoothed would have
+//! vanished for the length of the drag. That is why the gesture used to refuse
+//! to be live at all with more than one visible field subtool, and it was
+//! filed upstream as ClayCore#378.
+//!
+//! ClayCore 0.78.0 answers it. `clay_brick_cache_eval_requests_excluding` is
+//! the document evaluated over every visible SDF layer *except* one, which is
+//! precisely the other half of what the preview holds. The engine composes
+//! visible field layers by a hard union, so the composition is an elementwise
+//! minimum and it is exact: nothing is blended and there is no seam.
+//!
+//! Two properties make it usable where the obvious route is not. It **edits
+//! nothing and records no undo entry**, so it is legal between
+//! `clay_sdf_smooth_begin` and its commit — where hiding the other layers,
+//! sampling, and showing them again is three edits, and the commit correctly
+//! refuses a layer that moved since it began. And it takes no seed and leaves
+//! none, so it is priced like a stroke's first dab; the layers it excludes do
+//! not move while the artist drags, so the whole-form pass is paid once at
+//! pointer-down and every frame after it costs only the dab's own bricks.
+
+use std::collections::HashSet;
 
 use claycore::{
-    BrickCache, BrickConfig, BrickKey, BrickSubmit, Document, LayerId, MoveParams, MoveTransaction,
-    RelaxParams, SculptPolicy, SmoothTransaction,
+    Backend, BrickCache, BrickConfig, BrickKey, BrickRequest, BrickSubmit, Document, LayerId,
+    MoveParams, MoveTransaction, RelaxParams, SculptPolicy, SmoothTransaction,
 };
 use clayspace_model::ModelError;
+
+/// What a preview has to be composed with, where the document holds more than
+/// the layer being previewed.
+///
+/// `None` on a document whose only visible field subtool is the one under the
+/// brush, which is the common case and the one every brush figure is measured
+/// on: there is nothing to compose, and the gesture runs exactly the path it
+/// ran before this existed.
+pub(crate) struct Rest {
+    /// The layer the transaction holds. It is left out of every evaluation of
+    /// the rest because it *is* the preview.
+    excluded: LayerId,
+    /// Where the other visible field subtools stand, in the world.
+    ///
+    /// The preview's own lattice covers the layer being smoothed and nothing
+    /// else, so a subtool standing beside it falls outside every brick the
+    /// transaction reports. These boxes are what the preview cache is widened
+    /// to cover, once, at pointer-down.
+    bounds: Vec<([f32; 3], [f32; 3])>,
+    /// Where an evaluation runs. Chosen once, for a batch the size of the
+    /// pointer-down pass, because that pass is what dominates: a dab's
+    /// composition is a couple of dozen bricks and the whole form is a
+    /// thousand.
+    backend: Option<Backend>,
+    /// Preview keys the transaction covers.
+    ///
+    /// The second pass widens the lattice over the *other* subtools, and a box
+    /// that overlaps this one would otherwise re-fill a brick that already
+    /// holds a composed sample with the rest of the document alone — which is
+    /// the layer being smoothed disappearing from exactly where it is.
+    covered: HashSet<BrickKey>,
+}
+
+impl Rest {
+    pub(crate) fn new(
+        excluded: LayerId,
+        bounds: Vec<([f32; 3], [f32; 3])>,
+        backend: Option<Backend>,
+    ) -> Self {
+        Self {
+            excluded,
+            bounds,
+            backend,
+            covered: HashSet::new(),
+        }
+    }
+}
 
 /// The surface the viewport draws while a live gesture is running.
 pub struct LiveSurface<'a> {
@@ -58,6 +131,8 @@ pub(crate) struct LiveSmooth {
     offset: Option<[f32; 3]>,
     /// Preview keys the viewport has not drawn yet.
     dirty: Vec<BrickKey>,
+    /// The document beside the layer being previewed, where there is one.
+    rest: Option<Rest>,
     brick_span: f32,
     config: BrickConfig,
 }
@@ -68,6 +143,7 @@ impl LiveSmooth {
         document: &mut Document,
         layer: LayerId,
         config: BrickConfig,
+        rest: Option<Rest>,
     ) -> Result<Self, ModelError> {
         let transaction =
             SmoothTransaction::begin(document, layer, SculptPolicy::at(config.voxel_size))
@@ -78,10 +154,13 @@ impl LiveSmooth {
             cache,
             offset: None,
             dirty: Vec::new(),
+            rest,
             brick_span: config.voxel_size * config.dim as f32,
             config,
         };
-        live.prime()?;
+        // Read rather than written: the transaction is open on `document` and
+        // the evaluations below only ask it questions.
+        live.prime(document)?;
         Ok(live)
     }
 
@@ -97,7 +176,7 @@ impl LiveSmooth {
     /// of zero moves no sample — the engine reports `changed: false` and hands
     /// over every brick. This is the pointer-down cost, paid once, and it buys
     /// a preview that is the whole form from the first frame.
-    fn prime(&mut self) -> Result<(), ModelError> {
+    fn prime(&mut self, document: &Document) -> Result<(), ModelError> {
         self.transaction
             .update(RelaxParams {
                 strength: 0.0,
@@ -109,11 +188,96 @@ impl LiveSmooth {
                 mask: None,
             })
             .map_err(ModelError::engine)?;
-        self.absorb()?;
+        self.absorb(document)?;
+        self.widen_over_the_rest(document)?;
         // Primed, not drawn: nothing has been asked for yet, so the keys this
         // filled are the surface's starting state rather than an edit to it.
         self.dirty.clear();
         Ok(())
+    }
+
+    /// Covers the other visible field subtools, once, at pointer-down.
+    ///
+    /// The pass above fills the bricks the *transaction* reports, which are
+    /// the layer being smoothed and nothing else — so a second subtool
+    /// standing beside it has no brick in this lattice at all and would simply
+    /// not be drawn. This marks where those subtools stand and fills what it
+    /// drains from the document without the layer under the brush.
+    ///
+    /// A brick the transaction already covers is dropped rather than
+    /// re-filled: it holds a composed sample, and the rest of the document
+    /// alone would be that composition with the layer being smoothed taken out
+    /// of it. Taking a request and not submitting it leaves the brick holding
+    /// what it had, which is exactly right here and is the same property the
+    /// band's neighbours rely on in [`Self::submit_round`].
+    fn widen_over_the_rest(&mut self, document: &Document) -> Result<(), ModelError> {
+        // No offset means nothing was primed — an empty layer — and there is
+        // no lattice to widen yet.
+        let (Some(rest), Some(offset)) = (self.rest.as_ref(), self.offset) else {
+            return Ok(());
+        };
+        let bounds = rest.bounds.clone();
+        for (min, max) in bounds {
+            let low = std::array::from_fn(|axis| min[axis] - offset[axis]);
+            let high = std::array::from_fn(|axis| max[axis] - offset[axis]);
+            self.cache
+                .mark_dirty(low, high)
+                .map_err(ModelError::engine)?;
+        }
+        loop {
+            let (requests, remaining) = self
+                .cache
+                .take_dirty(Self::DRAIN_BATCH)
+                .map_err(ModelError::engine)?;
+            if requests.is_empty() {
+                break;
+            }
+            let wanted: Vec<BrickRequest> = requests
+                .into_iter()
+                .filter(|request| {
+                    self.rest
+                        .as_ref()
+                        .is_some_and(|rest| !rest.covered.contains(&request.key()))
+                })
+                .collect();
+            if !wanted.is_empty() {
+                let values = self.the_rest_of_the_document(document, offset, &wanted)?;
+                self.cache
+                    .submit(&wanted, &values, None)
+                    .map_err(ModelError::engine)?;
+            }
+            if remaining == 0 {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Evaluates the document without the layer being previewed, over bricks
+    /// this cache named in its own coordinates.
+    ///
+    /// The requests are translated on the way out and the originals are kept
+    /// for the submission — see [`claycore::BrickRequest::translated`], and
+    /// the module comment above for why this lattice is not the document's.
+    fn the_rest_of_the_document(
+        &self,
+        document: &Document,
+        offset: [f32; 3],
+        requests: &[BrickRequest],
+    ) -> Result<Vec<f32>, ModelError> {
+        let rest = self
+            .rest
+            .as_ref()
+            .expect("only called with a rest to compose");
+        let moved: Vec<BrickRequest> = requests
+            .iter()
+            .map(|request| request.translated(offset))
+            .collect();
+        Ok(self
+            .cache
+            .eval_excluding(document, rest.excluded, rest.backend.as_ref(), &moved)
+            .map_err(ModelError::engine)?
+            .values)
     }
 
     /// The surface to draw.
@@ -132,15 +296,19 @@ impl LiveSmooth {
     }
 
     /// One dab, and the preview it leaves behind.
-    pub(crate) fn dab(&mut self, params: RelaxParams<'_>) -> Result<usize, ModelError> {
+    pub(crate) fn dab(
+        &mut self,
+        document: &Document,
+        params: RelaxParams<'_>,
+    ) -> Result<usize, ModelError> {
         self.transaction
             .update(params)
             .map_err(ModelError::engine)?;
-        self.absorb()
+        self.absorb(document)
     }
 
     /// Moves the bricks the transaction says are new into the preview cache.
-    fn absorb(&mut self) -> Result<usize, ModelError> {
+    fn absorb(&mut self, document: &Document) -> Result<usize, ModelError> {
         let Some(delta) = self
             .transaction
             .take_preview()
@@ -162,8 +330,13 @@ impl LiveSmooth {
             wanted.insert(brick.key, at);
             self.mark(brick.key)?;
         }
+        // What the transaction covers, accumulated across the gesture: the
+        // widening pass reads it to leave composed bricks alone.
+        if let Some(rest) = self.rest.as_mut() {
+            rest.covered.extend(wanted.keys().copied());
+        }
 
-        self.drain_into_cache(&delta, &wanted)
+        self.drain_into_cache(document, &delta, &wanted)
     }
 
     /// Moves every brick the delta has samples for out of the dirty pool.
@@ -180,6 +353,7 @@ impl LiveSmooth {
     /// has not changed it.
     fn drain_into_cache(
         &mut self,
+        document: &Document,
         delta: &claycore::PreviewDelta,
         wanted: &std::collections::HashMap<BrickKey, usize>,
     ) -> Result<usize, ModelError> {
@@ -192,7 +366,7 @@ impl LiveSmooth {
             if requests.is_empty() {
                 break;
             }
-            accepted += self.submit_round(delta, wanted, requests)?;
+            accepted += self.submit_round(document, delta, wanted, requests)?;
             if remaining == 0 {
                 break;
             }
@@ -204,6 +378,7 @@ impl LiveSmooth {
     /// record which the cache accepted.
     fn submit_round(
         &mut self,
+        document: &Document,
         delta: &claycore::PreviewDelta,
         wanted: &std::collections::HashMap<BrickKey, usize>,
         requests: Vec<claycore::BrickRequest>,
@@ -217,6 +392,7 @@ impl LiveSmooth {
             self.strip_halo(&delta.bricks[at], delta, &mut values);
             submitted.push(request);
         }
+        self.compose_the_rest(document, &submitted, &mut values)?;
         let outcomes = self
             .cache
             .submit(&submitted, &values, None)
@@ -229,6 +405,34 @@ impl LiveSmooth {
             }
         }
         Ok(accepted)
+    }
+
+    /// Folds the rest of the document into a batch the transaction produced.
+    ///
+    /// An elementwise minimum, and it is exact rather than an approximation:
+    /// the engine composes visible field subtools by a hard union, so the
+    /// smaller of the two distances at a sample *is* the document's distance
+    /// there. Nothing is blended, so there is no seam to place.
+    ///
+    /// A no-op where nothing else is visible, which is the ordinary document
+    /// and every figure the brushes are measured on.
+    fn compose_the_rest(
+        &self,
+        document: &Document,
+        submitted: &[BrickRequest],
+        values: &mut [f32],
+    ) -> Result<(), ModelError> {
+        let (Some(_), Some(offset)) = (self.rest.as_ref(), self.offset) else {
+            return Ok(());
+        };
+        if submitted.is_empty() {
+            return Ok(());
+        }
+        let rest = self.the_rest_of_the_document(document, offset, submitted)?;
+        for (preview, rest) in values.iter_mut().zip(rest) {
+            *preview = preview.min(rest);
+        }
+        Ok(())
     }
 
     /// Marks exactly one brick, by naming a box well inside it.

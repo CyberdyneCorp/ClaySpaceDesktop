@@ -559,6 +559,42 @@ fn a_new_layer_cannot_be_asked_for_as_a_mesh() {
     );
 }
 
+/// Nor as a subdivision hierarchy, which is the same dead row one
+/// representation further along.
+///
+/// A hierarchy is built from a cage — `clay_multires_from_mesh` takes the
+/// triangles and there is no call that makes an empty one — so an unrefused ask
+/// would have fallen through the same `_` arm to `add_sdf_layer` and recorded
+/// the row as a hierarchy. Held here beside the mesh case rather than trusted
+/// to the comment above it, and held over `CREATABLE` as well, so that the
+/// control and the document cannot start disagreeing about what can be made out
+/// of nothing.
+#[test]
+fn a_new_layer_cannot_be_asked_for_as_a_hierarchy() {
+    let mut doc = document();
+    let before = doc.scene().layers.len();
+
+    let refusal = doc
+        .add_layer("Hierarquia", Representation::Multires)
+        .expect_err("an empty hierarchy is not a thing the engine can make");
+
+    assert!(
+        refusal.to_string().to_lowercase().contains("malha"),
+        "the refusal has to say a hierarchy comes from a mesh: {refusal}"
+    );
+    assert_eq!(
+        doc.scene().layers.len(),
+        before,
+        "the refusal still made a layer"
+    );
+    assert!(
+        Representation::CREATABLE
+            .iter()
+            .all(|kind| *kind != Representation::Multires),
+        "the control offers a representation the document refuses"
+    );
+}
+
 /// A carried mesh can be crossed to a grid.
 ///
 /// Found alongside the manipulator work: `mesh_to_voxels` takes its region from

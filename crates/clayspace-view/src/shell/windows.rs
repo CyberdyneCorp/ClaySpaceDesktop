@@ -355,6 +355,12 @@ pub fn diagnostics_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &m
             if d.render.is_some() && heading(ui, s.section_rendering) {
                 diagnostics_render(ui, d);
             }
+            if d.mesh.is_some() && heading(ui, s.section_mesh_sculpting) {
+                diagnostics_mesh(ui, d);
+            }
+            if d.memory.is_some() && heading(ui, s.section_memory) {
+                diagnostics_memory(ui, d);
+            }
 
             ui.add_space(space::SNUG);
             ui.horizontal(|ui| {
@@ -422,6 +428,61 @@ pub(super) fn diagnostics_backend(ui: &mut egui::Ui, d: &Diagnostics) {
             );
         }
     }
+}
+
+/// What mesh sculpting has had to correct for itself.
+///
+/// Two numbers, and they are here because what they count is otherwise
+/// invisible:
+/// a brush handed a seed from a numbering that has been retired reaches
+/// nothing, and a stroke that reached nothing looks exactly like a stroke over
+/// a frozen mask. Reported at zero for the same reason the fallbacks are —
+/// silence would read as a broken panel rather than as a quiet session.
+pub(super) fn diagnostics_mesh(ui: &mut egui::Ui, d: &Diagnostics) {
+    let Some(mesh) = &d.mesh else {
+        return;
+    };
+    readout(ui, "Esculturas em malha", format!("{}", mesh.sculptors));
+    readout(
+        ui,
+        "Sementes recusadas",
+        format!("{}", mesh.stale_seeds_rejected),
+    );
+}
+
+/// Where the document's memory is, in the terms that decide what may go.
+///
+/// Three figures rather than one, because a total answers the wrong question.
+/// A sculptor under memory pressure is not asking how big the document is,
+/// they are asking which part they can let go of: the first line is their own
+/// work and is never released, the second reconstructs identically and costs
+/// only a stall, and the third is undo depth, which is a policy rather than a
+/// fact about the sculpture.
+///
+/// The last row is the honesty check. A mesh-sculpting session is held beside
+/// the document rather than inside it, so the engine's own roll-up reports it
+/// as nothing — correctly, since it cannot walk what it does not own. This
+/// application asks each session what it costs and folds the answers in, and
+/// the row says how many it asked, so a surface tier of zero reads as "there
+/// are none" rather than as "nobody asked".
+pub(super) fn diagnostics_memory(ui: &mut egui::Ui, d: &Diagnostics) {
+    let Some(m) = &d.memory else {
+        return;
+    };
+    readout(ui, "Trabalho", megabytes(m.essential));
+    readout(ui, "Reconstruível", megabytes(m.rebuildable));
+    readout(ui, "Desfazer", megabytes(m.undoable));
+    readout(ui, "Total", megabytes(m.total));
+    readout(
+        ui,
+        "Superfícies",
+        format!("{} · {}", m.surfaces, megabytes(m.surface_bytes)),
+    );
+}
+
+/// Bytes as a figure a sculptor can hold against what the machine has.
+fn megabytes(bytes: u64) -> String {
+    format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
 }
 
 /// What the viewport drew, and what the device charged for it.

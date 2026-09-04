@@ -19,6 +19,8 @@ struct Calls {
     removed: Vec<LayerKey>,
     added: Vec<String>,
     moved: Vec<(LayerKey, usize)>,
+    /// What was asked of a hierarchy's stack of passes, in order.
+    passes: Vec<clayspace_model::MultiresSculptLayerOp>,
 }
 
 struct FakeScene {
@@ -46,6 +48,7 @@ impl FakeScene {
             health: None,
             voxel: None,
             sculpt_layers: Vec::new(),
+            multires: None,
         };
         Self {
             calls,
@@ -70,6 +73,14 @@ impl FakeScene {
 }
 
 impl SceneModel for FakeScene {
+    fn apply_multires_sculpt_layer_op(
+        &mut self,
+        op: clayspace_model::MultiresSculptLayerOp,
+    ) -> Result<(), ModelError> {
+        self.calls.borrow_mut().passes.push(op);
+        self.guard()
+    }
+
     fn scene(&self) -> Scene {
         Scene {
             nodes: self
@@ -170,6 +181,7 @@ impl SceneModel for FakeScene {
             health: None,
             voxel: None,
             sculpt_layers: Vec::new(),
+            multires: None,
         });
         self.active = Some(key);
         Ok(key)
@@ -555,4 +567,48 @@ fn commands_this_viewmodel_does_not_own_are_ignored() {
 
     assert!(calls.borrow().activated.is_empty());
     assert!(!watcher.take_change(vm.scene()));
+}
+
+/// A pass operation reaches the model, and its refusal reaches the interface.
+///
+/// The two halves that a control which draws and does nothing would still
+/// pass. A hierarchy's stack refuses in three ways a sculptor has to be told
+/// about — a locked pass, a merge with nothing under it, and any composition
+/// change while a stroke is still open — and all three arrive as the reason on
+/// the one line beside the viewport, cleared by the next thing that works.
+#[test]
+fn a_pass_operation_is_forwarded_and_its_refusal_is_stated() {
+    use clayspace_model::{MultiresSculptLayerId, MultiresSculptLayerOp as Op};
+
+    let calls = Rc::new(RefCell::new(Calls::default()));
+    let mut model = FakeScene::new(calls.clone());
+    model.refuse = Some("termine o traço antes de mexer na composição dos passes");
+    let mut vm = SceneViewModel::new(Box::new(model));
+
+    let dial = Op::SetStrength {
+        id: MultiresSculptLayerId::new(7),
+        strength: 0.25,
+    };
+    assert!(vm.apply_sculpt_layer_op(dial.clone()).is_err());
+    assert_eq!(
+        calls.borrow().passes,
+        vec![dial],
+        "the operation has to reach the model rather than being answered here"
+    );
+    assert_eq!(
+        vm.refusal().get().as_deref(),
+        Some("termine o traço antes de mexer na composição dos passes"),
+        "a refused pass operation left nothing for the interface to say"
+    );
+
+    // And the next one that works clears it, so the line belongs to the last
+    // thing that was asked rather than to the last thing that failed.
+    let mut model = FakeScene::new(calls.clone());
+    model.refuse = None;
+    let mut vm = SceneViewModel::new(Box::new(model));
+    vm.apply_sculpt_layer_op(Op::Add {
+        name: String::new(),
+    })
+    .expect("a pass is added");
+    assert!(vm.refusal().get().is_none());
 }

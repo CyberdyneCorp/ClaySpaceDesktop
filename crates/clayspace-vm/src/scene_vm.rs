@@ -139,6 +139,60 @@ impl SceneViewModel {
         }
     }
 
+    /// Moves the active hierarchy's levels, or changes how many it has.
+    ///
+    /// Apart from [`SceneViewModel::dispatch`] for the reason
+    /// [`SceneViewModel::remesh`] is apart from it: the refusal is the answer.
+    /// A level is priced against a budget and refused over it rather than
+    /// attempted, so "that level peaks at 3 GB, past the 2 GB budget" is the
+    /// whole of what a sculptor gets back from asking — and a command that
+    /// swallowed it would leave a button that does nothing and says nothing.
+    ///
+    /// Through [`SceneViewModel::finish`], so the refusal is cleared by the
+    /// next scene command that works — the line beside the viewport belongs to
+    /// the last thing that was asked rather than to the last thing that
+    /// failed. It is here rather than in `dispatch` because the composition
+    /// root has to know whether the picture changed: three of the four
+    /// operations move a number and only one of them redraws anything.
+    pub fn apply_level_op(
+        &mut self,
+        op: clayspace_model::MultiresLevelOp,
+    ) -> Result<(), ModelError> {
+        let outcome = self.model.apply_multires_level_op(op);
+        self.finish(outcome)
+    }
+
+    /// Acts on the active hierarchy's stack of passes.
+    ///
+    /// Beside [`SceneViewModel::apply_level_op`] rather than inside
+    /// [`SceneViewModel::dispatch`], and for the same two reasons. The refusal
+    /// is half the operation — a locked pass, a slider moved while a stroke is
+    /// still open, a merge with nothing under it — and the composition root
+    /// has to know whether the picture moved, which for this stack is *three
+    /// operations out of eleven*: an additive stack commutes, so a reorder
+    /// moves no vertex, and a rename, a lock and a change of which pass is
+    /// active move nothing either.
+    ///
+    /// Through [`SceneViewModel::finish`], so the reason lands on the same
+    /// line every other scene refusal lands on and is cleared by the next
+    /// command that works.
+    pub fn apply_sculpt_layer_op(
+        &mut self,
+        op: clayspace_model::MultiresSculptLayerOp,
+    ) -> Result<(), ModelError> {
+        let outcome = self.model.apply_multires_sculpt_layer_op(op);
+        self.finish(outcome)
+    }
+
+    /// What subdividing the active hierarchy once more would cost.
+    ///
+    /// Asked whenever the panel is drawn rather than held, because it moves
+    /// with every level added or removed and the engine answers it in
+    /// microseconds. `None` where the active layer is not a hierarchy.
+    pub fn subdivision_cost(&self) -> Option<clayspace_model::SubdivisionCost> {
+        self.model.subdivision_cost()
+    }
+
     /// Re-reads the scene from the model.
     ///
     /// Called after anything that could have changed it, including edits the
@@ -157,7 +211,11 @@ impl SceneViewModel {
             }
             Err(error) => {
                 // A refusal is shown rather than swallowed: the specification
-                // asks for a stated reason, not a silent no-op.
+                // asks for a stated reason, not a silent no-op. It reaches the
+                // screen through the options bar's one "why that did not
+                // happen" line — which it did not until the hierarchy's levels
+                // needed it, so a rebuild refused for an unusable resolution
+                // set this and nothing read it.
                 self.refusal.set_if_changed(Some(error.to_string()));
                 Err(error)
             }

@@ -2,7 +2,8 @@
 //!
 //! The engine composes the layers of a document by hard union
 //! (`clay/scene/tape.h`), so there is no live boolean between two of them —
-//! that is ClayCore #321, filed and open. What can be built today is a
+//! that is ClayCore #321, filed and open, and re-checked against v0.78.0,
+//! which does not name it. What can be built today is a
 //! *resolved* boolean: each operand is sampled into a volume, the two volumes
 //! are combined in a subtool of their own, and what comes out is an ordinary
 //! subtool that can be sculpted, moved and used as an operand again.

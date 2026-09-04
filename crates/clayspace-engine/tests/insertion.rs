@@ -215,7 +215,7 @@ fn a_grid_refuses_a_placed_object_and_takes_a_subtool_anyway() {
         .place_object(Shape::Sphere, &[0.4], [0.0; 3], adding())
         .expect_err("a grid has no ordered list to put an item in");
     match refused {
-        ModelError::Unavailable(Unavailable::NoVerbHere { active, verbs }) => {
+        ModelError::Unavailable(Unavailable::NoVerbHere { active, verbs, .. }) => {
             assert_eq!(active, Representation::Voxel);
             assert!(
                 verbs.on(Representation::Sdf).is_some(),

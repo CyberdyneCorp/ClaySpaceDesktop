@@ -4,8 +4,9 @@ Where the project stands, what is left, and what is still undecided. Task
 counts come from the tasks files under `openspec/changes/`, which are the
 authority.
 
-**Seven changes.** `add-clayspace-desktop` stands at **107 of 109 tasks** —
-milestones 1 to 4 delivered, milestone 5 all but closed.
+**Thirty-three changes, twenty-five of them with every task ticked.**
+`add-clayspace-desktop` stands at **107 of 109 tasks** — milestones 1 to 4
+delivered, milestone 5 all but closed.
 `make-representations-first-class` is **complete**, and is what took the
 application from one vocabulary to three; its own summary is below.
 `place-and-transform-objects` is **complete**: a shape placed in the scene
@@ -26,12 +27,26 @@ and the shelf did not reach: a brush colour and a Pintar that changes a pixel,
 Mover and Planar on a grid, Argila and Vinco on a field, and Mover Topológico
 as a tool of its own.
 
-Engine pinned at ClayCore **0.73.0**, at the tag rather than at `main` — the
+And a fourth vocabulary. `a-hierarchy-the-domain-can-describe`,
+`a-hierarchy-that-is-sculpted-and-saved` and `a-stack-of-passes-on-a-hierarchy`
+are **complete** between them: the engine's subdivision hierarchy is a
+representation like the other three — crossed into from a mesh that becomes its
+cage, sculpted at a level independent of the one being drawn, carrying a stack
+of named passes whose strengths stay dialable, and saved in a side-car beside
+the document because the container carries the cage and nothing standing on it.
+`a-subtool-stretches-per-axis`, `a-preview-that-holds-the-whole-scene`,
+`memory-that-says-which-part` and `maintenance-between-strokes` are the rest of
+what the v0.78.0 pin made reachable.
+
+Engine pinned at ClayCore **0.78.0**, at the tag rather than at `main` — the
 tag is a release, `main` is where they are still working. On the reference
 scene a dab is 2.1 ms median against a 50 ms budget and startup to first
-document is 11.4 ms, recorded against 0.52.2 on Linux x86_64. The macOS
-baseline still reads 0.29.1 — 12.2 ms and 15.1 ms there — and nothing since
-has been re-measured on that machine. See *What is slow and why*.
+document is 11.4 ms, recorded against 0.52.2 on Linux x86_64. The twenty-three
+figures this pin added — the hierarchy's own group, the deferred normal flush
+measured against the same stroke without it, and the drain between two strokes
+— have no entry in any baseline and report as `new` until one is recorded. The
+macOS baseline still reads 0.29.1 — 12.2 ms and 15.1 ms there — and nothing
+since has been re-measured on that machine. See *What is slow and why*.
 
 ## Milestones
 
@@ -297,6 +312,48 @@ a field. Reconstructing the resolver host-side would put field math in this
 application, which the layering forbids and which the engine's own note asks
 callers not to do.
 
+**Two limits ClayCore v0.78.0 states about itself are now held as tripwires
+here**, because both bear on work this application is about to do and neither
+is a filed defect — they are the shape of the ABI, stated rather than
+discovered.
+
+*A `.clayspace` does not carry a multires hierarchy.* The release calls this
+"the largest integration cost" in it, and it is: a `clay_multires` is a
+free-standing owning handle that took a **copy** of the cage on the way in, so
+the document it was built from does not know it exists.
+`clay_multires_serialize` is the only route the sculpt has to disk and where
+those bytes go is the host's decision. Measured in
+`claycore/tests/multires_document.rs`: the same document saved either side of a
+dab on the hierarchy built from its cage comes out at 812 bytes both times and
+byte for byte identical, while the hierarchy's own blob is 13,128 bytes; reopen
+the file and the cage is there, flat, with nothing refusing and nothing warning.
+So a multires representation needs a side-car in the shape of
+`clayspace_engine::objects`' table — and unlike that table, which is
+bookkeeping, this one *is* the work, so a failed write has to fail the save.
+The tripwire fails the day `clay_document_save` starts carrying the surface.
+**That side-car is now built**: `<path>.multires` beside the document, one file
+rewritten whole, priced by `clay_multires_preflight_encode` before it
+allocates, and failing the save when it cannot be written. A document opened
+without it comes back as the cage its layer holds rather than as a hierarchy
+that has silently lost every level. See *Sculpting a subdivision hierarchy* in
+`docs/features.md`.
+
+*Two of the five automask factors do not cross the ABI.* Cavity needs a field
+to measure cavity from and surface-group needs the document's group lattice,
+both callbacks on the C++ side that a flat descriptor cannot carry, so setting
+their bits from C is inert rather than an error — "unchanged from v0.73.0", in
+the release's own words. `claycore::Automask` surfaces all five anyway, on the
+principle that a factor which silently does nothing is worse hidden than named,
+and `claycore/tests/mesh_automask.rs` measures the pair: 62,576 vertices
+reached with no automask and 62,576 with cavity at full strength, every
+position identical to the last bit. The three that do cross are held beside
+them — a backface gate takes a sphere's antipode from −0.846 back to −1.000,
+and four rings of boundary fade take a sheet's corner from 0.600 to 0.000. This
+application sets none of them: `stroke_mesh` sends `Automask::default()` by
+name, which is why v0.78.0's fix to the adaptive sculptor's dropped automask
+changes nothing here. When a backface gate is offered as a brush setting,
+`Shaping` is where it is chosen and those three are the ones available.
+
 Every other issue filed from this work has been released and taken up —
 including [#71](https://github.com/CyberdyneCorp/ClayCore/issues/71), which was
 the macOS CI blocker.
@@ -350,13 +407,9 @@ shape a mesh layer has always had. The next step is a per-chunk slot layout in
 that buffer, which is what `SurfaceGeometry` already does for the field side;
 it is not owed until a document holds a grid past about two million triangles.
 
-**Five numbered upstream issues are open:**
+**Four numbered upstream issues are open:**
 [#210](https://github.com/CyberdyneCorp/ClayCore/issues/210), an undo that
 cannot say what it changed;
-[#378](https://github.com/CyberdyneCorp/ClayCore/issues/378), a live brush
-preview that cannot be composed with the rest of the document — which is why a
-live Suavizar opens only where the layer being smoothed is the only visible
-field subtool, and falls back to the held gesture otherwise;
 [#321](https://github.com/CyberdyneCorp/ClayCore/issues/321), a layer with no
 combine operation, which is what a live subtool boolean waits on;
 [#364](https://github.com/CyberdyneCorp/ClayCore/issues/364), instance layers
@@ -364,7 +417,14 @@ with no constructor, which is what a cheap duplicate waits on; and
 [#365](https://github.com/CyberdyneCorp/ClayCore/issues/365), a voxel grid
 reachable only by name. Each costs latency or a cheaper implementation and none
 of them blocks anything — see *What is blocked, and what is not*. Every other
-issue filed from this work has been released, and
+issue filed from this work has been released.
+[#378](https://github.com/CyberdyneCorp/ClayCore/issues/378) — a live brush
+preview that could not be composed with the rest of the document, which is why
+a live Suavizar used to open only where the layer being smoothed was the only
+visible field subtool — was released in 0.78.0 and is now adopted: the document
+is evaluated over every visible SDF layer *except* the one under the brush,
+once at pointer-down, and the preview is composed with it by a minimum. See
+`crates/clayspace-engine/src/live.rs`.
 [#317](https://github.com/CyberdyneCorp/ClayCore/issues/317) is released and
 now linked: the readers it promised arrived with the 0.60.0 pin and the
 sidecar they retire is still here, which is a change of its own.

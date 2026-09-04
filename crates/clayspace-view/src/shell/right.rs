@@ -350,6 +350,20 @@ pub(super) fn brush_controls_section(
     if let Some(value) = slider(ui, s.label_noise, state.brush.shaping.noise, 0.0..=1.0, 2) {
         queue.push(Command::SetBrushNoise(value));
     }
+    // Degrees here and radians everywhere below, which is the one place the
+    // conversion belongs: the domain carries the angle in the unit the engine
+    // takes it in, and a dial marked 0 to 360 is what a sculptor reads. Zero
+    // decimals because a stamp turned by a fraction of a degree is a control
+    // pretending to a precision the eye has no use for.
+    if let Some(degrees) = slider(
+        ui,
+        s.label_grain,
+        state.brush.shaping.azimuth.to_degrees(),
+        0.0..=360.0,
+        0,
+    ) {
+        queue.push(Command::SetBrushAzimuth(degrees.to_radians()));
+    }
     // The edge profile stays. The smoothing moved to the options bar, where the
     // stroke's other numbers are and where a sculptor reaches for it mid-line;
     // this did not follow it, because the bar cannot hold everything at the

@@ -26,6 +26,7 @@ pub mod instrument;
 pub mod lattice;
 pub mod locale;
 pub mod mask;
+pub mod multires;
 pub mod outline;
 pub mod reference;
 pub mod scene;
@@ -43,11 +44,15 @@ pub use boolean::{BooleanOp, BooleanRefusal, BooleanSettings};
 pub use colour::{Colour, ColourState};
 pub use combine::{BlendProfile, Combine, CombineSettings, StrokeModifiers};
 pub use conversion::{
-    ConversionSettings, Cost, DeformSettings, DeformVerb, Direction, Refusal, RepairReport,
+    CageFault, ConversionSettings, Cost, DeformSettings, DeformVerb, Direction, Refusal,
+    RepairReport,
 };
 pub use curve::{CurveJoin, CurveModel, CurvePoint, CurveProfile, CurveState, FEWEST_POINTS};
 pub use detail::DetailPolicy;
-pub use diagnostics::{AoDiagnostics, Diagnostics, DiagnosticsModel, Fallback, RenderDiagnostics};
+pub use diagnostics::{
+    AoDiagnostics, Diagnostics, DiagnosticsModel, Fallback, MemoryDiagnostics, MeshDiagnostics,
+    MultiresDiagnostics, RenderDiagnostics,
+};
 pub use document::{DocumentModel, OpenError};
 pub use exchange::{
     ExchangeModel, ExportMesher, ExportSettings, ExportWarning, Format, ImportAs, ImportSettings,
@@ -62,6 +67,10 @@ pub use lattice::{
 };
 pub use locale::Locale;
 pub use mask::{can_extrude, ExtrudeSettings, ExtrudeSide, MaskModel, MaskOp, MaskState};
+pub use multires::{
+    MultiresLevelOp, MultiresLevels, MultiresSculptLayer, MultiresSculptLayerCost,
+    MultiresSculptLayerId, MultiresSculptLayerOp, MultiresState, SubdivisionCost, WriteDomain,
+};
 pub use outline::{
     cells_to_write, coverage_path, lattice_pitch, MaskGesture, MaskOutline, OutlineDraft,
     OutlineFrame, OutlineMode, CELL_CEILING, COVERING, OUTLINE_SPACING,

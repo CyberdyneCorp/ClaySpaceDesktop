@@ -21,7 +21,10 @@
 
 use clayspace_engine::claycore;
 use clayspace_engine::{BackendPolicy, ClayDocument};
-use clayspace_model::{BrushSettings, GestureSample, SceneModel, SculptModel, ToolKind};
+use clayspace_model::{
+    BrushSettings, CombineSettings, GestureSample, LayerKey, ObjectModel, Representation,
+    SceneModel, SculptModel, Shape, ToolKind,
+};
 
 fn sphere() -> ClayDocument {
     let policy = BackendPolicy::discover(None).expect("discover backends");
@@ -195,18 +198,199 @@ fn abandoning_a_live_gesture_leaves_the_document_as_it_was() {
     );
 }
 
-#[test]
-fn a_second_field_subtool_falls_back_to_the_gesture_being_held() {
+// -- a second field subtool, which used to refuse the preview ---------------
+//
+// The transaction previews one layer, and the viewport meshes the preview
+// instead of the document's cache — so with a second visible field subtool the
+// preview was the layer under the brush and nothing else, and the rest of the
+// scene would have vanished for the length of the drag. The gesture refused to
+// be live at all rather than draw that. It was filed upstream as ClayCore#378
+// and ClayCore 0.78.0 answers it: the document can be evaluated over every
+// visible SDF layer *except* one, which is the other half of what the preview
+// holds, and `clayspace_engine::live` composes the two by a minimum.
+//
+// What made the obvious route impossible is worth restating, because it is
+// what these tests are really about: hiding the other subtools, sampling, and
+// showing them again is three edits to the document, and the commit refuses a
+// layer that moved since the transaction began. The excluding evaluation edits
+// nothing and records no undo entry, so it is legal in the middle of one.
+
+/// A second field subtool standing two units along +x, well clear of the
+/// starting form so the two can be told apart by where their vertices are.
+const BESIDE: [f32; 3] = [2.0, 0.0, 0.0];
+
+/// The starting form, and a second subtool beside it. Returns both keys with
+/// the *first* one active, which is the layer the gesture is made on.
+fn two_subtools() -> (ClayDocument, LayerKey, LayerKey) {
     let mut document = sphere();
-    document
-        .add_layer("Segundo", clayspace_model::Representation::Sdf)
+    let first = document
+        .scene()
+        .active
+        .expect("the starting form is active");
+    let second = document
+        .add_layer("Segundo", Representation::Sdf)
         .expect("a second field subtool");
+    document
+        .place_object(Shape::Sphere, &[0.5], BESIDE, CombineSettings::default())
+        .expect("something in it to be seen");
+    document
+        .set_active_layer(first)
+        .expect("smooth the starting form, not the new subtool");
+    (document, first, second)
+}
+
+/// How far the drawn surface reaches along +x, over everything drawn.
+fn far_along_x(vertices: &[[f32; 3]]) -> f32 {
+    vertices
+        .iter()
+        .fold(f32::NEG_INFINITY, |far, v| far.max(v[0]))
+}
+
+/// The inversion of the test this file used to carry.
+///
+/// It asserted that a second field subtool refused the live gesture. It now
+/// asserts the gesture opens *and* that the second subtool is still on screen
+/// while the first is being smoothed — which is the thing the refusal existed
+/// to avoid getting wrong.
+#[test]
+fn a_second_field_subtool_is_still_drawn_while_the_first_is_smoothed() {
+    let (mut document, _first, _second) = two_subtools();
+    let settled = far_along_x(&drawn_vertices(&document));
+    assert!(
+        settled > 2.0,
+        "the fixture never drew the second subtool at all: reach {settled}"
+    );
 
     assert!(
-        !document.open_live_gesture(ToolKind::Suavizar, STARTING_SYMMETRY),
-        "the brick cache holds the union of every visible field layer and the \
-         preview is of one, so this case is refused rather than drawn wrong"
+        document.open_live_gesture(ToolKind::Suavizar, STARTING_SYMMETRY),
+        "a second field subtool no longer refuses the preview"
     );
+    document
+        .apply_stroke(ToolKind::Suavizar, brush(), &samples(0), STARTING_SYMMETRY)
+        .expect("a live dab");
+
+    let drawn = drawn_vertices(&document);
+    assert!(
+        !drawn.is_empty(),
+        "the preview drew nothing at all with two subtools visible"
+    );
+    let during = far_along_x(&drawn);
+    assert!(
+        during > 2.0,
+        "the second subtool vanished while the first was smoothed: the preview \
+         reached only {during} along +x, against {settled} before the gesture \
+         opened. That is the defect the old refusal existed to prevent."
+    );
+    // And the layer being smoothed is still there too, which says the
+    // composition is a union rather than a replacement.
+    assert!(
+        drawn.iter().any(|v| v[0].abs() < 1.2),
+        "the layer under the brush is missing from its own preview"
+    );
+}
+
+/// The regression test the release notes ask for by name.
+///
+/// Every evaluation of the rest of the document is taken between
+/// `clay_sdf_smooth_begin` and its commit. The route this replaces — hide the
+/// other subtools, sample, show them again — is three edits, and the commit
+/// correctly refuses a layer that moved since it began. So the claim is not
+/// that the composition looks right but that the gesture it was taken inside
+/// of still commits, and that it wrote nothing while it was open.
+#[test]
+fn composing_the_rest_of_the_document_does_not_spoil_the_gesture_it_is_inside() {
+    let (mut document, _first, _second) = two_subtools();
+    let before = document.history().depth;
+
+    assert!(document.open_live_gesture(ToolKind::Suavizar, STARTING_SYMMETRY));
+    for step in 0..6 {
+        document
+            .apply_stroke(
+                ToolKind::Suavizar,
+                brush(),
+                &samples(step),
+                STARTING_SYMMETRY,
+            )
+            .expect("a live dab");
+        assert_eq!(
+            document.history().depth,
+            before,
+            "something in the live path wrote to the document: an excluding \
+             evaluation records no undo entry, and an edit here is what makes \
+             the commit refuse"
+        );
+    }
+
+    let recorded = document
+        .close_live_gesture()
+        .expect("the gesture the exclusions were taken inside of must commit");
+    assert!(
+        recorded > 0,
+        "the commit recorded nothing, so it did not install the smooth"
+    );
+    assert!(document.history().depth > before);
+}
+
+/// A hidden subtool is not composed in, and does not make the gesture pay for
+/// a composition it has nothing to compose.
+///
+/// The engine's own rule is the asymmetry this leans on: excluding a hidden
+/// layer succeeds rather than refusing, because a hidden layer contributes
+/// nothing to the union already — see `claycore`'s
+/// `the_brick_half_refuses_an_unknown_layer_and_accepts_a_hidden_one` for the
+/// other side of it, an unknown layer, which is `NotFound`. Here the same fact
+/// is reached from above: hiding the second subtool takes it out of what is
+/// drawn, and the preview agrees.
+#[test]
+fn a_hidden_second_subtool_is_left_out_of_the_preview() {
+    let (mut document, _first, second) = two_subtools();
+    document
+        .set_layer_visible(second, false)
+        .expect("hide the second subtool");
+
+    assert!(document.open_live_gesture(ToolKind::Suavizar, STARTING_SYMMETRY));
+    document
+        .apply_stroke(ToolKind::Suavizar, brush(), &samples(0), STARTING_SYMMETRY)
+        .expect("a live dab");
+
+    let during = far_along_x(&drawn_vertices(&document));
+    assert!(
+        during < 2.0,
+        "a hidden subtool was drawn into the preview: it reached {during} \
+         along +x, and the hidden form stands at {}",
+        BESIDE[0]
+    );
+    document.discard_live_gesture();
+}
+
+/// A second subtool with nothing in it is not a refusal either.
+///
+/// It has no bounds to widen the preview lattice over and contributes nothing
+/// to the union, so the gesture opens and the preview is what it would have
+/// been with one subtool. Stated as a test because "an empty layer succeeds"
+/// is half of the engine's own asymmetry, and the half a host is most likely
+/// to get wrong by refusing it.
+#[test]
+fn an_empty_second_subtool_neither_refuses_the_gesture_nor_changes_it() {
+    let mut document = sphere();
+    let first = document.scene().active.expect("active");
+    document
+        .add_layer("Vazia", Representation::Sdf)
+        .expect("an empty second field subtool");
+    document.set_active_layer(first).expect("back to the form");
+
+    assert!(
+        document.open_live_gesture(ToolKind::Suavizar, STARTING_SYMMETRY),
+        "an empty second subtool refused a gesture it has nothing to do with"
+    );
+    document
+        .apply_stroke(ToolKind::Suavizar, brush(), &samples(0), STARTING_SYMMETRY)
+        .expect("a live dab");
+    assert!(
+        !drawn_vertices(&document).is_empty(),
+        "the preview drew nothing beside an empty subtool"
+    );
+    document.close_live_gesture().expect("commit");
 }
 
 #[test]

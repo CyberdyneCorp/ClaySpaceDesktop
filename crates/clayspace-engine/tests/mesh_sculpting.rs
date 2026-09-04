@@ -310,13 +310,13 @@ mod undo {
     }
 }
 
-/// The mesh's quality is reportable, which is how stretching is *shown*.
+/// The mesh's ray-query tree reports what it costs.
 ///
-/// Nothing here retessellates: that would spend the retopology the import was
-/// for, and the engine stops at the same boundary. So a heavy pull is reported
-/// rather than prevented, and the figure is what a sculptor reads to know the
-/// mesh wants retopology — at the point it starts wanting it, rather than at
-/// export.
+/// The engine's figure is the expected number of triangle tests a random ray
+/// must make, read against what the same tree scored when it was built — not,
+/// as this used to say, a measure of how stretched the triangles are. Nothing
+/// here retessellates either way: what a decayed figure argues for is a
+/// rebuild of the tree, which is queued between strokes rather than done.
 #[test]
 fn the_mesh_reports_what_its_queries_cost() {
     let (mut document, path) = with_imported_mesh("quality");
@@ -324,8 +324,8 @@ fn the_mesh_reports_what_its_queries_cost() {
     // to assert there was no figure until the first stroke, because the
     // sculptor the figure comes from was built by that stroke — the same
     // deadlock `the_pointer_finds_an_imported_mesh` records, seen from the
-    // readout's side. A sculptor deciding whether a mesh needs retopology
-    // wants the number before they start, not after.
+    // readout's side. It is also the figure a later drift is measured
+    // against, so it has to exist before the first stroke rather than after.
     assert!(
         document.mesh_quality().is_some(),
         "a selected mesh layer reports no quality figure at all"

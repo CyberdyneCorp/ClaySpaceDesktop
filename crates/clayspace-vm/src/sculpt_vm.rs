@@ -307,6 +307,7 @@ impl SculptViewModel {
             Command::SetBrushIntensity(value) => self.edit_brush(|b| b.intensity = value),
             Command::SetBrushFlow(value) => self.edit_brush(|b| b.flow = value),
             Command::SetBrushNoise(value) => self.edit_brush(|b| b.shaping.noise = value),
+            Command::SetBrushAzimuth(value) => self.edit_brush(|b| b.shaping.azimuth = value),
             Command::SetBrushFalloff(falloff) => self.edit_brush(|b| b.shaping.falloff = falloff),
             Command::SetBrushAccumulate(on) => self.edit_brush(|b| b.shaping.accumulate = on),
             Command::SetBrushAlpha(on) => self.edit_brush(|b| b.alpha = on),
@@ -402,6 +403,14 @@ impl SculptViewModel {
             | Command::SetDeform(_)
             | Command::RunDeform
             | Command::SculptLayer(_)
+            // A level moves where a brush writes and what is drawn, and
+            // neither is a brush setting: the shelf offers the same verbs
+            // either way, so nothing this ViewModel holds follows it.
+            | Command::MultiresLevel(_)
+            // And a pass is a property of the hierarchy's stack, not of the
+            // brush: the shelf offers the same verbs whichever pass a stroke
+            // is going into.
+            | Command::MultiresSculptLayer(_)
             | Command::SetLayerVisible(..)
             // Solo shows a subtool alone without making it the one a brush
             // lands on, so nothing this ViewModel holds follows it.
@@ -791,6 +800,13 @@ impl SculptViewModel {
             // makes it wrong elsewhere.
             Representation::Sdf => tool == ToolKind::Puxar,
             Representation::Voxel => false,
+            // The mesh's answer, because the drag IS the mesh's drag: a stamp
+            // on a hierarchy is the fixed sculptor's stamp over the bound
+            // level's own mesh. And the take-back the replay needs is exact
+            // there — a layered gesture's cancel restores recorded `before`
+            // values rather than reconstructing them — so a segment can be
+            // undone and the gesture laid down again from its anchor.
+            Representation::Multires => true,
         }
     }
 

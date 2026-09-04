@@ -137,9 +137,11 @@ fn the_manipulator_sits_on_a_whole_subtools_middle() {
                 reach,
                 hovered: None,
                 view_axis: [0.0, 0.0, 1.0],
-                // One scale factor on a layer as on an object: the engine's
-                // transforms take one, so there is one handle for it.
-                per_axis_scale: false,
+                // Three boxes on a whole subtool, as on a placed object: the
+                // engine's layer transform has taken a factor per axis since
+                // ABI 0.74.0, so the widget is the same widget wherever it
+                // stands.
+                per_axis_scale: true,
             }),
             outline: bounds_of(&document, second),
             subtool_outline: None,
@@ -186,7 +188,7 @@ fn the_manipulator_on_a_subtool_is_one_widget_in_every_mode() {
                     reach,
                     hovered: None,
                     view_axis: [0.0, 0.0, 1.0],
-                    per_axis_scale: false,
+                    per_axis_scale: true,
                 }),
                 outline: None,
                 subtool_outline: None,
@@ -328,5 +330,60 @@ fn moving_a_whole_subtool_moves_the_drawn_surface() {
         after.mean_difference(&engine_image) < 0.01,
         "the settled surface after a move differs from the clean document mesh by {}",
         after.mean_difference(&engine_image)
+    );
+}
+
+/// The three scale boxes are drawn on a whole subtool, and they are what makes
+/// its scale mode a different picture from the one it drew before.
+///
+/// The engine's layer transform took one factor until ABI 0.74.0, so the
+/// widget standing on a subtool hid the boxes and offered the centre handle
+/// alone — which meant the one manipulator drew two different widgets
+/// depending on what it was pointed at. It draws one now.
+#[test]
+fn the_subtool_manipulator_draws_a_scale_box_per_axis() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let Some((mut document, second)) = two_subtools() else {
+        return;
+    };
+    let gpu = harness.gpu.clone();
+    let geometry = meshed(&gpu, &mut document);
+    let camera = support::framed(&document);
+    let at = document
+        .target_transform(GizmoTarget::Layer(second))
+        .expect("a transform");
+    let reach = reach_for(&document, second);
+
+    let shot = |harness: &mut Harness, per_axis_scale: bool, name: &str| {
+        harness.renderer.set_lattice(
+            &harness.gpu,
+            LatticeView {
+                points: &[],
+                edges: &[],
+                selected: &[],
+                gizmo: Some(GizmoView {
+                    pivot: at.position,
+                    mode: GizmoMode::Scale,
+                    reach,
+                    hovered: None,
+                    view_axis: [0.0, 0.0, 1.0],
+                    per_axis_scale,
+                }),
+                outline: None,
+                subtool_outline: None,
+                handle: 0.0,
+            },
+        );
+        harness.capture(geometry.mesh(), &camera, false, name)
+    };
+
+    let with_boxes = shot(&mut harness, true, "subtools-scale-per-axis");
+    let without = shot(&mut harness, false, "subtools-scale-uniform");
+    assert!(
+        with_boxes.mean_difference(&without) > 0.0005,
+        "the subtool's scale manipulator drew the same picture with the axis \
+         boxes and without them, so they are not being drawn on a subtool"
     );
 }

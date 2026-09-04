@@ -7,11 +7,20 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use crate::figures::{Figure, Record};
+use crate::figures::{Figure, Record, Spread};
 use crate::skip::Skip;
 
 pub struct Run {
     figures: BTreeMap<String, Figure>,
+    /// What the samples behind a figure looked like, where the measurement
+    /// took more than one.
+    ///
+    /// Keyed by the figure's own name rather than by the measurement's prefix,
+    /// even though `.mean` and `.p95` are reduced from one sample set and so
+    /// share a spread. The comparison asks the question one figure at a time,
+    /// and a lookup that had to strip a suffix to find the answer would be one
+    /// renamed figure away from silently finding nothing.
+    spreads: BTreeMap<String, Spread>,
     /// Keyed by the name — or the name prefix — the missing figures share.
     skips: BTreeMap<String, Skip>,
     durations: Vec<(&'static str, Duration)>,
@@ -25,6 +34,7 @@ impl Run {
     pub fn new(filter: Option<String>) -> Self {
         Self {
             figures: BTreeMap::new(),
+            spreads: BTreeMap::new(),
             skips: BTreeMap::new(),
             durations: Vec::new(),
             filter,
@@ -34,6 +44,10 @@ impl Run {
 
     pub fn figures(&self) -> &BTreeMap<String, Figure> {
         &self.figures
+    }
+
+    pub fn spreads(&self) -> &BTreeMap<String, Spread> {
+        &self.spreads
     }
 
     pub fn skips(&self) -> &BTreeMap<String, Skip> {
@@ -86,10 +100,27 @@ impl Run {
         self.insert(name, figure());
     }
 
+    /// Keeps what the samples behind a figure looked like.
+    ///
+    /// Called by [`Run::timings`] for everything routed through it, and by
+    /// hand from the few groups that take their own quantiles. A measurement
+    /// that genuinely has one observation records none, which is the honest
+    /// answer and is visible as a blank in the report rather than as a
+    /// confident range over a sample of one.
+    pub fn spread(&mut self, name: &str, samples: &[f64]) {
+        if !self.wants(name) {
+            return;
+        }
+        if let Some(spread) = Spread::of(samples) {
+            self.spreads.insert(name.to_string(), spread);
+        }
+    }
+
     /// Records the timings of one measurement, under the names its record
     /// kind gives them.
     pub fn timings(&mut self, prefix: &str, record: Record, samples: Vec<f64>) {
-        for (name, figure) in record.figures(prefix, samples) {
+        for (name, figure) in record.figures(prefix, &samples) {
+            self.spread(&name, &samples);
             self.insert(name, figure);
         }
     }

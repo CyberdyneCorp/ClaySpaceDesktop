@@ -89,12 +89,31 @@ pub fn shelf_filter_chip_id(filter: ShelfFilter) -> egui::Id {
     egui::Id::new(("shelf-filter-chip", filter))
 }
 
-/// How wide the filter column runs, and how tall one of its rows is.
-///
-/// Five rows inside the shelf's own height, which is what caps them: the
-/// region is 84 logical pixels and the swatches beside them take most of it.
+/// How wide the filter column runs.
 const FILTER_WIDTH: f32 = 74.0;
-const FILTER_ROW: f32 = 15.0;
+
+/// The tallest a filter row is allowed to be.
+///
+/// The height that reads well beside a swatch. It is a ceiling rather than the
+/// height itself — see [`filter_row`].
+const FILTER_ROW_MAX: f32 = 15.0;
+
+/// How tall one filter row is: the shelf's own height, shared out.
+///
+/// Derived rather than fixed, and this is a repair. The column holds one row
+/// per representation plus "available" and "favourites", so its length is
+/// `Representation::ALL.len() + 2` — it was five and a constant chosen for five
+/// was written down beside a comment saying so. The fourth representation makes
+/// it six, and six rows of fifteen pixels is ninety inside a region that is
+/// eighty-four: the column would have overrun the shelf with nothing erroring
+/// and no test failing, because every assertion here is about *which* rows are
+/// drawn rather than whether they fit.
+///
+/// Capped at [`FILTER_ROW_MAX`] so that a shorter list keeps the proportions it
+/// had rather than growing into the slack.
+fn filter_row() -> f32 {
+    (region::SHELF / ShelfFilter::all().len() as f32).min(FILTER_ROW_MAX)
+}
 
 /// The filter column at the shelf's leading edge.
 ///
@@ -105,6 +124,7 @@ fn shelf_filters(ui: &mut egui::Ui, state: &ShellState<'_>) -> ShelfFilter {
     let s = state.strings;
     let current = shelf_filter(ui.ctx());
     let mut chosen = current;
+    let row = filter_row();
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
         for filter in ShelfFilter::all() {
@@ -115,7 +135,7 @@ fn shelf_filters(ui: &mut egui::Ui, state: &ShellState<'_>) -> ShelfFilter {
             };
             let on = filter == current;
             let (rect, response) =
-                ui.allocate_exact_size(egui::vec2(FILTER_WIDTH, FILTER_ROW), egui::Sense::click());
+                ui.allocate_exact_size(egui::vec2(FILTER_WIDTH, row), egui::Sense::click());
             let lit = on || response.hovered();
             if lit {
                 ui.painter()
