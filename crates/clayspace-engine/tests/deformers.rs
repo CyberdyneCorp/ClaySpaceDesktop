@@ -13,21 +13,19 @@ use clayspace_model::{
     Representation, SceneModel, SculptModel,
 };
 
-/// Ignored on macOS, and that is the point of the change that added it.
-///
-/// These tests used to disable themselves: `with_mesh` returned `Option` and
-/// every step ended in `?`, so a failed export made the test return early and
-/// the run go green. Turning those into `expect` showed that on the Metal
-/// backend the export comes back with no triangles at all — #37 — and that
-/// these tests had never run there.
-///
-/// `ignore` is over-broad, because `macOS, CPU only` can run them and Rust
-/// cannot `cfg` on a runtime backend. It is still the right trade: an ignored
-/// test is *reported* as ignored, where the old shape was reported as passing.
-/// Remove the attribute when #37 closes.
-///
 /// A document whose active layer is a mesh, made by exporting the starting form
 /// and importing it back — the only route a mesh layer has into a document.
+///
+/// These four tests were ignored on macOS from #35 until now. They used to
+/// disable themselves — `with_mesh` returned `Option` and every step ended in
+/// `?`, so a failed export returned early and the run went green — and turning
+/// those into `expect` showed the Metal export coming back with no triangles at
+/// all (#37), on tests that had never run there.
+///
+/// The ignore was over-broad by its own admission: `macOS, CPU only` could
+/// always run these, and Rust cannot `cfg` on a runtime backend. It is removed
+/// here rather than narrowed, because an ignore with no expiry is the quiet
+/// self-disabling #35 existed to stop, wearing better manners.
 fn with_mesh(who: &str) -> (ClayDocument, std::path::PathBuf) {
     let policy = BackendPolicy::discover(None).expect("discover backends");
     let mut document = ClayDocument::new(policy)
@@ -58,10 +56,6 @@ fn vertices(document: &mut ClayDocument) -> Vec<[f32; 3]> {
 }
 
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "the Metal export yields no triangles; see #37"
-)]
 fn a_taper_moves_the_form_and_one_undo_takes_it_back() {
     let (mut document, path) = with_mesh("taper");
     let before = vertices(&mut document);
@@ -99,10 +93,6 @@ fn a_taper_moves_the_form_and_one_undo_takes_it_back() {
 }
 
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "the Metal export yields no triangles; see #37"
-)]
 fn a_twist_moves_the_form_and_one_undo_takes_it_back() {
     let (mut document, path) = with_mesh("twist");
     let before = vertices(&mut document);
@@ -128,10 +118,6 @@ fn a_twist_moves_the_form_and_one_undo_takes_it_back() {
 /// The two verbs must not produce the same form, or one of them is mapped onto
 /// the other and a sculptor has one deformer under two names.
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "the Metal export yields no triangles; see #37"
-)]
 fn a_taper_and_a_twist_are_different_deformations() {
     let mut forms = Vec::new();
     for verb in DeformVerb::ALL {
@@ -159,10 +145,6 @@ fn a_taper_and_a_twist_are_different_deformations() {
 /// A field has no vertices to map forward, and the refusal has to say where the
 /// deformer does apply rather than restating one representation's answer.
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "the Metal export yields no triangles; see #37"
-)]
 fn a_deformer_on_a_field_is_refused_by_where_it_applies() {
     let policy = BackendPolicy::discover(None).expect("discover backends");
     let mut document = ClayDocument::new(policy)
