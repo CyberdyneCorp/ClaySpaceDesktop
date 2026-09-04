@@ -11,6 +11,25 @@
 //! happens to have the right hardware; the engine words its own values on the
 //! way in.
 
+/// Whether a second party could have been driving this session.
+///
+/// In the report for the reason the engine revision and the container minor
+/// are: a defect report that does not say an agent was driving is a report
+/// whose steps cannot be trusted to be the whole of what happened. "It moved
+/// on its own" and "an agent applied forty strokes" are the same symptom with
+/// different causes, and only one of them is a defect in this application.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AgentDiagnostics {
+    pub listening: bool,
+    /// Where a client would connect. **Never the secret**: a report is pasted
+    /// into issues and chat windows, and a secret that reaches one of those is
+    /// a session anyone reading it can drive.
+    pub address: String,
+    pub connected: usize,
+    /// How many of this session's commands arrived from an agent.
+    pub commands: u64,
+}
+
 /// One operation that ran somewhere other than the active backend.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fallback {
@@ -94,6 +113,8 @@ pub struct Diagnostics {
     /// rather than this build's, and a report taken with no document open
     /// carries `None`.
     pub memory: Option<MemoryDiagnostics>,
+    /// The agent-facing door, where this build has one.
+    pub agent: Option<AgentDiagnostics>,
 }
 
 /// Where a document's memory is, in the terms that decide what may be released.
@@ -274,6 +295,21 @@ impl Diagnostics {
                 line("stall", stall);
             }
         }
+        match &self.agent {
+            Some(agent) if agent.listening => {
+                line(
+                    "agent",
+                    &format!(
+                        "listening on {}, {} connected, {} commands this session",
+                        agent.address, agent.connected, agent.commands
+                    ),
+                );
+            }
+            // Said explicitly rather than omitted. A missing section reads as
+            // "this build has no door", and the two are different answers.
+            Some(_) => line("agent", "not listening"),
+            None => line("agent", "not built with a door"),
+        }
         if self.fallbacks.is_empty() {
             line("fallbacks", "none this session");
         } else {
@@ -418,6 +454,7 @@ mod tests {
             mesh: None,
             hierarchies: None,
             memory: None,
+            agent: None,
         }
     }
 
@@ -558,5 +595,61 @@ mod tests {
         for line in sample().to_report().lines() {
             assert!(line.contains(": "), "unparseable line: {line}");
         }
+    }
+}
+
+#[cfg(test)]
+mod agent_tests {
+    use super::*;
+
+    fn listening() -> Diagnostics {
+        Diagnostics {
+            agent: Some(AgentDiagnostics {
+                listening: true,
+                address: "http://127.0.0.1:7457/mcp".into(),
+                connected: 1,
+                commands: 40,
+            }),
+            ..Diagnostics::default()
+        }
+    }
+
+    #[test]
+    fn a_report_from_a_driven_session_says_so() {
+        let report = listening().to_report();
+        assert!(
+            report.contains("agent: listening on http://127.0.0.1:7457/mcp"),
+            "{report}"
+        );
+        assert!(report.contains("40 commands"), "{report}");
+    }
+
+    #[test]
+    fn a_report_from_an_untouched_session_says_that_too() {
+        let mut diagnostics = listening();
+        diagnostics.agent = Some(AgentDiagnostics::default());
+        assert!(diagnostics.to_report().contains("agent: not listening"));
+
+        diagnostics.agent = None;
+        assert!(diagnostics
+            .to_report()
+            .contains("agent: not built with a door"));
+    }
+
+    /// A report is pasted into issues and chat windows. Nothing that reaches
+    /// one may be enough to drive the session it came from.
+    #[test]
+    fn the_secret_is_not_in_the_report() {
+        let secret = "f2c1b0a9e8d7c6b5a4938271605f4e3d2c1b0a9e8d7c6b5a4938271605f4e3d2";
+        let mut diagnostics = listening();
+        diagnostics.agent.as_mut().unwrap().address = "http://127.0.0.1:7457/mcp".into();
+        let report = diagnostics.to_report();
+        assert!(!report.contains(secret), "{report}");
+        // Nor any field shaped like one: the structure carries no place to put
+        // it, which is the property that makes this hold for every session and
+        // not only this one.
+        assert!(!report.to_lowercase().contains("chave"), "{report}");
+        assert!(!report.to_lowercase().contains("secret"), "{report}");
+        assert!(!report.to_lowercase().contains("bearer"), "{report}");
     }
 }

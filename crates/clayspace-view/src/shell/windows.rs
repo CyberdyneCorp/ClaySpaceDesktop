@@ -349,6 +349,15 @@ pub fn diagnostics_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &m
             if heading(ui, s.section_diagnostics) {
                 diagnostics_build(ui, d);
             }
+            // Second, above everything about this machine, and drawn whether
+            // or not anything is listening — for the reason the fallbacks are
+            // listed when there are none: silence reads as "the panel is
+            // broken" rather than as "no door". Whether a second party could
+            // have been driving is the first thing a defect report has to
+            // settle, and a reader should not have to scroll for it.
+            if heading(ui, s.section_agent) {
+                diagnostics_agent(ui, d);
+            }
             if heading(ui, s.label_backend) {
                 diagnostics_backend(ui, d);
             }
@@ -393,6 +402,28 @@ pub(super) fn diagnostics_build(ui: &mut egui::Ui, d: &Diagnostics) {
 }
 
 /// What is running: the backends, the one chosen, and what went wrong on it.
+/// Whether an agent could have been driving this session.
+///
+/// The address and never the secret. This panel is read from, screenshotted
+/// and pasted into issues, and a key that reaches one of those is a session
+/// anyone reading it can drive — which is why the secret has a window of its
+/// own, behind a menu item, and is not here.
+pub(super) fn diagnostics_agent(ui: &mut egui::Ui, d: &Diagnostics) {
+    match &d.agent {
+        None => readout(ui, "Porta", "esta versão não tem porta"),
+        Some(agent) if !agent.listening => {
+            readout(ui, "Porta", "fechada");
+            readout(ui, "Comandos de agente", agent.commands.to_string());
+        }
+        Some(agent) => {
+            readout(ui, "Porta", "ouvindo");
+            readout(ui, "Endereço", agent.address.clone());
+            readout(ui, "Clientes", agent.connected.to_string());
+            readout(ui, "Comandos de agente", agent.commands.to_string());
+        }
+    }
+}
+
 pub(super) fn diagnostics_backend(ui: &mut egui::Ui, d: &Diagnostics) {
     readout(ui, "Disponíveis", d.backends.join(", "));
     readout(
@@ -936,4 +967,108 @@ pub fn export_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut Co
     if !open {
         queue.push(Command::ToggleExport);
     }
+}
+
+/// The address and secret a client would need.
+///
+/// Behind a menu item rather than on screen, and closed again the moment the
+/// person is done: a secret left on a screen is a secret in every screenshot
+/// taken afterwards.
+pub fn agent_access_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    if !state.agent_access || !state.door.listening {
+        return;
+    }
+    let s = state.strings;
+    let mut open = true;
+    egui::Window::new(s.title_agent_access)
+        .open(&mut open)
+        .resizable(false)
+        .collapsible(false)
+        .show(ctx, |ui| {
+            ui.set_min_width(420.0);
+            ui.label(
+                egui::RichText::new(&state.door.url)
+                    .family(egui::FontFamily::Monospace)
+                    .size(type_scale::LABEL),
+            );
+            ui.add_space(space::SNUG);
+            ui.label(
+                egui::RichText::new(&state.door.secret)
+                    .family(egui::FontFamily::Monospace)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+            ui.add_space(space::SNUG);
+            ui.label(
+                egui::RichText::new(s.hint_agent_secret)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::accent()),
+            );
+        });
+    if !open {
+        queue.push(Command::ShowAgentAccess(false));
+    }
+}
+
+/// What an agent is asking permission for.
+///
+/// Drawn from ViewModel state and answered with a command, like everything
+/// else here: the shell owns no part of the decision, which is what lets the
+/// whole consent flow be tested with no window.
+pub fn agent_ask_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let Some(ask) = state.agent_ask else {
+        return;
+    };
+    let s = state.strings;
+    egui::Window::new(s.title_agent_ask)
+        .resizable(false)
+        .collapsible(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            ui.set_min_width(420.0);
+            // What is being asked, by whom, and on which path. Nobody consents
+            // into the dark.
+            ui.label(
+                egui::RichText::new(&ask.client)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+            ui.label(egui::RichText::new(gate_words(s, ask.gate)).size(type_scale::HEADING));
+            if let Some(path) = &ask.path {
+                ui.label(
+                    egui::RichText::new(path)
+                        .family(egui::FontFamily::Monospace)
+                        .size(type_scale::LABEL)
+                        .color(Tokens::text_dim()),
+                );
+            }
+            ui.add_space(space::SNUG);
+            ui.horizontal(|ui| {
+                if ui.button(s.agent_ask_yes).clicked() {
+                    queue.push(Command::AnswerAgentAsk(clayspace_vm::AgentAnswer::Yes));
+                }
+                if ui.button(s.agent_ask_always).clicked() {
+                    queue.push(Command::AnswerAgentAsk(clayspace_vm::AgentAnswer::Always));
+                }
+                if ui.button(s.agent_ask_no).clicked() {
+                    queue.push(Command::AnswerAgentAsk(clayspace_vm::AgentAnswer::No));
+                }
+            });
+        });
+}
+
+/// What a gate is, in the interface's own language.
+///
+/// Indexed by position in the enumeration, and the table is a fixed-length
+/// array, so a gate added stops this compiling until it has been worded.
+fn gate_words(s: &crate::Strings, gate: clayspace_vm::AgentGate) -> &'static str {
+    let index = match gate {
+        clayspace_vm::AgentGate::Overwrite => 0,
+        clayspace_vm::AgentGate::Export => 1,
+        clayspace_vm::AgentGate::Open => 2,
+        clayspace_vm::AgentGate::DiscardUnsaved => 3,
+        clayspace_vm::AgentGate::IrreversibleRemoval => 4,
+        clayspace_vm::AgentGate::Quit => 5,
+    };
+    s.agent_gates[index]
 }

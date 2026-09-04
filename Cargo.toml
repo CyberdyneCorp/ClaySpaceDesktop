@@ -7,6 +7,7 @@ members = [
     "crates/clayspace-engine",
     "crates/clayspace-vm",
     "crates/clayspace-view",
+    "crates/clayspace-mcp",
     "crates/clayspace-app",
 ]
 

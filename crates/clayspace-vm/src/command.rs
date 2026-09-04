@@ -409,6 +409,17 @@ pub enum Command {
     /// Puts the report on the clipboard, which is the whole point of having
     /// one: a person pastes it into an issue rather than transcribing it.
     CopyDiagnostics,
+
+    /// Opens the agent-facing door, or shuts it.
+    ///
+    /// A door shut by hand stays shut when the application is opened again,
+    /// which is why this is a command and not a runtime flag: the choice is
+    /// the person's and it is remembered.
+    ToggleAgentDoor,
+    /// Shows or hides the address and secret a client would need.
+    ShowAgentAccess(bool),
+    /// Answers the permission an agent is asking for.
+    AnswerAgentAsk(crate::agent_vm::AgentAnswer),
 }
 
 impl Command {
@@ -586,6 +597,12 @@ impl Command {
                 | Self::SoloLayer(_)
                 | Self::ToggleArmatureEditing
                 | Self::ToggleSkinPreview
+                // The door is not the sculpture. Opening it, shutting it and
+                // answering what it asks change nothing a history entry could
+                // hold.
+                | Self::ToggleAgentDoor
+                | Self::ShowAgentAccess(_)
+                | Self::AnswerAgentAsk(_)
         )
     }
 
@@ -718,6 +735,9 @@ impl Command {
             Self::ToggleAttribution => "attribution",
             Self::ToggleDiagnostics => "diagnostics",
             Self::CopyDiagnostics => "copy diagnostics",
+            Self::ToggleAgentDoor => "agent door",
+            Self::ShowAgentAccess(_) => "agent address",
+            Self::AnswerAgentAsk(_) => "answer the agent",
         }
     }
 }

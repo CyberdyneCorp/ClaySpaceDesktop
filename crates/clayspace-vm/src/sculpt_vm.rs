@@ -559,7 +559,11 @@ impl SculptViewModel {
             | Command::SetVoxelDisplay(..)
             | Command::ToggleAttribution
             | Command::ToggleDiagnostics
-            | Command::CopyDiagnostics => {}
+            | Command::CopyDiagnostics
+            // The door is not the sculpture.
+            | Command::ToggleAgentDoor
+            | Command::ShowAgentAccess(_)
+            | Command::AnswerAgentAsk(_) => {}
         }
         Ok(())
     }

@@ -47,6 +47,41 @@ run:
 run-cpu:
     CLAYCORE_CPU_ONLY=1 cargo run -p {{app}} --release --bin {{app}}
 
+# The application prints this on the way up and Window → Agent address and key
+# shows it, but a terminal is where a client's configuration is usually being
+# written.
+
+# Where a client connects, for the session that is open now.
+agent-access:
+    @cat "${XDG_STATE_HOME:-$HOME/.local/state}/clayspace/agente.acesso" 2>/dev/null \
+      || cat "$HOME/Library/Application Support/ClaySpaceDesktop/agente.acesso" 2>/dev/null \
+      || echo "nothing is listening: no agente.acesso in the session directory"
+
+# The menu does the same thing while the application is running. This is for a
+# machine where it should not open at all.
+
+# Shuts the agent door for the next session.
+agent-shut:
+    @mkdir -p "${XDG_STATE_HOME:-$HOME/.local/state}/clayspace" 2>/dev/null || true
+    @printf 'fechada\n' > "$HOME/Library/Application Support/ClaySpaceDesktop/agente.porta" 2>/dev/null \
+      || printf 'fechada\n' > "${XDG_STATE_HOME:-$HOME/.local/state}/clayspace/agente.porta"
+    @echo "the agent door will stay shut until it is opened from the Window menu"
+
+# The agent-facing crate's own suite. No display, no GPU, no engine built.
+test-agent:
+    cargo test -p clayspace-mcp
+
+# Starts a real application with a window of its own and contends with the
+# visual suite for the adapter, so it is asked for rather than run by `just
+# test`. One test target, on its own, single-threaded. Debug rather than
+# release, unlike the rest: what this checks is protocol behaviour, and a
+# second whole-tree build to check it would cost more than it is worth.
+
+# The door, driven against the real application over loopback.
+test-agent-e2e:
+    CLAYSPACE_AGENT_E2E=1 cargo test -p {{app}} --test agent_end_to_end -- \
+      --test-threads 1 --nocapture
+
 # What the engine reports about itself, without opening a window. The
 # application's own Ajuda → Diagnóstico adds the graphics adapter and this
 # session's fallbacks to the same picture.

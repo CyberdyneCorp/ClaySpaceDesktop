@@ -379,6 +379,9 @@ impl BackendPolicy {
     /// The renderer is filled in afterwards by whoever has a device.
     pub fn diagnostics(&self) -> clayspace_model::Diagnostics {
         clayspace_model::Diagnostics {
+            // The door is the composition root's business: this layer knows
+            // the engine and not what else is holding the session.
+            agent: None,
             app_version: format!("ClaySpaceDesktop {}", env!("CARGO_PKG_VERSION")),
             engine_version: format!("claycore {}", claycore::version()),
             engine_revision: claycore::revision().to_string(),

@@ -102,7 +102,8 @@ strokes — are in no baseline and report as `new`.
 
 ## Contents
 
-- [Running it](#running-it) · [Pointer and keys](#pointer-and-keys)
+- [Running it](#running-it) · [Pointer and keys](#pointer-and-keys) ·
+  [Driving it from an agent](#driving-it-from-an-agent)
 - [Features](#features) — [the shelf follows the active
   layer](#the-shelf-follows-the-active-layer) ·
   [sculpting](#sculpting-a-stroke-is-one-call-and-one-undo) ·
@@ -178,6 +179,69 @@ pointer means something else — see [what the pointer
 means](#what-the-pointer-means).
 
 ---
+
+## Driving it from an agent
+
+The application listens for the whole time it is open, so an agent works the
+session a sculptor is already in rather than starting one of its own. It speaks
+the Model Context Protocol over Streamable HTTP, bound to loopback and nothing
+else.
+
+The port and a secret are written to the session directory when the application
+opens, and taken away when it closes:
+
+```sh
+cat "$HOME/Library/Application Support/ClaySpaceDesktop/agente.acesso"   # macOS
+cat "${XDG_STATE_HOME:-$HOME/.local/state}/clayspace/agente.acesso"      # Linux
+# porta 7457
+# chave  f2c1…
+# processo 84213
+```
+
+Point a client at `http://127.0.0.1:<porta>/mcp` with `Authorization: Bearer
+<chave>`. The application prints the URL on the way up, and **Window › Agent
+address and key…** shows both. The same menu shuts the door and opens it again,
+and a door shut by hand stays shut when the application is opened next.
+
+**What an agent gets.** Twenty-four tools grouped by the domains the interface
+already has panels for — `tool`, `brush`, `stroke`, `mask`, `curve`, `shape`,
+`object`, `transform`, `lattice`, `subtool`, `boolean`, `layer`, `passes`,
+`hierarchy`, `document`, `exchange`, `repair`, `convert`, `deform`, `armature`,
+`history`, `view`, `reference`, `session` — plus `describe`, `state`,
+`viewport`, `wait` and `measure`. Every action dispatches the *same* command a
+menu item does, so an agent's edit is one history entry and one undo away, and
+is refused wherever the interface would refuse it.
+
+**It can see.** Any group call takes `capture: "viewport"` or `"window"` and
+returns the frame after the change in the same answer, taken after the edit has
+reached the surface. `viewport.compare` reads a difference against the
+difference two renders of an unchanged subject already produce on that machine
+— zero on Linux and not on macOS — so a rasteriser is not read as a change.
+
+**What it cannot do without you.** Saving over a file, exporting, opening a
+document, starting a new one and quitting are gated. The request appears at the
+window naming the operation, the client and the path, and can be allowed once,
+allowed always, or refused. The connection secret is not consent. Opening the
+door, shutting it and answering that request are the only three commands in the
+application an agent cannot reach at all.
+
+The door has a suite of its own: `just test-agent` runs the agent-facing
+crate's 133 tests, which need no display, no GPU and no engine built, and `just
+test-agent-e2e` drives the real application over loopback. The second is asked
+for rather than run by `just test` — it starts a window and a GPU device of its
+own, and doing that beside the visual suite makes both flaky.
+
+**The blast radius, stated.** Any process running as this user can read
+`agente.acesso` and drive the session. That is the same boundary that already
+protects the autosave and the recovery marker, and it is why the destructive
+verbs are gated behind something the file cannot supply. The secret is new
+every run, the listener binds loopback only, the `Origin` and `Host` headers
+are checked so a page in a browser cannot reach it through a name that resolves
+to loopback, and the diagnostics report carries the address but never the key.
+
+The status area says whether the application is listening, whether a client is
+connected, and when an agent last changed the document — so a surface that
+moved while nobody touched the window has a cause in the report.
 
 ## Features
 

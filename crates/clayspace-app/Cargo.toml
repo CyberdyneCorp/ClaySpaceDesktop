@@ -34,6 +34,7 @@ opencl = ["clayspace-engine/opencl"]
 clayspace-engine = { path = "../clayspace-engine" }
 clayspace-model = { version = "0.1.0", path = "../clayspace-model" }
 clayspace-vm = { version = "0.1.0", path = "../clayspace-vm" }
+clayspace-mcp = { path = "../clayspace-mcp" }
 clayspace-view = { path = "../clayspace-view" }
 winit = "0.30.13"
 wgpu = "24.0.5"
@@ -46,6 +47,8 @@ egui-winit = "0.31.1"
 rfd = "0.15.4"
 
 [dev-dependencies]
+# The end-to-end test speaks the tool surface's own wire, so it reads JSON.
+serde_json = "1.0.145"
 egui = "0.31.1"
 egui-wgpu = "0.31.1"
 png = "0.18.1"
