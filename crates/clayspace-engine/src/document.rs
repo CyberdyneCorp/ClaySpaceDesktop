@@ -1766,17 +1766,55 @@ impl ClayDocument {
     }
 
     fn refill(&mut self, layer: LayerId, nodes: &[NodeId]) -> Result<(), ModelError> {
+        self.mark_for_refill(layer, nodes)?;
+        self.drain_dirty()
+    }
+
+    /// Marks what a refill would cover and leaves the draining to the caller.
+    ///
+    /// The dirty set is the cache's own and spans every layer — `drain_dirty`
+    /// takes from `cache.take_dirty` until it is empty, not from a set per
+    /// layer. So an operation that dirties several layers can mark them all and
+    /// drain once, and a brick two of them share is refilled once rather than
+    /// once each. The regions overlap more often than not: they are the same
+    /// world.
+    fn mark_for_refill(&mut self, layer: LayerId, nodes: &[NodeId]) -> Result<(), ModelError> {
         if nodes.is_empty() {
             self.cache
                 .mark_dirty_layer(&self.document, layer)
-                .map_err(ModelError::engine)?;
+                .map_err(ModelError::engine)
         } else {
             self.cache
                 .mark_dirty_nodes(&self.document, layer, nodes)
-                .map_err(ModelError::engine)?;
+                .map(|_| ())
+                .map_err(ModelError::engine)
         }
+    }
 
-        self.drain_dirty()
+    /// Writes one layer's visibility without settling the cache.
+    ///
+    /// `SceneModel::set_layer_visible` is this plus a drain, and that is the
+    /// right shape for the callers it has: one layer hidden is one thing the
+    /// sculptor did, and the surface has to agree before the next frame.
+    ///
+    /// It is the wrong shape for the two callers that write several flags as
+    /// *one* action — a boolean retiring both its operands, and a solo hiding
+    /// every layer but one. Draining between them refills bricks the next flag
+    /// is about to dirty again, and the caller then refills a third time for
+    /// the thing it was actually doing. Those callers mark here and drain once
+    /// at the end.
+    ///
+    /// **A caller that marks owes a drain**, on the failing path as much as on
+    /// the succeeding one: a mark left standing is a cache that disagrees with
+    /// the document until something else happens to drain it.
+    fn write_layer_visible(&mut self, key: LayerKey, visible: bool) -> Result<(), ModelError> {
+        let index = self.index_of(key)?;
+        let id = self.layers[index].id;
+        self.document
+            .set_layer_visible(id, visible)
+            .map_err(ModelError::engine)?;
+        self.layers[index].visible = visible;
+        self.mark_for_refill(id, &[])
     }
 
     /// How many bytes a voxel cell costs, for the budget refusal.
@@ -2013,6 +2051,16 @@ impl ClayDocument {
         let before = self.solo.clone();
         let mut depths = Vec::new();
         let outcome = self.write_each_visibility(wanted, &mut depths);
+        // Owed whether the batch finished or stopped halfway: the flags that
+        // did land have marked their layers, and a mark left standing is a
+        // cache disagreeing with the document until something else drains it.
+        //
+        // Kept beside `outcome` rather than folded into it, because the two
+        // answer different questions. Everything below asks whether the *flags*
+        // reached what was asked for; a drain that failed does not mean they
+        // did not, and letting it say so would leave the solo unrecorded for a
+        // scene that is in fact showing what the solo describes.
+        let settled = self.drain_dirty();
         // The state only reaches the one asked for if every flag did. A batch
         // that failed halfway is a batch whose caller is about to restore.
         if outcome.is_ok() {
@@ -2028,7 +2076,10 @@ impl ClayDocument {
             });
             self.visibility_redo.clear();
         }
-        outcome
+        // The flags' failure is the one worth reporting; the drain's is
+        // reported only if they landed. Ordered as `with_visibility` orders its
+        // body and its restore, and for the same reason.
+        outcome.and(settled)
     }
 
     /// The writes themselves, recording each depth as it lands.
@@ -2052,7 +2103,7 @@ impl ClayDocument {
             if self.layers[index].visible == visible {
                 continue;
             }
-            SceneModel::set_layer_visible(self, key, visible)?;
+            self.write_layer_visible(key, visible)?;
             depths.push(self.engine_undo_depth());
         }
         Ok(())
@@ -7712,15 +7763,12 @@ impl SceneModel for ClayDocument {
     }
 
     fn set_layer_visible(&mut self, key: LayerKey, visible: bool) -> Result<(), ModelError> {
-        let index = self.index_of(key)?;
-        let id = self.layers[index].id;
-        self.document
-            .set_layer_visible(id, visible)
-            .map_err(ModelError::engine)?;
-        self.layers[index].visible = visible;
-        // Hiding a layer removes its contribution, so the surface moves.
-        self.refill(id, &[])?;
-        Ok(())
+        // Hiding a layer removes its contribution, so the surface moves — and
+        // one layer hidden is one thing the sculptor did, so it settles here.
+        // The callers that write several flags as one action mark through
+        // `write_layer_visible` and drain once themselves.
+        self.write_layer_visible(key, visible)?;
+        self.drain_dirty()
     }
 
     /// Shows one subtool alone, or releases the solo and puts the scene back.
@@ -11962,7 +12010,12 @@ impl ClayDocument {
             if consume {
                 SceneModel::remove_layer(self, operand)?;
             } else {
-                SceneModel::set_layer_visible(self, operand, false)?;
+                // Marked, not drained: `settle_subtool` refills the result
+                // immediately after this and takes both operands' bricks with
+                // it. Draining here refilled each operand's whole layer, and
+                // the result's region is the union of the two operand boxes —
+                // so the bricks paid for twice were about to be dirtied again.
+                self.write_layer_visible(operand, false)?;
             }
         }
         Ok(())
@@ -12005,7 +12058,7 @@ impl ClayDocument {
         });
 
         let consume = settings.consume;
-        let (key, layer, _) = self.insert_subtool(name, move |doc, layer| {
+        let inserted = self.insert_subtool(name, move |doc, layer| {
             let first_node = doc
                 .document
                 .add_item(layer, &first)
@@ -12037,7 +12090,19 @@ impl ClayDocument {
             // the one thing the sculptor asked for.
             doc.retire_operands(base, tool, consume)?;
             Ok(node)
-        })?;
+        });
+        // `retire_operands` marks the operands and leaves them for the settle
+        // below. If the insertion failed after that, the settle never runs, so
+        // the drain it was relying on happens here instead — a cache left
+        // marked would disagree with the document until something unrelated
+        // drained it, and the refusal would show as a stale viewport.
+        let (key, layer, _) = match inserted {
+            Ok(made) => made,
+            Err(why) => {
+                let _ = self.drain_dirty();
+                return Err(why);
+            }
+        };
         // No object row: what stands in the result is a pair of sampled
         // volumes rather than one of the offered shapes, so there is nothing
         // for the shape controls to measure. The subtool is the selection.
