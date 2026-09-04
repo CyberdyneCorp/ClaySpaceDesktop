@@ -11865,11 +11865,38 @@ impl ClayDocument {
     /// The region both operands are sampled over: the pair's box, padded by
     /// the band. See [`ClayDocument::bake_subtool_over`] for why it is one
     /// region and not two.
-    fn boolean_region(base: Bounds, tool: Bounds, cell: f32) -> Bounds {
+    fn boolean_region(base: Bounds, tool: Bounds, op: BooleanOp, cell: f32) -> Bounds {
         let band = Self::feather_for(cell);
+        // Where the result can possibly be, which is not the same box for the
+        // three operations and used to be treated as though it were.
+        //
+        // This is the region both operands are *sampled over*, so it decides
+        // what the bake costs — and, because the volume items the bake makes
+        // span it, it decides the box `settle_subtool` marks and fills
+        // afterwards. That second one is the expensive half: measured on a
+        // sphere and a pyramid at four times their default size, the two bakes
+        // are 71 ms of a 9,588 ms operation and the settle is 9,516.
+        let (min, max) = match op {
+            // A union is the only one that can leave material anywhere either
+            // form reaches.
+            BooleanOp::Union => (
+                std::array::from_fn(|axis| base.0[axis].min(tool.0[axis])),
+                std::array::from_fn(|axis| base.1[axis].max(tool.1[axis])),
+            ),
+            // A subtraction only ever removes, so the result is inside the base
+            // — the tool's reach past it cannot add anything to sample.
+            BooleanOp::Subtract => (base.0, base.1),
+            // An intersection is only where both are, so it is inside both
+            // boxes. `boxes_meet` has already refused a pair that does not
+            // overlap, so this box is never inside-out.
+            BooleanOp::Intersect => (
+                std::array::from_fn(|axis| base.0[axis].max(tool.0[axis])),
+                std::array::from_fn(|axis| base.1[axis].min(tool.1[axis])),
+            ),
+        };
         (
-            std::array::from_fn(|axis| base.0[axis].min(tool.0[axis]) - band),
-            std::array::from_fn(|axis| base.1[axis].max(tool.1[axis]) + band),
+            std::array::from_fn(|axis| min[axis] - band),
+            std::array::from_fn(|axis| max[axis] + band),
         )
     }
 
@@ -11894,13 +11921,31 @@ impl ClayDocument {
     }
 
     /// Refuses a pair the document's memory budget will not hold.
+    /// The most cells a boolean will sample before it refuses.
+    ///
+    /// A backstop rather than a budget: the panel already prices the pair and
+    /// shows the figure, so this is only here to stop the operation nobody
+    /// meant to ask for. The anchors are measured, on a sphere and a pyramid
+    /// scaled together at the working cell — 207k cells in 150 ms, 3.0M in
+    /// 11 s, 22.4M in **485 s**. The ceiling sits above every case that
+    /// finishes in seconds and below the one that does not finish at all.
+    ///
+    /// It is a cell count and not a byte figure because what is being bounded
+    /// is *work*: the volume items span the sampled region, so the region is
+    /// also what `settle_subtool` marks and fills afterwards, and that is the
+    /// expensive half by two orders of magnitude.
+    const MAX_BOOLEAN_CELLS: u64 = 4_000_000;
+
     fn boolean_fits_the_budget(&self, region: Bounds, cell: f32) -> Result<(), ModelError> {
+        // The tighter of the document's own budget and the ceiling above, so a
+        // document that sets a smaller one still wins.
         let budget = self
             .cache
             .stats()
             .ok()
             .and_then(|stats| stats.memory_budget)
-            .unwrap_or(u64::MAX);
+            .unwrap_or(u64::MAX)
+            .min(Self::MAX_BOOLEAN_CELLS * Self::BYTES_PER_CELL);
         Self::boolean_cost_over(region, cell)
             .within(budget, Self::BYTES_PER_CELL)
             .map_err(|refusal| match refusal {
@@ -12311,6 +12356,7 @@ impl ObjectModel for ClayDocument {
         let region = Self::boolean_region(
             self.operand_bounds(base)?,
             self.operand_bounds(tool)?,
+            settings.op,
             settings.cell_size,
         );
         Some(Self::boolean_cost_over(region, settings.cell_size))
@@ -12331,7 +12377,7 @@ impl ObjectModel for ClayDocument {
                 tool: self.operand_name(tool)?,
             }));
         }
-        let region = Self::boolean_region(base_box, tool_box, settings.cell_size);
+        let region = Self::boolean_region(base_box, tool_box, settings.op, settings.cell_size);
         self.boolean_fits_the_budget(region, settings.cell_size)?;
 
         // Named for what made it, in a mark that reads the same in every
