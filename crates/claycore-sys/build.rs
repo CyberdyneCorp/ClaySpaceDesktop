@@ -18,6 +18,7 @@ fn main() {
         .unwrap_or_else(|_| manifest.join("../../vendor/ClayCore"));
 
     check_submodule(&engine);
+    check_submodule_revision(&engine, &manifest.join("../.."));
     record_revision(&engine);
     check_cmake();
 
@@ -68,6 +69,96 @@ fn check_submodule(engine: &Path) {
          (or clone with --recurse-submodules)\n",
         engine.display()
     );
+}
+
+/// Whether the checked-out engine is the revision this workspace pins.
+///
+/// A `git pull` that moves the pin moves the *gitlink* and not the submodule's
+/// working copy, so the tree ends up compiling code written against one engine
+/// against the headers of another. What that produces is a wall of
+/// `unresolved import` on generated bindings — `sys::clay_multires_error`,
+/// `sys::clay_maintenance_kind` — which names neither the cause nor the fix,
+/// and has cost this repository an afternoon twice now.
+///
+/// **Stale is not the same as deliberate.** `just engine-pin` checks the
+/// submodule out at a new tag and tells you to rebuild *before* the new pointer
+/// is committed, so during that workflow the working copy is ahead of the
+/// gitlink on purpose. Failing there would break the one command whose whole
+/// job is to move the pin.
+///
+/// The two are told apart by direction: a checkout that is an *ancestor* of the
+/// pinned revision is behind it, which is the `git pull` case and a hard error.
+/// Anything else — ahead, or on an unrelated branch — is somebody moving the
+/// engine on purpose, and gets a warning it can ignore.
+///
+/// Every git failure here is a reason to say nothing. A source tree with no
+/// git, a vendored tarball, a package build: none of them can be stale, because
+/// none of them has a pin to be stale against.
+fn check_submodule_revision(engine: &Path, workspace: &Path) {
+    let Some(pinned) = git(workspace, &["rev-parse", "HEAD:vendor/ClayCore"]) else {
+        return;
+    };
+    let Some(checked_out) = git(engine, &["rev-parse", "HEAD"]) else {
+        return;
+    };
+    if pinned == checked_out {
+        return;
+    }
+
+    // A pinned revision the submodule does not even have is the strongest
+    // evidence of the stale case there is: the pointer moved and nothing
+    // fetched it. `--is-ancestor` cannot answer for an object it lacks, so this
+    // is asked first rather than left to fail into the warning below.
+    // Asked by exit status rather than through `git`, which reads an empty
+    // stdout as a failure — and `cat-file -e` says yes by saying nothing.
+    let has_pinned = Command::new("git")
+        .arg("-C")
+        .arg(engine)
+        .args(["cat-file", "-e", &format!("{pinned}^{{commit}}")])
+        .status()
+        .is_ok_and(|status| status.success());
+    let behind = has_pinned
+        && Command::new("git")
+            .arg("-C")
+            .arg(engine)
+            .args(["merge-base", "--is-ancestor", &checked_out, &pinned])
+            .status()
+            .is_ok_and(|status| status.success());
+
+    if behind || !has_pinned {
+        panic!(
+            "\n\nClayCore is checked out at the wrong revision.\n\n    \
+             this workspace pins {pinned}\n    \
+             vendor/ClayCore is at  {checked_out}\n\n\
+             The pin moved and the submodule's working copy did not follow — a\n\
+             `git pull` moves the pointer, not the checkout. Run:\n\n    \
+             git submodule update --init --recursive\n\n\
+             Without this the generated bindings are the old engine's, and the\n\
+             failure is a wall of `unresolved import` naming neither cause nor\n\
+             fix.\n"
+        );
+    }
+
+    println!(
+        "cargo::warning=vendor/ClayCore is at {checked_out}, ahead of the pinned \
+         {pinned} — building against the checkout. Commit the new pointer, or run \
+         `git submodule update --init --recursive` to go back."
+    );
+}
+
+/// One git command, or `None` for any reason it did not answer.
+fn git(at: &Path, args: &[&str]) -> Option<String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(at)
+        .args(args)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!text.is_empty()).then_some(text)
 }
 
 fn check_cmake() {
