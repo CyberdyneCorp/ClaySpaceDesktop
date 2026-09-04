@@ -337,6 +337,36 @@ pub enum Command {
     ToggleSkinPreview,
     /// Makes the selected sphere cut into the rig rather than add to it.
     ToggleZsphereNegative,
+    /// Which ZSphere the armature's verbs act on, or none.
+    SelectZsphere(Option<clayspace_model::NodeIndex>),
+    /// Grows a ZSphere out of another, at a point in the world.
+    ///
+    /// The pointer's way is a press on the parent, a first movement that
+    /// creates the child, and a release — three events describing one
+    /// intention, and only three because a hand cannot say "here" and "there"
+    /// at once. This says both.
+    AddZsphere {
+        parent: clayspace_model::NodeIndex,
+        at: [f32; 3],
+        /// The armature's own default where none is given.
+        radius: Option<f32>,
+    },
+    /// Puts a ZSphere on the link between one and its parent.
+    InsertZsphere(clayspace_model::NodeIndex),
+    /// Moves a ZSphere to a point, subtree and all.
+    MoveZsphere {
+        index: clayspace_model::NodeIndex,
+        to: [f32; 3],
+    },
+    ResizeZsphere {
+        index: clayspace_model::NodeIndex,
+        radius: f32,
+    },
+    /// Hangs a ZSphere, and its subtree, under a different parent.
+    ReparentZsphere {
+        index: clayspace_model::NodeIndex,
+        parent: clayspace_model::NodeIndex,
+    },
     /// The skin thickness, as a multiplier on the authored radii.
     SetSkinThickness(f32),
 
@@ -600,6 +630,7 @@ impl Command {
                 // The door is not the sculpture. Opening it, shutting it and
                 // answering what it asks change nothing a history entry could
                 // hold.
+                | Self::SelectZsphere(_)
                 | Self::ToggleAgentDoor
                 | Self::ShowAgentAccess(_)
                 | Self::AnswerAgentAsk(_)
@@ -690,6 +721,12 @@ impl Command {
             Self::ToggleSkinPreview => "skin preview",
             Self::ToggleZsphereNegative => "negative zsphere",
             Self::SetSkinThickness(_) => "skin thickness",
+            Self::SelectZsphere(_) => "choose zsphere",
+            Self::AddZsphere { .. } => "zsphere",
+            Self::InsertZsphere(_) => "insert zsphere",
+            Self::MoveZsphere { .. } => "move zsphere",
+            Self::ResizeZsphere { .. } => "zsphere radius",
+            Self::ReparentZsphere { .. } => "reparent zsphere",
             Self::BeginStroke { .. } => "begin stroke",
             Self::ContinueStroke { .. } => "continue stroke",
             Self::EndStroke => "stroke",

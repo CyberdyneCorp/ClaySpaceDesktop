@@ -210,6 +210,12 @@ pub fn home_of(command: &Command) -> Home {
         ToggleSkinPreview => Home::In("armature", "toggle_skin_preview"),
         ToggleZsphereNegative => Home::In("armature", "toggle_negative"),
         SetSkinThickness(_) => Home::In("armature", "set_skin_thickness"),
+        SelectZsphere(_) => Home::In("armature", "select"),
+        AddZsphere { .. } => Home::In("armature", "add"),
+        InsertZsphere(_) => Home::In("armature", "insert"),
+        MoveZsphere { .. } => Home::In("armature", "move"),
+        ResizeZsphere { .. } => Home::In("armature", "resize"),
+        ReparentZsphere { .. } => Home::In("armature", "reparent"),
 
         // -- history --------------------------------------------------------
         Undo => Home::In("history", "undo"),
@@ -509,6 +515,31 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
         ("armature", "toggle_skin_preview") => C::ToggleSkinPreview,
         ("armature", "toggle_negative") => C::ToggleZsphereNegative,
         ("armature", "set_skin_thickness") => C::SetSkinThickness(args.number("thickness")?),
+        ("armature", "select") => C::SelectZsphere(match args.integer_or("sphere", -1)? {
+            index if index < 0 => None,
+            index => Some(index as u32),
+        }),
+        ("armature", "add") => C::AddZsphere {
+            parent: args.integer("parent")? as u32,
+            at: args.vec3("at")?,
+            radius: match args.number_or("radius", f32::NAN)? {
+                radius if radius.is_nan() => None,
+                radius => Some(radius),
+            },
+        },
+        ("armature", "insert") => C::InsertZsphere(args.integer("sphere")? as u32),
+        ("armature", "move") => C::MoveZsphere {
+            index: args.integer("sphere")? as u32,
+            to: args.vec3("to")?,
+        },
+        ("armature", "resize") => C::ResizeZsphere {
+            index: args.integer("sphere")? as u32,
+            radius: args.number("radius")?,
+        },
+        ("armature", "reparent") => C::ReparentZsphere {
+            index: args.integer("sphere")? as u32,
+            parent: args.integer("parent")? as u32,
+        },
 
         // -- history --------------------------------------------------------
         ("history", "undo") => C::Undo,

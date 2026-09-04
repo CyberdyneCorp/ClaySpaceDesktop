@@ -149,6 +149,34 @@ no working row fails the test.
 proposal's grounds — a hundred and thirty tools is a list an agent chooses
 badly from, and every new variant would become a protocol change.
 
+### The armature's rigging gestures become commands
+
+`home_of` is exhaustive over `Command`, which makes it a complete guard over
+everything the command path already carries — and no guard at all over what it
+does not. The armature was the case: growing a ZSphere is "drag a child out of
+a parent" and lived on `ArmatureViewModel` as `press` / `drag` / `release`,
+called straight from the pointer. Those were never `Command`s, so nothing
+refused to compile and nothing appeared in `NotOffered`; the surface was
+simply missing a limb and said so nowhere.
+
+Six commands close it — `SelectZsphere`, `AddZsphere`, `InsertZsphere`,
+`MoveZsphere`, `ResizeZsphere`, `ReparentZsphere` — and each says in one value
+what the pointer says in three events. A press that names the parent, a first
+movement that creates the child and a release are three only because a hand
+cannot say "here" and "there" at once; `AddZsphere` says both. `MoveZsphere`
+takes a **point rather than a displacement**, and is exact where a drag only
+ends up close: the delta is worked out from the tree once instead of
+accumulating over a gesture.
+
+The tests hold the two paths against each other — a sphere grown by dragging
+and a sphere grown by asking must be the same sphere, in the same place, with
+the same selection after it.
+
+What this does not do is make the guard complete. The lesson is the general
+one: a verb that never entered the command path is invisible to a mechanism
+built over that path, and finding the next one takes a person reading the
+ViewModels rather than a compiler.
+
 *Alternative considered:* deriving the argument schemas via `serde` on
 `Command`. Rejected: it puts `serde` into `clayspace-vm`, which today depends
 on `clayspace-model` and nothing else, and it exports the internal shape of a

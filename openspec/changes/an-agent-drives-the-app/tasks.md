@@ -151,6 +151,19 @@
       in the harness-free style `window_smoke` already uses because macOS wants
       the event loop on the process main thread
 
+## 11. The armature reaches the command path
+
+- [x] 11.1 Six commands for what only a pointer could say: select, add,
+      insert, move, resize and reparent a ZSphere
+- [x] 11.2 `ArmatureViewModel` verbs behind them, mirrored where the
+      armature's symmetry is on, exactly as a drag is
+- [x] 11.3 A move takes a point rather than a displacement — exact, where a
+      drag only ends up close
+- [x] 11.4 A sphere grown by asking is the same sphere as one grown by
+      dragging, held against each other in a test
+- [x] 11.5 An index that is not there is named rather than guessed, and does
+      not cost the caller a selection they already had
+
 ## 10. The record
 
 - [x] 10.1 `docs/architecture.md`: the layer, why it sits beside the View, and

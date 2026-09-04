@@ -745,7 +745,7 @@ fn capture_request(args: &Args<'_>) -> Result<CaptureRequest, Refusal> {
 fn size(args: &Args<'_>, name: &str) -> Result<Option<u32>, Refusal> {
     match args.integer_or(name, 0)? {
         0 => Ok(None),
-        value if value < 0 || value > 8192 => Err(Refusal::new(
+        value if !(0..=8192).contains(&value) => Err(Refusal::new(
             RefusalCode::BadArgument,
             format!("{name} is between 1 and 8192, and {value} is not"),
         )),

@@ -487,3 +487,163 @@ fn the_root_cannot_cut() {
         "making the root negative was accepted silently"
     );
 }
+
+// -- rigging without a pointer -----------------------------------------------
+//
+// The gestures above are what a hand does. These are the same intentions said
+// in one call each, for a caller that has no hand — the agent-facing door.
+// They are kept honest against the gestures: a sphere grown by dragging and a
+// sphere grown by asking must be the same sphere.
+
+#[test]
+fn a_sphere_can_be_grown_by_asking_rather_than_dragging() {
+    let mut asked = ArmatureViewModel::new(FakeRig::default().boxed());
+    asked.begin([0.0, 0.0, 0.0]);
+    asked.set_symmetric(false);
+    asked.add(0, [1.0, 0.0, 0.0], None);
+
+    let dragged = rigged();
+
+    let (a, b) = (
+        asked.tree().get().clone().expect("a tree"),
+        dragged.tree().get().clone().expect("a tree"),
+    );
+    assert_eq!(
+        a.nodes.len(),
+        b.nodes.len(),
+        "a different number of spheres"
+    );
+    assert!(
+        distance(a.nodes[1].position, b.nodes[1].position) < 1e-5,
+        "the asked-for sphere landed somewhere else: {:?} against {:?}",
+        a.nodes[1].position,
+        b.nodes[1].position
+    );
+    // And it is selected, as the grown one is: the next verb acts on what was
+    // just made.
+    assert_eq!(*asked.selected().get(), Some(1));
+}
+
+#[test]
+fn a_sphere_is_moved_to_a_point_rather_than_by_a_displacement() {
+    let mut vm = rigged();
+    vm.move_to(1, [0.0, 0.75, 0.0]);
+    let tree = vm.tree().get().clone().expect("a tree");
+    assert!(
+        distance(tree.nodes[1].position, [0.0, 0.75, 0.0]) < 1e-5,
+        "{:?}",
+        tree.nodes[1].position
+    );
+    // Exact, where a drag only ends up close: the delta is worked out from the
+    // tree once rather than accumulated over a gesture.
+    assert!(vm.notice().get().is_none());
+}
+
+#[test]
+fn moving_a_sphere_carries_what_hangs_off_it() {
+    let mut vm = rigged();
+    vm.add(1, [2.0, 0.0, 0.0], None);
+    let before = vm.tree().get().clone().expect("a tree").nodes[2].position;
+
+    vm.move_to(1, [1.0, 1.0, 0.0]);
+
+    let after = vm.tree().get().clone().expect("a tree").nodes[2].position;
+    assert!(
+        distance(before, after) > 0.5,
+        "the child stayed behind: {before:?} then {after:?}"
+    );
+}
+
+#[test]
+fn a_sphere_asked_for_out_of_nothing_is_refused_in_words() {
+    let mut vm = ArmatureViewModel::new(FakeRig::default().boxed());
+    vm.add(0, [1.0, 0.0, 0.0], None);
+    assert!(
+        vm.notice().get().is_some(),
+        "growing out of an armature that does not exist said nothing"
+    );
+    assert!(vm.tree().get().is_none());
+}
+
+#[test]
+fn a_sphere_that_is_not_there_is_named_rather_than_guessed() {
+    let mut vm = rigged();
+    let held = *vm.selected().get();
+    vm.select(Some(99));
+    // Refused, and the selection that was already there is left alone: an
+    // impossible request should not cost a caller the choice they had made.
+    assert_eq!(
+        *vm.selected().get(),
+        held,
+        "a bad index moved the selection"
+    );
+    assert!(vm.notice().get().is_some());
+
+    vm.move_to(99, [0.0, 1.0, 0.0]);
+    assert!(vm.notice().get().is_some());
+}
+
+#[test]
+fn choosing_a_sphere_and_clearing_the_choice() {
+    let mut vm = rigged();
+    vm.select(Some(0));
+    assert_eq!(*vm.selected().get(), Some(0));
+    vm.select(None);
+    assert_eq!(*vm.selected().get(), None);
+}
+
+#[test]
+fn a_radius_is_asked_for_or_defaulted_and_never_zero() {
+    let mut vm = rigged();
+    vm.add(1, [2.0, 0.0, 0.0], Some(0.25));
+    assert!((vm.tree().get().clone().unwrap().nodes[2].radius - 0.25).abs() < 1e-5);
+
+    // A sphere of no size is a sphere nothing can be grabbed by.
+    vm.resize(2, -1.0);
+    assert!(vm.tree().get().clone().unwrap().nodes[2].radius > 0.0);
+}
+
+#[test]
+fn symmetry_mirrors_a_sphere_that_was_asked_for_as_it_mirrors_one_dragged() {
+    let mut vm = ArmatureViewModel::new(FakeRig::default().boxed());
+    vm.begin([0.0, 0.0, 0.0]);
+    vm.set_symmetric(true);
+    vm.add(0, [1.0, 0.0, 0.0], None);
+
+    let tree = vm.tree().get().clone().expect("a tree");
+    assert!(
+        tree.nodes.len() >= 3,
+        "symmetry grew no mirror: {} spheres",
+        tree.nodes.len()
+    );
+    assert!(
+        tree.nodes
+            .iter()
+            .any(|node| distance(node.position, [-1.0, 0.0, 0.0]) < 1e-5),
+        "nothing landed on the other side"
+    );
+}
+
+#[test]
+fn a_sphere_hangs_under_a_different_parent_when_asked() {
+    let mut vm = rigged();
+    vm.add(1, [2.0, 0.0, 0.0], None);
+    vm.reparent(2, 0);
+    assert!(
+        vm.notice().get().is_none(),
+        "{:?}",
+        vm.notice().get().clone()
+    );
+    let tree = vm.tree().get().clone().expect("a tree");
+    assert_eq!(tree.nodes[2].parent, 0);
+}
+
+#[test]
+fn a_sphere_is_put_on_a_link_when_one_is_asked_for() {
+    let mut vm = rigged();
+    let before = vm.tree().get().clone().expect("a tree").nodes.len();
+    vm.insert(1);
+    let after = vm.tree().get().clone().expect("a tree").nodes.len();
+    assert_eq!(after, before + 1, "nothing was inserted");
+    assert_eq!(*vm.selected().get(), Some((after - 1) as NodeIndex));
+}

@@ -212,6 +212,10 @@ already has panels for — `tool`, `brush`, `stroke`, `mask`, `curve`, `shape`,
 menu item does, so an agent's edit is one history entry and one undo away, and
 is refused wherever the interface would refuse it.
 
+The armature is driven too: `armature.add` grows a ZSphere out of another at a
+point, where the pointer needs a press, a drag and a release to say the same
+thing, and `move` takes a point rather than a displacement.
+
 **It can see.** Any group call takes `capture: "viewport"` or `"window"` and
 returns the frame after the change in the same answer, taken after the edit has
 reached the surface. `viewport.compare` reads a difference against the

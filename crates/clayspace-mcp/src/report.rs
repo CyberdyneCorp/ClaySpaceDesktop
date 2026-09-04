@@ -374,7 +374,7 @@ mod tests {
             [0.0, 0.0, 3.0],
             [0.0; 3],
             [0.0, 1.0, 0.0],
-            0.785_398,
+            std::f32::consts::FRAC_PI_4,
             [800, 600],
         );
         assert!(
@@ -416,15 +416,17 @@ mod tests {
 
     #[test]
     fn memory_is_reported_by_the_part_that_holds_it() {
-        let mut diagnostics = Diagnostics::default();
-        diagnostics.memory = Some(clayspace_model::MemoryDiagnostics {
-            essential: 10,
-            rebuildable: 20,
-            undoable: 30,
-            total: 60,
-            surfaces: 2,
-            surface_bytes: 40,
-        });
+        let diagnostics = Diagnostics {
+            memory: Some(clayspace_model::MemoryDiagnostics {
+                essential: 10,
+                rebuildable: 20,
+                undoable: 30,
+                total: 60,
+                surfaces: 2,
+                surface_bytes: 40,
+            }),
+            ..Diagnostics::default()
+        };
         let state = memory_state(&diagnostics, 1024).unwrap();
         assert_eq!(state.in_use_bytes, 60);
         assert_eq!(state.budget_bytes, 1024);
@@ -451,13 +453,15 @@ mod tests {
 
     #[test]
     fn the_backends_and_every_fallback_reach_the_wire() {
-        let mut diagnostics = Diagnostics::default();
-        diagnostics.active_backend = "metal".into();
-        diagnostics.backends = vec!["cpu".into(), "metal".into()];
-        diagnostics.fallbacks = vec![clayspace_model::Fallback {
-            operation: "remesh".into(),
-            declined_by: "metal".into(),
-        }];
+        let diagnostics = Diagnostics {
+            active_backend: "metal".into(),
+            backends: vec!["cpu".into(), "metal".into()],
+            fallbacks: vec![clayspace_model::Fallback {
+                operation: "remesh".into(),
+                declined_by: "metal".into(),
+            }],
+            ..Diagnostics::default()
+        };
         let state = backend_state(&diagnostics);
         assert_eq!(state.active, "metal");
         assert_eq!(state.registered.len(), 2);

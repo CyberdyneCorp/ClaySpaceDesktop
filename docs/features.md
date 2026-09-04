@@ -3047,6 +3047,21 @@ transforming, selecting, navigating, undoing. That is what the session is for.
 While a person is holding a stroke, a drag or an outline, a call that would
 change the document is refused saying so, and calls that only read are served.
 
+### Rigging without a pointer
+
+Growing a ZSphere is "drag a child out of a parent": a press that names the
+parent, a first movement that creates the child, and a release. That is three
+events describing one intention, and it is three only because a hand cannot
+say "here" and "there" at once. `armature.add` says both, and the other five —
+`select`, `insert`, `move`, `resize`, `reparent` — say the rest.
+
+A move takes a point rather than a displacement, which makes it exact where a
+drag only ends up close: the difference is worked out from the tree once
+instead of accumulating over a gesture. Symmetry mirrors an asked-for sphere
+exactly as it mirrors a dragged one. An index that is not in the tree is named
+rather than guessed at, and does not cost the caller a selection they had
+already made.
+
 ### What it can measure
 
 `state` reads the document, the scene tree, the active tool, the camera, the

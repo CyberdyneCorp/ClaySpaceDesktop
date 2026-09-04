@@ -79,8 +79,8 @@ test-agent:
 
 # The door, driven against the real application over loopback.
 test-agent-e2e:
-    CLAYSPACE_AGENT_E2E=1 cargo test -p {{app}} --test agent_end_to_end -- \
-      --test-threads 1 --nocapture
+    CLAYSPACE_AGENT_E2E=1 cargo test -p {{app}} --features agent-e2e \
+      --test agent_end_to_end -- --test-threads 1 --nocapture
 
 # What the engine reports about itself, without opening a window. The
 # application's own Ajuda → Diagnóstico adds the graphics adapter and this

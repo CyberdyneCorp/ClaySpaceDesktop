@@ -561,6 +561,12 @@ impl SculptViewModel {
             | Command::ToggleDiagnostics
             | Command::CopyDiagnostics
             // The door is not the sculpture.
+            | Command::SelectZsphere(_)
+            | Command::AddZsphere { .. }
+            | Command::InsertZsphere(_)
+            | Command::MoveZsphere { .. }
+            | Command::ResizeZsphere { .. }
+            | Command::ReparentZsphere { .. }
             | Command::ToggleAgentDoor
             | Command::ShowAgentAccess(_)
             | Command::AnswerAgentAsk(_) => {}

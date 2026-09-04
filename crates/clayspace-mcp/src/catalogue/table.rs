@@ -1229,6 +1229,66 @@ pub const TABLE: &[ActionSpec] = &[
     },
     ActionSpec {
         group: "armature",
+        name: "select",
+        summary: "Which ZSphere the other verbs act on, or none.",
+        arguments: &[o("sphere", Kind::Integer, "its index; omit to clear")],
+        example: r#"{"sphere":0}"#,
+    },
+    ActionSpec {
+        group: "armature",
+        name: "add",
+        summary: "Grows a ZSphere out of another, at a point in the world. \
+                  Mirrored where the armature's symmetry is on.",
+        arguments: &[
+            r("parent", Kind::Integer, "the sphere it grows from"),
+            r("at", Kind::Vec3, "where the new one lands"),
+            o(
+                "radius",
+                Kind::Number,
+                "the armature's own default where none is given",
+            ),
+        ],
+        example: r#"{"parent":0,"at":[0.0,0.4,0.0]}"#,
+    },
+    ActionSpec {
+        group: "armature",
+        name: "insert",
+        summary: "Puts a ZSphere on the link between one and its parent.",
+        arguments: &[r("sphere", Kind::Integer, "the child end of the link")],
+        example: r#"{"sphere":1}"#,
+    },
+    ActionSpec {
+        group: "armature",
+        name: "move",
+        summary: "Moves a ZSphere to a point, subtree and all.",
+        arguments: &[
+            r("sphere", Kind::Integer, "which"),
+            r("to", Kind::Vec3, "where, in the world"),
+        ],
+        example: r#"{"sphere":1,"to":[0.2,0.5,0.0]}"#,
+    },
+    ActionSpec {
+        group: "armature",
+        name: "resize",
+        summary: "How thick a ZSphere is.",
+        arguments: &[
+            r("sphere", Kind::Integer, "which"),
+            r("radius", Kind::Number, "the radius"),
+        ],
+        example: r#"{"sphere":1,"radius":0.12}"#,
+    },
+    ActionSpec {
+        group: "armature",
+        name: "reparent",
+        summary: "Hangs a ZSphere, and its subtree, under a different parent.",
+        arguments: &[
+            r("sphere", Kind::Integer, "which"),
+            r("parent", Kind::Integer, "its new parent"),
+        ],
+        example: r#"{"sphere":2,"parent":0}"#,
+    },
+    ActionSpec {
+        group: "armature",
         name: "set_skin_thickness",
         summary: "How thick the skin over the armature is.",
         arguments: &[r("thickness", Kind::Number, "the thickness")],

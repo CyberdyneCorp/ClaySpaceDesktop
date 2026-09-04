@@ -4608,6 +4608,37 @@ impl App {
                 self.armature.set_selected_negative(negative);
                 self.after_armature_edit(before);
             }
+            // Choosing changes nothing in the document, so it takes none of
+            // the undo bookkeeping the rest of these do.
+            Command::SelectZsphere(index) => {
+                self.armature.select(index);
+                self.request_redraw();
+            }
+            Command::AddZsphere { parent, at, radius } => {
+                let before = self.engine_undo_depth();
+                self.armature.add(parent, at, radius);
+                self.after_armature_edit(before);
+            }
+            Command::InsertZsphere(child) => {
+                let before = self.engine_undo_depth();
+                self.armature.insert(child);
+                self.after_armature_edit(before);
+            }
+            Command::MoveZsphere { index, to } => {
+                let before = self.engine_undo_depth();
+                self.armature.move_to(index, to);
+                self.after_armature_edit(before);
+            }
+            Command::ResizeZsphere { index, radius } => {
+                let before = self.engine_undo_depth();
+                self.armature.resize(index, radius);
+                self.after_armature_edit(before);
+            }
+            Command::ReparentZsphere { index, parent } => {
+                let before = self.engine_undo_depth();
+                self.armature.reparent(index, parent);
+                self.after_armature_edit(before);
+            }
             Command::SetSkinThickness(thickness) => {
                 let before = self.engine_undo_depth();
                 self.armature.set_skin(SkinSettings { thickness });
@@ -4899,129 +4930,6 @@ fn next_matcap(current: MatCap) -> MatCap {
     all[(index + 1) % all.len()]
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{gizmo_geometry_update, tool_status, GizmoGeometryUpdate, ToolStatusSources};
-    use clayspace_model::Representation;
-    use clayspace_vm::Command;
-
-    /// Nothing to explain, which is the state the options bar is in almost
-    /// always.
-    fn quiet() -> ToolStatusSources<'static> {
-        ToolStatusSources {
-            document: None,
-            reference: None,
-            mask: None,
-            object: None,
-            scene: None,
-            sculpt: None,
-        }
-    }
-
-    /// A save that failed reaches the options bar.
-    ///
-    /// It did not. `DocumentVm::notice` has said "the last failure, for the
-    /// interface to show" since it was written, and the chain that builds the
-    /// options bar never read it — so a save refused because a hierarchy's
-    /// side-car could not be written printed to stderr, which no sculptor is
-    /// looking at, and the document silently stayed unsaved. Removing
-    /// `document` from `tool_status` fails here.
-    #[test]
-    fn a_failed_save_reaches_the_options_bar() {
-        assert_eq!(
-            tool_status(ToolStatusSources {
-                document: Some("the side-car could not be written"),
-                ..quiet()
-            }),
-            Some("the side-car could not be written")
-        );
-    }
-
-    /// A refused rebuild reaches the options bar.
-    ///
-    /// The same hole in a second Observable: `run_remesh` has claimed this
-    /// reaches the screen since it was written and nothing read it, so a
-    /// rebuild refused for an unusable resolution — and now a level refused
-    /// for its peak, which is this branch's own new refusal — went to stderr
-    /// and the click looked like it had done nothing. Removing `scene` from
-    /// `tool_status` fails here.
-    #[test]
-    fn a_refused_rebuild_reaches_the_options_bar() {
-        assert_eq!(
-            tool_status(ToolStatusSources {
-                scene: Some("that resolution will not fit"),
-                ..quiet()
-            }),
-            Some("that resolution will not fit")
-        );
-    }
-
-    /// An explicit refusal beats a standing condition, and the document's beats
-    /// every other explicit one.
-    ///
-    /// The order is the behaviour: a sculptor who has just been told a save
-    /// failed must not have that replaced by a tool note that was already true
-    /// before the click.
-    #[test]
-    fn the_most_recent_explicit_refusal_is_the_one_shown() {
-        assert_eq!(
-            tool_status(ToolStatusSources {
-                document: Some("save"),
-                reference: Some("reference"),
-                mask: Some("mask"),
-                object: Some("object"),
-                scene: Some("scene"),
-                sculpt: Some("standing"),
-            }),
-            Some("save")
-        );
-        assert_eq!(
-            tool_status(ToolStatusSources {
-                scene: Some("scene"),
-                sculpt: Some("standing"),
-                ..quiet()
-            }),
-            Some("scene")
-        );
-    }
-
-    /// Six silences say nothing rather than an empty line.
-    #[test]
-    fn nothing_refused_says_nothing() {
-        assert_eq!(tool_status(quiet()), None);
-    }
-
-    #[test]
-    fn an_sdf_gizmo_settles_when_the_drag_ends() {
-        assert_eq!(
-            gizmo_geometry_update(&Command::EndGizmoDrag, true, Representation::Sdf),
-            GizmoGeometryUpdate::Settle
-        );
-    }
-
-    #[test]
-    fn an_sdf_gizmo_settles_while_it_is_moving() {
-        assert_eq!(
-            gizmo_geometry_update(
-                &Command::DragGizmo([1.0, 0.0, 0.0], false),
-                true,
-                Representation::Sdf,
-            ),
-            GizmoGeometryUpdate::Settle
-        );
-    }
-
-    #[test]
-    fn carried_geometry_does_not_rebuild_the_sdf_surface() {
-        for representation in [Representation::Voxel, Representation::Mesh] {
-            assert_eq!(
-                gizmo_geometry_update(&Command::EndGizmoDrag, true, representation),
-                GizmoGeometryUpdate::Incremental
-            );
-        }
-    }
-}
-
 /// What the agent-facing door can ask of the running application.
 ///
 /// Every method here runs on the interface thread, between frames, because
@@ -5062,7 +4970,7 @@ impl Session for App {
             self.agent.acted();
         }
 
-        let history = self.sculpt.history().get().clone();
+        let history = *self.sculpt.history().get();
         let last = self.sculpt.last_action().get().clone();
         Ok(Applied {
             label,
@@ -5355,5 +5263,128 @@ impl Session for App {
 
     fn gesture_in_progress(&self) -> bool {
         self.holding_a_gesture()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{gizmo_geometry_update, tool_status, GizmoGeometryUpdate, ToolStatusSources};
+    use clayspace_model::Representation;
+    use clayspace_vm::Command;
+
+    /// Nothing to explain, which is the state the options bar is in almost
+    /// always.
+    fn quiet() -> ToolStatusSources<'static> {
+        ToolStatusSources {
+            document: None,
+            reference: None,
+            mask: None,
+            object: None,
+            scene: None,
+            sculpt: None,
+        }
+    }
+
+    /// A save that failed reaches the options bar.
+    ///
+    /// It did not. `DocumentVm::notice` has said "the last failure, for the
+    /// interface to show" since it was written, and the chain that builds the
+    /// options bar never read it — so a save refused because a hierarchy's
+    /// side-car could not be written printed to stderr, which no sculptor is
+    /// looking at, and the document silently stayed unsaved. Removing
+    /// `document` from `tool_status` fails here.
+    #[test]
+    fn a_failed_save_reaches_the_options_bar() {
+        assert_eq!(
+            tool_status(ToolStatusSources {
+                document: Some("the side-car could not be written"),
+                ..quiet()
+            }),
+            Some("the side-car could not be written")
+        );
+    }
+
+    /// A refused rebuild reaches the options bar.
+    ///
+    /// The same hole in a second Observable: `run_remesh` has claimed this
+    /// reaches the screen since it was written and nothing read it, so a
+    /// rebuild refused for an unusable resolution — and now a level refused
+    /// for its peak, which is this branch's own new refusal — went to stderr
+    /// and the click looked like it had done nothing. Removing `scene` from
+    /// `tool_status` fails here.
+    #[test]
+    fn a_refused_rebuild_reaches_the_options_bar() {
+        assert_eq!(
+            tool_status(ToolStatusSources {
+                scene: Some("that resolution will not fit"),
+                ..quiet()
+            }),
+            Some("that resolution will not fit")
+        );
+    }
+
+    /// An explicit refusal beats a standing condition, and the document's beats
+    /// every other explicit one.
+    ///
+    /// The order is the behaviour: a sculptor who has just been told a save
+    /// failed must not have that replaced by a tool note that was already true
+    /// before the click.
+    #[test]
+    fn the_most_recent_explicit_refusal_is_the_one_shown() {
+        assert_eq!(
+            tool_status(ToolStatusSources {
+                document: Some("save"),
+                reference: Some("reference"),
+                mask: Some("mask"),
+                object: Some("object"),
+                scene: Some("scene"),
+                sculpt: Some("standing"),
+            }),
+            Some("save")
+        );
+        assert_eq!(
+            tool_status(ToolStatusSources {
+                scene: Some("scene"),
+                sculpt: Some("standing"),
+                ..quiet()
+            }),
+            Some("scene")
+        );
+    }
+
+    /// Six silences say nothing rather than an empty line.
+    #[test]
+    fn nothing_refused_says_nothing() {
+        assert_eq!(tool_status(quiet()), None);
+    }
+
+    #[test]
+    fn an_sdf_gizmo_settles_when_the_drag_ends() {
+        assert_eq!(
+            gizmo_geometry_update(&Command::EndGizmoDrag, true, Representation::Sdf),
+            GizmoGeometryUpdate::Settle
+        );
+    }
+
+    #[test]
+    fn an_sdf_gizmo_settles_while_it_is_moving() {
+        assert_eq!(
+            gizmo_geometry_update(
+                &Command::DragGizmo([1.0, 0.0, 0.0], false),
+                true,
+                Representation::Sdf,
+            ),
+            GizmoGeometryUpdate::Settle
+        );
+    }
+
+    #[test]
+    fn carried_geometry_does_not_rebuild_the_sdf_surface() {
+        for representation in [Representation::Voxel, Representation::Mesh] {
+            assert_eq!(
+                gizmo_geometry_update(&Command::EndGizmoDrag, true, representation),
+                GizmoGeometryUpdate::Incremental
+            );
+        }
     }
 }

@@ -302,6 +302,15 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # The agent end-to-end target is behind a feature, because building it
+      # on every row of the test matrix buys a whole-application link for a
+      # test that then skips. It is still compiled and linted here, where the
+      # runner is cheap and the link is fast, so it cannot rot unnoticed.
+      - name: Clippy, the opted-in targets
+        run: |
+          cargo clippy -p clayspace-app --features agent-e2e \
+            --test agent_end_to_end -- -D warnings
+
       - name: Install cargo-deny
         uses: taiki-e/install-action@cargo-deny
 
