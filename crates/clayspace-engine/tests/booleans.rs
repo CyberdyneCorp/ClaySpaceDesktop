@@ -1064,3 +1064,128 @@ fn a_failed_body_leaves_no_brick_waiting() {
          borrowed visibility until something else drains"
     );
 }
+
+// -- what a boolean samples -------------------------------------------------
+
+/// How many cells this pair would sample at the resolution the panel offers.
+fn cells(doc: &mut ClayDocument, base: LayerKey, tool: LayerKey, op: BooleanOp) -> u64 {
+    doc.boolean_cost(settings(base, tool, op))
+        .expect("a pair the panel can price")
+        .cells
+}
+
+/// An intersect samples only where both forms can be, not where either is.
+///
+/// The region a boolean samples is also the box its result layer occupies, so
+/// it is what `settle_subtool` marks and fills afterwards — and that is the
+/// expensive half by two orders of magnitude. Measured on a sphere and a
+/// pyramid at four times their default size, the two bakes were 71 ms of a
+/// 9,588 ms operation and the settle was 9,516.
+///
+/// Sampling the union for an intersect was therefore paying to prove emptiness
+/// over a region the operation cannot reach: `max(base, tool)` can only leave
+/// material where both forms are, so everything outside their overlap is
+/// already known to be empty.
+#[test]
+fn an_intersect_samples_only_where_the_two_forms_overlap() {
+    let mut doc = document();
+    // Offset, so the union is materially larger than the overlap. Two forms
+    // sitting on top of one another would pass this whatever the region was.
+    let base = a_sphere(&mut doc);
+    let tool = a_cylinder(&mut doc, [0.4, 0.0, 0.0]);
+
+    let intersecting = cells(&mut doc, base, tool, BooleanOp::Intersect);
+    let uniting = cells(&mut doc, base, tool, BooleanOp::Union);
+
+    assert!(
+        intersecting < uniting,
+        "an intersect sampled {intersecting} cells and a union {uniting}: the \
+         intersect is being sampled over a region it cannot reach"
+    );
+}
+
+/// A subtraction is bounded by the form it cuts into.
+///
+/// The tool's reach past the base cannot add anything: a subtraction only ever
+/// removes, so the result is inside the base and the rest of the union is
+/// sampled to prove an emptiness that was never in question.
+#[test]
+fn a_subtraction_samples_no_further_than_the_form_it_cuts() {
+    let mut doc = document();
+    let base = a_sphere(&mut doc);
+    let tool = a_cylinder(&mut doc, [0.4, 0.0, 0.0]);
+
+    let subtracting = cells(&mut doc, base, tool, BooleanOp::Subtract);
+    let uniting = cells(&mut doc, base, tool, BooleanOp::Union);
+
+    assert!(
+        subtracting < uniting,
+        "a subtraction sampled {subtracting} cells and a union {uniting}"
+    );
+}
+
+/// A union still needs the whole of both, and is not narrowed by either rule.
+#[test]
+fn a_union_still_samples_everywhere_either_form_reaches() {
+    let mut doc = document();
+    let base = a_sphere(&mut doc);
+    let tool = a_cylinder(&mut doc, [0.4, 0.0, 0.0]);
+
+    let uniting = cells(&mut doc, base, tool, BooleanOp::Union);
+    let intersecting = cells(&mut doc, base, tool, BooleanOp::Intersect);
+    let subtracting = cells(&mut doc, base, tool, BooleanOp::Subtract);
+
+    assert!(
+        uniting > intersecting && uniting > subtracting,
+        "a union is the one operation that can leave material anywhere either \
+         form reaches, so it must sample the most: {uniting} against \
+         {intersecting} and {subtracting}"
+    );
+}
+
+/// A pair too large to *sample* is refused, even where it fits the byte budget.
+///
+/// `a_pair_over_the_budget_is_refused` covers the document's own memory budget,
+/// which a billion cells at a 0.002 cell trips. This is the other ceiling: work
+/// rather than bytes. Two ordinary forms at an ordinary resolution can still
+/// ask for tens of millions of cells just by being large, and 126 MB is nothing
+/// to a budget measured in gigabytes.
+///
+/// Before it, a sphere and a pyramid at eight times their default size sampled
+/// 22.4 million cells and took **485 seconds** — with nothing said, and nothing
+/// to cancel. The panel already prices the pair and shows the figure, so this
+/// is a backstop for the operation nobody meant to ask for.
+#[test]
+fn a_pair_too_large_to_sample_is_refused_even_inside_the_byte_budget() {
+    let mut doc = document();
+    // Large rather than distant: distance is what the byte-budget test above
+    // already uses, and this has to be refused by the *cell* ceiling instead.
+    let base = doc
+        .insert_shape_subtool(Shape::Sphere, &[3.0], [0.0; 3], adding())
+        .expect("a large sphere")
+        .layer;
+    let tool = doc
+        .insert_shape_subtool(Shape::Sphere, &[3.0], [1.0, 0.0, 0.0], adding())
+        .expect("another")
+        .layer;
+
+    let refusal = doc.run_boolean(settings(base, tool, BooleanOp::Union));
+    let Err(ModelError::Boolean(BooleanRefusal::OverBudget {
+        cells,
+        budget_bytes,
+    })) = refusal
+    else {
+        panic!("a pair this large should be refused by name, got {refusal:?}");
+    };
+
+    assert!(
+        cells > 4_000_000,
+        "the pair was supposed to be over the cell ceiling, and asked for {cells}"
+    );
+    // The ceiling's own figure rather than the document's, which is what says
+    // this refusal came from the work bound and not from the byte one.
+    assert_eq!(
+        budget_bytes, 16_000_000,
+        "refused against {budget_bytes} bytes, which is not the cell ceiling"
+    );
+}
