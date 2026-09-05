@@ -433,6 +433,10 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                     queue.push(Command::ToggleDiagnostics);
                     ui.close_menu();
                 }
+                if ui.button(s.action_export_profile).clicked() {
+                    queue.push(Command::ExportProfile);
+                    ui.close_menu();
+                }
                 if ui.button(s.action_attribution).clicked() {
                     queue.push(Command::ToggleAttribution);
                     ui.close_menu();

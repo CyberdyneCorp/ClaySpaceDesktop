@@ -12,7 +12,8 @@ use std::time::{Duration, Instant};
 
 use clayspace_app::input::Activation;
 use clayspace_app::{
-    chord_for, ray_at, SessionStore, SharedDocument, SurfaceGeometry, ViewportInput,
+    chord_for, profile_file, ray_at, DocumentShape, SessionStore, SharedDocument, SurfaceGeometry,
+    ViewportInput,
 };
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_mcp::{
@@ -24,7 +25,7 @@ use clayspace_model::{
     AutosavePolicy, Detail, DetailPolicy, Diagnostics, ExchangeModel, ExportSettings,
     ExportWarning, Format, FrameLog, GizmoMode, ImportSettings, LayerKey, LayerOperation,
     RecentDocuments, Recovery, RefFormat, RefPlane, Representation, SceneModel, SculptModel,
-    SkinSettings, StrokeModifiers, Units, ViewPresetKind,
+    SkinSettings, StrokeDiagnostics, StrokeModifiers, Units, ViewPresetKind,
 };
 use clayspace_view::shell::{self, region, ArmatureState, ShellState};
 use clayspace_view::{
@@ -98,6 +99,30 @@ struct AgentWake;
 /// repackaged, and the licence policy in `deny.toml` is written on the
 /// understanding that attribution travels with the distribution.
 const ATTRIBUTION: &str = include_str!("../../../ATTRIBUTION.md");
+
+/// Whether a report should carry the stroke section.
+///
+/// The report is rebuilt every frame, deliberately — a cached one goes stale
+/// precisely when a fallback happens, which is the moment it exists for. Every
+/// other section of it is a handful of string allocations; the stroke section
+/// sorts every retained window, and measured **0.9 ms** once a session has
+/// been worked. That is five per cent of a frame spent assembling a section
+/// nobody had open, so it is assembled where somebody is going to read it —
+/// the window, the export, an agent that asked for it — and nowhere else.
+///
+/// What this does **not** gate is the recording. `profile_overhead.rs`
+/// measures one record at **18 ns**, five per dab, against a dab of two
+/// milliseconds: the instrument is not part of what it measures, and switching
+/// it off would buy nothing and cost the report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StrokeSection {
+    /// Read the profile and summarise it.
+    Summarised,
+    /// Leave it out. The section reads as absent, which is distinct from a
+    /// session in which nothing was measured — that one reports every phase
+    /// with no samples in it.
+    Skipped,
+}
 
 /// The language the machine is set to, as a tag.
 ///
@@ -882,6 +907,9 @@ impl App {
     }
 
     fn sync_geometry_now(&mut self) {
+        // Read before the sync, because acknowledging the re-mesh below is
+        // what clears the pending count this reads.
+        let cause = self.remesh_cause();
         let Some(graphics) = self.graphics.as_mut() else {
             return;
         };
@@ -890,10 +918,31 @@ impl App {
             .document
             .with(|document| graphics.geometry.sync(&gpu, document));
         match result {
-            Ok(_) => self.sculpt.acknowledge_remesh(),
+            Ok(cost) => {
+                if let Some(cost) = cost {
+                    self.document.record_remesh(&cause, cost);
+                }
+                self.sculpt.acknowledge_remesh();
+            }
             Err(e) => eprintln!("the surface could not be re-meshed: {e}"),
         }
         self.coarsen_if_over_budget();
+    }
+
+    /// What the work a re-mesh is about to do was caused by.
+    ///
+    /// The tool where a pending edit made the bricks dirty, because "the
+    /// smooth brush is the slow one" is a sentence an engine team can act on
+    /// and "the re-mesh is slow" is not. A re-mesh with nothing pending was
+    /// caused by something else — an opened document, a conversion, a level
+    /// of detail changing — and is named as that rather than blamed on
+    /// whichever brush happened to run last.
+    fn remesh_cause(&self) -> String {
+        let pending = *self.sculpt.pending_remesh().get();
+        match self.sculpt.last_action().get().tool.filter(|_| pending > 0) {
+            Some(tool) => tool.label().to_string(),
+            None => "re-malha".to_string(),
+        }
     }
 
     /// Drops to the coarse level when the full surface is more than the
@@ -2578,7 +2627,7 @@ impl App {
     /// allocations against a frame that meshes a surface, and a cached report
     /// is one that goes stale precisely when a fallback happens — which is the
     /// moment it exists for.
-    fn diagnostics(&self) -> Diagnostics {
+    fn diagnostics(&self, stroke: StrokeSection) -> Diagnostics {
         let mut report = self.policy.diagnostics();
         report.renderer = self
             .graphics
@@ -2613,7 +2662,89 @@ impl App {
             connected: self.agent.door().connected,
             commands: self.agent.from_agent(),
         });
+        // Both halves of a stroke meet in the handle every stroke passes
+        // through, so the report has one thing to read rather than two.
+        //
+        // Summarised only where something is going to read it. Recording a
+        // phase costs 18 ns and is free beside the dab it measures;
+        // *summarising* the session sorts every retained window and measured
+        // 0.9 ms once they fill — and this report is rebuilt every frame, so
+        // folding it in unconditionally spent five per cent of every frame on
+        // a section nobody had open. `profile_overhead.rs` holds both figures.
+        report.stroke = match stroke {
+            StrokeSection::Summarised => Some(self.document.with_profile(StrokeDiagnostics::of)),
+            StrokeSection::Skipped => None,
+        };
         report
+    }
+
+    /// Writes the session's profile to a file, for the engine's authors.
+    ///
+    /// The report on the clipboard is what a person reads; this is what a
+    /// machine reads. It carries the distribution behind every phase, the
+    /// conditions the figures were taken under and the shape of what was being
+    /// sculpted — everything this project has otherwise had to reconstruct by
+    /// hand in an upstream issue, because a follow-up question is a round trip
+    /// and a round trip is where a performance report dies.
+    ///
+    /// Offered on a debug build as well, and told about. The identifying half
+    /// of a profile is just as true there, and that is often the build
+    /// somebody is running when they hit the thing worth reporting — but an
+    /// unoptimised build runs this work about two and a half times slower, so
+    /// a reader must be told before the file leaves the machine as well as
+    /// inside it.
+    fn export_profile(&mut self) {
+        // The decision is the library's and is held by a test; this is only
+        // the dialog that carries it.
+        if profile_file::ask_before_writing() == profile_file::Ask::WarnTimingsAreNotComparable
+            && !self.confirm_debug_profile()
+        {
+            return;
+        }
+        let Some(path) = rfd::FileDialog::new()
+            .set_title(self.strings.action_export_profile)
+            .set_file_name(profile_file::FILE_NAME)
+            .add_filter("JSON", &profile_file::EXTENSIONS)
+            .save_file()
+        else {
+            return;
+        };
+        let text = profile_file::render(
+            &self.diagnostics(StrokeSection::Summarised),
+            &self.document.profile(),
+            &self.document_shape(),
+        );
+        // Written whole or not at all: a half-file is a file somebody attaches
+        // to an issue and nobody can read.
+        match profile_file::write(&path, &text) {
+            Ok(()) => println!("perfil escrito em {}", path.display()),
+            Err(e) => eprintln!("o perfil não pôde ser escrito: {e}"),
+        }
+        self.request_redraw();
+    }
+
+    /// Says what a debug build's durations are worth, before one is written.
+    ///
+    /// The file says the same thing twice inside itself. This is the third
+    /// place, and it is the one that reaches somebody who is about to attach
+    /// the file to somebody else's issue tracker.
+    fn confirm_debug_profile(&self) -> bool {
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Warning)
+            .set_title(self.strings.action_export_profile)
+            .set_description(self.strings.ask_profile_from_debug)
+            .set_buttons(rfd::MessageButtons::YesNo)
+            .show()
+            == rfd::MessageDialogResult::Yes
+    }
+
+    /// What was being sculpted when the figures were taken.
+    ///
+    /// Read through the shape rather than handed the scene, so that nothing
+    /// the sculptor named can reach the file: the shape has nowhere to put a
+    /// name.
+    fn document_shape(&self) -> DocumentShape {
+        DocumentShape::of(self.scene.scene().get(), *self.sculpt.stats().get())
     }
 
     /// Whether a command blocks the interface long enough to say so.
@@ -3856,7 +3987,14 @@ impl App {
         let last = self.sculpt.last_action().get().clone();
         let history = *self.sculpt.history().get();
 
-        let diagnostics = self.diagnostics();
+        // Only when the window that shows it is open. The report is rebuilt
+        // every frame and the stroke section is the one part of it that costs
+        // something to assemble.
+        let diagnostics = self.diagnostics(if self.show_diagnostics {
+            StrokeSection::Summarised
+        } else {
+            StrokeSection::Skipped
+        });
         // Assembled for the format the last export used, so the panel says
         // something before a file has been chosen. Re-checked against the
         // actual extension when the write happens.
@@ -4569,6 +4707,7 @@ impl App {
                 self.request_redraw();
             }
             Command::CopyDiagnostics => {}
+            Command::ExportProfile => self.export_profile(),
             Command::NewArmature => {
                 // At the middle of what is already there, so the first sphere
                 // lands inside the model rather than at a world origin that
@@ -5056,8 +5195,15 @@ impl Session for App {
                     .collect(),
             );
         }
-        if query.memory || query.timing || query.backends {
-            let diagnostics = self.diagnostics();
+        if query.memory || query.timing || query.backends || query.strokes {
+            // The stroke section is the one part of this report that costs
+            // something to assemble, so it is assembled only where the agent
+            // asked for it.
+            let diagnostics = self.diagnostics(if query.strokes {
+                StrokeSection::Summarised
+            } else {
+                StrokeSection::Skipped
+            });
             if query.memory {
                 // The engine's own accounting, read the way the status area
                 // reads it, so an agent and a person cannot disagree.
@@ -5082,6 +5228,13 @@ impl Session for App {
             }
             if query.backends {
                 state.backends = Some(report::backend_state(&diagnostics));
+            }
+            if query.strokes {
+                // Where the last strokes spent their milliseconds, split
+                // across the engine boundary. An agent that drives forty
+                // strokes and reads this can say *which call* was slow, which
+                // is the one thing a total cannot say.
+                state.strokes = report::stroke_state(&diagnostics);
             }
         }
 

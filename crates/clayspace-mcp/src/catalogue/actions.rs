@@ -257,6 +257,13 @@ pub fn home_of(command: &Command) -> Home {
         ToggleAttribution => Home::In("session", "toggle_attribution"),
         ToggleDiagnostics => Home::In("session", "toggle_diagnostics"),
         CopyDiagnostics => Home::In("session", "copy_diagnostics"),
+
+        // The command opens a save panel, so it is not offered for the reason
+        // every other file dialog is not. What an agent actually wants from it
+        // is the figures, and those are a *read* — `read` with the `strokes`
+        // section — which needs no panel, changes nothing, and hands back the
+        // same per-phase split the file carries.
+        ExportProfile => Home::NotOffered(OPENS_A_PANEL),
     }
 }
 

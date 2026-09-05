@@ -180,7 +180,39 @@ fn diagnostics() -> clayspace_model::Diagnostics {
             surfaces: 2,
             surface_bytes: 96 * 1024 * 1024,
         }),
+        // A worked session, so the capture shows the section that says which
+        // side of the engine boundary a stroke's milliseconds went to — and
+        // shows a phase with nothing in it saying so rather than showing a
+        // zero.
+        stroke: Some(clayspace_model::StrokeDiagnostics::of(&worked())),
+        refill: Some(clayspace_model::RefillDiagnostics {
+            accelerated: "cuda".into(),
+            cpu: Some(118.0),
+            accelerated_cost: Some(413.0),
+        }),
     }
+}
+
+/// A session with a stroke behind it, for the capture.
+fn worked() -> clayspace_model::StrokeProfile {
+    use clayspace_model::{Phase, Work};
+
+    let mut profile = clayspace_model::StrokeProfile::default();
+    for step in 0..24 {
+        profile.record(
+            "Padrão",
+            Phase::EngineEdit,
+            std::time::Duration::from_micros(500 + step * 10),
+            Work::bricks(27),
+        );
+        profile.record(
+            "Padrão",
+            Phase::EngineMesh,
+            std::time::Duration::from_micros(6_000 + step * 40),
+            Work::meshed(27, 9_000),
+        );
+    }
+    profile
 }
 
 /// The default bindings, so the menus render the chords they advertise.

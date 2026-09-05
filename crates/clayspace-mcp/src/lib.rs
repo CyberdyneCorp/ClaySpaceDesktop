@@ -37,5 +37,6 @@ pub use queue::{Answer, JobQueue};
 pub use server::{BindError, Server, ServerHandle};
 pub use session::{
     Applied, CaptureRequest, CaptureWhat, Consent, ConsentOutcome, Frame, GateKind, Measured,
-    Outstanding, Refusal, RefusalCode, Session, Settled, StateQuery, StateReport,
+    Outstanding, PhaseCostState, Refusal, RefusalCode, Session, Settled, StateQuery, StateReport,
+    StrokeCostState,
 };

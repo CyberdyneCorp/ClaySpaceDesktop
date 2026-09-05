@@ -407,7 +407,28 @@ impl BackendPolicy {
             mesh: None,
             hierarchies: None,
             memory: None,
+            // The session's own, filled by the composition root from the
+            // handle every stroke passes through.
+            stroke: None,
+            refill: self.refill_diagnostics(),
         }
+    }
+
+    /// What a refill was measured to cost per brick on each backend.
+    ///
+    /// `None` where the active backend is the CPU, because there is then no
+    /// routing decision and nothing to report a second cost against. That is a
+    /// different answer from *both backends cost nothing*, which is what a
+    /// zeroed pair would say.
+    fn refill_diagnostics(&self) -> Option<clayspace_model::RefillDiagnostics> {
+        if self.active == Backend::Cpu {
+            return None;
+        }
+        Some(clayspace_model::RefillDiagnostics {
+            accelerated: self.active.to_string(),
+            cpu: self.cpu_refill.per_brick,
+            accelerated_cost: self.accelerated_refill.per_brick,
+        })
     }
 }
 
