@@ -30,13 +30,14 @@ jobs:
   test:
     name: ${{ matrix.name }} (${{ matrix.profile }})
     runs-on: ${{ matrix.os }}
-    # Sixty, and each job now runs *one* profile rather than both.
+    # Seventy-five, and each job now runs *one* profile rather than both.
     #
     # The budget was sixty, then ninety, and the ninety was reached: the Metal
     # job was cancelled at 90:13 with two tests of the release suite left to
     # run. Its own note said what to do about that — "if it approaches ninety,
-    # the answer is to make it faster, not to raise this again" — and this is
-    # that answer, taken without deleting a test or weakening an assertion.
+    # the answer is to make it faster, not to raise this again" — and the split
+    # below is that answer, taken without deleting a test or weakening an
+    # assertion.
     #
     # Measured on the run that was cancelled: 3 min to build, **37 min** for
     # the debug suite, **49 min** for the release step, of which only 24 were
@@ -44,16 +45,30 @@ jobs:
     # profiles in one job is two builds and two suites in series, and the
     # slower one had been carrying the faster one over the line.
     #
-    # Split, the same work is two jobs of forty-odd minutes that start at the
-    # same moment. Sixty rather than ninety because a budget with an hour of
-    # slack does not catch anything, and the whole reason the last one was
-    # raised is that a *cancelled* job reads as a red X with no failing test in
-    # it and sends whoever looks hunting for one.
-    #
     # Split on every row and not only on Metal. Linux and macOS CPU-only are
     # not near the wall today, and a matrix whose rows are shaped differently
     # is one where the row that matters is the one nobody has looked at.
-    timeout-minutes: 60
+    #
+    # Seventy-five rather than sixty, and this number is measured rather than
+    # chosen. Sixty was tried first and cancelled `macOS, Metal (release)` at
+    # 60:50. The slowest job, on the run that followed:
+    #
+    #     build   20 min   the C++ engine, and a restored cache does not spare
+    #                      most of it
+    #     tests   28 min
+    #     total   48 min   against a cold build of 30 min, so ~58 with no cache
+    #
+    # A cache goes cold on eviction, on a lockfile bump and on a toolchain
+    # update, and a budget that only holds while it is warm is a gate that
+    # fails for reasons that have nothing to do with the change under test.
+    # Seventy-five covers the cold case with margin and still measures one
+    # profile of one configuration, so a regression in either shows up as
+    # itself.
+    #
+    # If this is approached again, the build is where to look and not the
+    # suite: it is twenty of the forty-eight minutes with a cache and thirty
+    # without one.
+    timeout-minutes: 75
     strategy:
       # One row failing should not hide the others: a Metal-only regression is
       # worth seeing next to a green CPU run — and now a release-only one is
