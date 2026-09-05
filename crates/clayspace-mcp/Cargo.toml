@@ -1,0 +1,23 @@
+[package]
+name = "clayspace-mcp"
+description = "The agent-facing door: an MCP server over the same commands the interface emits."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+# Not published: this is an application, and its crates are its internals.
+publish = false
+
+[dependencies]
+clayspace-model = { path = "../clayspace-model" }
+clayspace-vm = { path = "../clayspace-vm" }
+# The tool boundary is JSON and nothing else here is. Confined to this crate by
+# `tools/check_layering.py`: a domain or ViewModel type given a derive would
+# turn its internal shape into a wire contract we then could not refactor.
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.145"
+# The encoder for an image content block. Already in the workspace, and the
+# frame crosses the Session seam as rows so the encode happens here, on a
+# connection thread, rather than inside a frame.
+png = "0.18.1"

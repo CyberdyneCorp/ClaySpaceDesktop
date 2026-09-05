@@ -63,6 +63,66 @@ FORBIDDEN: list[tuple[str, str, str]] = [
         "wgpu",
         "the Model layer is domain logic and knows nothing of rendering",
     ),
+    # The agent-facing door sits beside the View and is held to the View's
+    # isolation for the View's reason: a tool surface that can only be
+    # exercised with a window and a compiled C++ engine is a tool surface
+    # nobody will test.
+    (
+        "clayspace-mcp",
+        "claycore",
+        "the agent-facing crate reaches the application through commands, not "
+        "the engine",
+    ),
+    (
+        "clayspace-mcp",
+        "claycore-sys",
+        "the agent-facing crate must not reach the engine's FFI",
+    ),
+    (
+        "clayspace-mcp",
+        "clayspace-engine",
+        "the agent-facing crate must not reach the engine adapter either",
+    ),
+    (
+        "clayspace-mcp",
+        "clayspace-view",
+        "the agent-facing crate is a second reader of ViewModel state, not a "
+        "second interface",
+    ),
+    (
+        "clayspace-mcp",
+        "egui",
+        "the tool surface must be exercisable with no interface library",
+    ),
+    (
+        "clayspace-mcp",
+        "wgpu",
+        "the tool surface must be exercisable with no GPU; a capture crosses "
+        "the Session seam as rows of pixels",
+    ),
+    (
+        "clayspace-mcp",
+        "winit",
+        "the tool surface must be exercisable with no window",
+    ),
+    # JSON is the tool boundary's business and nothing else's. A domain or
+    # ViewModel type given a derive is a type whose internal shape has become a
+    # contract with every client, and this workspace refactors those freely.
+    (
+        "clayspace-model",
+        "serde",
+        "the domain's shape is not a wire contract",
+    ),
+    (
+        "clayspace-vm",
+        "serde",
+        "a ViewModel's shape is not a wire contract",
+    ),
+    (
+        "clayspace-view",
+        "serde_json",
+        "the tool boundary is the only place JSON belongs",
+    ),
 ]
 
 # Only these crates may contain `unsafe`. Everything else declares

@@ -408,6 +408,25 @@ pub fn menu_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQu
                         .data_mut(|data| data.insert_temp(layout_reset_id(), true));
                     ui.close_menu();
                 }
+                ui.separator();
+                // The door is the person's, not the agent's: an agent cannot
+                // open it, shut it, or see this menu.
+                let word = if state.door.listening {
+                    s.menu_agent_close
+                } else {
+                    s.menu_agent_open
+                };
+                if ui.button(word).clicked() {
+                    queue.push(Command::ToggleAgentDoor);
+                    ui.close_menu();
+                }
+                if ui
+                    .add_enabled(state.door.listening, egui::Button::new(s.menu_agent_access))
+                    .clicked()
+                {
+                    queue.push(Command::ShowAgentAccess(true));
+                    ui.close_menu();
+                }
             });
             ui.menu_button(s.menu_help, |ui| {
                 if ui.button(s.action_diagnostics).clicked() {

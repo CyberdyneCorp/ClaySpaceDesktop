@@ -51,6 +51,7 @@ concurrent mutation is a borrow-check error rather than a race.
 ```mermaid
 graph TD
     APP["clayspace-app"]
+    MCP["clayspace-mcp"]
     VIEW["clayspace-view"]
     VM["clayspace-vm"]
     MODEL["clayspace-model"]
@@ -59,6 +60,9 @@ graph TD
     SYS["claycore-sys"]
 
     APP --> VIEW
+    APP --> MCP
+    MCP --> VM
+    MCP --> MODEL
     APP --> ENGINE
     APP --> VM
     VIEW --> VM
@@ -80,11 +84,72 @@ graph TD
 | `clayspace-engine` | ClayCore-backed implementations | — |
 | `clayspace-vm` | ViewModels: observable state and commands | egui, wgpu, winit, ClayCore |
 | `clayspace-view` | Widgets and the renderer | ClayCore, directly or transitively |
+| `clayspace-mcp` | The agent-facing door: protocol, tool surface, gates | ClayCore, egui, wgpu, winit, `clayspace-view` |
 | `clayspace-app` | Composition root, window, event loop | — |
 
 `unsafe` exists in the two bridge crates and nowhere else. Every other crate
 declares `#![forbid(unsafe_code)]`, and `tools/check_layering.py` fails if one
 drops the declaration or if any forbidden dependency edge appears.
+
+### Why the door sits beside the View and not under it
+
+`clayspace-mcp` is a second reader of ViewModel state and a second emitter of
+commands, and it is held to every constraint the View is held to, for the
+View's reason: a tool surface that can only be exercised with a window and a
+compiled C++ engine is a tool surface nobody tests. It has no `egui`, no
+`wgpu`, no `winit` and no ClayCore, so a hundred and thirty command mappings,
+the whole protocol and every gate are covered by tests that run in the
+ViewModel suite's feedback loop.
+
+The seam is a trait the composition root implements:
+
+```rust
+pub trait Session {
+    fn apply(&mut self, command: Command) -> Result<Applied, Refusal>;
+    fn read(&mut self, query: StateQuery) -> StateReport;
+    fn capture(&mut self, request: CaptureRequest) -> Result<Frame, Refusal>;
+    fn settle(&mut self, budget: Duration) -> Settled;
+    fn measure(&mut self, command: Command) -> Result<Measured, Refusal>;
+    fn consent(&mut self, ask: &Consent) -> ConsentOutcome;
+    fn gesture_in_progress(&self) -> bool;
+}
+```
+
+Every method runs **on the interface thread, between frames**, and that is not
+a preference. `Observable` holds a `Cell` and the engine's safe wrapper is
+`Send + !Sync`, so a connection thread holding a ViewModel or a document behind
+a mutex is a borrow-check error rather than a design somebody rejected. A
+parsed request becomes a job on a queue, the event loop drains it — bounded, so
+a burst from an agent delays itself rather than starving the redraw — and the
+answer is sent from *inside* the drain, which is what makes a tool's return
+mean the change has happened.
+
+Waking is why `EventLoop::with_user_event` replaced `EventLoop::new`. The loop
+sleeps on `ControlFlow::Wait` deliberately; without a proxy to wake it, an
+agent's command would sit in the queue until somebody moved the mouse.
+
+**The tool surface cannot drift from the command vocabulary**, because one
+function refuses to compile if it does:
+
+```rust
+fn home_of(command: &Command) -> Home  // exhaustive, no wildcard arm
+```
+
+A new `Command` variant does not build until somebody has given it a group and
+an action name, or has said in `Home::NotOffered` why it is not offered. That
+is the whole reason the mapping is written by hand rather than derived: a derive
+would accept a variant nobody exposed, silently. The three commands that open,
+shut and answer the door are themselves `NotOffered` — an agent that could
+answer the permission it is being asked for would have made the gate a
+formality.
+
+**Any process running as this user can read the connection secret and drive the
+session.** That is the stated blast radius. The door binds loopback only, the
+secret is new every run and published `0600` in the session directory, the
+`Origin` and `Host` headers are checked so a browser page cannot reach it, and
+the operations that can destroy work — writing over a file, exporting, opening
+a document, discarding unsaved work, quitting — need a consent the secret
+cannot supply.
 
 ### Why the domain and the adapter are separate
 

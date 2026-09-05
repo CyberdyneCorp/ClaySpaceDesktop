@@ -2944,6 +2944,156 @@ the startup fill to it cost 179 ms against 63 ms. The accelerated backend keeps
 a batch unless the CPU beats it by more than a quarter, so a near-tie stays on
 the default and only a decisive loss moves the work.
 
+## Driving it from an agent
+
+The application listens for the whole time it is open. An agent connects to the
+session a sculptor is already in rather than starting one of its own, and it
+drives it through the same commands the interface emits — so an agent's edit is
+one history entry, undone by the same undo, and refused wherever the interface
+would refuse it. There is no second way in.
+
+### Reaching it
+
+Model Context Protocol over Streamable HTTP, bound to `127.0.0.1` and to
+nothing else. The port and a secret are written to the session directory when
+the application opens and removed when it closes:
+
+```
+porta 7457
+chave  f2c1b0a9…
+processo 84213
+```
+
+The file is `agente.acesso`, readable by its owner alone. A client connects to
+`http://127.0.0.1:<porta>/mcp` with `Authorization: Bearer <chave>`. The
+secret is new for every run, so one read from a previous session opens nothing.
+A request declaring a web origin the server did not issue is refused whatever
+secret it carries, which is the one attack a loopback HTTP server has that a
+Unix socket does not.
+
+If the port is taken, the next free one is used and published. Two copies of
+the application running at once are therefore reachable separately.
+
+If the door cannot open at all — no port free, no session directory — the
+application opens anyway and says why. That costs the door, not the ability to
+sculpt.
+
+### What it can ask for
+
+Twenty-four tools, one per domain the interface already has a panel for, each
+taking an action and that action's arguments:
+
+| | |
+|---|---|
+| Sculpting | `tool`, `brush`, `stroke`, `mask`, `curve` |
+| Forms | `shape`, `object`, `transform`, `lattice`, `subtool`, `boolean` |
+| The scene | `layer`, `passes`, `hierarchy` |
+| The document | `document`, `exchange`, `repair`, `convert`, `deform` |
+| The rest | `armature`, `history`, `view`, `reference`, `session` |
+
+and five that are not commands: `describe`, `state`, `viewport`, `wait` and
+`measure`.
+
+`describe` answers from the application's own vocabulary rather than from a
+copy of it, so an agent learns the verbs at the moment it needs them and the
+answer cannot go stale. Every action names its arguments, which are required,
+what a choice's whole set is, and an example that is exercised by the test
+suite — a row that stopped building the command it claims is a row the build
+fails on.
+
+An unknown action is refused with the actions the group *does* have. A missing
+or wrongly typed argument is refused naming the argument, what it should have
+been, and what arrived, and changes nothing.
+
+A few commands are real and deliberately not offered, each with its reason in
+the source and in `describe`: the five that open a file panel on the sculptor's
+own screen, and the three that open, shut or answer the agent door — an agent
+that could answer the permission it is being asked for would have made the gate
+a formality.
+
+### What it can see
+
+A capture returns the viewport, or the whole window with the panels and bars as
+drawn, as a PNG the client displays. It is the renderer that draws the window,
+with the same camera, shading, overlays and quality — a second drawing path
+could disagree with what the sculptor is looking at, which is the one thing it
+exists to rule out.
+
+Any changing call takes `capture` and returns the frame *after* the change, in
+the same answer and after the edit has reached the surface. Where meshing or a
+job is still running the answer names it beside the image: a half-meshed
+surface read as a defect is a defect filed.
+
+`wait` holds until the session is quiet, and names what is still running where
+its bound is reached. `viewport.compare` reports a difference against the
+difference two renders of an unchanged subject already produce on that machine
+— zero on Linux and not on macOS, where a runner was measured leaving 1,294
+pixels byte-differing on a frame that had not changed. An agent reads
+`past_the_floor`, not the raw count.
+
+### What it cannot do without you
+
+Saving over a file, exporting, opening a document, starting a new one and
+quitting are gated. The request appears at the window naming the operation, the
+client and the path, and can be allowed once, allowed always, or refused.
+Allowing once does not stand for the next one; allowing always records the kind
+in the session store and can be undone by editing `agente.consentimentos`.
+Nobody answering it refuses it after a bound rather than holding the connection
+open on an unattended machine.
+
+Everything the edit history can bring back is ungated — sculpting, masking,
+transforming, selecting, navigating, undoing. That is what the session is for.
+
+While a person is holding a stroke, a drag or an outline, a call that would
+change the document is refused saying so, and calls that only read are served.
+
+### Rigging without a pointer
+
+Growing a ZSphere is "drag a child out of a parent": a press that names the
+parent, a first movement that creates the child, and a release. That is three
+events describing one intention, and it is three only because a hand cannot
+say "here" and "there" at once. `armature.add` says both, and the other five —
+`select`, `insert`, `move`, `resize`, `reparent` — say the rest.
+
+A move takes a point rather than a displacement, which makes it exact where a
+drag only ends up close: the difference is worked out from the tree once
+instead of accumulating over a gesture. Symmetry mirrors an asked-for sphere
+exactly as it mirrors a dragged one. An index that is not in the tree is named
+rather than guessed at, and does not cost the caller a selection they had
+already made.
+
+### What it can measure
+
+`state` reads the document, the scene tree, the active tool, the camera, the
+history, the mask, running jobs, the memory ledger by the part of the document
+that holds it, the frame timings, the stalls, the active backend and every
+operation that fell back to another. Reading marks nothing changed, so an agent
+polling the session is never the reason an idle application stops sleeping.
+
+`measure` runs one action with the clock around it and reports the wall time,
+whether a frame stalled, and the conditions. It always says it is a live figure
+— taken with a window open and a person's session in memory — and nothing here
+writes a benchmark baseline. The baselines in `benchmarks/` are what future
+runs are judged against and they are recorded by the harness under stated
+conditions; a number from a live session is evidence.
+
+An agent request that holds the interface thread longer than a frame appears in
+the stall log under its own name, beside every other stall, so the door's cost
+is visible in the same place everything else's is.
+
+### What the window says about it
+
+The status area says whether the application is listening, whether a client is
+connected, and when an agent last changed the document. A surface that moved
+while nobody touched the window is otherwise a defect report with no cause in
+it. The diagnostics report carries the same three answers — and the address,
+never the key, because a report is pasted into issues.
+
+**Any process running as this user can read `agente.acesso` and drive the
+session.** That is the stated blast radius, and it is the same boundary that
+already protects the autosave and the recovery marker. It is why the operations
+that can destroy work need a consent the file cannot supply.
+
 ## History
 
 - Undo and redo over the engine's own vocabulary.

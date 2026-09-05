@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod agent_vm;
 pub mod armature_vm;
 pub mod boolean_vm;
 pub mod command;
@@ -22,6 +23,7 @@ mod reference_vm;
 pub mod scene_vm;
 pub mod sculpt_vm;
 
+pub use agent_vm::{AgentAnswer, AgentAsk, AgentGate, AgentViewModel, Door};
 pub use command::{Axis, Command, CommandQueue};
 pub use history_vm::HistoryViewModel;
 pub use jobs::{Completion, Generation, JobRunner, Outcome, Progress, Reporter};

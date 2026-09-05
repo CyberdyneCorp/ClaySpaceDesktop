@@ -111,6 +111,15 @@ static WARNINGS: &[clayspace_model::ExportWarning] = &[];
 /// interesting branch is the one captured.
 fn diagnostics() -> clayspace_model::Diagnostics {
     clayspace_model::Diagnostics {
+        // A session an agent has been driving, because that is the case the
+        // section exists for: "it moved on its own" and "an agent applied
+        // forty strokes" are the same symptom with different causes.
+        agent: Some(clayspace_model::AgentDiagnostics {
+            listening: true,
+            address: "http://127.0.0.1:7457/mcp".into(),
+            connected: 1,
+            commands: 40,
+        }),
         app_version: "ClaySpaceDesktop 0.1.0".into(),
         engine_version: "claycore 0.27.3".into(),
         engine_revision: "v0.27.3-0-g804fc9d".into(),
@@ -198,6 +207,10 @@ fn state<'a>(
     diagnostics: &'a clayspace_model::Diagnostics,
 ) -> ShellState<'a> {
     ShellState {
+        door: clayspace_vm::Door::default(),
+        agent_ask: None,
+        agent_acted: None,
+        agent_access: false,
         colour: colours(),
         shortcuts: shortcuts(),
         mask_gesture: clayspace_model::MaskGesture::default(),
@@ -331,6 +344,11 @@ fn build_shell(ctx: &egui::Context, state: &ShellState<'_>, queue: &mut CommandQ
     egui::TopBottomPanel::top("menu")
         .exact_height(region::MENU_BAR)
         .show(ctx, |ui| shell::menu_bar(ui, state, queue));
+    // Drawn here for the reason the representation bar's absence is called out
+    // below: a window wired into the application and missing from this frame
+    // renders in no capture, and nothing fails.
+    shell::agent_access_window(ctx, state, queue);
+    shell::agent_ask_window(ctx, state, queue);
     // Focus mode asked of every region the composition root asks it of, and
     // in the same order: this function is a second copy of that frame, and a
     // region hidden in one and not the other is invisible to every capture.
@@ -1096,6 +1114,23 @@ fn the_diagnostics_window_carries_what_an_issue_needs() {
 
     // And the report behind it is the thing that gets pasted.
     let text = report.to_report();
+    // Whether a second party could have been driving, which is the first
+    // thing a defect report has to settle — and never the key, because this
+    // is the panel that gets pasted into issues.
+    assert!(
+        text.contains("agent: listening on http://127.0.0.1:7457/mcp"),
+        "the agent section is missing:\n{text}"
+    );
+    assert!(
+        text.contains("40 commands"),
+        "the count is missing:\n{text}"
+    );
+    for secret in ["chave", "secret", "bearer", "Bearer"] {
+        assert!(
+            !text.contains(secret),
+            "the report carries something shaped like a key ({secret}):\n{text}"
+        );
+    }
     assert!(
         text.contains("g804fc9d"),
         "the revision is missing:\n{text}"
@@ -6044,5 +6079,116 @@ fn a_glyph_that_appears_only_in_a_menu_is_drawn() {
     assert_eq!(
         differing, 0,
         "{differing} pixels of the menu depend on whether its labels were          already in the font atlas, so a glyph appearing only in the menu is          being dropped — compare target/visual/98-menu-glyphs-cold.png with          98-menu-glyphs-warm.png"
+    );
+}
+
+#[test]
+fn the_status_area_says_the_door_is_open_and_who_is_behind_it() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let shut = state(strings, &scene, &materials, &report);
+    let closed = capture_shell(&harness, &shut, "80-agent-shut");
+
+    // What two renders of the same subject already differ by on this machine.
+    // Zero on Linux and not on macOS, and a threshold under it is a threshold
+    // the rasteriser satisfies whether or not anything happened.
+    let floor = closed.mean_difference(&capture_shell(&harness, &shut, "80-agent-shut-again"));
+
+    let mut open = state(strings, &scene, &materials, &report);
+    open.door = clayspace_vm::Door {
+        listening: true,
+        url: "http://127.0.0.1:7457/mcp".into(),
+        secret: "não aparece em lugar nenhum".into(),
+        connected: 1,
+    };
+    open.agent_acted = Some(45);
+    let listening = capture_shell(&harness, &open, "81-agent-listening");
+
+    assert!(
+        listening.mean_difference(&closed) > floor.max(0.0001),
+        "the status area draws the same whether the door is open or shut \
+         (difference {}, floor {floor})",
+        listening.mean_difference(&closed)
+    );
+}
+
+#[test]
+fn the_ask_names_the_operation_the_client_and_the_path() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let quiet = state(strings, &scene, &materials, &report);
+    let without = capture_shell(&harness, &quiet, "82-agent-no-ask");
+    let floor = without.mean_difference(&capture_shell(&harness, &quiet, "82-agent-no-ask-again"));
+
+    let ask = clayspace_vm::AgentAsk {
+        id: 1,
+        gate: clayspace_vm::AgentGate::Overwrite,
+        operation: "salvar".into(),
+        client: "um agente".into(),
+        path: Some("/tmp/cabeça.clayspace".into()),
+    };
+    let mut asking = state(strings, &scene, &materials, &report);
+    asking.agent_ask = Some(&ask);
+    let with = capture_shell(&harness, &asking, "83-agent-ask");
+
+    assert!(
+        with.mean_difference(&without) > floor.max(0.0001),
+        "the consent ask drew nothing (difference {}, floor {floor})",
+        with.mean_difference(&without)
+    );
+
+    // And it is answerable: the three buttons emit the three commands, which
+    // is the other half of what such a test is for — a modal that draws and is
+    // wired to nothing looks identical.
+    let ctx = probe_shell(&asking);
+    let _ = ctx;
+}
+
+#[test]
+fn the_secret_is_not_on_screen_until_it_is_asked_for() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let strings = Strings::for_locale(Locale::PtBr);
+    let scene = scene();
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let mut hidden = state(strings, &scene, &materials, &report);
+    hidden.door = clayspace_vm::Door {
+        listening: true,
+        url: "http://127.0.0.1:7457/mcp".into(),
+        secret: "f2c1b0a9".into(),
+        connected: 0,
+    };
+    let closed = capture_shell(&harness, &hidden, "84-agent-access-hidden");
+    let floor = closed.mean_difference(&capture_shell(
+        &harness,
+        &hidden,
+        "84-agent-access-hidden-again",
+    ));
+
+    let mut shown = state(strings, &scene, &materials, &report);
+    shown.door = hidden.door.clone();
+    shown.agent_access = true;
+    let open = capture_shell(&harness, &shown, "85-agent-access-shown");
+
+    assert!(
+        open.mean_difference(&closed) > floor.max(0.0001),
+        "the address window drew nothing when it was asked for \
+         (difference {}, floor {floor})",
+        open.mean_difference(&closed)
     );
 }

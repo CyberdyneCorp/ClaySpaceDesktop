@@ -25,7 +25,7 @@ linked statically. Its licence is reproduced in full at
 
 - **ClayCore** — MIT License
 
-## Rust dependencies (383)
+## Rust dependencies (386)
 
 | Package | Version | Licence |
 |---|---|---|
@@ -165,6 +165,7 @@ linked statically. Its licence is reproduced in full at
 | image | 0.25.10 | MIT OR Apache-2.0 |
 | indexmap | 2.14.0 | Apache-2.0 OR MIT |
 | itertools | 0.13.0 | MIT OR Apache-2.0 |
+| itoa | 1.0.18 | MIT OR Apache-2.0 |
 | jni | 0.22.4 | MIT OR Apache-2.0 |
 | jni-macros | 0.22.4 | MIT OR Apache-2.0 |
 | jni-sys | 0.3.1 | MIT OR Apache-2.0 |
@@ -286,6 +287,7 @@ linked statically. Its licence is reproduced in full at
 | serde | 1.0.229 | MIT OR Apache-2.0 |
 | serde_core | 1.0.229 | MIT OR Apache-2.0 |
 | serde_derive | 1.0.229 | MIT OR Apache-2.0 |
+| serde_json | 1.0.151 | MIT OR Apache-2.0 |
 | serde_repr | 0.1.21 | MIT OR Apache-2.0 |
 | shlex | 1.3.0 | MIT OR Apache-2.0 |
 | shlex | 2.0.1 | MIT OR Apache-2.0 |
@@ -407,6 +409,7 @@ linked statically. Its licence is reproduced in full at
 | zerotrie | 0.2.4 | Unicode-3.0 |
 | zerovec | 0.11.6 | Unicode-3.0 |
 | zerovec-derive | 0.11.3 | Unicode-3.0 |
+| zmij | 1.0.23 | MIT |
 | zune-core | 0.5.3 | MIT OR Apache-2.0 OR Zlib |
 | zune-jpeg | 0.5.15 | MIT OR Apache-2.0 OR Zlib |
 | zvariant | 5.14.0 | MIT |

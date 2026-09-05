@@ -75,6 +75,7 @@ pub use shelf::{
     tool_rail, ShelfFilter,
 };
 pub use widgets::{chip_id, close_id, heading_id, readout_id, slider_id, slider_widget_id};
+pub use windows::{agent_access_window, agent_ask_window};
 pub use windows::{
     attribution_window, convert_window, deform_window, diagnostics_window, export_window,
     import_window, reference_slider_name, reference_window, repair_window, ReferenceSlot,
@@ -226,6 +227,14 @@ pub struct ShellState<'a> {
     /// whether the composition controls are refusing. `None` where the active
     /// layer is not a hierarchy.
     pub multires_cost: Option<clayspace_model::MultiresSculptLayerCost>,
+    /// Where the agent-facing door stands.
+    pub door: clayspace_vm::Door,
+    /// What an agent is asking permission for, while it is asking.
+    pub agent_ask: Option<&'a clayspace_vm::AgentAsk>,
+    /// How long ago an agent last changed the document, in seconds.
+    pub agent_acted: Option<u64>,
+    /// Whether the address and secret are on screen.
+    pub agent_access: bool,
     pub strings: &'a Strings,
     /// The bindings in force, so a menu item can show the chord that does the
     /// same thing. Borrowed rather than copied because remapping replaces the
@@ -576,6 +585,58 @@ fn autosave_readout(ui: &mut egui::Ui, state: &ShellState<'_>) {
         .memory_mut(|memory| memory.data.insert_temp(autosave_id(), row.response.rect));
 }
 
+/// Whether the application is listening, and when an agent last acted.
+fn agent_readout(ui: &mut egui::Ui, state: &ShellState<'_>) {
+    let s = state.strings;
+    let (word, colour) = if state.door.listening {
+        (
+            match state.door.connected {
+                0 => s.state_agent_listening.to_string(),
+                connected => format!(
+                    "{} · {connected} {}",
+                    s.state_agent_listening, s.state_agent_connected
+                ),
+            },
+            if state.door.connected > 0 {
+                Tokens::accent()
+            } else {
+                Tokens::text_dim()
+            },
+        )
+    } else {
+        (s.state_agent_shut.to_string(), Tokens::text_faint())
+    };
+
+    ui.label(
+        egui::RichText::new(s.label_agent)
+            .size(type_scale::HEADING)
+            .color(Tokens::text_faint()),
+    );
+    ui.label(
+        egui::RichText::new(word)
+            .size(type_scale::LABEL)
+            .color(colour),
+    );
+
+    if let Some(seconds) = state.agent_acted {
+        ui.label(
+            egui::RichText::new(format!("{} {}", s.state_agent_acted, ago(seconds)))
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+        );
+    }
+}
+
+/// How long ago, in the coarse terms a status area wants.
+fn ago(seconds: u64) -> String {
+    match seconds {
+        0..=9 => "agora".to_string(),
+        s if s < 60 => format!("{s}s"),
+        s if s < 3600 => format!("{}min", s / 60),
+        s => format!("{}h", s / 3600),
+    }
+}
+
 /// A duration as minutes and seconds, which is how a countdown is read.
 fn clock(left: std::time::Duration) -> String {
     let seconds = left.as_secs();
@@ -645,6 +706,12 @@ pub fn status_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Command
             }
             ui.add_space(space::SECTION);
             numeric(ui, format!("{}: {}", s.label_backend, state.backend));
+
+            // Whether a second party could be driving, and when one last did.
+            // A surface that moved while nobody touched the window is
+            // otherwise a defect report with no cause in it.
+            ui.add_space(space::SECTION);
+            agent_readout(ui, state);
             if let Some((label, changed)) = state.last_action {
                 ui.add_space(space::SECTION);
                 let text = if changed {

@@ -390,6 +390,111 @@ impl ArmatureViewModel {
     }
 
     /// Removes the selected sphere and everything under it.
+    /// Where a sphere is, for a caller that knows an index and not a point.
+    pub fn position_of(&self, index: NodeIndex) -> Option<[f32; 3]> {
+        self.tree
+            .get()
+            .as_ref()?
+            .get(index)
+            .map(|node| node.position)
+    }
+
+    /// Selects a sphere, or clears the selection.
+    ///
+    /// A selection past the end of the tree is refused rather than kept: the
+    /// next verb would take hold of whatever now sits at that index, which is
+    /// the same reason `refresh` drops one.
+    pub fn select(&mut self, index: Option<NodeIndex>) {
+        match index {
+            None => self.selected.set(None),
+            Some(index) if self.position_of(index).is_some() => self.selected.set(Some(index)),
+            Some(index) => self
+                .notice
+                .set(Some(format!("não há esfera {index} neste esqueleto"))),
+        }
+    }
+
+    /// Grows a sphere out of another, at a point in the world.
+    ///
+    /// The pointer's way is to drag a child out of a parent: a press that
+    /// names the parent, a first movement that creates the child, and a
+    /// release. That is three events describing one intention, and it is only
+    /// three because a hand cannot say "here" and "there" at once. This says
+    /// both, so an agent does not have to counterfeit a gesture.
+    ///
+    /// Mirrored where the armature's symmetry is on, exactly as the drag is.
+    pub fn add(&mut self, parent: NodeIndex, at: [f32; 3], radius: Option<f32>) {
+        let radius = radius.unwrap_or(self.default_radius);
+        let mirrored = *self.symmetric.get();
+        match self.model.add_zsphere(parent, at, radius, mirrored) {
+            Ok(child) => {
+                self.notice.set_if_changed(None);
+                self.refresh();
+                self.selected.set(Some(child));
+            }
+            Err(e) => self.notice.set(Some(e.to_string())),
+        }
+    }
+
+    /// Puts a sphere on the link between one and its parent.
+    pub fn insert(&mut self, child: NodeIndex) {
+        match self.model.insert_zsphere(child) {
+            Ok(inserted) => {
+                self.notice.set_if_changed(None);
+                self.refresh();
+                self.selected.set(Some(inserted));
+            }
+            Err(e) => self.notice.set(Some(e.to_string())),
+        }
+    }
+
+    /// Moves a sphere to a point, subtree and all.
+    ///
+    /// A point rather than a displacement, because a caller that is not a hand
+    /// knows where it wants the sphere and not how far that is from where the
+    /// sphere happens to be. The model takes a delta, so the difference is
+    /// worked out here — from the tree, once, rather than accumulated over a
+    /// drag, which is what makes this exact where a drag only ends up close.
+    pub fn move_to(&mut self, index: NodeIndex, to: [f32; 3]) {
+        let Some(from) = self.position_of(index) else {
+            self.notice
+                .set(Some(format!("não há esfera {index} neste esqueleto")));
+            return;
+        };
+        let delta = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
+        let mirror = self.mirrored_node(index);
+        match self.move_symmetric(index, mirror, delta) {
+            Ok(()) => {
+                self.notice.set_if_changed(None);
+                self.refresh();
+            }
+            Err(e) => self.notice.set(Some(e.to_string())),
+        }
+    }
+
+    /// How thick a sphere is.
+    pub fn resize(&mut self, index: NodeIndex, radius: f32) {
+        let mirror = self.mirrored_node(index);
+        match self.resize_symmetric(index, mirror, radius.max(0.01)) {
+            Ok(()) => {
+                self.notice.set_if_changed(None);
+                self.refresh();
+            }
+            Err(e) => self.notice.set(Some(e.to_string())),
+        }
+    }
+
+    /// Hangs a sphere, and its subtree, under a different parent.
+    pub fn reparent(&mut self, index: NodeIndex, parent: NodeIndex) {
+        match self.model.reparent_zsphere(index, parent) {
+            Ok(()) => {
+                self.notice.set_if_changed(None);
+                self.refresh();
+            }
+            Err(e) => self.notice.set(Some(e.to_string())),
+        }
+    }
+
     pub fn remove_selected(&mut self) {
         let Some(index) = *self.selected.get() else {
             return;

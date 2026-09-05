@@ -14,6 +14,7 @@ pub struct OffscreenTarget {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     framebuffer: Framebuffer,
+    format: wgpu::TextureFormat,
     /// Row stride in the readback buffer. Copies require rows aligned to 256
     /// bytes, so this is usually wider than the image.
     padded_bytes_per_row: u32,
@@ -26,6 +27,19 @@ impl OffscreenTarget {
     pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
     pub fn new(gpu: &Gpu, width: u32, height: u32) -> Self {
+        Self::with_format(gpu, width, height, Self::FORMAT)
+    }
+
+    /// The same, in a format a caller chose.
+    ///
+    /// For capturing through a renderer that was built for a *window*: its
+    /// pipelines carry the surface's format, which on macOS is
+    /// `Bgra8UnormSrgb`, and a render pass whose attachment is a different
+    /// format fails validation and leaves the texture untouched — a capture
+    /// that comes back as transparent black with the reason only in a log.
+    /// The alternative is a second renderer built for this format, which is a
+    /// second set of pipelines to keep in step with the first.
+    pub fn with_format(gpu: &Gpu, width: u32, height: u32, format: wgpu::TextureFormat) -> Self {
         let (width, height) = (width.max(1), height.max(1));
 
         let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
@@ -38,7 +52,7 @@ impl OffscreenTarget {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: Self::FORMAT,
+            format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
@@ -58,7 +72,8 @@ impl OffscreenTarget {
         Self {
             texture,
             view,
-            framebuffer: Framebuffer::new(gpu, width, height, Self::FORMAT),
+            framebuffer: Framebuffer::new(gpu, width, height, format),
+            format,
             padded_bytes_per_row,
             readback,
         }
@@ -78,6 +93,14 @@ impl OffscreenTarget {
 
     pub fn height(&self) -> u32 {
         self.framebuffer.height
+    }
+
+    /// Whether the pixels come back blue-first, which a `Bgra` target's do.
+    pub fn is_bgra(&self) -> bool {
+        matches!(
+            self.format,
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+        )
     }
 
     /// Renders one frame and returns it as RGBA8 rows, unpadded.

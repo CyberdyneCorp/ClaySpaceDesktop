@@ -24,6 +24,12 @@ path = "src/main.rs"
 
 [features]
 default = []
+# The end-to-end test of the agent door. Behind a feature because the target
+# links the whole application — a slow link on macOS — and then skips at
+# runtime everywhere it is not asked for, which is a full link bought for
+# nothing on every row of the test matrix. `just test-agent-e2e` turns it on,
+# and the lint job builds it on Linux so it cannot rot unnoticed.
+agent-e2e = []
 # The whole chain, so the binary can be built for a backend by name.
 metal = ["clayspace-engine/metal"]
 cuda = ["clayspace-engine/cuda"]
@@ -34,6 +40,7 @@ opencl = ["clayspace-engine/opencl"]
 clayspace-engine = { path = "../clayspace-engine" }
 clayspace-model = { version = "0.1.0", path = "../clayspace-model" }
 clayspace-vm = { version = "0.1.0", path = "../clayspace-vm" }
+clayspace-mcp = { path = "../clayspace-mcp" }
 clayspace-view = { path = "../clayspace-view" }
 winit = "0.30.13"
 wgpu = "24.0.5"
@@ -46,6 +53,8 @@ egui-winit = "0.31.1"
 rfd = "0.15.4"
 
 [dev-dependencies]
+# The end-to-end test speaks the tool surface's own wire, so it reads JSON.
+serde_json = "1.0.145"
 egui = "0.31.1"
 egui-wgpu = "0.31.1"
 png = "0.18.1"
@@ -57,3 +66,7 @@ pollster = "1.0.1"
 [[test]]
 name = "window_smoke"
 harness = false
+
+[[test]]
+name = "agent_end_to_end"
+required-features = ["agent-e2e"]
