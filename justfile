@@ -90,6 +90,17 @@ test-agent-e2e:
 diagnostics:
     cargo run -q -p claycore --example diagnostics
 
+# Ajuda → Exportar perfil… writes a JSON file for the engine's authors: the
+# distribution behind every phase of a stroke, the conditions it was taken
+# under, and the shape of what was being sculpted. An unoptimised build runs
+# that work about two and a half times slower, so the file it writes declares
+# its own timings incomparable — this recipe is the way to produce one that
+# does not have to.
+
+# The application, optimised, so a profile exported from it can be quoted.
+profile:
+    cargo run -q -p {{app}} --release
+
 # -- testing -----------------------------------------------------------------
 
 # The whole suite. No display and no GPU required.

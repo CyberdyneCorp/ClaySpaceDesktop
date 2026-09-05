@@ -346,35 +346,59 @@ pub fn diagnostics_window(ctx: &egui::Context, state: &ShellState<'_>, queue: &m
             ui.set_min_width(360.0);
             let d = state.diagnostics;
 
-            if heading(ui, s.section_diagnostics) {
-                diagnostics_build(ui, d);
-            }
-            // Second, above everything about this machine, and drawn whether
-            // or not anything is listening — for the reason the fallbacks are
-            // listed when there are none: silence reads as "the panel is
-            // broken" rather than as "no door". Whether a second party could
-            // have been driving is the first thing a defect report has to
-            // settle, and a reader should not have to scroll for it.
-            if heading(ui, s.section_agent) {
-                diagnostics_agent(ui, d);
-            }
-            if heading(ui, s.label_backend) {
-                diagnostics_backend(ui, d);
-            }
-            if d.render.is_some() && heading(ui, s.section_rendering) {
-                diagnostics_render(ui, d);
-            }
-            if d.mesh.is_some() && heading(ui, s.section_mesh_sculpting) {
-                diagnostics_mesh(ui, d);
-            }
-            if d.memory.is_some() && heading(ui, s.section_memory) {
-                diagnostics_memory(ui, d);
-            }
+            // The report grows a section every time this build learns to
+            // answer something new — the agent door, rendering, mesh
+            // sculpting, memory, and now the stroke — and it had outgrown a
+            // 1280x800 screen before the last two were added. An unscrolled
+            // window puts its copy button below the desktop, which is the one
+            // control the whole window exists for. So the sections scroll and
+            // the buttons do not. The fraction is measured against the capture
+            // rather than chosen: at 0.6 of the screen the button row fell
+            // past the window's own edge at the size `visual_shell` renders
+            // at.
+            egui::ScrollArea::vertical()
+                .max_height(ctx.screen_rect().height() * 0.45)
+                .show(ui, |ui| {
+                    if heading(ui, s.section_diagnostics) {
+                        diagnostics_build(ui, d);
+                    }
+                    // Second, above everything about this machine, and drawn
+                    // whether or not anything is listening — for the reason
+                    // the fallbacks are listed when there are none: silence
+                    // reads as "the panel is broken" rather than as "no door".
+                    // Whether a second party could have been driving is the
+                    // first thing a defect report has to settle.
+                    if heading(ui, s.section_agent) {
+                        diagnostics_agent(ui, d);
+                    }
+                    if heading(ui, s.label_backend) {
+                        diagnostics_backend(ui, d);
+                    }
+                    if d.render.is_some() && heading(ui, s.section_rendering) {
+                        diagnostics_render(ui, d);
+                    }
+                    if d.mesh.is_some() && heading(ui, s.section_mesh_sculpting) {
+                        diagnostics_mesh(ui, d);
+                    }
+                    if d.memory.is_some() && heading(ui, s.section_memory) {
+                        diagnostics_memory(ui, d);
+                    }
+                    if d.stroke.is_some() && heading(ui, s.section_stroke) {
+                        diagnostics_stroke(ui, d);
+                    }
+                });
 
             ui.add_space(space::SNUG);
             ui.horizontal(|ui| {
                 if ui.button(s.action_copy).clicked() {
                     queue.push(Command::CopyDiagnostics);
+                }
+                // Beside the copy button because they answer the same
+                // question at two sizes: the clipboard is what a person
+                // reads, and the file is what the engine's authors run
+                // against.
+                if ui.button(s.action_export_profile).clicked() {
+                    queue.push(Command::ExportProfile);
                 }
                 if state.diagnostics_copied {
                     ui.label(
@@ -509,6 +533,53 @@ pub(super) fn diagnostics_memory(ui: &mut egui::Ui, d: &Diagnostics) {
         "Superfícies",
         format!("{} · {}", m.surfaces, megabytes(m.surface_bytes)),
     );
+}
+
+/// Where a stroke's milliseconds went, phase by phase.
+///
+/// The row above this section says an operation took 42 ms. That figure spans
+/// an engine call and this application's own work around it, and neither party
+/// can act on a number they cannot attribute — so each phase says whose it is,
+/// and the engine's rows come first because they are the ones that leave this
+/// building.
+///
+/// A phase that never ran says so rather than showing a zero. A zero reads as
+/// *free*, which is the reading that sends somebody looking in the wrong
+/// place.
+pub(super) fn diagnostics_stroke(ui: &mut egui::Ui, d: &Diagnostics) {
+    let Some(stroke) = &d.stroke else {
+        return;
+    };
+    if stroke.is_empty() {
+        return readout(ui, "Amostras", "nenhuma nesta sessão".to_string());
+    }
+    for phase in &stroke.phases {
+        readout(ui, phase_name(&phase.phase), phase_cost(phase));
+    }
+}
+
+/// The phase, in the interface's own words rather than the profile's keys.
+fn phase_name(phase: &str) -> &'static str {
+    match phase {
+        "engine edit" => "Motor · pincelada",
+        "engine mesh" => "Motor · malha",
+        "read" => "Nosso · leitura",
+        "split" => "Nosso · divisão",
+        _ => "Nosso · envio",
+    }
+}
+
+/// The median and the worst, or the fact that there is neither.
+fn phase_cost(phase: &clayspace_model::PhaseCost) -> String {
+    let (Some(median), Some(worst)) = (phase.median, phase.worst) else {
+        return "sem amostras".to_string();
+    };
+    format!(
+        "{:.2} / {:.2} ms · {}",
+        median.as_secs_f64() * 1000.0,
+        worst.as_secs_f64() * 1000.0,
+        phase.samples
+    )
 }
 
 /// Bytes as a figure a sculptor can hold against what the machine has.

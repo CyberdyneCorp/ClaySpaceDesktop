@@ -862,6 +862,39 @@ depth are three figures. A fourth counts the mesh-sculpting sessions the
 application asked, because a document with no surfaces and a host that never
 asked report the same zero. One button puts the lot on the clipboard.
 
+**A stroke's milliseconds are split, and the split is exported.** The report
+used to say `re-malha 42 ms` — a figure spanning an engine call and this
+application's work around it, which neither party can act on because neither
+can tell whose it was. It now carries five rows: the engine's stroke and brick
+refill, the engine's `clay_brick_cache_mesh`, and our copy, split and upload,
+each with a median, a worst and a sample count. Four of those had been measured
+on every dab of every real stroke and thrown away; the engine's own edit was
+not measured at all. Beside them, the measured cost per brick of a refill on
+each backend — the evidence the routing decides on every batch, and the figure
+behind CUDA being 3.5x slower than the CPU here.
+
+**Help → Export profile…** writes that as one JSON file for the engine's
+authors, with the whole distribution behind every phase — count, retained
+window, median, p95, worst, per tool as well as across tools — and everything
+this project has ever reconstructed by hand in an upstream issue around it:
+engine version and revision, backends, fallbacks, adapter, stalls, per-pass GPU
+time, memory by category, and the shape of what was being sculpted. A follow-up
+question is a round trip, and a round trip is where a performance report dies.
+Nothing unmeasured is written as a zero, nothing the sculptor named comes out,
+and a debug build stamps its own timings as not comparable and asks before
+writing — it runs this work about two and a half times slower, so `just
+profile` is the way to produce one that can be quoted.
+
+An agent reads the same split through **`state` with the `strokes` section** —
+no panel, no file, nothing changed, and every figure marked as coming from a
+live session so it cannot be mistaken for a baseline.
+
+**Measuring costs nothing, and that is measured.** Recording a phase is 20 ns
+against a two-millisecond dab, which is why there is no switch for it.
+Summarising a session is 0.9 ms, and the report is rebuilt every frame — so the
+summary is assembled only where something is going to read it. `profile_overhead.rs`
+holds both figures.
+
 **Help → Attributions** shows the attribution manifest, generated from `cargo
 metadata` and embedded in the binary rather than shipped beside it.
 
@@ -1164,6 +1197,7 @@ long-form commands live in one place. `just` on its own lists them.
 | `just engine` | Which ClayCore this build is pinned to |
 | `just engine-pin v0.60.0` | Move the pin to a release tag |
 | `just diagnostics` | What this build is and what it decided to run on |
+| `just profile` | The application, optimised, so an exported profile can be quoted |
 
 `just check` runs six gates that are six different tools — formatting, the
 layering rules, clippy, the suite, the specification and the packaging

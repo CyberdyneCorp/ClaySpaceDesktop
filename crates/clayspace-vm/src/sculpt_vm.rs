@@ -569,7 +569,10 @@ impl SculptViewModel {
             | Command::ReparentZsphere { .. }
             | Command::ToggleAgentDoor
             | Command::ShowAgentAccess(_)
-            | Command::AnswerAgentAsk(_) => {}
+            | Command::AnswerAgentAsk(_)
+            // The file belongs to the platform, as the clipboard does. The
+            // composition root writes it; no ViewModel state changes here.
+            | Command::ExportProfile => {}
         }
         Ok(())
     }

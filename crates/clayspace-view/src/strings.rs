@@ -317,6 +317,9 @@ pub struct Strings {
     pub section_memory: &'static str,
     /// The agent-facing door's own section of the diagnostics window.
     pub section_agent: &'static str,
+    /// The stroke-cost section of the diagnostics report: which of a stroke's
+    /// milliseconds were the engine's and which were this application's.
+    pub section_stroke: &'static str,
 
     // Labels
     /// How far a stamp is turned about its own facing — the grain.
@@ -596,6 +599,15 @@ pub struct Strings {
     pub action_shadows: &'static str,
     pub action_attribution: &'static str,
     pub action_copy: &'static str,
+    /// Writes the session's profile to a file, for the engine's authors.
+    pub action_export_profile: &'static str,
+    /// What a debug build's durations are worth, asked before one is written.
+    ///
+    /// The file says the same thing twice inside itself, in fields a machine
+    /// reads. This is the third place and the only one a person sees, and it
+    /// is the one that reaches somebody about to attach the file to somebody
+    /// else's issue tracker.
+    pub ask_profile_from_debug: &'static str,
     pub state_copied: &'static str,
     pub action_armature_new: &'static str,
     pub action_armature_edit: &'static str,
@@ -869,6 +881,7 @@ libera em vez de congelar.",
     section_mesh_sculpting: "ESCULTURA EM MALHA",
     section_memory: "MEMÓRIA",
     section_agent: "PORTA DO AGENTE",
+    section_stroke: "ESFORÇO DA PINCELADA",
 
     label_grain: "Grão",
     label_intensity: "Intensidade",
@@ -1063,6 +1076,11 @@ libera em vez de congelar.",
         action_shadows: "Sombra do estúdio",
     action_attribution: "Atribuições",
     action_copy: "Copiar relatório",
+    action_export_profile: "Exportar perfil…",
+    ask_profile_from_debug: "Esta é uma compilação de depuração: ela roda cerca de duas \
+                             vezes e meia mais devagar, então os tempos deste arquivo não \
+                             se comparam com os de outra máquina. O arquivo diz isso de si \
+                             mesmo. Exportar mesmo assim?",
     state_copied: "copiado",
     action_armature_new: "Nova armadura",
     action_armature_edit: "Editar armadura",
@@ -1333,6 +1351,7 @@ instead.",
     section_mesh_sculpting: "MESH SCULPTING",
     section_memory: "MEMORY",
     section_agent: "AGENT DOOR",
+    section_stroke: "STROKE COST",
 
     label_grain: "Grain",
     label_intensity: "Intensity",
@@ -1527,6 +1546,11 @@ instead.",
         action_shadows: "Studio shadow",
     action_attribution: "Attributions",
     action_copy: "Copy report",
+    action_export_profile: "Export profile…",
+    ask_profile_from_debug: "This is a debug build: it runs about two and a half times \
+                             slower, so the timings in this file do not compare with \
+                             those from another machine. The file says so itself. Export \
+                             anyway?",
     state_copied: "copied",
     action_armature_new: "New armature",
     action_armature_edit: "Edit armature",
@@ -1801,6 +1825,7 @@ lados. Con Ctrl, libera en vez de congelar.",
     section_mesh_sculpting: "ESCULTURA EN MALLA",
     section_memory: "MEMORIA",
     section_agent: "PUERTA DEL AGENTE",
+    section_stroke: "COSTO DEL TRAZO",
 
     label_grain: "Grano",
     label_intensity: "Intensidad",
@@ -1999,6 +2024,11 @@ lados. Con Ctrl, libera en vez de congelar.",
         action_shadows: "Sombra do estúdio",
     action_attribution: "Atribuciones",
     action_copy: "Copiar informe",
+    action_export_profile: "Exportar perfil…",
+    ask_profile_from_debug: "Esta es una compilación de depuración: se ejecuta unas dos \
+                             veces y media más lento, así que los tiempos de este archivo \
+                             no se comparan con los de otra máquina. El archivo lo dice de \
+                             sí mismo. ¿Exportar de todos modos?",
     state_copied: "copiado",
     action_armature_new: "Nuevo esqueleto",
     action_armature_edit: "Editar esqueleto",
@@ -2279,7 +2309,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 249] {
+    pub fn all(&self) -> [&'static str; 252] {
         [
             self.label_autosave_in,
             self.state_autosaved,
@@ -2430,6 +2460,7 @@ impl Strings {
             self.section_rendering,
             self.section_mesh_sculpting,
             self.section_memory,
+            self.section_stroke,
             self.label_grain,
             self.label_intensity,
             self.label_size,
@@ -2519,6 +2550,8 @@ impl Strings {
             self.action_shadows,
             self.action_attribution,
             self.action_copy,
+            self.action_export_profile,
+            self.ask_profile_from_debug,
             self.state_copied,
             self.action_armature_new,
             self.action_armature_edit,
@@ -2545,6 +2578,40 @@ mod tests {
             for value in strings.all() {
                 assert!(!value.is_empty(), "{} has an empty string", locale.label());
             }
+        }
+    }
+
+    /// The warning a debug build shows before it writes a profile.
+    ///
+    /// Held here rather than left to the dialog, because the dialog cannot be
+    /// driven headlessly and the sentence is the whole of what it does. It has
+    /// two jobs — say which build this is, and say that its timings do not
+    /// travel — and a translation that keeps the tone and drops one of them
+    /// would leave somebody attaching a debug figure to somebody else's issue
+    /// tracker believing it stands.
+    #[test]
+    fn the_debug_profile_warning_says_what_it_is_for_in_every_language() {
+        // What "debug", "compare" and "export" look like in the three, kept as
+        // stems so a conjugation does not break the test.
+        let build = [["depuração"], ["debug"], ["depuración"]];
+        let travels = [["comparam"], ["compare"], ["comparan"]];
+        for (locale, (build, travels)) in Locale::ALL.iter().zip(build.iter().zip(travels.iter())) {
+            let asked = Strings::for_locale(*locale).ask_profile_from_debug;
+            assert!(
+                build.iter().any(|stem| asked.contains(stem)),
+                "{} does not say which build this is: {asked}",
+                locale.label()
+            );
+            assert!(
+                travels.iter().any(|stem| asked.contains(stem)),
+                "{} does not say the timings do not travel: {asked}",
+                locale.label()
+            );
+            assert!(
+                asked.ends_with('?'),
+                "{} does not actually ask anything: {asked}",
+                locale.label()
+            );
         }
     }
 

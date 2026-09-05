@@ -21,7 +21,8 @@ use clayspace_vm::AgentGate;
 
 use crate::session::{
     BackendState, CameraState, DocumentState, FallbackState, GateKind, HistoryState, LayerState,
-    MaskState, MemoryPart, MemoryState, SceneState, StallState, TimingState, ToolState,
+    MaskState, MemoryPart, MemoryState, PhaseCostState, SceneState, StallState, StrokeCostState,
+    TimingState, ToolState,
 };
 
 /// How many agent jobs the interface thread does between two frames.
@@ -242,6 +243,137 @@ pub fn backend_state(diagnostics: &Diagnostics) -> BackendState {
                 declined_by: fallback.declined_by.clone(),
             })
             .collect(),
+    }
+}
+
+/// Where the last strokes spent their milliseconds.
+///
+/// `None` where the report carries no stroke section, which is what a report
+/// assembled without one looks like — the composition root only summarises the
+/// profile when something is going to read it, because summarising costs
+/// nearly a millisecond once a session has been worked and recording costs
+/// eighteen nanoseconds. Absent and *nothing was measured* are different
+/// answers: a session nobody sculpted in still reports every phase, with no
+/// samples in it.
+pub fn stroke_state(diagnostics: &Diagnostics) -> Option<StrokeCostState> {
+    let stroke = diagnostics.stroke.as_ref()?;
+    Some(StrokeCostState {
+        tools_measured: stroke.tools,
+        phases: stroke.phases.iter().map(phase_cost_state).collect(),
+        // Always true. A figure taken with a window open is evidence, not a
+        // baseline, and nothing here may write one.
+        live_session: true,
+    })
+}
+
+fn phase_cost_state(phase: &clayspace_model::PhaseCost) -> PhaseCostState {
+    let millis = |took: Option<std::time::Duration>| took.map(|d| d.as_secs_f64() * 1000.0);
+    PhaseCostState {
+        phase: phase.phase.clone(),
+        side: if phase.engine { "engine" } else { "ours" }.to_string(),
+        entry_point: phase.entry_point.clone(),
+        samples: phase.samples,
+        median_ms: millis(phase.median),
+        p95_ms: millis(phase.p95),
+        worst_ms: millis(phase.worst),
+        keys: phase.keys,
+        triangles: phase.triangles,
+        bricks: phase.bricks,
+    }
+}
+
+#[cfg(test)]
+mod stroke_tests {
+    use super::*;
+    use clayspace_model::{Phase, StrokeDiagnostics, StrokeProfile, Work};
+
+    fn worked() -> Diagnostics {
+        let mut profile = StrokeProfile::default();
+        for step in 0..12 {
+            profile.record(
+                "Padrão",
+                Phase::EngineEdit,
+                Duration::from_micros(500 + step * 10),
+                Work::bricks(27),
+            );
+            profile.record(
+                "Padrão",
+                Phase::EngineMesh,
+                Duration::from_micros(6_000 + step * 40),
+                Work::meshed(27, 9_000),
+            );
+        }
+        Diagnostics {
+            stroke: Some(StrokeDiagnostics::of(&profile)),
+            ..Diagnostics::default()
+        }
+    }
+
+    /// The whole point of the section: an agent that drove the strokes can say
+    /// *which call* was slow, which a total spanning both sides cannot.
+    #[test]
+    fn an_agent_reads_which_side_of_the_engine_boundary_the_time_went_to() {
+        let state = stroke_state(&worked()).expect("a stroke section");
+        assert_eq!(state.tools_measured, 1);
+
+        let edit = state
+            .phases
+            .iter()
+            .find(|phase| phase.phase == "engine edit")
+            .expect("the engine's edit");
+        assert_eq!(edit.side, "engine");
+        assert_eq!(edit.entry_point.as_deref(), Some("stroke and brick refill"));
+        assert_eq!(edit.samples, 12);
+        assert!(edit.median_ms.is_some_and(|ms| ms > 0.0));
+        assert_eq!(edit.bricks, 324);
+
+        let upload = state
+            .phases
+            .iter()
+            .find(|phase| phase.phase == "upload")
+            .expect("our upload");
+        assert_eq!(upload.side, "ours");
+        assert!(upload.entry_point.is_none());
+    }
+
+    /// A zero would read as *free*, which is the reading that sends an agent
+    /// looking in the wrong place.
+    #[test]
+    fn a_phase_that_never_ran_carries_no_figure_rather_than_a_zero() {
+        let state = stroke_state(&worked()).expect("a stroke section");
+        let upload = state
+            .phases
+            .iter()
+            .find(|phase| phase.phase == "upload")
+            .expect("our upload");
+        assert_eq!(upload.samples, 0);
+        assert_eq!(upload.median_ms, None);
+        assert_eq!(upload.p95_ms, None);
+        assert_eq!(upload.worst_ms, None);
+    }
+
+    /// The spec is blunt about it: a figure taken with a window open is
+    /// evidence, not a baseline.
+    #[test]
+    fn every_figure_says_it_came_from_a_live_session() {
+        assert!(stroke_state(&worked()).expect("a section").live_session);
+    }
+
+    /// Absent and *nothing was measured* are different answers. The first is a
+    /// report assembled without the section, because summarising costs
+    /// something and nobody asked; the second still lists every phase.
+    #[test]
+    fn a_report_assembled_without_the_section_has_none() {
+        assert!(stroke_state(&Diagnostics::default()).is_none());
+
+        let empty = Diagnostics {
+            stroke: Some(StrokeDiagnostics::of(&StrokeProfile::default())),
+            ..Diagnostics::default()
+        };
+        let state = stroke_state(&empty).expect("a section with nothing in it");
+        assert_eq!(state.tools_measured, 0);
+        assert_eq!(state.phases.len(), Phase::ALL.len());
+        assert!(state.phases.iter().all(|phase| phase.samples == 0));
     }
 }
 

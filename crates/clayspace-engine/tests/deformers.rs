@@ -7,6 +7,8 @@
 //! engine history at all, and what undo takes back is the delta record the
 //! adapter keeps beside it.
 
+use std::sync::atomic::{AtomicU32, Ordering};
+
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
     DeformSettings, DeformVerb, ExchangeModel, ExportSettings, ImportSettings, LayerOperation,
@@ -31,7 +33,7 @@ fn with_mesh(who: &str) -> (ClayDocument, std::path::PathBuf) {
     let mut document = ClayDocument::new(policy)
         .and_then(ClayDocument::with_starting_form)
         .expect("a document with a starting form");
-    let path = std::env::temp_dir().join(format!("clayspace-deform-{who}.obj"));
+    let path = fixture_path(who);
     let _ = std::fs::remove_file(&path);
     document
         .export_mesh(&path, ExportSettings::default())
@@ -48,6 +50,30 @@ fn with_mesh(who: &str) -> (ClayDocument, std::path::PathBuf) {
         .expect("the imported mesh is a layer");
     document.set_active_layer(key).expect("activate the mesh");
     (document, path)
+}
+
+/// Where one test's fixture goes, and nowhere another's could.
+///
+/// The name alone is not enough, and this cost a green CI run on macOS to
+/// learn. These tests run at once, each removing its own fixture on the way in
+/// and on the way out; two of them asked for `taper` and `Taper`, which are the
+/// same file on a **case-insensitive** filesystem — the default on macOS, and
+/// not on Linux, which is why it passed here and failed there, and why it
+/// failed only sometimes. One test deleted the other's mesh between its export
+/// and its import, and `clay_mesh_load` reported an I/O error on a file that
+/// had been there a moment earlier.
+///
+/// Fixed by making a collision impossible rather than by renaming the two that
+/// collided: the process and a counter make every fixture its own, whatever a
+/// later test decides to call itself and however the filesystem folds case.
+fn fixture_path(who: &str) -> std::path::PathBuf {
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+
+    std::env::temp_dir().join(format!(
+        "clayspace-deform-{who}-{}-{}.obj",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ))
 }
 
 /// Every vertex of the mesh layers, so a deformation can be compared exactly.
@@ -161,4 +187,32 @@ fn a_deformer_on_a_field_is_refused_by_where_it_applies() {
         error.to_string().contains("mesh"),
         "the refusal must name where the deformer applies: {error}"
     );
+}
+
+/// The regression. It reproduces on every platform, which is the point: the
+/// defect it guards was invisible on Linux and cost a run on macOS.
+///
+/// Two fixtures whose names differ only in case are one file wherever the
+/// filesystem folds case, and these tests run at once and delete their own
+/// fixtures. Comparing the paths as they are would pass on Linux and prove
+/// nothing, so they are compared folded — the way macOS compares them.
+#[test]
+fn two_fixtures_never_share_a_path_however_the_filesystem_folds_case() {
+    let taper = fixture_path("taper");
+    let pair = fixture_path("Taper");
+
+    assert_ne!(taper, pair);
+    assert_ne!(
+        taper.to_string_lossy().to_lowercase(),
+        pair.to_string_lossy().to_lowercase(),
+        "two fixtures differ only in case, which is one file on macOS: one \
+         test would delete the other's mesh between its export and its import"
+    );
+}
+
+/// And no two calls collide even when the caller asks for the same name, which
+/// is what stops the next test that copies one of these from reintroducing it.
+#[test]
+fn the_same_name_asked_for_twice_gets_two_fixtures() {
+    assert_ne!(fixture_path("taper"), fixture_path("taper"));
 }

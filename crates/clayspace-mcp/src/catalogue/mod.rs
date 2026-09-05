@@ -532,7 +532,12 @@ impl ToolSurface for Catalogue {
             title: "Estado".into(),
             description: "Reads the session without changing it: the document, the \
                           scene tree, the active tool, the camera, the history, the \
-                          mask, running jobs, memory, timings and backends."
+                          mask, running jobs, memory, timings, backends, and where \
+                          the strokes of this session spent their milliseconds — \
+                          split into the engine's own calls and this application's \
+                          work around them, per tool, as a distribution rather than \
+                          an average. Figures from a live session are evidence and \
+                          never a benchmark baseline."
                 .into(),
             input_schema: json!({
                 "type": "object",
@@ -542,6 +547,7 @@ impl ToolSurface for Catalogue {
                         "items": { "type": "string", "enum": [
                             "document", "scene", "tool", "camera", "history",
                             "mask", "jobs", "memory", "timing", "backends",
+                            "strokes",
                         ]},
                         "description": "which sections; omit for all of them",
                     }

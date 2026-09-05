@@ -11,24 +11,95 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
+use crate::geometry::SyncCost;
 use clayspace_engine::ClayDocument;
 use clayspace_model::{
     Armature, ArmatureModel, BrushSettings, CombineSettings, CurveJoin, CurveModel, CurveProfile,
     CurveState, DocumentModel, EditOutcome, ExchangeModel, ExportSettings, ExtrudeSettings,
     GestureSample, GizmoHandle, GizmoMode, HistoryState, ImportSettings, LatticeModel,
     LatticeState, LayerCost, LayerKey, MaskModel, MaskOp, MaskState, ModelError, NodeIndex,
-    OpenError, Protection, Representation, Scene, SceneModel, SceneStats, SculptModel,
-    SkinSettings, ToolKind,
+    OpenError, Phase, Protection, Representation, Scene, SceneModel, SceneStats, SculptModel,
+    SkinSettings, StrokeProfile, ToolKind, Work,
 };
 
-/// A handle to the one document.
+/// A handle to the one document, and to what working on it has cost.
 #[derive(Clone)]
-pub struct SharedDocument(Rc<RefCell<ClayDocument>>);
+pub struct SharedDocument {
+    document: Rc<RefCell<ClayDocument>>,
+    /// What every stroke through this handle has cost the engine.
+    ///
+    /// Held here rather than at the composition root because this is the one
+    /// place every stroke passes through — the ViewModel, the reference
+    /// builder and the benchmark harness all reach the document this way — so
+    /// a clock here needs no timing code in the layers above and cannot be
+    /// bypassed by a path that reaches the document another way.
+    profile: Rc<RefCell<StrokeProfile>>,
+}
 
 impl SharedDocument {
     pub fn new(document: ClayDocument) -> Self {
-        Self(Rc::new(RefCell::new(document)))
+        Self {
+            document: Rc::new(RefCell::new(document)),
+            profile: Rc::new(RefCell::new(StrokeProfile::default())),
+        }
+    }
+
+    /// What this session has cost, phase by phase.
+    ///
+    /// Cloned rather than borrowed out: the caller is a report being rendered
+    /// while a stroke may still be running, and handing out a `Ref` would make
+    /// the report able to panic the sculpting path.
+    ///
+    /// **The clone is not free** — at four thousand retained samples across
+    /// five phases and several tools it is the largest thing in the report —
+    /// so anything that only needs to *read* the profile takes
+    /// [`Self::with_profile`] instead. This exists for the file writer, which
+    /// wants a value it can hold while it renders.
+    pub fn profile(&self) -> StrokeProfile {
+        self.profile.borrow().clone()
+    }
+
+    /// Reads the profile in place, without copying it.
+    ///
+    /// The borrow lives no longer than the closure, so nothing can hold it
+    /// across a stroke.
+    pub fn with_profile<T>(&self, read: impl FnOnce(&StrokeProfile) -> T) -> T {
+        read(&self.profile.borrow())
+    }
+
+    /// Records a phase of the work a stroke caused.
+    ///
+    /// The re-mesh is measured by the composition root, which is what holds
+    /// the surface; it hands its figures here so that both halves of a stroke
+    /// end up in one place and the report has one thing to read.
+    pub fn record_phase(&self, cause: &str, phase: Phase, took: Duration, work: Work) {
+        self.profile.borrow_mut().record(cause, phase, took, work);
+    }
+
+    /// Folds what a re-mesh cost into the session's profile.
+    ///
+    /// These four figures have been measured on every dab of every real stroke
+    /// since `SyncCost` existed, and were dropped on the floor by the caller.
+    /// They are the half of a stroke that says whether the engine's meshing
+    /// call or this application's own work around it is what a sculptor is
+    /// waiting for.
+    ///
+    /// Here rather than at the call site so that the mapping from a cost onto
+    /// its phases is written once: a fifth term added to `SyncCost` and
+    /// forgotten in one of two places would be a phase silently missing from
+    /// every report.
+    pub fn record_remesh(&self, cause: &str, cost: SyncCost) {
+        let work = Work::meshed(cost.keys, cost.triangles);
+        for (phase, took) in [
+            (Phase::EngineMesh, cost.engine_mesh_time),
+            (Phase::Read, cost.read_time),
+            (Phase::Split, cost.split_time),
+            (Phase::Upload, cost.upload_time),
+        ] {
+            self.record_phase(cause, phase, took, work);
+        }
     }
 
     /// Runs something against the document directly.
@@ -36,17 +107,17 @@ impl SharedDocument {
     /// For the composition root's own work — meshing, statistics — rather than
     /// for anything a ViewModel does.
     pub fn with<T>(&self, work: impl FnOnce(&mut ClayDocument) -> T) -> T {
-        work(&mut self.0.borrow_mut())
+        work(&mut self.document.borrow_mut())
     }
 }
 
 impl SculptModel for SharedDocument {
     fn active_representation(&self) -> Representation {
-        self.0.borrow().active_representation()
+        self.document.borrow().active_representation()
     }
 
     fn active_layer_editable(&self) -> bool {
-        self.0.borrow().active_layer_editable()
+        self.document.borrow().active_layer_editable()
     }
 
     // Every provided method of `SculptModel` is forwarded here as well, and
@@ -58,48 +129,58 @@ impl SculptModel for SharedDocument {
     // discarded it, and fourteen combine operations drew the same picture. Any
     // provided method added to the trait belongs here too.
     fn active_layer_carries_geometry(&self) -> bool {
-        self.0.borrow().active_layer_carries_geometry()
+        self.document.borrow().active_layer_carries_geometry()
     }
 
     fn active_layer_visible(&self) -> bool {
-        self.0.borrow().active_layer_visible()
+        self.document.borrow().active_layer_visible()
     }
 
     fn apply_operation(
         &mut self,
         operation: clayspace_model::LayerOperation,
     ) -> Result<EditOutcome, ModelError> {
-        self.0.borrow_mut().apply_operation(operation)
+        self.document.borrow_mut().apply_operation(operation)
     }
 
     fn symmetry(&self) -> [bool; 3] {
-        self.0.borrow().symmetry()
+        self.document.borrow().symmetry()
     }
 
     fn set_symmetry(&mut self, symmetry: [bool; 3]) -> Result<(), ModelError> {
-        self.0.borrow_mut().set_symmetry(symmetry)
+        self.document.borrow_mut().set_symmetry(symmetry)
     }
 
     fn set_combine(&mut self, combine: CombineSettings) {
-        self.0.borrow_mut().set_combine(combine);
+        self.document.borrow_mut().set_combine(combine);
     }
 
     fn combine(&self) -> CombineSettings {
-        self.0.borrow().combine()
+        self.document.borrow().combine()
     }
 
     fn set_colour(&mut self, colour: clayspace_model::Colour) {
-        self.0.borrow_mut().set_colour(colour);
+        self.document.borrow_mut().set_colour(colour);
     }
 
     fn choose_recent_colour(&mut self, index: usize) -> bool {
-        self.0.borrow_mut().choose_recent_colour(index)
+        self.document.borrow_mut().choose_recent_colour(index)
     }
 
     fn colour_state(&self) -> clayspace_model::ColourState {
-        self.0.borrow().colour_state()
+        self.document.borrow().colour_state()
     }
 
+    /// The engine's half of a stroke, timed.
+    ///
+    /// Nothing of this application's runs inside the call: the engine applies
+    /// the stroke and refills the bricks it dirtied, and this is what that
+    /// costs. It is the purest ClayCore figure this application is in a
+    /// position to hand over, and until now it was not measured at all.
+    ///
+    /// A refusal records nothing. An error is not a measurement of the engine
+    /// doing the work, and folding one in would drag the phase's median
+    /// towards whatever refusing costs.
     fn apply_stroke(
         &mut self,
         tool: ToolKind,
@@ -107,41 +188,52 @@ impl SculptModel for SharedDocument {
         samples: &[GestureSample],
         symmetry: [bool; 3],
     ) -> Result<EditOutcome, ModelError> {
-        self.0
+        let started = Instant::now();
+        let outcome = self
+            .document
             .borrow_mut()
-            .apply_stroke(tool, brush, samples, symmetry)
+            .apply_stroke(tool, brush, samples, symmetry);
+        if let Ok(outcome) = &outcome {
+            self.record_phase(
+                tool.label(),
+                Phase::EngineEdit,
+                started.elapsed(),
+                Work::bricks(outcome.dirty_bricks),
+            );
+        }
+        outcome
     }
 
     fn pick(&self, origin: [f32; 3], direction: [f32; 3]) -> Option<[f32; 3]> {
-        self.0.borrow().pick(origin, direction)
+        self.document.borrow().pick(origin, direction)
     }
 
     fn undo(&mut self) -> Result<bool, ModelError> {
-        self.0.borrow_mut().undo()
+        self.document.borrow_mut().undo()
     }
 
     fn redo(&mut self) -> Result<bool, ModelError> {
-        self.0.borrow_mut().redo()
+        self.document.borrow_mut().redo()
     }
 
     fn history(&self) -> HistoryState {
-        self.0.borrow().history()
+        self.document.borrow().history()
     }
 
     fn stats(&self) -> SceneStats {
-        self.0.borrow().stats()
+        self.document.borrow().stats()
     }
 
     fn bounds(&self) -> Option<([f32; 3], [f32; 3])> {
-        self.0.borrow().bounds()
+        self.document.borrow().bounds()
     }
 
     fn set_alpha(&mut self, alpha: Option<clayspace_model::Alpha>) {
-        self.0.borrow_mut().set_alpha(alpha);
+        self.document.borrow_mut().set_alpha(alpha);
     }
 
     fn alpha_name(&self) -> Option<String> {
-        self.0.borrow().alpha_name()
+        self.document.borrow().alpha_name()
     }
 
     // The gesture hooks, which have to be forwarded like everything else.
@@ -154,70 +246,72 @@ impl SculptModel for SharedDocument {
     // from its anchor: the tests drive `ClayDocument`, and only the
     // application drives this.
     fn begin_gesture(&mut self) {
-        self.0.borrow_mut().begin_gesture();
+        self.document.borrow_mut().begin_gesture();
     }
 
     fn end_gesture(&mut self) {
-        self.0.borrow_mut().end_gesture();
+        self.document.borrow_mut().end_gesture();
     }
 
     fn open_live_gesture(&mut self, tool: clayspace_model::ToolKind, symmetry: [bool; 3]) -> bool {
-        self.0.borrow_mut().open_live_gesture(tool, symmetry)
+        self.document.borrow_mut().open_live_gesture(tool, symmetry)
     }
 
     fn close_live_gesture(&mut self) -> Result<usize, ModelError> {
-        self.0.borrow_mut().close_live_gesture()
+        self.document.borrow_mut().close_live_gesture()
     }
 
     fn discard_live_gesture(&mut self) -> usize {
-        self.0.borrow_mut().discard_live_gesture()
+        self.document.borrow_mut().discard_live_gesture()
     }
 }
 
 impl SceneModel for SharedDocument {
     fn scene(&self) -> Scene {
-        self.0.borrow().scene()
+        self.document.borrow().scene()
     }
 
     fn set_active_layer(&mut self, key: LayerKey) -> Result<(), ModelError> {
-        self.0.borrow_mut().set_active_layer(key)
+        self.document.borrow_mut().set_active_layer(key)
     }
 
     fn set_layer_visible(&mut self, key: LayerKey, visible: bool) -> Result<(), ModelError> {
-        self.0.borrow_mut().set_layer_visible(key, visible)
+        self.document.borrow_mut().set_layer_visible(key, visible)
     }
 
     fn set_solo(&mut self, key: Option<LayerKey>) -> Result<(), ModelError> {
-        self.0.borrow_mut().set_solo(key)
+        self.document.borrow_mut().set_solo(key)
     }
 
     fn apply_sculpt_layer_op(
         &mut self,
         op: clayspace_model::SculptLayerOp,
     ) -> Result<(), ModelError> {
-        self.0.borrow_mut().apply_sculpt_layer_op(op)
+        self.document.borrow_mut().apply_sculpt_layer_op(op)
     }
 
     fn sculpt_layer_cost(&self) -> clayspace_model::SculptLayerCost {
-        self.0.borrow().sculpt_layer_cost()
+        self.document.borrow().sculpt_layer_cost()
     }
 
     fn apply_multires_level_op(
         &mut self,
         op: clayspace_model::MultiresLevelOp,
     ) -> Result<(), ModelError> {
-        self.0.borrow_mut().apply_multires_level_op(op)
+        self.document.borrow_mut().apply_multires_level_op(op)
     }
 
     fn apply_multires_sculpt_layer_op(
         &mut self,
         op: clayspace_model::MultiresSculptLayerOp,
     ) -> Result<(), ModelError> {
-        self.0.borrow_mut().apply_multires_sculpt_layer_op(op)
+        self.document
+            .borrow_mut()
+            .apply_multires_sculpt_layer_op(op)
     }
 
     fn subdivision_cost(&self) -> Option<clayspace_model::SubdivisionCost> {
-        self.0.borrow().subdivision_cost()
+        self.document.borrow().subdivision_cost()
     }
 
     fn set_layer_protection(
@@ -225,11 +319,13 @@ impl SceneModel for SharedDocument {
         key: LayerKey,
         protection: Protection,
     ) -> Result<(), ModelError> {
-        self.0.borrow_mut().set_layer_protection(key, protection)
+        self.document
+            .borrow_mut()
+            .set_layer_protection(key, protection)
     }
 
     fn rename_layer(&mut self, key: LayerKey, name: &str) -> Result<(), ModelError> {
-        self.0.borrow_mut().rename_layer(key, name)
+        self.document.borrow_mut().rename_layer(key, name)
     }
 
     fn add_layer(
@@ -237,19 +333,19 @@ impl SceneModel for SharedDocument {
         name: &str,
         representation: Representation,
     ) -> Result<LayerKey, ModelError> {
-        self.0.borrow_mut().add_layer(name, representation)
+        self.document.borrow_mut().add_layer(name, representation)
     }
 
     fn remove_layer(&mut self, key: LayerKey) -> Result<(), ModelError> {
-        self.0.borrow_mut().remove_layer(key)
+        self.document.borrow_mut().remove_layer(key)
     }
 
     fn move_layer(&mut self, key: LayerKey, index: usize) -> Result<(), ModelError> {
-        self.0.borrow_mut().move_layer(key, index)
+        self.document.borrow_mut().move_layer(key, index)
     }
 
     fn layer_at(&mut self, origin: [f32; 3], direction: [f32; 3]) -> Option<LayerKey> {
-        self.0.borrow_mut().layer_at(origin, direction)
+        self.document.borrow_mut().layer_at(origin, direction)
     }
 
     fn set_layer_transform(
@@ -258,25 +354,25 @@ impl SceneModel for SharedDocument {
         position: [f32; 3],
         scale: f32,
     ) -> Result<(), ModelError> {
-        self.0
+        self.document
             .borrow_mut()
             .set_layer_transform(key, position, scale)
     }
 
     fn layer_bounds(&self, key: LayerKey) -> Option<([f32; 3], [f32; 3])> {
-        self.0.borrow().layer_bounds(key)
+        self.document.borrow().layer_bounds(key)
     }
 
     fn layer_cost(&self, key: LayerKey) -> Result<LayerCost, ModelError> {
-        self.0.borrow().layer_cost(key)
+        self.document.borrow().layer_cost(key)
     }
 
     fn consolidate_layer(&mut self, key: LayerKey) -> Result<(), ModelError> {
-        self.0.borrow_mut().consolidate_layer(key)
+        self.document.borrow_mut().consolidate_layer(key)
     }
 
     fn add_mesh_layer(&mut self, name: &str) -> Result<LayerKey, ModelError> {
-        self.0.borrow_mut().add_mesh_layer(name)
+        self.document.borrow_mut().add_mesh_layer(name)
     }
 
     fn remesh_layer(
@@ -284,140 +380,140 @@ impl SceneModel for SharedDocument {
         key: LayerKey,
         settings: clayspace_model::RemeshSettings,
     ) -> Result<clayspace_model::RemeshOutcome, ModelError> {
-        self.0.borrow_mut().remesh_layer(key, settings)
+        self.document.borrow_mut().remesh_layer(key, settings)
     }
 }
 
 impl DocumentModel for SharedDocument {
     fn save(&mut self, path: &std::path::Path) -> Result<(), ModelError> {
-        self.0.borrow_mut().save(path)
+        self.document.borrow_mut().save(path)
     }
 
     fn open(&mut self, path: &std::path::Path) -> Result<(), OpenError> {
-        self.0.borrow_mut().open(path)
+        self.document.borrow_mut().open(path)
     }
 
     fn reset(&mut self) -> Result<(), ModelError> {
-        self.0.borrow_mut().reset()
+        self.document.borrow_mut().reset()
     }
 }
 
 impl MaskModel for SharedDocument {
     fn mask_state(&self) -> MaskState {
-        self.0.borrow().mask_state()
+        self.document.borrow().mask_state()
     }
 
     fn apply_mask_op(&mut self, op: MaskOp) -> Result<(), ModelError> {
-        self.0.borrow_mut().apply_mask_op(op)
+        self.document.borrow_mut().apply_mask_op(op)
     }
 
     fn extrude_mask(&mut self, settings: ExtrudeSettings) -> Result<(), ModelError> {
-        self.0.borrow_mut().extrude_mask(settings)
+        self.document.borrow_mut().extrude_mask(settings)
     }
 
     fn apply_outline(&mut self, outline: &clayspace_model::MaskOutline) -> Result<(), ModelError> {
-        self.0.borrow_mut().apply_outline(outline)
+        self.document.borrow_mut().apply_outline(outline)
     }
 }
 
 impl CurveModel for SharedDocument {
     fn curve(&self) -> CurveState {
-        self.0.borrow().curve()
+        self.document.borrow().curve()
     }
     fn begin_curve(&mut self) {
-        self.0.borrow_mut().begin_curve()
+        self.document.borrow_mut().begin_curve()
     }
     fn add_curve_point(&mut self, at: [f32; 3], radius: f32) -> Result<(), ModelError> {
-        self.0.borrow_mut().add_curve_point(at, radius)
+        self.document.borrow_mut().add_curve_point(at, radius)
     }
     fn select_curve_point(&mut self, index: Option<usize>) {
-        self.0.borrow_mut().select_curve_point(index)
+        self.document.borrow_mut().select_curve_point(index)
     }
     fn toggle_curve_point(&mut self, index: usize) {
-        self.0.borrow_mut().toggle_curve_point(index)
+        self.document.borrow_mut().toggle_curve_point(index)
     }
     fn drag_curve(&mut self, by: [f32; 3]) -> Result<(), ModelError> {
-        self.0.borrow_mut().drag_curve(by)
+        self.document.borrow_mut().drag_curve(by)
     }
     fn set_curve_radius(&mut self, radius: f32) -> Result<(), ModelError> {
-        self.0.borrow_mut().set_curve_radius(radius)
+        self.document.borrow_mut().set_curve_radius(radius)
     }
     fn set_curve_join(&mut self, join: CurveJoin) -> Result<(), ModelError> {
-        self.0.borrow_mut().set_curve_join(join)
+        self.document.borrow_mut().set_curve_join(join)
     }
     fn set_curve_profile(&mut self, profile: CurveProfile) -> Result<(), ModelError> {
-        self.0.borrow_mut().set_curve_profile(profile)
+        self.document.borrow_mut().set_curve_profile(profile)
     }
     fn remove_curve_points(&mut self) -> Result<(), ModelError> {
-        self.0.borrow_mut().remove_curve_points()
+        self.document.borrow_mut().remove_curve_points()
     }
     fn apply_curve(&mut self) -> Result<(), ModelError> {
-        self.0.borrow_mut().apply_curve()
+        self.document.borrow_mut().apply_curve()
     }
     fn cancel_curve(&mut self) {
-        self.0.borrow_mut().cancel_curve()
+        self.document.borrow_mut().cancel_curve()
     }
 }
 
 impl LatticeModel for SharedDocument {
     fn lattice(&self) -> LatticeState {
-        self.0.borrow().lattice()
+        self.document.borrow().lattice()
     }
 
     fn begin_lattice(&mut self, divisions: [i32; 3]) -> Result<(), ModelError> {
-        self.0.borrow_mut().begin_lattice(divisions)
+        self.document.borrow_mut().begin_lattice(divisions)
     }
 
     fn select_lattice_point(&mut self, index: Option<usize>) {
-        self.0.borrow_mut().select_lattice_point(index)
+        self.document.borrow_mut().select_lattice_point(index)
     }
 
     fn toggle_lattice_point(&mut self, index: usize) {
-        self.0.borrow_mut().toggle_lattice_point(index)
+        self.document.borrow_mut().toggle_lattice_point(index)
     }
 
     fn select_lattice_points(&mut self, indices: &[usize]) {
-        self.0.borrow_mut().select_lattice_points(indices)
+        self.document.borrow_mut().select_lattice_points(indices)
     }
 
     fn set_gizmo_mode(&mut self, mode: GizmoMode) {
-        self.0.borrow_mut().set_gizmo_mode(mode)
+        self.document.borrow_mut().set_gizmo_mode(mode)
     }
 
     fn begin_gizmo_drag(&mut self, handle: GizmoHandle, anchor: [f32; 3], view_axis: [f32; 3]) {
-        self.0
+        self.document
             .borrow_mut()
             .begin_gizmo_drag(handle, anchor, view_axis)
     }
 
     fn drag_gizmo(&mut self, to: [f32; 3], snap: bool) -> Result<(), ModelError> {
-        self.0.borrow_mut().drag_gizmo(to, snap)
+        self.document.borrow_mut().drag_gizmo(to, snap)
     }
 
     fn end_gizmo_drag(&mut self) {
-        self.0.borrow_mut().end_gizmo_drag()
+        self.document.borrow_mut().end_gizmo_drag()
     }
 
     fn drag_lattice_point(&mut self, to: [f32; 3]) -> Result<(), ModelError> {
-        self.0.borrow_mut().drag_lattice_point(to)
+        self.document.borrow_mut().drag_lattice_point(to)
     }
 
     fn apply_lattice(&mut self) -> Result<(), ModelError> {
-        self.0.borrow_mut().apply_lattice()
+        self.document.borrow_mut().apply_lattice()
     }
 
     fn cancel_lattice(&mut self) {
-        self.0.borrow_mut().cancel_lattice()
+        self.document.borrow_mut().cancel_lattice()
     }
 }
 
 impl ArmatureModel for SharedDocument {
     fn armature(&self) -> Option<Armature> {
-        self.0.borrow().armature()
+        self.document.borrow().armature()
     }
 
     fn begin_armature(&mut self, position: [f32; 3], radius: f32) -> Result<(), ModelError> {
-        self.0.borrow_mut().begin_armature(position, radius)
+        self.document.borrow_mut().begin_armature(position, radius)
     }
 
     fn add_zsphere(
@@ -427,17 +523,17 @@ impl ArmatureModel for SharedDocument {
         radius: f32,
         mirrored: bool,
     ) -> Result<NodeIndex, ModelError> {
-        self.0
+        self.document
             .borrow_mut()
             .add_zsphere(parent, position, radius, mirrored)
     }
 
     fn move_zsphere(&mut self, index: NodeIndex, delta: [f32; 3]) -> Result<(), ModelError> {
-        self.0.borrow_mut().move_zsphere(index, delta)
+        self.document.borrow_mut().move_zsphere(index, delta)
     }
 
     fn resize_zsphere(&mut self, index: NodeIndex, radius: f32) -> Result<(), ModelError> {
-        self.0.borrow_mut().resize_zsphere(index, radius)
+        self.document.borrow_mut().resize_zsphere(index, radius)
     }
 
     fn reparent_zsphere(
@@ -445,27 +541,31 @@ impl ArmatureModel for SharedDocument {
         index: NodeIndex,
         new_parent: NodeIndex,
     ) -> Result<(), ModelError> {
-        self.0.borrow_mut().reparent_zsphere(index, new_parent)
+        self.document
+            .borrow_mut()
+            .reparent_zsphere(index, new_parent)
     }
 
     fn remove_zsphere(&mut self, index: NodeIndex) -> Result<(), ModelError> {
-        self.0.borrow_mut().remove_zsphere(index)
+        self.document.borrow_mut().remove_zsphere(index)
     }
 
     fn insert_zsphere(&mut self, child: NodeIndex) -> Result<NodeIndex, ModelError> {
-        self.0.borrow_mut().insert_zsphere(child)
+        self.document.borrow_mut().insert_zsphere(child)
     }
 
     fn set_zsphere_negative(&mut self, index: NodeIndex, negative: bool) -> Result<(), ModelError> {
-        self.0.borrow_mut().set_zsphere_negative(index, negative)
+        self.document
+            .borrow_mut()
+            .set_zsphere_negative(index, negative)
     }
 
     fn set_skin(&mut self, skin: SkinSettings) -> Result<(), ModelError> {
-        self.0.borrow_mut().set_skin(skin)
+        self.document.borrow_mut().set_skin(skin)
     }
 
     fn skin(&self) -> SkinSettings {
-        self.0.borrow().skin()
+        self.document.borrow().skin()
     }
 }
 
@@ -475,7 +575,7 @@ impl ExchangeModel for SharedDocument {
         path: &std::path::Path,
         settings: ImportSettings,
     ) -> Result<(), ModelError> {
-        self.0.borrow_mut().import_mesh(path, settings)
+        self.document.borrow_mut().import_mesh(path, settings)
     }
 
     fn export_mesh(
@@ -483,11 +583,11 @@ impl ExchangeModel for SharedDocument {
         path: &std::path::Path,
         settings: ExportSettings,
     ) -> Result<(), ModelError> {
-        self.0.borrow_mut().export_mesh(path, settings)
+        self.document.borrow_mut().export_mesh(path, settings)
     }
 
     fn has_mesh_layers(&self) -> bool {
-        self.0.borrow().has_mesh_layers()
+        self.document.borrow().has_mesh_layers()
     }
 }
 
@@ -495,15 +595,15 @@ use clayspace_model::ObjectModel;
 
 impl ObjectModel for SharedDocument {
     fn objects(&mut self) -> Vec<clayspace_model::SceneObject> {
-        self.0.borrow_mut().objects()
+        self.document.borrow_mut().objects()
     }
 
     fn selected_object(&self) -> Option<clayspace_model::ObjectId> {
-        self.0.borrow().selected_object()
+        self.document.borrow().selected_object()
     }
 
     fn select_object(&mut self, id: Option<clayspace_model::ObjectId>) {
-        self.0.borrow_mut().select_object(id)
+        self.document.borrow_mut().select_object(id)
     }
 
     fn place_object(
@@ -513,7 +613,7 @@ impl ObjectModel for SharedDocument {
         at: [f32; 3],
         combine: clayspace_model::CombineSettings,
     ) -> Result<clayspace_model::ObjectId, ModelError> {
-        self.0
+        self.document
             .borrow_mut()
             .place_object(shape, parameters, at, combine)
     }
@@ -537,7 +637,7 @@ impl ObjectModel for SharedDocument {
         at: [f32; 3],
         combine: clayspace_model::CombineSettings,
     ) -> Result<clayspace_model::Inserted, ModelError> {
-        self.0
+        self.document
             .borrow_mut()
             .insert_shape_subtool(shape, parameters, at, combine)
     }
@@ -547,37 +647,37 @@ impl ObjectModel for SharedDocument {
         from: LayerKey,
         cell_size: f32,
     ) -> Result<clayspace_model::Inserted, ModelError> {
-        self.0.borrow_mut().copy_subtool(from, cell_size)
+        self.document.borrow_mut().copy_subtool(from, cell_size)
     }
 
     fn copyable_subtools(&mut self) -> Vec<(LayerKey, String)> {
-        self.0.borrow_mut().copyable_subtools()
+        self.document.borrow_mut().copyable_subtools()
     }
 
     fn boolean_operands(&mut self) -> Vec<(LayerKey, String)> {
-        self.0.borrow_mut().boolean_operands()
+        self.document.borrow_mut().boolean_operands()
     }
 
     fn boolean_cell(&mut self, base: LayerKey, tool: LayerKey) -> Option<f32> {
-        self.0.borrow_mut().boolean_cell(base, tool)
+        self.document.borrow_mut().boolean_cell(base, tool)
     }
 
     fn boolean_cost(
         &mut self,
         settings: clayspace_model::BooleanSettings,
     ) -> Option<clayspace_model::Cost> {
-        self.0.borrow_mut().boolean_cost(settings)
+        self.document.borrow_mut().boolean_cost(settings)
     }
 
     fn run_boolean(
         &mut self,
         settings: clayspace_model::BooleanSettings,
     ) -> Result<clayspace_model::Inserted, ModelError> {
-        self.0.borrow_mut().run_boolean(settings)
+        self.document.borrow_mut().run_boolean(settings)
     }
 
     fn mesh_operands(&mut self) -> Vec<(LayerKey, String)> {
-        self.0.borrow_mut().mesh_operands()
+        self.document.borrow_mut().mesh_operands()
     }
 
     fn mesh_operand_cost(
@@ -585,7 +685,9 @@ impl ObjectModel for SharedDocument {
         from: LayerKey,
         cell_size: f32,
     ) -> Option<clayspace_model::Cost> {
-        self.0.borrow_mut().mesh_operand_cost(from, cell_size)
+        self.document
+            .borrow_mut()
+            .mesh_operand_cost(from, cell_size)
     }
 
     fn place_mesh_object(
@@ -595,7 +697,7 @@ impl ObjectModel for SharedDocument {
         at: [f32; 3],
         combine: clayspace_model::CombineSettings,
     ) -> Result<clayspace_model::ObjectId, ModelError> {
-        self.0
+        self.document
             .borrow_mut()
             .place_mesh_object(from, cell_size, at, combine)
     }
@@ -608,9 +710,13 @@ impl ObjectModel for SharedDocument {
         rotation_angle: f32,
         scale: [f32; 3],
     ) -> Result<(), ModelError> {
-        self.0
-            .borrow_mut()
-            .set_object_transform(id, position, rotation_axis, rotation_angle, scale)
+        self.document.borrow_mut().set_object_transform(
+            id,
+            position,
+            rotation_axis,
+            rotation_angle,
+            scale,
+        )
     }
 
     fn set_object_shape(
@@ -619,7 +725,9 @@ impl ObjectModel for SharedDocument {
         shape: clayspace_model::Shape,
         parameters: &[f32],
     ) -> Result<(), ModelError> {
-        self.0.borrow_mut().set_object_shape(id, shape, parameters)
+        self.document
+            .borrow_mut()
+            .set_object_shape(id, shape, parameters)
     }
 
     fn set_object_combine(
@@ -627,18 +735,18 @@ impl ObjectModel for SharedDocument {
         id: clayspace_model::ObjectId,
         combine: clayspace_model::CombineSettings,
     ) -> Result<(), ModelError> {
-        self.0.borrow_mut().set_object_combine(id, combine)
+        self.document.borrow_mut().set_object_combine(id, combine)
     }
 
     fn remove_object(&mut self, id: clayspace_model::ObjectId) -> Result<(), ModelError> {
-        self.0.borrow_mut().remove_object(id)
+        self.document.borrow_mut().remove_object(id)
     }
 
     fn target_transform(
         &mut self,
         target: clayspace_model::GizmoTarget,
     ) -> Option<clayspace_model::Transform> {
-        self.0.borrow_mut().target_transform(target)
+        self.document.borrow_mut().target_transform(target)
     }
 
     fn set_target_transform(
@@ -646,15 +754,17 @@ impl ObjectModel for SharedDocument {
         target: clayspace_model::GizmoTarget,
         transform: clayspace_model::Transform,
     ) -> Result<(), ModelError> {
-        self.0.borrow_mut().set_target_transform(target, transform)
+        self.document
+            .borrow_mut()
+            .set_target_transform(target, transform)
     }
 
     fn begin_target_drag(&mut self, target: clayspace_model::GizmoTarget) {
-        self.0.borrow_mut().begin_target_drag(target)
+        self.document.borrow_mut().begin_target_drag(target)
     }
 
     fn end_target_drag(&mut self) {
-        self.0.borrow_mut().end_target_drag()
+        self.document.borrow_mut().end_target_drag()
     }
 
     fn pick_object(
@@ -662,7 +772,7 @@ impl ObjectModel for SharedDocument {
         origin: [f32; 3],
         direction: [f32; 3],
     ) -> Option<clayspace_model::ObjectId> {
-        self.0.borrow_mut().pick_object(origin, direction)
+        self.document.borrow_mut().pick_object(origin, direction)
     }
 
     fn pick_item(
@@ -670,6 +780,6 @@ impl ObjectModel for SharedDocument {
         origin: [f32; 3],
         direction: [f32; 3],
     ) -> Option<(clayspace_model::ItemKind, clayspace_model::LayerKey)> {
-        self.0.borrow_mut().pick_item(origin, direction)
+        self.document.borrow_mut().pick_item(origin, direction)
     }
 }

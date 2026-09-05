@@ -450,6 +450,14 @@ pub enum Command {
     ShowAgentAccess(bool),
     /// Answers the permission an agent is asking for.
     AnswerAgentAsk(crate::agent_vm::AgentAnswer),
+    /// Writes the session's profile to a file, for the engine's authors.
+    ///
+    /// The report on the clipboard is what a person reads; this is what a
+    /// machine reads. It carries the distributions behind every figure, the
+    /// conditions they were taken under and the shape of what was being
+    /// sculpted, so that a performance report needs no follow-up question —
+    /// which is where a performance report otherwise dies.
+    ExportProfile,
 }
 
 impl Command {
@@ -477,6 +485,7 @@ impl Command {
                 | Self::ToggleAttribution
                 | Self::ToggleDiagnostics
                 | Self::CopyDiagnostics
+                | Self::ExportProfile
                 // Document lifecycle is not an edit. Opening replaces the
                 // document wholesale and saving changes nothing in it, so
                 // neither belongs in the undo history or the modified mark.
@@ -775,6 +784,7 @@ impl Command {
             Self::ToggleAgentDoor => "agent door",
             Self::ShowAgentAccess(_) => "agent address",
             Self::AnswerAgentAsk(_) => "answer the agent",
+            Self::ExportProfile => "exportar perfil",
         }
     }
 }

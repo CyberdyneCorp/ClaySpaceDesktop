@@ -28,6 +28,7 @@ pub mod locale;
 pub mod mask;
 pub mod multires;
 pub mod outline;
+pub mod profile;
 pub mod reference;
 pub mod scene;
 pub mod sculpt;
@@ -51,7 +52,8 @@ pub use curve::{CurveJoin, CurveModel, CurvePoint, CurveProfile, CurveState, FEW
 pub use detail::DetailPolicy;
 pub use diagnostics::{
     AgentDiagnostics, AoDiagnostics, Diagnostics, DiagnosticsModel, Fallback, MemoryDiagnostics,
-    MeshDiagnostics, MultiresDiagnostics, RenderDiagnostics,
+    MeshDiagnostics, MultiresDiagnostics, PhaseCost, RefillDiagnostics, RenderDiagnostics,
+    StrokeDiagnostics,
 };
 pub use document::{DocumentModel, OpenError};
 pub use exchange::{
@@ -75,6 +77,7 @@ pub use outline::{
     cells_to_write, coverage_path, lattice_pitch, MaskGesture, MaskOutline, OutlineDraft,
     OutlineFrame, OutlineMode, CELL_CEILING, COVERING, OUTLINE_SPACING,
 };
+pub use profile::{Phase, Samples, StrokeProfile, Summary, ToolProfile, Work, RETAINED};
 pub use reference::{
     read_references, write_references, RefFormat, RefPlane, ReferenceImage, ReferenceRefusal,
     ReferenceSettings, RememberedReference,

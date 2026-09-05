@@ -3241,6 +3241,101 @@ and calls `clay_document_memory_with_surfaces`. The row says how many sessions
 were asked as well as what they came to, so a surface tier of zero reads as
 *there are none* rather than as *nobody asked*.
 
+**Esforço da pincelada** is where a stroke's milliseconds went, and it exists
+because the line above it cannot be acted on. A stall reported as *re-malha
+42 ms* spans an engine call and this application's own work around it, and
+neither party reading that number can tell whose it was. Five rows split it:
+the engine's stroke and brick refill, the engine's `clay_brick_cache_mesh`,
+and then our copy into the vertex layout, our per-key split and our upload.
+Each carries a median, a worst and a sample count.
+
+Four of the five have been measured on every dab of every real stroke since
+`SyncCost` existed and were thrown away by the composition root; the fifth,
+the engine's own edit, was not measured at all — `SculptVm` called
+`apply_stroke` and nothing timed it. Both halves now meet in `SharedDocument`,
+which is the one handle every stroke passes through, so the report has one
+thing to read and no path to the document can bypass the clock.
+
+A phase that never ran says *sem amostras* rather than showing a zero, for the
+reason the stale-seed count is reported at zero: a reader has to be able to
+tell *this did not happen* from *this was free*, and only one of those is ever
+a reason to stop looking.
+
+**Recarga** is the measured cost per brick of a refill on each backend the
+routing considered. It was already being measured — the routing decides on it
+every batch — and was visible to nothing but a test. It is the figure behind
+this project's sharpest engine finding, that CUDA is 3.5x slower than the CPU
+at every batch size on the Linux reference machine, and a backend that has not
+been timed yet says so rather than reporting nothing per brick.
+
+## Profile export
+
+An agent driving the session reads the same split without a panel or a file:
+`state` with the `strokes` section hands back every phase with its side of the
+engine boundary, its sample count and its distribution, each marked as coming
+from a live session so it can never be mistaken for a benchmark baseline. The
+*command* that writes the file is deliberately not offered to an agent — it
+opens a save panel on the sculptor's own screen, which an agent cannot answer.
+
+**Ajuda → Exportar perfil…** writes one JSON file for the engine's authors.
+The clipboard report is what a person reads; this is what a machine reads, and
+it carries what a person's report has to leave out: the whole distribution
+behind every phase — sample count, retained window, median, 95th percentile,
+worst — per tool as well as across tools, so *the smooth brush is the slow one*
+is a sentence the file can support and an aggregate cannot.
+
+Around the figures it carries everything this project has ever had to
+reconstruct by hand in an upstream issue: the engine version **and the revision
+of the engine build that was linked**, the platform, every registered backend,
+the active one and why, the adapter, the fallbacks, the stalls, the per-pass
+GPU milliseconds, the refill costs, the document's memory by category, and the
+shape of what was being sculpted — how many layers, in which representations,
+how many items in each edit list, how coarse each grid. A follow-up question is
+a round trip, and a round trip is where a performance report dies.
+
+Three rules shape the file.
+
+**It says whether its own timings mean anything.** An unoptimised build runs
+this work about two and a half times slower — `sculpt_latency.rs` refuses to
+assert a budget against one for exactly that reason — so a debug build stamps
+`"build": "debug"` and `"timings_comparable": false` at the top level, before
+any number, and asks before writing, in the interface's own language. Both come
+from one place: `ask_before_writing` is derived from `timings_comparable`
+rather than from a second check of its own, so the question a person is asked
+and the claim the file makes cannot drift apart. It is not *refused* on a debug
+build: the identifying half of a profile is just as true there, and that is
+often the build somebody is running when they hit the thing worth reporting.
+`just profile` is the optimised way to produce one.
+
+**Measuring it does not slow the application down, and this is measured rather
+than asserted.** `profile_overhead.rs` keeps the two costs apart. *Recording* a
+phase is **20 ns**, five of them per dab, against a dab of two milliseconds —
+which is why there is no switch for it: one would buy a ten-thousandth of a dab
+and cost the report. *Summarising* a session sorts every retained window and
+measured **0.9 ms**, and the diagnostics report is rebuilt every frame, so for
+a while that was five per cent of every frame spent on a section nobody had
+open. It is now assembled only where something is going to read it — the open
+window, the export, an agent that asked — and each window is sorted once rather
+than three times. What the windows hold is bounded by construction: 64 KiB
+full, 320 KiB for a tool's five phases, 6.6 MiB if every one of the
+twenty-one tools is worked to its ceiling.
+
+**Nothing unmeasured is written as a zero.** A phase that never ran, a backend
+never timed, an adapter with no timestamp queries — all `null`. A zero reads as
+*free*, which is the reading that sends somebody looking in the wrong place.
+
+**Nothing the sculptor named comes out.** No document path, no layer name; a
+layer is its representation and its index. This is enforced by what is
+*collected* rather than by a pass over the output, because a redaction step is
+a step that can be forgotten when a field is added, and a shape with nowhere to
+put a name cannot leak one. A test asserts it over the whole rendered file.
+
+The JSON is rendered by hand rather than serialised, for the reason
+`bench/json.rs` gives — *"a serialiser in the dependency graph is a thing the
+audit has to consider forever for one file"* — but through a writer that owns
+nesting, commas and escaping, so well-formedness is a property of the writer
+and not of every place that writes.
+
 **Ajuda → Atribuições** shows the attribution manifest, which is generated
 from `cargo metadata` and embedded in the binary rather than shipped beside it.
 

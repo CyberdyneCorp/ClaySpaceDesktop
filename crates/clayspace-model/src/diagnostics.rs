@@ -11,6 +11,10 @@
 //! happens to have the right hardware; the engine words its own values on the
 //! way in.
 
+use std::time::Duration;
+
+use crate::profile::{Phase, StrokeProfile};
+
 /// Whether a second party could have been driving this session.
 ///
 /// In the report for the reason the engine revision and the container minor
@@ -115,6 +119,121 @@ pub struct Diagnostics {
     pub memory: Option<MemoryDiagnostics>,
     /// The agent-facing door, where this build has one.
     pub agent: Option<AgentDiagnostics>,
+
+    /// Where a stroke's milliseconds went, phase by phase.
+    ///
+    /// In the report because the line above it — an operation and a total —
+    /// is the one thing neither party can act on. A re-mesh reported as 42 ms
+    /// spans an engine call and this application's work around it, and nobody
+    /// reading that number can tell whose it was.
+    ///
+    /// Optional for the reason [`Self::render`] is: the report is readable
+    /// before anything has been sculpted, and a section that could not be
+    /// produced until a stroke had run would be no use for diagnosing a
+    /// session that cannot run one.
+    pub stroke: Option<StrokeDiagnostics>,
+
+    /// What a brick refill was measured to cost on each backend.
+    ///
+    /// The evidence the routing decision is actually made on, which until now
+    /// was visible to nothing but a test. It is also the figure behind this
+    /// project's sharpest engine finding — that an accelerated backend can be
+    /// several times *slower* than the CPU on a given machine — and that is a
+    /// fact about the engine which only a host that measures both is in a
+    /// position to report.
+    pub refill: Option<RefillDiagnostics>,
+}
+
+/// What a refill costs per brick on each backend the routing considered.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RefillDiagnostics {
+    /// The accelerated backend, in the engine's own word for it.
+    pub accelerated: String,
+    /// Nanoseconds per brick on the CPU, once one refill has been timed there.
+    pub cpu: Option<f64>,
+    /// The same on the accelerated backend.
+    pub accelerated_cost: Option<f64>,
+}
+
+/// What one phase of a stroke has cost this session.
+///
+/// Plain fields rather than the profile's own types, as the rest of this
+/// module is: the layer that renders a report should not have to know how the
+/// window behind a quantile is kept.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PhaseCost {
+    /// The phase, in the words the report uses for it.
+    pub phase: String,
+    /// Whether the time was the engine's.
+    pub engine: bool,
+    /// Which engine call, where it is the engine's and there is one to name.
+    pub entry_point: Option<String>,
+    /// Every sample this session, including any the window has dropped.
+    pub samples: u64,
+    /// `None` where the phase never ran — which is a different fact from
+    /// costing nothing, and is reported as one.
+    pub median: Option<Duration>,
+    /// The tail a sculptor actually feels, which a median hides.
+    pub p95: Option<Duration>,
+    pub worst: Option<Duration>,
+    /// Keys re-meshed across those samples, summed.
+    pub keys: usize,
+    /// Triangles produced across those samples, summed.
+    pub triangles: usize,
+    /// Bricks dirtied across those samples, summed.
+    pub bricks: usize,
+}
+
+/// Where a stroke's milliseconds went.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct StrokeDiagnostics {
+    /// Every phase, in the order they run, whether or not each has samples.
+    pub phases: Vec<PhaseCost>,
+    /// The tools that ran, for the report's summary line.
+    pub tools: usize,
+}
+
+impl StrokeDiagnostics {
+    /// Reads a session's profile into the shape the report renders.
+    ///
+    /// Every phase is carried, including the ones with nothing in them. A
+    /// section that showed only the phases that ran would leave a reader
+    /// unable to tell a phase that cost nothing from a phase this build does
+    /// not measure.
+    pub fn of(profile: &StrokeProfile) -> Self {
+        let whole = profile.across_tools();
+        let phases = Phase::ALL
+            .iter()
+            .map(|phase| {
+                let samples = whole.phase(*phase);
+                let work = samples.work();
+                // One sort rather than two: this is assembled while a report
+                // is being built, and the composition root builds one whenever
+                // something is going to read it.
+                let summary = samples.summary();
+                PhaseCost {
+                    phase: phase.label().to_string(),
+                    engine: phase.is_engine(),
+                    entry_point: phase.entry_point().map(str::to_string),
+                    samples: samples.seen(),
+                    median: summary.map(|s| s.median),
+                    p95: summary.map(|s| s.p95),
+                    worst: summary.map(|s| s.worst),
+                    keys: work.keys,
+                    triangles: work.triangles,
+                    bricks: work.bricks,
+                }
+            })
+            .collect();
+        Self {
+            phases,
+            tools: profile.tools().filter(|(_, tool)| !tool.is_empty()).count(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.phases.iter().all(|phase| phase.samples == 0)
+    }
 }
 
 /// Where a document's memory is, in the terms that decide what may be released.
@@ -415,7 +534,87 @@ impl Diagnostics {
                 ),
             );
         }
+        if let Some(refill) = &self.refill {
+            line(
+                "refill",
+                &format!(
+                    "cpu {}, {} {}",
+                    per_brick(refill.cpu),
+                    refill.accelerated,
+                    per_brick(refill.accelerated_cost)
+                ),
+            );
+        }
+        if let Some(stroke) = &self.stroke {
+            self.report_stroke(stroke, &mut line);
+        }
         out
+    }
+
+    /// The stroke section: one line per phase, in the order they run.
+    ///
+    /// Whether the time was the engine's is said on every line rather than
+    /// implied by a heading, because these lines are pasted into an issue one
+    /// at a time as often as the whole report is pasted at once.
+    fn report_stroke(&self, stroke: &StrokeDiagnostics, line: &mut impl FnMut(&str, &str)) {
+        if stroke.is_empty() {
+            return line("stroke", "no samples this session");
+        }
+        line("stroke", &format!("{} tools measured", stroke.tools));
+        for phase in &stroke.phases {
+            let key = format!("stroke {}", phase.phase);
+            line(&key, &phase.describe());
+        }
+    }
+}
+
+impl PhaseCost {
+    /// The phase as a report line, saying whose time it was.
+    pub fn describe(&self) -> String {
+        let side = match (&self.entry_point, self.engine) {
+            (Some(entry), _) => format!("engine, {entry}"),
+            (None, true) => "engine".to_string(),
+            (None, false) => "ours".to_string(),
+        };
+        let (Some(median), Some(worst)) = (self.median, self.worst) else {
+            return format!("no samples ({side})");
+        };
+        format!(
+            "{} samples, {} median, {} worst, over {} ({side})",
+            self.samples,
+            milliseconds(median),
+            milliseconds(worst),
+            self.describe_work()
+        )
+    }
+
+    /// What the samples behind the figures covered.
+    ///
+    /// A duration without it is not comparable with any other duration: eleven
+    /// milliseconds over four keys and eleven over ninety are the same number
+    /// and opposite facts.
+    fn describe_work(&self) -> String {
+        if self.keys == 0 && self.triangles == 0 {
+            return format!("{} bricks", self.bricks);
+        }
+        format!("{} keys, {} triangles", self.keys, self.triangles)
+    }
+}
+
+/// A duration as the report states one.
+fn milliseconds(took: Duration) -> String {
+    format!("{:.2} ms", took.as_secs_f64() * 1000.0)
+}
+
+/// A measured per-brick cost, or the fact that there is not one yet.
+///
+/// "not measured" rather than zero, for the reason every other absent figure
+/// in this module says so: a backend that has not been timed and a backend
+/// that costs nothing are different claims, and only one of them is ever true.
+fn per_brick(cost: Option<f64>) -> String {
+    match cost {
+        Some(ns) => format!("{ns:.0} ns/brick"),
+        None => "not measured".to_string(),
     }
 }
 
@@ -455,6 +654,8 @@ mod tests {
             hierarchies: None,
             memory: None,
             agent: None,
+            stroke: None,
+            refill: None,
         }
     }
 
@@ -590,9 +791,128 @@ mod tests {
         assert!(!text.contains("memory"), "{text}");
     }
 
+    fn worked() -> StrokeProfile {
+        use crate::profile::Work;
+
+        let mut profile = StrokeProfile::default();
+        for _ in 0..12 {
+            profile.record(
+                "Padrão",
+                Phase::EngineEdit,
+                Duration::from_micros(520),
+                Work::bricks(27),
+            );
+            profile.record(
+                "Padrão",
+                Phase::EngineMesh,
+                Duration::from_micros(6_260),
+                Work::meshed(27, 9_000),
+            );
+        }
+        profile
+    }
+
+    /// The whole reason the section exists: a re-mesh reported as one total
+    /// spans an engine call and this application's work around it, and neither
+    /// party can act on a number they cannot attribute.
+    #[test]
+    fn the_stroke_section_says_which_side_of_the_boundary_the_time_went_to() {
+        let mut diagnostics = sample();
+        diagnostics.stroke = Some(StrokeDiagnostics::of(&worked()));
+        let text = diagnostics.to_report();
+
+        assert!(
+            text.contains("stroke engine edit: 12 samples"),
+            "the engine's edit is not in the report:\n{text}"
+        );
+        assert!(
+            text.contains("(engine, stroke and brick refill)"),
+            "the edit does not say whose time it was:\n{text}"
+        );
+        assert!(
+            text.contains("(engine, clay_brick_cache_mesh)"),
+            "the meshing call is not named:\n{text}"
+        );
+    }
+
+    /// A phase that did not run and a phase that was free are different facts.
+    #[test]
+    fn a_phase_that_never_ran_is_reported_as_having_no_samples() {
+        let mut diagnostics = sample();
+        diagnostics.stroke = Some(StrokeDiagnostics::of(&worked()));
+        let text = diagnostics.to_report();
+        assert!(text.contains("stroke upload: no samples (ours)"), "{text}");
+        assert!(
+            !text.contains("stroke upload: 0 samples, 0.00 ms"),
+            "an unmeasured phase was reported as a free one:\n{text}"
+        );
+    }
+
+    #[test]
+    fn a_session_that_sculpted_nothing_says_so_rather_than_listing_five_zeroes() {
+        let mut diagnostics = sample();
+        diagnostics.stroke = Some(StrokeDiagnostics::of(&StrokeProfile::default()));
+        let text = diagnostics.to_report();
+        assert!(text.contains("stroke: no samples this session"), "{text}");
+    }
+
+    #[test]
+    fn a_figure_carries_the_work_it_was_measured_over() {
+        let mut diagnostics = sample();
+        diagnostics.stroke = Some(StrokeDiagnostics::of(&worked()));
+        let text = diagnostics.to_report();
+        assert!(text.contains("over 324 keys, 108000 triangles"), "{text}");
+        assert!(text.contains("over 324 bricks"), "{text}");
+    }
+
+    #[test]
+    fn the_refill_routing_evidence_reaches_the_report() {
+        let mut diagnostics = sample();
+        diagnostics.refill = Some(RefillDiagnostics {
+            accelerated: "cuda".into(),
+            cpu: Some(118.0),
+            accelerated_cost: Some(413.0),
+        });
+        let text = diagnostics.to_report();
+        assert!(
+            text.contains("refill: cpu 118 ns/brick, cuda 413 ns/brick"),
+            "{text}"
+        );
+    }
+
+    /// The routing runs on a constant until both sides have been timed, and a
+    /// backend reported as costing nothing is the one reading that would send
+    /// somebody looking in the wrong place.
+    #[test]
+    fn an_unmeasured_backend_is_not_reported_as_free() {
+        let mut diagnostics = sample();
+        diagnostics.refill = Some(RefillDiagnostics {
+            accelerated: "cuda".into(),
+            cpu: Some(118.0),
+            accelerated_cost: None,
+        });
+        let text = diagnostics.to_report();
+        assert!(text.contains("cuda not measured"), "{text}");
+        assert!(!text.contains("cuda 0 ns/brick"), "{text}");
+    }
+
+    #[test]
+    fn a_report_taken_before_anything_was_sculpted_omits_both_sections() {
+        let text = sample().to_report();
+        assert!(!text.contains("stroke"), "{text}");
+        assert!(!text.contains("refill"), "{text}");
+    }
+
     #[test]
     fn every_line_is_a_key_and_a_value() {
-        for line in sample().to_report().lines() {
+        let mut diagnostics = sample();
+        diagnostics.stroke = Some(StrokeDiagnostics::of(&worked()));
+        diagnostics.refill = Some(RefillDiagnostics {
+            accelerated: "cuda".into(),
+            cpu: Some(118.0),
+            accelerated_cost: None,
+        });
+        for line in diagnostics.to_report().lines() {
             assert!(line.contains(": "), "unparseable line: {line}");
         }
     }

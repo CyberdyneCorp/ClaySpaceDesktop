@@ -242,6 +242,8 @@ pub struct StateQuery {
     pub memory: bool,
     pub timing: bool,
     pub backends: bool,
+    /// Where the last strokes spent their milliseconds, phase by phase.
+    pub strokes: bool,
 }
 
 impl StateQuery {
@@ -257,6 +259,7 @@ impl StateQuery {
             memory: true,
             timing: true,
             backends: true,
+            strokes: true,
         }
     }
 
@@ -282,13 +285,14 @@ impl StateQuery {
                 "memory" => query.memory = true,
                 "timing" => query.timing = true,
                 "backends" => query.backends = true,
+                "strokes" => query.strokes = true,
                 other => {
                     return Err(Refusal::new(
                         RefusalCode::BadArgument,
                         format!(
                             "there is no section named {other}; the sections are \
                              document, scene, tool, camera, history, mask, jobs, \
-                             memory, timing and backends"
+                             memory, timing, backends and strokes"
                         ),
                     ))
                 }
@@ -321,6 +325,52 @@ pub struct StateReport {
     pub timing: Option<TimingState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backends: Option<BackendState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strokes: Option<StrokeCostState>,
+}
+
+/// Where a stroke's milliseconds went, for an agent that drove the strokes.
+///
+/// The section an agent asks for when it wants to know *what it just cost*
+/// rather than *whether it worked*. Every phase says which side of the engine
+/// boundary it is on, because a total spanning an engine call and this
+/// application's work around it is a figure neither party can act on.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct StrokeCostState {
+    /// How many tools have figures. Zero is a session nobody has sculpted in.
+    pub tools_measured: usize,
+    pub phases: Vec<PhaseCostState>,
+    /// Always true, and always sent, for the reason [`Measured::live_session`]
+    /// carries it: a figure taken with a window open and a person's session in
+    /// memory is evidence, not a baseline, and nothing here may write one.
+    pub live_session: bool,
+}
+
+/// One phase of a stroke, as an agent reads it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PhaseCostState {
+    /// The phase, in the words the report uses for it.
+    pub phase: String,
+    /// `engine` or `ours`. The whole point of the section.
+    pub side: String,
+    /// Which engine call, where it is the engine's and there is one to name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_point: Option<String>,
+    /// Every sample this session, including any the window has dropped.
+    pub samples: u64,
+    /// Absent where the phase never ran — which is a different fact from
+    /// costing nothing, and is sent as one. A zero here would read as *free*.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub median_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub p95_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worst_ms: Option<f64>,
+    /// What the samples behind those figures covered. A duration without it is
+    /// not comparable with any other duration.
+    pub keys: usize,
+    pub triangles: usize,
+    pub bricks: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
