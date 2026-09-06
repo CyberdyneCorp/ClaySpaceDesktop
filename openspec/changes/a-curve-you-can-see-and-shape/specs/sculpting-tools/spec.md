@@ -58,3 +58,52 @@ re-selection.
 - **WHEN** a double-click lands on the guide between two control points
 - **THEN** a control point is inserted between exactly those two, the points
   before and after it keep their places, and the new one is the selection
+
+### Requirement: A curve can be drawn as well as clicked
+A drag beginning where there is no control point and no guide SHALL lay a chain
+of control points along the pointer's path, and a click in the same place SHALL
+lay exactly one.
+
+The two SHALL be told apart by distance travelled rather than by a mode. A press
+that never moves never reaches the spacing, so one path serves both.
+
+Spacing SHALL be measured in tube-widths. A point per frame is a curve that
+cannot be edited afterwards, and being able to go back to it is what separates
+this tool from a brush.
+
+A freehand stroke SHALL stay on the plane its first point chose, and SHALL NOT
+re-pick the surface per point: by the second point the tube the stroke is
+drawing is under the pointer, so a ray cast at the surface lands on the stroke's
+own output.
+
+#### Scenario: A sculptor drags to draw a tube
+- **WHEN** the pointer is dragged from a place holding neither a control point
+  nor the guide
+- **THEN** control points are laid along the path at tube-width spacing, and
+  the tube follows them
+
+#### Scenario: A sculptor clicks without moving
+- **WHEN** a press begins and ends without travelling
+- **THEN** exactly one control point is placed
+
+### Requirement: A press on the guide does not extend the curve
+A press landing on the guide, where no control point is under the pointer,
+SHALL be consumed without adding a control point.
+
+Appending there adds a point at the *end* of the curve — nowhere near the
+pointer — and selects it, so the line appears to jump to a place nobody
+clicked. It also makes a double-click on the guide unreachable, because the
+first press of the double has already appended before the second can be read.
+
+The order in which a press is resolved SHALL be decidable without a viewport: a
+control point first, then a double on the guide, then the guide alone, then
+empty space.
+
+#### Scenario: A sculptor clicks the line once
+- **WHEN** a single press lands on the guide away from any control point
+- **THEN** the curve is unchanged and no point is added
+
+#### Scenario: A sculptor double-clicks a control point
+- **WHEN** a double-click lands on an existing control point
+- **THEN** the point is taken in hand rather than a second one being inserted
+  coincident with it

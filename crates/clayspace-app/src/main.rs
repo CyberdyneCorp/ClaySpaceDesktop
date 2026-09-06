@@ -231,6 +231,21 @@ struct PlacedReference {
     opacity: f32,
 }
 
+/// What a press on a curve resolves to. See [`App::curve_press_action`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CurvePress {
+    /// Split the span at this guide sample.
+    Insert(usize),
+    /// Add or remove this control point from the selection.
+    Toggle(usize),
+    /// Take hold of this control point.
+    Grab(usize),
+    /// On the line: the press is spent and nothing changes.
+    Consume,
+    /// Off everything: put a point down and open a freehand stroke.
+    Append,
+}
+
 struct App {
     document: SharedDocument,
     sculpt: SculptViewModel,
@@ -245,6 +260,19 @@ struct App {
     curve: CurveViewModel,
     /// The plane a curve drag runs on, and where it started.
     curve_drag: Option<([f32; 3], [f32; 3], [f32; 3])>,
+    /// A freehand curve stroke in progress: the last point it laid, and the
+    /// plane it is being drawn on.
+    ///
+    /// `Some` from the press that started the stroke until the release, which
+    /// is what tells a drag from a click: a click never travels far enough to
+    /// lay a second point.
+    ///
+    /// The plane is fixed at the press and the stroke stays on it. Re-picking
+    /// the surface per sample would be worse than it sounds — by the second
+    /// point there is a tube under the pointer, the one this stroke is
+    /// drawing, so the ray would land on it and the curve would climb its own
+    /// output.
+    curve_draw: Option<([f32; 3], [f32; 3])>,
     /// When and where the last curve press landed, for spotting a double.
     ///
     /// Held here rather than read from egui because what a double-click *does*
@@ -572,6 +600,7 @@ impl App {
             boolean,
             curve,
             curve_drag: None,
+            curve_draw: None,
             last_curve_press: None,
             cage_plane: None,
             marquee: None,
@@ -1787,6 +1816,36 @@ impl App {
         Some(std::array::from_fn(|i| origin[i] + direction[i] * reach))
     }
 
+    /// What a press on a curve means, decided before any of it is acted on.
+    ///
+    /// Pulled out of the ray arithmetic because the *order* of these questions
+    /// is the whole of a bug that shipped: a press on the guide fell through
+    /// to the append, so the first press of a double-click added a stray point
+    /// at the end of the curve and selected it, and what a sculptor saw was a
+    /// vertex jumping to the pointer instead of a point being inserted. An
+    /// ordering worth getting right is worth being able to test without a
+    /// window, a GPU or a camera.
+    fn curve_press_action(
+        double: bool,
+        on_point: Option<usize>,
+        on_guide: Option<usize>,
+        add: bool,
+    ) -> CurvePress {
+        match (double, on_point, on_guide) {
+            // A control point under the pointer answers first, double or not:
+            // a control point sits *on* the guide, so asking the line first
+            // would insert a second point coincident with every one that is
+            // double-clicked. A double on a point is a double on a point.
+            (_, Some(index), _) if add => CurvePress::Toggle(index),
+            (_, Some(index), _) => CurvePress::Grab(index),
+            (true, None, Some(sample)) => CurvePress::Insert(sample),
+            // On the line, single: consumed. Appending here is what put the
+            // new point at the far end of the curve.
+            (false, None, Some(_)) => CurvePress::Consume,
+            (_, None, None) => CurvePress::Append,
+        }
+    }
+
     /// A curve press: grab a control point, or place a new one.
     ///
     /// Before the cage and before the surface, for the reason each of those is
@@ -1806,60 +1865,117 @@ impl App {
         self.last_curve_press = Some((now, point));
         let positions: Vec<[f32; 3]> = curve.points.iter().map(|p| p.position).collect();
         let handle = Self::curve_handle(&curve);
+        let reach = handle * Self::CAGE_GRAB;
+        let on_point = Self::nearest_along(&positions, ray, reach);
+        let guide = curve.path();
+        let on_guide = Self::nearest_along(&guide, ray, reach);
 
-        // A double-click on the line puts a point *into* it.
-        //
-        // Before the grab below, because the second press of a double lands
-        // within a handle's reach of the point the first one just placed or
-        // selected — so testing the points first would turn every double into
-        // a re-select and this would never run. It is checked against the
-        // *guide* rather than the control points for the same reason the guide
-        // is drawn: the line a sculptor is aiming at is the one the tube
-        // follows, and on a curved span that is nowhere near the chord.
-        if double {
-            let guide = curve.path();
-            if let Some(sample) = Self::nearest_along(&guide, ray, handle * Self::CAGE_GRAB) {
+        match Self::curve_press_action(double, on_point, on_guide, add) {
+            CurvePress::Insert(sample) => {
                 let index = curve.insertion_for_sample(sample);
                 let radius = *self.curve.radius().get();
                 self.handle(Command::InsertCurvePoint(index, guide[sample], radius));
                 return true;
             }
-        }
-
-        if let Some(index) = Self::nearest_along(&positions, ray, handle * Self::CAGE_GRAB) {
-            if add {
+            // On the line but not on a point, and not a double. Consumed, and
+            // emphatically **not** appended: a press on the guide used to fall
+            // through to the append below, which put a point at the *end* of
+            // the curve — nowhere near the pointer — and selected it, so the
+            // line appeared to jump. That is also what made a double-click
+            // look like dragging a vertex, since its first press appended a
+            // stray point before the second could be read as a double.
+            CurvePress::Consume => return true,
+            CurvePress::Append => {}
+            CurvePress::Toggle(index) => {
                 self.handle(Command::ToggleCurvePoint(index));
                 return true;
             }
-            // The plane the drag runs on: facing the camera, through the point
-            // that was grabbed — the plane a person is picturing when they
-            // pull a control point sideways.
-            let (_, direction) = ray;
-            let normal = [-direction[0], -direction[1], -direction[2]];
-            let at = positions[index];
-            self.curve_drag = Self::on_plane(ray, at, normal).map(|from| (at, normal, from));
-            self.handle(Command::SelectCurvePoint(Some(index)));
-            return true;
+            CurvePress::Grab(index) => {
+                let (_, direction) = ray;
+                let normal = [-direction[0], -direction[1], -direction[2]];
+                let at = positions[index];
+                self.curve_drag = Self::on_plane(ray, at, normal).map(|from| (at, normal, from));
+                self.handle(Command::SelectCurvePoint(Some(index)));
+                return true;
+            }
         }
 
-        // Nothing under the pointer: place a point. On the surface where the
-        // ray meets it, and otherwise on the plane through the curve's last
-        // point — a curve is drawn *off* the form as often as on it, and a
-        // press that missed the clay used to do nothing at all.
+        // Nothing under the pointer: place a point, and open a freehand
+        // stroke. On the surface where the ray meets it, and otherwise on the
+        // plane through the curve's last point — a curve is drawn *off* the
+        // form as often as on it, and a press that missed the clay used to do
+        // nothing at all.
         let radius = *self.curve.radius().get();
-        let at = match self.pick_at(point) {
-            Some((hit, _)) => Some(hit),
-            None => {
-                let anchor = positions.last().copied().unwrap_or([0.0; 3]);
-                let (_, direction) = ray;
-                Self::on_plane(ray, anchor, [-direction[0], -direction[1], -direction[2]])
-            }
-        };
-        let Some(at) = at else {
+        let anchor = positions.last().copied().unwrap_or([0.0; 3]);
+        let Some(at) = self.curve_point_at(point, anchor) else {
             return false;
         };
         self.handle(Command::AddCurvePoint(at, radius));
+        // A click puts one point down; a drag lays a line of them. Nothing
+        // else has to distinguish the two — a press that never moves simply
+        // never reaches the spacing below.
+        let (_, direction) = ray;
+        self.curve_draw = Some((at, [-direction[0], -direction[1], -direction[2]]));
         true
+    }
+
+    /// Where a curve point goes for a pointer at `point`.
+    ///
+    /// The surface under the ray, or the camera-facing plane through `anchor`
+    /// where the ray misses the clay. Shared by the press and by the freehand
+    /// drag, so a stroke stays on the plane its first point chose instead of
+    /// stepping off it the moment the pointer leaves the form.
+    fn curve_point_at(&self, point: egui::Pos2, anchor: [f32; 3]) -> Option<[f32; 3]> {
+        if let Some((hit, _)) = self.pick_at(point) {
+            return Some(hit);
+        }
+        let ray = self.ray_at(point)?;
+        let (_, direction) = ray;
+        Self::on_plane(ray, anchor, [-direction[0], -direction[1], -direction[2]])
+    }
+
+    /// Lays down points while a freehand curve stroke is being dragged.
+    ///
+    /// Spaced rather than one per frame: a pointer sampled at sixty hertz over
+    /// a slow drag would leave hundreds of control points on top of each
+    /// other, which is a curve nobody can edit afterwards — and editing it
+    /// afterwards is the whole difference between this tool and a brush.
+    fn carry_curve_draw(&mut self, input: &ViewportInput) {
+        let Some((last, normal)) = self.curve_draw else {
+            return;
+        };
+        let Some(at) = input
+            .pointer
+            .and_then(|pointer| self.ray_at(pointer))
+            .and_then(|ray| Self::on_plane(ray, last, normal))
+        else {
+            return;
+        };
+        let radius = *self.curve.radius().get();
+        if !Self::curve_draw_reaches(last, at, radius) {
+            return;
+        }
+        self.handle(Command::AddCurvePoint(at, radius));
+        self.curve_draw = Some((at, normal));
+    }
+
+    /// Whether a freehand stroke has travelled far enough to lay another
+    /// point.
+    ///
+    /// Spaced rather than one per frame: a pointer sampled at sixty hertz over
+    /// a slow drag would leave hundreds of control points on top of each
+    /// other, and a curve nobody can edit afterwards is a brush with extra
+    /// steps — being able to go back to it is the whole difference.
+    ///
+    /// Measured in tube-widths, so a thick tube gets the coarser chain it
+    /// wants and a thin one keeps its detail.
+    fn curve_draw_reaches(last: [f32; 3], at: [f32; 3], radius: f32) -> bool {
+        let spacing = (radius * 1.5).max(1e-2);
+        let travelled: f32 = (0..3)
+            .map(|axis| (at[axis] - last[axis]).powi(2))
+            .sum::<f32>()
+            .sqrt();
+        travelled >= spacing
     }
 
     /// Where a curve drag has reached, as a displacement from where it began.
@@ -3165,7 +3281,10 @@ impl App {
                     // seams — and once per gesture, with the pointer up.
                     self.settle_geometry();
                 }
-                Drag::Curve => self.curve_drag = None,
+                Drag::Curve => {
+                    self.curve_drag = None;
+                    self.curve_draw = None;
+                }
                 Drag::Outline => self.close_the_drawn_outline(),
                 Drag::Gizmo => {
                     self.gizmo_drag = None;
@@ -3473,6 +3592,13 @@ impl App {
 
     /// Movement, while a curve drag is under way.
     fn carry_curve(&mut self, input: &ViewportInput) {
+        // A freehand stroke and a control-point drag are the same button on
+        // the same tool, told apart by what the press landed on: a drag has a
+        // grabbed point, a stroke has a last-laid one, and never both.
+        if self.curve_drag.is_none() {
+            self.carry_curve_draw(input);
+            return;
+        }
         if let Some(by) = input.pointer.and_then(|point| self.curve_drag_to(point)) {
             self.handle(Command::DragCurve(by));
             // Re-anchored, because the model moves the points by a
@@ -5482,6 +5608,110 @@ impl Session for App {
 
     fn gesture_in_progress(&self) -> bool {
         self.holding_a_gesture()
+    }
+}
+
+#[cfg(test)]
+mod curve_press {
+    use super::*;
+
+    /// The bug this ordering exists to stop.
+    ///
+    /// A press on the line used to fall through to the append, which put a
+    /// point at the far *end* of the curve and selected it. Two things came of
+    /// that: the line jumped to a place nobody clicked, and a double-click
+    /// could never work, because its first press had already added a stray
+    /// point before the second could be read as a double.
+    #[test]
+    fn a_press_on_the_line_is_spent_rather_than_appending() {
+        assert_eq!(
+            App::curve_press_action(false, None, Some(7), false),
+            CurvePress::Consume
+        );
+    }
+
+    #[test]
+    fn a_double_on_the_line_splits_the_span_under_it() {
+        assert_eq!(
+            App::curve_press_action(true, None, Some(7), false),
+            CurvePress::Insert(7)
+        );
+    }
+
+    /// A control point sits *on* the guide, so asking the line first would
+    /// insert a second point coincident with every point double-clicked.
+    #[test]
+    fn a_double_on_a_control_point_takes_the_point() {
+        assert_eq!(
+            App::curve_press_action(true, Some(2), Some(7), false),
+            CurvePress::Grab(2)
+        );
+    }
+
+    #[test]
+    fn a_press_on_nothing_puts_a_point_down() {
+        assert_eq!(
+            App::curve_press_action(false, None, None, false),
+            CurvePress::Append
+        );
+        assert_eq!(
+            App::curve_press_action(true, None, None, false),
+            CurvePress::Append
+        );
+    }
+
+    #[test]
+    fn the_modifier_adds_a_point_to_the_selection_instead_of_grabbing_it() {
+        assert_eq!(
+            App::curve_press_action(false, Some(3), None, true),
+            CurvePress::Toggle(3)
+        );
+    }
+}
+
+#[cfg(test)]
+mod curve_stroke {
+    use super::*;
+
+    /// A drag lays a chain; a click lays one point.
+    ///
+    /// Nothing distinguishes the two except this: a press that never travels
+    /// never reaches the spacing, so the same code path serves both.
+    #[test]
+    fn a_stationary_press_lays_no_second_point() {
+        let at = [0.5, 1.0, 0.0];
+        assert!(!App::curve_draw_reaches(at, at, 0.12));
+        assert!(!App::curve_draw_reaches(at, [0.5, 1.01, 0.0], 0.12));
+    }
+
+    #[test]
+    fn a_drag_lays_one_once_it_has_travelled_a_tube_width() {
+        let from = [0.0, 0.0, 0.0];
+        assert!(App::curve_draw_reaches(from, [0.3, 0.0, 0.0], 0.12));
+    }
+
+    /// Spacing in tube-widths, so a fat tube gets a coarse chain and a fine
+    /// one keeps its detail — the same drag, two radii, two answers.
+    #[test]
+    fn a_thicker_tube_gets_a_coarser_chain() {
+        let from = [0.0, 0.0, 0.0];
+        let to = [0.1, 0.0, 0.0];
+        assert!(
+            App::curve_draw_reaches(from, to, 0.02),
+            "a fine tube should have laid a point over this distance"
+        );
+        assert!(
+            !App::curve_draw_reaches(from, to, 0.5),
+            "a fat tube should not have"
+        );
+    }
+
+    /// And a floor, so a tube of almost no thickness does not ask for a point
+    /// per pixel.
+    #[test]
+    fn a_hairline_tube_still_has_a_floor() {
+        let from = [0.0, 0.0, 0.0];
+        assert!(!App::curve_draw_reaches(from, [0.001, 0.0, 0.0], 1e-6));
     }
 }
 

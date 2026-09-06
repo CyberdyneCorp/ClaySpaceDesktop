@@ -60,7 +60,31 @@
       control points, since the second press of a double lands within a
       handle's reach of the point the first one selected
 
-## 4. Hold it
+## 4. Two the first pass missed, reported from a session
+
+- [x] 4.1 A press on the guide is **consumed**, not appended. It fell through
+      to the append, which put a point at the far end of the curve and selected
+      it — so the line jumped somewhere nobody clicked, and the double-click
+      below could never fire because the first press had already added a stray
+      point. This is the defect the first pass shipped
+- [x] 4.2 The press order is decided in `App::curve_press_action`, returning a
+      `CurvePress` rather than acting inside the ray arithmetic — the *order*
+      of the questions was the whole bug, and an order worth getting right is
+      worth testing without a window, a GPU or a camera; verify the five cases
+      in `curve_press`
+- [x] 4.3 A control point answers before the guide, so a double-click on a
+      point takes the point instead of inserting a second one coincident with
+      it. The first pass had this the other way round and it was recorded as a
+      deliberate trade; it was a defect
+- [x] 4.4 A drag draws the curve freehand, laying a point each tube-width, and
+      a click still lays one — told apart by distance travelled rather than by
+      a mode, so one path serves both; verify the four cases in `curve_stroke`
+- [x] 4.5 A freehand stroke stays on the plane its first point chose rather
+      than re-picking the surface per point: by the second point the tube the
+      stroke is drawing is under the pointer, so a surface pick lands on the
+      stroke's own output and the curve climbs it
+
+## 5. Hold it
 
 - [x] 4.1 `just check` — formatting, clippy, the workspace suite, the
       specification
