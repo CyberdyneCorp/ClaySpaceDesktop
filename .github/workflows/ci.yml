@@ -28,44 +28,88 @@ jobs:
   # into the engine, so the CPU-only rows are the ones that must pass
   # everywhere; the accelerated rows are what the acceleration policy is for.
   test:
-    name: ${{ matrix.name }}
+    name: ${{ matrix.name }} (${{ matrix.profile }})
     runs-on: ${{ matrix.os }}
-    # Ninety, because Metal needs about sixty and the budget was sixty.
+    # Seventy-five, and each job now runs *one* profile rather than both.
     #
-    # Measured on this workflow, the same commit: Linux Vulkan 22 min, Linux
-    # CPU 26, macOS CPU-only 31, macOS Metal **57**. At a sixty-minute budget
-    # the slowest job had three minutes of headroom, so it did not fail — it
-    # was cancelled, which reads as a red X with no failing test in it and
-    # sends whoever looks hunting for one. It has now tipped over on `main`
-    # and on a branch that changes one assertion in one test file.
+    # The budget was sixty, then ninety, and the ninety was reached: the Metal
+    # job was cancelled at 90:13 with two tests of the release suite left to
+    # run. Its own note said what to do about that — "if it approaches ninety,
+    # the answer is to make it faster, not to raise this again" — and the split
+    # below is that answer, taken without deleting a test or weakening an
+    # assertion.
     #
-    # Raising the budget rather than trimming the suite: the job is doing real
-    # work — Metal runs the GPU tests CPU-only skips, which is most of the
-    # difference — and a cancelled job teaches people to re-run rather than to
-    # read. If it approaches ninety, the answer is to make it faster, not to
-    # raise this again.
-    timeout-minutes: 90
+    # Measured on the run that was cancelled: 3 min to build, **37 min** for
+    # the debug suite, **49 min** for the release step, of which only 24 were
+    # tests and 25 were the release compile the debug step had not done. Two
+    # profiles in one job is two builds and two suites in series, and the
+    # slower one had been carrying the faster one over the line.
+    #
+    # Split on every row and not only on Metal. Linux and macOS CPU-only are
+    # not near the wall today, and a matrix whose rows are shaped differently
+    # is one where the row that matters is the one nobody has looked at.
+    #
+    # Seventy-five rather than sixty, and this number is measured rather than
+    # chosen. Sixty was tried first and cancelled `macOS, Metal (release)` at
+    # 60:50. The slowest job, on the run that followed:
+    #
+    #     build   20 min   the C++ engine, and a restored cache does not spare
+    #                      most of it
+    #     tests   28 min
+    #     total   48 min   against a cold build of 30 min, so ~58 with no cache
+    #
+    # A cache goes cold on eviction, on a lockfile bump and on a toolchain
+    # update, and a budget that only holds while it is warm is a gate that
+    # fails for reasons that have nothing to do with the change under test.
+    # Seventy-five covers the cold case with margin and still measures one
+    # profile of one configuration, so a regression in either shows up as
+    # itself.
+    #
+    # If this is approached again, the build is where to look and not the
+    # suite: it is twenty of the forty-eight minutes with a cache and thirty
+    # without one.
+    timeout-minutes: 75
     strategy:
       # One row failing should not hide the others: a Metal-only regression is
-      # worth seeing next to a green CPU run.
+      # worth seeing next to a green CPU run — and now a release-only one is
+      # worth seeing next to a green debug run.
       fail-fast: false
       matrix:
+        # Each configuration is tested twice: once in the profile a
+        # `debug_assertions` check runs in, once in the profile a timing budget
+        # means anything in. They were always both run; they are no longer run
+        # one after the other.
+        profile: [debug, release]
+        target: [macos-cpu, macos-metal, linux-cpu, linux-vulkan]
         include:
-          - name: macOS, CPU only
+          # What each profile costs cargo on the command line, carried here
+          # rather than spelled as a conditional at both call sites: an
+          # expression that renders to nothing leaves a dangling line
+          # continuation behind it, and a build step whose shell is only
+          # accidentally valid is one nobody will want to edit.
+          - profile: debug
+            flag: ""
+          - profile: release
+            flag: "--release"
+          - target: macos-cpu
+            name: macOS, CPU only
             slug: macos-cpu
             os: macos-14
             features: ""
             cpu_only: true
-          - name: macOS, Metal
+          - target: macos-metal
+            name: macOS, Metal
             slug: macos-metal
             os: macos-14
             features: "--features clayspace-engine/metal"
-          - name: Linux, CPU only
+          - target: linux-cpu
+            name: Linux, CPU only
             slug: linux-cpu
             os: ubuntu-24.04
             features: ""
             cpu_only: true
-          - name: Linux, Vulkan
+          - target: linux-vulkan
+            name: Linux, Vulkan
             slug: linux-vulkan
             os: ubuntu-24.04
             features: "--features clayspace-engine/vulkan"
@@ -89,10 +133,20 @@ jobs:
       # `ValidationError: Key Validation Error … cannot contain commas` and
       # carried on without a cache, so every macOS job rebuilt the C++ engine
       # from scratch.
+      #
+      # And the profile beside it. `target/debug` and `target/release` are
+      # different trees, so one key for both would have the two jobs racing to
+      # save a `target/` holding half of what the key claims — and the loser
+      # then restores a cache with none of its own artifacts in it, which is
+      # the slow build this change exists to stop.
       - name: Cache cargo and the engine build
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.slug }}
+          key: ${{ matrix.slug }}-${{ matrix.profile }}
+          # A cancelled or failing job saved nothing, so the next run rebuilt
+          # from scratch and was slower, and was likelier to be cancelled in
+          # turn. That loop is how a job that fits its budget stops fitting it.
+          cache-on-failure: true
 
       # winit and wgpu need these to build on Linux even where no window is
       # ever opened; rfd needs GTK for its fallback dialog.
@@ -117,8 +171,11 @@ jobs:
           # purposes.
           echo "VULKAN_SDK=/usr" >> "$GITHUB_ENV"
 
+      # `--all-targets` in the profile this job tests, so the test step does
+      # not silently carry a compile the build step was supposed to have done.
+      # That is where twenty-five of the cancelled run's ninety minutes went.
       - name: Build
-        run: cargo build --workspace --all-targets ${{ matrix.features }}
+        run: cargo build --workspace --all-targets ${{ matrix.features }} ${{ matrix.flag }}
 
       # Visual tests ask for a headless GPU and skip when there is none; the
       # window smoke asks for a display and skips likewise. Both report the
@@ -129,14 +186,16 @@ jobs:
       # that fails, and one red test then hides every other. It hid a real one:
       # `gesture_end` failed on macOS for weeks and `visual_incremental` never
       # ran behind it, so the run reported one problem where there were two.
+      #
+      # One profile, because this job is one profile. Both are still run on
+      # every configuration — as two jobs that start together rather than as
+      # two steps that wait for each other. Neither is redundant: a debug build
+      # is where an overflow check and a `debug_assertions` branch exist at
+      # all, and an optimised build is the only one where a timing budget means
+      # anything, which `sculpt_latency`, `gesture_end` and `visual_brushes`
+      # each say in their own words before declining to assert one in debug.
       - name: Test
-        run: cargo test --workspace --no-fail-fast ${{ matrix.features }}
-
-      # The budgets are a property of an optimised build. Measuring them in a
-      # debug build measures the profile, so the timing assertions only run
-      # here.
-      - name: Test (release)
-        run: cargo test --workspace --no-fail-fast --release ${{ matrix.features }}
+        run: cargo test --workspace --no-fail-fast ${{ matrix.features }} ${{ matrix.flag }}
 
       # A visual test that fails says "see target/visual/…", and until now that
       # file went into the bin with the runner. The whole reason those tests
@@ -147,7 +206,11 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: visual-${{ matrix.slug }}-${{ github.sha }}
+          # The profile too. Two jobs now reach this step for one commit, and
+          # an artifact name is unique per run: the second upload would be
+          # refused and the captures it was keeping would go into the bin with
+          # the runner, which is the one thing this step exists to prevent.
+          name: visual-${{ matrix.slug }}-${{ matrix.profile }}-${{ github.sha }}
           path: target/visual
           if-no-files-found: ignore
 
