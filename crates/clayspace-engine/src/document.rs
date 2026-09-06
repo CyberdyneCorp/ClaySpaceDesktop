@@ -7704,6 +7704,11 @@ struct Curve {
     profile: CurveProfile,
     /// The placed sweep, once there are enough points to have one.
     node: Option<claycore::NodeId>,
+    /// Control points the engine was last given.
+    ///
+    /// What lets an appended point dirty the end it added instead of every
+    /// brick the tube has ever reached. Zero until the sweep exists.
+    sent: usize,
 }
 
 impl Curve {
@@ -9820,6 +9825,7 @@ impl CurveModel for ClayDocument {
             join: CurveJoin::default(),
             profile: CurveProfile::default(),
             node: None,
+            sent: 0,
         });
     }
 
@@ -9890,15 +9896,23 @@ impl CurveModel for ClayDocument {
         let Some(curve) = self.curve.as_mut() else {
             return Ok(());
         };
-        for index in curve.selection.clone() {
-            let Some(point) = curve.points.get_mut(index) else {
+        let selection = curve.selection.clone();
+        // Where the points were, before they move. A drag changes the field in
+        // two places — the neighbourhood it leaves and the one it arrives in —
+        // and refilling only the destination leaves the old bulge standing on
+        // the surface with nothing to say it is stale.
+        let before = Self::curve_neighbourhood(curve, &selection);
+        for index in &selection {
+            let Some(point) = curve.points.get_mut(*index) else {
                 continue;
             };
             for (at, step) in point.position.iter_mut().zip(by) {
                 *at += step;
             }
         }
-        self.reshape_curve()
+        let mut moved = before;
+        moved.extend(Self::curve_neighbourhood(curve, &selection));
+        self.reshape_curve_within(moved)
     }
 
     fn drag_curve_points(
@@ -9914,13 +9928,19 @@ impl CurveModel for ClayDocument {
         // is what makes a turn about the selection's middle mean the same
         // thing on a curve as on a cage — and what gets a curve turn and scale
         // without a second implementation of either.
-        for index in curve.selection.clone() {
+        let selection = curve.selection.clone();
+        let before = Self::curve_neighbourhood(curve, &selection);
+        for index in selection.clone() {
             let Some(point) = curve.points.get_mut(index) else {
                 continue;
             };
             point.position = drag.apply(point.position, to, snap);
         }
-        self.reshape_curve()
+        let mut moved = before;
+        if let Some(curve) = self.curve.as_ref() {
+            moved.extend(Self::curve_neighbourhood(curve, &selection));
+        }
+        self.reshape_curve_within(moved)
     }
 
     fn set_curve_radius(&mut self, radius: f32) -> Result<(), ModelError> {
@@ -10007,6 +10027,14 @@ impl ClayDocument {
     /// one tendril: a curve edited by dragging a point would otherwise leave a
     /// sweep behind on every move.
     fn reshape_curve(&mut self) -> Result<(), ModelError> {
+        self.reshape_curve_within(Vec::new())
+    }
+
+    /// Re-sweeps the curve, told what a drag disturbed where one did.
+    ///
+    /// `moved` is an item-space box. `None` means "this was not a move", and
+    /// the append path decides the region instead.
+    fn reshape_curve_within(&mut self, moved: Vec<([f32; 3], [f32; 3])>) -> Result<(), ModelError> {
         let Some(curve) = self.curve.as_ref() else {
             return Ok(());
         };
@@ -10019,10 +10047,46 @@ impl ClayDocument {
         let kind = point_type(curve.join);
 
         if let Some(node) = curve.node {
+            // Only the end an append added.
+            //
+            // `clay_brick_cache_mark_dirty_nodes` computes a node's own bound,
+            // and for a swept curve that is everything the tube has ever
+            // reached — so laying a point re-evaluated the whole tube, every
+            // point. Measured over a thirty-point freehand stroke, the cost of
+            // one point climbed from 2.0 ms to 31.1 ms while the brick count
+            // only went from 440 to 880: the bricks doubled and the time went
+            // up fifteen times, because each brick's evaluation also walks
+            // every segment of the curve. The two compound, and narrowing the
+            // region is the half that is ours.
+            //
+            // `None` where the change is not an append — a point moved,
+            // removed, or the join or profile changed — since any of those can
+            // move the whole tube and the node's own bound is the honest
+            // answer.
+            // A drag names what it disturbed: where the points were and where
+            // they now are. Both, because the field changed in both places and
+            // refilling only the destination leaves the old bulge standing on
+            // the surface with nothing to say it is stale.
+            let regions = if moved.is_empty() {
+                self.curve_tail_regions(curve, &guide)
+            } else {
+                Some(
+                    moved
+                        .iter()
+                        .flat_map(|local| self.curve_images_of(curve, *local))
+                        .collect(),
+                )
+            };
             self.document
                 .set_layer_stroke_points(layer, node, &guide, kind, Self::CURVE_TOLERANCE)
                 .map_err(ModelError::engine)?;
-            return self.refill(layer, &[node]);
+            if let Some(curve) = self.curve.as_mut() {
+                curve.sent = guide.len() / 4;
+            }
+            return match regions {
+                Some(regions) if !regions.is_empty() => self.refill_regions(&regions),
+                _ => self.refill(layer, &[node]),
+            };
         }
 
         let mut item = self.curve_item(curve, &guide, kind)?;
@@ -10032,10 +10096,156 @@ impl ClayDocument {
             .document
             .add_item(layer, &item)
             .map_err(ModelError::engine)?;
+        let sent = guide.len() / 4;
         if let Some(curve) = self.curve.as_mut() {
             curve.node = Some(node);
+            curve.sent = sent;
         }
         self.refill(layer, &[node])
+    }
+
+    /// The item-space boxes a set of control points and their neighbours
+    /// occupy — **one per point**, not one around all of them.
+    ///
+    /// A Catmull-Rom span is governed by four control points, so moving one
+    /// disturbs the spans whose window contains it: two points either side.
+    ///
+    /// One box per point rather than one over the range, because a tube is
+    /// usually bent and a single box around five points of a bend contains a
+    /// great deal of air. Measured on a wiggling twenty-four point curve, the
+    /// enclosing box dirties 256 bricks where the points' own boxes dirty far
+    /// fewer, and the cache refills a brick once however many regions name it.
+    fn curve_neighbourhood(curve: &Curve, indices: &[usize]) -> Vec<([f32; 3], [f32; 3])> {
+        /// Two, not three: point `i` appears in the four-point window of the
+        /// spans from `i-2` to `i+1`, so the points those windows reach span
+        /// `i-2` to `i+2`.
+        const REACH: usize = 2;
+        if indices.is_empty() || curve.points.is_empty() {
+            return Vec::new();
+        }
+        let last = curve.points.len() - 1;
+        let mut touched: Vec<usize> = Vec::new();
+        for &index in indices {
+            for at in index.saturating_sub(REACH)..=(index + REACH).min(last) {
+                touched.push(at);
+            }
+        }
+        touched.sort_unstable();
+        touched.dedup();
+        touched
+            .into_iter()
+            .filter_map(|at| {
+                let point = curve.points.get(at)?;
+                // Two radii, and the headroom is free.
+                //
+                // The cliff is measured rather than guessed: with
+                // `curve_cache_freshness` reading the *rendered* surface, 1.5
+                // passes and **1.2 fails at 71 stale pixels**, so the value
+                // that merely works sits a quarter above a real edge. 1.75,
+                // 2.0 and 2.5 all pass, and 2.0 dirties the same 168 bricks as
+                // 1.5 — a brick is eight voxels across and both margins round
+                // into the same ones. Where a wider region costs nothing, the
+                // narrow one is a liability with no upside: the cliff's
+                // position depends on this fixture's radius and point spacing,
+                // and a curve drawn with other numbers moves it.
+                let margin = point.radius * 2.0;
+                Some((
+                    std::array::from_fn(|axis| point.position[axis] - margin),
+                    std::array::from_fn(|axis| point.position[axis] + margin),
+                ))
+            })
+            .collect()
+    }
+
+    /// The world regions an appended control point changed, or `None` where
+    /// the change is not an append.
+    ///
+    /// A guide that grew by one or more points at its end disturbs the curve
+    /// only near that end — a Catmull-Rom span is governed by four control
+    /// points, so three back from the join covers it — plus every image the
+    /// layer mirror places it at. A curve is an item, so the mirror reflects
+    /// it, and a stroke drawn on one side of a mirrored layer appears on both.
+    ///
+    /// `None` for anything else: a point moved, removed, retapered, or a join
+    /// or profile changed can move the whole tube, and the node's own bound is
+    /// then the honest answer. Correct is the direction to fail in, because
+    /// the engine computes that bound itself in world space.
+    fn curve_tail_regions(
+        &self,
+        curve: &Curve,
+        guide: &[f32],
+    ) -> Option<Vec<([f32; 3], [f32; 3])>> {
+        const REACH: usize = 3;
+        let count = guide.len() / 4;
+        let sent = curve.sent;
+        if sent == 0 || count <= sent {
+            return None;
+        }
+        // The layer is resolved by `curve_images_of` below, which needs its
+        // mirror and its transform; this only has to know the layer exists.
+        self.index_of(curve.layer).ok()?;
+        let first = sent.saturating_sub(REACH);
+        let mut min = [f32::INFINITY; 3];
+        let mut max = [f32::NEG_INFINITY; 3];
+        for point in first..count {
+            let at = &guide[point * 4..point * 4 + 4];
+            // The radius the guide carries, and a share of it again: a swept
+            // profile is not always the sphere the radius describes, and a
+            // region that is exactly the radius clips the corners of a square
+            // or a hexagon.
+            //
+            // **One and a half here where the drag uses two, and the two
+            // numbers were measured separately rather than made to agree.**
+            // Against `curve_cache_freshness`, which reads the rendered
+            // surface, this path fails at 0.7 and passes at 1.0 — so 1.5 sits
+            // at twice its cliff. And widening is *not* free on this path the
+            // way it is on the drag's: 2.0 costs 164 bricks and 3.875 ms per
+            // appended point against 67 and 2.184 at 1.5, because these boxes
+            // follow one another along the guide and each one's growth adds
+            // bricks the next does not already cover. This is the path a
+            // freehand stroke runs every time the pointer travels a
+            // tube-width, so the time is the one a sculptor feels.
+            let margin = at[3] * 1.5;
+            for axis in 0..3 {
+                min[axis] = min[axis].min(at[axis] - margin);
+                max[axis] = max[axis].max(at[axis] + margin);
+            }
+        }
+
+        Some(self.curve_images_of(curve, (min, max)))
+    }
+
+    /// One world region per image the layer mirror places a box at.
+    ///
+    /// **Separate regions, not one box containing them all**: a box spanning
+    /// an image and its reflection swallows the whole untouched middle of the
+    /// form. The cache refills a brick once however many regions name it, so
+    /// marking each image on its own is strictly tighter and never wrong.
+    fn curve_images_of(
+        &self,
+        curve: &Curve,
+        local: ([f32; 3], [f32; 3]),
+    ) -> Vec<([f32; 3], [f32; 3])> {
+        let Ok(index) = self.index_of(curve.layer) else {
+            return Vec::new();
+        };
+        let layer = &self.layers[index];
+        let mirror = Mirror(layer.mirror);
+        let axes: Vec<usize> = (0..3).filter(|axis| mirror.0[*axis]).collect();
+        let placed = layer.transform;
+        (0..(1usize << axes.len()))
+            .map(|image| {
+                let (mut low, mut high) = local;
+                for (bit, &axis) in axes.iter().enumerate() {
+                    if image & (1 << bit) != 0 {
+                        let (a, b) = (low[axis], high[axis]);
+                        low[axis] = -b;
+                        high[axis] = -a;
+                    }
+                }
+                Self::world_bounds(&placed, (low, high))
+            })
+            .collect()
     }
 
     /// The item a curve sweeps, which is a different primitive depending on

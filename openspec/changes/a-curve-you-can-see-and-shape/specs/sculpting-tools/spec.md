@@ -107,3 +107,75 @@ empty space.
 - **WHEN** a double-click lands on an existing control point
 - **THEN** the point is taken in hand rather than a second one being inserted
   coincident with it
+
+### Requirement: Laying a control point costs the end it added
+An appended control point SHALL dirty the region the new end changed, together
+with every image the layer mirror places it at, rather than the swept node's
+own bound.
+
+A change that is not an append — a point moved or removed, a radius, join or
+profile changed — SHALL use the node's own bound, since any of those can move
+the whole tube.
+
+The regions SHALL be marked separately rather than unioned into one box, which
+would span the untouched form between an image and its reflection.
+
+This SHALL be held by a test that detects **staleness**, not only cost: a brick
+the append changed but the region did not name keeps its old value and nothing
+reports it. Measuring the surface, refilling everything, and measuring again is
+what distinguishes a region that named enough from one that merely named less.
+
+#### Scenario: A curve is drawn freehand
+- **WHEN** control points are appended one after another
+- **THEN** each costs the end it added rather than the whole tube
+
+#### Scenario: A curve laid point by point is compared with one refilled whole
+- **WHEN** the layer is refilled from scratch after an incremental build
+- **THEN** the surface is unchanged
+
+### Requirement: The brush ring is not drawn while a curve is placed
+The brush ring SHALL NOT be drawn while a curve is being placed or edited.
+
+A ring under the pointer states that the next press leaves a stroke there. While
+a curve is up a press puts a control point down, takes hold of one, draws a
+chain of them, or is spent on the guide — none of which is a dab, so the ring
+would be promising something no press there can deliver.
+
+This SHALL be a clause of the rule that answers whether the ring is drawn,
+alongside the whole-subtool manipulator, the deformation cage and the mask's
+drawn gestures, rather than a condition at the call site: they are the same
+question and a fourth answer kept somewhere else is how the third one came to
+be missed.
+
+#### Scenario: A curve is active
+- **WHEN** the pointer is over the form with a curve being placed
+- **THEN** no brush ring is drawn
+
+### Requirement: Dragging a control point costs what the drag disturbed
+A drag SHALL dirty the neighbourhood of the points that moved — both where they
+were and where they now are — rather than the swept node's whole bound.
+
+Both, because the field changed in both places: refilling only the destination
+leaves the shape the point left standing on the surface with nothing to report
+it.
+
+The regions SHALL be one box per affected point rather than one box around the
+range. A bent tube's enclosing box is mostly air.
+
+The margin SHALL be measured against a **rendered** surface, not a pick. A pick
+is answered from a path that stays correct whether or not the brick cache was
+refilled, so it cannot detect a region that is too small — and the value that
+merely passes a pick may sit below a real cliff.
+
+Margins on different paths SHALL NOT be made to agree for tidiness. Each is
+measured against its own cliff and its own cost, and the answers differ.
+
+#### Scenario: A control point is dragged clear of where it started
+- **WHEN** the surface is rendered after the drag, and again after every brick
+  the tube reaches is refilled
+- **THEN** the two pictures agree
+
+#### Scenario: A margin is chosen
+- **WHEN** a refill region's margin is set
+- **THEN** the value sits above a cliff found by making the guard fail, and its
+  cost on the path that runs most often is measured before it is widened

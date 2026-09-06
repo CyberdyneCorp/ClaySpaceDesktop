@@ -3080,6 +3080,7 @@ impl App {
             self.layer_manipulator_up(),
             self.lattice.state().get().active,
             self.draws_an_outline(),
+            self.curve.state().get().active,
         ) {
             return Vec::new();
         }
