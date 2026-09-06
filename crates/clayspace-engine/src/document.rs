@@ -5351,16 +5351,31 @@ impl ClayDocument {
     /// continues at the tip thickness rather than re-thinning what is already
     /// down.
     ///
-    /// Five rather than the eight that first reproduced the old look, and for
-    /// a meshing reason rather than a matter of taste: a *fat* swept curve
-    /// pinholes. Measured through `visual_holes` over the same six tendrils, a
-    /// span of 8 leaves two pinholes and a span of 100 — no taper at all —
-    /// leaves three, while 5 and 3 are clean; and they are there in the
-    /// engine's own mesh as much as in ours, so they are the mesher's rather
-    /// than our incremental patching. The old index-relative taper hid this by
-    /// making tendrils thinner than that for the gestures we happened to draw.
-    /// Reported upstream rather than only tuned around. Five keeps a real
-    /// taper and stays inside what the mesher handles.
+    /// Five rather than the eight that first reproduced the old look, because
+    /// a fatter tendril renders with specks of background showing through it.
+    /// Measured through `visual_holes` over the same six tendrils: a span of 8
+    /// shows two, a span of 100 — no taper at all — shows three, and 5 and 3
+    /// show none. The old index-relative taper hid this by making tendrils
+    /// thinner than that for the gestures we happened to draw.
+    ///
+    /// **The surface has no hole in it, and this constant is not tuned around
+    /// an engine defect.** That was the first conclusion and it was wrong: the
+    /// specks appear in the engine's own mesh as well as in ours, which reads
+    /// as "then they are the mesher's" and is not what it shows, because both
+    /// pictures go through the same rasteriser. Meshed and measured
+    /// topologically instead, the same document is watertight, 2-manifold and
+    /// Euler characteristic **2** at resolutions 96, 128 and 192 — a
+    /// topological sphere. A pinhole is a tunnel and would drop that to 0.
+    ///
+    /// What it is instead: the mesh carries sub-pixel slivers, and they grow
+    /// with resolution — 150 at 96, 343 at 128, 1342 at 192, with the smallest
+    /// triangle at 1.3e-13. A rasteriser can drop both the front and back
+    /// sheet of a region thinner than its sample spacing, so real geometry
+    /// disappears for a pixel. Fatter tendrils produce more of it.
+    ///
+    /// So five is chosen against something a sculptor genuinely sees, and the
+    /// fix if anyone wants one is in our render path rather than in the field
+    /// or the engine.
     const TAPER_SPAN: f32 = 5.0;
 
     /// The tendril's radius `travelled` along the path, for a brush of `size`.

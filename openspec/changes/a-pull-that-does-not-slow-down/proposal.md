@@ -64,6 +64,16 @@ samples    ms    bricks         ms     bricks
 Unmirrored is flat. The reported 440 ms segment is now under 1 ms, and under
 4 ms at the worst mirrored.
 
+**One conclusion in this work was wrong and is corrected rather than removed.**
+The taper span is five because a fatter tendril renders with specks of
+background through it — and the first reading of those specks, that they were
+holes in the engine's mesher because they appeared in its own mesh as well as
+in ours, does not follow: all three pictures go through one rasteriser.
+Measured topologically the document is watertight, 2-manifold and Euler
+characteristic 2 at three resolutions. It carries sub-pixel slivers instead,
+which a rasteriser drops. The span still stands, because a sculptor sees the
+specks; what changed is whose defect it is, and the answer is ours.
+
 **What remains is not ours.** The mirrored column climbs while its brick count
 does not, which is `ctape_stroke_dist` walking every segment of the curve for
 every sample — O(control points), confirmed by the engine's authors in

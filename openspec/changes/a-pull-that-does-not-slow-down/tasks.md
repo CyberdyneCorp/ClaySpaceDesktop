@@ -6,10 +6,20 @@
       the distance travelled from the anchor, and `snakehook_stroke` calls it
       per sample instead of computing `index / (len - 1)` inline; verify
       `a_radius_depends_on_the_distance_and_not_on_the_stroke`
-- [x] 1.2 `TAPER_SPAN` carries why it is five and not eight — a *fat* swept
-      curve pinholes in the engine's own mesher, measured through
+- [x] 1.2 `TAPER_SPAN` carries why it is five and not eight — a fatter tendril
+      renders with specks of background through it, measured through
       `visual_holes` at spans 100, 8, 5 and 3 — so the next reader meets the
       artifact rather than a magic number
+- [x] 1.2a The first reading of that artifact was **wrong and is corrected in
+      place**: specks in the engine's own mesh as well as in ours was read as
+      "then it is the mesher's", and reported upstream as such. All three
+      pictures go through one rasteriser, so agreement across them rules out
+      our incremental store and nothing below it. Measured topologically, the
+      same document is watertight, 2-manifold and Euler characteristic 2 at
+      resolutions 96, 128 and 192 — a sphere, where a pinhole is a tunnel and
+      would give 0. What it carries is sub-pixel slivers, 150 at 96 rising to
+      1342 at 192, which a rasteriser drops. The comment in `visual_holes` that
+      licensed the bad inference is corrected too
 - [x] 1.3 The radius floor is documented as a **precaution and not a measured
       fix**: it was added against the hypothesis that thin tendrils pinholed,
       the test failed again unchanged because at that stroke length the floor

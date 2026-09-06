@@ -187,7 +187,16 @@ fn a_sculpted_form_has_no_holes_in_it() {
 
     // And the engine's own mesh of the same document, which goes nowhere near
     // the per-key store, the splitting or the slots. If this is clean and ours
-    // is not, the holes are ours; if both show them, they are the engine's.
+    // is not, the defect is in our patching.
+    //
+    // **Both showing it does NOT make it the engine's**, which this comment
+    // used to claim and which cost a false report upstream. All three pictures
+    // are rendered through one rasteriser, so all three share everything it
+    // does — and what this counter finds has been measured to be a rendering
+    // artifact at least once: a document failing here meshed to a watertight,
+    // 2-manifold, Euler-characteristic-2 surface at three resolutions, with
+    // sub-pixel slivers that a rasteriser drops. Agreement across these three
+    // rules out the incremental store. It rules out nothing below it.
     let engine = support::mesh_document(document.document(), 96);
     let engine_image = harness.capture_mesh(&engine, &camera, "132-holes-engine-mesh");
     let engine_holes = pinholes(&engine_image, background);
