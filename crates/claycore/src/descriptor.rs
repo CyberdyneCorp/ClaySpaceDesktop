@@ -84,6 +84,7 @@ descriptors! {
     sys::clay_chunk_options,
     sys::clay_chunk_readback,
     sys::clay_maintenance_item,
+    sys::clay_resume_stats,
 }
 
 #[cfg(test)]

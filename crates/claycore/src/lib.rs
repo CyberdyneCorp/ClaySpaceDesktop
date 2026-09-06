@@ -91,7 +91,7 @@ pub use pick::{Hit, Snapped};
 pub use reader::Reader;
 pub use remesh::{
     OpenSurface, Projection, RemeshEstimate, RemeshParams, RemeshRefusal, RemeshReport, Resolution,
-    SmallComponents, Surface,
+    ResumeStats, SmallComponents, Surface,
 };
 pub use sculpt::{
     resolve_stroke, FlattenMode, FlattenParams, MoveParams, RelaxParams, TopologicalMoveParams,
@@ -189,7 +189,7 @@ pub fn revision() -> &'static str {
 /// constant exists so that a mismatch can also be reported in diagnostics.
 pub const EXPECTED_ABI: Version = Version {
     major: 0,
-    minor: 78,
+    minor: 84,
     patch: 0,
 };
 
