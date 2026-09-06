@@ -519,6 +519,16 @@ pub struct LatticeView<'a> {
     pub points: &'a [[f32; 3]],
     /// Index pairs joined by a cage edge.
     pub edges: &'a [(u32, u32)],
+    /// A polyline drawn through, rather than between, the control points.
+    ///
+    /// A cage has none: its edges *are* its shape. A curve does, because the
+    /// chords between its control points are a different line from the one the
+    /// tube is swept along — and the tube hides its own guide, so the chain
+    /// was the only line a sculptor could see and it was the wrong one.
+    ///
+    /// Consecutive entries are joined. Empty for anything that has no such
+    /// line, which is everything except a curve.
+    pub guide: &'a [[f32; 3]],
     /// Which control points are in hand.
     pub selected: &'a [usize],
     /// The manipulator on that selection, when there is one.

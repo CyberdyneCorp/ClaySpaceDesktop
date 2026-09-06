@@ -336,3 +336,124 @@ fn a_curve_on_a_mirrored_layer_comes_out_mirrored() {
          {there}; the layer's mirror should have carried it across"
     );
 }
+
+/// The guide the viewport draws has to be the line the tube actually follows.
+///
+/// The overlay used to draw the control polygon — straight chords between the
+/// points — which is a *different line* from the swept guide under `Through`
+/// and `Rounded`. A sculptor looking at it saw a chain that cut the corners
+/// the tube rounds, so the one line they could see was the one the tube does
+/// not take.
+///
+/// `CurveState::path` is the interface's own tessellation, and there is no ABI
+/// call that hands back a swept guide's, so agreement is something to measure
+/// rather than assume. This measures the property itself rather than a proxy:
+/// every sample of the drawn guide is evaluated against the swept field and
+/// has to be **inside** the tube. A tessellation that disagreed with the
+/// engine's would put samples outside it.
+#[test]
+fn the_guide_lies_inside_the_tube_it_describes() {
+    /// Thin against the bend below, so a line that cuts the corner leaves it.
+    const RADIUS: f32 = 0.1;
+
+    for join in CurveJoin::ALL {
+        let mut document = document();
+        document.begin_curve();
+        // Bent hard in two planes, so a wrong tessellation has somewhere to go
+        // wrong: a gentle curve is close enough to its chords to pass this by
+        // accident.
+        for at in [
+            [-0.9f32, 1.5, 0.0],
+            [-0.3, 2.1, 0.5],
+            [0.3, 1.2, -0.5],
+            [0.9, 1.9, 0.0],
+        ] {
+            document.add_curve_point(at, RADIUS).expect("refused");
+        }
+        document.set_curve_join(join).expect("join");
+
+        let path = document.curve().path();
+        assert!(path.len() >= 4, "{join:?} tessellated to nothing");
+
+        let values = document
+            .document()
+            .eval_points(None, &path)
+            .expect("the swept field");
+        let worst = values.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+
+        // Deep inside, not merely inside.
+        //
+        // "Every sample is within the tube" was the first version of this and
+        // it does not discriminate: checked by feeding it the control polygon,
+        // which is the line this change exists to stop drawing, and it passed.
+        // A chord across a gentle bend stays inside a tube of this radius, so
+        // the assertion was true of the wrong line as well as the right one.
+        //
+        // On the guide the tube is swept along, the field is about minus the
+        // radius — that is what the centre of a tube of that thickness reads.
+        // A line that cuts a corner rides closer to the wall and reads nearer
+        // zero, which is what this measures.
+        assert!(
+            worst < -0.6 * RADIUS,
+            "{join:?}: the worst of {} guide samples reads {worst} where the \
+             centre line of a {RADIUS} tube reads about {}. The drawn guide is \
+             not the line the sweep follows",
+            path.len(),
+            -RADIUS
+        );
+    }
+}
+
+/// A point put into the middle of a curve stays in the middle of it.
+///
+/// Appending is what a click on empty space does; a curve that can only grow
+/// at its end cannot be refined where a tube usually needs it. The order
+/// matters as much as the count: a point inserted at index 2 that landed at
+/// the end would leave the guide doubling back on itself, and the tube with
+/// it.
+#[test]
+fn a_point_inserted_into_a_curve_splits_the_span_it_names() {
+    let mut document = document();
+    lay(&mut document);
+    let before = document.curve().points.len();
+    let ends = (
+        document.curve().points[0].position,
+        document.curve().points[before - 1].position,
+    );
+
+    document
+        .insert_curve_point(1, [-0.45, 1.9, 0.0], 0.13)
+        .expect("the insertion was refused");
+
+    let curve = document.curve();
+    assert_eq!(curve.points.len(), before + 1, "nothing was inserted");
+    assert_eq!(
+        curve.points[1].position,
+        [-0.45, 1.9, 0.0],
+        "the point did not land where it was put"
+    );
+    assert_eq!(curve.points[0].position, ends.0, "the start moved");
+    assert_eq!(
+        curve.points[curve.points.len() - 1].position,
+        ends.1,
+        "the end moved"
+    );
+    assert_eq!(
+        curve.selection,
+        vec![1],
+        "the point just placed is the one that should be in hand"
+    );
+
+    // And the tube still follows it: an insertion that produced a guide the
+    // sweep disagreed with would show here as a sample outside the surface.
+    let path = curve.path();
+    let values = document
+        .document()
+        .eval_points(None, &path)
+        .expect("the swept field");
+    let worst = values.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    assert!(
+        worst < 0.0,
+        "after inserting a point the guide leaves its own tube by {worst}"
+    );
+}

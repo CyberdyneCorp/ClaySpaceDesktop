@@ -432,6 +432,16 @@ impl CurveModel for SharedDocument {
     fn toggle_curve_point(&mut self, index: usize) {
         self.document.borrow_mut().toggle_curve_point(index)
     }
+    fn insert_curve_point(
+        &mut self,
+        index: usize,
+        at: [f32; 3],
+        radius: f32,
+    ) -> Result<(), ModelError> {
+        self.document
+            .borrow_mut()
+            .insert_curve_point(index, at, radius)
+    }
     fn drag_curve(&mut self, by: [f32; 3]) -> Result<(), ModelError> {
         self.document.borrow_mut().drag_curve(by)
     }

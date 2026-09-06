@@ -9860,6 +9860,32 @@ impl CurveModel for ClayDocument {
         }
     }
 
+    fn insert_curve_point(
+        &mut self,
+        index: usize,
+        at: [f32; 3],
+        radius: f32,
+    ) -> Result<(), ModelError> {
+        let Some(curve) = self.curve.as_mut() else {
+            return Ok(());
+        };
+        // Clamped rather than refused. The index comes from a click on a
+        // tessellated guide, and the arithmetic that turns a sample into a
+        // span is the interface's; a point landing one past the end is a
+        // rounding question, not something to make a sculptor's click fail.
+        let index = index.min(curve.points.len());
+        curve.points.insert(
+            index,
+            CurvePoint {
+                position: at,
+                radius: radius.max(1e-3),
+            },
+        );
+        // The new point is the one in hand, as it is after appending one.
+        curve.selection = vec![index];
+        self.reshape_curve()
+    }
+
     fn drag_curve(&mut self, by: [f32; 3]) -> Result<(), ModelError> {
         let Some(curve) = self.curve.as_mut() else {
             return Ok(());

@@ -100,6 +100,7 @@ pub fn home_of(command: &Command) -> Home {
         // -- curve ----------------------------------------------------------
         ToggleCurve => Home::In("curve", "toggle"),
         AddCurvePoint(..) => Home::In("curve", "add_point"),
+        InsertCurvePoint(..) => Home::In("curve", "insert_point"),
         SelectCurvePoint(_) => Home::In("curve", "select_point"),
         ToggleCurvePoint(_) => Home::In("curve", "toggle_point"),
         DragCurve(_) => Home::In("curve", "drag"),

@@ -262,7 +262,9 @@ measure.
 ### A tube along a curve
 
 **Dinâmica → Tubo por curva** places a curve: click to put a control point
-down, drag one to move it, Del removes the selected ones. What makes it
+down, **drag to draw one freehand**, drag a point to move it, **double-click
+the line to add one between two others**, Del removes the selected ones. What
+makes it
 different from a brush is not the shape it leaves but that it can be **gone
 back to** — a stroke is over when the pointer comes up, and a curve is a set of
 points that stay where they were put. Nomad calls it a Tube, 3DCoat a spline.
@@ -281,6 +283,51 @@ tube behind on every move.
 | Junção | **Cantos** straight, **Pelos pontos** Catmull-Rom through them, **Arredondado** a B-spline that rounds corners off |
 | Perfil | Círculo, Quadrado, Hexágono, Triângulo |
 | Aplicar | Leaves the swept form and takes the curve down |
+| Arrastar no vazio | Draws the curve freehand, laying a point every tube-width |
+| Duplo clique na linha | Splits the span under the pointer, and takes the new point in hand |
+
+**A drag draws the curve, a click places one point.** Nothing distinguishes
+them but distance: a press opens a stroke, and each time the pointer has
+travelled a tube-width from the last point it lays another. A click never
+travels that far, so the same path serves both and there is no mode to be in.
+Spacing in tube-widths rather than pixels, so a thick tube gets the coarse chain
+it wants and a fine one keeps its detail — a point per frame at sixty hertz is a
+curve nobody can edit afterwards, and going back to it is the whole difference
+between this and a brush.
+
+A freehand stroke stays on the plane its first point chose. Re-picking the
+surface for each point is worse than it sounds: by the second one there is a
+tube under the pointer — the one the stroke is drawing — so the ray lands on it
+and the curve climbs its own output.
+
+**A press on the line is spent, not appended.** It used to fall through to
+placing a point, which put one at the far *end* of the curve rather than where
+the pointer was, and selected it, so the line appeared to jump somewhere nobody
+clicked. It also made the double-click below impossible: the first press had
+already added a stray point before the second could be read as a double.
+
+**The line you see is the line the tube follows.** It draws the *tessellated
+join* rather than the straight chords between the control points, and those are
+two different lines for every join except Cantos — the chords cut exactly the
+corners the tube rounds. The chain was drawn first, on the reasoning that the
+sweep already shows the curve so drawing it again would be drawing the surface
+twice. That is true of a curve you can see and false of one you cannot: the
+guide runs down the inside of its own tube, so the only line visible was the
+one the tube does not take.
+
+The interface computes that tessellation itself, because no engine call hands
+back a swept guide's. Whether the two agree is therefore measured rather than
+assumed — every sample of the drawn guide is evaluated against the swept field
+and has to read about minus the tube's radius, which is what the centre of a
+tube that thick reads. Asserting only that the samples fall *inside* the tube
+is not enough and was tried: a chord across a gentle bend stays inside, so the
+weaker test passed when handed the very line the change exists to stop drawing.
+
+**And the surface goes ghosted while a curve is up**, the way it already does
+for a deformation cage. Overlays are drawn wherever they are, but faded where
+the sculpt stands in front of them — and a guide inside its own tube is behind
+the surface along its whole length. Measured on one frame, the guide's pixels
+move by 17.8 against an opaque surface and 55.0 against a ghosted one.
 
 **Two primitives, because they do different things.** A **round** tube is a
 swept-sphere chain — the snakehook's primitive — which takes a radius *per

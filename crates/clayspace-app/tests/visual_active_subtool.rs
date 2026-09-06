@@ -240,6 +240,7 @@ fn an_active_sdf_subtool_is_outlined() {
             LatticeView {
                 points: &[],
                 edges: &[],
+                guide: &[],
                 selected: &[],
                 gizmo: None,
                 outline: None,
@@ -257,6 +258,7 @@ fn an_active_sdf_subtool_is_outlined() {
         LatticeView {
             points: &[],
             edges: &[],
+            guide: &[],
             selected: &[],
             gizmo: None,
             outline: None,
@@ -303,6 +305,7 @@ fn an_active_sdf_subtool_is_outlined() {
         LatticeView {
             points: &[],
             edges: &[],
+            guide: &[],
             selected: &[],
             gizmo: None,
             outline: None,
