@@ -245,6 +245,13 @@ struct App {
     curve: CurveViewModel,
     /// The plane a curve drag runs on, and where it started.
     curve_drag: Option<([f32; 3], [f32; 3], [f32; 3])>,
+    /// When and where the last curve press landed, for spotting a double.
+    ///
+    /// Held here rather than read from egui because what a double-click *does*
+    /// is a rule of this application — split the span under the pointer — and
+    /// a rule worth testing should not need a window open to test it. See
+    /// [`App::is_double_press`].
+    last_curve_press: Option<(std::time::Instant, egui::Pos2)>,
     /// The plane a lattice drag runs on: an anchor and a normal facing the eye.
     cage_plane: Option<([f32; 3], [f32; 3])>,
     /// The selection box being drawn: where it began, where it has reached,
@@ -565,6 +572,7 @@ impl App {
             boolean,
             curve,
             curve_drag: None,
+            last_curve_press: None,
             cage_plane: None,
             marquee: None,
             gizmo_hover: None,
@@ -1793,8 +1801,31 @@ impl App {
         let Some(ray) = self.ray_at(point) else {
             return false;
         };
+        let now = std::time::Instant::now();
+        let double = Self::is_double_press(self.last_curve_press, now, point);
+        self.last_curve_press = Some((now, point));
         let positions: Vec<[f32; 3]> = curve.points.iter().map(|p| p.position).collect();
         let handle = Self::curve_handle(&curve);
+
+        // A double-click on the line puts a point *into* it.
+        //
+        // Before the grab below, because the second press of a double lands
+        // within a handle's reach of the point the first one just placed or
+        // selected — so testing the points first would turn every double into
+        // a re-select and this would never run. It is checked against the
+        // *guide* rather than the control points for the same reason the guide
+        // is drawn: the line a sculptor is aiming at is the one the tube
+        // follows, and on a curved span that is nowhere near the chord.
+        if double {
+            let guide = curve.path();
+            if let Some(sample) = Self::nearest_along(&guide, ray, handle * Self::CAGE_GRAB) {
+                let index = curve.insertion_for_sample(sample);
+                let radius = *self.curve.radius().get();
+                self.handle(Command::InsertCurvePoint(index, guide[sample], radius));
+                return true;
+            }
+        }
+
         if let Some(index) = Self::nearest_along(&positions, ray, handle * Self::CAGE_GRAB) {
             if add {
                 self.handle(Command::ToggleCurvePoint(index));
@@ -1837,6 +1868,31 @@ impl App {
         let anchor = self.curve_drag?.0;
         let now = Self::on_plane(self.ray_at(point)?, anchor, normal)?;
         Some(std::array::from_fn(|axis| now[axis] - from[axis]))
+    }
+
+    /// Whether this press is the second half of a double-click.
+    ///
+    /// Ours rather than the window system's, because the *rule* is this
+    /// application's — a double on a curve's guide splits the span under it —
+    /// and a rule worth holding should be testable without a window. Both
+    /// halves matter: two presses far apart in time are two presses, and two
+    /// in the same instant at opposite corners of the viewport are a coincidence
+    /// rather than a gesture.
+    fn is_double_press(
+        last: Option<(std::time::Instant, egui::Pos2)>,
+        now: std::time::Instant,
+        at: egui::Pos2,
+    ) -> bool {
+        /// The window every desktop uses, near enough.
+        const WITHIN: std::time::Duration = std::time::Duration::from_millis(400);
+        /// How far the pointer may drift between the two, in logical pixels.
+        /// A hand resting on a tablet is not perfectly still, and a threshold
+        /// of zero would make this fire only for a mouse.
+        const DRIFT: f32 = 6.0;
+        let Some((then, was)) = last else {
+            return false;
+        };
+        now.duration_since(then) <= WITHIN && was.distance(at) <= DRIFT
     }
 
     /// How big a curve's control-point handle is, in world units.
@@ -2262,10 +2318,13 @@ impl App {
             return;
         };
         let gpu = graphics.gpu.clone();
-        // Drawn through while a cage is up: half the control points are behind
-        // the form, and a solid surface hides exactly the handles that need
-        // reaching.
-        graphics.renderer.set_ghosted(cage.active);
+        // Drawn through while a cage *or a curve* is up: half of a cage's
+        // control points are behind the form, and a curve's guide runs
+        // straight down the middle of the tube it describes — which is the one
+        // place an opaque surface hides it completely. The scaffold shader
+        // dims whatever the sculpt stands in front of, so a curve without this
+        // was drawn at the dimmed alpha along its whole length.
+        graphics.renderer.set_ghosted(cage.active || curve.active);
         if !cage.active {
             // The curve, which shares the overlay. Its points are drawn like a
             // cage's and joined in a chain — the control polygon rather than
@@ -2274,12 +2333,17 @@ impl App {
             if curve.active {
                 let points: Vec<[f32; 3]> =
                     curve.points.iter().map(|point| point.position).collect();
-                let edges = curve.edges();
+                // No chords: the guide below is the line, and drawing both put
+                // two lines through the same points that agree only where the
+                // curve happens to be straight.
+                let edges: Vec<(u32, u32)> = Vec::new();
+                let guide = curve.path();
                 graphics.renderer.set_lattice(
                     &gpu,
                     clayspace_view::LatticeView {
                         points: &points,
                         edges: &edges,
+                        guide: &guide,
                         selected: &curve.selection,
                         gizmo: None,
                         outline: None,
@@ -2309,6 +2373,7 @@ impl App {
                 clayspace_view::LatticeView {
                     points: &[],
                     edges: &[],
+                    guide: &[],
                     selected: &[],
                     gizmo: object_gizmo,
                     outline,
@@ -2325,6 +2390,7 @@ impl App {
             clayspace_view::LatticeView {
                 points: &cage.points,
                 edges: &edges,
+                guide: &[],
                 selected: &cage.selection,
                 gizmo: cage.pivot().map(|pivot| clayspace_view::GizmoView {
                     pivot,
@@ -5416,6 +5482,57 @@ impl Session for App {
 
     fn gesture_in_progress(&self) -> bool {
         self.holding_a_gesture()
+    }
+}
+
+#[cfg(test)]
+mod double_press {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    fn at(x: f32, y: f32) -> egui::Pos2 {
+        egui::pos2(x, y)
+    }
+
+    #[test]
+    fn a_first_press_is_never_a_double() {
+        assert!(!App::is_double_press(None, Instant::now(), at(10.0, 10.0)));
+    }
+
+    #[test]
+    fn two_presses_in_the_same_place_and_moment_are_a_double() {
+        let now = Instant::now();
+        let last = Some((now, at(10.0, 10.0)));
+        assert!(App::is_double_press(
+            last,
+            now + Duration::from_millis(120),
+            at(11.0, 11.0)
+        ));
+    }
+
+    #[test]
+    fn a_slow_second_press_is_two_presses() {
+        let now = Instant::now();
+        let last = Some((now, at(10.0, 10.0)));
+        assert!(!App::is_double_press(
+            last,
+            now + Duration::from_millis(900),
+            at(10.0, 10.0)
+        ));
+    }
+
+    /// Two clicks in the same instant at opposite ends of the viewport are a
+    /// coincidence, not a gesture — and on a curve the difference matters,
+    /// because the second one would split a span nowhere near the first.
+    #[test]
+    fn a_second_press_somewhere_else_is_two_presses() {
+        let now = Instant::now();
+        let last = Some((now, at(10.0, 10.0)));
+        assert!(!App::is_double_press(
+            last,
+            now + Duration::from_millis(50),
+            at(400.0, 300.0)
+        ));
     }
 }
 

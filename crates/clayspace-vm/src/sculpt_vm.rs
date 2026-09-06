@@ -366,6 +366,7 @@ impl SculptViewModel {
             | Command::CancelMaskOutline
             | Command::ToggleCurve
             | Command::AddCurvePoint(..)
+            | Command::InsertCurvePoint(..)
             | Command::SelectCurvePoint(_)
             | Command::ToggleCurvePoint(_)
             | Command::DragCurve(_)

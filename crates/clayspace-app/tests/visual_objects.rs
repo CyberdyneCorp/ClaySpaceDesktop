@@ -94,6 +94,7 @@ fn a_selected_object_is_outlined_where_it_stands() {
         LatticeView {
             points: &[],
             edges: &[],
+            guide: &[],
             selected: &[],
             gizmo: None,
             outline: None,
@@ -108,6 +109,7 @@ fn a_selected_object_is_outlined_where_it_stands() {
         LatticeView {
             points: &[],
             edges: &[],
+            guide: &[],
             selected: &[],
             gizmo: Some(GizmoView {
                 pivot: object.position,
@@ -155,6 +157,7 @@ fn the_manipulator_is_seen_through_the_form_it_sits_in() {
             LatticeView {
                 points: &[],
                 edges: &[],
+                guide: &[],
                 selected: &[],
                 gizmo: None,
                 outline: None,
@@ -173,6 +176,7 @@ fn the_manipulator_is_seen_through_the_form_it_sits_in() {
         LatticeView {
             points: &[],
             edges: &[],
+            guide: &[],
             selected: &[],
             gizmo: Some(GizmoView {
                 pivot: [0.0, 0.0, 0.0],
@@ -222,6 +226,7 @@ fn scale_mode_draws_fewer_handles_on_an_object_than_on_a_cage() {
             LatticeView {
                 points: &[],
                 edges: &[],
+                guide: &[],
                 selected: &[],
                 gizmo: Some(GizmoView {
                     pivot: [0.0, 0.4, 0.0],
@@ -267,6 +272,7 @@ fn the_manipulator_moves_the_object_it_is_on() {
             LatticeView {
                 points: &[],
                 edges: &[],
+                guide: &[],
                 selected: &[],
                 gizmo: None,
                 outline: None,

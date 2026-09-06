@@ -75,6 +75,7 @@ fn a_cage_is_drawn_around_the_form() {
         LatticeView {
             points: &cage.points,
             edges: &edges,
+            guide: &[],
             selected: &[],
             gizmo: None,
             outline: None,
@@ -134,6 +135,7 @@ fn the_selected_point_is_told_apart_from_the_rest() {
             LatticeView {
                 points: &cage.points,
                 edges: &edges,
+                guide: &[],
                 selected,
                 // No manipulator: this is about the handles themselves, and a
                 // gizmo over them would be measuring its own pixels.
@@ -193,6 +195,7 @@ fn dragging_the_cage_reaches_the_drawn_surface() {
         LatticeView {
             points: &[],
             edges: &[],
+            guide: &[],
             selected: &[],
             gizmo: None,
             outline: None,
@@ -242,6 +245,7 @@ fn the_manipulator_is_one_widget_whatever_the_mode() {
             LatticeView {
                 points: &cage.points,
                 edges: &edges,
+                guide: &[],
                 selected: &selected,
                 gizmo: mode.map(|mode| GizmoView {
                     view_axis: LOOKING_DOWN_Z,
@@ -317,6 +321,7 @@ fn the_handle_under_the_pointer_is_lit() {
             LatticeView {
                 points: &cage.points,
                 edges: &edges,
+                guide: &[],
                 selected: &selected,
                 gizmo: Some(GizmoView {
                     view_axis: LOOKING_DOWN_Z,
@@ -601,6 +606,7 @@ fn the_form_is_drawn_through_while_a_cage_is_up() {
             LatticeView {
                 points: &cage.points,
                 edges: &edges,
+                guide: &[],
                 selected: &[],
                 gizmo: None,
                 outline: None,
@@ -705,6 +711,7 @@ fn the_outer_ring_is_drawn_and_faces_the_camera() {
                 LatticeView {
                     points: &cage.points,
                     edges: &edges,
+                    guide: &[],
                     selected: &selected,
                     gizmo: gizmo.map(|mode| GizmoView {
                         view_axis,
@@ -789,6 +796,7 @@ fn turning_a_face_visibly_turns_the_cage_on_screen() {
             LatticeView {
                 points: &cage.points,
                 edges: &edges,
+                guide: &[],
                 selected: &cage.selection,
                 gizmo: cage.pivot().map(|pivot| GizmoView {
                     view_axis: facing,

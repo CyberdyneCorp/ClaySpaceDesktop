@@ -44,6 +44,7 @@ fn manipulator_over_the_form(harness: &mut Harness) {
         LatticeView {
             points: &[],
             edges: &[],
+            guide: &[],
             selected: &[],
             gizmo: Some(GizmoView {
                 pivot: [0.0, 0.0, 0.0],
@@ -68,6 +69,7 @@ fn no_manipulator(harness: &mut Harness) {
         LatticeView {
             points: &[],
             edges: &[],
+            guide: &[],
             selected: &[],
             gizmo: None,
             outline: None,

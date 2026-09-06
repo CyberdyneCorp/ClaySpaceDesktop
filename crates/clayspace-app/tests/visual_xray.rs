@@ -35,6 +35,7 @@ fn ring_around_the_form(harness: &mut Harness) {
         LatticeView {
             points: &[],
             edges: &[],
+            guide: &[],
             selected: &[],
             gizmo: Some(GizmoView {
                 pivot: [0.0, 0.0, 0.0],
@@ -58,6 +59,7 @@ fn no_ring(harness: &mut Harness) {
         LatticeView {
             points: &[],
             edges: &[],
+            guide: &[],
             selected: &[],
             gizmo: None,
             outline: None,

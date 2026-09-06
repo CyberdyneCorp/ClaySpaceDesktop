@@ -101,6 +101,7 @@ fn the_manipulator_sits_on_a_whole_subtools_middle() {
             LatticeView {
                 points: &[],
                 edges: &[],
+                guide: &[],
                 selected: &[],
                 gizmo: None,
                 outline: None,
@@ -130,6 +131,7 @@ fn the_manipulator_sits_on_a_whole_subtools_middle() {
         LatticeView {
             points: &[],
             edges: &[],
+            guide: &[],
             selected: &[],
             gizmo: Some(GizmoView {
                 pivot: at.position,
@@ -181,6 +183,7 @@ fn the_manipulator_on_a_subtool_is_one_widget_in_every_mode() {
             LatticeView {
                 points: &[],
                 edges: &[],
+                guide: &[],
                 selected: &[],
                 gizmo: Some(GizmoView {
                     pivot: at.position,
@@ -221,6 +224,7 @@ fn the_manipulator_on_a_subtool_is_one_widget_in_every_mode() {
             LatticeView {
                 points: &[],
                 edges: &[],
+                guide: &[],
                 selected: &[],
                 gizmo: None,
                 outline: None,
@@ -362,6 +366,7 @@ fn the_subtool_manipulator_draws_a_scale_box_per_axis() {
             LatticeView {
                 points: &[],
                 edges: &[],
+                guide: &[],
                 selected: &[],
                 gizmo: Some(GizmoView {
                     pivot: at.position,

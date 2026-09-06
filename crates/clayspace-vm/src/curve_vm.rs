@@ -63,6 +63,9 @@ impl CurveViewModel {
             Command::AddCurvePoint(at, radius) => {
                 self.report(|model| model.add_curve_point(*at, *radius));
             }
+            Command::InsertCurvePoint(index, at, radius) => {
+                self.report(|model| model.insert_curve_point(*index, *at, *radius));
+            }
             Command::SelectCurvePoint(index) => self.model.select_curve_point(*index),
             Command::ToggleCurvePoint(index) => self.model.toggle_curve_point(*index),
             Command::DragCurve(by) => self.report(|model| model.drag_curve(*by)),
@@ -155,6 +158,25 @@ mod tests {
                 position: at,
                 radius,
             });
+            Ok(())
+        }
+
+        fn insert_curve_point(
+            &mut self,
+            index: usize,
+            at: [f32; 3],
+            radius: f32,
+        ) -> Result<(), ModelError> {
+            self.edit()?;
+            let index = index.min(self.state.points.len());
+            self.state.points.insert(
+                index,
+                CurvePoint {
+                    position: at,
+                    radius,
+                },
+            );
+            self.state.selection = vec![index];
             Ok(())
         }
 
@@ -258,6 +280,37 @@ mod tests {
         vm.dispatch(&Command::AddCurvePoint([0.0, 0.0, 0.0], 0.1));
         assert!(vm.notice().get().is_none(), "a stale refusal was left up");
         assert_eq!(*ran.borrow(), 1);
+    }
+
+    /// Splitting a span is not appending, and the command has to reach the
+    /// model as the thing it is.
+    ///
+    /// The two used to be one call with an index, and the reason they are not
+    /// is that a double-click on the guide and a click on empty space are
+    /// different gestures asking for different things — a command whose
+    /// meaning turns on whether a field is set reads as one thing doing two.
+    #[test]
+    fn a_point_can_be_put_between_two_others() {
+        let (mut vm, ran) = fixture(None);
+        for at in [[0.0f32, 0.0, 0.0], [2.0, 0.0, 0.0]] {
+            vm.dispatch(&Command::AddCurvePoint(at, 0.1));
+        }
+        vm.dispatch(&Command::InsertCurvePoint(1, [1.0, 1.0, 0.0], 0.2));
+
+        let state = vm.state().get().clone();
+        assert_eq!(state.points.len(), 3, "the point never arrived");
+        assert_eq!(
+            state.points[1].position,
+            [1.0, 1.0, 0.0],
+            "it was appended rather than inserted"
+        );
+        assert_eq!(state.points[2].position, [2.0, 0.0, 0.0], "the end moved");
+        assert_eq!(
+            state.selection,
+            vec![1],
+            "the point just placed should be the one in hand"
+        );
+        assert_eq!(*ran.borrow(), 3);
     }
 
     /// The panel's radius is what the *next* point is given, so it is held

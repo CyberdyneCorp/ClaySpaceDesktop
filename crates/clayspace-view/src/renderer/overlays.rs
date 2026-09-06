@@ -847,6 +847,14 @@ pub(super) fn lattice_geometry(view: LatticeView<'_>) -> LatticeGeometry {
     const POINT: [f32; 3] = [0.78, 0.60, 0.38];
     const SELECTED: [f32; 3] = [1.0, 0.72, 0.30];
 
+    // The line the tube actually follows, drawn brighter than the control
+    // polygon because it is the thing being aimed at rather than the
+    // scaffolding around it.
+    const GUIDE: [f32; 3] = [0.98, 0.72, 0.34];
+    for pair in view.guide.windows(2) {
+        segment(Vec3::from(pair[0]), Vec3::from(pair[1]), GUIDE);
+    }
+
     for (from, to) in view.edges {
         let (Some(a), Some(b)) = (
             view.points.get(*from as usize),

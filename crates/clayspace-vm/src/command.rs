@@ -26,6 +26,13 @@ pub enum Command {
     ToggleCurve,
     /// Appends a control point at the end of the curve.
     AddCurvePoint([f32; 3], f32),
+    /// A control point put *into* the curve, splitting the span it lands on.
+    ///
+    /// Separate from `AddCurvePoint` rather than an index on it: appending and
+    /// splitting are different acts, they come from different gestures, and a
+    /// command whose meaning turns on whether a field is `None` reads as one
+    /// thing doing two.
+    InsertCurvePoint(usize, [f32; 3], f32),
     /// The control point under the pointer, or none. Replaces the selection.
     SelectCurvePoint(Option<usize>),
     /// Adds or removes one control point without disturbing the rest.
@@ -652,6 +659,7 @@ impl Command {
             Self::SelectTool(_) => "select tool",
             Self::ToggleCurve => "curva",
             Self::AddCurvePoint(..) => "ponto da curva",
+            Self::InsertCurvePoint(..) => "dividir a curva",
             Self::SelectCurvePoint(_) | Self::ToggleCurvePoint(_) => "escolher ponto",
             Self::DragCurve(_) => "arrastar curva",
             Self::SetCurveRadius(_) => "espessura do tubo",
