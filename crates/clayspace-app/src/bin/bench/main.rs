@@ -85,18 +85,40 @@ fn main() {
 
     report::report(&run);
 
+    let baseline = flag("--baseline");
     if let Some(path) = json_path {
-        if let Some(load) = load.filter(|l| l.too_busy_to_record()) {
-            if !args.iter().any(|a| a == "--allow-busy") {
+        // **Refuse to record. Never refuse to compare.**
+        //
+        // `--json` names a file; it does not say what the file is *for*. A run
+        // that also names a `--baseline` is comparing, and its json is this
+        // run's own figures kept as an artifact — a thing worth writing on any
+        // machine, because a comparison's provenance travels inside it. A run
+        // with no baseline to compare against is the one recording a new one,
+        // and that is what a busy box ruins for every future run.
+        //
+        // Reading the load off the presence of `--json` alone conflated the
+        // two, and the cost was not theoretical: two pull requests failed this
+        // gate on two unrelated branches, with a message about recording a
+        // baseline nobody had asked to record, and **the comparison never ran
+        // at all** because the refusal exits before reaching it. A gate that
+        // fails loudly on the wrong act still tells you nothing about the
+        // change it was gating.
+        let busy = load.as_ref().is_some_and(|l| l.too_busy_to_record());
+        let allow_busy = args.iter().any(|a| a == "--allow-busy");
+        if refuses_a_busy_run(baseline.is_some(), busy, allow_busy) {
+            if let Some(load) = load.as_ref() {
                 eprintln!(
                     "\nrefusing to record a baseline: {}. A baseline taken against \
                      other work stays wrong for every run that compares to it. Wait \
                      for the machine, or pass --allow-busy if you mean it.",
                     load.describe()
                 );
-                std::process::exit(2);
             }
-            eprintln!("\nrecording a baseline anyway: {}", load.describe());
+            std::process::exit(2);
+        } else if busy && allow_busy && baseline.is_none() {
+            if let Some(load) = load.as_ref() {
+                eprintln!("\nrecording a baseline anyway: {}", load.describe());
+            }
         }
         match json::write(&path, &where_, load.as_ref(), &run) {
             Ok(()) => println!("\nwritten to {path}"),
@@ -110,7 +132,7 @@ fn main() {
     let enforce = args.iter().any(|a| a == "--enforce-budgets");
     let mut failed = report_budgets(&run, enforce);
 
-    if let Some(path) = flag("--baseline") {
+    if let Some(path) = baseline {
         match compare::compare(&path, &where_, load.as_ref(), &run) {
             Ok(regressions) => failed |= regressions,
             Err(e) => {
@@ -164,6 +186,27 @@ fn measure_everything(policy: &BackendPolicy, run: &mut Run) {
 /// installed, for a reason nobody is about to fix, is a gate people learn to
 /// ignore; `--enforce-budgets` is there for when the figure is expected to
 /// hold.
+/// Whether a busy machine should stop this run before it writes its json.
+///
+/// **Refuse to record. Never refuse to compare.**
+///
+/// `--json` names a file; it does not say what the file is *for*. A run that
+/// also names a `--baseline` is comparing, and its json is this run's own
+/// figures kept as an artifact — worth writing on any machine, because a
+/// comparison carries its provenance inside it. A run with no baseline is the
+/// one recording a *new* one, and that is what a busy box ruins for every
+/// future run that compares against it.
+///
+/// Deciding this from `--json` alone conflated the two, and the cost was not
+/// theoretical: two pull requests failed this gate on two unrelated branches,
+/// each with a message about recording a baseline nobody had asked to record,
+/// and **the comparison never ran at all** — the refusal exits before reaching
+/// it. A gate that fails loudly on the wrong act still says nothing about the
+/// change it was gating.
+fn refuses_a_busy_run(comparing: bool, busy: bool, allow_busy: bool) -> bool {
+    !comparing && busy && !allow_busy
+}
+
 fn report_budgets(run: &Run, enforce: bool) -> bool {
     let over: Vec<String> = run
         .figures()
@@ -192,4 +235,36 @@ fn over_budget(name: &str, figure: &Figure) -> Option<String> {
             figure.value, figure.unit
         )
     })
+}
+
+#[cfg(test)]
+mod busy_machine {
+    use super::*;
+
+    /// The defect this rule exists to remove: a comparison on a loaded runner
+    /// is a comparison, and refusing it tells nobody anything about the change.
+    #[test]
+    fn a_comparison_is_never_refused_however_busy_the_machine() {
+        assert!(!refuses_a_busy_run(true, true, false));
+        assert!(!refuses_a_busy_run(true, true, true));
+    }
+
+    /// And the protection that was working is kept: a baseline taken against
+    /// other work stays wrong for every run that compares to it.
+    #[test]
+    fn recording_a_baseline_on_a_busy_machine_is_refused() {
+        assert!(refuses_a_busy_run(false, true, false));
+    }
+
+    #[test]
+    fn a_quiet_machine_records_without_complaint() {
+        assert!(!refuses_a_busy_run(false, false, false));
+    }
+
+    /// `--allow-busy` is how the recording job says it means it, and it is the
+    /// only thing that gets past the refusal.
+    #[test]
+    fn saying_you_mean_it_gets_past_the_refusal() {
+        assert!(!refuses_a_busy_run(false, true, true));
+    }
 }
