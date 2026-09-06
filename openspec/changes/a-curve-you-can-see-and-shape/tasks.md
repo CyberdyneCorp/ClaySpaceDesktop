@@ -84,12 +84,62 @@
       stroke is drawing is under the pointer, so a surface pick lands on the
       stroke's own output and the curve climbs it
 
-## 5. Hold it
+## 5. Make it feel like drawing
 
-- [x] 5.1 `just check` — formatting, clippy, the workspace suite, the
+- [x] 5.1 An appended control point dirties the end it added and each image the
+      layer mirror places it at, instead of the swept node's whole bound —
+      2.9 ms at the thirtieth point of a stroke against 31.1, and 80 bricks
+      against 880; verify
+      `appending_a_point_dirties_the_end_and_not_the_whole_tube`
+- [x] 5.2 Anything that is not an append falls back to the node's own bound,
+      since a moved point, a radius, a join or a profile can move the whole
+      tube
+- [x] 5.3 The narrow region is held by a **staleness** test and not only by a
+      cost one: measure the surface, refill the whole layer, measure again, and
+      require no change; verify `a_curve_laid_point_by_point_is_not_left_stale`,
+      confirmed to fail at 1.098 against a deliberately narrowed region
+- [x] 5.4 What remains is the engine's and is not worked around: each brick's
+      evaluation walks every segment of the curve, so the two costs compound —
+      reported upstream, confirmed in `ctape_stroke_dist`, and not scheduled
+- [x] 5.5 No brush ring while a curve is up. `shows_the_brush_ring` gains a
+      fourth clause rather than the caller gaining a condition, because it is
+      the rule and the other three live there; verify its test
+
+## 6. Dragging a point costs what it disturbed
+
+- [x] 6.1 A drag names the neighbourhood it disturbed — where the points were
+      and where they now are — instead of the swept node's whole bound:
+      **168 bricks against 1452, 5.1 ms against 13.4**; verify
+      `a_dragged_control_point_leaves_no_stale_bricks`
+- [x] 6.2 One box **per point** rather than one around the range, since a bent
+      tube's enclosing box is mostly air: 168 bricks against the 256 a single
+      box dirties
+- [x] 6.3 `REACH` is two, not three: point `i` appears in the four-point window
+      of the spans from `i-2` to `i+1`, so those windows reach `i-2` to `i+2`
+- [x] 6.4 The guard reads the **rendered surface**, because the engine-side
+      tests compare picks and a pick stays correct whether or not the brick
+      cache was refilled. Proved by making it fail: a 0.15x margin leaves
+      **2363 stale pixels**, naming the place the point came from
+- [x] 6.5 The two margins are measured apart rather than made to agree — the
+      drag takes 2.0 because its cliff is at 1.2 and widening costs nothing
+      (the same 168 bricks), the append keeps 1.5 because its cliff is at 0.7
+      and widening costs 164 bricks against 67 on the path a freehand stroke
+      runs every tube-width
+- [x] 6.6 Three wrong readings on the way to this, each corrected by
+      measurement and each recorded where it happened: a margin sweep whose
+      `sed` edited the drag path while the test exercised the append path; a
+      "marks nothing" control that passed an empty vector and fell through
+      `!is_empty()` into the node-wide arm, so it marked **everything** and
+      returned exactly what a correct implementation would; and an upstream
+      question answered accurately about the *tape* cache when it had been
+      asked about the *brick* cache
+
+## 7. Hold it
+
+- [x] 7.1 `just check` — formatting, clippy, the workspace suite, the
       specification. Re-run after **every** edit to this file, which is the
       lesson of the numbering above: section 4 was inserted, the old section 4
       became 5, its tasks kept their 4.x numbers, and the change was reported
       as validating on a run taken before the edit
-- [x] 5.2 `docs/features.md` — the *Pulling a tendril* neighbourhood gains what
+- [x] 7.2 `docs/features.md` — the *Pulling a tendril* neighbourhood gains what
       the guide is, why it is drawn tessellated, and how a drag draws one

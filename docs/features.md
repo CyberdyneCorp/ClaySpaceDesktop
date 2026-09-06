@@ -300,6 +300,34 @@ surface for each point is worse than it sounds: by the second one there is a
 tube under the pointer — the one the stroke is drawing — so the ray lands on it
 and the curve climbs its own output.
 
+**Laying a point costs the end it added.** Editing replaces the sweep rather
+than adding another, and the engine dirties a node's own bound — for a swept
+curve, everything the tube has ever reached. That made a freehand stroke
+quadratic in its own length *twice over*: measured across a thirty-point
+stroke, one point went from **2.0 ms to 31.1 ms** while its bricks only went
+from 440 to 880. The bricks doubled and the time went up fifteen times, because
+each brick's evaluation also walks every segment of the curve, so the two
+compound. An appended point now dirties the span it added and every image the
+layer mirror puts it at — 2.9 ms at the thirtieth point instead of 31.1.
+
+**Dragging a point costs what the drag disturbed**, likewise: the
+neighbourhood of the points that moved, both where they were and where they now
+are, since refilling only the destination leaves the shape the point left
+standing on the surface. That is 168 bricks against 1452, and 5.1 ms against
+13.4. One box per affected point rather than one around them all — a bent
+tube's enclosing box is mostly air, and the boxes together dirty 168 where the
+single box dirties 256.
+
+A thickness, a join or a profile change still takes the node's own bound,
+because any of those can move the whole tube. Correct is the direction to fail
+in.
+
+**No brush ring while a curve is up.** A ring says the next press leaves a
+stroke, and on a curve a press puts a control point down, takes hold of one, or
+draws a chain of them. It is the fourth mode to take the press away from the
+brush, after the whole-subtool manipulator, the deformation cage and the mask's
+drawn gestures.
+
 **A press on the line is spent, not appended.** It used to fall through to
 placing a point, which put one at the far *end* of the curve rather than where
 the pointer was, and selected it, so the line appeared to jump somewhere nobody

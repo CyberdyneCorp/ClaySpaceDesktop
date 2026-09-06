@@ -288,11 +288,12 @@ pub fn handle_under(
 /// Whether the brush ring is drawn under the pointer.
 ///
 /// A ring says "the next press leaves a stroke here", so it may only be drawn
-/// where that is true. Three modes take the press away from the brush and each
+/// where that is true. Four modes take the press away from the brush and each
 /// has to take the ring with it: the whole-subtool manipulator, where a press
 /// on the clay moves it; a deformation cage, where a press that misses a
-/// control point orbits; and the mask brush's drawn gestures, where a press
-/// begins an outline instead.
+/// control point orbits; the mask brush's drawn gestures, where a press begins
+/// an outline instead; and a curve being placed, where a press puts a control
+/// point down, takes hold of one, or draws a chain of them — never a dab.
 ///
 /// The cage half was missed once — the routing refused the stroke and the ring
 /// promised one anyway, which is the worst of both: a sculptor aiming at a
@@ -307,8 +308,9 @@ pub fn shows_the_brush_ring(
     layer_manipulator_up: bool,
     caged: bool,
     drawing_an_outline: bool,
+    placing_a_curve: bool,
 ) -> bool {
-    !layer_manipulator_up && !caged && !drawing_an_outline
+    !layer_manipulator_up && !caged && !drawing_an_outline && !placing_a_curve
 }
 
 /// Whether a press should start a stroke, or turn the camera instead.
@@ -830,15 +832,23 @@ mod manipulator_tests {
         // The other half of `press_sculpts`: the routing already refused the
         // stroke, and the ring went on promising one. Reported as brushes
         // showing over the form while a deformation cage was up.
-        assert!(shows_the_brush_ring(false, false, false));
+        assert!(shows_the_brush_ring(false, false, false, false));
         assert!(
-            !shows_the_brush_ring(false, true, false),
+            !shows_the_brush_ring(false, true, false, false),
             "a cage kept the ring"
         );
-        assert!(!shows_the_brush_ring(true, false, false));
+        assert!(!shows_the_brush_ring(true, false, false, false));
         assert!(
-            !shows_the_brush_ring(false, false, true),
+            !shows_the_brush_ring(false, false, true, false),
             "a drawn mask gesture kept the ring"
+        );
+        // A curve takes the press for its own: a click puts a control point
+        // down, a drag lays a chain of them, and a press on the guide is spent.
+        // None of those is a dab, so a ring promising one is a lie the sculptor
+        // has to test by trying it.
+        assert!(
+            !shows_the_brush_ring(false, false, false, true),
+            "the brush ring was drawn while a curve was being placed"
         );
     }
 }

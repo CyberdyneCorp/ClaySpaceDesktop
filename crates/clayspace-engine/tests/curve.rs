@@ -457,3 +457,186 @@ fn a_point_inserted_into_a_curve_splits_the_span_it_names() {
         "after inserting a point the guide leaves its own tube by {worst}"
     );
 }
+
+/// A curve built point by point has the same surface as one built whole.
+///
+/// Appending a control point dirties only the end it added, because dirtying
+/// the node's own bound re-evaluates every brick the tube has ever reached —
+/// measured over a thirty-point stroke, one point went from 2.0 ms to 31.1 ms
+/// while its bricks only went from 440 to 880, since each brick's evaluation
+/// also walks every segment of the curve.
+///
+/// The risk a narrow region carries is staleness: a brick the append changed
+/// but the region did not name keeps its old value, and nothing says so. This
+/// is what catches that. The surface is measured through the brick cache,
+/// then every brick the layer reaches is dirtied and refilled, and the same
+/// measurement is taken again. **A region that named everything it should
+/// leaves the second reading identical to the first.**
+#[test]
+fn a_curve_laid_point_by_point_is_not_left_stale() {
+    let mut document = document();
+    document.begin_curve();
+    // A wandering path, so the tail region has to follow a curve that doubles
+    // back rather than a straight run where any box would do.
+    for step in 0..14 {
+        let t = step as f32 / 14.0;
+        let at = [
+            -1.3 + t * 2.6,
+            1.35 + (t * 7.0).sin() * 0.45,
+            (t * 5.0).cos() * 0.3,
+        ];
+        document.add_curve_point(at, 0.09).expect("refused");
+    }
+
+    let probes: Vec<[f32; 3]> = (0..24)
+        .map(|step| {
+            let angle = step as f32 / 24.0 * std::f32::consts::TAU;
+            [angle.cos(), 1.0 + angle.sin() * 0.6, angle.sin() * 0.4]
+        })
+        .collect();
+    let incremental: Vec<f32> = probes.iter().map(|at| reach(&document, *at)).collect();
+
+    // The whole tube, refilled from scratch.
+    //
+    // Through the join, because a join change is **not** an append: it can
+    // move the entire curve, so it takes the node's own bound rather than a
+    // tail region. Away and back leaves the geometry exactly as it was and the
+    // cache rebuilt for all of it — which is the comparison this test needs
+    // and there is no other public way to ask for.
+    let join = document.curve().join;
+    let other = if join == CurveJoin::Corners {
+        CurveJoin::Through
+    } else {
+        CurveJoin::Corners
+    };
+    document.set_curve_join(other).expect("join away");
+    document.set_curve_join(join).expect("join back");
+    let whole: Vec<f32> = probes.iter().map(|at| reach(&document, *at)).collect();
+
+    let worst = incremental
+        .iter()
+        .zip(&whole)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f32, f32::max);
+    assert!(
+        worst < 1e-3,
+        "refilling the whole layer moved the surface by {worst}, so laying the \
+         curve point by point had left bricks stale that the appended end \
+         changed"
+    );
+}
+
+/// Appending a point costs the end it added, not the whole tube.
+///
+/// A count rather than a duration, because a duration on a shared machine is
+/// not something to fail a build over — but the count is what the duration was
+/// made of, and it is deterministic.
+#[test]
+fn appending_a_point_dirties_the_end_and_not_the_whole_tube() {
+    let mut document = document();
+    document.begin_curve();
+    for step in 0..20 {
+        let t = step as f32 / 20.0;
+        document
+            .add_curve_point([-1.3 + t * 2.6, 1.35 + (t * 7.0).sin() * 0.45, 0.0], 0.09)
+            .expect("refused");
+    }
+    document.take_dirty_keys();
+
+    // One more point, which is the case a freehand drag makes twenty times a
+    // second.
+    document
+        .add_curve_point([1.4, 1.5, 0.0], 0.09)
+        .expect("refused");
+    let appended = document.dirty_keys().len();
+
+    // And the whole tube, through a join change — which is not an append, so
+    // it takes the node's own bound.
+    document.take_dirty_keys();
+    let join = document.curve().join;
+    let other = if join == CurveJoin::Corners {
+        CurveJoin::Through
+    } else {
+        CurveJoin::Corners
+    };
+    document.set_curve_join(other).expect("join");
+    let whole = document.dirty_keys().len();
+
+    println!("appended {appended} bricks, the whole tube is {whole}");
+    assert!(appended > 0, "the append dirtied nothing at all");
+    assert!(
+        appended * 3 < whole,
+        "appending a point dirtied {appended} bricks where the whole tube is \
+         {whole}, so the tube is still being re-evaluated end to end on every \
+         point a freehand stroke lays"
+    );
+}
+
+/// Dragging a control point leaves nothing stale — where it went, and where it
+/// came from.
+///
+/// A drag is not an append, so it takes a different path to a different
+/// region: the neighbourhood of the points that moved, before and after. That
+/// path had no staleness guard of its own, and the append one does not reach
+/// it — checked, by shrinking the drag region's margin to a twentieth of the
+/// radius and watching `a_curve_laid_point_by_point_is_not_left_stale` pass
+/// anyway. Two code paths, two margins, one test between them.
+///
+/// The half a narrow region gets wrong first is the place the point *left*:
+/// refilling only where it arrived leaves the old bulge standing on the
+/// surface, and nothing reports it.
+#[test]
+fn dragging_a_point_leaves_nothing_stale_behind_it() {
+    let mut document = document();
+    document.begin_curve();
+    for step in 0..16 {
+        let t = step as f32 / 16.0;
+        document
+            .add_curve_point(
+                [
+                    -1.3 + t * 2.6,
+                    1.35 + (t * 7.0).sin() * 0.45,
+                    (t * 5.0).cos() * 0.25,
+                ],
+                0.09,
+            )
+            .expect("refused");
+    }
+    document.select_curve_point(Some(8));
+    // Far enough that where it came from and where it went do not overlap.
+    for _ in 0..6 {
+        document.drag_curve([0.0, 0.09, 0.0]).expect("drag");
+    }
+
+    let probes: Vec<[f32; 3]> = (0..32)
+        .map(|step| {
+            let angle = step as f32 / 32.0 * std::f32::consts::TAU;
+            [angle.cos(), 1.0 + angle.sin() * 0.7, angle.sin() * 0.4]
+        })
+        .collect();
+    let dragged: Vec<f32> = probes.iter().map(|at| reach(&document, *at)).collect();
+
+    // The whole tube from scratch, through a join change — which is neither an
+    // append nor a drag, so it takes the node's own bound.
+    let join = document.curve().join;
+    let other = if join == CurveJoin::Corners {
+        CurveJoin::Through
+    } else {
+        CurveJoin::Corners
+    };
+    document.set_curve_join(other).expect("join away");
+    document.set_curve_join(join).expect("join back");
+    let whole: Vec<f32> = probes.iter().map(|at| reach(&document, *at)).collect();
+
+    let worst = dragged
+        .iter()
+        .zip(&whole)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f32, f32::max);
+    assert!(
+        worst < 1e-3,
+        "refilling the whole tube after the drag moved the surface by {worst}, \
+         so dragging a control point had left bricks stale — most likely where \
+         the point came from rather than where it went"
+    );
+}
