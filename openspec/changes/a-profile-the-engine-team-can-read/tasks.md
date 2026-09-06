@@ -39,8 +39,14 @@
       keys and triangles as the workload, instead of matching `Ok(_)` and
       dropping it; verify a headless test that dabs once and finds all five
       phases populated
-- [x] 3.2 A sync that re-meshed nothing records nothing; verify
-      `a_sync_with_no_dirty_keys_records_no_samples`
+- [x] 3.2 A sync that re-meshed nothing records nothing; held inside
+      `a_dab_populates_every_phase_of_a_stroke`, which dabs, records, then syncs
+      again with nothing dirty and asserts `Ok(None)` and an unmoved sample
+      count. **This line named a test of its own that was never written** — the
+      assertion was folded into the neighbouring test instead and the task was
+      ticked against the intention. Corrected after a fifteen-line check over
+      every backticked name in every `tasks.md` found it: a task naming a test
+      is a claim, and nothing was reading it
 
 ## 4. The report says which side
 
@@ -93,7 +99,9 @@
       file-writing commands; verify the command's label appears in the stall
       list naming if it ever stalls
 - [x] 7.2 **Ajuda → Exportar perfil…** beside Diagnostics, opening a save
-      dialog defaulting to `perfil.json`; the menu entry and the window button
+      dialog whose default file name is perfil.json — unquoted, because it is a
+      name the dialog offers a person and not a file in this tree, and a
+      backticked name reads as a claim that one exists; the menu entry and the window button
       are verified in `target/visual/64-diagnostics.png`, and the dialog's own
       parameters — `profile_file::FILE_NAME` and `EXTENSIONS` — by
       `the_save_dialog_offers_what_its_default_name_already_is`
@@ -112,7 +120,8 @@
       that does not exist
 - [x] 7.5 Exporting from a session that has applied no stroke still writes a
       file, with zero-sample phases; verify
-      `an_unworked_session_still_exports`
+      `an_unworked_session_still_exports_every_phase` — this line named the
+      prefix, which greps to nothing and reads as a test that was removed
 
 ## 8. Hold it
 

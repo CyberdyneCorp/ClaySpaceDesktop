@@ -397,3 +397,96 @@ fn states_of_nothing_is_nothing() {
     // that would write nothing, so this one never reaches it.
     assert!(cache.states(&[]).expect("states").is_empty());
 }
+
+/// What the resumable refill reused, and the two properties a host reads it for.
+///
+/// Added with the reader itself: `clay_document_resume_stats` had no safe
+/// wrapper until a question about ClayCore #471 needed one, and its only
+/// callers were two probes that live outside this suite deliberately. So the
+/// wrapper shipped with no gate over it — which is the shape this repository
+/// spent a day naming elsewhere, arriving in its own tree.
+///
+/// **The counters are cumulative and never reset**, which is the whole of how
+/// a caller measures one gesture: read either side and subtract. A counter
+/// that reset would make every such difference wrong by exactly the work
+/// before it, silently, and in the direction that looks like an improvement.
+///
+/// **And a seed is only valid across an append**, which is what this fixture
+/// happens to demonstrate. Adding an item to a layer and refilling resumes
+/// every brick — 0 to 64 here, with `refilled` unmoved at 64 — because the
+/// document gained items at the tail and changed nothing else. A *transform*
+/// is not an append: measured through the application on a gizmo drag, the
+/// same counters read 0 resumed against a million refilled, because a node
+/// transform edit retires every seed. Both are correct and the two together
+/// are why this reads the pair rather than either alone.
+#[test]
+fn the_resume_counters_only_ever_climb() {
+    // Built here rather than through `filled_cache`, because the second refill
+    // needs the layer id the first one used.
+    let (doc, layer) = sphere_document();
+    let mut cache = BrickCache::new(cache_config()).expect("create cache");
+    cache.mark_dirty_layer(&doc, layer).expect("mark layer");
+    assert!(
+        cache.refill_all(&doc, None, 256).expect("refill") > 0,
+        "refilling a sphere accepted no bricks"
+    );
+    let before = doc.resume_stats().expect("resume stats");
+
+    // A real edit between the two reads, not a second refill of an unchanged
+    // document: re-marking a clean layer refills nothing, and the assertions
+    // below would pass against counters that never move. The guard caught
+    // exactly that on the first attempt at this fixture.
+    let mut doc = doc;
+    let second = Item::sphere(0.6).expect("build sphere");
+    doc.add_item(layer, &second).expect("place a second sphere");
+    cache.mark_dirty_layer(&doc, layer).expect("mark layer");
+    cache.refill_all(&doc, None, 256).expect("refill again");
+    let after = doc.resume_stats().expect("resume stats");
+
+    for (name, older, newer) in [
+        (
+            "refilled_bricks",
+            before.refilled_bricks,
+            after.refilled_bricks,
+        ),
+        (
+            "resumed_bricks",
+            before.resumed_bricks,
+            after.resumed_bricks,
+        ),
+    ] {
+        assert!(
+            newer >= older,
+            "{name} fell from {older} to {newer}, so it is not cumulative and \
+             a host measuring one gesture by subtracting either side of it \
+             would read the difference as negative work"
+        );
+    }
+
+    let moved = (after.refilled_bricks - before.refilled_bricks)
+        + (after.resumed_bricks - before.resumed_bricks);
+    assert!(
+        moved > 0,
+        "a refill after an edit moved no counter at all, so this fixture \
+         cannot tell a cumulative counter from a frozen one"
+    );
+
+    // The append is what makes this the resumed case rather than the refilled
+    // one, and asserting which counter moved is what stops the test passing if
+    // the seed path silently stops being taken.
+    assert!(
+        after.resumed_bricks > before.resumed_bricks,
+        "an append resumed nothing ({} to {}), so either the seed path is not \
+         being taken or an append is no longer the case a seed is valid for",
+        before.resumed_bricks,
+        after.resumed_bricks
+    );
+
+    // Unlimited is `None` rather than zero, as `BrickStats::memory_budget`
+    // already reads — a store with no cap and a store capped at nothing are
+    // different facts and only one of them is ever true.
+    assert!(
+        after.budget.is_none_or(|budget| budget > 0),
+        "a budget of zero reached a caller as a cap rather than as unlimited"
+    );
+}

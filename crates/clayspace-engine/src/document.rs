@@ -990,6 +990,18 @@ impl CarriedBuffer {
     }
 }
 
+/// The tendril a Snake Hook is currently growing.
+///
+/// Held only while the gesture is open. `points` is how many control points
+/// the engine was last given, which is what lets a segment dirty the part of
+/// the curve that moved instead of everything the pull has ever reached.
+#[derive(Debug, Clone, Copy)]
+struct LiveHook {
+    layer: LayerId,
+    node: claycore::NodeId,
+    points: usize,
+}
+
 pub struct ClayDocument {
     // -- what must go before the document ------------------------------------
     //
@@ -1136,7 +1148,7 @@ pub struct ClayDocument {
     /// Held so the segments of one drag *grow* a single curve rather than
     /// leaving a trail of them: a segment that added its own item restarted
     /// the taper, which beaded the tendril into a string of spheres.
-    live_hook: Option<(LayerId, claycore::NodeId)>,
+    live_hook: Option<LiveHook>,
     /// Changes whenever the cage does — its points, its selection or its
     /// resolution.
     cage_revision: u64,
@@ -3585,11 +3597,30 @@ impl ClayDocument {
         // The path as control points, each carrying the radius at that point.
         // Tapering toward the tip is what makes it read as a pulled tendril
         // rather than a tube.
+        //
+        // Measured along the path rather than across the point *index*, and
+        // that is the whole of the second fix here. `index / (len - 1)`
+        // renumbers every point each time the pull is extended, so a control
+        // point already laid down changed radius on every segment — measured,
+        // the point at index 5 thickened by 82% over one forty-sample pull.
+        // The tendril behind the cursor kept fattening as the sculptor drew,
+        // which is wrong on its own, and it also made the *whole* node's field
+        // change every segment, which is what made the refill below quadratic.
+        //
+        // Arc length from the anchor never changes for a point already placed,
+        // so a point's radius is fixed the moment it is put down.
         let mut points = Vec::with_capacity(live.len() * 4);
-        for (index, sample) in live.iter().enumerate() {
-            let t = index as f32 / (live.len() - 1) as f32;
-            points.extend_from_slice(&sample.position);
-            points.push(brush.size * (1.0 - 0.7 * t));
+        let mut travelled = 0.0f32;
+        let mut previous: Option<[f32; 3]> = None;
+        for sample in &live {
+            let at = sample.position;
+            if let Some(last) = previous {
+                let step = [at[0] - last[0], at[1] - last[1], at[2] - last[2]];
+                travelled += (step[0] * step[0] + step[1] * step[1] + step[2] * step[2]).sqrt();
+            }
+            previous = Some(at);
+            points.extend_from_slice(&at);
+            points.push(Self::tendril_radius(travelled, brush.size));
         }
 
         // The curve this gesture is already pulling, grown rather than joined.
@@ -3600,14 +3631,51 @@ impl ClayDocument {
         // Measured on one such pull, the thickness along it wobbled by 0.210
         // where a single curve wobbles by 0.137, and that 0.137 is the taper
         // itself.
-        if let Some((held, node)) = self.live_hook.filter(|(held, _)| *held == layer) {
+        if let Some(hook) = self.live_hook.filter(|hook| hook.layer == layer) {
             self.document
-                .set_layer_stroke_points(held, node, &points, POINT_KIND, Self::CURVE_TOLERANCE)
+                .set_layer_stroke_points(
+                    hook.layer,
+                    hook.node,
+                    &points,
+                    POINT_KIND,
+                    Self::CURVE_TOLERANCE,
+                )
                 .map_err(ModelError::engine)?;
-            self.refill(layer, &[node])?;
+
+            // Only what this segment actually moved.
+            //
+            // `clay_brick_cache_mark_dirty_nodes` "computes the bound itself"
+            // (clay.h:9413), and for a curve node that bound is the whole
+            // tendril — so growing the curve re-evaluated every brick the pull
+            // had ever reached. Measured on a forty-sample pull that is 880
+            // bricks against the 36 the new end needs, and 110 ms against
+            // 0.122: the per-segment cost grew with the stroke and the stroke
+            // cost grew with its own square.
+            //
+            // Legal only because the taper above is anchored: while a radius
+            // could still change behind the cursor, the whole node really was
+            // dirty and the wide bound was the correct answer. The two fixes
+            // are one fix.
+            let placed = self.active_layer().transform;
+            let mirror = Mirror(self.active_layer().mirror);
+            let regions =
+                Self::tendril_tail_regions(&points, hook.points, brush.size, mirror, &placed);
+            self.live_hook = Some(LiveHook {
+                points: live.len(),
+                ..hook
+            });
+            if regions.is_empty() {
+                // Nothing this can name, so the node's own bound it is. Reached
+                // when the curve did not grow — a mask freezing the newest
+                // samples is the way that happens — and correct rather than
+                // fast, which is the right way round for a case that is rare.
+                self.refill(hook.layer, &[hook.node])?;
+            } else {
+                self.refill_regions(&regions)?;
+            }
             return Ok(EditOutcome {
                 changed: true,
-                dirty_bricks: 1,
+                dirty_bricks: self.dirty.len(),
             });
         }
 
@@ -3631,7 +3699,11 @@ impl ClayDocument {
         // Held only while a gesture is open; `end_gesture` lets it go, so the
         // next pull starts its own tendril.
         if self.previewing {
-            self.live_hook = Some((layer, node));
+            self.live_hook = Some(LiveHook {
+                layer,
+                node,
+                points: live.len(),
+            });
         }
         self.refill(layer, &[node])?;
         Ok(EditOutcome {
@@ -5270,6 +5342,199 @@ impl ClayDocument {
     /// to agree on what a document means — so it is a constant here and not a
     /// display setting.
     const CURVE_TOLERANCE: f32 = 0.002;
+
+    /// How far a pull tapers, in brush widths, before it holds one thickness.
+    ///
+    /// The taper has to be measured against *something* fixed, or a point's
+    /// radius depends on how long the stroke turns out to be — which is the
+    /// defect this constant exists to remove. A pull longer than the span
+    /// continues at the tip thickness rather than re-thinning what is already
+    /// down.
+    ///
+    /// Five rather than the eight that first reproduced the old look, because
+    /// a fatter tendril renders with specks of background showing through it.
+    /// Measured through `visual_holes` over the same six tendrils: a span of 8
+    /// shows two, a span of 100 — no taper at all — shows three, and 5 and 3
+    /// show none. The old index-relative taper hid this by making tendrils
+    /// thinner than that for the gestures we happened to draw.
+    ///
+    /// **The surface has no hole in it, and this constant is not tuned around
+    /// an engine defect.** That was the first conclusion and it was wrong: the
+    /// specks appear in the engine's own mesh as well as in ours, which reads
+    /// as "then they are the mesher's" and is not what it shows, because both
+    /// pictures go through the same rasteriser. Meshed and measured
+    /// topologically instead, the same document is watertight, 2-manifold and
+    /// Euler characteristic **2** at resolutions 96, 128 and 192 — a
+    /// topological sphere. A pinhole is a tunnel and would drop that to 0.
+    ///
+    /// What it is instead: the mesh carries sub-pixel slivers, and they grow
+    /// with resolution — 150 at 96, 343 at 128, 1342 at 192, with the smallest
+    /// triangle at 1.3e-13. A rasteriser can drop both the front and back
+    /// sheet of a region thinner than its sample spacing, so real geometry
+    /// disappears for a pixel. Fatter tendrils produce more of it.
+    ///
+    /// So five is chosen against something a sculptor genuinely sees, and the
+    /// fix if anyone wants one is in our render path rather than in the field
+    /// or the engine.
+    const TAPER_SPAN: f32 = 5.0;
+
+    /// The tendril's radius `travelled` along the path, for a brush of `size`.
+    ///
+    /// A function of distance from the anchor and nothing else, which is the
+    /// property the whole fix rests on: a control point already placed has a
+    /// fixed distance from the anchor, so its radius cannot change when the
+    /// pull is extended.
+    ///
+    /// The floor is a **precaution and not a measured fix**, and the
+    /// distinction is worth keeping because the measurement went the other
+    /// way. A tendril thinner than a couple of voxels cannot be carried by the
+    /// grid, so a floor belongs here on its own terms — but when `visual_holes`
+    /// found pinholes it was *fat* tendrils that caused them, this floor was
+    /// added against the opposite hypothesis, and the test failed again
+    /// unchanged because at that stroke length the floor never engaged. It is
+    /// kept because it is independently right, not because it was seen to fix
+    /// anything. Never above the brush's own radius: a brush finer than the
+    /// grid does not taper at all, which is the honest answer.
+    fn tendril_radius(travelled: f32, size: f32) -> f32 {
+        let t = (travelled / (size * Self::TAPER_SPAN)).clamp(0.0, 1.0);
+        let thinnest = (Self::VOXEL_SIZE * 2.5).min(size);
+        (size * (1.0 - 0.7 * t)).max(thinnest)
+    }
+
+    /// The world box a segment actually changed, or `None` for the whole node.
+    ///
+    /// `sent` is how many control points the engine already had. A Catmull-Rom
+    /// segment is governed by four control points, so appending one moves the
+    /// curve as far back as three points before the join — `REACH` — and the
+    /// box is grown by each point's own radius plus the blend the stroke is
+    /// built with.
+    ///
+    /// `None` when the tail cannot be trusted to be the only change: a curve
+    /// that shrank, or one whose first delivery this is.
+    /// The box is in the layer's **own** coordinates, because that is what the
+    /// control points are in and what the layer mirror reflects through — the
+    /// caller crosses into world before dirtying anything.
+    fn tendril_tail_bounds(points: &[f32], sent: usize, size: f32) -> Option<([f32; 3], [f32; 3])> {
+        const REACH: usize = 3;
+        let count = points.len() / 4;
+        if sent == 0 || count <= sent {
+            return None;
+        }
+        let first = sent.saturating_sub(REACH);
+        // The blend welds the new end into what is already there, so the
+        // region it disturbs is wider than the swept radius alone.
+        let blend = size * 0.5;
+        let mut min = [f32::INFINITY; 3];
+        let mut max = [f32::NEG_INFINITY; 3];
+        for index in first..count {
+            let at = &points[index * 4..index * 4 + 4];
+            let margin = at[3] + blend;
+            for axis in 0..3 {
+                min[axis] = min[axis].min(at[axis] - margin);
+                max[axis] = max[axis].max(at[axis] + margin);
+            }
+        }
+
+        Some((min, max))
+    }
+
+    /// Every region a segment changed: the new end, and each image the layer
+    /// mirror puts it at, in world coordinates.
+    ///
+    /// **Separate boxes rather than one that contains them all.** Unioning a
+    /// box with its own reflection produces an AABB spanning from one image to
+    /// the other, which swallows the whole untouched middle of the form — on a
+    /// mirrored pull that measured 350 bricks where the two ends together need
+    /// far fewer. The cache takes as many regions as it is given and refills a
+    /// brick once however many name it, so marking each image on its own is
+    /// strictly tighter and never wrong.
+    ///
+    /// Empty when the tail cannot be trusted to be the only change, which the
+    /// caller answers with a node-wide refill.
+    fn tendril_tail_regions(
+        points: &[f32],
+        sent: usize,
+        size: f32,
+        mirror: Mirror,
+        transform: &clayspace_model::Transform,
+    ) -> Vec<([f32; 3], [f32; 3])> {
+        let Some(local) = Self::tendril_tail_bounds(points, sent, size) else {
+            return Vec::new();
+        };
+        let axes: Vec<usize> = (0..3).filter(|axis| mirror.0[*axis]).collect();
+        // One image per subset of the mirrored axes, the unreflected box
+        // included — which is what a mirror across two or three planes
+        // actually produces.
+        (0..(1usize << axes.len()))
+            .map(|image| {
+                let (mut min, mut max) = local;
+                for (bit, &axis) in axes.iter().enumerate() {
+                    if image & (1 << bit) != 0 {
+                        let (low, high) = (min[axis], max[axis]);
+                        min[axis] = -high;
+                        max[axis] = -low;
+                    }
+                }
+                Self::world_bounds(transform, (min, max))
+            })
+            .collect()
+    }
+
+    /// Marks several world regions and drains once.
+    ///
+    /// Once rather than per region, for the reason `mark_for_refill` gives:
+    /// draining between marks refills bricks the next mark is about to dirty
+    /// again, and the images of one mirrored stroke overlap wherever the
+    /// stroke crosses a symmetry plane.
+    fn refill_regions(&mut self, regions: &[([f32; 3], [f32; 3])]) -> Result<(), ModelError> {
+        for (min, max) in regions {
+            self.cache
+                .mark_dirty(*min, *max)
+                .map_err(ModelError::engine)?;
+        }
+        self.drain_dirty()
+    }
+
+    /// An item-space box in world coordinates, which is what the cache dirties.
+    ///
+    /// **Two crossings, and this applies one of them.** A stroke's points live
+    /// in the *item's* own space — the engine evaluates them through the
+    /// inverse of the item's world placement — so they travel with the node's
+    /// transform and with its layer's. This applies the layer's, which is
+    /// correct only while the node's is identity. Every stroke item this
+    /// application creates is added without one and never given one
+    /// afterwards, so that holds; it is written down because it is an
+    /// invariant of ours rather than a guarantee of the engine's, and the day
+    /// something places a stroke node this silently names the wrong region.
+    /// `clay_brick_cache_mark_dirty_nodes` has no such condition — it computes
+    /// the bound from the document, in world — which is what the fallback
+    /// above uses and why the fallback is the safe direction to fail in.
+    ///
+    /// Every corner rather than the two extremes: a rotated transform turns a
+    /// box into one with a different axis alignment, and carrying `min` and
+    /// `max` through it directly would name a region that misses what moved.
+    fn world_bounds(
+        transform: &clayspace_model::Transform,
+        (min, max): ([f32; 3], [f32; 3]),
+    ) -> ([f32; 3], [f32; 3]) {
+        let mut low = [f32::INFINITY; 3];
+        let mut high = [f32::NEG_INFINITY; 3];
+        for corner in 0..8 {
+            let at = std::array::from_fn(|axis| {
+                if corner & (1 << axis) == 0 {
+                    min[axis]
+                } else {
+                    max[axis]
+                }
+            });
+            let world = Self::into_world(transform, at);
+            for axis in 0..3 {
+                low[axis] = low[axis].min(world[axis]);
+                high[axis] = high[axis].max(world[axis]);
+            }
+        }
+        (low, high)
+    }
 
     /// The triangles of every visible mesh and voxel layer, for the viewport.
     ///
@@ -11392,11 +11657,23 @@ impl ClayDocument {
         // Both extents; the whole layer where either is unknown, because a
         // layer transform moves everything the layer holds.
         if let Err(refused) = self.refill_bound(id, union(before, after)) {
-            // The cache would not track the region — a subtool scaled past
-            // what it can hold — so the field must not stay where the picture
-            // cannot follow it. Put the transform back and say why; the
+            // The cache would not track the region, so the field must not stay
+            // where the picture cannot follow it. Put the transform back; the
             // manipulator keeps following the hand and the clay stays at the
             // last size the cache accepted.
+            //
+            // **Why the refusal is not explained here.** A scale past what the
+            // cache can hold is the usual cause and this used to say so as
+            // though it were known. It is not: `mark_dirty` refuses with a
+            // string, so which limit bound — memory, brick count or extent —
+            // and what the region and the budget were are all facts the engine
+            // has and this side does not. What reaches the sculptor is the
+            // engine's own sentence, which is accurate and terse; what cannot
+            // reach them is the two controls they have, the scale and the cell
+            // size, because naming those needs the numbers. Reported upstream
+            // against the house rule that a host should never walk state to
+            // render a refusal; when the status is typed, this comment and the
+            // guess it used to carry come out together.
             self.write_layer_transform(id, previous)?;
             self.layers[index].transform = previous;
             return Err(refused);
@@ -12771,6 +13048,60 @@ impl ObjectModel for ClayDocument {
             node: node.get(),
         };
         self.object_index(id).map(|_| id)
+    }
+}
+
+#[cfg(test)]
+mod tendril_taper {
+    use super::*;
+
+    /// The property the dirty-region fix depends on for its correctness.
+    #[test]
+    fn a_radius_depends_on_the_distance_and_not_on_the_stroke() {
+        // The same point, reached by a short pull and by a long one, is the
+        // same distance from the anchor either way.
+        for travelled in [0.0, 0.05, 0.2, 0.6, 1.4] {
+            assert_eq!(
+                ClayDocument::tendril_radius(travelled, 0.12),
+                ClayDocument::tendril_radius(travelled, 0.12),
+            );
+        }
+        // And it never grows as the pull goes on.
+        let mut last = f32::INFINITY;
+        for step in 0..40 {
+            let radius = ClayDocument::tendril_radius(step as f32 * 0.05, 0.12);
+            assert!(radius <= last, "the taper thickened at step {step}");
+            last = radius;
+        }
+    }
+
+    #[test]
+    fn a_tendril_never_thins_past_what_the_grid_can_carry() {
+        // Far beyond the span, where the taper alone would ask for
+        // 0.3 x 0.12 = 0.036, under two voxels at this cell size.
+        let far = ClayDocument::tendril_radius(100.0, 0.12);
+        assert!(
+            far >= ClayDocument::VOXEL_SIZE * 2.5,
+            "a long pull tapered to {far}, thinner than the grid carries"
+        );
+    }
+
+    #[test]
+    fn a_brush_finer_than_the_grid_does_not_taper_at_all() {
+        // The floor may never make a tendril fatter than the brush asked for.
+        let size = ClayDocument::VOXEL_SIZE;
+        for travelled in [0.0, 0.5, 100.0] {
+            let radius = ClayDocument::tendril_radius(travelled, size);
+            assert!(
+                radius <= size,
+                "a {size} brush produced a {radius} tendril at {travelled}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pull_starts_at_the_brushs_own_width() {
+        assert_eq!(ClayDocument::tendril_radius(0.0, 0.12), 0.12);
     }
 }
 

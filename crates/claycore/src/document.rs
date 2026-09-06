@@ -577,34 +577,37 @@ impl Document {
     /// it can write.
     ///
     /// **This is a decision the C ABI makes for its callers, and naming it
-    /// here is the point of the constant.** ClayCore v0.78.0 took the scene
-    /// and container formats to minor 16 for a layer's per-axis scale, and
-    /// item 1 of its upgrade notes says that a host exchanging documents with
-    /// an older build should write at minor 15 instead — where the field is
-    /// dropped and a squashed layer comes back at the identity triple, so the
-    /// document opens and the loss is visible rather than fatal.
+    /// here is the point of the constant.** ClayCore v0.84.0 took the scene
+    /// and container formats to minor 17, so that a node's volume and gate are
+    /// written as a document-wide payload id with the bytes following only
+    /// where the id is new — eight placements of one captured detail went from
+    /// 1,499,457 bytes to 189,117. Item 1 of its upgrade notes says that a
+    /// host exchanging documents with an older build should write at minor 16
+    /// instead, where the per-node shape is restored exactly and what is lost
+    /// is the deduplication and nothing an artist authored.
     ///
-    /// **There is no way to take that advice from here.** The minor to write
-    /// at is a parameter on the C++ `scene::serialize_document`, and it is not
-    /// on `io::save_clayspace`, which has no such parameter at all, and it is
-    /// not on `clay_document_save`, which takes a path and nothing else. So a
-    /// document written through this ABI is written at
-    /// [`Self::FORMAT`], whatever the host would have preferred.
+    /// **There is no way to take that advice from here**, and this is the
+    /// third release for which that has been true. The minor to write at is a
+    /// parameter on the C++ `scene::serialize_document`, and it is not on
+    /// `io::save_clayspace`, which has no such parameter at all, and it is not
+    /// on `clay_document_save`, which takes a path and nothing else. So a
+    /// document written through this ABI is written at [`Self::FORMAT`],
+    /// whatever the host would have preferred.
     ///
     /// That is also the choice this workspace would make. It has followed the
-    /// engine's current minor through 7, 8, 11, 14 and 15 — each the same
+    /// engine's current minor through 7, 8, 11, 14, 15 and 16 — each the same
     /// shape, a field inside a back-to-back record — and it exchanges
     /// documents with no older build: the format is the engine's, the engine
     /// is vendored and pinned here, and a `.clayspace` this application writes
-    /// is opened by this application. What minor 16 costs is that a document
-    /// written now is *refused* by a build that predates v0.78.0 rather than
+    /// is opened by this application. What minor 17 costs is that a document
+    /// written now is *refused* by a build that predates v0.84.0 rather than
     /// misread, which is the direction the format was designed to fail in.
     ///
     /// [`Self::format_of`] reads what a file actually says, so the constant is
     /// checkable rather than asserted.
     pub const FORMAT: FormatVersion = FormatVersion {
         major: 1,
-        minor: 16,
+        minor: 17,
     };
 
     /// What a `.clayspace` file's own header says it was written at.

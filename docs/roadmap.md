@@ -131,9 +131,172 @@ another. This is what a **live** subtool boolean waits on. What is built instead
 is a *resolved* one: each operand is sampled into a volume, the two are combined
 in a subtool of its own, and moving an operand afterwards does not update the
 result. The interface says so rather than implying otherwise, and the operands
-are kept so the operation can be run again from a new position. When #321 lands,
-the same vocabulary upgrades to a live boolean without a word of it changing —
-see [features.md](features.md#a-boolean-between-two-subtools).
+are kept so the operation can be run again from a new position — see
+[features.md](features.md#a-boolean-between-two-subtools).
+
+**The vocabulary upgrades for part of that, not all of it, and this page used to
+claim otherwise.** A layer composition is refused on a non-SDF layer
+(`CLAY_ERROR_INVALID_ARGUMENT`), while `boolean_operands` offers **every**
+representation — "a mesh through the crossing `bake_operand` performs for it".
+So whatever the interface says about a live boolean has to be said **per operand
+rather than per operation**.
+
+**SDF-only is the shape of the feature, not of the first release**, and the
+reason is structural rather than a promise: `run()` skips any layer that is not
+a field, so a mesh or grid layer contributes nothing to what a document
+evaluates to — and for a mesh that is enforced by ClayCore's own layering check
+withholding `mesh` from `clay::scene`. A composition on such a layer would be a
+control that does not act, which is the thing the engine refuses on purpose.
+
+So the sentence to write, which should hold for years rather than a release:
+**a subtool is live when it is a field subtool; a mesh or grid subtool becomes
+live by being converted into one; and a resolved boolean stays first-class for
+operands nobody converts.**
+
+Adopting it costs nothing structural, which is measured rather than hoped:
+ClayCore's `BM_LayerFoldStack1000` runs at **0.72x** `BM_ItemFoldStack1000`, so
+a thousand layers folding is cheaper than a thousand items combining. Read that
+narrowly — the fixture is a thousand layers each holding a few items, so it
+prices the *fold* and not a stack of heavy ones. Where subtools are individually
+large the layer count stops dominating and the ratio approaches 1.0x, because
+both paths then pay the same per-item cost underneath. The claim that survives
+is *adopting layer booleans costs nothing structural*, not *layers are faster
+than items*.
+
+That has an action behind it in both cases and this application already offers
+both crossings — `MeshToSdf`, triangles onto a lattice as a volume item, and
+`VoxelToSdf`, occupancy read back as a redistanced field. So the interface's
+line for a non-field operand is *"convert this subtool to make the boolean
+live"* rather than *"this operand cannot be live"*, which names a control the
+sculptor already has instead of a limit they cannot do anything about.
+
+**An empty operand is this application's duty to filter, and the engine cannot
+do it for us.** The live fold *applies* an absent operand where the resolved
+path skips it, so an empty intersecting layer would blank the field where
+`run_boolean` leaves the model alone. That is not an oversight upstream: a
+layer reads as absent for two different reasons — it holds nothing, or its
+chain was wholly culled in this compile's region, which a per-brick compile does
+constantly for a layer whose content is elsewhere — and skipping the fold in the
+second case would let an intersecting layer fail to remove material from a brick
+its own geometry does not reach, while the whole-document compile removes it
+there. Silent, per-brick, and looking deliberate.
+
+**This application creates no item groups, which is why the group-extent hole
+does not reach it.** ClayCore's stage-3 work on #321 found that a *group*'s
+reported `tape.bounds` is the plain union of its children with no ring for the
+group's own combine, so a smoothly-combined group can carry surface outside the
+extent the engine reports — 11,618 lattice samples outside the box, measured.
+Nothing here meets it: `clay_layer_add_group` and `clay_layer_add_item_in_group`
+have no safe wrapper in `claycore` and no call site anywhere, and every item this
+application adds goes to the layer root. The hole is latent rather than live, and
+it is a reason to wrap a group deliberately rather than casually if one is ever
+wanted.
+
+What the same stage *did* fix reaches us directly the moment a layer carries a
+composition: a layer fold now dilates the layer's extent by the fold's own
+support before it reaches `tape.bounds`. `place_layer` takes `layer_bounds`
+either side of a move and refills their union, so a reported extent that omitted
+a blend ring would refill a region too small and leave surface unmeshed where
+the old form stood. The fix lands before the feature that would expose it.
+
+**The refill this application asks for is only as wide as the bound it is
+given, and that is a dependency rather than a risk we control.** `place_layer`
+and `set_object_transform` both compute `union(before, after)` from
+`node_bound`, which is `clay_layer_node_influence_bound`, and refill it through
+`refill_region` → `clay_brick_cache_mark_dirty`. Once layers compose, a fold has
+its own support and a reported bound that omits it makes **our** refill too
+small — stale geometry, re-stamped to the new revision, with no error anywhere,
+because we asked for exactly what we were told.
+
+As of ClayCore's review of #321 the widening had landed on the engine's internal
+command path and **not on the entry points this application calls**:
+`clay_layer_node_influence_bound`, `clay_brick_cache_mark_dirty_nodes`,
+`clay_layer_influence_bound` and `clay_brick_cache_mark_dirty_layer` all still
+reported the un-dilated box, measured at 344 band-clamped samples changing
+outside the reported region, worst 0.0535 against a 0.1 band. The asymmetry
+worth remembering is that a single stamp through `apply_edit` got the dilated
+box while the same stamp issued as a *stroke* did not.
+
+The **gesture** half of it is narrower than that, and checked rather than
+assumed on both sides. Three entry points build their region from item boxes and
+bypass the fixed path — `clay_layer_place_stamps`, `clay_layer_move_surface` and
+`clay_layer_magnify_surface` — and of those this application drives exactly one:
+`move_surface`, through `ToolKind::Mover`. `place_stamps` has no caller here at
+all, and `magnify_surface` is not even wrapped. `clay_layer_apply_stroke` is
+*not* among them — it applies each stroke node through `apply_edit`, so every
+brush dab already takes the path that was fixed first.
+
+So the live exposure is **one tool, on a drag**, where a region too small shows
+as the surface tearing behind the pointer rather than as a stale patch found
+later.
+
+Recorded here rather than left in the conversation it came from, because the
+symptom on this side is stale geometry with nothing to point at, and the first
+instinct would be to look in `SurfaceGeometry`. **If a composed document leaves
+stale bricks after a Mover drag, check which bound the engine handed back before
+looking at anything here.**
+
+**And a blended composition cannot be dragged cheaply, which is a choice this
+application has to make rather than inherit.** A layer composition's *rounding*
+follows the layer's scale; its blend *radius* does not — it is an absolute world
+distance, as `CombineSettings::radius` already is here. So a soft cutter scaled
+up covers the same absolute distance across a bigger form, and the cut reads as
+hardening as the subtool grows.
+
+That is fixable on this side — the radius could be multiplied by the layer's
+scale when the composition is written, so the join stays proportional. What it
+costs is the fast path: the placement gesture moves a layer without touching the
+document, and a radius that follows the scale means *scaling re-composes the
+layer*, which is an edit and not a placement. So the choice is between a soft
+join that hardens under a scale and keeps the cheap drag, or one that stays
+proportional and gives it up. Naming it here because it is not visible from
+either the engine's side or the interface's, only from the seam.
+
+Either way the layer classifies GENERAL while it carries a soft join with a
+positive radius, once ClayCore #321 lands the predicate for it — `placement.cpp`
+reads a layer's *items* and not its composition today, so a scaled cutter with a
+smooth join currently reports SIMILARITY and would take the cheap invalidation
+it has not earned.
+
+So the engine folds and probes whether the operator actually reads an absence as
+a change; a union skips and an intersect does not. The artist-facing rule —
+*an absent operand is not an operand* — stays right and stays ours.
+`boolean_operands` already applies it on the resolved path, dropping empty
+subtools "because there is nothing in them to combine". **When a layer
+composition is adopted here, the same filter has to reach it**, or the same two
+subtools give different answers depending on which route the sculptor took.
+
+**#321 is in implementation upstream and carries two things this application
+owes when it lands.** It was ordered last in its phase and moved to P0 on this
+repository's argument: a subtool *is* a layer here, so a subtractive **item**
+inside one does not reach the workflow — the artist wants to drag the cutter and
+watch the cut follow.
+
+*The container goes to minor 18, and a document using layer booleans will have
+no downgrade path at all.* That is deliberate and was settled on a point this
+repository raised: every earlier minor degraded by losing something no artist
+authored — 16 → 17 costs "the payload deduplication and nothing an artist
+authored" — while 18 → 17 would return a subtractive layer as a union, so the
+cutter that was carving a hole comes back as a lump welded to the form, in a
+file that opens cleanly. Writing below 18 therefore **refuses** a document
+carrying a non-default composition rather than degrading it, which is the
+direction this format already fails in: records are not length-prefixed, so an
+older build meeting a newer minor fails rather than misreads.
+
+What that owes here is a sentence rather than a feature. A query arrives with
+the change — *can this document be written at minor N without losing authored
+intent* — and the honest surface is the diagnostics report already saying which
+minor a document was written at, plus "this document uses layer booleans and
+will not open in an older build". **No downgrade is to be offered**, because an
+offered one that quietly welded the cutter on would be worse than none.
+
+*A C-ABI host still cannot choose the minor it writes*, which is now a named row
+on ClayCore's own roadmap rather than a thing this repository re-discovers each
+pin. `clay_document_save` takes a path and `clay_document_save_memory` takes a
+blob; neither takes a version, and the parameter lives on the C++
+`serialize_document`. Three releases of upgrade notes have advised writing at an
+older minor for interchange and no C-ABI host has been able to take that advice.
+It cost nothing while the loss was deduplication. See `Document::FORMAT`.
 
 [#210](https://github.com/CyberdyneCorp/ClayCore/issues/210) — `clay_document_undo`
 does not report what it changed, so an undo has to dirty the whole layer. Undo
@@ -391,7 +554,37 @@ Taken up here, each one flipping a test rather than being read about.
 
 ### Upstream: released, not yet taken up here
 
-**Nothing.** Every issue filed from this work has been released *and* taken up.
+**Twenty-nine entry points, added by ClayCore v0.84.0, of which this
+application calls none.** That is a deliberate line rather than a backlog: a pin
+move should be separable from what the pin enables, so that a bisect over an
+upgrade lands on the upgrade. Two of them are worth real work.
+
+**The layer placement gesture** — `clay_layer_placement_begin` / `_update` /
+`_commit`. `place_layer` writes a transform and refills the union of the old and
+new bounds on **every frame of a gizmo drag**, and this application pays a second
+time to hide it: an SDF drag rebuilds the whole layer per frame so the mesher's
+artifacts never reach the screen. Upstream measures the engine's half at 12.4 ms
+a frame at 100 items and **95.7 ms** at 1000, against 0.30 ms of matrix
+multiply, and the gesture makes sixty refills one. It is a *layer* drag and
+therefore not the fix for the item case in
+[#471](https://github.com/CyberdyneCorp/ClayCore/issues/471) — two different
+drags with two different fixes, and only one of them has a fix today.
+
+**The SDF prefix cache** — `clay_sdf_prefix_cache` with
+`clay_brick_cache_eval_requests_seeded`, which takes a cold brick from 14.65 ms
+to **0.291 ms**, flat across a ten-fold document. That is a hitch in the middle
+of a stroke rather than a startup cost, and it is the phase
+`a-profile-the-engine-team-can-read` now measures under its own name. Take this
+one first: the instrument that shows it already exists here, and the placement
+gesture's win is real but arrives in a phase nothing here reports yet.
+
+Smaller and unclaimed: stamp assets (`clay_layer_place_stamps` and its capture),
+and two diagnostics that would sit beside the ones already exported —
+`clay_document_extent_stats` and `clay_layer_warp_cost_get`.
+
+Every *issue* filed from this work has been released and taken up; what is
+listed above was never filed from here, because it was never a gap this
+application had reported.
 
 ### Upstream: available and not needed
 
@@ -1227,6 +1420,65 @@ the digest comparison that waits on it — were red on
 0.29.0**. Nothing here has confirmed them green since: it takes a run on the
 macOS runners, and the pin moved two releases without one. Treat them as
 unknown rather than as blocked.
+
+### Six ways a gate can be real and unenforced
+
+None of these was found by a gate failing. All three were found by asking which
+runner sees what, and the question worth carrying is not *"is there a gate"* but
+**"what would have to happen for this gate to fail, and does that ever happen
+here?"**
+
+**A gate no change triggers.** ClayCore's example-coverage check was red on their
+main for a day because the commit that broke it was documentation, and nobody
+runs an example gate for a documentation change.
+
+**A gate the wrong version runs.** The OpenSpec job installs
+`@fission-ai/openspec@latest` while `just spec` runs whatever is installed
+locally. Measured 2026-09-06: **local 1.11.0, CI 1.12.0**, both 37/37, agreeing
+by luck rather than by design. A result quoted from the local CLI is not the
+result the job produces, and this page has quoted one.
+
+An unpinned enforcer is the *worse* half of this pair, which is worth stating
+because it looks like the safer half. A stale pin is wrong the same way every
+day until somebody looks. `@latest` means a tree that is green today can be red
+tomorrow with nobody having touched it — and the failure arrives attached to
+whatever change happens to be in flight, so the natural suspect is the change
+rather than the tool. Pinning costs a periodic deliberate bump and buys the
+property that **a red tree means somebody did something.** One line, not yet
+taken.
+
+**A gate compiled but never run.** `agent_end_to_end` sits behind the
+`agent-e2e` feature, and the lint job builds it without running it under a
+comment that says *"It is still compiled and linted here, where the runner is
+cheap and the link is fast, so it cannot rot unnoticed."* It has rotted — the
+target fails, and failed before the v0.84.0 pin moved. This is the worst of the
+three, because a compile is not a run and a comment claiming otherwise converts
+an unknown into a false known.
+
+**A gate for a claim nobody made machine-readable.** No check asks whether the
+artefacts a change *says* it built exist. A fifteen-line pass over every
+backticked name in every `tasks.md` found three wrong claims in changes of ours
+that had already merged: a test named but never written, a test named by a
+prefix of its real name — which greps to nothing and so reads as a deletion that
+never happened — and a runtime file name backticked as though it were a path in
+this tree. A task naming a test is a claim, and nothing was reading it.
+
+Three causes account for most of it, and the first changes how a failure should
+be *read* rather than fixed. **A file growing into a directory** — `renderer.rs`
+becoming `renderer/mod.rs` — is the dominant decay mode for a file claim and has
+no symbol equivalent, because splitting a module keeps its symbols and moves its
+path. A spike is usually one refactor, not one change's worth of carelessness.
+**A shorthand** — the tail of a longer symbol, written in backticks to avoid
+repeating it — is not noise to tolerate: the fix is to write the symbol in full,
+which is what the claim should have said. And **not a file in this tree** covers
+both directions, a name that exists in another repository and one that does not
+exist until a person creates it.
+
+**A check that never applies.** The most seductive of the six, because a check
+that cannot fire is indistinguishable from a check that always passes, and
+adopting one feels like diligence. A checklist taken whole from another
+repository is how you get it — a recipe check on a tree with no recipes is green
+forever and reports itself as covered.
 
 The performance gate compares against the baseline for the platform it runs on
 — `benchmarks/baseline-macos-aarch64.json` or

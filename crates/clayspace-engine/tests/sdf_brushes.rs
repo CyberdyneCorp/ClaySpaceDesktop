@@ -21,6 +21,33 @@
 //! On the sign: it belongs to the verbs that have one. Depositing has an
 //! opposite and so does planing; smoothing does not, and neither does the
 //! direction of a drag — those are the same rules the mesh brushes follow.
+//!
+//! # Read a brush with a field query, not with a pick
+//!
+//! Every assertion in this file measures the surface with
+//! [`SculptModel::pick`], which marches. That is the right instrument for
+//! *"did the surface move where a sculptor is looking"* and the wrong one for
+//! *"did this verb change"*, and the difference cost two hours at the v0.84.0
+//! pin.
+//!
+//! What happened: ClayCore #447 changed picking to walk the brick cache
+//! analytically rather than sphere-trace it, and a resting unit sphere went
+//! from reading 1.006707 to 1.000296. Two of this file's tests then failed,
+//! and the first diagnosis — taken with a *second* pick reading — was that the
+//! brush had got stronger. Measured with `clay_eval_points` instead, over 2,197
+//! points about the stroke, **the field moves 0.0400000 on both pins for one
+//! stroke and 0.1198471 on both for four dabs, to the last digit.** The verb is
+//! bit-identical across the release. The pick was the whole difference.
+//!
+//! The tell was there and was read backwards: on v0.78.0 the pick returned
+//! `1.0350003` before and after, *exactly*. An instrument giving bit-identical
+//! readings either side of a four-hundredths field change is quantising, not
+//! reporting a weak effect.
+//!
+//! So: if a threshold in this file ever needs re-deriving, derive it against a
+//! no-op case and **read that case with a field query rather than a pick** —
+//! otherwise the number measures whichever marcher the pinned engine happens
+//! to ship.
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{BrushSettings, GestureSample, Representation, SculptModel, ToolKind};
@@ -43,6 +70,68 @@ fn reach(document: &ClayDocument, direction: [f32; 3]) -> f32 {
 
 const AT: [f32; 3] = [0.6, 0.0, 0.8];
 const MIRRORED: [f32; 3] = [-0.6, 0.0, 0.8];
+
+/// The four verbs that sample a region rather than stamp into it.
+///
+/// The engine adapter's own grouping — "Suavizar, Relaxar, Planar and Polir do
+/// not stamp: they sample a region" — and they are grouped here for the reason
+/// they are grouped there: each averages toward something the neighbourhood
+/// already is.
+///
+/// They need something to smooth. A pristine sphere is already the smoothest
+/// thing there is, so asking one of these to move it is asking it to do the
+/// job it exists *not* to do — and it took ClayCore v0.84.0 to make that
+/// visible. Before it, a pick against the resting sphere read **1.006707**
+/// where the surface is at 1.0; after it walks the brick cache analytically
+/// rather than sphere-tracing it, the same pick reads **1.000296**. A smooth
+/// of a pristine sphere then correctly moves it 3e-4, under the 1e-3 this file
+/// asks of a brush — and the reason it cleared that bar before was six
+/// thousandths of measurement error, not six thousandths of clay.
+///
+/// So these are given a bump to take out, which is what they are for. Measured
+/// across the pin, on the fixture below: a dab 0.037 proud, and the smoothing
+/// took back **0.0084 on v0.78.0 and 0.0109 on v0.84.0** — stronger, not
+/// weaker.
+const SMOOTHING_BRUSHES: [ToolKind; 4] = [
+    ToolKind::Suavizar,
+    ToolKind::Relaxar,
+    ToolKind::Planar,
+    ToolKind::Polir,
+];
+
+/// A sphere with something on it worth smoothing, at `where_`.
+fn bumped_at(where_: [f32; 3]) -> ClayDocument {
+    let mut document = sphere();
+    let samples = [GestureSample {
+        position: where_,
+        pressure: 1.0,
+        time: 0.0,
+    }];
+    document
+        .apply_stroke(
+            ToolKind::Padrao,
+            BrushSettings {
+                size: 0.12,
+                intensity: 1.0,
+                ..BrushSettings::default()
+            },
+            &samples,
+            [false; 3],
+        )
+        .expect("the fixture's own dab was refused");
+    document
+}
+
+/// A bump under the stroke.
+fn bumped() -> ClayDocument {
+    bumped_at(AT)
+}
+
+/// A bump where the *mirror* is expected to land, which is what the symmetry
+/// test needs a smoothing verb to have something to do about.
+fn bumped_mirrored() -> ClayDocument {
+    bumped_at(MIRRORED)
+}
 
 fn stroke(document: &mut ClayDocument, tool: ToolKind, invert: bool, symmetry: [bool; 3]) -> bool {
     let samples: Vec<GestureSample> = (0..=6)
@@ -112,10 +201,13 @@ fn the_surface_brushes_are_the_ones_the_shelf_offers() {
 
 #[test]
 fn every_surface_brush_moves_the_surface() {
-    let base = sphere();
-    let rest = reach(&base, AT);
     for tool in SURFACE_BRUSHES {
-        let mut document = sphere();
+        // A smoothing verb is asked to flatten a bump; every other verb is
+        // asked to mark a resting sphere. Same assertion, and each on a
+        // surface where it has something to do.
+        let smoothing = SMOOTHING_BRUSHES.contains(&tool);
+        let mut document = if smoothing { bumped() } else { sphere() };
+        let rest = reach(&document, AT);
         let changed = stroke(&mut document, tool, false, [false; 3]);
         let after = reach(&document, AT);
         assert!(changed, "{tool:?} reported no change");
@@ -130,10 +222,16 @@ fn every_surface_brush_moves_the_surface() {
 #[test]
 fn every_surface_brush_mirrors_when_it_is_asked_to() {
     // The reported fault, and it was five brushes rather than one.
-    let base = sphere();
-    let rest = reach(&base, MIRRORED);
     for tool in SURFACE_BRUSHES {
-        let mut document = sphere();
+        // A smoothing verb needs a bump on the *far* side to take out, or the
+        // mirror has nothing to show for itself — see `SMOOTHING_BRUSHES`.
+        let smoothing = SMOOTHING_BRUSHES.contains(&tool);
+        let mut document = if smoothing {
+            bumped_mirrored()
+        } else {
+            sphere()
+        };
+        let rest = reach(&document, MIRRORED);
         stroke(&mut document, tool, false, [true, false, false]);
         let there = reach(&document, MIRRORED);
         assert!(

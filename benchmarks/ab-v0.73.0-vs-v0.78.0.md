@@ -733,3 +733,97 @@ reads.
 | `tape.dab_after_96_edits` | ms | 3.38 | 3.23–3.58 | 3.29 | 3.25–3.37 | 0.972x | no |
 | `tape.dab_on_fresh` | ms | 2.02 | 1.91–7.88 | 2.00 | 1.92–2.16 | 0.993x | no |
 | `tape.growth` | x | 1.67 | 0.454–1.77 | 1.64 | 1.56–1.69 | 0.979x | no |
+
+
+---
+
+# Addendum: what v0.84.0 did and did not give back
+
+Measured 2026-09-05 on the same machine, the same backend, the same viewport
+and the same five scenes as the campaign above — and on a **quieter** box than
+that one: 0.14 load per core here against the 0.30-and-a-runaway-process
+recorded in *Conditions*. Four runs of `just bench-only object` at
+`v0.84.0-0-g662e1327`, means below.
+
+ClayCore v0.84.0's notes say issue #451 — which this report raised — is closed:
+*"The intersect drag now costs what the subtract control costs."* On the
+fixture this report actually measured, **it does not.**
+
+| | v0.73.0 | v0.78.0 | v0.84.0 |
+|---|---:|---:|---:|
+| `object.drag_frame.mean` — subtracting, the control | 25.49 ms | 25.82 ms | **25.46 ms** |
+| `object.drag_frame_intersect.mean` — intersecting | 57.35 ms | 66.84 ms | **64.81 ms** |
+| intersect ÷ subtract, within one pin | 2.25x | 2.59x | **2.54x** |
+
+**2.03 ms of the 9.49 ms regression came back — 21% of it — and the drag is
+still 1.130x what it cost at v0.73.0.** The control is flat across all three
+pins, which is what makes the rest of the row readable.
+
+**This is not a contradiction of the upstream fix, and it should not be
+reported as one.** What #454/#459/#461 fixed is the *layer extent bound query*,
+and the numbers upstream publishes for it are sub-millisecond: a drag frame
+going from 0.0669 ms to 0.0003 ms, with layer walks over 200 frames falling
+from 200 to 2. A fix worth 0.067 ms a frame was never going to account for 9.49
+ms a frame here. Both statements are true: the quadratic bound is gone, and
+whatever makes an intersecting boolean cost two and a half times its
+subtracting control on this fixture is still there and is not the bound.
+
+### The mechanism, and it is not the bound query but the bound
+
+Identified on the ClayCore side after this was reported, `src/scene/bounds.cpp`:
+
+```cpp
+if (item.op == Op::Intersect) return Nonlocality::BoundedByLayer;
+```
+
+An intersect item's influence bound **is** the layer's extent — correctly, since
+`max(acc, item)` can only take material away and what it removes lies anywhere
+the layer already occupies. A subtract is `op_is_local` and dirties its own
+geometry dilated by blend. Two different regions, one frame path.
+
+So a drag on an intersect re-evaluates and re-meshes the whole layer every
+frame. Measured from this side, timing `set_object_transform` — which inside a
+gesture is two bound queries, the engine write, four field assignments of ours,
+and `refill_bound(layer, union(before, after))` — separately from the re-mesh
+that follows it:
+
+| refill per drag frame, median of 12 | subtract | intersect |
+|---|---:|---:|
+| `reference`, radius 1.0 | 3.76–4.19 ms | **41.53–44.03 ms** |
+| `reference-10x`, radius √10 | 12.75–12.84 ms | **6,845–10,098 ms** |
+
+**At constant item count.** Both scenes hold a starting sphere plus 8 strokes of
+12 samples — 97 items — because *"the point of the larger scene is more surface
+at the same edit density, not more editing"*. The only difference is extent:
+~10x the surface area, ~31.6x the volume. Across that, the subtract refill
+scales 3.0–3.4x and the intersect refill scales **165–229x**, which is
+superlinear in the extent by a further 5–7x that nothing here explains.
+
+That accounts for essentially all of the headline. On the reference scene the
+intersect frame is 64.81 ms of which 41.5–44.0 is refill, and the subtract frame
+is 25.46 ms of which 3.8–4.2 is refill: **~38 ms of the ~39 ms difference
+between the two frames is the refill.** The rest is a mesh and a draw.
+
+Worth stating because it inverts the intuition: on the *mesh* alone an intersect
+is cheaper than a subtract here — 8.85 ms against 11.44 — because the result is
+smaller, 59,015 triangles against 346,858. The operation that produces six times
+less geometry costs two and a half times more frame.
+
+**What this fixture is.** One frame of a live boolean drag: a placed
+`Shape::Cylinder` (radius 0.25, height 1.6) dragged across the reference form
+with `Combine::Intersect`, the boolean re-evaluated every frame — measured
+beside `object.drag_frame`, the same fixture and the same frame path differing
+only in the operation.
+
+## And one claim that is confirmed
+
+| | v0.73.0 | v0.78.0 | v0.84.0 |
+|---|---:|---:|---:|
+| `object.pick.ms` | 0.100 ms | 0.113 ms | **0.055 ms** |
+
+**0.49x of v0.78.0**, against the release notes' claim of *"0.51-0.54x of the
+previous cost"* for `clay_raycast_attributed` no longer building a document per
+candidate item. This application calls that entry point directly, in
+`ClayDocument::pick_item`, which is why the improvement arrives without a line
+changing — and it also clears the 1.133x this report had recorded against
+v0.78.0 for the same figure.

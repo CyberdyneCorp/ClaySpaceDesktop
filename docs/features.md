@@ -316,6 +316,27 @@ tendril rather than a string of beads, and both were wrong at first:
   is the path the pointer took. A straight drag hides this entirely; a curving
   one is where it shows.
 
+- **The taper is measured along the path, not across the point list.** It was
+  `index / (len - 1)` at first, so the denominator was however long the stroke
+  had turned out to be *so far* — and every extra sample renumbered every point
+  and rewrote its radius. Clay already laid down kept thickening behind the
+  cursor: measured, the point at index 5 of a forty-sample pull carried radius
+  0.0600 when the stroke was eight samples long and 0.1092 when it was forty,
+  an **82%** thickening of a part the sculptor was no longer touching. Radius
+  now comes from the distance travelled from the anchor, which never changes
+  for a point already placed. A pull longer than five brush widths holds its
+  tip thickness rather than re-thinning what is behind it.
+
+That last one was also the whole of why a long pull got slower the longer it
+went. Because the field really did change along the entire tendril on every
+segment, the whole curve's bricks were correctly dirty and correctly
+re-evaluated — 880 of them at 110 ms per segment on a forty-sample pull, so the
+stroke's cost grew with its own square and the interface stalled in steps of
+89, 226, 335 and 440 ms. With the taper anchored, only the newly drawn end
+changes, and a segment dirties that region instead of the whole curve: **150
+bricks against 880** on the same pull. A pull is no longer quadratic in its own
+length.
+
 The curve is held only while a gesture is open, so the next pull is its own
 tendril rather than a continuation of the last.
 

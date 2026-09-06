@@ -409,7 +409,50 @@ impl crate::Mesh {
     }
 }
 
+/// What the resumable refill has been able to reuse.
+///
+/// Cumulative over a document's life and never reset, so a figure for one
+/// gesture is the difference across it rather than the value at the end.
+///
+/// [`Self::bytes`] against [`Self::budget`] is the question a ratio alone
+/// cannot answer: a resume ratio that collapses because the store is full is a
+/// different fault from one that collapses because nothing was reusable, and
+/// only the first is fixed by dirtying less.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResumeStats {
+    /// Seeds held.
+    pub entries: u64,
+    pub bytes: u64,
+    /// What the store may hold; `None` is unlimited.
+    pub budget: Option<u64>,
+    /// Bricks that started from a seed rather than from nothing.
+    pub resumed_bricks: u64,
+    /// Bricks that were walked in full.
+    pub refilled_bricks: u64,
+}
+
 impl Document {
+    /// What the resumable refill has reused, cumulatively.
+    ///
+    /// Read either side of a gesture and subtract: the counters do not reset,
+    /// which is what lets one drag be measured without disturbing the
+    /// document.
+    pub fn resume_stats(&self) -> Result<ResumeStats> {
+        let mut raw = sys::clay_resume_stats::sized();
+        // SAFETY: a valid document handle and a descriptor with struct_size set.
+        check(
+            unsafe { sys::clay_document_resume_stats(self.as_ptr(), &mut raw) },
+            "clay_document_resume_stats",
+        )?;
+        Ok(ResumeStats {
+            entries: raw.entries,
+            bytes: raw.bytes,
+            budget: (raw.budget != 0).then_some(raw.budget),
+            resumed_bricks: raw.resumed_bricks,
+            refilled_bricks: raw.refilled_bricks,
+        })
+    }
+
     /// A mesh layer's geometry revision.
     ///
     /// Bumped every time a layer's triangles are replaced wholesale, and
