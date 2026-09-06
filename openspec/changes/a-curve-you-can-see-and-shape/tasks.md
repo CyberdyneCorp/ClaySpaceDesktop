@@ -86,7 +86,10 @@
 
 ## 5. Hold it
 
-- [x] 4.1 `just check` — formatting, clippy, the workspace suite, the
-      specification
-- [x] 4.2 `docs/features.md` — the *Pulling a tendril* neighbourhood gains what
-      the guide is and why it is drawn tessellated
+- [x] 5.1 `just check` — formatting, clippy, the workspace suite, the
+      specification. Re-run after **every** edit to this file, which is the
+      lesson of the numbering above: section 4 was inserted, the old section 4
+      became 5, its tasks kept their 4.x numbers, and the change was reported
+      as validating on a run taken before the edit
+- [x] 5.2 `docs/features.md` — the *Pulling a tendril* neighbourhood gains what
+      the guide is, why it is drawn tessellated, and how a drag draws one
