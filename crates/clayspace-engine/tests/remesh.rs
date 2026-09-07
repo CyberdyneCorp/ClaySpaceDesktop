@@ -276,3 +276,100 @@ fn a_stroke_lands_after_the_rebuild_is_redone() {
         .expect("a stroke after redoing a rebuild was refused");
     assert!(outcome.changed);
 }
+
+/// A rebuild the viewport is told about.
+///
+/// Reported from a session: pressing **Rebuild** left the polyframe drawing
+/// the old topology, and the new one appeared only once a stroke landed.
+///
+/// A rebuild replaces every vertex and every index and moves nothing else —
+/// the key is the same, the layer is as visible as it was, the transform has
+/// not moved — so `mesh_revision`, which is what the viewport watches to
+/// decide whether to upload, sat still through it. The first stroke moved a
+/// vertex and changed the number the old way, which is exactly how it was
+/// reported. The same shape as a crossing drawing nothing, and the same
+/// repair: name the thing that changed.
+///
+/// Measured before the fix, at every resolution from 16 to 64: triangles
+/// 44,784 to 7,032 or 115,296, and the revision unmoved.
+#[test]
+fn a_rebuild_moves_the_number_the_viewport_watches() {
+    let Some((mut document, key)) = meshed() else {
+        return;
+    };
+    let before = document.mesh_revision();
+    let triangles_before = triangles(&mut document);
+
+    let outcome = document
+        .remesh_layer(key, RemeshSettings::default())
+        .expect("a rebuild");
+    assert_ne!(
+        triangles(&mut document),
+        triangles_before,
+        "the rebuild left the same triangle count, so this fixture cannot tell \
+         a viewport that was told from one that was not"
+    );
+    assert_ne!(
+        document.mesh_revision(),
+        before,
+        "the rebuild replaced {} triangles with {} and the number the viewport \
+         watches did not move, so it would go on drawing the mesh it has until \
+         something else happens to change it",
+        outcome.triangles_before,
+        outcome.triangles_after
+    );
+}
+
+/// The coarse end of the resolution range reaches the engine.
+///
+/// The floor was 32 and the sanitiser clamps to it, so asking for anything
+/// below produced a rebuild at 32 — measured, 8, 16, 24 and 32 all returned
+/// the identical 28,560 triangles at a voxel size of 0.0625. A sculptor
+/// blocking out fuses shells deliberately coarsely and had no way to ask for
+/// it.
+///
+/// Asserts a *relation* rather than a count: what matters is that a coarser
+/// setting produces a coarser mesh, and the counts belong to the fixture.
+#[test]
+fn the_coarsest_resolution_offered_is_coarser_than_the_one_above_it() {
+    let floor = *RemeshSettings::RESOLUTION.start();
+    assert!(
+        floor <= 16,
+        "the range starts at {floor}, so the coarse end a block-out wants is \
+         not on the slider"
+    );
+
+    let mut coarse_result = None;
+    for resolution in [floor, floor * 2] {
+        let Some((mut document, key)) = meshed() else {
+            return;
+        };
+        let outcome = document
+            .remesh_layer(
+                key,
+                RemeshSettings {
+                    resolution,
+                    ..RemeshSettings::default()
+                },
+            )
+            .unwrap_or_else(|e| panic!("a rebuild at {resolution} was refused: {e}"));
+        match coarse_result {
+            None => coarse_result = Some(outcome),
+            Some(coarse) => {
+                assert!(
+                    coarse.triangles_after < outcome.triangles_after,
+                    "{floor} gave {} triangles and {} gave {}, so the coarse \
+                     end of the range is being clamped away before it reaches \
+                     the engine",
+                    coarse.triangles_after,
+                    resolution,
+                    outcome.triangles_after
+                );
+                assert!(
+                    coarse.voxel_size > outcome.voxel_size,
+                    "a coarser resolution did not give a larger cell"
+                );
+            }
+        }
+    }
+}

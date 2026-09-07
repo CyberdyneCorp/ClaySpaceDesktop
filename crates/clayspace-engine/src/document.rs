@@ -6029,6 +6029,26 @@ impl ClayDocument {
             .fold(0xcbf2_9ce4_8422_2325u64, |hash, layer| {
                 let shown = u64::from(layer.visible && layer.carries_geometry);
                 let hash = (hash ^ (layer.key.0 << 1 | shown)).wrapping_mul(0x1000_0000_01b3);
+                // **And whether the triangles under that key are still the
+                // same triangles.**
+                //
+                // A rebuild replaces every vertex and every index and moves
+                // nothing else: the key is the same, the layer is as visible
+                // as it was, the transform has not moved. So without this the
+                // number sat still through a rebuild, and the viewport —
+                // which uploads only when it changes — went on drawing the
+                // mesh it had. Reported as the polyframe still showing the
+                // old topology until a stroke landed, which is what moved the
+                // number the old way. Measured: at every resolution from 16
+                // to 64, triangles 44,784 -> 7,032 or 115,296, and the
+                // revision unmoved.
+                //
+                // `geometry_revision` is the engine's own
+                // `clay_document_mesh_layer_revision`, which it documents as
+                // bumped "every time a layer's triangles are replaced
+                // wholesale" — exactly this moment, and it is already being
+                // read into the row by `settle_geometry_revisions`.
+                let hash = (hash ^ layer.geometry_revision).wrapping_mul(0x1000_0000_01b3);
                 let at = layer.transform;
                 at.position
                     .into_iter()
