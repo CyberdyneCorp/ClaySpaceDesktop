@@ -30,6 +30,7 @@ mod brick;
 mod brush;
 mod buffer;
 mod consolidate;
+mod cut;
 mod descriptor;
 mod document;
 mod error;
@@ -58,6 +59,7 @@ pub use brick::{
 };
 pub use brush::{Accumulation, BrushParams, BrushShape, Falloff, StrokePreset, StrokeSample};
 pub use consolidate::{ConsolidationCost, ConsolidationParams, FieldReport};
+pub use cut::{cut, CutFrame, CutOutline, CutShape, TrimSide};
 pub use document::{
     prim, ArmatureEdit, Document, FormatVersion, GizmoCage, Item, LayerId, NodeId, PointType,
     Primitive, Profile,

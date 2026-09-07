@@ -247,6 +247,8 @@ fn state<'a>(
         shortcuts: shortcuts(),
         mask_gesture: clayspace_model::MaskGesture::default(),
         outline: None,
+        cut_gesture: clayspace_model::CutGesture::Line,
+        cut: None,
         representation: clayspace_model::Representation::Sdf,
         show_shapes: false,
         insert_as: clayspace_model::InsertAs::default(),

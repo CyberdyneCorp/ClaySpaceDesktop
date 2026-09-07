@@ -365,6 +365,14 @@ impl SculptViewModel {
             | Command::EndMaskOutline(_)
             | Command::CancelMaskOutline
             | Command::ToggleCurve
+            // The cut's own gesture, which belongs to the cut ViewModel: it
+            // is drawn on the view frame rather than across the surface, so
+            // nothing here has an opinion about it.
+            | Command::SetCutGesture(_)
+            | Command::BeginCut(_)
+            | Command::ExtendCut(_)
+            | Command::EndCut(_)
+            | Command::CancelCut
             | Command::AddCurvePoint(..)
             | Command::InsertCurvePoint(..)
             | Command::SelectCurvePoint(_)

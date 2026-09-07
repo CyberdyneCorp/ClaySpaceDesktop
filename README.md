@@ -122,7 +122,9 @@ strokes — are in no baseline and report as `new`.
   layer](#the-shelf-follows-the-active-layer) ·
   [sculpting](#sculpting-a-stroke-is-one-call-and-one-undo) ·
   [focus mode](#focus-mode-and-the-regions-that-move) ·
-  [masking](#masking) · [subtools](#a-scene-is-a-list-of-subtools) ·
+  [masking](#masking) ·
+  [cutting](#cutting-with-a-shape-you-draw-over-the-model) ·
+  [subtools](#a-scene-is-a-list-of-subtools) ·
   [shapes](#inserting-a-form-and-where-it-goes) ·
   [booleans](#a-boolean-between-two-subtools) ·
   [conversions](#crossing-between-representations) ·
@@ -424,6 +426,28 @@ measured, filed as
 [ClayCore#394](https://github.com/CyberdyneCorp/ClayCore/issues/394), and held
 open by a tripwire test written to fail the day it started working. It fired on
 the upgrade.
+
+### Cutting with a shape you draw over the model
+
+**Dinâmica → Aparar** — **Trim** on the shelf — removes material with a shape
+drawn on the view rather than a stroke across the surface. The options bar
+picks which shape the next gesture is: a **line**, a **lasso** or a
+**rectangle**.
+
+**The direction you draw in says which half goes.** A line drawn left to right
+takes what is below it and the same line drawn back takes what is above; a
+lasso wound clockwise takes what it encloses and wound the other way takes
+everything else. One rule underneath: what lies to the right of your travel is
+the half that goes. While you drag, a barb at the middle of the stroke points
+at the side about to be removed. A rectangle has no travel to read and takes
+what is inside it.
+
+The cut is a straight prism rather than a wedge under the camera, it passes all
+the way through the form, and what it leaves is an **item** — one undo entry,
+adjustable afterwards, resolved when a sculptor chooses to. It is **not
+reflected by the layer's symmetry**: a trim is drawn where the sculptor is
+looking, and mirroring it would remove material on the far side of the form.
+Field subtools only, because a cut resolves to a field item.
 
 ### A scene is a list of subtools
 

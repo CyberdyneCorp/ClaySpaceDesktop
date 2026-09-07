@@ -372,6 +372,96 @@ side of a mirrored layer appears on both, which is what symmetry is for — but 
 tube laid *across* the plane is folded onto itself and reads as symmetric
 whatever its radii do.
 
+### Cutting with a shape drawn on the view
+
+**Dinâmica → Aparar** — the **Trim** entry on the shelf — cuts with a shape you
+draw over the model rather than a stroke across it. ZBrush calls it Trim,
+3DCoat a cut. The options bar's **Corte** chooser picks which shape the next
+gesture is: **Linha**, **Laço** or **Retângulo**.
+
+**The direction you draw in says which half goes**, so there is no second
+control to reach for and no dialog after the gesture:
+
+| gesture | what it takes |
+|---|---|
+| a line drawn left to right | everything **below** it |
+| the same line drawn back | everything **above** it |
+| a line drawn upward | everything to its **right** |
+| a lasso wound clockwise | what it **encloses** |
+| a lasso wound anticlockwise | everything **outside** it |
+| a rectangle dragged corner to corner | everything **inside** it |
+
+One rule underneath the five that have a direction: **what lies to the right of
+your travel is the half that goes.** A rectangle has no travel to read — it is
+the one shape that says which half it takes by enclosing it — so it takes what
+is inside however it was dragged. A diagonal leans to whichever of the four it
+is nearest rather than being refused, and a press that never travelled is
+refused rather than guessed at. While you drag, a short barb at the stroke's midpoint points
+at the side that will be removed — the rule is drawn rather than remembered.
+
+**A line and a lasso are different shapes from the same points**, and they take
+different routes through the engine for that reason: a line is closed against
+the frame's own bounds on the side it covers, and joining its two ends instead
+would cut a sliver between them rather than dividing the form. So they are two
+entry points chosen by the gesture, not one with a toggle.
+
+**A line and a rectangle keep two points, not every sample the pointer sent.**
+A hand wobbles, and a line built from the whole track carries the wobble into
+the cut face — the drawn line looked straight on screen and the cut edge was
+not. Both shapes are defined by where the gesture began and where it is now, so
+the drag replaces the second point rather than appending to a track. A lasso is
+the free shape and keeps them all.
+
+**The cut is a prism, not a frustum.** A shape drawn under a perspective camera
+sweeps a converging wedge, and cutting with one gives a cut face that is not
+flat and a solid that depends on where the camera stood. The engine is explicit
+about this and a trim is a straight cut, as it is in both references. It is
+swept from the layer's own bounds, so it passes all the way through rather than
+stopping inside and leaving a shelf.
+
+**What it leaves is an item, not a bake** — one undo entry, adjustable
+afterwards by the same route every other placed shape is. Resolving it is a
+choice a sculptor makes rather than one the tool makes for them, which is the
+position this application already takes on booleans.
+
+**Cutting again does not depend on what the last cut left.** Two things a
+sculptor never sees decide this, and both were wrong at first. The shape is
+placed against the **frame's own origin** — the point the view-centre ray meets
+a plane through the subtool, which is where `(0, 0)` on screen is — rather than
+against the middle of the form's bounding box; the two agree while the form is
+symmetric about what the camera is framed on, and part company the moment a cut
+makes it lopsided. And the prism is sized against the **surface's** extent
+rather than the layer's, because a cut is an item and the layer's bounds grow
+to hold it: a cut framed against bounds that already hold a cut is framed
+against its own predecessor. Measured, that ran away — a form spanning 2.0 read
+18.0 after one Line cut, then 146, then 1170, and the Line tool stopped cutting
+after the first stroke. A subtract cannot add surface, so the surface's extent
+is stable however many times you cut.
+
+**A cut is the one item the layer's mirror does not reflect.** A curve is an
+item and symmetry reflects it, which is what the section above says and what a
+sculptor wants from a tube — but a cut is drawn *on the view*, at the place the
+pointer went, and reflecting it removes material on the far side of the form
+where nothing was drawn. So the placed cut opts out of the layer's mirror
+(`clay_item_set_mirror(-1)`) rather than the tool switching symmetry off around
+itself, which would leave the setting changed for the next stroke. Symmetry
+stays where the sculptor left it and the cut lands where they drew it.
+
+**What it costs is the form, not the brush.** `cut.line` and `cut.lasso`
+measure a gesture thrown across the whole of the reference form, which is the
+worst one there is: a cut is swept from the layer's own bounds and passes all
+the way through, so the work is the region it crosses. They sit beside
+`mask.outline` rather than with the brushes for that reason, and there are two
+of them because an open curve and a closed one are different entry points into
+the engine. `brush.sdf.trim` stays skipped as *no gesture this harness can
+synthesise*, which is true of the brush harness and is not a claim that the
+tool cannot be measured.
+
+**Field subtools only.** The cut resolves to a field item, so Trim greys out on
+a mesh, a grid and a hierarchy. Trimming a mesh would mean crossing into a
+field and back — a representation change with its own cost and its own undo
+entry — and a tool that says it removes material must not perform one silently.
+
 ### Pulling a tendril
 
 **Puxar** authors a curve — a chain of spheres swept along the path, tapering

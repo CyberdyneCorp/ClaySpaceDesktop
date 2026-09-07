@@ -90,6 +90,11 @@ pub fn home_of(command: &Command) -> Home {
         ApplyMaskOp(_) => Home::In("mask", "apply"),
         SetMaskGesture(_) => Home::In("mask", "set_gesture"),
         SetMaskSteps(_) => Home::In("mask", "set_steps"),
+        SetCutGesture(_) => Home::In("cut", "set_gesture"),
+        BeginCut(_) => Home::In("cut", "begin"),
+        ExtendCut(_) => Home::In("cut", "extend"),
+        EndCut(_) => Home::In("cut", "end"),
+        CancelCut => Home::In("cut", "cancel"),
         BeginMaskOutline(..) => Home::In("mask", "begin_outline"),
         ExtendMaskOutline(_) => Home::In("mask", "extend_outline"),
         EndMaskOutline(_) => Home::In("mask", "end_outline"),
@@ -328,6 +333,19 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
         ("stroke", "cancel") => C::CancelStroke,
 
         // -- mask -----------------------------------------------------------
+        // -- cut ------------------------------------------------------------
+        ("cut", "set_gesture") => C::SetCutGesture(args.choice("gesture", tags::CUT_GESTURES)?),
+        ("cut", "begin") => C::BeginCut(args.vec2("at")?),
+        ("cut", "extend") => C::ExtendCut(args.vec2("at")?),
+        ("cut", "end") => C::EndCut(OutlineFrame {
+            origin: args.vec3("origin")?,
+            right: args.vec3("right")?,
+            up: args.vec3("up")?,
+            forward: args.vec3("forward")?,
+            scale: args.vec2("scale")?,
+        }),
+        ("cut", "cancel") => C::CancelCut,
+
         ("mask", "toggle_painting") => C::ToggleMaskPainting,
         ("mask", "apply") => C::ApplyMaskOp(mask_op(args)?),
         ("mask", "set_gesture") => C::SetMaskGesture(args.choice("gesture", tags::GESTURES)?),

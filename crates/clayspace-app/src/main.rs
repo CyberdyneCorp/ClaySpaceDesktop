@@ -182,6 +182,9 @@ enum Drag {
     Marquee,
     /// Drawing a mask outline over the form.
     Outline,
+    /// Drawing a cut over the form: a line, a lasso or a box on the view
+    /// frame, resolved into a prism when the pointer comes up.
+    Cut,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -258,6 +261,7 @@ struct App {
     /// The boolean between two subtools, while one is being set up.
     boolean: BooleanViewModel,
     curve: CurveViewModel,
+    cut: clayspace_vm::CutViewModel,
     /// The plane a curve drag runs on, and where it started.
     curve_drag: Option<([f32; 3], [f32; 3], [f32; 3])>,
     /// A freehand curve stroke in progress: the last point it laid, and the
@@ -532,6 +536,7 @@ impl App {
         let objects = ObjectViewModel::new(Box::new(document.clone()));
         let boolean = BooleanViewModel::new(Box::new(document.clone()));
         let curve = CurveViewModel::new(Box::new(document.clone()));
+        let cut = clayspace_vm::CutViewModel::new(Box::new(document.clone()));
         let armature = ArmatureViewModel::new(Box::new(document.clone()));
 
         // Read before the marker for this session is written, or every run
@@ -599,6 +604,7 @@ impl App {
             objects,
             boolean,
             curve,
+            cut,
             curve_drag: None,
             curve_draw: None,
             last_curve_press: None,
@@ -3079,7 +3085,7 @@ impl App {
         if !clayspace_app::input::shows_the_brush_ring(
             self.layer_manipulator_up(),
             self.lattice.state().get().active,
-            self.draws_an_outline(),
+            self.draws_an_outline() || self.draws_a_cut(),
             self.curve.state().get().active,
         ) {
             return Vec::new();
@@ -3287,6 +3293,7 @@ impl App {
                     self.curve_draw = None;
                 }
                 Drag::Outline => self.close_the_drawn_outline(),
+                Drag::Cut => self.close_the_drawn_cut(),
                 Drag::Gizmo => {
                     self.gizmo_drag = None;
                     self.handle(Command::EndGizmoDrag);
@@ -3394,6 +3401,16 @@ impl App {
                 && button == egui::PointerButton::Primary
                 && !input.orbit_modifier
                 && self.begin_outline(point, input);
+            let cutting = !rigged
+                && !on_curve
+                && !manipulated
+                && !transformed
+                && !caged
+                && !boxing
+                && !drawing_an_outline
+                && button == egui::PointerButton::Primary
+                && !input.orbit_modifier
+                && self.begin_cut(point);
             // Last of the four. It always runs now, because a press on
             // geometry is what makes that geometry's subtool the sculpt
             // target; whether it also *takes* the press is decided inside, and
@@ -3440,6 +3457,7 @@ impl App {
                 _ if manipulated || transformed => Drag::Gizmo,
                 _ if caged => Drag::Cage,
                 _ if boxing => Drag::Marquee,
+                _ if cutting => Drag::Cut,
                 _ if drawing_an_outline => Drag::Outline,
                 egui::PointerButton::Middle => Drag::Pan,
                 egui::PointerButton::Secondary => Drag::Orbit,
@@ -3478,6 +3496,7 @@ impl App {
                 Drag::Sculpt => self.carry_sculpt(input),
                 Drag::Curve => self.carry_curve(input),
                 Drag::Outline => self.carry_outline(input),
+                Drag::Cut => self.carry_cut(input),
                 Drag::Gizmo => self.carry_gizmo(input),
                 Drag::Cage => self.carry_cage(input),
                 Drag::Marquee => self.carry_marquee(input),
@@ -3514,6 +3533,54 @@ impl App {
         // that is drawing it.
         self.handle(Command::BeginMaskOutline(at, input.invert_modifier));
         true
+    }
+
+    /// A press with the cut tool in hand, which begins a drawn cut.
+    ///
+    /// Before the surface and before the manipulator, as the outline is: a cut
+    /// is drawn *on the view* and a press meant for one would otherwise find
+    /// the clay behind it.
+    fn begin_cut(&mut self, point: egui::Pos2) -> bool {
+        if !self.draws_a_cut() {
+            return false;
+        }
+        let Some(at) = self.ndc_at(point) else {
+            return false;
+        };
+        self.handle(Command::BeginCut(at));
+        true
+    }
+
+    /// Whether the next press over the viewport draws a cut.
+    ///
+    /// Asked by the press *and* by the brush ring, from here rather than
+    /// separately — the same reason `draws_an_outline` is one function: a ring
+    /// promising a stroke the press will not leave is the mistake the cage
+    /// made once.
+    fn draws_a_cut(&self) -> bool {
+        *self.sculpt.tool().get() == clayspace_model::ToolKind::Trim
+    }
+
+    /// Movement, while a cut is being drawn.
+    fn carry_cut(&mut self, input: &ViewportInput) {
+        if let Some(at) = input.pointer.and_then(|point| self.ndc_at(point)) {
+            self.handle(Command::ExtendCut(at));
+        }
+    }
+
+    /// The pointer came up: resolve the cut on the frame it was drawn over.
+    ///
+    /// Nothing to cut through where there is no frame, and the draft is taken
+    /// down either way, because the gesture has ended whatever came of it.
+    fn close_the_drawn_cut(&mut self) {
+        match self.outline_frame() {
+            Some(frame) => self.busy(|app| {
+                app.timed("corte desenhado", |app| {
+                    app.handle(Command::EndCut(frame));
+                });
+            }),
+            None => self.handle(Command::CancelCut),
+        }
     }
 
     /// Whether the next press over the viewport draws an outline rather than
@@ -4003,6 +4070,7 @@ impl App {
             self.boolean.refresh();
         }
         self.curve.dispatch(command);
+        self.cut.dispatch(command);
     }
 
     /// The state that belongs to the application itself rather than to a
@@ -4209,6 +4277,8 @@ impl App {
             mask: *self.mask.state().get(),
             mask_gesture: *self.mask.gesture().get(),
             outline: self.mask.draft().get().as_ref(),
+            cut_gesture: *self.cut.gesture().get(),
+            cut: self.cut.draft().get().as_ref(),
             armature: self.armature_state(),
             recent: self.recent.paths(),
             show_repair: self.show_repair,
@@ -4510,6 +4580,7 @@ impl App {
                         // viewport while it is up, so the press that would draw
                         // one is the press that draws the other.
                         shell::outline_overlay(ui, rect, &state);
+                        shell::cut_overlay(ui, rect, &state);
                         // And the transform readout, in the corner, while a
                         // manipulator is pointed at a placed object. Over the
                         // scene for the same reason as the two above: it

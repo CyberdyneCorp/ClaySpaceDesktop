@@ -50,6 +50,7 @@ pub struct Strings {
     pub extrude_side_names: [&'static str; clayspace_model::ExtrudeSide::ALL.len()],
     /// How the mask brush is used, in `MaskGesture::ALL` order.
     pub mask_gesture_names: [&'static str; clayspace_model::MaskGesture::ALL.len()],
+    pub cut_gesture_names: [&'static str; clayspace_model::CutGesture::ALL.len()],
     /// How a grid is drawn, in `VoxelDisplay::ALL` order.
     pub voxel_display_names: [&'static str; clayspace_model::VoxelDisplay::ALL.len()],
     /// The manipulator's three modes, in `GizmoMode::ALL` order.
@@ -161,6 +162,8 @@ pub struct Strings {
     pub action_paint_mask: &'static str,
     /// The heading over the two ways the mask brush can be used.
     pub label_mask_gesture: &'static str,
+    pub label_cut_gesture: &'static str,
+    pub hint_cut: &'static str,
     /// What a drawn gesture does, and what the modifier does to it.
     pub hint_mask_outline: &'static str,
     /// The curve section of the inspector.
@@ -644,6 +647,7 @@ const PT_BR: Strings = Strings {
     blend_names: ["Dura", "Quadrática", "Cúbica", "Circular", "Chanfro"],
     extrude_side_names: ["Para fora", "Para dentro", "Centrado"],
     mask_gesture_names: ["Pincel", "Laço", "Retângulo"],
+    cut_gesture_names: ["Linha", "Laço", "Retângulo"],
     voxel_display_names: ["Voxels", "Suave"],
     gizmo_mode_names: ["Mover", "Girar", "Escalar"],
     tool_names: [
@@ -787,6 +791,11 @@ const PT_BR: Strings = Strings {
     menu_masks: "Máscaras",
     action_paint_mask: "Pintar máscara",
     label_mask_gesture: "Gesto",
+    label_cut_gesture: "Corte",
+    hint_cut: "Desenhe uma linha através da forma: o lado à direita do traço é o \
+         que sai. Desenhe no outro sentido para ficar com a outra metade. Um \
+         laço no sentido horário remove o que envolve; no anti-horário guarda \
+         só isso.",
     hint_mask_outline: "Desenhe em volta do que quer congelar — à mão livre ou \
 arrastando um retângulo. Congela através da forma, dos dois lados. Com Ctrl, \
 libera em vez de congelar.",
@@ -1115,6 +1124,7 @@ const EN_US: Strings = Strings {
     blend_names: ["Hard", "Quadratic", "Cubic", "Circular", "Chamfer"],
     extrude_side_names: ["Outward", "Inward", "Centred"],
     mask_gesture_names: ["Brush", "Lasso", "Rectangle"],
+    cut_gesture_names: ["Line", "Lasso", "Rectangle"],
     voxel_display_names: ["Voxels", "Smooth"],
     gizmo_mode_names: ["Move", "Turn", "Scale"],
     tool_names: [
@@ -1258,6 +1268,11 @@ const EN_US: Strings = Strings {
     menu_masks: "Masks",
     action_paint_mask: "Paint mask",
     label_mask_gesture: "Gesture",
+    label_cut_gesture: "Cut",
+    hint_cut: "Draw a line across the form: the side to the right of your \
+         travel is the half that goes. Draw it the other way to keep the other \
+         half. A clockwise lasso removes what it encloses; anticlockwise keeps \
+         only that.",
     hint_mask_outline: "Draw around what you want frozen — freehand, or drag a \
 rectangle. It freezes through the form, both sides. Hold Ctrl to release \
 instead.",
@@ -1585,6 +1600,7 @@ const ES_419: Strings = Strings {
     blend_names: ["Dura", "Cuadrática", "Cúbica", "Circular", "Chaflán"],
     extrude_side_names: ["Hacia fuera", "Hacia dentro", "Centrado"],
     mask_gesture_names: ["Pincel", "Lazo", "Rectángulo"],
+    cut_gesture_names: ["Línea", "Lazo", "Rectángulo"],
     voxel_display_names: ["Vóxeles", "Suave"],
     gizmo_mode_names: ["Mover", "Girar", "Escalar"],
     tool_names: [
@@ -1728,6 +1744,11 @@ const ES_419: Strings = Strings {
     menu_masks: "Máscaras",
     action_paint_mask: "Pintar máscara",
     label_mask_gesture: "Gesto",
+    label_cut_gesture: "Corte",
+    hint_cut: "Dibuje una línea a través de la forma: el lado a la derecha del \
+         trazo es el que se va. Dibújela al revés para quedarse con la otra \
+         mitad. Un lazo en sentido horario quita lo que encierra; al revés \
+         conserva sólo eso.",
     hint_mask_outline: "Dibuja alrededor de lo que quieras congelar — a mano \
 alzada o arrastrando un rectángulo. Congela a través de la forma, por ambos \
 lados. Con Ctrl, libera en vez de congelar.",
@@ -2225,6 +2246,14 @@ impl Strings {
         Self::at(
             &self.mask_gesture_names,
             clayspace_model::MaskGesture::ALL,
+            gesture,
+        )
+    }
+
+    pub fn cut_gesture_name(&self, gesture: clayspace_model::CutGesture) -> &'static str {
+        Self::at(
+            &self.cut_gesture_names,
+            clayspace_model::CutGesture::ALL,
             gesture,
         )
     }
