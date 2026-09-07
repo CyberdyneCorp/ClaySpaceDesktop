@@ -1445,6 +1445,18 @@ impl App {
         // active subtool, and the document underneath just became a different
         // one.
         self.sculpt.refresh_after_open();
+        // The cage, the curve and the boolean's operands all describe the
+        // document that has just been replaced.
+        //
+        // Reported from a session: after using the deformation cage or a tube
+        // along a curve, choosing New left both still up, with their settings
+        // and their control points, over a document that had never had either.
+        // The boolean panel was the same omission and nobody had met it yet —
+        // found by asking which view models *can* refresh rather than fixing
+        // the two that were reported.
+        self.lattice.refresh();
+        self.curve.refresh();
+        self.boolean.refresh();
         if let Some(graphics) = self.graphics.as_mut() {
             let gpu = graphics.gpu.clone();
             // A rebuild rather than a sync: nothing about the old document's

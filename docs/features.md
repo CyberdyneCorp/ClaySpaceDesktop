@@ -2066,6 +2066,17 @@ stands where it stood, which is what a sculptor means by converting *this*
 layer. That setting had been in the domain from the beginning, with nothing in
 the interface able to ask for it.
 
+**An emptied field takes its surface with it.** When the source was the only
+field content, crossing it in place leaves the document with no field to mesh —
+and `clay_document_mesh` refuses an empty document rather than returning an
+empty mesh. The viewport's whole-field path cleared what it was drawing only
+*after* that call succeeded, so the refusal propagated and the old surface
+stayed in the buffers: a converted subtool was drawn as the field **and** the
+mesh at once, the two interpenetrating, clearing only once mesh sculpting began
+and the per-brick path ran instead. An empty field is a surface with nothing in
+it rather than a failure, which is what deleting the last field subtool needs
+as well.
+
 The entry carries an ellipsis and opens the conversion panel rather than
 converting on the click. A crossing costs work, a crossing into cells needs a
 size chosen, and one that would not fit the budget is refused — the panel is

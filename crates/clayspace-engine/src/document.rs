@@ -5854,6 +5854,23 @@ impl ClayDocument {
     /// made. Measured on the reference grid, 16.8 ms against 1.5 ms for the
     /// greedy whole-grid mesh — and the incremental greedy path a stroke
     /// actually uses is 3.3 ms a dab.
+    /// Whether any field layer still holds something to mesh.
+    ///
+    /// Asked of the tape rather than of the brick cache, because the moment
+    /// this has to be right is immediately after a crossing — before anything
+    /// has drained the cache, which still holds the bricks of the field that
+    /// has just gone.
+    ///
+    /// `clay_document_mesh` refuses an empty document rather than returning an
+    /// empty mesh, so a caller that means "give me the field surface, there
+    /// may not be one" has to ask this first.
+    pub fn has_field_surface(&self) -> bool {
+        self.layers
+            .iter()
+            .filter(|layer| layer.representation == Representation::Sdf)
+            .any(|layer| matches!(self.document.layer_bounds(layer.id), Ok(Some(_))))
+    }
+
     pub fn resmooth_voxels(&mut self) -> Result<(), ModelError> {
         if self.voxel_display != VoxelDisplay::Smooth {
             self.voxel_smooth.clear();
