@@ -164,11 +164,20 @@ impl Default for RemeshSettings {
 impl RemeshSettings {
     /// The coarsest and finest the interface offers.
     ///
-    /// The floor is where a rebuild stops describing the form at all; the
-    /// ceiling is where it stops being a rebuild and becomes a subdivision
-    /// with a different name, at a cost the engine's own memory ceiling would
-    /// meet soon after.
-    pub const RESOLUTION: std::ops::RangeInclusive<u32> = 32..=512;
+    /// The ceiling is where a rebuild stops being one and becomes a
+    /// subdivision with a different name, at a cost the engine's own memory
+    /// ceiling would meet soon after.
+    ///
+    /// **The floor is 16, and it used to be 32.** The old comment said 32 was
+    /// "where a rebuild stops describing the form at all", which is a claim
+    /// about the form rather than about the operation and is wrong for the way
+    /// the tool is actually used: a sculptor blocking out fuses shells
+    /// deliberately coarsely, and the engine states no minimum of its own.
+    /// Below 16 the cells are larger than most of what a sculptor has pulled
+    /// out, so the result is a blob rather than a coarse form — that is where
+    /// the floor belongs, and it is a judgement about usefulness rather than
+    /// about validity.
+    pub const RESOLUTION: std::ops::RangeInclusive<u32> = 16..=512;
 
     pub fn sanitized(self) -> Self {
         Self {

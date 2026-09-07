@@ -2236,7 +2236,16 @@ not exist.
 **One number and three switches.** The *Resolução* is cells across the form's
 longest dimension, so it means the same thing on a thumbnail and on a bust, and
 the engine reports back what it came to in world units. Detail finer than a
-cell does not survive, which is the whole of what choosing it decides. The
+cell does not survive, which is the whole of what choosing it decides. It runs
+from **16 to 512**. The floor was 32, on the reasoning that below it a rebuild
+"stops describing the form at all" — which is a claim about the form rather
+than about the operation, and wrong for the way the tool is used: blocking out
+means fusing shells deliberately coarsely, and the engine states no minimum of
+its own. The sanitiser clamps to the range, so the old floor did not refuse a
+coarser request, it *silently rounded it up* — measured, 8, 16, 24 and 32 all
+returned the same 28,560 triangles at the same 0.0625 cell. At 16 the same form
+comes out at 7,032 triangles and a 0.125 cell, still watertight and in one
+piece. The
 switches are *Remover pedaços soltos*, which discards fragments too small for
 the resolution to have described anyway; *Seguir a forma atual*, which pulls
 the new surface most of the way back onto the one it replaces so the sampling's
@@ -2245,6 +2254,27 @@ back reintroduces the geometry the rebuild was asked to remove; and *Arestas
 vivas*, which holds corners instead of rounding them at the cost of the
 watertight guarantee. The engine marks that last mode experimental and so does
 the hint on it.
+
+**A rebuild is triangles, not quads.** Both of the engine's surface modes emit
+them — smooth is marching tetrahedra, watertight and 2-manifold by
+construction; sharp is dual contouring. The engine does carry a quad path, and
+it is not what a sculptor asking for quads means: it produces a regular grid
+derived from the sampling lattice, which the engine's own header is emphatic
+about — no edge loops around a limb or a mouth, no poles at features, density
+that does not follow curvature, and a result it calls the *input* a retopology
+pass replaces rather than the output one produces. It is also neither
+watertight nor manifold. So the polyframe showing triangles is the tool working
+as intended, and offering quads here would invite a comparison with ZRemesher
+that the engine says it would lose.
+
+**The viewport is told when the triangles change.** A rebuild replaces every
+vertex and index and moves nothing else — same layer, same visibility, same
+placement — so the number the viewport watches to decide whether to upload sat
+still through one, and the polyframe went on drawing the topology it had until
+a stroke moved that number the old way. The layer's own geometry revision, the
+engine's counter for "the triangles were replaced wholesale", is folded into it
+now. The same shape as a crossing drawing nothing and a converted subtool drawn
+twice, and the same repair each time: name the thing that changed.
 
 **It says what it destroyed.** Every rebuild is destructive — vertex and polygon
 identity are gone, and texture coordinates are dropped rather than reprojected,
