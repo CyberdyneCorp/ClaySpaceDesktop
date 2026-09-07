@@ -86,6 +86,14 @@ pub fn options_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
                     bar_rule(ui);
                     mask_gesture_control(ui, state, queue);
                 }
+                // Beside the mask's, and only while the cut tool is in hand:
+                // the two are the same kind of choice — which shape the next
+                // drawn gesture is — and a sculptor who has learned one has
+                // learned the other.
+                if state.tool == clayspace_model::ToolKind::Trim {
+                    bar_rule(ui);
+                    cut_gesture_control(ui, state, queue);
+                }
 
                 ui.add_space(space::SNUG);
                 ui.vertical(|ui| {
@@ -173,6 +181,32 @@ const GESTURE_WIDTH: f32 = 140.0;
 
 /// Which gesture the mask brush makes: a drag across the surface, a shape
 /// traced over the form, or a box dragged corner to corner.
+/// Which shape the cut tool's next gesture draws.
+///
+/// The hint carries the direction rule, because the rule is the whole tool: a
+/// line takes the half to the right of the travel and a lasso's winding says
+/// whether it removes what it encloses or keeps only that. A rule nobody can
+/// discover is one nobody uses.
+fn cut_gesture_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    ui.vertical(|ui| {
+        ui.set_width(GESTURE_WIDTH);
+        group_label(ui, s.label_cut_gesture);
+        let response = ui.scope(|ui| {
+            segmented(
+                ui,
+                &clayspace_model::CutGesture::ALL,
+                |gesture| s.cut_gesture_name(gesture),
+                state.cut_gesture,
+            )
+        });
+        if let Some(gesture) = response.inner {
+            queue.push(Command::SetCutGesture(gesture));
+        }
+        response.response.on_hover_text(s.hint_cut);
+    });
+}
+
 fn mask_gesture_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
     let s = state.strings;
     ui.vertical(|ui| {

@@ -12,6 +12,7 @@
 //! below are for the enumerations that had no reason to have one until there
 //! was a wire.
 
+use clayspace_model::CutGesture;
 use clayspace_model::{
     BlendProfile, BooleanOp, Combine, CurveJoin, CurveProfile, DeformVerb, Direction, ExportMesher,
     ExtrudeSide, Falloff, GizmoMode, ImportAs, InsertAs, Locale, MaskGesture, RefPlane,
@@ -103,6 +104,15 @@ pub const GESTURES: &[(&str, MaskGesture)] = &[
     ("brush", MaskGesture::Brush),
     ("lasso", MaskGesture::Lasso),
     ("rectangle", MaskGesture::Rectangle),
+];
+
+/// The shapes a cut can be drawn as. A line and a lasso are different entry
+/// points in the engine — joining a line's ends cuts a sliver rather than
+/// dividing the frame — so they are named apart here too.
+pub const CUT_GESTURES: &[(&str, CutGesture)] = &[
+    ("line", CutGesture::Line),
+    ("lasso", CutGesture::Lasso),
+    ("rectangle", CutGesture::Rectangle),
 ];
 
 pub const JOINS: &[(&str, CurveJoin)] = &[

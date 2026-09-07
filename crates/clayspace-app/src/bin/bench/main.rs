@@ -175,6 +175,7 @@ fn measure_everything(policy: &BackendPolicy, run: &mut Run) {
     run.group("convert", |run| groups::convert::measure(policy, run));
     run.group("bake", |run| groups::bake::measure(policy, run));
     run.group("mask", |run| groups::mask::measure(policy, run));
+    run.group("cut", |run| groups::cut::measure(policy, run));
     run.group("history", |run| groups::history::measure(policy, run));
 }
 

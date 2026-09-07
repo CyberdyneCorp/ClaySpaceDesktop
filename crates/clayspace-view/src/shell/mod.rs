@@ -15,6 +15,7 @@
 //! the tests that read this source now walk it rather than listing one
 //! directory.
 
+use clayspace_model::CutGesture;
 use clayspace_model::{
     AlphaSupport, BlendProfile, BrushSettings, Combine, CombineSettings, DeformSettings,
     DeformVerb, Diagnostics, Direction, ExportMesher, ExportSettings, ExportWarning,
@@ -115,6 +116,15 @@ pub struct ShellState<'a> {
     pub mask_gesture: MaskGesture,
     /// The outline being drawn over the viewport, while one is.
     pub outline: Option<&'a OutlineDraft>,
+    /// Which shape the next cut gesture draws.
+    pub cut_gesture: clayspace_model::CutGesture,
+    /// The cut being drawn over the viewport, while one is.
+    ///
+    /// Held apart from `outline` rather than folded into it: a mask outline
+    /// says what will be frozen and a cut says what will be *removed*, and one
+    /// field carrying both would be a picture whose meaning depends on which
+    /// tool is in hand.
+    pub cut: Option<&'a clayspace_vm::CutDraft>,
     /// The rig, as the menu and the armature panel need it.
     pub armature: ArmatureState,
     /// Documents opened lately, most recent first.
@@ -782,6 +792,89 @@ pub fn outline_overlay(ui: &egui::Ui, rect: egui::Rect, state: &ShellState<'_>) 
         ));
     }
 }
+
+/// The cut being drawn, traced over the viewport.
+///
+/// In the accent, like the mask's outline, and **distinguished by shape rather
+/// than by colour.** A second accent was considered and rejected: the palette
+/// says ACCENT is "the sole accent", and a cut being drawn is an active state
+/// exactly as a mask outline is, so giving it a colour of its own would break
+/// the rule the design is built on to solve a problem the barb already solves.
+///
+/// The barb is what a mask outline has no need of: a line's *direction* decides
+/// which half goes, so the direction is drawn — a short tick at the stroke's
+/// midpoint, on the side that will be removed. A sculptor should not have to
+/// remember the rule to see the answer.
+pub fn cut_overlay(ui: &egui::Ui, rect: egui::Rect, state: &ShellState<'_>) {
+    let Some(draft) = state.cut else {
+        return;
+    };
+    let track = cut_corners(draft);
+    if track.len() < 2 {
+        return;
+    }
+    let points: Vec<egui::Pos2> = track.iter().map(|ndc| outline_point(rect, *ndc)).collect();
+    let tint = Tokens::accent();
+    let painter = ui.painter_at(rect);
+    painter.add(egui::Shape::line(
+        points.clone(),
+        egui::Stroke::new(OUTLINE_WIDTH, tint),
+    ));
+
+    match draft.gesture {
+        // A loop closes itself across a gap the sculptor can see, faintly, so
+        // where it lands is predictable rather than a surprise.
+        CutGesture::Lasso => {
+            if let Some((first, last)) = points.first().copied().zip(points.last().copied()) {
+                painter.add(egui::Shape::line_segment(
+                    [last, first],
+                    egui::Stroke::new(OUTLINE_WIDTH, tint.gamma_multiply(OUTLINE_CLOSING)),
+                ));
+            }
+        }
+        // A line's direction is what decides which half goes, so the direction
+        // is drawn: a short barb on the side that will be removed, at the
+        // stroke's midpoint where the eye already is.
+        CutGesture::Line => {
+            if let Some((first, last)) = points.first().copied().zip(points.last().copied()) {
+                let travel = last - first;
+                let length = travel.length();
+                if length > f32::EPSILON {
+                    // A quarter-turn clockwise: the side that goes, which is
+                    // the same rule `side_of` applies in the domain.
+                    let removed = egui::vec2(travel.y, -travel.x) / length;
+                    let middle = first + travel * 0.5;
+                    painter.add(egui::Shape::line_segment(
+                        [middle, middle + removed * CUT_BARB],
+                        egui::Stroke::new(OUTLINE_WIDTH, tint),
+                    ));
+                }
+            }
+        }
+        CutGesture::Rectangle => {}
+    }
+}
+
+/// The points a cut draft draws as, which is not always its track: a rectangle
+/// is two dragged corners and four drawn ones.
+fn cut_corners(draft: &clayspace_vm::CutDraft) -> Vec<[f32; 2]> {
+    match draft.gesture {
+        CutGesture::Rectangle => match (draft.track.first(), draft.track.last()) {
+            (Some(a), Some(b)) if draft.track.len() >= 2 => vec![
+                [a[0], a[1]],
+                [b[0], a[1]],
+                [b[0], b[1]],
+                [a[0], b[1]],
+                [a[0], a[1]],
+            ],
+            _ => Vec::new(),
+        },
+        _ => draft.track.clone(),
+    }
+}
+
+/// How far the barb showing a line's removed side reaches, in points.
+const CUT_BARB: f32 = 14.0;
 
 /// How wide the drawn outline is, in points.
 const OUTLINE_WIDTH: f32 = 1.5;

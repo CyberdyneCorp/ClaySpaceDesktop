@@ -9,6 +9,7 @@ pub mod authoring;
 pub mod bake;
 pub mod brushes;
 pub mod convert;
+pub mod cut;
 pub mod dab;
 pub mod history;
 pub mod locality;

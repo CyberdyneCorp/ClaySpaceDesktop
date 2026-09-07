@@ -160,6 +160,18 @@ pub enum Command {
     ///
     /// Latched at the press, as a stroke's modifiers are: a key caught
     /// mid-drag would change what the outline means under the sculptor's hand.
+    /// Which shape the next cut gesture draws.
+    SetCutGesture(clayspace_model::CutGesture),
+    /// A cut gesture begun, in normalised device coordinates.
+    BeginCut([f32; 2]),
+    /// Carried to where the pointer is now.
+    ExtendCut([f32; 2]),
+    /// Finished, with the frame the viewport drew it on — the cut is resolved
+    /// and placed here, which is why this one carries the frame and the others
+    /// do not.
+    EndCut(OutlineFrame),
+    /// Abandoned before it cut anything.
+    CancelCut,
     BeginMaskOutline([f32; 2], bool),
     /// Carries the outline to where the pointer is now.
     ExtendMaskOutline([f32; 2]),
@@ -658,6 +670,11 @@ impl Command {
         match self {
             Self::SelectTool(_) => "select tool",
             Self::ToggleCurve => "curva",
+            Self::SetCutGesture(_) => "gesto de corte",
+            Self::BeginCut(_) => "começar corte",
+            Self::ExtendCut(_) => "arrastar corte",
+            Self::EndCut(_) => "cortar",
+            Self::CancelCut => "cancelar corte",
             Self::AddCurvePoint(..) => "ponto da curva",
             Self::InsertCurvePoint(..) => "dividir a curva",
             Self::SelectCurvePoint(_) | Self::ToggleCurvePoint(_) => "escolher ponto",

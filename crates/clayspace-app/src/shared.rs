@@ -793,3 +793,9 @@ impl ObjectModel for SharedDocument {
         self.document.borrow_mut().pick_item(origin, direction)
     }
 }
+
+impl clayspace_model::CutModel for SharedDocument {
+    fn apply_cut(&mut self, cut: &clayspace_model::DrawnCut) -> Result<(), ModelError> {
+        self.document.borrow_mut().apply_cut(cut)
+    }
+}

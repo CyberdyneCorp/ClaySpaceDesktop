@@ -459,6 +459,21 @@ impl Item {
         )
     }
 
+    /// Whether the layer's mirror reflects this item.
+    ///
+    /// `-1` opts out — "an asymmetric detail on an otherwise symmetric layer",
+    /// in the engine's words. The flag was an opt-*in* through 0.27.3, which
+    /// made `clay_set_layer_mirror` a silent no-op unless every item also
+    /// passed 1; 1 is still accepted and still means reflected.
+    pub fn set_mirror(&mut self, reflected: bool) -> Result<()> {
+        // SAFETY: the handle is non-null and owned here; the flag is one of
+        // the two values the entry point documents.
+        check(
+            unsafe { sys::clay_item_set_mirror(self.raw.as_ptr(), if reflected { 1 } else { -1 }) },
+            "clay_item_set_mirror",
+        )
+    }
+
     pub(crate) fn from_raw(raw: *mut sys::clay_item, operation: &'static str) -> Result<Self> {
         NonNull::new(raw)
             .map(|raw| Self { raw })

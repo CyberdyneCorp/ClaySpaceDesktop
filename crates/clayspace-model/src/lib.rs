@@ -17,6 +17,7 @@ pub mod colour;
 pub mod combine;
 pub mod conversion;
 pub mod curve;
+mod cut;
 pub mod detail;
 pub mod diagnostics;
 pub mod document;
@@ -49,6 +50,7 @@ pub use conversion::{
     RepairReport,
 };
 pub use curve::{CurveJoin, CurveModel, CurvePoint, CurveProfile, CurveState, FEWEST_POINTS};
+pub use cut::{lasso_keeps_inside, side_of, CutGesture, CutModel, DrawnCut, TrimSide};
 pub use detail::DetailPolicy;
 pub use diagnostics::{
     AgentDiagnostics, AoDiagnostics, Diagnostics, DiagnosticsModel, Fallback, MemoryDiagnostics,

@@ -12,13 +12,13 @@ use claycore::{
 use clayspace_model::{
     Alpha, Armature, ArmatureModel, BlendProfile, BooleanOp, BooleanRefusal, BooleanSettings,
     BrushSettings, Combine, CombineSettings, ConversionSettings, Cost, CurveJoin, CurveModel,
-    CurvePoint, CurveProfile, CurveState, Direction, DocumentModel, EditOutcome, ExchangeModel,
-    ExportMesher, ExportSettings, ExtrudeSettings, Format, GestureSample, GizmoDrag, GizmoHandle,
-    GizmoMode, GizmoTarget, HistoryState, ImportAs, ImportSettings, Inserted, ItemKind,
-    LatticeModel, LatticeState, LayerKey, LayerSummary, MaskModel, MaskOp, MaskOutline, MaskState,
-    ModelError, NodeIndex, ObjectId, ObjectModel, OpenError, Protection, Refusal, Representation,
-    Scene, SceneModel, SceneNode, SceneStats, SculptModel, Shape, SkinSettings, SmoothBlur,
-    ToolKind, VoxelDisplay, OBJECT_VERBS,
+    CurvePoint, CurveProfile, CurveState, CutGesture, Direction, DocumentModel, DrawnCut,
+    EditOutcome, ExchangeModel, ExportMesher, ExportSettings, ExtrudeSettings, Format,
+    GestureSample, GizmoDrag, GizmoHandle, GizmoMode, GizmoTarget, HistoryState, ImportAs,
+    ImportSettings, Inserted, ItemKind, LatticeModel, LatticeState, LayerKey, LayerSummary,
+    MaskModel, MaskOp, MaskOutline, MaskState, ModelError, NodeIndex, ObjectId, ObjectModel,
+    OpenError, Protection, Refusal, Representation, Scene, SceneModel, SceneNode, SceneStats,
+    SculptModel, Shape, SkinSettings, SmoothBlur, ToolKind, VoxelDisplay, OBJECT_VERBS,
 };
 
 use crate::backend::{BackendPolicy, Operation};
@@ -7729,6 +7729,16 @@ impl Curve {
 }
 
 /// How a join reaches the engine.
+/// The domain's trim side in the engine's terms.
+fn engine_trim_side(side: clayspace_model::TrimSide) -> claycore::TrimSide {
+    match side {
+        clayspace_model::TrimSide::Below => claycore::TrimSide::Below,
+        clayspace_model::TrimSide::Above => claycore::TrimSide::Above,
+        clayspace_model::TrimSide::Left => claycore::TrimSide::Left,
+        clayspace_model::TrimSide::Right => claycore::TrimSide::Right,
+    }
+}
+
 fn point_type(join: CurveJoin) -> claycore::PointType {
     match join {
         CurveJoin::Corners => claycore::PointType::Hard,
@@ -7958,6 +7968,9 @@ fn mesh_verb(tool: ToolKind) -> Option<claycore::MeshBrush> {
         // volume, and a mesh's geodesic Grab is a different operation wearing
         // a similar description. Inventing the mapping because one exists
         // nearby is exactly what the table is for preventing.
+        // Trim among them: its gesture is a shape on the view frame resolved
+        // into a prism, not a stroke across the surface, so it has no stroke
+        // operation to route. It reaches the engine through `CutModel`.
         ToolKind::Mascara
         | ToolKind::Preencher
         | ToolKind::Trim
@@ -13429,5 +13442,271 @@ mod live_mesh_guard {
              had before the stamp: dropping the gesture did not recompute \
              what it deferred"
         );
+    }
+}
+
+impl ClayDocument {
+    /// Resolves a drawn shape into a cut item and places it in the active
+    /// layer.
+    ///
+    /// The engine holds no viewport, so everything about *where* the cut is
+    /// happens here: the frame the sculptor drew on becomes an origin and an
+    /// orthonormal basis, and the outline becomes world units on it.
+    ///
+    /// The sweep is left to the engine — both extents zero — so the cut passes
+    /// all the way through the layer's own bounds instead of stopping inside
+    /// and leaving a shelf.
+    /// How far a box reaches from a point along a direction.
+    ///
+    /// The largest projection of the box's eight corners, so it is exact for a
+    /// frame turned any way against the box rather than only for one squared
+    /// up with it.
+    fn reaches_along(region: ([f32; 3], [f32; 3]), from: [f32; 3], direction: [f32; 3]) -> f32 {
+        (0..8)
+            .map(|corner| {
+                (0..3)
+                    .map(|axis| {
+                        let at = if corner >> axis & 1 == 0 {
+                            region.0[axis]
+                        } else {
+                            region.1[axis]
+                        };
+                        (at - from[axis]) * direction[axis]
+                    })
+                    .sum::<f32>()
+                    .abs()
+            })
+            .fold(0.0f32, f32::max)
+    }
+
+    /// The box a cut has to pass through.
+    ///
+    /// **The surface's extent, not the layer's.** A cut is an item, so the
+    /// layer's bounds grow to hold it — and a cut framed against bounds that
+    /// already hold a cut is framed against its own predecessor. That is a
+    /// feedback loop, and it ran away: measured, a form spanning 2.000 took
+    /// one Line cut and reported 18.000, then 146, then 1170. Nothing about
+    /// the *form* had changed; the tape had simply grown a large empty item
+    /// and the next cut believed it had to clear it.
+    ///
+    /// A subtract cannot add surface, so the surface's own extent is stable
+    /// under any number of cuts, which is what breaks the loop rather than
+    /// merely slowing it. Sizing the reach exactly is the other half: together
+    /// they hold, and either alone still drifts — the projection grows by the
+    /// box's diagonal under a turned frame, and a stable region with a
+    /// four-times reach is still eighteen units of empty item.
+    ///
+    /// Falls back to the layer's bounds when the cache holds no surface,
+    /// which is a document that has not been meshed yet rather than an error.
+    fn region_to_cut(
+        &self,
+        layer_id: claycore::LayerId,
+    ) -> Result<([f32; 3], [f32; 3]), ModelError> {
+        let config = self.cache.config();
+        let span = config.voxel_size * config.dim as f32;
+        let surface = self.cache.surface_bricks().ok().filter(|k| !k.is_empty());
+        if let Some(keys) = surface {
+            let mut low = [f32::MAX; 3];
+            let mut high = [f32::MIN; 3];
+            for key in keys {
+                for axis in 0..3 {
+                    low[axis] = low[axis].min(key[axis] as f32 * span);
+                    high[axis] = high[axis].max((key[axis] + 1) as f32 * span);
+                }
+            }
+            return Ok((low, high));
+        }
+        self.document
+            .layer_bounds(layer_id)
+            .map_err(ModelError::engine)?
+            .ok_or_else(|| ModelError::engine("a camada não tem limites para cortar"))
+    }
+
+    fn place_drawn_cut(&mut self, cut: &DrawnCut) -> Result<(), ModelError> {
+        let layer = self.active_layer();
+        if layer.representation != Representation::Sdf {
+            return Err(ModelError::engine("um corte só existe num campo (SDF)"));
+        }
+        let layer_id = layer.id;
+        let region = self.region_to_cut(layer_id)?;
+
+        // The frame the shape was drawn on, pushed clear of the region along
+        // the sweep so the prism starts outside the form rather than inside
+        // it. Not through the picked point: a cut whose depth depends on what
+        // happened to be under the pointer moves when the same shape is drawn
+        // again from the same angle.
+        let frame = &cut.frame;
+        // **Anchored on the frame's own origin, not on the middle of the
+        // region.**
+        //
+        // `OutlineFrame::at` defines a drawn point as `origin + right*x +
+        // up*y`, and the viewport builds that origin by casting the
+        // view-centre ray onto a plane through the subtool — so `(0, 0)` is
+        // the middle of the screen, which is what a sculptor drew against.
+        // This used the region's centre instead, which says the shape lands
+        // relative to the form's bounding box. The two agree exactly while the
+        // form is symmetric about the point the camera is framed on, which is
+        // every fixture we had and the first cut of any session. They part the
+        // moment a cut makes the form lopsided: measured on the probe, the
+        // second line cut moved the box's middle to y = -0.7 and the third cut
+        // landed nowhere near where it was drawn.
+        let depth = Self::reaches_along(region, frame.origin, frame.forward);
+        // The shape is measured from this point on the frame, so a rectangle's
+        // centre belongs *here* rather than in a node transform afterwards.
+        // Placing it twice — once by the descriptor and again by the node —
+        // put the box at double its offset, which is why a drawn rectangle cut
+        // nothing where it was drawn.
+        let middle = cut.centre().unwrap_or([0.0, 0.0]);
+        let origin = std::array::from_fn(|axis| {
+            frame.origin[axis] - frame.forward[axis] * depth
+                + frame.right[axis] * middle[0]
+                + frame.up[axis] * middle[1]
+        });
+        let engine_frame = claycore::CutFrame {
+            origin,
+            right: frame.right,
+            up: frame.up,
+            forward: frame.forward,
+            region,
+            rounding: 0.0,
+        };
+
+        // A stroke's points as the curve calls take them: x, y, z, radius,
+        // with z on the frame and the radius unread by a cut.
+        let control: Vec<f32> = cut
+            .track
+            .iter()
+            .flat_map(|at| [at[0] - middle[0], at[1] - middle[1], 0.0, 0.0])
+            .collect();
+        // **Far enough to clear the region and no further.**
+        //
+        // Measured by projecting the region's own corners onto the frame
+        // rather than taken as a multiple of its longest axis. The multiple
+        // was `span * 4.0 + 1.0`, and the polygon closing an open curve
+        // extends this far either side of it — so cutting a form two units
+        // across placed an item **eighteen** units across, the layer's bounds
+        // grew to match, and the next cut read those bounds as the region it
+        // had to clear. Measured: a form spanning 2.000 became 18, then 146,
+        // then 1170; the second cut ran and removed nothing, and the third
+        // was refused. A sculptor sees the Line tool stop cutting after one
+        // or two strokes.
+        //
+        // The projection is exact for any camera angle, where a multiple of
+        // the longest axis is wrong by the shape of the box and by how the
+        // frame is turned against it.
+        // A few voxels, not `BRICK_MARGIN`. The projection already clears the
+        // region exactly, so this guards float error rather than sizing
+        // anything — and the polygon's extent is the item's bound, which is
+        // what a placed cut asks the brick cache to refill. Sixteen voxels
+        // took a form spanning 2.0 to an item spanning 4.3 and quadrupled the
+        // volume refilled for no reach the cut could use.
+        let margin = self.cache.config().voxel_size * 4.0;
+        let reach = [
+            Self::reaches_along(region, origin, frame.right) + margin,
+            Self::reaches_along(region, origin, frame.up) + margin,
+        ];
+
+        let (shape, outline, op) = match cut.gesture {
+            CutGesture::Line => {
+                let side = cut
+                    .side()
+                    .ok_or_else(|| ModelError::engine("o traço não tem direção"))?;
+                let outline = claycore::CutOutline::from_open_curve(
+                    &control,
+                    None,
+                    engine_trim_side(side),
+                    reach,
+                    Self::CURVE_TOLERANCE,
+                )
+                .map_err(ModelError::engine)?;
+                // The half the outline covers is what goes. Which half that is
+                // was decided by the direction; its fate is this op, and the
+                // two are deliberately not the same control.
+                (claycore::CutShape::Polygon, outline, Op::Subtract)
+            }
+            CutGesture::Lasso => {
+                let keeps = cut
+                    .keeps_inside()
+                    .ok_or_else(|| ModelError::engine("o laço não encerra nada"))?;
+                let outline =
+                    claycore::CutOutline::from_closed_curve(&control, None, Self::CURVE_TOLERANCE)
+                        .map_err(ModelError::engine)?;
+                // A loop has an inside rather than two sides, so the way it was
+                // wound picks the op directly.
+                let op = if keeps { Op::Intersect } else { Op::Subtract };
+                (claycore::CutShape::Polygon, outline, op)
+            }
+            CutGesture::Rectangle => {
+                let (half_width, half_height) = cut
+                    .corners()
+                    .filter(|(w, h)| *w > 0.0 && *h > 0.0)
+                    .ok_or_else(|| ModelError::engine("o retângulo não tem área"))?;
+                // The engine's own rectangle, not a four-point polygon: it can
+                // express the shape exactly, and the polygon path would
+                // tessellate something it does not have to.
+                (
+                    claycore::CutShape::Rect {
+                        half_width,
+                        half_height,
+                    },
+                    claycore::CutOutline::default(),
+                    Op::Subtract,
+                )
+            }
+        };
+
+        let mut item = claycore::cut(&engine_frame, shape, &outline).map_err(ModelError::engine)?;
+        item.set_op(op).map_err(ModelError::engine)?;
+        // **A cut is not mirrored, whatever the layer's symmetry.**
+        //
+        // The mirror is a property of the layer and reflects its items, so a
+        // cut added to a symmetric layer came back as two cuts — one the
+        // sculptor drew and one nobody did. That is right for a *shape*, which
+        // is what symmetry is for, and wrong for a cut: a trim is drawn on the
+        // view in the sculptor's own sight, and they get the half they drew.
+        // Reflecting it removes material on the far side of the form they
+        // cannot see from where they are standing.
+        //
+        // Opted out per item rather than by clearing the layer's mirror, which
+        // would un-reflect every stamp already on it.
+        item.set_mirror(false).map_err(ModelError::engine)?;
+
+        // Bracketed for the reason `place_object` is: the item and where it
+        // stands are two engine edits and a sculptor asked for one thing.
+        self.document
+            .begin_undo_group()
+            .map_err(ModelError::engine)?;
+        let placed = self
+            .document
+            .add_item(layer_id, &item)
+            .map_err(ModelError::engine);
+        let closed = self.document.end_undo_group().map_err(ModelError::engine);
+        let node = placed?;
+        closed?;
+
+        let bound = self.node_bound(layer_id, node);
+        self.refill_bound(layer_id, bound)
+    }
+}
+
+impl clayspace_model::CutModel for ClayDocument {
+    /// **One gate, not two.**
+    ///
+    /// This used to ask `DrawnCut::is_drawn` first and then place the cut,
+    /// and `place_drawn_cut` refuses each degenerate gesture again on its own
+    /// terms — no direction, nothing enclosed, no area. With a caller that had
+    /// already asked, those three refusals could not fire, and the refusal
+    /// test passed whichever of the two was doing the work. Two gates where
+    /// one is unreachable is worse than one: nobody re-reads a guard that is
+    /// never exercised, and it reads at review as protection that is not
+    /// there.
+    ///
+    /// So the gesture's own arithmetic decides, at the point where what it
+    /// decides is used, and each refusal says which gesture failed and why
+    /// rather than reporting all three as "too small". `is_drawn` stays as the
+    /// domain's predicate — it is what an interface asks before offering to
+    /// cut — and it is no longer a second opinion on the same question.
+    fn apply_cut(&mut self, cut: &DrawnCut) -> Result<(), ModelError> {
+        self.place_drawn_cut(cut)
     }
 }
