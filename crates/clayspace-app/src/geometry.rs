@@ -912,6 +912,31 @@ impl SurfaceGeometry {
             return self.rebuild(gpu, document);
         }
 
+        // **An empty field is not a failure, it is an empty surface.**
+        //
+        // `clay_document_mesh` refuses an empty document rather than returning
+        // an empty mesh, and this meshes the whole field in one call and
+        // clears `keys` only *after* it succeeds. So a field that has just
+        // gone left the refusal propagating and the old surface standing in
+        // the GPU buffers — reported from a session as the field and the mesh
+        // drawn together after an in-place crossing, clearing only once mesh
+        // sculpting began and something else called `sync`.
+        //
+        // `rebuild_at` does not have this: it clears first and re-meshes per
+        // key, so an empty document leaves it correctly empty. Only the
+        // whole-document path had to be told.
+        if !document.has_field_surface() {
+            self.keys.clear();
+            self.touched.clear();
+            self.relayout = true;
+            self.dirty = true;
+            self.detail = Detail::Full;
+            self.surface_epoch = document.surface_epoch();
+            self.upload(gpu);
+            self.clean_override = true;
+            return Ok(());
+        }
+
         let mesh = document.document().mesh(MeshParams {
             voxel_size: Some(ClayDocument::VOXEL_SIZE),
             mesher: Mesher::SurfaceNets,

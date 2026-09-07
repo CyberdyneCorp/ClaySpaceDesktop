@@ -803,6 +803,14 @@ manifold.
 
 - Save, open, new, save-as, and a **File** menu carrying all of it plus *Open
   recent*, which prunes documents that are no longer there.
+- **Replacing the document puts every panel back.** A new or opened document
+  refreshes the shelf, the scene, the mask, the rig, the placed objects — and
+  the deformation cage, the curve a tube follows and the boolean's operands,
+  which for a while it did not: choosing *New* left a raised cage and a drawn
+  curve standing over a document that had never had either. What is checked is
+  not that a cage comes down but that **every** view model offering a refresh
+  is refreshed, so one added later fails on the row that was added rather than
+  going quiet until someone meets it.
 - **Autosave every two minutes**, and only while there is something to lose.
   The status area says which it is — *nothing to save*, or the time until the
   next one — so whether the work is safe is readable rather than assumed.
