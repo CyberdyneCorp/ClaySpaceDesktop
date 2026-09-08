@@ -33,12 +33,31 @@
       commit** — `SOVERSION` is the project major, still 0, so
       `libcyber_capi.so.0` names two different releases and a mismatched library
       loads silently. Assert an ABI-level number the day the engine grows one
-- [x] 2.7 Configure with `CYBER_REQUIRE_QUADCOVER=ON` so a missing dependency
-      fails the build rather than falling back, **and** read the solver string
-      at startup, refusing `native` where `native+geogram` is required. Two
-      gates guarding two different failures: the flag catches our build losing
-      the dependency, the check catches a different `libcyber_capi.so.0` being
-      loaded — which their soname permits, since it names every 0.x release
+- [ ] 2.7 **Half done, and the other half is not possible at this ABI.**
+      Configure with `CYBER_REQUIRE_QUADCOVER=ON` so a missing dependency
+      fails the build rather than falling back: **done**, and it is a hard
+      `FATAL_ERROR` at `cmake/QuadCoverSolver.cmake:105`, so a build that
+      cannot have the in-process field does not produce a library that quietly
+      quadrangulates differently — it fails to configure. Confirmed on the
+      compile line, which carries `-D CYBER_HAVE_QUADCOVER`.
+
+      Reading the solver string at startup: **not done and not reachable.**
+      `cyber_capi.h` exposes no solver-name entry point — `grep -n solver`
+      over the header returns prose and nothing else. A `Solver` enum was
+      written against this task and was dead on arrival: nothing could
+      construct it, while its doc asserted the solver is "readable at all".
+      Removed, with the reasoning kept in `version.rs` so it is not rewritten
+      by the next reader who has the same idea.
+
+      **The risk that half was guarding is therefore still open, and is worth
+      naming rather than closing with the task:** a *different*
+      `libcyber_capi.so.0` being loaded than the one we built, which their
+      soname permits because it names every 0.x release. The build-time flag
+      cannot see that; only a runtime read could. So this stays unticked until
+      the engine exposes the solver, and the ask is filed with them rather
+      than worked around here — a string the CLI prints is the CLI's own
+      report, not the library we link, so reading it would measure the wrong
+      artifact
 - [x] 2.8 A `CyberMesh` is built, used and dropped per operation, and no id is
       cached across one; the engine reassigns element ids on most retopology
       calls and **all** of them on subdivide

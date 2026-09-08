@@ -43,7 +43,7 @@ pub use error::{Error, Result};
 pub use mesh::Mesh;
 pub use remesh::{remesh, was_cancelled, QuadMethod, RemeshParams, Unwatched, Watcher};
 pub use uv::{atlas, Atlas, AtlasParams};
-pub use version::{version, Solver, Version};
+pub use version::{version, Version};
 
 /// Caps the engine's worker pool.
 ///

@@ -16,24 +16,29 @@ impl std::fmt::Display for Version {
     }
 }
 
-/// Which seamless-UV solver the loaded library was built with.
-///
-/// **This is not cosmetic.** The in-process QuadCover field is the shipping
-/// default quadrangulator, and a build without it does not fail — it routes to
-/// the portable solver and produces genuinely different quads. The difference
-/// is invisible until output quality is worse and nobody knows why, which is
-/// why it is readable at all.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Solver {
-    /// `native+geogram` — the in-process QuadCover field. What we require.
-    NativeAndGeogram,
-    /// `native` — the portable fallback.
-    Native,
-    /// Something this build of the wrapper does not recognise, carried rather
-    /// than mapped onto either: a solver name we cannot read is a fact about
-    /// the library and guessing at it would be the one mistake that matters.
-    Unknown,
-}
+// NO `Solver` TYPE HERE, and the absence is the finding rather than an
+// omission.
+//
+// One stood here: an enum of `NativeAndGeogram` / `Native` / `Unknown` whose
+// doc said the in-process QuadCover field is "readable at all" because a build
+// without it silently routes to the portable quadrangulator. The reasoning was
+// right and the type was **dead**: nothing constructed it, because
+// `cyber_capi.h` exposes no solver-name entry point at all — `grep -n solver`
+// over the header returns prose and nothing else. So the doc asserted a
+// capability the ABI does not offer, which is worse than having no type: a
+// reader would go looking for the reader function.
+//
+// What actually guarantees the solver is build-time, and it is stronger than a
+// runtime string would be. `cmake/QuadCoverSolver.cmake:105` turns a missing
+// in-process field into `FATAL_ERROR` when `CYBER_REQUIRE_QUADCOVER=ON`, which
+// `cyberremesh-sys/build.rs` sets — so a build that cannot have QuadCover does
+// not produce a library that quietly quadrangulates differently, it fails to
+// configure. A string check would have run after the fact; this one runs
+// before there is anything to check.
+//
+// The CLI does print `seamless-uv-solver native+geogram`, but that is the
+// CLI's own report and not the library we link, so reading it would be a
+// measurement of the wrong artifact.
 
 /// The engine's version.
 pub fn version() -> Version {
