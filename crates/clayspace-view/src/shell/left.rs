@@ -104,6 +104,15 @@ pub(super) fn layers_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &
     // instead of waiting for advice that does not exist.
     if state.representation == Representation::Mesh {
         remesh_control(ui, state, queue);
+        // And retopology, beside it, for the same reason and at the same
+        // moment: the form is right and the mesh is wrong. The rebuild gives
+        // even triangles, this gives quads with edge loops, and a sculptor
+        // choosing between them wants to see both rather than to remember
+        // that the other exists.
+        retopo_control(ui, state, queue);
+        uv_control(ui, state, queue);
+        conform_control(ui, state, queue);
+        bake_control(ui, state, queue);
     }
     // And the hierarchy's: a new pass, what the stack costs, and why the
     // composition controls are refusing while the pointer is down. Under the
@@ -1152,6 +1161,664 @@ pub(super) fn field_health_control(
 /// button. It is the same sentence every time and a sculptor reaching for this
 /// the tenth time is not reading it — but the first time, and the time they
 /// wonder where their UVs went, it has to be somewhere.
+/// Retopology to quads, beside the rebuild that shares its shape.
+///
+/// **Two operations that look alike and are not.** *Refazer a malha* resamples
+/// a surface through a voxel grid and hands back triangles at an even density;
+/// this rebuilds the topology as **quads with edge loops** through a different
+/// engine entirely. They sit next to each other because a sculptor reaches for
+/// them at the same moment — the form is right and the mesh is wrong — and the
+/// headings say which is which rather than leaving it to be discovered.
+///
+/// The result arrives as a **new subtool**, so the panel does not need to warn
+/// about what it destroys: nothing is destroyed, and the two can be compared.
+/// The UV layout, under the retopology that usually precedes it.
+///
+/// **The order on screen is the order of the pipeline.** A sculptor
+/// retopologises and then unwraps, so the two panels sit in that sequence
+/// rather than alphabetically or by how often each is used.
+///
+/// The report is the point of this panel. A UV layout is a trade nobody can
+/// judge from a pass or a fail, so the figures are shown as figures —
+/// distortion, coverage, and the flipped-chart count, which is a *defect*
+/// rather than a quality number and is coloured as one when it is not zero.
+/// Baking maps from the field, last in the pipeline order.
+///
+/// **The panel says what makes this different**, because from the outside it
+/// looks like every other baker: it samples ClayCore's field rather than a
+/// high-poly mesh, so there is nothing to export first, the cage ray is traced
+/// through the actual surface rather than a tessellation of it, and normals
+/// come from exact gradients. That is the one sentence on the heading's hover.
+///
+/// Only the four maps a field can answer are offered. The others exist in the
+/// engine and need a target mesh, so they are a different feature rather than a
+/// greyed row here.
+/// Conforming a retopologised mesh back onto a field that has moved.
+///
+/// **Last in the panel order and first in the workflow that needs it**, which
+/// is not a contradiction: a sculptor reaches for this *after* a retopology,
+/// on a later day, when the form has changed and the quads no longer follow
+/// it. Putting it beside retopology is what makes it findable then.
+///
+/// The report is the point. The engine completes and flags rather than
+/// refusing or silently stretching, so what a sculptor needs to see is how far
+/// the worst vertex travelled — not whether it "worked".
+pub(super) fn conform_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    let Some(layer) = state.scene.active_layer() else {
+        return;
+    };
+
+    ui.add_space(space::SNUG);
+    ui.label(
+        egui::RichText::new(s.conform_heading)
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    )
+    .on_hover_text(s.conform_hint);
+
+    let unavailable = state.conform_unavailable.as_deref();
+    let running = state.conform_progress.is_some();
+    let mut settings = state.conform;
+
+    ui.add_enabled_ui(unavailable.is_none() && !running, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(s.conform_threshold)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+            let slider = ui.add(
+                egui::Slider::new(&mut settings.threshold, 0.001..=1.0)
+                    .logarithmic(true)
+                    .show_value(true),
+            );
+            if slider.changed() {
+                queue.push(Command::SetConformSettings(settings));
+            }
+            slider.on_hover_text(s.conform_threshold_hint);
+        });
+    });
+
+    ui.horizontal(|ui| {
+        if running {
+            if ui.button(s.retopo_cancel).clicked() {
+                queue.push(Command::CancelConform);
+            }
+            match state.conform_progress.as_ref().and_then(|(_, at)| *at) {
+                Some(fraction) => {
+                    ui.add(egui::ProgressBar::new(fraction).desired_width(80.0));
+                }
+                None => {
+                    ui.spinner();
+                }
+            }
+            ui.label(
+                egui::RichText::new(s.conform_running)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+            return;
+        }
+
+        let button = ui.add_enabled(unavailable.is_none(), egui::Button::new(s.conform_action));
+        if let Some(reason) = unavailable {
+            // This refusal has two halves — not a mesh, or no field to conform
+            // *to* — and the model's own sentence says which, so it is shown
+            // rather than summarised.
+            button.clone().on_hover_text(reason);
+        }
+        if button.clicked() {
+            queue.push(Command::SelectLayer(layer.key));
+            queue.push(Command::RunConform);
+        }
+    });
+
+    if let Some(outcome) = state.conform_outcome.as_ref() {
+        ui.label(
+            egui::RichText::new(format!(
+                "{} {} · {} {:.3}",
+                outcome.moved_vertices, s.conform_moved, s.conform_deviation, outcome.max_deviation
+            ))
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+        );
+        // Where it struggled, on its own line and only when it did. The count
+        // is the engine's true total; the returned list is capped, and saying
+        // "512 flagged" when ten thousand were would be the report lying by
+        // omission.
+        if outcome.struggled() {
+            ui.label(
+                egui::RichText::new(format!("{} {}", outcome.flagged_count, s.conform_flagged))
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+        }
+    }
+}
+
+pub(super) fn bake_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    let Some(layer) = state.scene.active_layer() else {
+        return;
+    };
+
+    ui.add_space(space::SNUG);
+    ui.label(
+        egui::RichText::new(s.bake_heading)
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    )
+    .on_hover_text(s.bake_hint);
+
+    let unavailable = state.bake_unavailable.as_deref();
+    let running = state.bake_progress.is_some();
+    let mut settings = state.bake.clone();
+    let mut changed = false;
+
+    ui.add_enabled_ui(unavailable.is_none() && !running, |ui| {
+        // Which maps, as checkboxes rather than a multi-select: four is few
+        // enough to show at once, and a sculptor picking three of four wants
+        // to see the fourth is off rather than open a list to find out.
+        for map in clayspace_model::BakeMap::ALL {
+            let mut on = settings.maps.contains(&map);
+            if ui
+                .checkbox(
+                    &mut on,
+                    egui::RichText::new(map.label())
+                        .size(type_scale::LABEL)
+                        .color(Tokens::text_dim()),
+                )
+                .changed()
+            {
+                if on {
+                    settings.maps.push(map);
+                } else {
+                    settings.maps.retain(|kept| *kept != map);
+                }
+                changed = true;
+            }
+        }
+
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(s.bake_size)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+            egui::ComboBox::from_id_salt("bake-size")
+                .selected_text(format!("{}", settings.size))
+                .show_ui(ui, |ui| {
+                    for size in clayspace_model::BakeSettings::SIZES {
+                        if ui
+                            .selectable_value(&mut settings.size, size, format!("{size}"))
+                            .changed()
+                        {
+                            changed = true;
+                        }
+                    }
+                });
+        });
+
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(s.bake_cage)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+            let slider =
+                ui.add(egui::Slider::new(&mut settings.cage_distance, 0.0..=0.2).show_value(true));
+            if slider.changed() {
+                changed = true;
+            }
+            slider.on_hover_text(s.bake_cage_hint);
+        });
+
+        // The occlusion controls only where occlusion was asked for. A sample
+        // count beside a bake that is not sampling a hemisphere is a control
+        // that does nothing, and a control that does nothing is worse than an
+        // absent one.
+        if settings
+            .maps
+            .contains(&clayspace_model::BakeMap::AmbientOcclusion)
+        {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(s.bake_ao_samples)
+                        .size(type_scale::LABEL)
+                        .color(Tokens::text_dim()),
+                );
+                if ui
+                    .add(
+                        egui::Slider::new(&mut settings.ao_samples, 4..=512)
+                            .logarithmic(true)
+                            .show_value(true),
+                    )
+                    .changed()
+                {
+                    changed = true;
+                }
+                ui.label(
+                    egui::RichText::new(s.bake_ao_radius)
+                        .size(type_scale::LABEL)
+                        .color(Tokens::text_dim()),
+                );
+                if ui
+                    .add(egui::Slider::new(&mut settings.ao_radius, 0.05..=5.0).show_value(true))
+                    .changed()
+                {
+                    changed = true;
+                }
+            });
+        }
+    });
+
+    if changed {
+        queue.push(Command::SetBakeSettings(settings));
+    }
+
+    ui.horizontal(|ui| {
+        if running {
+            if ui.button(s.retopo_cancel).clicked() {
+                queue.push(Command::CancelBake);
+            }
+            match state.bake_progress.as_ref().and_then(|(_, at)| *at) {
+                Some(fraction) => {
+                    ui.add(egui::ProgressBar::new(fraction).desired_width(80.0));
+                }
+                None => {
+                    ui.spinner();
+                }
+            }
+            ui.label(
+                egui::RichText::new(s.bake_running)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+            return;
+        }
+
+        // Where the maps go is chosen before the bake can run, and the button
+        // says which state it is in rather than failing on the click. The
+        // composition root owns the panel; this only asks for one.
+        match state.bake_into.as_deref() {
+            None => {
+                if ui.button(s.bake_choose).clicked() {
+                    queue.push(Command::ChooseBakeDestination);
+                }
+            }
+            Some(into) => {
+                let button =
+                    ui.add_enabled(unavailable.is_none(), egui::Button::new(s.bake_action));
+                if let Some(reason) = unavailable {
+                    button.clone().on_hover_text(reason);
+                }
+                if button.clicked() {
+                    queue.push(Command::SelectLayer(layer.key));
+                    queue.push(Command::RunBake);
+                }
+                if ui.button(s.bake_choose).on_hover_text(into).clicked() {
+                    queue.push(Command::ChooseBakeDestination);
+                }
+            }
+        }
+    });
+
+    if let Some(result) = state.bake_result.as_ref() {
+        ui.label(
+            egui::RichText::new(format!("{} {}", result.written.len(), s.bake_written))
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+        );
+        // A refused map is named. Reporting "3 written" without saying the
+        // fourth failed is the shape of report this project keeps finding in
+        // other people's tools.
+        for (map, why) in &result.refused {
+            ui.label(
+                egui::RichText::new(format!("{}: {why}", map.label()))
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+        }
+    }
+}
+
+pub(super) fn uv_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    let Some(layer) = state.scene.active_layer() else {
+        return;
+    };
+
+    ui.add_space(space::SNUG);
+    ui.label(
+        egui::RichText::new(s.uv_heading)
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    )
+    .on_hover_text(s.uv_hint);
+
+    let unavailable = state.uv_unavailable.as_deref();
+    let running = state.uv_progress.is_some();
+    let mut settings = state.uv;
+    let mut changed = false;
+
+    ui.add_enabled_ui(unavailable.is_none() && !running, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(s.uv_texture)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+            // The sizes a texture actually is, rather than a slider through
+            // values no pipeline uses. Powers of two from the domain's own
+            // list, so one added there appears here.
+            egui::ComboBox::from_id_salt("uv-texture")
+                .selected_text(format!("{}", settings.texture_size))
+                .show_ui(ui, |ui| {
+                    for size in clayspace_model::UvSettings::TEXTURE_SIZES {
+                        if ui
+                            .selectable_value(&mut settings.texture_size, size, format!("{size}"))
+                            .changed()
+                        {
+                            changed = true;
+                        }
+                    }
+                });
+        });
+
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(s.uv_chart_angle)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+            let slider = ui.add(
+                egui::Slider::new(&mut settings.max_chart_angle_degrees, 1.0..=180.0)
+                    .show_value(true),
+            );
+            if slider.changed() {
+                changed = true;
+            }
+            slider.on_hover_text(s.uv_chart_angle_hint);
+        });
+
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(s.uv_margin)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+            if ui
+                .add(egui::Slider::new(&mut settings.pack_margin, 0.0..=0.05).show_value(true))
+                .changed()
+            {
+                changed = true;
+            }
+        });
+
+        for (label, hint, flag) in [
+            (
+                s.uv_reorient,
+                s.uv_reorient_hint,
+                &mut settings.reorient_charts,
+            ),
+            (s.uv_merge, s.uv_merge_hint, &mut settings.merge_charts),
+        ] {
+            let toggle = ui.checkbox(
+                flag,
+                egui::RichText::new(label)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+            if toggle.changed() {
+                changed = true;
+            }
+            toggle.on_hover_text(hint);
+        }
+    });
+
+    if changed {
+        queue.push(Command::SetUvSettings(settings));
+    }
+
+    ui.horizontal(|ui| {
+        if running {
+            if ui.button(s.retopo_cancel).clicked() {
+                queue.push(Command::CancelUvAtlas);
+            }
+            match state.uv_progress.as_ref().and_then(|(_, at)| *at) {
+                Some(fraction) => {
+                    ui.add(egui::ProgressBar::new(fraction).desired_width(80.0));
+                }
+                None => {
+                    ui.spinner();
+                }
+            }
+            ui.label(
+                egui::RichText::new(s.uv_running)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+            return;
+        }
+
+        let button = ui.add_enabled(unavailable.is_none(), egui::Button::new(s.uv_action));
+        if let Some(reason) = unavailable {
+            button.clone().on_hover_text(reason);
+        }
+        if button.clicked() {
+            queue.push(Command::SelectLayer(layer.key));
+            queue.push(Command::RunUvAtlas);
+        }
+    });
+
+    // The report, on its own line because there are four numbers and they do
+    // not fit beside a button.
+    if let Some(outcome) = state.uv_outcome {
+        ui.label(
+            egui::RichText::new(format!(
+                "{} {} · {} {:.3} · {} {:.0}%",
+                outcome.charts,
+                s.uv_charts,
+                s.uv_distortion,
+                outcome.max_angle_distortion,
+                s.uv_coverage,
+                outcome.packed_area * 100.0
+            ))
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+        );
+        // A flipped chart is a parameterisation that turned inside out, which
+        // is a defect and not a figure on a scale. Shown on its own line only
+        // when there is one, rather than folded into the report above where a
+        // zero would read as another statistic — the same way the rebuild
+        // states "the result did not come out closed" as a sentence rather
+        // than as a number.
+        //
+        // In `text_dim` like every other notice in this panel, and not in a
+        // warning colour: this design system has no warning token, and
+        // inventing one here would put a colour on screen that nothing else
+        // uses and that no other defect gets.
+        if outcome.flipped_charts > 0 {
+            ui.label(
+                egui::RichText::new(format!("{} {}", outcome.flipped_charts, s.uv_flipped))
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+        }
+    }
+}
+
+pub(super) fn retopo_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    let Some(layer) = state.scene.active_layer() else {
+        return;
+    };
+
+    ui.add_space(space::SNUG);
+    ui.label(
+        egui::RichText::new(s.retopo_heading)
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    )
+    .on_hover_text(s.retopo_hint);
+
+    // Unavailable is shown rather than hidden, with the model's own reason on
+    // it. A control that vanishes teaches nobody why; one that is greyed with
+    // "this layer is Sdf" on its hover teaches the representation rule once.
+    let unavailable = state.retopo_unavailable.as_deref();
+    let running = state.retopo_progress.is_some();
+
+    let mut settings = state.retopo;
+    let mut changed = false;
+
+    ui.add_enabled_ui(unavailable.is_none() && !running, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(s.retopo_target)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+            // Logarithmic for the reason the rebuild's resolution is: the
+            // numbers a sculptor moves between are 500, 2000, 8000, and on a
+            // linear track the whole useful lower half is the first
+            // centimetre.
+            let slider = ui.add(
+                egui::Slider::new(
+                    &mut settings.target_quads,
+                    clayspace_model::RetopoSettings::TARGET_QUADS,
+                )
+                .logarithmic(true)
+                .show_value(true),
+            );
+            if slider.changed() {
+                changed = true;
+            }
+            slider.on_hover_text(s.retopo_target_hint);
+        });
+
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(s.retopo_method)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+            // Every method the domain offers, from the domain's own list, so
+            // one added there appears here without a second list to update.
+            egui::ComboBox::from_id_salt("retopo-method")
+                .selected_text(settings.method.label())
+                .show_ui(ui, |ui| {
+                    for method in clayspace_model::QuadMethod::ALL {
+                        let picked = ui
+                            .selectable_value(&mut settings.method, method, method.label())
+                            .on_hover_text(method.hint());
+                        if picked.changed() {
+                            changed = true;
+                        }
+                    }
+                });
+        });
+
+        let pure = ui.checkbox(
+            &mut settings.pure_quads,
+            egui::RichText::new(s.retopo_pure)
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+        );
+        if pure.changed() {
+            changed = true;
+        }
+        pure.on_hover_text(s.retopo_pure_hint);
+
+        for (label, hint, value, range) in [
+            (
+                s.retopo_sharp,
+                s.retopo_sharp_hint,
+                &mut settings.sharp_edge_degrees,
+                0.0..=180.0,
+            ),
+            (
+                s.retopo_adaptivity,
+                s.retopo_adaptivity_hint,
+                &mut settings.adaptivity,
+                0.0..=1.0,
+            ),
+        ] {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(label)
+                        .size(type_scale::LABEL)
+                        .color(Tokens::text_dim()),
+                );
+                let slider = ui.add(egui::Slider::new(value, range).show_value(true));
+                if slider.changed() {
+                    changed = true;
+                }
+                slider.on_hover_text(hint);
+            });
+        }
+    });
+
+    if changed {
+        queue.push(Command::SetRetopoSettings(settings));
+    }
+
+    ui.horizontal(|ui| {
+        if running {
+            if ui.button(s.retopo_cancel).clicked() {
+                queue.push(Command::CancelRetopology);
+            }
+            // The fraction where the engine reports one. A spinner where it
+            // does not, rather than a bar pretending to a number nobody has.
+            match state.retopo_progress.as_ref().and_then(|(_, at)| *at) {
+                Some(fraction) => {
+                    ui.add(egui::ProgressBar::new(fraction).desired_width(80.0));
+                }
+                None => {
+                    ui.spinner();
+                }
+            }
+            ui.label(
+                egui::RichText::new(s.retopo_running)
+                    .size(type_scale::LABEL)
+                    .color(Tokens::text_dim()),
+            );
+            return;
+        }
+
+        let button = ui.add_enabled(unavailable.is_none(), egui::Button::new(s.retopo_action));
+        if let Some(reason) = unavailable {
+            // The model's sentence, not one composed here. It already names
+            // the representation in the way a sculptor can act on.
+            button.clone().on_hover_text(reason);
+        }
+        if button.clicked() {
+            // Made active first, as the rebuild and a conversion are: the
+            // retopology acts on the active subtool, so asking it of a row
+            // that is not the active one would rebuild something else.
+            queue.push(Command::SelectLayer(layer.key));
+            queue.push(Command::RunRetopology);
+        }
+
+        // What the last one came to, beside the button that made it. Faces
+        // rather than triangles, because faces are what a sculptor asked for
+        // and the quad share is the answer to "did that actually give me
+        // quads".
+        if let Some(outcome) = state.retopo_outcome {
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} {} · {:.0}%",
+                    outcome.faces,
+                    s.retopo_outcome,
+                    outcome.quad_share() * 100.0
+                ))
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+            );
+        }
+    });
+}
+
 pub(super) fn remesh_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
     let s = state.strings;
     let Some(layer) = state.scene.active_layer() else {

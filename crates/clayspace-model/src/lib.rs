@@ -31,6 +31,7 @@ pub mod multires;
 pub mod outline;
 pub mod profile;
 pub mod reference;
+pub mod retopo;
 pub mod scene;
 pub mod sculpt;
 pub mod session;
@@ -83,6 +84,12 @@ pub use profile::{Phase, Samples, StrokeProfile, Summary, ToolProfile, Work, RET
 pub use reference::{
     read_references, write_references, RefFormat, RefPlane, ReferenceImage, ReferenceRefusal,
     ReferenceSettings, RememberedReference,
+};
+pub use retopo::{
+    BakeMap, BakeModel, BakeResult, BakeSettings, BakedMap, Baker, ConformModel, ConformOutcome,
+    ConformResult, ConformSettings, ConformSource, Conformer, QuadMethod, RetopoModel,
+    RetopoOutcome, RetopoResult, RetopoSettings, RetopoSource, Retopologiser, Unwrapper, UvModel,
+    UvOutcome, UvResult, UvSettings, UvSource,
 };
 pub use scene::{
     FieldHealth, LayerCost, LayerKey, LayerSummary, Protection, RemeshOutcome, RemeshSettings,

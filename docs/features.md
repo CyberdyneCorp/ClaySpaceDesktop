@@ -2048,6 +2048,98 @@ says so on the options bar rather than doing nothing, and the press stays the
 brush's: a press on the clay is a stroke, and taking that away to explain
 something would be the worse error.
 
+### Retopology, UV and baking: the second half of the pipeline
+
+The pipeline is `sculpt -> retopo -> UV -> bake`. This application owns the
+first stage; **CyberRemesher v0.8.0** owns the rest, vendored beside ClayCore as
+a second engine with its own `-sys` crate and safe wrapper. Neither engine knows
+the other's types — both state that as a rule about themselves — so this
+application is the only place the correspondence exists.
+
+**Retopologise to quads** rebuilds a mesh subtool's topology as quads with edge
+loops. Five methods, from the engine's own list: **QuadCover** (its default,
+QuadCover seamless-UV isoline extraction), **ZRemesher** (the same field, solve
+and extraction plus an explicit topology-layout stage, which makes where the
+edge loops go a *result* rather than a consequence), **field-aligned**
+(strongest on box and CAD geometry), **Instant Meshes**, and an experimental
+**integer** parametrisation. *Pure quads* subdivides and relaxes onto the
+surface until no triangles remain.
+
+The result arrives as a **new subtool beside the source**, in one undo entry. A
+retopology a sculptor cannot compare against the sculpt is one they cannot
+judge, and replacing the source is a decision that cannot be undone by looking
+at it.
+
+**Two operations that look alike and are not.** *Refazer a malha* resamples a
+surface through a voxel grid and hands back triangles at an even density;
+retopology rebuilds the topology as quads through a different engine entirely.
+They sit next to each other because a sculptor reaches for both at the same
+moment — the form is right and the mesh is wrong.
+
+**Desdobramento UV** cuts the mesh into islands, unwraps each conformally, turns
+each onto its minimum-area box and packs them into the unit square. What it
+reports is what a sculptor judges it by: charts, angle distortion, coverage, and
+the **flipped-chart count** — which is a *defect* rather than a figure on a
+scale, so it is stated as a sentence only when there is one.
+
+**The atlas stays in the retopology engine.** ClayCore's mesh layers carry no UV
+attribute, so writing it back would mean inventing one, and a layout living in
+two places is a layout that can disagree with itself. The report crosses back;
+the atlas is written at export from the engine that holds it.
+
+**Cozer mapas** bakes normal, ambient occlusion, curvature and cavity **from the
+field**, with no high-poly mesh at all. This is the half of the pipeline nothing
+else could supply: the retopology engine's `CyberFieldEvaluator` is three C
+callbacks whose field-sampled maps had always been empty for want of a
+volumetric engine, and ClayCore answers all three. The cage ray is sphere-traced
+through the actual surface rather than a tessellation of it, and normals come
+from exact gradients rather than interpolated vertex normals. Only those four
+maps are offered, because they are the four a field can answer; the rest need a
+target mesh and are a different feature rather than a greyed row.
+
+**Two conversions make that join correct, and both produce plausible-looking
+wrong output if skipped.** The baker's `occlusion` callback wants **openness**,
+where 1 is fully open, while `CLAY_MEASURE_OCCLUSION` is occlusion, where 1 is
+fully enclosed — passing ours through unconverted bakes an ambient occlusion map
+that is dark where it should be light, everywhere. And curvature is a different
+*quantity* rather than a different scale: theirs is signed mean curvature in
+`1/length` and ClayCore's is a saturated `[0,1]` masking value, so no curvature
+callback is supplied at all and the engine derives it from the gradient, as its
+authors instruct. Both are held by tests that fail when the conversion is
+removed.
+
+**Conformar ao campo** re-snaps a retopologised mesh onto the field's current
+surface, preserving its topology exactly — for when the sculpt changed *after*
+the retopology and redoing it would throw the edge loops away. Unlike the other
+three it writes **into** the active subtool rather than beside it: a conform is a
+correction to a mesh already accepted, not a candidate to compare. It commits
+through `replace_mesh_layer`'s expected-revision compare-and-swap, so a commit is
+refused rather than overwriting work done while it ran. It **completes and
+flags**: the maximum deviation and the count of vertices past a chosen threshold
+reach the sculptor, because a host that drops those turns "finished, and here is
+where it struggled" back into "finished".
+
+**Sculpting latency is a constraint, not an aspiration.** Four decisions hold it:
+the retopology engine is built **CPU-only** so ClayCore keeps the GPU — two
+engines contending for one device mid-stroke is a fault nobody can read off a
+frame time; its worker pool is **capped** at startup, since uncapped it sizes
+itself from hardware concurrency and takes every core the host is sharing; every
+operation runs **off the interface thread** through the existing job runner,
+which already discards a result whose document moved on; and each is **refused
+while a gesture is open** rather than queued behind it.
+
+**A mesh handle is valid for one operation.** The engine reassigns element ids on
+most retopology calls and all of them on subdivision, with nothing to announce
+it — so nothing here keeps one, and any correspondence back into ClayCore is
+positional and rebuilt rather than an id that was kept.
+
+**What is deliberately not here.** The engine's manual-retopology toolset — some
+forty calls for drawing strips, inserting loops, painted soft selection and
+stroke interpretation — is a second interaction model, and a different
+application sharing a library. And no routing rule of our own between quad
+solvers: the engine's authors record that choosing per input by measuring both
+"is still open work", so this offers the choice and takes their default.
+
 ### Crossing a layer from its own row
 
 The representation bar's cards cross the *active* layer. A sculptor looking at a

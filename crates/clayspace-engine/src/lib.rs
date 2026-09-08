@@ -19,6 +19,7 @@ mod maintenance;
 pub mod multires;
 pub mod objects;
 mod reference;
+mod retopo;
 mod sculptors;
 mod seed;
 
@@ -27,5 +28,6 @@ pub use backend::{BackendPolicy, Operation, SelectionReason, UnavailableBackend}
 pub use document::{CarriedSpan, ClayDocument};
 pub use live::LiveSurface;
 pub use reference::read_reference;
+pub use retopo::{EngineBaker, EngineConformer, EngineRetopologiser, EngineUnwrapper};
 
 pub use claycore;

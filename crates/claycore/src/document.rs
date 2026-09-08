@@ -13,6 +13,7 @@ use claycore_sys as sys;
 
 use crate::descriptor::Descriptor;
 use crate::error::{check, ErrorKind, Result};
+use crate::measure::{MeasureParams, SurfaceMeasure};
 use crate::mesh::{Mesh, MeshLayerDesc, MeshParams};
 use crate::{cstring, raw_failure, Backend};
 
@@ -816,6 +817,58 @@ impl Document {
     /// track.
     ///
     /// [`ErrorKind::NotFound`]: crate::ErrorKind::NotFound
+    /// What the shape *is* at a point: how it bends, how enclosed it is, how
+    /// much material is behind it.
+    ///
+    /// **Cheap on a field and expensive in a mesh engine**, which is the
+    /// engine's own argument for these existing at all. Curvature here is the
+    /// field's Laplacian and its sign is unambiguous, so cavity and convexity
+    /// are one subtraction apart; a mesh has to estimate curvature from a
+    /// vertex ring, with a valence-dependent error. The same runs for
+    /// occlusion: a field is marched directly, at any resolution, with nothing
+    /// to build and nothing to invalidate, and it measures the *actual*
+    /// surface rather than a tessellation of it.
+    ///
+    /// Every query returns the same bits on every backend and every run — the
+    /// hemisphere pattern is a fixed low-discrepancy sequence rotated by a
+    /// hash of the point and an explicit seed, not a random number generator.
+    ///
+    /// **`Occlusion` runs the direction its name says**: 0 is open sky and 1
+    /// is fully enclosed. A retopology engine's `occlusion` callback wants
+    /// *openness* and runs the other way, so a host wiring the two together
+    /// converts rather than passes through — see `SurfaceMeasure::Occlusion`.
+    pub fn measure_points(
+        &self,
+        measure: SurfaceMeasure,
+        points: &[[f32; 3]],
+        params: MeasureParams,
+    ) -> Result<Vec<f32>> {
+        let mut values = vec![0.0f32; points.len()];
+        if points.is_empty() {
+            return Ok(values);
+        }
+        let raw = params.to_raw();
+        // SAFETY: `points` is `count` triples and the count is passed beside
+        // it; `values` holds one float per point; the descriptor is versioned
+        // with `struct_size` set; a null token is the documented way to ask
+        // for an uncancellable measurement.
+        check(
+            unsafe {
+                sys::clay_measure_points(
+                    self.as_ptr(),
+                    measure.to_raw(),
+                    points.as_ptr() as *const f32,
+                    points.len(),
+                    &raw,
+                    values.as_mut_ptr(),
+                    std::ptr::null_mut(),
+                )
+            },
+            "clay_measure_points",
+        )?;
+        Ok(values)
+    }
+
     pub fn eval_points_excluding(
         &self,
         excluded: LayerId,

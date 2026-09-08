@@ -1,0 +1,15 @@
+[package]
+name = "cyberremesh"
+description = "Safe wrapper over the CyberRemesher C ABI. The only crate besides claycore permitted unsafe."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+cyberremesh-sys = { path = "../cyberremesh-sys" }
+
+[dev-dependencies]
+claycore = { path = "../claycore" }

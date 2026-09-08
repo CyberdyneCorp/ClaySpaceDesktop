@@ -204,6 +204,54 @@ pub fn home_of(command: &Command) -> Home {
         SetConversion(_) => Home::In("convert", "set"),
         RunConversion => Home::In("convert", "run"),
 
+        // -- retopo ---------------------------------------------------------
+        //
+        // Offered, unlike the file-panel commands: a retopology is a model
+        // operation with a result an agent can read back — face and triangle
+        // counts, and the quad share — rather than a dialog a person has to
+        // stand in front of. It runs off the interface thread and places its
+        // result when it returns, which an agent driving a session wants
+        // exactly as much as a sculptor does.
+        SetRetopoSettings(_) => Home::In("retopo", "set"),
+        RunRetopology => Home::In("retopo", "run"),
+        CancelRetopology => Home::In("retopo", "cancel"),
+
+        // -- uv -------------------------------------------------------------
+        //
+        // Offered for the reason retopology is: a layout is a model operation
+        // whose report an agent can read — charts, distortion, flipped charts,
+        // coverage — rather than a dialog somebody stands in front of.
+        SetUvSettings(_) => Home::In("uv", "set"),
+        RunUvAtlas => Home::In("uv", "atlas"),
+        CancelUvAtlas => Home::In("uv", "cancel"),
+
+        // -- conform --------------------------------------------------------
+        //
+        // Offered: it writes no files, its result is a report an agent can
+        // read, and it is the one operation here whose *refusal* an agent most
+        // wants — a commit rejected because the layer moved underneath it is a
+        // fact about the session, not a failure.
+        SetConformSettings(_) => Home::In("conform", "set"),
+        RunConform => Home::In("conform", "run"),
+        CancelConform => Home::In("conform", "cancel"),
+
+        // -- bake -----------------------------------------------------------
+        //
+        // `set` and `cancel` are offered; **`run` is not**, and the reason is
+        // the same one that keeps `ExportProfile` out: a bake writes files to a
+        // path a person chooses through a panel, and there is no path an agent
+        // could name that this application would accept. What an agent wants
+        // instead is the report, which the `state` tool carries.
+        SetBakeSettings(_) => Home::In("bake", "set"),
+        CancelBake => Home::In("bake", "cancel"),
+        ChooseBakeDestination => {
+            Home::NotOffered("it opens a file panel; a destination is a person's choice")
+        }
+        RunBake => Home::NotOffered(
+            "a bake writes image files to a chosen path, so it opens a file \
+             panel; read the last bake's report through `state` instead",
+        ),
+
         // -- deform ---------------------------------------------------------
         ToggleDeform => Home::In("deform", "toggle_panel"),
         SetDeform(_) => Home::In("deform", "set"),
@@ -521,6 +569,100 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
             in_place: args.boolean_or("in_place", ConversionSettings::default().in_place)?,
         }),
         ("convert", "run") => C::RunConversion,
+        ("retopo", "set") => C::SetRetopoSettings(clayspace_model::RetopoSettings {
+            target_quads: args.integer_or(
+                "target_quads",
+                clayspace_model::RetopoSettings::default().target_quads as i64,
+            )? as u32,
+            method: match args.text_or("method", "quadcover")?.as_str() {
+                "zremesher" => clayspace_model::QuadMethod::ZRemesher,
+                "field_aligned" => clayspace_model::QuadMethod::FieldAligned,
+                "instant_meshes" => clayspace_model::QuadMethod::InstantMeshes,
+                "integer" => clayspace_model::QuadMethod::Integer,
+                _ => clayspace_model::QuadMethod::QuadCover,
+            },
+            sharp_edge_degrees: args.number_or(
+                "sharp_edge_degrees",
+                clayspace_model::RetopoSettings::default().sharp_edge_degrees,
+            )?,
+            pure_quads: args.boolean_or(
+                "pure_quads",
+                clayspace_model::RetopoSettings::default().pure_quads,
+            )?,
+            adaptivity: args.number_or(
+                "adaptivity",
+                clayspace_model::RetopoSettings::default().adaptivity,
+            )?,
+        }),
+        ("retopo", "run") => C::RunRetopology,
+        ("uv", "set") => C::SetUvSettings(clayspace_model::UvSettings {
+            max_chart_angle_degrees: args.number_or(
+                "max_chart_angle_degrees",
+                clayspace_model::UvSettings::default().max_chart_angle_degrees,
+            )?,
+            pack_margin: args.number_or(
+                "pack_margin",
+                clayspace_model::UvSettings::default().pack_margin,
+            )?,
+            texture_size: args.integer_or(
+                "texture_size",
+                clayspace_model::UvSettings::default().texture_size as i64,
+            )? as u32,
+            reorient_charts: args.boolean_or(
+                "reorient_charts",
+                clayspace_model::UvSettings::default().reorient_charts,
+            )?,
+            merge_charts: args.boolean_or(
+                "merge_charts",
+                clayspace_model::UvSettings::default().merge_charts,
+            )?,
+            max_chart_distortion: args.number_or(
+                "max_chart_distortion",
+                clayspace_model::UvSettings::default().max_chart_distortion,
+            )?,
+        }),
+        ("uv", "atlas") => C::RunUvAtlas,
+        ("conform", "set") => C::SetConformSettings(clayspace_model::ConformSettings {
+            threshold: args.number_or(
+                "threshold",
+                clayspace_model::ConformSettings::default().threshold,
+            )?,
+        }),
+        ("conform", "run") => C::RunConform,
+        ("conform", "cancel") => C::CancelConform,
+        ("bake", "set") => C::SetBakeSettings(clayspace_model::BakeSettings {
+            maps: args
+                .optional_text("maps")?
+                .map(|list| {
+                    list.split(',')
+                        .filter_map(|name| match name.trim() {
+                            "normal" => Some(clayspace_model::BakeMap::Normal),
+                            "ao" => Some(clayspace_model::BakeMap::AmbientOcclusion),
+                            "curvature" => Some(clayspace_model::BakeMap::Curvature),
+                            "cavity" => Some(clayspace_model::BakeMap::Cavity),
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .unwrap_or_else(|| clayspace_model::BakeSettings::default().maps),
+            size: args.integer_or("size", clayspace_model::BakeSettings::default().size as i64)?
+                as u32,
+            cage_distance: args.number_or(
+                "cage_distance",
+                clayspace_model::BakeSettings::default().cage_distance,
+            )?,
+            ao_samples: args.integer_or(
+                "ao_samples",
+                clayspace_model::BakeSettings::default().ao_samples as i64,
+            )? as u32,
+            ao_radius: args.number_or(
+                "ao_radius",
+                clayspace_model::BakeSettings::default().ao_radius,
+            )?,
+        }),
+        ("bake", "cancel") => C::CancelBake,
+        ("uv", "cancel") => C::CancelUvAtlas,
+        ("retopo", "cancel") => C::CancelRetopology,
 
         // -- deform ---------------------------------------------------------
         ("deform", "toggle_panel") => C::ToggleDeform,

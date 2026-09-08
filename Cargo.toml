@@ -3,6 +3,8 @@ resolver = "2"
 members = [
     "crates/claycore-sys",
     "crates/claycore",
+    "crates/cyberremesh-sys",
+    "crates/cyberremesh",
     "crates/clayspace-model",
     "crates/clayspace-engine",
     "crates/clayspace-vm",

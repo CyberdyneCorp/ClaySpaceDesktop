@@ -329,6 +329,36 @@ pub enum Command {
     SetDeform(clayspace_model::DeformSettings),
     /// Applies it to the active layer, as one undo step.
     RunDeform,
+    /// What the retopology panel is set to.
+    SetRetopoSettings(clayspace_model::RetopoSettings),
+    /// Rebuilds the active mesh subtool's topology as quads, off the
+    /// interface thread, arriving as a new subtool beside the source.
+    RunRetopology,
+    /// Asks a running retopology to stop between stages. It finishes as
+    /// cancelled rather than being abandoned, so nothing is left half-placed.
+    CancelRetopology,
+    /// What the UV panel is set to.
+    SetUvSettings(clayspace_model::UvSettings),
+    /// Lays out the active mesh subtool's UVs, off the interface thread.
+    RunUvAtlas,
+    /// Asks a running layout to stop between stages.
+    CancelUvAtlas,
+    /// What the conform panel is set to.
+    SetConformSettings(clayspace_model::ConformSettings),
+    /// Re-snaps the active mesh subtool onto the field as it is now, keeping
+    /// its topology, off the interface thread.
+    RunConform,
+    /// Asks a running conform to stop.
+    CancelConform,
+    /// What the bake panel is set to.
+    SetBakeSettings(clayspace_model::BakeSettings),
+    /// Asks the composition root for a destination, which owns the file
+    /// panel. The ViewModel never opens one.
+    ChooseBakeDestination,
+    /// Bakes the chosen maps from the field, off the interface thread.
+    RunBake,
+    /// Asks a running bake to stop between maps.
+    CancelBake,
     /// What the conversion panel is set to.
     SetConversion(ConversionSettings),
     /// Crosses the active layer, adding a new one.
@@ -531,6 +561,23 @@ impl Command {
                 | Self::ToggleDeform
                 | Self::SetDeform(_)
                 | Self::RunDeform
+                // Retopology runs off the interface thread and places its
+                // result when it returns, so it is the composition root's
+                // path for the same reason a conversion is — and its own undo
+                // entry is made where the placement happens rather than here.
+                | Self::SetRetopoSettings(_)
+                | Self::RunRetopology
+                | Self::CancelRetopology
+                | Self::SetUvSettings(_)
+                | Self::RunUvAtlas
+                | Self::CancelUvAtlas
+                | Self::SetConformSettings(_)
+                | Self::RunConform
+                | Self::CancelConform
+                | Self::SetBakeSettings(_)
+                | Self::ChooseBakeDestination
+                | Self::RunBake
+                | Self::CancelBake
                 // A pass is not undo — dialling one is a property of the stack
                 // rather than an entry in a history — so it takes the
                 // composition root's own path like the other layer work.
@@ -670,6 +717,19 @@ impl Command {
         match self {
             Self::SelectTool(_) => "select tool",
             Self::ToggleCurve => "curva",
+            Self::SetConformSettings(_) => "conformação",
+            Self::RunConform => "conformar",
+            Self::CancelConform => "cancelar conformação",
+            Self::SetBakeSettings(_) => "cozedura",
+            Self::ChooseBakeDestination => "escolher destino",
+            Self::RunBake => "cozer mapas",
+            Self::CancelBake => "cancelar cozedura",
+            Self::SetUvSettings(_) => "UV",
+            Self::RunUvAtlas => "desdobrar UV",
+            Self::CancelUvAtlas => "cancelar desdobramento",
+            Self::SetRetopoSettings(_) => "retopologia",
+            Self::RunRetopology => "remalhar para quads",
+            Self::CancelRetopology => "cancelar retopologia",
             Self::SetCutGesture(_) => "gesto de corte",
             Self::BeginCut(_) => "começar corte",
             Self::ExtendCut(_) => "arrastar corte",

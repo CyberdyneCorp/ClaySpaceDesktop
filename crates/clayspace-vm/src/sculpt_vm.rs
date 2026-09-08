@@ -401,6 +401,21 @@ impl SculptViewModel {
             | Command::ToggleRepair
             | Command::SetConversion(_)
             | Command::RunConversion
+            // Retopology belongs to its own ViewModel, which owns the job that
+            // runs it off this thread. Nothing here reads or changes.
+            | Command::SetRetopoSettings(_)
+            | Command::RunRetopology
+            | Command::CancelRetopology
+            | Command::SetUvSettings(_)
+            | Command::RunUvAtlas
+            | Command::CancelUvAtlas
+            | Command::SetConformSettings(_)
+            | Command::RunConform
+            | Command::CancelConform
+            | Command::SetBakeSettings(_)
+            | Command::ChooseBakeDestination
+            | Command::RunBake
+            | Command::CancelBake
             // How the next rebuild is made, which reaches nothing until it is
             // asked for.
             | Command::SetRemeshSettings(_)

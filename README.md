@@ -123,6 +123,7 @@ strokes — are in no baseline and report as `new`.
   [sculpting](#sculpting-a-stroke-is-one-call-and-one-undo) ·
   [focus mode](#focus-mode-and-the-regions-that-move) ·
   [masking](#masking) ·
+  [retopology, UV and baking](#retopology-uv-and-baking) ·
   [cutting](#cutting-with-a-shape-you-draw-over-the-model) ·
   [subtools](#a-scene-is-a-list-of-subtools) ·
   [shapes](#inserting-a-form-and-where-it-goes) ·
@@ -448,6 +449,33 @@ adjustable afterwards, resolved when a sculptor chooses to. It is **not
 reflected by the layer's symmetry**: a trim is drawn where the sculptor is
 looking, and mirroring it would remove material on the far side of the form.
 Field subtools only, because a cut resolves to a field item.
+
+### Retopology, UV and baking
+
+The pipeline is `sculpt -> retopo -> UV -> bake`. This application owns the
+first stage; **CyberRemesher v0.8.0** owns the rest, vendored beside ClayCore as
+a second engine. Four operations reach a mesh subtool, all of them off the
+interface thread with progress and a cancel:
+
+- **Retopologise to quads** — five methods including the **ZRemesher** track,
+  which makes edge-loop structure an explicit artifact rather than a consequence
+  of the field. The result arrives as a new subtool beside the source, in one
+  undo entry, so the two can be compared.
+- **UV layout** — islands, conformal unwrap, minimum-area re-orientation and
+  packing, reporting charts, distortion and coverage.
+- **Bake maps from the field** — normal, ambient occlusion, curvature and
+  cavity, sampled from ClayCore's field with **no high-poly mesh**. The cage ray
+  is sphere-traced through the actual surface and normals come from exact
+  gradients. This is the half of the pipeline neither engine could fill alone:
+  the retopologiser's field evaluator had always had nothing to ask.
+- **Conform to the field** — re-snaps a retopologised mesh onto a sculpt that
+  moved since, keeping its topology exactly, and reports how far the worst
+  vertex had to travel rather than only that it finished.
+
+**Sculpting latency is held by four decisions rather than hoped for**: the second
+engine is built CPU-only so ClayCore keeps the GPU, its worker pool is capped at
+startup, every operation runs through the job runner that already discards a
+stale result, and each is refused while a gesture is open.
 
 ### A scene is a list of subtools
 

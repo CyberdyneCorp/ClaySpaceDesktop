@@ -799,3 +799,61 @@ impl clayspace_model::CutModel for SharedDocument {
         self.document.borrow_mut().apply_cut(cut)
     }
 }
+
+impl clayspace_model::RetopoModel for SharedDocument {
+    fn can_retopologise(&self) -> Result<(), String> {
+        self.document.borrow().can_retopologise()
+    }
+
+    fn retopologise(
+        &mut self,
+        settings: clayspace_model::RetopoSettings,
+    ) -> Result<clayspace_model::RetopoOutcome, ModelError> {
+        self.document.borrow_mut().retopologise(settings)
+    }
+
+    fn retopo_source(&mut self) -> Result<clayspace_model::RetopoSource, ModelError> {
+        self.document.borrow_mut().retopo_source()
+    }
+
+    fn place_retopology(
+        &mut self,
+        result: &clayspace_model::RetopoResult,
+    ) -> Result<(), ModelError> {
+        self.document.borrow_mut().place_retopology(result)
+    }
+}
+
+impl clayspace_model::UvModel for SharedDocument {
+    fn can_unwrap(&self) -> Result<(), String> {
+        self.document.borrow().can_unwrap()
+    }
+
+    fn uv_source(&mut self) -> Result<clayspace_model::UvSource, ModelError> {
+        self.document.borrow_mut().uv_source()
+    }
+
+    fn record_uv(&mut self, result: &clayspace_model::UvResult) -> Result<(), ModelError> {
+        self.document.borrow_mut().record_uv(result)
+    }
+}
+
+impl clayspace_model::BakeModel for SharedDocument {
+    fn can_bake(&self) -> Result<(), String> {
+        self.document.borrow().can_bake()
+    }
+}
+
+impl clayspace_model::ConformModel for SharedDocument {
+    fn can_conform(&self) -> Result<(), String> {
+        self.document.borrow().can_conform()
+    }
+
+    fn conform_source(&mut self) -> Result<clayspace_model::ConformSource, ModelError> {
+        self.document.borrow_mut().conform_source()
+    }
+
+    fn apply_conform(&mut self, result: &clayspace_model::ConformResult) -> Result<(), ModelError> {
+        self.document.borrow_mut().apply_conform(result)
+    }
+}
