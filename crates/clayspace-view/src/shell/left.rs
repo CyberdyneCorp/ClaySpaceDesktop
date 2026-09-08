@@ -1325,7 +1325,7 @@ pub(super) fn bake_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mu
             if ui
                 .checkbox(
                     &mut on,
-                    egui::RichText::new(map.label())
+                    egui::RichText::new(s.bake_map_name(map))
                         .size(type_scale::LABEL)
                         .color(Tokens::text_dim()),
                 )
@@ -1475,7 +1475,7 @@ pub(super) fn bake_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mu
         // other people's tools.
         for (map, why) in &result.refused {
             ui.label(
-                egui::RichText::new(format!("{}: {why}", map.label()))
+                egui::RichText::new(format!("{}: {why}", s.bake_map_name(*map)))
                     .size(type_scale::LABEL)
                     .color(Tokens::text_dim()),
             );
@@ -1706,12 +1706,16 @@ pub(super) fn retopo_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &
             // Every method the domain offers, from the domain's own list, so
             // one added there appears here without a second list to update.
             egui::ComboBox::from_id_salt("retopo-method")
-                .selected_text(settings.method.label())
+                .selected_text(s.retopo_method_name(settings.method))
                 .show_ui(ui, |ui| {
                     for method in clayspace_model::QuadMethod::ALL {
                         let picked = ui
-                            .selectable_value(&mut settings.method, method, method.label())
-                            .on_hover_text(method.hint());
+                            .selectable_value(
+                                &mut settings.method,
+                                method,
+                                s.retopo_method_name(method),
+                            )
+                            .on_hover_text(s.retopo_method_hint(method));
                         if picked.changed() {
                             changed = true;
                         }

@@ -407,6 +407,17 @@ pub struct Strings {
     pub retopo_target: &'static str,
     pub retopo_target_hint: &'static str,
     pub retopo_method: &'static str,
+    /// The five quadrangulators, in `QuadMethod::ALL` order. Two are proper
+    /// nouns and stay as they are in every locale; three are descriptions and
+    /// must not.
+    pub retopo_method_names: [&'static str; clayspace_model::QuadMethod::ALL.len()],
+    /// One line each on what a sculptor is choosing between, in
+    /// `QuadMethod::ALL` order. Prose, so it needs translating more than the
+    /// names do — and the label tripwire in `design.rs` could not see it,
+    /// which is why it is here rather than still on the domain type.
+    pub retopo_method_hints: [&'static str; clayspace_model::QuadMethod::ALL.len()],
+    /// The four maps a bake can write, in `BakeMap::ALL` order.
+    pub bake_map_names: [&'static str; clayspace_model::BakeMap::ALL.len()],
     pub retopo_pure: &'static str,
     pub retopo_pure_hint: &'static str,
     pub retopo_sharp: &'static str,
@@ -1012,6 +1023,16 @@ libera em vez de congelar.",
     retopo_target_hint: "quantidade pretendida; o motor procura pelo \
                          comprimento de aresta, portanto aproxima e nunca acerta",
     retopo_method: "Método",
+    retopo_method_names: ["QuadCover", "ZRemesher", "Alinhado ao campo", "Instant Meshes", "Inteiro"],
+    retopo_method_hints: [
+        "O padrão do motor. Isolinhas de um campo cruzado sem costuras.",
+        "Acrescenta a etapa de layout: onde ficam os anéis de aresta e as \
+         singularidades deixa de ser consequência e passa a ser resultado.",
+        "Mais forte em geometria de caixa e CAD.",
+        "Extractor por campo de posições.",
+        "Experimental: parametrização inteira.",
+    ],
+    bake_map_names: ["Normais", "Oclusão ambiente", "Curvatura", "Cavidade"],
     retopo_pure: "Só quads",
     retopo_pure_hint: "subdivide e relaxa sobre a superfície até não sobrar \
                        triângulo nenhum",
@@ -1555,6 +1576,16 @@ instead.",
     retopo_target_hint: "how many to aim at; the engine searches over edge \
                          length, so it is approached and never hit",
     retopo_method: "Method",
+    retopo_method_names: ["QuadCover", "ZRemesher", "Field-aligned", "Instant Meshes", "Integer"],
+    retopo_method_hints: [
+        "The engine's default. Isolines of a seamless cross field.",
+        "Adds the layout stage: where the edge loops and singularities fall \
+         stops being a consequence and becomes a result.",
+        "Strongest on box and CAD geometry.",
+        "Position-field extraction.",
+        "Experimental: integer parametrisation.",
+    ],
+    bake_map_names: ["Normals", "Ambient occlusion", "Curvature", "Cavity"],
     retopo_pure: "Pure quads",
     retopo_pure_hint: "subdivides and relaxes onto the surface until no \
                        triangles remain",
@@ -2100,6 +2131,18 @@ lados. Con Ctrl, libera en vez de congelar.",
     retopo_target_hint: "cantidad pretendida; el motor busca por la longitud \
                          de arista, así que se aproxima y nunca acierta",
     retopo_method: "Método",
+    retopo_method_names: ["QuadCover", "ZRemesher", "Alineado al campo", "Instant Meshes", "Entero"],
+    retopo_method_hints: [
+        "El valor por defecto del motor. Isolíneas de un campo cruzado sin \
+         costuras.",
+        "Añade la etapa de disposición: dónde caen los anillos de aristas y \
+         las singularidades deja de ser una consecuencia y pasa a ser un \
+         resultado.",
+        "Más fuerte en geometría de caja y CAD.",
+        "Extractor por campo de posiciones.",
+        "Experimental: parametrización entera.",
+    ],
+    bake_map_names: ["Normales", "Oclusión ambiental", "Curvatura", "Cavidad"],
     retopo_pure: "Solo quads",
     retopo_pure_hint: "subdivide y relaja sobre la superficie hasta que no \
                        queden triángulos",
@@ -2411,6 +2454,29 @@ impl Strings {
     /// English screen.
     pub fn combine_name(&self, op: clayspace_model::Combine) -> &'static str {
         Self::at(&self.combine_names, clayspace_model::Combine::ALL, op)
+    }
+
+    /// The name for a quadrangulator, in this locale.
+    pub fn retopo_method_name(&self, method: clayspace_model::QuadMethod) -> &'static str {
+        Self::at(
+            &self.retopo_method_names,
+            clayspace_model::QuadMethod::ALL,
+            method,
+        )
+    }
+
+    /// The one-line hint for a quadrangulator, in this locale.
+    pub fn retopo_method_hint(&self, method: clayspace_model::QuadMethod) -> &'static str {
+        Self::at(
+            &self.retopo_method_hints,
+            clayspace_model::QuadMethod::ALL,
+            method,
+        )
+    }
+
+    /// The name for a bakeable map, in this locale.
+    pub fn bake_map_name(&self, map: clayspace_model::BakeMap) -> &'static str {
+        Self::at(&self.bake_map_names, clayspace_model::BakeMap::ALL, map)
     }
 
     /// The name for one of the four views, in this locale.

@@ -283,7 +283,21 @@ mod tests {
     /// mistake this exists to stop repeating while the backlog is worked off.
     /// Fixing one is: add an array to `Strings` keyed off the enum's `::ALL`,
     /// fill all three locales, add an accessor, and call it here.
-    const LABELS_STILL_DRAWN: usize = 9;
+    const DOMAIN_STRINGS_STILL_DRAWN: usize = 10;
+
+    /// The domain accessors that return a *localisable* string.
+    ///
+    /// `.label()` alone was the first version, and it let a `.hint()` through:
+    /// a control was wired to `QuadMethod::hint()`, which is a sentence of
+    /// Portuguese prose, and this test stayed green while flagging the
+    /// `.label()` beside it. A gate that watches one spelling of a mistake
+    /// reports the other as absent.
+    ///
+    /// `.detail()` is here for the same reason and carries one pre-existing
+    /// use (`ImportAs::detail` as hover text in `windows.rs`), which is now
+    /// counted rather than invisible — the backlog this ratchet works off
+    /// should include the items nobody had looked for.
+    const LOCALISABLE: [&str; 3] = [".label()", ".hint()", ".detail()"];
 
     /// Every `.rs` file in the crate, as (name, source).
     ///
@@ -318,24 +332,31 @@ mod tests {
     }
 
     #[test]
-    fn the_shell_draws_no_new_untranslated_labels() {
+    fn the_shell_draws_no_new_untranslated_domain_strings() {
         let drawn: usize = crate_source()
             .iter()
             .filter(|(name, _)| name.contains("shell"))
-            .map(|(_, text)| text.matches(".label()").count())
+            .map(|(_, text)| {
+                LOCALISABLE
+                    .iter()
+                    .map(|accessor| text.matches(accessor).count())
+                    .sum::<usize>()
+            })
             .sum();
         assert!(
-            drawn <= LABELS_STILL_DRAWN,
-            "the shell draws {drawn} domain labels, up from {LABELS_STILL_DRAWN}. \
-             A new control was wired to a domain `label()` rather than to \
-             `Strings`, so it will read in Portuguese on every other locale — \
-             see `Strings::combine_name` for the shape to follow"
+            drawn <= DOMAIN_STRINGS_STILL_DRAWN,
+            "the shell draws {drawn} domain strings, up from \
+             {DOMAIN_STRINGS_STILL_DRAWN}. A new control was wired to one of \
+             {LOCALISABLE:?} on a domain type rather than to `Strings`, so it \
+             will read in Portuguese on every other locale — see \
+             `Strings::combine_name` for the shape to follow"
         );
         assert!(
-            drawn >= LABELS_STILL_DRAWN,
-            "the shell draws {drawn} domain labels, down from \
-             {LABELS_STILL_DRAWN} — lower `LABELS_STILL_DRAWN` to {drawn} so \
-             the ratchet holds the ground that was just taken"
+            drawn >= DOMAIN_STRINGS_STILL_DRAWN,
+            "the shell draws {drawn} domain strings, down from \
+             {DOMAIN_STRINGS_STILL_DRAWN} — lower \
+             `DOMAIN_STRINGS_STILL_DRAWN` to {drawn} so the ratchet holds the \
+             ground that was just taken"
         );
     }
 
