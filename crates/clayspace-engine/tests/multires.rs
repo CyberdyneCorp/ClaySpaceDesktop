@@ -29,11 +29,24 @@ use clayspace_model::{
 
 // -- fixtures ---------------------------------------------------------------
 
+/// A path in the temporary directory that no other fixture can be handed.
+///
+/// Unique per *call* rather than per name. Tests in one integration binary
+/// run as parallel threads of one process, so pid-plus-label collides the
+/// moment two tests choose the same label, and the first to finish deletes
+/// the file the second is loading. `deformers.rs` fixed that class with a
+/// counter after being bitten by it; this is the same fix, applied before
+/// rather than after.
 fn scratch(name: &str, extension: &str) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static NEXT: AtomicU32 = AtomicU32::new(0);
     let path = std::env::temp_dir().join(format!(
-        "clayspace-multires-{name}-{}.{extension}",
-        std::process::id()
+        "clayspace-multires-{name}-{}-{}.{extension}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
     ));
+    // Kept: a counter makes a fresh name, but a leaked file from an earlier
+    // run of this binary can still sit on the path the counter lands on.
     let _ = std::fs::remove_file(&path);
     path
 }

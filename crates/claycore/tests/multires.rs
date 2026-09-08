@@ -24,6 +24,46 @@ use claycore::{
 
 // -- fixtures ---------------------------------------------------------------
 
+/// A temporary path no other fixture in this binary can be handed.
+///
+/// `process::id()` alone is not enough. Tests in one integration binary run
+/// as parallel *threads* of one process, so a path keyed only by pid and a
+/// caller-chosen label collides whenever two tests pass the same label — and
+/// then the first to finish deletes the file the second is about to load,
+/// which surfaces as `clay_mesh_load` returning `NotFound` on a path that was
+/// written successfully a moment earlier. `"remove"` was passed by two tests
+/// and did exactly that.
+///
+/// So the counter, and not merely a renaming of the duplicate: uniqueness
+/// that depends on humans keeping literals distinct is uniqueness that lasts
+/// until the next test is added. The label stays because it makes a leaked
+/// file legible.
+fn scratch(label: &str, extension: &str) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    std::env::temp_dir().join(format!(
+        "claycore-multires-{label}-{}-{}.{extension}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ))
+}
+
+/// Two fixtures asking for the same label are still handed different files.
+///
+/// The regression guard for the race above. Written against `scratch` rather
+/// than by running the two tests that collided, because a test that
+/// reproduces a race by running it is green on the runs where the race does
+/// not happen — which was most of them, and is why this shipped.
+#[test]
+fn one_label_twice_is_two_paths() {
+    let (first, second) = (scratch("same", "obj"), scratch("same", "obj"));
+    assert_ne!(
+        first, second,
+        "two fixtures with one label share a path, so whichever finishes \
+         first deletes the file the other is loading"
+    );
+}
+
 /// A flat grid of quads, which is what a Catmull-Clark cage is supposed to be.
 ///
 /// It goes through a file because the C ABI builds a mesh from an importer or
@@ -59,10 +99,7 @@ fn cage(divisions: usize, half: f32, name: &str) -> Mesh {
             ));
         }
     }
-    let path = std::env::temp_dir().join(format!(
-        "claycore-multires-{name}-{}.obj",
-        std::process::id()
-    ));
+    let path = scratch(name, "obj");
     std::fs::write(&path, text).expect("write the cage");
     let mesh = Mesh::load(&path).expect("load the cage");
     let _ = std::fs::remove_file(&path);
@@ -207,10 +244,7 @@ fn a_cage_that_is_not_manifold_is_refused_rather_than_repaired() {
     // One edge shared by three faces: the subdivision rules have no meaning
     // there, and a conversion that quietly welded it would change the
     // retopology somebody paid for without saying so.
-    let path = std::env::temp_dir().join(format!(
-        "claycore-multires-nonmanifold-{}.obj",
-        std::process::id()
-    ));
+    let path = scratch("nonmanifold", "obj");
     std::fs::write(
         &path,
         "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 -1 0\nv 0 0 1\nf 1 2 3\nf 1 2 4\nf 1 2 5\n",
@@ -236,10 +270,7 @@ fn a_cage_that_is_not_manifold_is_refused_rather_than_repaired() {
 
 #[test]
 fn a_cage_with_no_faces_is_refused() {
-    let path = std::env::temp_dir().join(format!(
-        "claycore-multires-facesless-{}.obj",
-        std::process::id()
-    ));
+    let path = scratch("facesless", "obj");
     std::fs::write(&path, "v 0 0 0\nv 1 0 0\nv 0 1 0\n").expect("write");
     let mesh = Mesh::load(&path).expect("load");
     let _ = std::fs::remove_file(&path);
