@@ -174,7 +174,6 @@ fn build_engine(engine: &Path) -> PathBuf {
         // turns a missing dependency into a configure error instead of a
         // silent fallback.
         .define("CYBER_WITH_QUADCOVER", "ON")
-        .define("CYBER_REQUIRE_QUADCOVER", "ON")
         // No GPU backend. ClayCore has the device; see the module comment.
         // All three already default OFF, and are stated so that a future
         // default flip does not quietly put a second engine on the card.
@@ -201,8 +200,46 @@ fn build_engine(engine: &Path) -> PathBuf {
         // sharing a symbol namespace is a class of bug nobody wants to debug.
         .build_target("cyber_capi_shared");
 
+    require_quadcover_where_it_is_supported(&mut cfg);
+
     let dst = cfg.build();
     dst.join("build")
+}
+
+/// Turn a missing QuadCover dependency into a configure error — on the
+/// platforms where the engine's own project does that.
+///
+/// `CYBER_WITH_QUADCOVER=ON` above is not a guarantee: without OpenMP and TBB
+/// the engine falls back to the portable quadrangulator and produces
+/// genuinely different quads with nothing to say so. `REQUIRE` makes that a
+/// `FATAL_ERROR` at `cmake/QuadCoverSolver.cmake:105`, which is the strongest
+/// form available — it fails before there is anything to check, and there is
+/// no runtime solver-name entry point in the C ABI to check with.
+///
+/// **Linux only, and that is the engine's own posture rather than ours.**
+/// Their `release.yml` reads
+/// `EXTRA: ${{ runner.os == 'Linux' && '-DCYBER_REQUIRE_QUADCOVER=ON' || '' }}`,
+/// and their comment calls Linux "the only leg that compiles and exercises the
+/// `CYBER_HAVE_QUADCOVER`" branches; every `REQUIRE` leg in their
+/// `hardening.yml` is Linux too. Requiring it on macOS was this crate's first
+/// attempt and it failed every macOS job — a requirement upstream does not
+/// support is a requirement that only breaks the build.
+///
+/// So macOS takes `WITH` without `REQUIRE`, and the fallback is **announced
+/// rather than silent**: a build there says which way it went, because the
+/// thing that makes the fallback dangerous is that nobody knows it happened.
+fn require_quadcover_where_it_is_supported(cfg: &mut cmake::Config) {
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if target_os == "linux" {
+        cfg.define("CYBER_REQUIRE_QUADCOVER", "ON");
+        return;
+    }
+    println!(
+        "cargo:warning=CyberRemesher: QuadCover requested but not required on \
+         {target_os} — the engine's own release workflow requires it on Linux \
+         only. If OpenMP and TBB are absent here the build silently uses the \
+         portable quadrangulator, which produces different quads."
+    );
 }
 
 fn emit_link_flags(build: &Path) {
