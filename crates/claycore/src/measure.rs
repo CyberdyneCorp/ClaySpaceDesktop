@@ -40,6 +40,21 @@ pub enum SurfaceMeasure {
 }
 
 impl SurfaceMeasure {
+    /// Every measure this crate binds.
+    ///
+    /// Exists so a test can walk them rather than name them: a measure added
+    /// here without a call behind it then fails on the row that was added,
+    /// instead of crossing `unsafe` with a SAFETY comment nobody has checked
+    /// because nothing ever constructs it.
+    pub const ALL: [SurfaceMeasure; 6] = [
+        Self::Curvature,
+        Self::Cavity,
+        Self::Convexity,
+        Self::NormalDirection,
+        Self::Occlusion,
+        Self::Thickness,
+    ];
+
     pub(crate) fn to_raw(self) -> sys::clay_surface_measure::Type {
         match self {
             Self::Curvature => sys::clay_surface_measure::CLAY_MEASURE_CURVATURE,
