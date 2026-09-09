@@ -213,7 +213,52 @@ fn build_engine(engine: &Path) -> PathBuf {
     require_quadcover_where_it_is_supported(&mut cfg);
 
     let dst = cfg.build();
-    dst.join("build")
+    let build = dst.join("build");
+    report_the_solver_the_build_got(&build);
+    build
+}
+
+/// Say which quadrangulator this build actually produced, when it is not the
+/// one that was asked for.
+///
+/// **Reports what the build GOT, not what the platform suggests**, and that
+/// distinction is the whole point. The first version of this warned on every
+/// non-Linux target, because `REQUIRE` is Linux-only here. So a macOS box
+/// *with* OpenMP and TBB — which builds QuadCover perfectly well — was told
+/// its quads might be wrong, every single build. A warning that fires
+/// whichever way the thing went cannot express the thing it watches for, and
+/// gets tuned out long before the one build that mattered.
+///
+/// `cyber_quadcover_solver` is a discrete static target CMake emits *only*
+/// when it finds both dependencies, so its absence is the fallback having
+/// happened rather than a guess that it might have. Checked after the build
+/// because that is when the answer exists.
+///
+/// Still a build-time check and still not the whole guard: it says what we
+/// linked, and cannot say what a host loads later — `libcyber_capi.so.0`
+/// names every 0.x release. The runtime half needs an entry point the pinned
+/// ABI does not have.
+fn report_the_solver_the_build_got(build: &Path) {
+    let solver = build.join("src/quadrangulate");
+    let built = std::fs::read_dir(&solver)
+        .map(|entries| {
+            entries.flatten().any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .contains("cyber_quadcover_solver")
+            })
+        })
+        .unwrap_or(false);
+    if built {
+        return;
+    }
+    println!(
+        "cargo:warning=CyberRemesher: built WITHOUT the in-process QuadCover \
+         field — OpenMP or TBB was missing, so the portable quadrangulator is \
+         in use and it produces different quads. Install them (apt \
+         libtbb-dev / brew libomp tbb) to match the release configuration."
+    );
 }
 
 /// Turn a missing QuadCover dependency into a configure error — on the
@@ -236,20 +281,15 @@ fn build_engine(engine: &Path) -> PathBuf {
 /// support is a requirement that only breaks the build.
 ///
 /// So macOS takes `WITH` without `REQUIRE`, and the fallback is **announced
-/// rather than silent**: a build there says which way it went, because the
-/// thing that makes the fallback dangerous is that nobody knows it happened.
+/// rather than silent**: the thing that makes it dangerous is that nobody
+/// knows it happened. The announcing is
+/// [`report_the_solver_the_build_got`], after the build rather than here,
+/// because only then is there an answer rather than a platform guess.
 fn require_quadcover_where_it_is_supported(cfg: &mut cmake::Config) {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os == "linux" {
         cfg.define("CYBER_REQUIRE_QUADCOVER", "ON");
-        return;
     }
-    println!(
-        "cargo:warning=CyberRemesher: QuadCover requested but not required on \
-         {target_os} — the engine's own release workflow requires it on Linux \
-         only. If OpenMP and TBB are absent here the build silently uses the \
-         portable quadrangulator, which produces different quads."
-    );
 }
 
 fn emit_link_flags(build: &Path) {
