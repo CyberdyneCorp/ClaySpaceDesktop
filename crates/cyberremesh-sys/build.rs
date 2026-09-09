@@ -188,9 +188,19 @@ fn build_engine(engine: &Path) -> PathBuf {
         // `cyber::setMaxWorkerThreads()` and forty more. `cyber_capi_shared`
         // is the one the engine documents for consumers: it links the core,
         // the quadrangulator, UV, bake, retopo and the in-process solver
-        // privately, and carries the `CYBER_CAPI_WITH_UV` definitions that the
-        // static target does not — so the static archive is missing entry
-        // points as well as symbols.
+        // privately.
+        //
+        // **Why the archive is short, corrected.** This used to say the static
+        // target lacked `CYBER_CAPI_WITH_UV` and so was "missing entry points
+        // as well as symbols". That is false: `capi/CMakeLists.txt:21` sets
+        // that definition on `cyber_capi`, and :86 sets the identical one on
+        // `cyber_capi_shared` — the two artifacts compile the same surface.
+        // What actually bites is line 14, where `cyber_capi` declares its
+        // dependencies `PUBLIC`: that propagates through CMake's *link
+        // interface* only, so hand-linking the archive from here gets
+        // `capi.cpp` and nothing it calls. Same conclusion, different cause —
+        // and the wrong cause would send the next reader to patch the
+        // definitions instead of the linking.
         //
         // It is also the one with the linker version script, which matters
         // more here than in a single-engine host: it exports *only* `cyber_*`,
