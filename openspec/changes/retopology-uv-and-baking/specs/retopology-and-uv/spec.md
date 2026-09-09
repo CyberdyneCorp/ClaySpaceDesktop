@@ -4,10 +4,14 @@
 A mesh subtool SHALL be retopologisable through `cyber_remesh`, with the quad
 methods the pinned release carries and a target quad count.
 
-The result SHALL arrive as a **new subtool** beside the source rather than
-replacing it. A retopology a sculptor cannot compare against the sculpt is one
-they cannot judge, and replacement can be added later where the reverse cannot
-be undone.
+The result SHALL replace the subtool's topology **in place**, in one undo entry,
+as *Refazer a malha* already does. The stack is not the record of an operation
+the history records.
+
+The commit SHALL be a compare-and-swap against the layer revision read before
+the work was dispatched, and SHALL refuse rather than overwrite when the layer
+has moved since — the work runs off the interface thread and the source remains
+strokeable while it does.
 
 The operation SHALL be offered on mesh subtools only. A field is not a mesh, and
 crossing one for the sculptor silently would perform a representation change

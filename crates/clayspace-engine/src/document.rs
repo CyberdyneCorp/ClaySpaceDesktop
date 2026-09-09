@@ -274,6 +274,33 @@ struct Layer {
     /// `None` for every other representation, and for a hierarchy row only
     /// between a document being read and its side-car being applied.
     multires: Option<crate::multires::Hierarchy>,
+    /// The **authored** edges of this layer's faces, two vertex indices per
+    /// edge, in the layer's own vertex order.
+    ///
+    /// Set only for a layer placed by a retopology, and it is what makes the
+    /// polyframe draw quads. ClayCore's mesh layers hold triangles and its C
+    /// ABI has exactly one mesh constructor — `clay_mesh_from_triangles` —
+    /// so a quad mesh from the retopologiser reaches the document as its own
+    /// fan triangulation and the quads have nowhere to live *inside* the
+    /// layer. Drawing a wireframe from those triangles shows every
+    /// triangulation diagonal, so a 100%-quad retopology looked like
+    /// triangles and a sculptor had no way to tell the two apart. Reported
+    /// from a session.
+    ///
+    /// Held here rather than pushed into ClayCore, which is also the safer
+    /// half of that choice: nothing of ours reaches `clay_document_save`, so
+    /// an edge list kept beside the layer cannot desynchronise a *saved*
+    /// document the way a quad array inside a `clay_mesh` could if a caller
+    /// rewrote `indices` without clearing it.
+    ///
+    /// `None` for every layer whose faces are genuinely triangles, and the
+    /// polyframe derives edges from the triangulation for those — which is
+    /// the right answer there, because the diagonals *are* the edges.
+    ///
+    /// Dropped whenever the layer's connectivity changes, for the reason
+    /// ClayCore's own `mesh_data.h` gives about its quad array: an edge list
+    /// describing a surface that no longer exists is worse than none.
+    authored: Option<AuthoredFaces>,
     /// This layer's grid as triangles, one entry per chunk.
     ///
     /// Kept per chunk so an edit costs the edit. Meshing a grid whole after
@@ -374,6 +401,9 @@ impl Layer {
             engine_name: name.to_string(),
             representation,
             carries_geometry: representation != Representation::Mesh,
+            // A new layer's faces are whatever meshed them, so there is
+            // nothing authored to draw until a retopology says otherwise.
+            authored: None,
             visible: true,
             protection: Protection::default(),
             intensity: 100,
@@ -941,12 +971,39 @@ struct VisibilityGesture {
 /// concatenated buffer, so without this nothing downstream can say where one
 /// subtool ends and the next begins — which is what an active-subtool cue has
 /// to know before it can tint one of them and leave the rest alone.
+/// What a layer's faces are, when they are not its triangles.
+///
+/// One struct rather than three parallel `Option`s so the three cannot drift
+/// apart: an edge list without its face count, or a face count left behind
+/// when the edges were dropped, would each describe a surface that no longer
+/// exists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AuthoredFaces {
+    /// Two vertex indices per edge, in the layer's own vertex order.
+    edges: Vec<u32>,
+    /// How many faces those edges bound.
+    faces: usize,
+    /// How many triangles the layer stores for them, so a scene-wide face
+    /// count needs no second walk of the geometry: this layer contributes
+    /// `faces` where it would otherwise have contributed `triangles`.
+    triangles: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CarriedSpan {
     pub layer: LayerKey,
     /// Positions into the index buffer, not into the vertex buffer: what a
     /// draw call takes is a range of indices.
     pub indices: std::ops::Range<u32>,
+    /// This layer's **authored** face edges, already rebased onto the shared
+    /// buffer, two vertex indices per edge.
+    ///
+    /// `Some` only for a layer a retopology placed. The polyframe draws these
+    /// instead of deriving edges from `indices`, which is the difference
+    /// between a quad mesh looking like quads and looking like its own fan
+    /// triangulation. `None` for every layer whose faces really are
+    /// triangles, where deriving is the right answer.
+    pub edges: Option<Vec<u32>>,
 }
 
 /// The one buffer every carried layer is concatenated into.
@@ -1207,6 +1264,26 @@ pub struct ClayDocument {
     /// clears it is the engine truncating the redo stack, which is the only
     /// event that makes a recorded depth unreachable. See [`Rebuild`].
     rebuilds: Vec<Rebuild>,
+    /// Which layer a retopology now running on a worker was asked about, and
+    /// what revision it was at when the work started.
+    ///
+    /// A retopology rebuilds the layer **in place**, which is what ZBrush's
+    /// ZRemesher and this application's own Rebuild both do — so the result
+    /// has to find its way back to the layer the sculptor asked about, and
+    /// `RetopoResult` carries a name rather than an identity. Stashed here at
+    /// `retopo_source` time instead of widening the domain trait, because the
+    /// identity is the *document's* business: the interface asked about "the
+    /// active subtool" and which one that was is not a fact the worker should
+    /// have to carry.
+    ///
+    /// The revision is the other half and the important one. The work happens
+    /// off the interface thread and nothing stops a sculptor stroking the
+    /// source while it runs, so the commit is a compare-and-swap:
+    /// `clay_document_replace_mesh_layer` refuses with `FORWARD_VERSION` if
+    /// the layer moved underneath, and its refusal leaves the layer
+    /// byte-identical. Beside-placement never needed this, which is part of
+    /// what made it the easier first shape.
+    retopo_target: Option<(LayerKey, u64)>,
     crossing_redo: Vec<Crossing>,
     /// Layers an undone crossing has taken off the scene.
     ///
@@ -1380,6 +1457,7 @@ impl ClayDocument {
             mesh_redo: Vec::new(),
             crossing_undo: Vec::new(),
             rebuilds: Vec::new(),
+            retopo_target: None,
             crossing_redo: Vec::new(),
             suppressed: std::collections::HashSet::new(),
             retired: std::collections::HashMap::new(),
@@ -2864,6 +2942,9 @@ impl ClayDocument {
             // the field alone called a document holding one sculpted grid
             // empty.
             triangles: self.stats.triangles,
+            // Recomputed by `stats()` from what the layers recorded; this
+            // internal copy carries the viewport's counts only.
+            faces: None,
             vertices: self.stats.vertices,
             objects: self.layers.len().max(1),
             detail: self.stats.detail,
@@ -5607,6 +5688,10 @@ impl ClayDocument {
         for (index, representation, name) in drawn {
             let layer = self.layers[index].key;
             let first = carried.indices.len() as u32;
+            // Where this layer's vertices will start, so its authored edges
+            // can be rebased exactly as `CarriedBuffer::append` rebases its
+            // indices. Read before the append, because that is what moves it.
+            let vertex_base = carried.positions.len() as u32;
             match representation {
                 Representation::Voxel => self.append_voxel_layer(index, &mut carried),
                 // From the display level, never from the cage the layer holds:
@@ -5620,9 +5705,34 @@ impl ClayDocument {
             // an exception in it.
             let last = carried.indices.len() as u32;
             if last > first {
+                // Rebased, and checked against what this layer actually
+                // contributed. The check is defence rather than doubt: every
+                // site that replaces a layer's topology drops these, and if
+                // one is ever added that forgets, the failure without this is
+                // an index buffer pointing past the vertices — which the GPU
+                // does not refuse, it just draws somewhere else.
+                let contributed = carried.positions.len() as u32 - vertex_base;
+                let edges = self.layers[index].authored.as_ref().and_then(|authored| {
+                    if authored.edges.iter().any(|&vertex| vertex >= contributed) {
+                        eprintln!(
+                            "as arestas guardadas da camada excedem os {contributed} \
+                             vértices que ela desenha; a malha aparente vai usar a \
+                             triangulação"
+                        );
+                        return None;
+                    }
+                    Some(
+                        authored
+                            .edges
+                            .iter()
+                            .map(|vertex| vertex + vertex_base)
+                            .collect(),
+                    )
+                });
                 spans.push(CarriedSpan {
                     layer,
                     indices: first..last,
+                    edges,
                 });
             }
         }
@@ -7468,6 +7578,13 @@ impl SculptModel for ClayDocument {
         );
         SceneStats {
             triangles,
+            // Faces only where the drawn geometry actually has some that are
+            // not triangles. A layer with authored faces contributes those
+            // instead of its triangles, so the row reads as a polygon count
+            // rather than as a second copy of the triangle count — which is
+            // what it was, and why a 100%-quad retopology looked like it had
+            // not happened.
+            faces: self.drawn_faces(triangles),
             vertices,
             objects: self.stats.objects,
             // Reported once something has been meshed; until then the
@@ -8720,6 +8837,19 @@ impl SceneModel for ClayDocument {
         // same vertex and index counts — a refusal arriving on the sculptor's
         // next stroke is a failure this side can simply not create.
         self.mesh_sculptors.borrow_mut().forget(key);
+        // And the authored faces with it. A rebuild replaces every vertex and
+        // index, so an edge list kept from a retopology now describes a
+        // surface that does not exist — ClayCore says the same thing about its
+        // own quad array in `mesh_data.h`, and its
+        // `clay_document_replace_mesh_layer` refuses a replacement that is
+        // neither quad-free nor quad-consistent for this reason. Dropped
+        // before the rebuild rather than after, so a failure part-way cannot
+        // leave the pair disagreeing.
+        //
+        // Not shared with `move_active_mesh_vertices`, deliberately: a conform
+        // moves positions and rewires nothing, so its edges stay true and a
+        // conformed quad mesh is still a quad mesh.
+        self.layers[index].authored = None;
 
         let settings = settings.sanitized();
         // The form's longest extent, which is what turns the sculptor's switch
@@ -9366,6 +9496,7 @@ impl ClayDocument {
             mesh_redo: Vec::new(),
             crossing_undo: Vec::new(),
             rebuilds: Vec::new(),
+            retopo_target: None,
             crossing_redo: Vec::new(),
             suppressed: std::collections::HashSet::new(),
             retired: std::collections::HashMap::new(),
@@ -12223,47 +12354,142 @@ impl ClayDocument {
         Ok(())
     }
 
+    /// The revision the active mesh layer is at, and the key it belongs to.
+    ///
+    /// Read before a retopology is dispatched so the commit can be a
+    /// compare-and-swap. See [`ClayDocument::retopo_target`].
+    pub(crate) fn remember_retopo_target(&mut self) -> Result<(), ModelError> {
+        let key = self.active_layer().key;
+        let id = self.layers[self.index_of(key)?].id;
+        let revision = self
+            .document
+            .mesh_layer_revision(id)
+            .map_err(ModelError::engine)?;
+        self.retopo_target = Some((key, revision));
+        Ok(())
+    }
+
+    /// Rebuilds a mesh layer's topology **in place**, from a retopology.
+    ///
+    /// The same shape as [`ClayDocument::remesh_layer`] and for the same
+    /// reason: a sculptor asked to rebuild the topology of the thing they are
+    /// looking at, and ZBrush's ZRemesher, its Dynamesh and this
+    /// application's own Rebuild all answer that on the subtool itself.
+    /// Placing the result beside the source instead — which is what this did
+    /// first — leaves the sculptor to delete one of two subtools every time,
+    /// and makes the *stack* the record of an operation that history already
+    /// records.
+    ///
+    /// `expected_revision` is what the layer was at when the work started.
+    /// The engine refuses with `FORWARD_VERSION` if it has moved since, and
+    /// leaves the layer byte-identical — so a stroke landing on the source
+    /// while a retopology ran costs the retopology and not the stroke, which
+    /// is the right way round.
+    pub(crate) fn replace_mesh_with_quads(
+        &mut self,
+        key: LayerKey,
+        expected_revision: u64,
+        positions: &[[f32; 3]],
+        indices: &[u32],
+        edges: &[u32],
+        faces: usize,
+    ) -> Result<(), ModelError> {
+        let index = self.index_of(key)?;
+        let layer = &self.layers[index];
+        if layer.representation != Representation::Mesh {
+            return Err(ModelError::engine(
+                "retopologizar reconstrói a topologia de uma malha; esta camada não é uma",
+            ));
+        }
+        if let Some(refusal) = layer.protection.refusal() {
+            return Err(ModelError::engine(refusal));
+        }
+        let id = layer.id;
+
+        // Before the replacement, as a rebuild does it: the sculptor holds an
+        // adjacency and a BVH over triangles that are about to stop existing,
+        // and the authored faces would describe a surface that no longer does.
+        self.mesh_sculptors.borrow_mut().forget(key);
+        self.layers[index].authored = None;
+
+        let mesh =
+            claycore::Mesh::from_triangles(positions, indices).map_err(ModelError::engine)?;
+        self.document
+            .replace_mesh_layer(id, &mesh, expected_revision)
+            .map_err(|e| {
+                ModelError::engine(format!(
+                    "a camada mudou enquanto a retopologia corria, por isso não foi \
+                     aplicada: {e}"
+                ))
+            })?;
+
+        // And the new faces, now that the geometry they describe is the one
+        // the layer holds.
+        if !edges.is_empty() {
+            let bound = positions.len() as u32;
+            if edges.len() % 2 == 0 && edges.iter().all(|&v| v < bound) {
+                self.layers[index].authored = Some(AuthoredFaces {
+                    edges: edges.to_vec(),
+                    faces,
+                    triangles: indices.len() / 3,
+                });
+            }
+        }
+
+        self.refresh_mesh_bounds(key);
+        self.settle_geometry_revisions();
+        // As a rebuild records itself, so a step across this in either
+        // direction is recognisable later. A retopology replaces every vertex
+        // and index exactly as a rebuild does, so the record is the same kind
+        // of event — see [`Rebuild`].
+        self.rebuilds.push(Rebuild {
+            layer: key,
+            engine_depth: self.engine_undo_depth(),
+        });
+        Ok(())
+    }
+
+    /// The stashed retopology target, taken so it cannot be used twice.
+    pub(crate) fn take_retopo_target(&mut self) -> Option<(LayerKey, u64)> {
+        self.retopo_target.take()
+    }
+
     /// The active subtool's name.
     pub(crate) fn scene_layers_name(&self) -> String {
         self.active_layer().name.clone()
     }
 
-    /// Attaches a retopologised surface as a new mesh subtool beside its
-    /// source, in one undo entry.
-    ///
-    /// Bracketed for the reason a crossing and a boolean are: making the layer
-    /// and filling it are several engine edits and a sculptor asked for one
-    /// thing. Without the group, undo takes back the filling and leaves an
-    /// empty layer standing.
-    pub(crate) fn attach_quads_beside_the_source(
-        &mut self,
-        positions: &[[f32; 3]],
-        indices: &[u32],
-    ) -> Result<LayerKey, ModelError> {
-        let name = format!("{} · quads", self.active_layer().name);
-        self.attach_quads_named(positions, indices, &name)
-    }
+    // NO `attach_quads_*` HERE ANY MORE. A retopology used to arrive as a new
+    // subtool beside its source, on the reasoning that a sculptor who cannot
+    // compare the result against the sculpt cannot judge it. Reported from a
+    // session as the wrong trade: it left two subtools to choose between after
+    // every retopology, and made the *stack* the record of an operation the
+    // history already records. ZBrush's ZRemesher, its Dynamesh and this
+    // application's own Rebuild all rebuild the subtool in front of you, and
+    // one undo is the comparison. See `replace_mesh_with_quads`.
 
-    /// The same, with the name already chosen — which is what a retopology
-    /// that ran on a worker thread has: it took the source's name with it
-    /// rather than reaching back into a document it cannot touch.
-    pub(crate) fn attach_quads_named(
-        &mut self,
-        positions: &[[f32; 3]],
-        indices: &[u32],
-        name: &str,
-    ) -> Result<LayerKey, ModelError> {
-        let name = self.unique_layer_name(name);
-        let mesh =
-            claycore::Mesh::from_triangles(positions, indices).map_err(ModelError::engine)?;
-        self.document
-            .begin_undo_group()
-            .map_err(ModelError::engine)?;
-        let attached = self.attach_meshed_layer(mesh, &name);
-        let closed = self.document.end_undo_group().map_err(ModelError::engine);
-        let key = attached?;
-        closed?;
-        Ok(key)
+    /// The scene's face count, or `None` when every drawn face is a triangle.
+    ///
+    /// Derived from what each layer recorded at placement rather than by
+    /// walking the geometry again: a layer with authored faces contributes
+    /// `faces` where it would otherwise have contributed `triangles`, so the
+    /// difference is subtracted from the total the viewport reported.
+    ///
+    /// `None` rather than "the same as triangles", so a reader shows the
+    /// triangle count instead of implying a distinction that is not there.
+    fn drawn_faces(&self, triangles: usize) -> Option<usize> {
+        let mut saved = 0usize;
+        let mut any = false;
+        for layer in &self.layers {
+            if !layer.visible {
+                continue;
+            }
+            if let Some(authored) = &layer.authored {
+                any = true;
+                saved += authored.triangles.saturating_sub(authored.faces);
+            }
+        }
+        any.then(|| triangles.saturating_sub(saved))
     }
 
     fn unique_layer_name(&self, base: &str) -> String {
