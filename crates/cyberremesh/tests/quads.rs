@@ -129,3 +129,62 @@ fn every_offered_quad_method_runs() {
         }
     }
 }
+
+/// The authored edges are not the triangulation's edges.
+///
+/// This is the assertion the retopology feature actually rests on, and it was
+/// missing: `a_sculpt_crosses_the_bridge_and_comes_back_as_quads` proves the
+/// engine *made* quads, and nothing proved a wireframe could be drawn from
+/// them. A host that fetches `triangle_indices` for its overlay draws
+/// triangles from a quad mesh and the sculptor sees no quads at all — which is
+/// exactly what happened here.
+///
+/// A closed pure-quad mesh of F faces has 2F edges (Euler, each edge shared by
+/// two quads). Its fan triangulation has 3F: the same 2F plus one diagonal per
+/// quad. So `edges < 3F` is the observable that says the diagonals are absent,
+/// and it is two-sided — a buffer that had included them could not satisfy it.
+#[test]
+fn the_edges_are_the_quads_and_not_their_triangulation() {
+    cyberremesh::set_max_worker_threads(4).expect("the cap");
+    let Some(source) = across() else {
+        return;
+    };
+    let quads = remesh(
+        &source,
+        RemeshParams {
+            target_quads: 400,
+            method: QuadMethod::ZRemesher,
+            ..RemeshParams::default()
+        },
+        &mut Unwatched,
+    )
+    .expect("the retopology");
+
+    assert!(
+        quads.render_order_is_positions_order(),
+        "the index buffers are in render order and the positions are not, so a \
+         wireframe drawn from these edges would join the wrong points"
+    );
+
+    let faces = quads.face_count();
+    let edges = quads.edge_count();
+    let indices = quads.edge_indices();
+    println!(
+        "  {faces} faces, {} triangles, {edges} authored edges",
+        quads.triangle_count()
+    );
+
+    assert_eq!(indices.len(), edges * 2, "two vertex indices per edge");
+    assert!(edges > 0, "a retopologised mesh with no edges");
+    assert!(
+        edges < faces * 3,
+        "{edges} edges for {faces} faces — a fan triangulation of F quads has \
+         3F edges and the quads themselves have 2F, so this buffer is \
+         carrying the diagonals a wireframe must not draw"
+    );
+    let bound = quads.vertex_count() as u32;
+    assert!(
+        indices.iter().all(|&v| v < bound),
+        "an edge indexes a vertex the mesh does not have"
+    );
+}
