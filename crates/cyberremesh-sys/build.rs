@@ -312,4 +312,30 @@ fn emit_rerun_directives(engine: &Path) {
         "cargo:rerun-if-changed={}",
         engine.join("CMakeLists.txt").display()
     );
+    // **The directories, not a list of files** — the same set
+    // `claycore-sys::emit_rerun_directives` walks, for the same reason, and
+    // this crate had diverged from it.
+    //
+    // Two concrete holes that left. `CYBER_REQUIRE_QUADCOVER` — the option
+    // deciding whether a missing solver is a configure error or a silent
+    // fallback to a different quadrangulator — lives in
+    // `cmake/QuadCoverSolver.cmake` and not at the top level, so editing the
+    // file that governs this build did not re-run this script. And nothing
+    // watched `capi/` or `src/` at all, so editing the engine's own C++ left
+    // Cargo believing the build script's output was current: CMake never ran
+    // and the previously built library stayed linked.
+    //
+    // Cargo watches a directory recursively, so this covers files added
+    // later too. That is the point of the shape: the gap was not one
+    // forgotten file, it was that the list was a list.
+    //
+    // `thirdparty/` is deliberately absent. It moves only when the submodule
+    // pin moves, and `check_submodule_revision` is what catches that — a
+    // rebuild trigger would be the weaker of the two guards.
+    for dir in ["capi", "src", "cmake"] {
+        let path = engine.join(dir);
+        if path.is_dir() {
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
+    }
 }
