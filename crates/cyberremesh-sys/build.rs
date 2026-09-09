@@ -278,7 +278,21 @@ fn generate_bindings(engine: &Path) {
         .default_enum_style(bindgen::EnumVariation::ModuleConsts)
         .derive_debug(true)
         .derive_default(true)
-        .layout_tests(false)
+        // **On, matching `claycore-sys`.** This said `false` and the saving was
+        // build time, which is the wrong trade for a crate whose entire risk
+        // model is that the pin moves and nothing says so. The generated
+        // `bindgen_test_layout_*` assertions pin every struct's size, its
+        // alignment and each field's offset, per target, *from the header* —
+        // so unlike a hand-written manifest they cannot rot.
+        //
+        // They check placement and not type identity, so a `const float*`
+        // swapped for a `const double*` of the same width still passes. That
+        // is a real hole and it is the reason they are a partial guard rather
+        // than the whole one; the engine's own team hit exactly it when
+        // designing a layout manifest, along with a field landing in existing
+        // trailing padding. A `cargo test` that fails when a struct moves is
+        // still worth more than the seconds it costs.
+        .layout_tests(true)
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .generate()
         .expect("the retopology engine's header could not be bound");
