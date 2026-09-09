@@ -176,6 +176,47 @@ impl Mesh {
         self.raw.as_ptr()
     }
 
+    /// Builds a mesh from positions and a triangulation.
+    ///
+    /// The way a surface produced outside this library — a retopologiser's
+    /// output, most of all — becomes something a document can hold.
+    ///
+    /// An index past the end is checked here rather than left to the engine,
+    /// because that is the one malformed input which reads memory instead of
+    /// returning a status.
+    pub fn from_triangles(positions: &[[f32; 3]], indices: &[u32]) -> Result<Self> {
+        if indices.len() % 3 != 0 {
+            return Err(raw_failure(
+                "clay_mesh_from_triangles",
+                ErrorKind::InvalidArgument,
+            ));
+        }
+        if indices.iter().any(|&i| i as usize >= positions.len()) {
+            return Err(raw_failure(
+                "clay_mesh_from_triangles",
+                ErrorKind::InvalidArgument,
+            ));
+        }
+        let mut raw = std::ptr::null_mut();
+        // SAFETY: `positions` is `vertex_count` triples and `indices` is
+        // `index_count` u32s, each count taken from the slice it describes;
+        // every index has been checked to name a vertex; the out-parameter is
+        // written only on success.
+        check(
+            unsafe {
+                sys::clay_mesh_from_triangles(
+                    positions.as_ptr() as *const f32,
+                    positions.len(),
+                    indices.as_ptr(),
+                    indices.len(),
+                    &mut raw,
+                )
+            },
+            "clay_mesh_from_triangles",
+        )?;
+        Self::from_raw(raw, "clay_mesh_from_triangles")
+    }
+
     /// Reads a mesh from a file. Format follows the extension.
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         Self::load_within(path, ImportBudget::default())
@@ -204,6 +245,144 @@ impl Mesh {
             unsafe { sys::clay_mesh_save(self.raw.as_ptr(), c_path.as_ptr()) },
             "clay_mesh_save",
         )
+    }
+
+    /// Writes the **sculpt handoff** profile: the file a retopology engine
+    /// reads to take this sculpt into `retopo -> UV -> bake`.
+    ///
+    /// **Not [`Self::save`], and the difference is not cosmetic.** `save`
+    /// declares a mesh's *quads* as its faces where it has them, and
+    /// CyberRemesher's reader refuses any arity but triangles — one line,
+    /// `if (face.size() != 3)`, at `handoff.cpp:403`. So the best export this
+    /// library can produce is precisely the file that pipeline rejects. This
+    /// call is the one that does not: the engine guarantees triangles, and
+    /// computes normals where the mesh has none because their reader requires
+    /// them. Neither guarantee is something a caller could be expected to know.
+    ///
+    /// The format is **theirs**, not ours — `docs/sculpt-handoff-format.md`
+    /// version 1.0, which the engine's own header defers to: "where their spec
+    /// and this header disagree, their spec is right."
+    ///
+    /// `producer` labels who made it; `None` takes the engine's default.
+    /// `material_mask` becomes the per-vertex `material_mix` channel — their
+    /// spec's blend weight between two material slots, which ClayCore does not
+    /// have and does not invent, so a painted mask supplies the scalar. `None`
+    /// writes zeros, the honest answer for a document that never expressed one.
+    pub fn save_handoff(
+        &self,
+        path: impl AsRef<Path>,
+        producer: Option<&str>,
+        material_mask: Option<&crate::Mask>,
+        binary: bool,
+    ) -> Result<()> {
+        let c_path = crate::cstring(
+            path.as_ref().to_string_lossy().as_ref(),
+            "clay_mesh_save_handoff",
+        )?;
+        let label = producer
+            .map(|name| crate::cstring(name, "clay_mesh_save_handoff"))
+            .transpose()?;
+        // SAFETY: the mesh and the optional mask are valid handles; both C
+        // strings outlive the call; a null producer and a null mask are the
+        // documented ways to ask for the default label and for zeros.
+        check(
+            unsafe {
+                sys::clay_mesh_save_handoff(
+                    self.raw.as_ptr(),
+                    c_path.as_ptr(),
+                    label.as_ref().map_or(std::ptr::null(), |l| l.as_ptr()),
+                    material_mask.map_or(std::ptr::null(), |m| m.as_ptr()),
+                    i32::from(binary),
+                )
+            },
+            "clay_mesh_save_handoff",
+        )
+    }
+
+    /// The same bytes, in memory, for the pipe route their CLI documents:
+    ///
+    /// ```sh
+    /// producer --for-retopo | cyberremesh --target - --output low.obj
+    /// ```
+    ///
+    /// An in-process producer needs no temporary file and gets the same version
+    /// gate either way.
+    pub fn handoff_bytes(
+        &self,
+        producer: Option<&str>,
+        material_mask: Option<&crate::Mask>,
+        binary: bool,
+    ) -> Result<Vec<u8>> {
+        let label = producer
+            .map(|name| crate::cstring(name, "clay_mesh_save_handoff_memory"))
+            .transpose()?;
+        let mut blob = std::ptr::null_mut();
+        // SAFETY: as `save_handoff`, with an owned blob written only on
+        // success.
+        check(
+            unsafe {
+                sys::clay_mesh_save_handoff_memory(
+                    self.raw.as_ptr(),
+                    label.as_ref().map_or(std::ptr::null(), |l| l.as_ptr()),
+                    material_mask.map_or(std::ptr::null(), |m| m.as_ptr()),
+                    i32::from(binary),
+                    &mut blob,
+                )
+            },
+            "clay_mesh_save_handoff_memory",
+        )?;
+        let blob = NonNull::new(blob).ok_or_else(|| {
+            raw_failure("clay_mesh_save_handoff_memory", ErrorKind::InvalidArgument)
+        })?;
+        // Copied out and the blob released here rather than handed up, so the
+        // caller owns a `Vec` and there is no engine handle to leak on an
+        // early return above.
+        //
+        // SAFETY: an owned blob; data and size describe the same allocation,
+        // and the copy happens before the destroy.
+        let bytes = unsafe {
+            let data = sys::clay_blob_data(blob.as_ptr());
+            let size = sys::clay_blob_size(blob.as_ptr());
+            let bytes = if data.is_null() || size == 0 {
+                Vec::new()
+            } else {
+                std::slice::from_raw_parts(data, size).to_vec()
+            };
+            sys::clay_blob_destroy(blob.as_ptr());
+            bytes
+        };
+        Ok(bytes)
+    }
+
+    /// The one array of the in-memory buffer profile that cannot be borrowed
+    /// from what is already exposed.
+    ///
+    /// Their `BufferView` wants positions, normals, colours, material mix and
+    /// indices. Four of the five are already borrowed pointers on this type, so
+    /// a struct here would duplicate one they own and give the two engines two
+    /// places to disagree about the layout. This produces the fifth.
+    ///
+    /// A `None` mask fills zeros.
+    pub fn handoff_material_mix(&self, material_mask: Option<&crate::Mask>) -> Result<Vec<f32>> {
+        let capacity = self.vertex_count();
+        let mut values = vec![0.0f32; capacity];
+        let mut count = 0usize;
+        // SAFETY: `values` has `capacity` floats and the capacity is passed
+        // beside it; `count` is written on success.
+        check(
+            unsafe {
+                sys::clay_mesh_handoff_material_mix(
+                    self.raw.as_ptr(),
+                    material_mask.map_or(std::ptr::null(), |m| m.as_ptr()),
+                    values.as_mut_ptr(),
+                    capacity,
+                    &mut count,
+                )
+            },
+            "clay_mesh_handoff_material_mix",
+        )?;
+        values.truncate(count);
+        Ok(values)
     }
 
     pub fn vertex_count(&self) -> usize {

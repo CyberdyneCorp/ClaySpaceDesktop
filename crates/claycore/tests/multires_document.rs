@@ -73,11 +73,21 @@ fn cage(divisions: usize, half: f32, name: &str) -> Mesh {
     mesh
 }
 
-/// A path in the temporary directory, unique to this process and this name.
+/// A path in the temporary directory that no other fixture can be handed.
+///
+/// Unique per *call* rather than per name. Tests in one integration binary
+/// run as parallel threads of one process, so pid-plus-label collides the
+/// moment two tests choose the same label, and the first to finish deletes
+/// the file the second is loading. `deformers.rs` fixed that class with a
+/// counter after being bitten by it; this is the same fix, applied before
+/// rather than after.
 fn scratch(name: &str, extension: &str) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static NEXT: AtomicU32 = AtomicU32::new(0);
     std::env::temp_dir().join(format!(
-        "claycore-multires-document-{name}-{}.{extension}",
-        std::process::id()
+        "claycore-multires-document-{name}-{}-{}.{extension}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
     ))
 }
 

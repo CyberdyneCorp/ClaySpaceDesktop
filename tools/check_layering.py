@@ -79,6 +79,45 @@ FORBIDDEN: list[tuple[str, str, str]] = [
         "the agent-facing crate must not reach the engine's FFI",
     ),
     (
+        "clayspace-view",
+        "cyberremesh",
+        "the View layer must not reach the retopology engine either; it reads "
+        "ViewModel state and emits commands",
+    ),
+    (
+        "clayspace-view",
+        "cyberremesh-sys",
+        "the View layer must not reach the retopology engine's FFI",
+    ),
+    (
+        "clayspace-vm",
+        "cyberremesh",
+        "ViewModels are handed a `Retopologiser` through the domain's trait; "
+        "knowing which engine implements it is the composition root's business",
+    ),
+    (
+        "clayspace-vm",
+        "cyberremesh-sys",
+        "ViewModels must not reach the retopology engine's FFI",
+    ),
+    (
+        "clayspace-model",
+        "cyberremesh",
+        "the Model layer is domain logic and knows of no engine; the "
+        "retopology seam is a trait it declares, not a library it calls",
+    ),
+    (
+        "clayspace-mcp",
+        "cyberremesh",
+        "the agent-facing crate reaches the application through commands, not "
+        "the retopology engine",
+    ),
+    (
+        "clayspace-mcp",
+        "cyberremesh-sys",
+        "the agent-facing crate must not reach the retopology engine's FFI",
+    ),
+    (
         "clayspace-mcp",
         "clayspace-engine",
         "the agent-facing crate must not reach the engine adapter either",
@@ -128,7 +167,12 @@ FORBIDDEN: list[tuple[str, str, str]] = [
 # Only these crates may contain `unsafe`. Everything else declares
 # `#![forbid(unsafe_code)]`, which the compiler enforces; this catches a crate
 # that quietly drops the declaration.
-UNSAFE_ALLOWED = {"claycore-sys", "claycore"}
+#
+# Four rather than two, because there are two vendored C++ engines: ClayCore
+# answers what the shape is, CyberRemesher rebuilds its topology, lays out its
+# UVs and bakes its maps. Each has a generated `-sys` crate and a safe wrapper,
+# and the wrapper is where the ownership rules live.
+UNSAFE_ALLOWED = {"claycore-sys", "claycore", "cyberremesh-sys", "cyberremesh"}
 
 
 def workspace_metadata() -> dict:

@@ -401,6 +401,72 @@ pub struct Strings {
     pub remesh_pieces: &'static str,
     pub remesh_uvs_dropped: &'static str,
     pub remesh_not_watertight: &'static str,
+    /// Retopology to quads, through the retopology engine.
+    pub retopo_heading: &'static str,
+    pub retopo_hint: &'static str,
+    pub retopo_target: &'static str,
+    pub retopo_target_hint: &'static str,
+    pub retopo_method: &'static str,
+    /// The five quadrangulators, in `QuadMethod::ALL` order. Two are proper
+    /// nouns and stay as they are in every locale; three are descriptions and
+    /// must not.
+    pub retopo_method_names: [&'static str; clayspace_model::QuadMethod::ALL.len()],
+    /// One line each on what a sculptor is choosing between, in
+    /// `QuadMethod::ALL` order. Prose, so it needs translating more than the
+    /// names do — and the label tripwire in `design.rs` could not see it,
+    /// which is why it is here rather than still on the domain type.
+    pub retopo_method_hints: [&'static str; clayspace_model::QuadMethod::ALL.len()],
+    /// The four maps a bake can write, in `BakeMap::ALL` order.
+    pub bake_map_names: [&'static str; clayspace_model::BakeMap::ALL.len()],
+    pub retopo_pure: &'static str,
+    pub retopo_pure_hint: &'static str,
+    pub retopo_sharp: &'static str,
+    pub retopo_sharp_hint: &'static str,
+    pub retopo_adaptivity: &'static str,
+    pub retopo_adaptivity_hint: &'static str,
+    pub retopo_action: &'static str,
+    pub retopo_cancel: &'static str,
+    pub retopo_running: &'static str,
+    pub retopo_outcome: &'static str,
+    /// The UV layout.
+    pub uv_heading: &'static str,
+    pub uv_hint: &'static str,
+    pub uv_texture: &'static str,
+    pub uv_chart_angle: &'static str,
+    pub uv_chart_angle_hint: &'static str,
+    pub uv_margin: &'static str,
+    pub uv_reorient: &'static str,
+    pub uv_reorient_hint: &'static str,
+    pub uv_merge: &'static str,
+    pub uv_merge_hint: &'static str,
+    pub uv_action: &'static str,
+    pub uv_running: &'static str,
+    pub uv_charts: &'static str,
+    pub uv_distortion: &'static str,
+    pub uv_flipped: &'static str,
+    pub uv_coverage: &'static str,
+    /// Baking maps from the field.
+    pub bake_heading: &'static str,
+    pub bake_hint: &'static str,
+    pub bake_size: &'static str,
+    pub bake_cage: &'static str,
+    pub bake_cage_hint: &'static str,
+    pub bake_ao_samples: &'static str,
+    pub bake_ao_radius: &'static str,
+    pub bake_choose: &'static str,
+    pub bake_action: &'static str,
+    pub bake_running: &'static str,
+    pub bake_written: &'static str,
+    /// Conforming a retopologised mesh onto a field that has moved.
+    pub conform_heading: &'static str,
+    pub conform_hint: &'static str,
+    pub conform_threshold: &'static str,
+    pub conform_threshold_hint: &'static str,
+    pub conform_action: &'static str,
+    pub conform_running: &'static str,
+    pub conform_moved: &'static str,
+    pub conform_deviation: &'static str,
+    pub conform_flagged: &'static str,
     pub sculpt_recording: &'static str,
     pub sculpt_cells: &'static str,
     pub sculpt_remove: &'static str,
@@ -949,6 +1015,84 @@ libera em vez de congelar.",
     remesh_pieces: "peças",
     remesh_uvs_dropped: "as coordenadas de textura foram descartadas",
     remesh_not_watertight: "o resultado não ficou fechado",
+    retopo_heading: "Retopologia para quads",
+    retopo_hint: "reconstrói a topologia como quads, com anéis de aresta — \
+                  chega como uma nova subferramenta ao lado da original, para \
+                  que dê para comparar",
+    retopo_target: "Quads",
+    retopo_target_hint: "quantidade pretendida; o motor procura pelo \
+                         comprimento de aresta, portanto aproxima e nunca acerta",
+    retopo_method: "Método",
+    retopo_method_names: ["QuadCover", "ZRemesher", "Alinhado ao campo", "Instant Meshes", "Inteiro"],
+    retopo_method_hints: [
+        "O padrão do motor. Isolinhas de um campo cruzado sem costuras.",
+        "Acrescenta a etapa de layout: onde ficam os anéis de aresta e as \
+         singularidades deixa de ser consequência e passa a ser resultado.",
+        "Mais forte em geometria de caixa e CAD.",
+        "Extractor por campo de posições.",
+        "Experimental: parametrização inteira.",
+    ],
+    bake_map_names: ["Normais", "Oclusão ambiente", "Curvatura", "Cavidade"],
+    retopo_pure: "Só quads",
+    retopo_pure_hint: "subdivide e relaxa sobre a superfície até não sobrar \
+                       triângulo nenhum",
+    retopo_sharp: "Arestas vivas",
+    retopo_sharp_hint: "ângulo diedro abaixo do qual uma aresta conta como \
+                        característica",
+    retopo_adaptivity: "Adaptação",
+    retopo_adaptivity_hint: "0 uniforme, 1 segue a curvatura",
+    retopo_action: "Retopologizar",
+    retopo_cancel: "Cancelar",
+    retopo_running: "a retopologia está a correr",
+    retopo_outcome: "faces",
+    uv_heading: "Desdobramento UV",
+    uv_hint: "corta em ilhas, desdobra cada uma e empacota no quadrado UV — o \
+              atlas fica no motor de retopologia, que é quem o escreve na \
+              exportação",
+    uv_texture: "Textura",
+    uv_chart_angle: "Ângulo da ilha",
+    uv_chart_angle_hint: "quanto as normais de uma ilha podem abrir antes de \
+                          ser cortada",
+    uv_margin: "Margem",
+    uv_reorient: "Reorientar ilhas",
+    uv_reorient_hint: "gira cada ilha para a sua caixa de área mínima, o que \
+                       quase duplica a cobertura em formas de caixa",
+    uv_merge: "Juntar ilhas",
+    uv_merge_hint: "junta ilhas adjacentes onde não custa distorção, e depois \
+                    onde custa menos que o limite",
+    uv_action: "Desdobrar",
+    uv_running: "o desdobramento está a correr",
+    uv_charts: "ilhas",
+    uv_distortion: "distorção",
+    uv_flipped: "ilhas invertidas",
+    uv_coverage: "cobertura",
+    bake_heading: "Cozer mapas",
+    bake_hint: "amostra o campo directamente em vez de uma malha de alta \
+                densidade: o raio da gaiola é traçado pela superfície real e \
+                as normais vêm de gradientes exactos, sem precisar de exportar \
+                nada",
+    bake_size: "Tamanho",
+    bake_cage: "Gaiola",
+    bake_cage_hint: "a que distância da superfície o raio começa",
+    bake_ao_samples: "Amostras",
+    bake_ao_radius: "Raio",
+    bake_choose: "Escolher onde gravar…",
+    bake_action: "Cozer",
+    bake_running: "a cozedura está a correr",
+    bake_written: "escritos",
+    conform_heading: "Conformar ao campo",
+    conform_hint: "volta a assentar esta malha na superfície actual do campo \
+                   preservando a topologia exactamente — é o que se usa quando \
+                   a escultura mudou depois da retopologia, em vez de \
+                   retopologizar outra vez e perder os anéis de aresta",
+    conform_threshold: "Limite",
+    conform_threshold_hint: "a partir de que distância um vértice que viajou \
+                             passa a ser assinalado",
+    conform_action: "Conformar",
+    conform_running: "a conformação está a correr",
+    conform_moved: "vértices movidos",
+    conform_deviation: "desvio",
+    conform_flagged: "assinalados",
     sculpt_recording: "gravando",
     sculpt_cells: "células",
     sculpt_remove: "remover o passe",
@@ -1425,6 +1569,80 @@ instead.",
     remesh_pieces: "pieces",
     remesh_uvs_dropped: "texture coordinates were dropped",
     remesh_not_watertight: "the result did not come out closed",
+    retopo_heading: "Retopologise to quads",
+    retopo_hint: "rebuilds the topology as quads with edge loops — arrives as \
+                  a new subtool beside the original, so the two can be compared",
+    retopo_target: "Quads",
+    retopo_target_hint: "how many to aim at; the engine searches over edge \
+                         length, so it is approached and never hit",
+    retopo_method: "Method",
+    retopo_method_names: ["QuadCover", "ZRemesher", "Field-aligned", "Instant Meshes", "Integer"],
+    retopo_method_hints: [
+        "The engine's default. Isolines of a seamless cross field.",
+        "Adds the layout stage: where the edge loops and singularities fall \
+         stops being a consequence and becomes a result.",
+        "Strongest on box and CAD geometry.",
+        "Position-field extraction.",
+        "Experimental: integer parametrisation.",
+    ],
+    bake_map_names: ["Normals", "Ambient occlusion", "Curvature", "Cavity"],
+    retopo_pure: "Pure quads",
+    retopo_pure_hint: "subdivides and relaxes onto the surface until no \
+                       triangles remain",
+    retopo_sharp: "Sharp edges",
+    retopo_sharp_hint: "the dihedral angle below which an edge counts as a \
+                        feature",
+    retopo_adaptivity: "Adaptivity",
+    retopo_adaptivity_hint: "0 uniform, 1 follows curvature",
+    retopo_action: "Retopologise",
+    retopo_cancel: "Cancel",
+    retopo_running: "a retopology is running",
+    retopo_outcome: "faces",
+    uv_heading: "UV layout",
+    uv_hint: "cuts into islands, unwraps each and packs them into the UV \
+              square — the atlas stays in the retopology engine, which is what \
+              writes it at export",
+    uv_texture: "Texture",
+    uv_chart_angle: "Chart angle",
+    uv_chart_angle_hint: "how far a chart's normals may spread before it is cut",
+    uv_margin: "Margin",
+    uv_reorient: "Reorient charts",
+    uv_reorient_hint: "turns each chart onto its minimum-area box, which \
+                       roughly doubles coverage on box-like forms",
+    uv_merge: "Merge charts",
+    uv_merge_hint: "folds adjacent charts together where it costs no \
+                    distortion, then where it costs less than the bound",
+    uv_action: "Unwrap",
+    uv_running: "a layout is running",
+    uv_charts: "charts",
+    uv_distortion: "distortion",
+    uv_flipped: "flipped charts",
+    uv_coverage: "coverage",
+    bake_heading: "Bake maps",
+    bake_hint: "samples the field directly instead of a high-poly mesh: the \
+                cage ray is traced through the actual surface and normals come \
+                from exact gradients, with nothing to export first",
+    bake_size: "Size",
+    bake_cage: "Cage",
+    bake_cage_hint: "how far off the surface the ray starts",
+    bake_ao_samples: "Samples",
+    bake_ao_radius: "Radius",
+    bake_choose: "Choose where to write…",
+    bake_action: "Bake",
+    bake_running: "a bake is running",
+    bake_written: "written",
+    conform_heading: "Conform to the field",
+    conform_hint: "re-snaps this mesh onto the field's current surface, keeping \
+                   its topology exactly — what to reach for when the sculpt \
+                   changed after the retopology, instead of retopologising \
+                   again and losing the edge loops",
+    conform_threshold: "Threshold",
+    conform_threshold_hint: "how far a vertex may travel before it is named",
+    conform_action: "Conform",
+    conform_running: "a conform is running",
+    conform_moved: "vertices moved",
+    conform_deviation: "deviation",
+    conform_flagged: "flagged",
     sculpt_recording: "recording",
     sculpt_cells: "cells",
     sculpt_remove: "remove the pass",
@@ -1905,6 +2123,85 @@ lados. Con Ctrl, libera en vez de congelar.",
     remesh_pieces: "piezas",
     remesh_uvs_dropped: "se descartaron las coordenadas de textura",
     remesh_not_watertight: "el resultado no quedó cerrado",
+    retopo_heading: "Retopología a quads",
+    retopo_hint: "reconstruye la topología como quads con anillos de aristas — \
+                  llega como una subherramienta nueva junto a la original, \
+                  para poder comparar",
+    retopo_target: "Quads",
+    retopo_target_hint: "cantidad pretendida; el motor busca por la longitud \
+                         de arista, así que se aproxima y nunca acierta",
+    retopo_method: "Método",
+    retopo_method_names: ["QuadCover", "ZRemesher", "Alineado al campo", "Instant Meshes", "Entero"],
+    retopo_method_hints: [
+        "El valor por defecto del motor. Isolíneas de un campo cruzado sin \
+         costuras.",
+        "Añade la etapa de disposición: dónde caen los anillos de aristas y \
+         las singularidades deja de ser una consecuencia y pasa a ser un \
+         resultado.",
+        "Más fuerte en geometría de caja y CAD.",
+        "Extractor por campo de posiciones.",
+        "Experimental: parametrización entera.",
+    ],
+    bake_map_names: ["Normales", "Oclusión ambiental", "Curvatura", "Cavidad"],
+    retopo_pure: "Solo quads",
+    retopo_pure_hint: "subdivide y relaja sobre la superficie hasta que no \
+                       queden triángulos",
+    retopo_sharp: "Aristas vivas",
+    retopo_sharp_hint: "ángulo diedro por debajo del cual una arista cuenta \
+                        como característica",
+    retopo_adaptivity: "Adaptación",
+    retopo_adaptivity_hint: "0 uniforme, 1 sigue la curvatura",
+    retopo_action: "Retopologizar",
+    retopo_cancel: "Cancelar",
+    retopo_running: "una retopología está en curso",
+    retopo_outcome: "caras",
+    uv_heading: "Desplegado UV",
+    uv_hint: "corta en islas, despliega cada una y las empaqueta en el cuadrado \
+              UV — el atlas queda en el motor de retopología, que es quien lo \
+              escribe al exportar",
+    uv_texture: "Textura",
+    uv_chart_angle: "Ángulo de la isla",
+    uv_chart_angle_hint: "cuánto pueden abrirse las normales de una isla antes \
+                          de cortarla",
+    uv_margin: "Margen",
+    uv_reorient: "Reorientar islas",
+    uv_reorient_hint: "gira cada isla a su caja de área mínima, lo que casi \
+                       duplica la cobertura en formas de caja",
+    uv_merge: "Unir islas",
+    uv_merge_hint: "une islas adyacentes donde no cuesta distorsión, y luego \
+                    donde cuesta menos que el límite",
+    uv_action: "Desplegar",
+    uv_running: "el desplegado está en curso",
+    uv_charts: "islas",
+    uv_distortion: "distorsión",
+    uv_flipped: "islas invertidas",
+    uv_coverage: "cobertura",
+    bake_heading: "Cocer mapas",
+    bake_hint: "muestrea el campo directamente en vez de una malla de alta \
+                densidad: el rayo de la jaula se traza por la superficie real \
+                y las normales vienen de gradientes exactos, sin exportar nada",
+    bake_size: "Tamaño",
+    bake_cage: "Jaula",
+    bake_cage_hint: "a qué distancia de la superficie empieza el rayo",
+    bake_ao_samples: "Muestras",
+    bake_ao_radius: "Radio",
+    bake_choose: "Elegir dónde guardar…",
+    bake_action: "Cocer",
+    bake_running: "la cocción está en curso",
+    bake_written: "escritos",
+    conform_heading: "Conformar al campo",
+    conform_hint: "vuelve a asentar esta malla en la superficie actual del \
+                   campo preservando la topología exactamente — es lo que se \
+                   usa cuando la escultura cambió después de la retopología, \
+                   en vez de retopologizar otra vez y perder los anillos",
+    conform_threshold: "Límite",
+    conform_threshold_hint: "a partir de qué distancia se señala un vértice \
+                             que ha viajado",
+    conform_action: "Conformar",
+    conform_running: "la conformación está en curso",
+    conform_moved: "vértices movidos",
+    conform_deviation: "desvío",
+    conform_flagged: "señalados",
     sculpt_recording: "grabando",
     sculpt_cells: "celdas",
     sculpt_remove: "quitar el pase",
@@ -2157,6 +2454,29 @@ impl Strings {
     /// English screen.
     pub fn combine_name(&self, op: clayspace_model::Combine) -> &'static str {
         Self::at(&self.combine_names, clayspace_model::Combine::ALL, op)
+    }
+
+    /// The name for a quadrangulator, in this locale.
+    pub fn retopo_method_name(&self, method: clayspace_model::QuadMethod) -> &'static str {
+        Self::at(
+            &self.retopo_method_names,
+            clayspace_model::QuadMethod::ALL,
+            method,
+        )
+    }
+
+    /// The one-line hint for a quadrangulator, in this locale.
+    pub fn retopo_method_hint(&self, method: clayspace_model::QuadMethod) -> &'static str {
+        Self::at(
+            &self.retopo_method_hints,
+            clayspace_model::QuadMethod::ALL,
+            method,
+        )
+    }
+
+    /// The name for a bakeable map, in this locale.
+    pub fn bake_map_name(&self, map: clayspace_model::BakeMap) -> &'static str {
+        Self::at(&self.bake_map_names, clayspace_model::BakeMap::ALL, map)
     }
 
     /// The name for one of the four views, in this locale.

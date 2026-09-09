@@ -1,6 +1,6 @@
 [package]
 name = "clayspace-engine"
-description = "The ClayCore-backed implementation of the domain's interfaces."
+description = "The engine-backed implementation of the domain's interfaces: ClayCore for the field, CyberRemesher for retopology, UV and baking."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -24,6 +24,7 @@ vulkan = ["claycore/vulkan"]
 opencl = ["claycore/opencl"]
 
 [dependencies]
+cyberremesh = { path = "../cyberremesh" }
 claycore.workspace = true
 clayspace-model = { path = "../clayspace-model" }
 # The engine decodes no images by design — an image decoder in a library that

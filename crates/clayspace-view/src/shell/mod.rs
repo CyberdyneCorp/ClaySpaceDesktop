@@ -149,6 +149,33 @@ pub struct ShellState<'a> {
     /// has been made in this session.
     pub remesh: clayspace_model::RemeshSettings,
     pub remesh_outcome: Option<clayspace_model::RemeshOutcome>,
+    /// What the retopology panel is set to, what the last one came to, and why
+    /// the tool is unavailable where it is.
+    pub retopo: clayspace_model::RetopoSettings,
+    pub retopo_outcome: Option<clayspace_model::RetopoOutcome>,
+    pub retopo_unavailable: Option<String>,
+    /// How far a running retopology has got, and its label. `None` when
+    /// nothing is running.
+    pub retopo_progress: Option<(String, Option<f32>)>,
+    /// The UV panel: what it is set to, what the last layout came to, why it
+    /// is unavailable, and how far a running one has got.
+    pub uv: clayspace_model::UvSettings,
+    pub uv_outcome: Option<clayspace_model::UvOutcome>,
+    pub uv_unavailable: Option<String>,
+    pub uv_progress: Option<(String, Option<f32>)>,
+    /// The bake panel. `bake_into` is where the maps will go, chosen through
+    /// the platform's file panel — `None` until a sculptor has chosen.
+    pub bake: clayspace_model::BakeSettings,
+    pub bake_result: Option<clayspace_model::BakeResult>,
+    pub bake_unavailable: Option<String>,
+    pub bake_progress: Option<(String, Option<f32>)>,
+    pub bake_into: Option<String>,
+    /// The conform panel: how far a vertex may travel before it is named,
+    /// what the last one came to, and why it is unavailable.
+    pub conform: clayspace_model::ConformSettings,
+    pub conform_outcome: Option<clayspace_model::ConformOutcome>,
+    pub conform_unavailable: Option<String>,
+    pub conform_progress: Option<(String, Option<f32>)>,
     /// The boolean panel: whether it is open, what it is set to, what could
     /// take part, what the pair would cost, and why the last attempt was
     /// refused.

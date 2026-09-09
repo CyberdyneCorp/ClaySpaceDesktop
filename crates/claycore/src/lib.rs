@@ -37,6 +37,7 @@ mod error;
 mod live;
 mod maintenance;
 mod mask;
+mod measure;
 mod memory;
 mod mesh;
 mod mesh_sculpt;
@@ -60,6 +61,19 @@ pub use brick::{
 pub use brush::{Accumulation, BrushParams, BrushShape, Falloff, StrokePreset, StrokeSample};
 pub use consolidate::{ConsolidationCost, ConsolidationParams, FieldReport};
 pub use cut::{cut, CutFrame, CutOutline, CutShape, TrimSide};
+pub use measure::{MeasureParams, SurfaceMeasure};
+
+/// The sculpt-handoff format version this engine writes.
+///
+/// Carried from the engine's own `CLAY_HANDOFF_VERSION_MAJOR`/`MINOR` rather
+/// than restated here: the format is CyberRemesher's
+/// `docs/sculpt-handoff-format.md`, and a number written twice is a number that
+/// can disagree with itself. Their reader refuses a version it does not support
+/// naming both, rather than reading it with the unknown parts dropped.
+pub const HANDOFF_VERSION: (u32, u32) = (
+    claycore_sys::CLAY_HANDOFF_VERSION_MAJOR,
+    claycore_sys::CLAY_HANDOFF_VERSION_MINOR,
+);
 pub use document::{
     prim, ArmatureEdit, Document, FormatVersion, GizmoCage, Item, LayerId, NodeId, PointType,
     Primitive, Profile,

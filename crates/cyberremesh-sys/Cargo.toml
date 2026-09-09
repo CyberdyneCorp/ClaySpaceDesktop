@@ -1,0 +1,15 @@
+[package]
+name = "cyberremesh-sys"
+description = "Raw FFI bindings to the CyberRemesher C ABI. Generated; no hand-written declarations."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+# Not published: this is an application, and its crates are its internals.
+publish = false
+links = "cyberremesh"
+
+[build-dependencies]
+bindgen = "0.70"
+cmake = "0.1"

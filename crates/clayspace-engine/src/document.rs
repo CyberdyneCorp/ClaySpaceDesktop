@@ -12159,6 +12159,113 @@ impl ClayDocument {
     /// Every representation, not only voxels: a sculptor who inserts three
     /// spheres and then crosses one to a grid would otherwise create the
     /// collision after the fact.
+    /// The active subtool's representation and whether it has geometry yet.
+    ///
+    /// Two facts rather than the whole `Layer`, because the retopology adapter
+    /// is in another module and a borrow of the row would outlive what it
+    /// needs.
+    pub(crate) fn active_layer_shape(&self) -> (Representation, bool) {
+        let layer = self.active_layer();
+        (layer.representation, layer.carries_geometry)
+    }
+
+    /// Moves the active mesh subtool's vertices, keeping its topology.
+    ///
+    /// **Through `replace_mesh_layer` with the layer's own revision**, which is
+    /// a compare-and-swap: if the layer was rebuilt while the conform ran, the
+    /// commit is refused rather than overwriting what the sculptor did in the
+    /// meantime. That is exactly what the check exists for, and a conform is
+    /// the case it was written about — slow work done off the layer and
+    /// committed afterwards.
+    ///
+    /// The indices are the ones already there. A conform preserves topology by
+    /// definition, so a position count that does not match is not a conform
+    /// and is refused here rather than replacing the layer with something else.
+    pub(crate) fn move_active_mesh_vertices(
+        &mut self,
+        positions: &[[f32; 3]],
+    ) -> Result<(), ModelError> {
+        let index = self.index_of(self.active_layer().key)?;
+        let (key, id) = (self.layers[index].key, self.layers[index].id);
+        let (_, _, _, indices, _) = self.visible_mesh_geometry();
+        // The vertex count the layer already has, read from the geometry this
+        // side has just taken out rather than from the engine again: the two
+        // are the same numbers and asking twice needs a mutable borrow the
+        // caller does not have.
+        let existing_vertices = self.visible_mesh_geometry().0.len();
+        if existing_vertices != positions.len() {
+            return Err(ModelError::engine(format!(
+                "a conformação devolveu {} vértices e a camada tem {}; \
+                 conformar preserva a topologia, portanto isto não é uma \
+                 conformação",
+                positions.len(),
+                existing_vertices
+            )));
+        }
+
+        let revision = self
+            .document
+            .mesh_layer_revision(id)
+            .map_err(ModelError::engine)?;
+        let mesh =
+            claycore::Mesh::from_triangles(positions, &indices).map_err(ModelError::engine)?;
+        self.document
+            .replace_mesh_layer(id, &mesh, revision)
+            .map_err(ModelError::engine)?;
+
+        // The sculptor holds an adjacency and a BVH over vertices that have
+        // all just moved, and the engine's revision is what tells this side
+        // so. Dropped here rather than left to the next stroke, which is the
+        // same reason a rebuild drops it.
+        self.mesh_sculptors.borrow_mut().forget(key);
+        self.refresh_mesh_bounds(key);
+        self.settle_geometry_revisions();
+        Ok(())
+    }
+
+    /// The active subtool's name.
+    pub(crate) fn scene_layers_name(&self) -> String {
+        self.active_layer().name.clone()
+    }
+
+    /// Attaches a retopologised surface as a new mesh subtool beside its
+    /// source, in one undo entry.
+    ///
+    /// Bracketed for the reason a crossing and a boolean are: making the layer
+    /// and filling it are several engine edits and a sculptor asked for one
+    /// thing. Without the group, undo takes back the filling and leaves an
+    /// empty layer standing.
+    pub(crate) fn attach_quads_beside_the_source(
+        &mut self,
+        positions: &[[f32; 3]],
+        indices: &[u32],
+    ) -> Result<LayerKey, ModelError> {
+        let name = format!("{} · quads", self.active_layer().name);
+        self.attach_quads_named(positions, indices, &name)
+    }
+
+    /// The same, with the name already chosen — which is what a retopology
+    /// that ran on a worker thread has: it took the source's name with it
+    /// rather than reaching back into a document it cannot touch.
+    pub(crate) fn attach_quads_named(
+        &mut self,
+        positions: &[[f32; 3]],
+        indices: &[u32],
+        name: &str,
+    ) -> Result<LayerKey, ModelError> {
+        let name = self.unique_layer_name(name);
+        let mesh =
+            claycore::Mesh::from_triangles(positions, indices).map_err(ModelError::engine)?;
+        self.document
+            .begin_undo_group()
+            .map_err(ModelError::engine)?;
+        let attached = self.attach_meshed_layer(mesh, &name);
+        let closed = self.document.end_undo_group().map_err(ModelError::engine);
+        let key = attached?;
+        closed?;
+        Ok(key)
+    }
+
     fn unique_layer_name(&self, base: &str) -> String {
         let base = if base.trim().is_empty() {
             "Subtool"

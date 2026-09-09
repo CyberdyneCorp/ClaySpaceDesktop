@@ -4,6 +4,47 @@ How the layers fit together, and why they are arranged this way. The
 specification in `openspec/` says *what* the application must do; this says how
 it is built and which decisions were forced rather than chosen.
 
+## Two vendored engines
+
+ClayCore answers what the shape *is*: a field, its bricks, its strokes and its
+measures. **CyberRemesher** rebuilds a mesh's topology, lays out its UVs and
+bakes its maps. Each is a git submodule pinned to a tag, each has a generated
+`-sys` crate and a safe wrapper, and those four crates are the only ones in the
+workspace permitted `unsafe` — which `tools/check_layering.py` asserts rather
+than leaving to review.
+
+**Neither engine knows the other exists**, and both state that as a rule about
+themselves. So the correspondence between them lives in `clayspace-engine`, the
+only layer where both are present, and it is made in two directions:
+
+| direction | mechanism |
+|---|---|
+| sculpt out | `clay_mesh_save_handoff` into the handoff buffer profile, version-gated by ClayCore's own constants |
+| field in | ClayCore's `eval_points`, `eval_gradients` and `measure_points` filling a `CyberFieldEvaluator` |
+
+**The retopology engine is built CPU-only.** ClayCore holds the accelerated
+backend; two engines contending for one CUDA device mid-stroke is a latency
+fault that cannot be read off a frame time. Its worker pool is capped at
+startup, which the engine documents as byte-identical to an uncapped run.
+
+**The heavy stages are traits the domain declares, not libraries it calls.**
+`Retopologiser`, `Unwrapper`, `Baker` and `Conformer` are `Send + Sync` traits in
+`clayspace-model`; the ViewModels are handed one and know nothing else about it,
+which is why they can be exercised with neither engine compiled. Each operation
+is three steps, and the split is forced rather than chosen: the document is an
+`Rc<RefCell>` so every ViewModel can reach it without a lock, which means it
+cannot cross to a worker. Read the source on the interface thread, work on a
+worker, place the result back on the interface thread — where a result whose
+document has moved on is discarded rather than applied.
+
+The bake's field is the sharpest case. `claycore::Document` is neither `Send` nor
+`Sync`, and `clayspace-engine` is not permitted `unsafe`, so the field is
+**opened on the worker from a snapshot on disk** and never crosses a thread
+boundary. That turned out to be the right semantics rather than a workaround: a
+bake takes seconds and a sculptor may keep working, so sampling the live
+document would mean the maps describe a shape that was changing as they were
+written.
+
 ## The engine underneath
 
 ClayCore is a headless C++20 library with a stable C ABI — 610 entry points at

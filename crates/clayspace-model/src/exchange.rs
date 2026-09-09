@@ -56,9 +56,13 @@ impl Default for ImportSettings {
         Self {
             becomes: ImportAs::Reference,
             scale: 1.0,
-            // Well under the engine's 50M default. A desktop that tries to
-            // carry fifty million vertices has already lost the frame budget,
-            // and a ceiling that is never reached is not a ceiling.
+            // A desktop that tries to carry eight million vertices has
+            // already lost the frame budget, and a ceiling that is never
+            // reached is not a ceiling. That is the whole reason: ClayCore's
+            // reader happens to stop at 50M
+            // (`clay/io/result.h`, `max_vertices`), which corroborates this
+            // but does not justify it — a limit that lives in someone else's
+            // engine can stop being true without a word here changing.
             max_vertices: 8_000_000,
             max_triangles: 16_000_000,
         }

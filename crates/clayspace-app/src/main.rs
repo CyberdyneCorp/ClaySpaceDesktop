@@ -262,6 +262,18 @@ struct App {
     boolean: BooleanViewModel,
     curve: CurveViewModel,
     cut: clayspace_vm::CutViewModel,
+    /// Retopology to quads, which runs off this thread.
+    retopo: clayspace_vm::RetopoViewModel,
+    /// The UV layout, which runs off this thread as well.
+    uv: clayspace_vm::UvViewModel,
+    /// Conforming a retopologised mesh onto a field that has moved.
+    conform: clayspace_vm::ConformViewModel,
+    /// Baking maps from the field — the half of the pipeline only this
+    /// application can supply, since it is the only place a field and a baker
+    /// are both present.
+    bake: clayspace_vm::BakeViewModel,
+    /// Where the next bake writes its maps, chosen through the file panel.
+    bake_into: Option<PathBuf>,
     /// The plane a curve drag runs on, and where it started.
     curve_drag: Option<([f32; 3], [f32; 3], [f32; 3])>,
     /// A freehand curve stroke in progress: the last point it laid, and the
@@ -537,6 +549,40 @@ impl App {
         let boolean = BooleanViewModel::new(Box::new(document.clone()));
         let curve = CurveViewModel::new(Box::new(document.clone()));
         let cut = clayspace_vm::CutViewModel::new(Box::new(document.clone()));
+        // The retopologiser is handed in rather than reached for: the
+        // ViewModel depends on the domain's trait, and this is the only layer
+        // that may know which engine implements it.
+        let retopo = clayspace_vm::RetopoViewModel::new(
+            Box::new(document.clone()),
+            std::sync::Arc::new(clayspace_engine::EngineRetopologiser),
+        );
+        let uv = clayspace_vm::UvViewModel::new(
+            Box::new(document.clone()),
+            std::sync::Arc::new(clayspace_engine::EngineUnwrapper),
+        );
+        let conform = clayspace_vm::ConformViewModel::new(
+            Box::new(document.clone()),
+            std::sync::Arc::new(clayspace_engine::EngineConformer),
+        );
+        // The snapshotter is a closure over the document rather than a stored
+        // baker: the snapshot has to be taken at the moment the sculptor asks,
+        // and one taken at startup would bake the shape the session opened
+        // with.
+        let bake = {
+            let document = document.clone();
+            clayspace_vm::BakeViewModel::new(
+                Box::new(document.clone()),
+                Box::new(document.clone()),
+                Box::new(move || {
+                    document
+                        .with(|d| clayspace_engine::EngineBaker::snapshot(d))
+                        .map(|baker| {
+                            std::sync::Arc::new(baker) as std::sync::Arc<dyn clayspace_model::Baker>
+                        })
+                        .map_err(|e| e.to_string())
+                }),
+            )
+        };
         let armature = ArmatureViewModel::new(Box::new(document.clone()));
 
         // Read before the marker for this session is written, or every run
@@ -605,6 +651,11 @@ impl App {
             boolean,
             curve,
             cut,
+            retopo,
+            uv,
+            bake,
+            conform,
+            bake_into: None,
             curve_drag: None,
             curve_draw: None,
             last_curve_press: None,
@@ -1037,6 +1088,25 @@ impl App {
     }
 
     /// Opens a document, after asking about unsaved work.
+    /// Where the next bake writes its maps.
+    ///
+    /// A **stem** rather than a file: a bake writes one image per map, named
+    /// `<stem>_normal.png`, `<stem>_ao.png` and so on, so asking for a single
+    /// filename would be asking for a name three of the four files will not
+    /// have. The dialog is here because it is the platform's, and a ViewModel
+    /// that opened one could not be exercised without a desktop.
+    fn choose_bake_destination(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Onde gravar os mapas")
+            .set_file_name("cozido")
+            .save_file()
+        else {
+            return;
+        };
+        self.bake.bake_into(path.clone());
+        self.bake_into = Some(path);
+    }
+
     fn open(&mut self) {
         if self.document_vm.guard() == Guard::WouldLoseWork && !self.confirm_discarding_work() {
             return;
@@ -1457,6 +1527,10 @@ impl App {
         self.lattice.refresh();
         self.curve.refresh();
         self.boolean.refresh();
+        self.retopo.refresh();
+        self.uv.refresh();
+        self.bake.refresh();
+        self.conform.refresh();
         if let Some(graphics) = self.graphics.as_mut() {
             let gpu = graphics.gpu.clone();
             // A rebuild rather than a sync: nothing about the old document's
@@ -4095,6 +4169,27 @@ impl App {
             Command::SetRemeshSettings(settings) => self.remesh = settings.sanitized(),
             Command::RemeshLayer(key) => self.run_remesh(*key),
             Command::RunConversion => self.run_conversion(),
+            // Straight to the ViewModel that owns the job. Not `busy()` and
+            // not `timed()`, unlike a conversion: this one runs off the
+            // interface thread, so a busy cursor over it would be a lie about
+            // where the work is and a timing around it would measure the
+            // dispatch rather than the retopology.
+            Command::SetRetopoSettings(_) | Command::RunRetopology | Command::CancelRetopology => {
+                self.retopo.dispatch(command)
+            }
+            Command::SetUvSettings(_) | Command::RunUvAtlas | Command::CancelUvAtlas => {
+                self.uv.dispatch(command)
+            }
+            // The destination is this layer's business: it owns the platform's
+            // file panel, and a ViewModel that opened one could not be
+            // exercised without a desktop.
+            Command::ChooseBakeDestination => self.choose_bake_destination(),
+            Command::SetConformSettings(_) | Command::RunConform | Command::CancelConform => {
+                self.conform.dispatch(command)
+            }
+            Command::SetBakeSettings(_) | Command::RunBake | Command::CancelBake => {
+                self.bake.dispatch(command)
+            }
             Command::ToggleRepair => self.show_repair = !self.show_repair,
             Command::SculptLayer(op) => self.run_sculpt_layer_op(op.clone()),
             Command::MultiresLevel(op) => self.run_multires_level_op(*op),
@@ -4156,8 +4251,21 @@ impl App {
             Command::SelectLayer(_) | Command::Undo | Command::Redo
         ) {
             self.refresh_rig();
+            // Whether retopology is available belongs to the active subtool —
+            // it rebuilds a mesh's topology, and a field is not a mesh — so it
+            // is re-read wherever the active subtool can have changed. A
+            // crossing changes it too, which the `touches_document` branch
+            // below covers.
+            self.retopo.refresh();
+            self.uv.refresh();
+            self.bake.refresh();
+            self.conform.refresh();
         }
         if command.touches_document() {
+            self.retopo.refresh();
+            self.uv.refresh();
+            self.bake.refresh();
+            self.conform.refresh();
             self.scene.refresh();
             // Painting a mask arrives as a stroke, which this ViewModel never
             // sees, so it is told to look again rather than left stale.
@@ -4226,6 +4334,13 @@ impl App {
             return;
         }
         self.settle_quality(frame_started);
+        // A retopology that has finished is placed here, before the interface
+        // is built, so the frame that shows the new subtool is the frame that
+        // learns about it. Never blocks: a job still running reports nothing.
+        self.retopo.poll();
+        self.uv.poll();
+        self.bake.poll();
+        self.conform.poll();
 
         // The interface is built first, because it decides where the viewport
         // is and therefore what a pointer position means.
@@ -4334,6 +4449,50 @@ impl App {
             conversion: self.conversion,
             remesh: self.remesh,
             remesh_outcome: self.remesh_outcome,
+            retopo: *self.retopo.settings().get(),
+            retopo_outcome: *self.retopo.last().get(),
+            retopo_unavailable: self.retopo.unavailable().get().clone(),
+            retopo_progress: self
+                .retopo
+                .jobs()
+                .progress()
+                .get()
+                .as_ref()
+                .map(|progress| (progress.label.clone(), progress.fraction)),
+            uv: *self.uv.settings().get(),
+            uv_outcome: *self.uv.last().get(),
+            uv_unavailable: self.uv.unavailable().get().clone(),
+            uv_progress: self
+                .uv
+                .jobs()
+                .progress()
+                .get()
+                .as_ref()
+                .map(|progress| (progress.label.clone(), progress.fraction)),
+            conform: *self.conform.settings().get(),
+            conform_outcome: self.conform.last().get().clone(),
+            conform_unavailable: self.conform.unavailable().get().clone(),
+            conform_progress: self
+                .conform
+                .jobs()
+                .progress()
+                .get()
+                .as_ref()
+                .map(|progress| (progress.label.clone(), progress.fraction)),
+            bake: self.bake.settings().get().clone(),
+            bake_result: self.bake.last().get().clone(),
+            bake_unavailable: self.bake.unavailable().get().clone(),
+            bake_progress: self
+                .bake
+                .jobs()
+                .progress()
+                .get()
+                .as_ref()
+                .map(|progress| (progress.label.clone(), progress.fraction)),
+            bake_into: self
+                .bake_into
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned()),
             // Asked of the document, which is the only layer that can see the
             // bounds a region is measured against.
             conversion_cost: self

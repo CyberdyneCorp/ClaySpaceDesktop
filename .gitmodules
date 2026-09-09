@@ -1,3 +1,7 @@
 [submodule "vendor/ClayCore"]
 	path = vendor/ClayCore
 	url = https://github.com/CyberdyneCorp/ClayCore.git
+[submodule "vendor/CyberRemesherAndUV"]
+	path = vendor/CyberRemesherAndUV
+	url = https://github.com/CyberdyneCorp/CyberRemesherAndUV.git
+	branch = main
