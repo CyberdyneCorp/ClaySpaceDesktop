@@ -50,6 +50,20 @@ pub struct MeshSpan {
     /// able to draw: a span with no bounds is never culled, which is what
     /// every caller did before there was a frustum to cull against.
     pub bounds: Option<([f32; 3], [f32; 3])>,
+    /// This subtool's **authored** face edges, in the shared buffer's vertex
+    /// numbering, two indices per edge.
+    ///
+    /// `Some` for a layer whose faces are not triangles — today, one a
+    /// retopology placed. The polyframe draws these instead of deriving edges
+    /// from the triangulation, and that is the whole difference between a
+    /// quad mesh reading as quads and reading as the fan triangulation of
+    /// them: a quad's two triangles share a diagonal that is not an edge of
+    /// the quad, and nothing in a triangle list says which of the three edges
+    /// of each triangle is the invented one.
+    ///
+    /// `None` means derive, which is correct where the faces really are
+    /// triangles.
+    pub edges: Option<Vec<u32>>,
 }
 
 impl MeshSpan {
@@ -64,6 +78,21 @@ impl MeshSpan {
             layer,
             indices,
             bounds: None,
+            edges: None,
+        }
+    }
+
+    /// The same, for a layer that carries its own faces.
+    pub fn with_edges(
+        layer: LayerKey,
+        indices: std::ops::Range<u32>,
+        edges: Option<Vec<u32>>,
+    ) -> Self {
+        Self {
+            layer,
+            indices,
+            bounds: None,
+            edges,
         }
     }
 }
@@ -1970,25 +1999,73 @@ impl Renderer {
         self.build_edges(gpu, indices);
     }
 
-    /// The same, once it is known the edges are actually wanted.
-    fn build_edges(&mut self, gpu: &Gpu, indices: &[u32]) {
+    /// The line list the polyframe draws, per subtool.
+    ///
+    /// **Authored edges where a subtool has them, derived where it does not.**
+    /// Deriving from a triangle list cannot recover a quad: a quad's two
+    /// triangles share a diagonal that is not one of its four edges, and the
+    /// triangle list does not say which of each triangle's three edges is the
+    /// invented one. So a retopologised layer drawn by derivation showed every
+    /// diagonal and a 100%-quad mesh read as triangles — reported from a
+    /// session, and the reason spans carry `edges` at all.
+    ///
+    /// Mixed scenes are the ordinary case rather than a corner: a retopology
+    /// places its result *beside* the source, so the very first thing a
+    /// sculptor sees is one layer of each kind. An all-or-nothing rule would
+    /// have failed exactly there.
+    fn line_indices(&self, indices: &[u32]) -> Vec<u32> {
         let mut seen = std::collections::HashSet::with_capacity(indices.len());
         let mut edges: Vec<u32> = Vec::with_capacity(indices.len());
-        for triangle in indices.chunks_exact(3) {
-            for (a, b) in [
-                (triangle[0], triangle[1]),
-                (triangle[1], triangle[2]),
-                (triangle[2], triangle[0]),
-            ] {
-                // Ordered, so the same edge reached from either of its two
-                // triangles is the same key.
-                let key = if a < b { (a, b) } else { (b, a) };
-                if seen.insert(key) {
-                    edges.push(key.0);
-                    edges.push(key.1);
+        let mut push = |a: u32, b: u32| {
+            // Ordered, so the same edge reached from either of its two faces
+            // is the same key. Deduplicated, and not only to halve the
+            // buffer: the lines are drawn translucent, so an edge emitted
+            // twice is blended twice and comes out darker than a boundary
+            // edge. A wireframe whose interior reads heavier than its
+            // silhouette is backwards.
+            let key = if a < b { (a, b) } else { (b, a) };
+            if seen.insert(key) {
+                edges.push(key.0);
+                edges.push(key.1);
+            }
+        };
+
+        let derive = |from: &[u32], push: &mut dyn FnMut(u32, u32)| {
+            for triangle in from.chunks_exact(3) {
+                push(triangle[0], triangle[1]);
+                push(triangle[1], triangle[2]);
+                push(triangle[2], triangle[0]);
+            }
+        };
+
+        if self.mesh_spans.is_empty() {
+            // No spans is every caller that predates them, and a whole-buffer
+            // derivation is what they got before.
+            derive(indices, &mut push);
+            return edges;
+        }
+
+        for span in &self.mesh_spans {
+            match &span.edges {
+                Some(authored) => {
+                    for edge in authored.chunks_exact(2) {
+                        push(edge[0], edge[1]);
+                    }
+                }
+                None => {
+                    let range = span.indices.start as usize..span.indices.end as usize;
+                    if let Some(slice) = indices.get(range) {
+                        derive(slice, &mut push);
+                    }
                 }
             }
         }
+        edges
+    }
+
+    /// The same, once it is known the edges are actually wanted.
+    fn build_edges(&mut self, gpu: &Gpu, indices: &[u32]) {
+        let edges = self.line_indices(indices);
 
         self.wire_index_count = edges.len() as u32;
         if edges.is_empty() {
