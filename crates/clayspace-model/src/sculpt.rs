@@ -42,6 +42,18 @@ impl EditOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SceneStats {
     pub triangles: usize,
+    /// Faces, where the drawn geometry has faces that are not its triangles.
+    ///
+    /// `None` means every drawn face *is* a triangle, and a reader should say
+    /// so by showing the triangle count — not by showing this as zero.
+    ///
+    /// It exists because the interface had a "Polygons" row drawn from
+    /// `triangles`, so the two rows were one number printed twice and a
+    /// 100%-quad retopology was indistinguishable from a triangle mesh. A
+    /// readout that cannot express the thing a sculptor is looking at is worse
+    /// than no readout: they read it and concluded the retopology had not
+    /// worked.
+    pub faces: Option<usize>,
     pub vertices: usize,
     pub objects: usize,
     /// Which detail the counts describe.

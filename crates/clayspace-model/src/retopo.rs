@@ -179,7 +179,21 @@ pub struct RetopoSource {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RetopoResult {
     pub positions: Vec<[f32; 3]>,
+    /// The fan triangulation, which is what a mesh layer stores.
     pub indices: Vec<u32>,
+    /// The **authored** face edges, two vertex indices per edge.
+    ///
+    /// Carried beside the triangulation rather than derived from it, because
+    /// they cannot be derived from it: a quad's two triangles share a diagonal
+    /// that is not an edge of the quad, and nothing in the triangle list says
+    /// which of the three edges of each triangle is the invented one. Drawing
+    /// a wireframe from the triangulation is what made a 100%-quad retopology
+    /// look like triangles.
+    ///
+    /// Empty when the retopologiser offered none, in which case the polyframe
+    /// derives edges from the triangulation — correct for a mesh whose faces
+    /// really are triangles.
+    pub edges: Vec<u32>,
     pub outcome: RetopoOutcome,
     pub name: String,
 }

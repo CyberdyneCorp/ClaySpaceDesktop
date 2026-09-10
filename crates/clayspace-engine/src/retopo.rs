@@ -114,16 +114,40 @@ impl RetopoModel for ClayDocument {
         // mesh layers hold triangles, and the engine carries the quads beside
         // its own triangulation of them rather than instead of it — so this is
         // the same surface, drawn the way this application already draws one.
+        // The subtool this is about, and the revision the commit will check
+        // against. Read through the same call the worker path uses, so the two
+        // cannot disagree about what "the target" means.
+        self.remember_retopo_target()?;
+        let Some((key, revision)) = self.take_retopo_target() else {
+            return Err(ModelError::engine(
+                "não há camada registada para receber esta retopologia",
+            ));
+        };
+
         let positions = quads.positions();
         let indices = quads.triangle_indices();
+        // The faces themselves, as edges. `triangle_indices` carries the fan
+        // triangulation and a wireframe drawn from it shows every diagonal,
+        // so a 100%-quad result looked like triangles — the engine's own
+        // words for this buffer are "a quad contributes 4 edges, never its
+        // triangulation diagonal".
+        let edges = authored_edges(&quads);
         drop(quads);
 
-        self.attach_quads_beside_the_source(&positions, &indices)?;
+        // In place, on the subtool the sculptor asked about. Nothing ran off
+        // the interface thread on this path, so the revision cannot have
+        // moved — it is passed anyway rather than passing 0, because the one
+        // call that commits a retopology should not have two contracts.
+        self.replace_mesh_with_quads(key, revision, &positions, &indices, &edges, outcome.faces)?;
         Ok(outcome)
     }
 
     fn retopo_source(&mut self) -> Result<RetopoSource, ModelError> {
         self.can_retopologise().map_err(ModelError::engine)?;
+        // Which layer this is about and what revision it is at, read before
+        // the work is dispatched. `RetopoResult` carries a name and not an
+        // identity, and the commit is a compare-and-swap.
+        self.remember_retopo_target()?;
         let (positions, normals, _colours, indices, _spans) = self.visible_mesh_geometry();
         if indices.is_empty() {
             return Err(ModelError::engine(
@@ -139,8 +163,22 @@ impl RetopoModel for ClayDocument {
     }
 
     fn place_retopology(&mut self, result: &RetopoResult) -> Result<(), ModelError> {
-        self.attach_quads_named(&result.positions, &result.indices, &result.name)?;
-        Ok(())
+        // The layer `retopo_source` was asked about, at the revision it was
+        // then. Taken rather than read, so a second commit cannot land on a
+        // target the first one already replaced.
+        let Some((key, revision)) = self.take_retopo_target() else {
+            return Err(ModelError::engine(
+                "não há camada registada para receber esta retopologia",
+            ));
+        };
+        self.replace_mesh_with_quads(
+            key,
+            revision,
+            &result.positions,
+            &result.indices,
+            &result.edges,
+            result.outcome.faces,
+        )
     }
 }
 
@@ -208,11 +246,32 @@ impl Retopologiser for EngineRetopologiser {
             },
             positions: quads.positions(),
             indices: quads.triangle_indices(),
+            edges: authored_edges(&quads),
             name: format!("{} · quads", source.name),
         })
         // `quads` drops here: a mesh handle is valid for the operation it was
         // made for, and everything worth keeping has been copied out.
     }
+}
+
+/// The retopologised faces as an edge list, or empty when they cannot be
+/// trusted.
+///
+/// The index buffers are in the engine's *render* vertex order, which equals
+/// `positions`' order only while no face is hidden. Nothing in this crate
+/// hides one, so the check is a guard against that changing rather than a
+/// live hazard — but a wireframe that joins the wrong points would be blamed
+/// on the retopology, so it is checked instead of assumed and the polyframe
+/// falls back to the triangulation if it ever fails.
+fn authored_edges(quads: &cyberremesh::Mesh) -> Vec<u32> {
+    if quads.render_order_is_positions_order() {
+        return quads.edge_indices();
+    }
+    eprintln!(
+        "a retopologia esconde faces, por isso as arestas não correspondem aos \
+         vértices; a malha aparente vai desenhar a triangulação"
+    );
+    Vec::new()
 }
 
 // -- UV ---------------------------------------------------------------------

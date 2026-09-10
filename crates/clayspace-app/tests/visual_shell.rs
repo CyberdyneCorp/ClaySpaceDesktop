@@ -349,6 +349,14 @@ fn state<'a>(
         shadows: true,
         stats: SceneStats {
             triangles: 2_356_789,
+            // `None`, so this fixture draws the same digits it drew before
+            // the Polygons row learned to show faces. These captures are
+            // about layout and the font atlas, and changing a rendered number
+            // here would make them fail for a reason unrelated to what they
+            // test. That the row can express a face count at all is asserted
+            // where it is computed:
+            // `the_placed_layer_carries_the_quads_the_viewport_will_draw`.
+            faces: None,
             vertices: 1_178_394,
             objects: 5,
             detail: clayspace_model::Detail::Full,

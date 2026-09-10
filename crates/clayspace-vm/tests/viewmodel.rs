@@ -54,6 +54,7 @@ impl FakeModel {
             },
             stats: SceneStats {
                 triangles: 100,
+                faces: None,
                 vertices: 60,
                 objects: 1,
                 detail: clayspace_model::Detail::Full,

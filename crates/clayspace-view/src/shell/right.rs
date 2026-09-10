@@ -295,7 +295,16 @@ pub(super) fn geometry_section(ui: &mut egui::Ui, state: &ShellState<'_>) {
                 .color(Tokens::accent()),
         );
     }
-    readout(ui, s.label_polygons, thousands(state.stats.triangles));
+    // Faces where the drawn geometry has any that are not triangles, and the
+    // triangle count otherwise. This row used to be `stats.triangles` — the
+    // same value as the row below it — so a 100%-quad retopology and a
+    // triangle mesh printed identically and a sculptor reading the panel
+    // concluded the retopology had not worked.
+    readout(
+        ui,
+        s.label_polygons,
+        thousands(state.stats.faces.unwrap_or(state.stats.triangles)),
+    );
     readout(ui, s.label_vertices, thousands(state.stats.vertices));
     readout(ui, s.label_triangles, thousands(state.stats.triangles));
     readout(ui, s.label_objects, format!("{}", state.stats.objects));

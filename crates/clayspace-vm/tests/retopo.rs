@@ -100,6 +100,12 @@ impl Retopologiser for Double {
         Ok(RetopoResult {
             positions: source.positions.clone(),
             indices: source.indices.clone(),
+            // A double, so the authored edges are the triangulation's own —
+            // these tests are about the ViewModel's job (dispatch, progress,
+            // cancellation, placement) and not about what a quadrangulator
+            // returns. The engine test that asserts the edges are *not* the
+            // triangulation is `the_edges_are_the_quads_and_not_their_triangulation`.
+            edges: Vec::new(),
             outcome: RetopoOutcome {
                 triangles_before: 1,
                 faces: 1,

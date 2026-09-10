@@ -459,8 +459,9 @@ interface thread with progress and a cancel:
 
 - **Retopologise to quads** — five methods including the **ZRemesher** track,
   which makes edge-loop structure an explicit artifact rather than a consequence
-  of the field. The result arrives as a new subtool beside the source, in one
-  undo entry, so the two can be compared.
+  of the field. It rebuilds the subtool **in place**, in one undo entry — the
+  same place ZBrush's ZRemesher, its Dynamesh and this application's own
+  Rebuild all put their result.
 - **UV layout** — islands, conformal unwrap, minimum-area re-orientation and
   packing, reporting charts, distortion and coverage.
 - **Bake maps from the field** — normal, ambient occlusion, curvature and

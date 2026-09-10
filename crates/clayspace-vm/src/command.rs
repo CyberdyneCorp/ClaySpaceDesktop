@@ -332,7 +332,7 @@ pub enum Command {
     /// What the retopology panel is set to.
     SetRetopoSettings(clayspace_model::RetopoSettings),
     /// Rebuilds the active mesh subtool's topology as quads, off the
-    /// interface thread, arriving as a new subtool beside the source.
+    /// interface thread, rebuilding the subtool in place.
     RunRetopology,
     /// Asks a running retopology to stop between stages. It finishes as
     /// cancelled rather than being abandoned, so nothing is left half-placed.

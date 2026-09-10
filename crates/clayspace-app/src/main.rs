@@ -1751,7 +1751,13 @@ impl App {
                 // can never name indices that a later rebuild moved.
                 let spans: Vec<clayspace_view::MeshSpan> = spans
                     .into_iter()
-                    .map(|span| clayspace_view::MeshSpan::new(span.layer, span.indices))
+                    .map(|span| {
+                        // The authored edges travel with the span for the same
+                        // reason the range does: they are numbered against the
+                        // buffer being uploaded, so a later rebuild that moved
+                        // it cannot leave them pointing at the old one.
+                        clayspace_view::MeshSpan::with_edges(span.layer, span.indices, span.edges)
+                    })
                     .collect();
                 (vertices, indices, spans)
             });

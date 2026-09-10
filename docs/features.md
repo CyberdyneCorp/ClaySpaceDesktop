@@ -2065,10 +2065,22 @@ edge loops go a *result* rather than a consequence), **field-aligned**
 **integer** parametrisation. *Pure quads* subdivides and relaxes onto the
 surface until no triangles remain.
 
-The result arrives as a **new subtool beside the source**, in one undo entry. A
-retopology a sculptor cannot compare against the sculpt is one they cannot
-judge, and replacing the source is a decision that cannot be undone by looking
-at it.
+The subtool is rebuilt **in place**, in one undo entry.
+
+This placed the result beside its source at first, reasoning that a retopology a
+sculptor cannot compare against the sculpt is one they cannot judge. Reported
+from a session as the wrong trade: it left two subtools to choose between after
+every retopology, and made the *stack* the record of an operation that the
+history already records. ZBrush's ZRemesher, its Dynamesh and *Refazer a malha*
+here all rebuild the subtool in front of you, and one undo is the comparison —
+so the convention won over the argument.
+
+The commit is a **compare-and-swap**. The work runs off the interface thread, so
+nothing stops a sculptor stroking the source while it runs;
+`clay_document_replace_mesh_layer` is given the revision the layer was at when
+the work started and refuses if it has moved, leaving the layer byte-identical.
+A stroke landing mid-retopology therefore costs the retopology rather than the
+stroke.
 
 **Two operations that look alike and are not.** *Refazer a malha* resamples a
 surface through a voxel grid and hands back triangles at an even density;

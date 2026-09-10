@@ -188,9 +188,19 @@ fn build_engine(engine: &Path) -> PathBuf {
         // `cyber::setMaxWorkerThreads()` and forty more. `cyber_capi_shared`
         // is the one the engine documents for consumers: it links the core,
         // the quadrangulator, UV, bake, retopo and the in-process solver
-        // privately, and carries the `CYBER_CAPI_WITH_UV` definitions that the
-        // static target does not — so the static archive is missing entry
-        // points as well as symbols.
+        // privately.
+        //
+        // **Why the archive is short, corrected.** This used to say the static
+        // target lacked `CYBER_CAPI_WITH_UV` and so was "missing entry points
+        // as well as symbols". That is false: `capi/CMakeLists.txt:21` sets
+        // that definition on `cyber_capi`, and :86 sets the identical one on
+        // `cyber_capi_shared` — the two artifacts compile the same surface.
+        // What actually bites is line 14, where `cyber_capi` declares its
+        // dependencies `PUBLIC`: that propagates through CMake's *link
+        // interface* only, so hand-linking the archive from here gets
+        // `capi.cpp` and nothing it calls. Same conclusion, different cause —
+        // and the wrong cause would send the next reader to patch the
+        // definitions instead of the linking.
         //
         // It is also the one with the linker version script, which matters
         // more here than in a single-engine host: it exports *only* `cyber_*`,
@@ -203,7 +213,52 @@ fn build_engine(engine: &Path) -> PathBuf {
     require_quadcover_where_it_is_supported(&mut cfg);
 
     let dst = cfg.build();
-    dst.join("build")
+    let build = dst.join("build");
+    report_the_solver_the_build_got(&build);
+    build
+}
+
+/// Say which quadrangulator this build actually produced, when it is not the
+/// one that was asked for.
+///
+/// **Reports what the build GOT, not what the platform suggests**, and that
+/// distinction is the whole point. The first version of this warned on every
+/// non-Linux target, because `REQUIRE` is Linux-only here. So a macOS box
+/// *with* OpenMP and TBB — which builds QuadCover perfectly well — was told
+/// its quads might be wrong, every single build. A warning that fires
+/// whichever way the thing went cannot express the thing it watches for, and
+/// gets tuned out long before the one build that mattered.
+///
+/// `cyber_quadcover_solver` is a discrete static target CMake emits *only*
+/// when it finds both dependencies, so its absence is the fallback having
+/// happened rather than a guess that it might have. Checked after the build
+/// because that is when the answer exists.
+///
+/// Still a build-time check and still not the whole guard: it says what we
+/// linked, and cannot say what a host loads later — `libcyber_capi.so.0`
+/// names every 0.x release. The runtime half needs an entry point the pinned
+/// ABI does not have.
+fn report_the_solver_the_build_got(build: &Path) {
+    let solver = build.join("src/quadrangulate");
+    let built = std::fs::read_dir(&solver)
+        .map(|entries| {
+            entries.flatten().any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .contains("cyber_quadcover_solver")
+            })
+        })
+        .unwrap_or(false);
+    if built {
+        return;
+    }
+    println!(
+        "cargo:warning=CyberRemesher: built WITHOUT the in-process QuadCover \
+         field — OpenMP or TBB was missing, so the portable quadrangulator is \
+         in use and it produces different quads. Install them (apt \
+         libtbb-dev / brew libomp tbb) to match the release configuration."
+    );
 }
 
 /// Turn a missing QuadCover dependency into a configure error — on the
@@ -226,20 +281,15 @@ fn build_engine(engine: &Path) -> PathBuf {
 /// support is a requirement that only breaks the build.
 ///
 /// So macOS takes `WITH` without `REQUIRE`, and the fallback is **announced
-/// rather than silent**: a build there says which way it went, because the
-/// thing that makes the fallback dangerous is that nobody knows it happened.
+/// rather than silent**: the thing that makes it dangerous is that nobody
+/// knows it happened. The announcing is
+/// [`report_the_solver_the_build_got`], after the build rather than here,
+/// because only then is there an answer rather than a platform guess.
 fn require_quadcover_where_it_is_supported(cfg: &mut cmake::Config) {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os == "linux" {
         cfg.define("CYBER_REQUIRE_QUADCOVER", "ON");
-        return;
     }
-    println!(
-        "cargo:warning=CyberRemesher: QuadCover requested but not required on \
-         {target_os} — the engine's own release workflow requires it on Linux \
-         only. If OpenMP and TBB are absent here the build silently uses the \
-         portable quadrangulator, which produces different quads."
-    );
 }
 
 fn emit_link_flags(build: &Path) {
@@ -268,7 +318,21 @@ fn generate_bindings(engine: &Path) {
         .default_enum_style(bindgen::EnumVariation::ModuleConsts)
         .derive_debug(true)
         .derive_default(true)
-        .layout_tests(false)
+        // **On, matching `claycore-sys`.** This said `false` and the saving was
+        // build time, which is the wrong trade for a crate whose entire risk
+        // model is that the pin moves and nothing says so. The generated
+        // `bindgen_test_layout_*` assertions pin every struct's size, its
+        // alignment and each field's offset, per target, *from the header* —
+        // so unlike a hand-written manifest they cannot rot.
+        //
+        // They check placement and not type identity, so a `const float*`
+        // swapped for a `const double*` of the same width still passes. That
+        // is a real hole and it is the reason they are a partial guard rather
+        // than the whole one; the engine's own team hit exactly it when
+        // designing a layout manifest, along with a field landing in existing
+        // trailing padding. A `cargo test` that fails when a struct moves is
+        // still worth more than the seconds it costs.
+        .layout_tests(true)
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .generate()
         .expect("the retopology engine's header could not be bound");
@@ -288,4 +352,30 @@ fn emit_rerun_directives(engine: &Path) {
         "cargo:rerun-if-changed={}",
         engine.join("CMakeLists.txt").display()
     );
+    // **The directories, not a list of files** — the same set
+    // `claycore-sys::emit_rerun_directives` walks, for the same reason, and
+    // this crate had diverged from it.
+    //
+    // Two concrete holes that left. `CYBER_REQUIRE_QUADCOVER` — the option
+    // deciding whether a missing solver is a configure error or a silent
+    // fallback to a different quadrangulator — lives in
+    // `cmake/QuadCoverSolver.cmake` and not at the top level, so editing the
+    // file that governs this build did not re-run this script. And nothing
+    // watched `capi/` or `src/` at all, so editing the engine's own C++ left
+    // Cargo believing the build script's output was current: CMake never ran
+    // and the previously built library stayed linked.
+    //
+    // Cargo watches a directory recursively, so this covers files added
+    // later too. That is the point of the shape: the gap was not one
+    // forgotten file, it was that the list was a list.
+    //
+    // `thirdparty/` is deliberately absent. It moves only when the submodule
+    // pin moves, and `check_submodule_revision` is what catches that — a
+    // rebuild trigger would be the weaker of the two guards.
+    for dir in ["capi", "src", "cmake"] {
+        let path = engine.join(dir);
+        if path.is_dir() {
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
+    }
 }

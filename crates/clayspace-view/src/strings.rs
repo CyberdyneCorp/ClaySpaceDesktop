@@ -1016,9 +1016,8 @@ libera em vez de congelar.",
     remesh_uvs_dropped: "as coordenadas de textura foram descartadas",
     remesh_not_watertight: "o resultado não ficou fechado",
     retopo_heading: "Retopologia para quads",
-    retopo_hint: "reconstrói a topologia como quads, com anéis de aresta — \
-                  chega como uma nova subferramenta ao lado da original, para \
-                  que dê para comparar",
+    retopo_hint: "reconstrói a topologia desta subferramenta como quads, com \
+                  anéis de aresta, numa só entrada do histórico",
     retopo_target: "Quads",
     retopo_target_hint: "quantidade pretendida; o motor procura pelo \
                          comprimento de aresta, portanto aproxima e nunca acerta",
@@ -1570,8 +1569,8 @@ instead.",
     remesh_uvs_dropped: "texture coordinates were dropped",
     remesh_not_watertight: "the result did not come out closed",
     retopo_heading: "Retopologise to quads",
-    retopo_hint: "rebuilds the topology as quads with edge loops — arrives as \
-                  a new subtool beside the original, so the two can be compared",
+    retopo_hint: "rebuilds this subtool's topology as quads with edge loops, \
+                  in one undo entry",
     retopo_target: "Quads",
     retopo_target_hint: "how many to aim at; the engine searches over edge \
                          length, so it is approached and never hit",
@@ -2124,9 +2123,8 @@ lados. Con Ctrl, libera en vez de congelar.",
     remesh_uvs_dropped: "se descartaron las coordenadas de textura",
     remesh_not_watertight: "el resultado no quedó cerrado",
     retopo_heading: "Retopología a quads",
-    retopo_hint: "reconstruye la topología como quads con anillos de aristas — \
-                  llega como una subherramienta nueva junto a la original, \
-                  para poder comparar",
+    retopo_hint: "reconstruye la topología de esta subherramienta como quads \
+                  con anillos de aristas, en una sola entrada del historial",
     retopo_target: "Quads",
     retopo_target_hint: "cantidad pretendida; el motor busca por la longitud \
                          de arista, así que se aproxima y nunca acierta",

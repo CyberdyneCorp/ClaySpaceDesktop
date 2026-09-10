@@ -170,6 +170,58 @@ impl Mesh {
         indices.truncate(written);
         indices
     }
+
+    /// How many unique undirected face edges the mesh has.
+    pub fn edge_count(&self) -> usize {
+        // SAFETY: a valid handle; the call reads and returns a count.
+        unsafe { sys::cyber_mesh_edge_count(self.raw.as_ptr()) }
+    }
+
+    /// The **authored** edges, two vertex indices per edge.
+    ///
+    /// This is what a wireframe wants and the triangulation is not. The
+    /// engine's own words: *"a quad contributes 4 edges, never its
+    /// triangulation diagonal — wireframe overlays draw the authored
+    /// topology, not the fan triangulation."* So a quad mesh drawn from these
+    /// looks like quads, and the same mesh drawn from `triangle_indices`
+    /// looks like triangles — which is the whole difference a sculptor sees.
+    ///
+    /// **Indexed in render order**, as the triangle indices are. That is the
+    /// same order as [`Mesh::positions`] only while no face is hidden, which
+    /// holds for everything this crate produces because nothing here calls
+    /// `cyber_mesh_set_hidden_faces`. [`Mesh::render_order_is_positions_order`]
+    /// is the check rather than the assumption.
+    pub fn edge_indices(&self) -> Vec<u32> {
+        let mut indices = vec![0u32; self.edge_count() * 2];
+        // SAFETY: as `positions` — an owned buffer whose length is passed
+        // beside it, and the call writes whole edges only.
+        let written = unsafe {
+            sys::cyber_mesh_copy_edge_indices(
+                self.raw.as_ptr(),
+                indices.as_mut_ptr(),
+                indices.len(),
+            )
+        };
+        indices.truncate(written);
+        indices
+    }
+
+    /// Whether the index buffers and [`Mesh::positions`] address the same
+    /// vertices.
+    ///
+    /// The engine documents `copy_render_positions` as "identical to
+    /// `cyber_mesh_copy_positions` exactly while nothing is hidden", and the
+    /// index buffers are in render order. Hiding a face makes the two
+    /// disagree, and nothing would say so — a wireframe would simply join the
+    /// wrong points. Cheap enough to assert wherever it matters.
+    pub fn render_order_is_positions_order(&self) -> bool {
+        // SAFETY: both calls are size queries with a null destination, which
+        // the engine documents as the way to ask for the required count.
+        let render = unsafe {
+            sys::cyber_mesh_copy_render_positions(self.raw.as_ptr(), std::ptr::null_mut(), 0)
+        };
+        render == self.vertex_count() * 3
+    }
 }
 
 impl Drop for Mesh {
