@@ -92,8 +92,17 @@ fn every_declared_measure_is_reachable() {
     for measure in SurfaceMeasure::ALL {
         let params = match measure {
             // The two that cast rays need a length to cast over; the engine's
-            // own default is fine for the rest.
+            // own default is fine for the rest. Both lengths are stated rather
+            // than inherited, because what the half below pins about
+            // `Thickness` is a distinction *within* a ray length: at 1.0 this
+            // fixture's waist resolves and its long axis saturates, and an
+            // engine that changed its own default would move that line
+            // without touching this file.
             SurfaceMeasure::Occlusion => MeasureParams::occlusion(1.0, 16),
+            SurfaceMeasure::Thickness => MeasureParams {
+                ray_length: Some(1.0),
+                ..MeasureParams::default()
+            },
             _ => MeasureParams::default(),
         };
         let values = document
@@ -121,8 +130,9 @@ fn every_declared_measure_is_reachable() {
 
     // THE TWO-SIDED HALF. Above walks every measure and proves each answers;
     // it does not prove any of them measures anything, and a measure that
-    // returned a constant would pass it. These pin the three whose whole
-    // meaning is a distinction, against ground chosen to carry it.
+    // returned a constant would pass it. These pin each of the six against
+    // ground chosen to carry it: five against the seam and the flank, and the
+    // sixth against ground that faces up.
     let (seam_i, flank_i, crown_i) = (0usize, 1usize, 2usize);
     let of = |want: SurfaceMeasure| -> &Vec<f32> {
         &answered
@@ -154,8 +164,50 @@ fn every_declared_measure_is_reachable() {
         occlusion[seam_i],
         occlusion[flank_i]
     );
+    // Curvature is the unsigned one — the magnitude of the bend, whichever
+    // way the surface bends — so it takes two claims rather than one. It must
+    // read the seam above the flank, like the three above; and it must read
+    // *something* on the flank, where `Cavity` reads nothing at all. A
+    // `Curvature` that answered only on concave ground would be `Cavity` under
+    // another name, and the first claim alone would not catch it.
+    let curvature = of(SurfaceMeasure::Curvature);
+    assert!(
+        curvature[seam_i] > curvature[flank_i],
+        "Curvature read {} in the seam and {} on the flank, so it is not \
+         distinguishing bent ground from smooth",
+        curvature[seam_i],
+        curvature[flank_i]
+    );
+    assert!(
+        curvature[flank_i] > cavity[flank_i],
+        "Curvature read {} on the convex flank, where Cavity read {}. \
+         Curvature is the bend either way; if it answers only where Cavity \
+         answers, it is measuring the concave half and is misnamed",
+        curvature[flank_i],
+        cavity[flank_i]
+    );
+
+    // Thickness asks what is behind the surface, so the ground that carries it
+    // is not concave against convex but thin against deep. Inward from the
+    // flank is the long axis of the whole body, longer than the ray length set
+    // above and so saturated; inward from the seam is the narrow waist where
+    // the lobes cross, which the same ray length resolves.
+    let thickness = of(SurfaceMeasure::Thickness);
+    assert!(
+        thickness[flank_i] > thickness[seam_i],
+        "Thickness read {} inward from the flank, down the long axis of the \
+         body, and {} through the narrow waist at the seam. The flank is the \
+         deeper of the two; if these agree, thickness is not reading depth",
+        thickness[flank_i],
+        thickness[seam_i]
+    );
+
     // And the one the other two probes cannot express: agreement with +y is
-    // what NormalDirection means, so it needs ground that faces up.
+    // what NormalDirection means, so it needs ground that faces up. It is the
+    // only measure here that is not a property of the shape at a point but a
+    // comparison against a direction, which is the trap in extending this
+    // pattern — it is the one that will *not* separate two shapes, because
+    // two shapes present much the same normals at the same place.
     let facing = of(SurfaceMeasure::NormalDirection);
     assert!(
         facing[crown_i] > facing[flank_i],
