@@ -1,5 +1,12 @@
 # What a live Move segment costs, and what makes it cost that
 
+> **Read the last section first.** Everything above it measures cost *within
+> one gesture*, which is not what was reported. The actual reproduction —
+> "almost a second after 3 or 4 move dabs in a simple sculpture" — is about
+> what accumulates *across* gestures, and it has a different cause, a
+> different fix, and a much larger effect. The within-gesture findings stand;
+> they were aimed at the wrong question.
+
 Measured 2026-09-10 on this machine (macOS, aarch64), Release, against the
 pinned engine — `vendor/ClayCore` at `662e132`, **0.84.0**. Instrument:
 `benchmarks/probes/move_segment_cost.rs`.
@@ -253,3 +260,91 @@ batch size, and `take_dirty` ordering. Not examined: `CullIndex` construction,
 chain prunability, and what `plan()`'s linear scan does differently for a
 clustered versus a spread entry set. It is small, it is filed, and it is worth
 less than it would cost either side to chase right now.
+
+
+---
+
+# The report, finally reproduced: it is the chain across dabs
+
+Added 2026-09-10 after the reproduction arrived: *"when I dab / stroke on
+ClaySpaceDesktop it doesn't feel like ZBrush, Nomad3d, Blender, it takes almost
+a second after I do 3 or 4 move dabs in a simple sculpture."*
+
+**A simple sculpture is the low-density case.** Everything above says it should
+be the fast one — 1.97 ms/event on a bare starting form. And the word is
+*dabs*: three or four discrete gestures, where every measurement above was
+taken inside a single gesture. So none of the earlier work was aimed at this.
+
+Instrument: `benchmarks/probes/move_dab_cost.rs`. A plain starting form, eight
+dabs, each a full open/segments/close, each landing somewhere new.
+
+## What accumulates
+
+| dab | chain | safe_step_scale | 256 raycasts | advises_consolidation |
+|---|---:|---:|---:|---|
+| 1 | 2 | 0.412423 | 0.56 ms | false |
+| 2 | 4 | 0.170093 | 2.89 ms | false |
+| 3 | 6 | 0.070150 | 3.73 ms | false |
+| 4 | 8 | 0.028932 | 9.60 ms | false |
+| 5 | 10 | 0.011932 | 22.33 ms | false |
+| 6 | 12 | 0.004921 | 34.66 ms | false |
+| 7 | 14 | 0.002030 | 39.30 ms | false |
+| 8 | 16 | 0.000837 | 35.73 ms | false |
+
+*(x mirror, which the starting form turns on by default.)*
+
+**Every dab adds one grab per mirror image to the layer's deformer chain, and
+the safe step scale is a product over that chain.** So it decays
+geometrically: 0.41 to 0.0008 over eight dabs, a factor of 490. Sphere-tracing
+the field then burns proportionally more iterations per ray, and 256 rays go
+from 0.56 ms to 39 ms — **70x**. A viewport casts one ray per pixel, not 256.
+
+That is the reported second, and it lands *after* the edit returns, which is
+exactly how it was described.
+
+## Three things this says
+
+**1. The transaction fixed the wrong axis — and only half the problem.**
+`live_move.rs` and `a_session_of_drags_steepens_by_the_drag_and_no_longer_by_
+the_segment` establish that a drag costs one grab per *gesture* rather than one
+per segment. True, and it was worth doing. But one per gesture still
+accumulates, and nothing collapses it. The header of `live_move.rs` already
+records the same decay measured per *drag* before the transaction existed —
+"twelve drags took the step scale from 0.264 to below what a float reports".
+That sentence was describing the problem that is still here.
+
+**2. Symmetry doubles the rate, and it is on by default.** With no mirror the
+chain grows by one per dab and reaches 0.0289 at dab 8; with the x mirror it
+grows by two and reaches 0.0289 at dab **4**. The starting form turns x on, so
+the default document degrades twice as fast as the measurements without it.
+
+**3. The engine's own advisory never fires.** `advises_consolidation` is
+`false` at every row, including a safe step scale of 0.000837. The host reads
+that flag (`document.rs:1663`) and surfaces it, so the mechanism for telling a
+sculptor to bake exists and is not triggering on the case that actually
+destroys interactivity. Whatever threshold it uses, a chain of 16 and a step
+scale three orders of magnitude down is not reaching it.
+
+## Where the fix is
+
+Not in the drag path, and not in local item density. The lever is **collapsing
+the chain** — which is the same verb ClayCore was already going to propose for
+the density case (`Op::Replace` bake-and-replace), reached from a completely
+different direction and for a much more common scenario: not a heavily stamped
+region, just four ordinary dabs.
+
+Two host-side questions fall out and neither needs the engine:
+
+- Should a Move dab consolidate the chain itself once it passes some depth?
+  The verb exists and the host already calls it for Suavizar and Relaxar.
+- Should the host use its own `safe_step_scale` threshold rather than waiting
+  for `advises_consolidation`, given the flag does not fire here?
+
+Both are design questions, recorded rather than acted on.
+
+## Caveat
+
+One machine, Release, CPU backend. The 256-ray figure is a stand-in for a
+render, not a render. What transfers is the mechanism and the shape: chain
+length grows per dab, step scale is a product over it, and march cost is
+inverse to step scale. The absolute milliseconds are not a device prediction.
