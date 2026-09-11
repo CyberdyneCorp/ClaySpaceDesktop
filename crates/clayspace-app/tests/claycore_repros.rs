@@ -7,8 +7,15 @@
 //! Two of these exist because a claim did not survive being written down.
 //! Subset meshing and jitter were both about to be filed as engine bugs on the
 //! strength of a visual artifact; measured properly, subset meshing agrees
-//! with whole meshing exactly, and the jitter disagreement was the narrow band
-//! being too thin for the brush.
+//! with whole meshing exactly, and the jitter disagreement was this
+//! application's own cache being too coarse to represent the displacement.
+//!
+//! **"Too thin a band" is how that was recorded for months and it was wrong.**
+//! The two configurations carry the SAME band — `band_voxels * voxel_size` is
+//! 0.06 at 3 x 0.02 and at 6 x 0.01 — so the width cannot be what separates
+//! them. The resolution is: three samples across that band against six. The
+//! claim survived a second time by sounding like the first, which is the
+//! failure this file exists to catch and did not.
 //!
 //! The mirror (#60) and `CLAY_OP_ADD` ignoring `strength` (#61) *were* engine
 //! bugs, and ClayCore 0.28.0 fixed both. These two now assert the fixed
