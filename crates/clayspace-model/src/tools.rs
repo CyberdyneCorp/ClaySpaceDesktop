@@ -1134,12 +1134,26 @@ pub struct Dynamics {
 
 impl Default for Dynamics {
     fn default() -> Self {
-        // Every one of them off: a brush that has never been told to vary
-        // along its stroke behaves exactly as it did before these existed,
-        // which is what keeps this a new control rather than a new default.
+        // THE ENGINE'S OWN DEFAULTS, not zero.
+        //
+        // These fields were always being sent — by `StrokePreset::default()`,
+        // which asks `clay_stroke_preset_defaults` for them. Plumbing them
+        // means the host now decides their value, and a host that decided
+        // "all off" would be changing every brush in the application while
+        // claiming to add a control.
+        //
+        // `pressure_strength` is the one that matters: the engine defaults it
+        // to **1**, so pressure has driven strength since before this control
+        // existed. Defaulting it to 0 here disconnected pen pressure from
+        // every stroke, silently, and the only thing that caught it was a
+        // latency test on another machine.
+        //
+        // `pressure_size` at 0 and the tapers at 0 are the engine's values
+        // too, and are kept by agreeing with it rather than by coincidence:
+        // `the_defaults_are_the_engines_defaults` fails if either side moves.
         Self {
             pressure_size: 0.0,
-            pressure_strength: 0.0,
+            pressure_strength: 1.0,
             pressure_curve: 1.0,
             taper_start: 0.0,
             taper_end: 0.0,

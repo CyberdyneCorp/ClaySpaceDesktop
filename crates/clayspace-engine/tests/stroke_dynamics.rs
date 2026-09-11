@@ -99,7 +99,17 @@ fn pressure_reaches_the_radius() {
 /// And the strength, which is a separate field and separately plumbed.
 #[test]
 fn pressure_reaches_the_strength() {
-    let ignored = moved(Dynamics::default(), AT_THE_START);
+    // Both ends spelled out. `Dynamics::default()` carries the ENGINE's
+    // default for this field, which is 1 — pressure has driven strength since
+    // before the control existed — so a test that used the default as its
+    // "off" arm would be comparing 1 against 1 and passing on nothing.
+    let disconnected = moved(
+        Dynamics {
+            pressure_strength: 0.0,
+            ..Dynamics::default()
+        },
+        AT_THE_START,
+    );
     let honoured = moved(
         Dynamics {
             pressure_strength: 1.0,
@@ -108,9 +118,9 @@ fn pressure_reaches_the_strength() {
         AT_THE_START,
     );
     assert!(
-        (honoured - ignored).abs() > 1e-4,
+        (honoured - disconnected).abs() > 1e-4,
         "pressure_strength at 1.0 and at 0.0 put the surface in the same \
-         place: {honoured} against {ignored}"
+         place: {honoured} against {disconnected}"
     );
 }
 
@@ -121,9 +131,14 @@ fn pressure_reaches_the_strength() {
 /// passed there would be testing nothing.
 #[test]
 fn the_pressure_curve_bends_what_pressure_means() {
+    // Strength held OFF so the curve is observed through one channel only.
+    // With both size and strength pressure-driven the two responses move
+    // together and the probe reads their combination, which was enough to hide
+    // the difference entirely.
     let linear = moved(
         Dynamics {
             pressure_size: 1.0,
+            pressure_strength: 0.0,
             pressure_curve: 1.0,
             ..Dynamics::default()
         },
@@ -132,6 +147,7 @@ fn the_pressure_curve_bends_what_pressure_means() {
     let bent = moved(
         Dynamics {
             pressure_size: 1.0,
+            pressure_strength: 0.0,
             pressure_curve: 3.0,
             ..Dynamics::default()
         },
@@ -201,4 +217,76 @@ fn the_clamp_passes_a_usable_setting_through_unchanged() {
     );
     assert_eq!(absurd.taper_start, 1.0);
     assert_eq!(absurd.taper_end, 0.0);
+}
+
+/// The host's defaults are the engine's defaults, field for field.
+///
+/// **This is the test that was missing, and its absence shipped a regression.**
+///
+/// These six fields were always reaching the engine — `StrokePreset::default()`
+/// asks `clay_stroke_preset_defaults` for them, so every brush ran with the
+/// engine's values. Plumbing them moved the decision to this side, and the
+/// first version of `Dynamics::default()` set them all to zero on the reasoning
+/// that "off" is the safe default for a new control.
+///
+/// It is not. `pressure_strength` defaults to **1** in the engine: pressure has
+/// driven stroke strength since before the control existed. Zeroing it
+/// disconnected pen pressure from every brush in the application, silently,
+/// while the commit claimed a brush nobody had touched would behave exactly as
+/// it did. Nothing in the suite noticed; a latency test on another machine did,
+/// for the wrong reason.
+///
+/// So the two are pinned together. If the engine changes a default this fails
+/// and someone decides deliberately, which is the only safe way for a value
+/// like this to move.
+#[test]
+fn the_defaults_are_the_engines_defaults() {
+    let engine = claycore::StrokePreset::default();
+    let host = Dynamics::default();
+
+    assert_eq!(
+        host.pressure_size, engine.pressure_size,
+        "pressure_size: host {} against the engine's {}",
+        host.pressure_size, engine.pressure_size
+    );
+    assert_eq!(
+        host.pressure_strength, engine.pressure_strength,
+        "pressure_strength: host {} against the engine's {}. This is the one \
+         that was wrong — the engine drives strength from pressure by default \
+         and a zero here turns that off for every brush",
+        host.pressure_strength, engine.pressure_strength
+    );
+    assert_eq!(
+        host.pressure_curve, engine.pressure_curve,
+        "pressure_curve: host {} against the engine's {}",
+        host.pressure_curve, engine.pressure_curve
+    );
+    assert_eq!(host.taper_start, engine.taper_start);
+    assert_eq!(host.taper_end, engine.taper_end);
+    assert_eq!(host.rake, engine.rotate_along_stroke);
+}
+
+/// And an untouched brush strokes exactly as it did before the control existed.
+///
+/// The property the test above protects, asserted end to end rather than field
+/// by field: a default brush and one whose dynamics are spelled out as the
+/// engine's own values put the surface in the same place.
+#[test]
+fn an_untouched_brush_strokes_as_it_always_did() {
+    let engine = claycore::StrokePreset::default();
+    let spelled_out = Dynamics {
+        pressure_size: engine.pressure_size,
+        pressure_strength: engine.pressure_strength,
+        pressure_curve: engine.pressure_curve,
+        taper_start: engine.taper_start,
+        taper_end: engine.taper_end,
+        rake: engine.rotate_along_stroke,
+    };
+    let untouched = moved(Dynamics::default(), AT_THE_START);
+    let explicit = moved(spelled_out, AT_THE_START);
+    assert!(
+        (untouched - explicit).abs() < 1e-6,
+        "a brush left alone strokes differently from one told to use the \
+         engine's own values: {untouched} against {explicit}"
+    );
 }
