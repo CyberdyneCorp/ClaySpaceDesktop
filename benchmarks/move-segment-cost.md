@@ -88,3 +88,92 @@ the absolute milliseconds do not. ClayCore's own probe measured 14.2 ms where
 this one measures 22.6 at the same 200 stamps, on a different build, voxel size
 and machine — same order, different number, and that gap is why neither figure
 should be quoted as a device prediction.
+
+---
+
+# Follow-up: it is not the cull, it is what is under the brush
+
+Added 2026-09-10, same machine and pin, after ClayCore measured the
+compile/eval split and found the compile share **flat at ~17%** across scene
+sizes — which kills the tape-cache hoist proposed above as anything more than a
+17% win. That measurement also reported that at 400 stamps the median brick
+compiles a tape carrying ~449 of the document's ~481 instructions, and raised
+the hypothesis that **the cull is barely culling**, with a blend pad that grows
+with chain length as the suspect.
+
+**That hypothesis does not hold on this host.** Three runs settle it.
+
+## The cull drops what is far away
+
+Same 400-stamp count, stamps confined to the hemisphere the drag is *not* on:
+
+| stamps, far hemisphere only | mean ms / event |
+|---|---:|
+| 0 | 1.20 |
+| 50 | 1.86 |
+| 200 | 2.01 |
+| 400 | 2.18 |
+
+Against **40.70 ms** for the same 400 stamps spread over the whole form. Far
+material costs 1.8x; the same material spread to include the drag site costs
+20x. Whatever the tape length says, the region test is dropping what is far.
+
+## How tight, exactly
+
+400 stamps every row — only their distance from the drag changes. The drag is
+radius 0.40 on a form of radius 0.95, so it subtends about 25 degrees:
+
+| ring at N° from the drag | mean ms / event |
+|---|---:|
+| 0 | 385.28 |
+| 30 | 211.58 |
+| 60 | 15.16 |
+| 90 | 6.33 |
+| 150 | 1.86 |
+
+**The fall between 30° and 60° is 14x.** The cull is tight, and it turns off
+almost exactly where the drag stops reaching. The cost is the material actually
+under the pointer.
+
+## Distant items are not quite free if they are spread far apart
+
+Separate balls added away from the drag, same count, varying only how large a
+volume they occupy:
+
+| balls | spread 0.5 | spread 4.0 | spread 16.0 |
+|---|---:|---:|---:|
+| 0 | 1.23 | 1.26 | 1.24 |
+| 50 | 1.28 | 1.29 | 1.43 |
+| 200 | 1.25 | 1.43 | 2.16 |
+| 400 | 1.26 | 1.44 | 4.99 |
+
+A tight cluster of 400 distant balls is free (1.26 against 1.23). The same 400
+spread over a cube of side 16 cost 4x. Real but small beside the numbers above,
+and noted rather than chased.
+
+## What this means
+
+**The report is local item density, not cull slack and not the drag pattern.**
+A sculpt that stamps repeatedly in one area carries every one of those items in
+that area, and every brick the drag dirties there evaluates all of them. At 400
+stamps piled inside the drag region a pointer event costs 385 ms; the same 400
+a hemisphere away cost 2.
+
+Three consequences:
+
+1. **Tightening the cull would win nothing here.** It is already turning off
+   within 2x of the drag's own reach.
+2. **ClayCore's fixture may be measuring this rather than a cull defect.** An
+   arc of overlapping spheres in one chain is geometrically the 0° row above —
+   everything is near everything, so a brick tape carrying nearly the whole
+   document is the *correct* answer there, not evidence of a failure. Their own
+   caveat anticipated this.
+3. **The lever is collapsing local item count**, which is a different piece of
+   work from anything discussed so far: baking a heavily stamped region back
+   into one volume so the chain under the brush stops growing. The engine
+   already has the verb — `Op::Replace` bake-and-replace, which Suavizar and
+   Relaxar use. Nothing decides *when* to apply it during ordinary stamping.
+
+Not proposing that here. Recording it because it is where the measurements
+point, and because the two cheap fixes that were on the table — the preview
+document and the tape cache — are now both measured and both small.
