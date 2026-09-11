@@ -112,7 +112,7 @@ test-one target:
     cargo test -p {{app}} --release --test {{target}} -- --nocapture
 
 # Everything CI checks, in the order that fails fastest.
-check: fmt-check layering lint test spec packaging
+check: engine-pinned fmt-check layering lint test spec packaging
     @echo "all gates passed"
 
 # Formatting, without changing anything.
@@ -282,6 +282,34 @@ engine-pin tag:
     git -C vendor/ClayCore checkout --detach {{tag}}
     @echo 'pinned — rebuild, then `just test` and expect the repro tests to'
     @echo 'flip for anything this release fixed'
+
+# Deliberately not a pin. `claycore-sys/build.rs` hard-errors when the checkout
+# is BEHIND the gitlink — the `git pull` mistake — and only warns when it is
+# ahead, because ahead is somebody moving the engine on purpose. This is that
+# somebody. The next build recompiles the engine on its own: the rerun
+# directives cover `src`, `include`, `backends` and the headers, so there is
+# nothing to clean, only several minutes to wait.
+#
+# Do not commit `vendor/ClayCore` while you are here. `just check` refuses a
+# pin that is not a release, which is the guard for doing it by accident.
+
+# Try a fix before it ships: the engine at ClayCore's main.
+engine-main:
+    git -C vendor/ClayCore fetch origin
+    git -C vendor/ClayCore checkout --detach origin/main
+    @git -C vendor/ClayCore describe --tags --always --long
+    @echo
+    @echo 'AHEAD OF THE PIN. The build will say so and carry on.'
+    @echo 'Back to the release with `just engine-restore`.'
+
+# Back to the release this workspace pins.
+engine-restore:
+    git submodule update --init --recursive vendor/ClayCore
+    @git -C vendor/ClayCore describe --tags --long
+
+# Every vendored engine is pinned to a release, not to a commit.
+engine-pinned:
+    python3 tools/check_engine_pin.py
 
 # -- housekeeping ------------------------------------------------------------
 
