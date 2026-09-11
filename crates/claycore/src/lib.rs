@@ -59,7 +59,9 @@ pub use brick::{
     BrickState, BrickStats, BrickSubmit, BrickValues,
 };
 pub use brush::{Accumulation, BrushParams, BrushShape, Falloff, StrokePreset, StrokeSample};
-pub use consolidate::{ConsolidationCost, ConsolidationParams, Degradation, FieldReport};
+pub use consolidate::{
+    ConsolidationCost, ConsolidationParams, Degradation, FieldReport, RegionMerge,
+};
 pub use cut::{cut, CutFrame, CutOutline, CutShape, TrimSide};
 pub use measure::{MeasureParams, SurfaceMeasure};
 

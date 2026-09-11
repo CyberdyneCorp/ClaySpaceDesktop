@@ -58,6 +58,7 @@ descriptors! {
     sys::clay_field_report,
     sys::clay_consolidation_params,
     sys::clay_consolidation_cost,
+    sys::clay_region_merge,
     sys::clay_sculpt_policy,
     sys::clay_sculpt_dirty,
     sys::clay_sculpt_budget,

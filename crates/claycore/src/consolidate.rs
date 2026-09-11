@@ -91,6 +91,54 @@ impl Degradation {
     }
 }
 
+/// What a region merge would absorb, and over what box.
+///
+/// The box is the **influence closure** of the region asked about: that region
+/// grown until every item able to reach inside it is wholly inside it. That is
+/// not "the items overlapping the region", and the difference is not cosmetic
+/// — absorb only the overlapping ones and a Subtract straddling the edge stays
+/// behind, the material it carved comes back, and the volume cannot take it
+/// away again.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RegionMerge {
+    /// The closure: what actually gets sampled.
+    pub box_min: [f32; 3],
+    pub box_max: [f32; 3],
+    /// How many roots the bake takes.
+    pub absorbed: u64,
+    /// The closure reached every visible root, so this was the whole-layer
+    /// bake under another name. Not a failure — the honest fallback — but the
+    /// thing a caller choosing between the two scopes has to look at.
+    pub whole_layer: bool,
+}
+
+impl RegionMerge {
+    fn from_raw(raw: sys::clay_region_merge) -> Self {
+        Self {
+            box_min: raw.box_min,
+            box_max: raw.box_max,
+            absorbed: raw.absorbed,
+            whole_layer: raw.whole_layer != 0,
+        }
+    }
+
+    /// How much bigger the closure is than the box that was asked for.
+    ///
+    /// The question a maintenance policy actually has: a safe step scale says
+    /// how sick the field is, and this says how invasive the cure would be.
+    /// Two forms at an identical step scale can have wildly different
+    /// closures. `None` when the requested box has no volume.
+    pub fn closure_ratio(&self, requested: ([f32; 3], [f32; 3])) -> Option<f32> {
+        let volume = |min: [f32; 3], max: [f32; 3]| {
+            (0..3)
+                .map(|axis| (max[axis] - min[axis]).max(0.0))
+                .product::<f32>()
+        };
+        let asked = volume(requested.0, requested.1);
+        (asked > 0.0).then(|| volume(self.box_min, self.box_max) / asked)
+    }
+}
+
 /// How a layer would be collapsed.
 ///
 /// `cell_size` is required rather than optional, because the engine cannot
@@ -252,6 +300,84 @@ impl Document {
             "clay_layer_consolidate",
         )?;
         Ok(ConsolidationCost::from_raw(raw))
+    }
+
+    /// What a region merge would absorb, and over what box — without baking.
+    ///
+    /// The closure, not the box that was asked for. See [`RegionMerge`].
+    pub fn plan_region_merge(
+        &self,
+        layer: LayerId,
+        region: ([f32; 3], [f32; 3]),
+    ) -> Result<RegionMerge> {
+        let (min, max) = region;
+        let mut raw = sys::clay_region_merge::sized();
+        // SAFETY: valid handle; two three-float arrays the entry point reads
+        // and one sized descriptor it writes.
+        check(
+            unsafe {
+                sys::clay_layer_plan_region_merge(
+                    self.as_ptr(),
+                    layer.0,
+                    min.as_ptr(),
+                    max.as_ptr(),
+                    &mut raw,
+                )
+            },
+            "clay_layer_plan_region_merge",
+        )?;
+        Ok(RegionMerge::from_raw(raw))
+    }
+
+    /// Bakes a REGION of a layer into one volume, leaving the rest parametric.
+    ///
+    /// The scope [`Self::consolidate`] is not. Collapsing the whole subtool is
+    /// right for an edit list that has genuinely degraded and wrong for what a
+    /// sculptor does, which is work a patch — and a host that applied the
+    /// whole-layer bake per gesture would lose the parameters of everything
+    /// nowhere near the stroke.
+    ///
+    /// **What it buys is that repeated work on one patch stays at one baked
+    /// item.** The second gesture's closure contains the first gesture's
+    /// volume, so it is absorbed rather than stacked on: O(1) in gestures
+    /// where appending was O(n). The engine measures twelve gestures on one
+    /// patch at 22 ms and 2 items for the first and 244 ms and 13 for the
+    /// twelfth, which is the curve a session of Move dabs draws here.
+    ///
+    /// Returns what it cost and what it absorbed. Check
+    /// [`RegionMerge::whole_layer`]: the closure can grow until it swallows
+    /// the subtool, and then this *is* [`Self::consolidate`] — the honest
+    /// fallback rather than a failure.
+    pub fn consolidate_region(
+        &mut self,
+        layer: LayerId,
+        region: ([f32; 3], [f32; 3]),
+        params: ConsolidationParams,
+    ) -> Result<(ConsolidationCost, RegionMerge)> {
+        let (min, max) = region;
+        let raw_params = params.to_raw();
+        let mut cost = sys::clay_consolidation_cost::sized();
+        let mut merge = sys::clay_region_merge::sized();
+        // SAFETY: as `plan_region_merge`, and the document is uniquely
+        // borrowed for the mutation.
+        check(
+            unsafe {
+                sys::clay_layer_consolidate_region(
+                    self.as_ptr(),
+                    layer.0,
+                    min.as_ptr(),
+                    max.as_ptr(),
+                    &raw_params,
+                    &mut cost,
+                    &mut merge,
+                )
+            },
+            "clay_layer_consolidate_region",
+        )?;
+        Ok((
+            ConsolidationCost::from_raw(cost),
+            RegionMerge::from_raw(merge),
+        ))
     }
 
     /// Whether a layer is already consolidated, and what it cost.
