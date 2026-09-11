@@ -298,3 +298,196 @@ fn a_press_that_never_drags_leaves_nothing_open() {
         "the gesture is over and must not still be holding the layer"
     );
 }
+
+/// The drag that is NOT previewed still costs one grab per image, not one per
+/// segment.
+///
+/// Everything above is about the live transaction. This is the other path:
+/// when no transaction is open — a mirror that could not be pointed, or a
+/// caller that never opened one — `baked_stroke` falls to
+/// `move_surface_stroke`, which writes the drag with
+/// `clay_layer_move_surface`. That call coalesces successive grabs only while
+/// the centre and the radius repeat **exactly**, so what the segments carry
+/// decides whether the fallback costs one grab or one per pointer event.
+///
+/// It used to cost one per pointer event. `Stroke::pending` hands a
+/// path-driven tool the last sample it already sent, so every segment after
+/// the first began where the previous one stopped, the centre moved with the
+/// pointer, and nothing coalesced. The chain's Lipschitz bound then multiplies
+/// once per segment, which is exactly the decay the header of this file
+/// describes for the pre-transaction live path — the fallback had kept it.
+///
+/// The ViewModel now replays a field Move from its anchor, pinned by
+/// `every_segment_of_a_field_drag_also_starts_at_the_anchor`. That test pins
+/// the decision; this one pins the consequence and the engine contract the
+/// decision leans on. If a future engine stops coalescing a repeated centre,
+/// the replay silently buys nothing and only this notices.
+///
+/// **One grab per mirror image, not one in total.** The layer mirror does not
+/// reach this verb, so `baked_stroke` reflects the gesture by hand and calls
+/// the engine once per image; each image coalesces within itself. Under the
+/// x mirror that is two, and two is the floor rather than the defect.
+#[test]
+fn the_unpreviewed_drag_coalesces_to_one_grab_per_image() {
+    const SEGMENTS: usize = 6;
+    let anchor = [0.0f32, 0.0, 0.95];
+    let path: Vec<GestureSample> = (0..=SEGMENTS)
+        .map(|step| GestureSample {
+            position: [anchor[0] + step as f32 * 0.03, anchor[1], anchor[2]],
+            pressure: 1.0,
+            time: step as f32,
+        })
+        .collect();
+
+    let chain_of = |from_the_anchor: bool, symmetry: [bool; 3]| -> i32 {
+        let mut document = sphere();
+        // No `open_live_gesture`, which is what puts this on the fallback.
+        SculptModel::begin_gesture(&mut document);
+        let mut applied = 0usize;
+        for end in 2..=path.len() {
+            let from = if from_the_anchor {
+                0
+            } else {
+                // What `pending` used to hand over: the newest samples plus
+                // the last one already sent.
+                applied.saturating_sub(1)
+            };
+            document
+                .apply_stroke(ToolKind::Mover, brush(), &path[from..end], symmetry)
+                .expect("a segment of the drag");
+            applied = end;
+        }
+        let key = document.scene().active_layer().expect("a layer").key;
+        let id = document.layer_id(key).expect("its id");
+        document
+            .document()
+            .field_report(id, 0.0)
+            .expect("a field report")
+            .longest_deformer_chain
+    };
+
+    // Unmirrored: the sculptor made one drag, so the field carries one grab.
+    assert_eq!(
+        chain_of(true, [false; 3]),
+        1,
+        "sent from the anchor and unmirrored, {SEGMENTS} segments must coalesce \
+         into the single grab the drag asked for"
+    );
+    // Mirrored: one per image, and the images do not stack each other.
+    assert_eq!(
+        chain_of(true, STARTING_SYMMETRY),
+        2,
+        "under one mirror the drag is written once per image, so two — a third \
+         would mean the images are being appended rather than coalesced"
+    );
+    // And the shape the replay replaced, so this states the defect and not
+    // only the fix. If these ever match the numbers above, the engine has
+    // started coalescing a moving centre and the replay is no longer
+    // load-bearing.
+    assert_eq!(
+        chain_of(false, [false; 3]) as usize,
+        SEGMENTS,
+        "re-anchoring each segment is what used to happen, and it is what costs \
+         a grab per pointer event"
+    );
+    assert_eq!(
+        chain_of(false, STARTING_SYMMETRY) as usize,
+        SEGMENTS * 2,
+        "and mirrored it cost one per image per segment"
+    );
+}
+
+/// A press on an open drag starts its own drag, and does not extend the last.
+///
+/// The invariant used to be held by convention: `arm_live_move` refused while
+/// a transaction was open, and everything downstream assumed the refusal meant
+/// the press had been handled. It did not. `apply_stroke` routes to the live
+/// path on `live_move.is_some()` without consulting the arming, so a second
+/// press silently continued the FIRST transaction — measuring the new drag's
+/// displacement from an anchor the sculptor had already released. And because
+/// the caller had been told the gesture was not live, the release never closed
+/// it: the orphan stayed open and collected every Move that followed.
+///
+/// Nothing in the application was found that could issue that press, which is
+/// why this went unnoticed. It is pinned here because "no caller does this
+/// today" is the kind of guarantee that a new caller silently revokes.
+///
+/// The second press abandons the first drag rather than banking it: a gesture
+/// that never got its pointer-up has not earned a commit, which is the rule
+/// the whole live path already runs on.
+#[test]
+fn a_second_press_abandons_the_open_drag_instead_of_extending_it() {
+    const SEGMENTS: usize = 4;
+
+    // What one clean drag leaves, for the second press to be measured against.
+    let alone = {
+        let mut document = sphere();
+        assert!(document.open_live_gesture(ToolKind::Mover, STARTING_SYMMETRY));
+        for step in 1..=SEGMENTS {
+            document
+                .apply_stroke(
+                    ToolKind::Mover,
+                    brush(),
+                    &drag_to(step, SEGMENTS),
+                    STARTING_SYMMETRY,
+                )
+                .expect("a segment");
+        }
+        document.close_live_gesture().expect("close");
+        reach_along_x(&drawn_vertices(&document))
+    };
+
+    // The same drag, but preceded by an abandoned one that was never closed.
+    let mut document = sphere();
+    assert!(document.open_live_gesture(ToolKind::Mover, STARTING_SYMMETRY));
+    for step in 1..=SEGMENTS {
+        document
+            .apply_stroke(
+                ToolKind::Mover,
+                brush(),
+                &drag_to(step, SEGMENTS),
+                STARTING_SYMMETRY,
+            )
+            .expect("a segment of the gesture that never ends");
+    }
+
+    // The press that never should have come, and no release before it.
+    assert!(
+        document.open_live_gesture(ToolKind::Mover, STARTING_SYMMETRY),
+        "a press must open its own drag; refusing here is what used to leave \
+         the first transaction open and collecting"
+    );
+    for step in 1..=SEGMENTS {
+        document
+            .apply_stroke(
+                ToolKind::Mover,
+                brush(),
+                &drag_to(step, SEGMENTS),
+                STARTING_SYMMETRY,
+            )
+            .expect("a segment of the second drag");
+    }
+    document.close_live_gesture().expect("close");
+
+    let after = reach_along_x(&drawn_vertices(&document));
+    assert!(
+        (after - alone).abs() < 1e-3,
+        "the second drag reached {after} where the same drag alone reaches \
+         {alone}. The abandoned gesture is still in the surface, so the press \
+         extended it rather than replacing it"
+    );
+
+    // And the field carries one drag's worth of grabs, not two.
+    let key = document.scene().active_layer().expect("a layer").key;
+    let id = document.layer_id(key).expect("its id");
+    let chain = document
+        .document()
+        .field_report(id, 0.0)
+        .expect("a field report")
+        .longest_deformer_chain;
+    assert_eq!(
+        chain, 2,
+        "one drag under one mirror is one grab per image; {chain} means the \
+         abandoned drag was committed alongside it"
+    );
+}

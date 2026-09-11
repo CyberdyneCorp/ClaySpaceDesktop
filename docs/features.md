@@ -145,6 +145,41 @@ Settings are held **per tool**: switching away and back returns what you left,
 not a default. Values are clamped to what the engine accepts rather than
 producing an error you cannot act on.
 
+### A drag on a field replays from where it started
+
+A drag arrives in segments as the pointer moves, and **every segment carries
+the gesture from its anchor** rather than only what is new. The field's Mover
+now does this as the mesh's has always done — see *Sculpting a mesh layer*,
+where the same rule is measured against Blender — but for a different reason
+and with a different mechanism.
+
+On an editable field layer the drag is a **transaction**: `clay_sdf_move_begin`
+on the press, one `clay_sdf_move_update` per pointer event carrying the total
+displacement from the anchor, and one `commit` on release. The anchor lives in
+the transaction, so the whole gesture costs the layer **one grab** however many
+segments drew it — twelve drags of six segments leave a deformer chain of 12
+rather than 72, and the chain's Lipschitz bound is a product, so that is the
+difference between a drag that stays interactive and one that decays as it is
+made.
+
+When no transaction can be opened — a mirror that could not be pointed — the
+drag falls to `clay_layer_move_surface`, which takes each segment's **first
+sample** as the centre of the grab it writes. That call folds successive grabs
+into one only while the centre and radius repeat exactly, so a segment starting
+where the last one stopped is a new grab every time: six segments, six grabs,
+and the same decay the transaction exists to prevent. Replaying from the anchor
+is what keeps the fallback to one grab per mirror image, matching the
+transaction.
+
+One grab **per image**, not one in total: the layer mirror cannot reach a verb
+that rewrites the field (see *Symmetry*), so a mirrored drag is reflected and
+applied once per image, and each image folds within itself.
+
+A press arriving while a drag is still open **abandons that drag** and starts
+its own. A gesture that never received its pointer-up has not earned a commit,
+which is the rule the whole live path runs on — the document carries no part of
+a drag until the release.
+
 ### Brush colour
 
 One current colour, plus the last six before it, shown as a swatch in the

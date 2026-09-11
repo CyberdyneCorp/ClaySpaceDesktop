@@ -835,7 +835,22 @@ impl SculptViewModel {
             // 0.137 is the taper itself. The model grows the one curve rather
             // than adding another, so replaying is free of the stacking that
             // makes it wrong elsewhere.
-            Representation::Sdf => tool == ToolKind::Puxar,
+            //
+            // A field's Move replays for a different reason, and needs none of
+            // the take-back above. When a live transaction is open the anchor
+            // lives in the transaction; when one is not — a mirror that could
+            // not be pointed, or a caller that never opened one — the drag
+            // falls to `clay_layer_move_surface`, which takes the segment's
+            // FIRST sample as the centre of the grab. That call coalesces
+            // successive grabs only while the centre and radius repeat
+            // exactly, so a segment starting where the last one stopped is a
+            // new grab every time: measured on the pinned engine, six segments
+            // sent that way leave a deformer chain of 6 where six sent from a
+            // fixed anchor leave 1, and the chain's Lipschitz bound
+            // multiplies. Replaying costs nothing here — the verb reads only
+            // the first and last sample — and the live path is unaffected,
+            // since it takes its anchor from the first segment either way.
+            Representation::Sdf => matches!(tool, ToolKind::Puxar | ToolKind::Mover),
             Representation::Voxel => false,
             // The mesh's answer, because the drag IS the mesh's drag: a stamp
             // on a hierarchy is the fixed sculptor's stamp over the bound

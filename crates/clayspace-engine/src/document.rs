@@ -3957,17 +3957,48 @@ impl ClayDocument {
     /// Answers the refusals a Move drag can be refused for without a position,
     /// and points the mirror while nothing is holding the layer.
     fn arm_live_move(&mut self, symmetry: [bool; 3]) -> bool {
-        if self.live_move.is_some() || self.live_move_armed || !self.live_move_is_possible() {
+        if !self.live_move_is_possible() {
             return false;
         }
+        // A PRESS ARRIVING ON AN OPEN DRAG IS AN ORPHAN, AND IT IS ABANDONED
+        // HERE RATHER THAN IGNORED.
+        //
+        // This used to refuse — and refusing was the defect, because the
+        // dispatch does not consult it. `apply_stroke` routes to the live path
+        // on `live_move.is_some()`, so a refused second press did not fall
+        // back: it silently extended the FIRST transaction, measuring its
+        // displacement from the first press's anchor. The surface then moved
+        // relative to a point the sculptor had already let go of. Worse, the
+        // caller was told the gesture was not live, so the release never
+        // closed it, and every Move after that extended the same orphan for
+        // the life of the session.
+        //
+        // The gesture is dropped rather than banked: nothing is owed for a
+        // drag that never got its pointer-up, and that is the same rule the
+        // whole live path is built on — the document carries no part of a drag
+        // until the release. Dropping also cannot fail, where a commit can.
+        //
+        // Before the mirror is pointed, never after: pointing it is an edit,
+        // and an edit under an open transaction is what makes its commit
+        // refuse.
+        let orphaned = if self.live_move.is_some() || self.live_move_armed {
+            self.discard_live_move()
+        } else {
+            0
+        };
         // Before the transaction opens, never during it: a commit refuses a
         // layer that changed since begin, and the mirror is such a change.
         let before = self.engine_undo_depth();
         if self.point_the_mirror(symmetry).is_err() {
+            // Nothing is armed to carry them, so the orphan's opening entries
+            // are left where `close_live_gesture` will still hand them back.
+            self.live_opening_entries = orphaned;
             return false;
         }
         self.live_move_armed = true;
-        self.live_opening_entries = self.engine_undo_depth().saturating_sub(before);
+        // The abandoned gesture's opening is still owed by whoever closes this
+        // one: its mirror edit happened and was never taken back.
+        self.live_opening_entries = orphaned + self.engine_undo_depth().saturating_sub(before);
         true
     }
 
@@ -4033,7 +4064,10 @@ impl ClayDocument {
             return self.close_live_move();
         }
         let Some(live) = self.live_smooth.take() else {
-            return Ok(0);
+            // Nothing is open. Anything still owed is an abandoned gesture's
+            // opening — see `arm_live_move`, which leaves it here when a press
+            // dropped an orphan and then could not point the mirror.
+            return Ok(std::mem::take(&mut self.live_opening_entries));
         };
         self.surface_epoch = self.surface_epoch.wrapping_add(1);
         let opening = std::mem::take(&mut self.live_opening_entries);
