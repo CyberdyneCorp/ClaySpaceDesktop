@@ -354,10 +354,37 @@ fn has_opencl() -> bool {
         .unwrap_or(false)
 }
 
+/// Routes the C++ compile through `ccache` when the machine has one.
+///
+/// This file's sibling comment in `.github/workflows/ci.yml` has claimed since
+/// the workflow was written that "that is what the ccache step is for" — and
+/// there was no ccache step, and nothing here ever set a launcher. Every job
+/// rebuilt both vendored engines from scratch, which is most of what the macOS
+/// rows spend their budget on.
+///
+/// Probed rather than assumed: a machine without `ccache` gets the compiler it
+/// always had, so this is a speed-up where it is available and a no-op where it
+/// is not. CMake takes the launcher as a prefix on each compile command, so an
+/// absent binary would otherwise fail every translation unit rather than fall
+/// back.
+fn use_ccache_if_present(cfg: &mut cmake::Config) {
+    let found = Command::new("ccache")
+        .arg("--version")
+        .output()
+        .is_ok_and(|out| out.status.success());
+    if !found {
+        return;
+    }
+    cfg.define("CMAKE_C_COMPILER_LAUNCHER", "ccache")
+        .define("CMAKE_CXX_COMPILER_LAUNCHER", "ccache");
+    println!("cargo::warning=building the engine through ccache");
+}
+
 fn build_engine(engine: &Path, b: &Backends) -> PathBuf {
     let flag = |on: bool| if on { "ON" } else { "OFF" };
 
     let mut cfg = cmake::Config::new(engine);
+    use_ccache_if_present(&mut cfg);
     cfg.define("CLAY_BUILD_TESTS", "OFF")
         .define("CLAY_BUILD_BENCHMARKS", "OFF")
         .define("CLAY_BUILD_PYTHON", "OFF")
