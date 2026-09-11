@@ -340,7 +340,17 @@ struct Layer {
     /// rest of the gesture. Written at the toggle instead, it would sit on the
     /// engine's stack unaccounted, and the next undo would spend itself on the
     /// mirror and leave part of the stroke standing.
-    mirror: [bool; 3],
+    ///
+    /// `None` means **nobody knows**. Writing the mirror is an edit, so an
+    /// undo can revert it — and because the ABI has no call that reads a
+    /// layer's mirror back, the account above is the only one there is and it
+    /// cannot be reconciled, only overwritten. A record that survived the undo
+    /// of the edit it recorded was not stale, it was *wrong*: the early return
+    /// in `point_the_mirror` then skipped a call it needed and the engine
+    /// sculpted through a mirror this side believed it had turned off — 0.28
+    /// units of surface on the far side of a stroke made with symmetry off.
+    /// So an undo forgets, and the next stroke writes it again.
+    mirror: Option<[bool; 3]>,
     // The frozen region painted on this subtool is *not* here, and that is
     // the change: it belongs to the layer inside the engine's own document,
     // where `clay_document_add_mask` attaches it and `clay_document_save`
@@ -417,7 +427,7 @@ impl Layer {
             // A layer the engine has just made carries no mirror — axes
             // 0/0/0 is what "off" is — so that is what it has been told, and
             // the first stroke that wants the setting above is what writes it.
-            mirror: [false; 3],
+            mirror: Some([false; 3]),
             armature: None,
             armature_bounds: None,
         }
@@ -1425,7 +1435,7 @@ impl ClayDocument {
             document,
             layers: vec![Layer {
                 // Written above, before undo started recording.
-                mirror: Layer::STARTING_SYMMETRY,
+                mirror: Some(Layer::STARTING_SYMMETRY),
                 ..Layer::new(id, LayerKey(1), "Forma", Representation::Sdf)
             }],
             active: 0,
@@ -3096,15 +3106,55 @@ impl ClayDocument {
     /// layer happened to carry.
     fn point_the_mirror(&mut self, symmetry: [bool; 3]) -> Result<(), ModelError> {
         let index = self.active;
-        if self.layers[index].mirror == symmetry {
+        // `Some(symmetry)` and not `symmetry`: a forgotten mirror is never
+        // equal to anything, so the call is made rather than skipped.
+        if self.layers[index].mirror == Some(symmetry) {
             return Ok(());
         }
         let layer = self.layers[index].id;
         self.document
             .set_layer_mirror(layer, symmetry, 0.0)
             .map_err(ModelError::engine)?;
-        self.layers[index].mirror = symmetry;
+        self.layers[index].mirror = Some(symmetry);
         Ok(())
+    }
+
+    /// Forgets what the engine was told every layer's mirror is.
+    ///
+    /// Called after a step through the history, because a step can revert the
+    /// edit that wrote one. `set_symmetry` only records the sculptor's choice;
+    /// the engine's mirror is written by the stroke that needs it, *inside*
+    /// that stroke's gesture — which is the whole point, so one undo spends
+    /// the mirror along with the rest of the stroke. The cost is that the same
+    /// undo silently invalidates this side's account of it.
+    ///
+    /// Every layer rather than the active one, and on redo as well as undo,
+    /// because the ABI offers no way to ask which entry moved or what it
+    /// touched. Narrowing this would mean guessing, and guessing wrong here is
+    /// what the fault was.
+    ///
+    /// The cost is one redundant `clay_set_layer_mirror` on the next stroke
+    /// after a history step — the call ClayCore #536 is making free, which is
+    /// why the two changes are complementary rather than competing.
+    fn forget_the_mirrors(&mut self) {
+        for layer in &mut self.layers {
+            layer.mirror = None;
+        }
+    }
+
+    /// Which axes to dirty the reflections of, when the answer has to be safe
+    /// rather than exact.
+    ///
+    /// The callers use this to decide which *reflected regions* to re-fill. A
+    /// forgotten mirror has no honest answer, and the two ways of being wrong
+    /// are not equal: dirtying a reflection the engine does not make costs a
+    /// re-fill nobody needed, where missing one the engine does make leaves a
+    /// stale brick on screen with nothing to correct it. So unknown reads as
+    /// all three axes. `snakehook_stroke` reaches this through `baked_stroke`,
+    /// which has already pointed the mirror, so it is the curve paths that can
+    /// see a `None` at all.
+    fn mirror_for_dirtying(layer: &Layer) -> [bool; 3] {
+        layer.mirror.unwrap_or([true; 3])
     }
 
     /// A stroke whose verb rewrites the field rather than adding an item.
@@ -3738,7 +3788,7 @@ impl ClayDocument {
             // dirty and the wide bound was the correct answer. The two fixes
             // are one fix.
             let placed = self.active_layer().transform;
-            let mirror = Mirror(self.active_layer().mirror);
+            let mirror = Mirror(Self::mirror_for_dirtying(self.active_layer()));
             let regions =
                 Self::tendril_tail_regions(&points, hook.points, brush.size, mirror, &placed);
             self.live_hook = Some(LiveHook {
@@ -7558,6 +7608,7 @@ impl SculptModel for ClayDocument {
         self.settle_history_room();
         let moved = self.undo_step();
         self.settle_history_room();
+        self.forget_the_mirrors();
         moved
     }
 
@@ -7565,6 +7616,7 @@ impl SculptModel for ClayDocument {
         self.settle_history_room();
         let moved = self.redo_step();
         self.settle_history_room();
+        self.forget_the_mirrors();
         moved
     }
 
@@ -10445,7 +10497,7 @@ impl ClayDocument {
             return Vec::new();
         };
         let layer = &self.layers[index];
-        let mirror = Mirror(layer.mirror);
+        let mirror = Mirror(Self::mirror_for_dirtying(layer));
         let axes: Vec<usize> = (0..3).filter(|axis| mirror.0[*axis]).collect();
         let placed = layer.transform;
         (0..(1usize << axes.len()))
