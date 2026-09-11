@@ -318,29 +318,53 @@ chain grows by one per dab and reaches 0.0289 at dab 8; with the x mirror it
 grows by two and reaches 0.0289 at dab **4**. The starting form turns x on, so
 the default document degrades twice as fast as the measurements without it.
 
-**3. The engine's own advisory never fires.** `advises_consolidation` is
-`false` at every row, including a safe step scale of 0.000837. The host reads
-that flag (`document.rs:1663`) and surfaces it, so the mechanism for telling a
-sculptor to bake exists and is not triggering on the case that actually
-destroys interactivity. Whatever threshold it uses, a chain of 16 and a step
-scale three orders of magnitude down is not reaching it.
+**3. The engine's advisory is silent on purpose, and the host is reading the
+wrong field.** `advises_consolidation` is `false` at every row, including a
+safe step scale of 0.000837 — and that is **correct**, not miscalibrated. It is
+keyed on the *mechanism*: for a layer whose degradation is all deformer chain
+there is nothing to absorb, and the engine has measured the bake at **6x
+worse** — it swaps a cheap analytic item for a dense volume, and a 29x better
+step scale is swamped by what the volume costs per sample. Had the flag fired
+and the host acted, the sculptor would have got a slower layer.
+
+The field that *does* describe this is `clay_field_report.degradation`, which
+has been in the ABI since 0.70.0 and reads `CLAY_DEGRADATION_DEFORMERS` here.
+The header says outright: **"READ `degradation` BEFORE ACTING."** This wrapper
+was not carrying it, so a degraded layer and a healthy one produced the same
+`false` and nothing else. Measured after binding it:
+
+| dab | chain | step_scale | advises | degradation |
+|---|---:|---:|---|---|
+| 1 | 1 | 0.666644 | false | `None` |
+| 2 | 2 | 0.444414 | false | `Deformers` |
+| 8 | 8 | 0.296266 | false | `Deformers` |
+
+The engine names the mechanism from the second dab onward.
 
 ## Where the fix is
 
-Not in the drag path, and not in local item density. The lever is **collapsing
-the chain** — which is the same verb ClayCore was already going to propose for
-the density case (`Op::Replace` bake-and-replace), reached from a completely
-different direction and for a much more common scenario: not a heavily stamped
-region, just four ordinary dabs.
+Not in the drag path, not in local item density, and **not in consolidation**.
+Baking is the cure for stacked volumes and a long edit list; it is measured 6x
+worse for a chain of grabs on a layer with nothing to absorb, which is what a
+session of dabs builds. An earlier draft of this note recommended exactly that
+bake, on the strength of the advisory being silent. It was wrong.
 
-Two host-side questions fall out and neither needs the engine:
+What is left is genuinely open:
 
-- Should a Move dab consolidate the chain itself once it passes some depth?
-  The verb exists and the host already calls it for Suavizar and Relaxar.
-- Should the host use its own `safe_step_scale` threshold rather than waiting
-  for `advises_consolidation`, given the flag does not fire here?
+- **The crossover is unmeasured.** The engine's "6x worse" was taken on a real
+  gesture, almost certainly a shallow chain. The table above reaches a 490x
+  degradation. At that depth 6x more per sample against 490x fewer steps may
+  well invert, and nothing in the current condition has an escape hatch for
+  "degraded so badly that even a bad cure wins". ClayCore is taking this.
+- **A collapse that keeps the layer parametric** — resolving N grabs into
+  fewer without going to a volume — would be the right cure if one exists.
+  `price-the-warps-a-layer-carries` declined both available forms as unsound,
+  so it is research rather than a patch.
 
-Both are design questions, recorded rather than acted on.
+Host-side, one thing is now possible that was not: `degradation` distinguishes
+a layer that wants nothing from one that is failing, so the application can at
+least *tell*, and warn, rather than treating both as healthy. Whether it should
+is a design question and is not decided here.
 
 ## Caveat
 
