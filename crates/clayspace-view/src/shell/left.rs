@@ -1124,6 +1124,24 @@ pub(super) fn field_health_control(
     if !health.advises_consolidation || health.consolidated {
         return;
     }
+    // AND ONLY WHEN THE CURE FITS THE ILLNESS.
+    //
+    // This row offers `OptimizeLayer`, which collapses the whole subtool. That
+    // is the cure for a stack of baked volumes or a long edit list, and the
+    // engine measures it 6x *worse* for a chain of brushes on a layer with
+    // nothing to absorb — a session of Move gestures — where it swaps cheap
+    // analytic items for a dense volume.
+    //
+    // The advisory above already knows that and is false for the deformer
+    // case, so today this is belt and braces. It stops being that the moment
+    // ClayCore lowers the advisory to a step-scale floor: the flag would go
+    // true on precisely the layer the collapse is wrong for, and this row
+    // would offer a button the model now refuses. An offer that cannot be
+    // honoured is worse than no offer, so the mechanism is asked rather than
+    // the flag alone.
+    if !health.degradation.whole_layer_bake_would_help() {
+        return;
+    }
 
     ui.add_space(space::SNUG);
     ui.label(
@@ -1138,10 +1156,25 @@ pub(super) fn field_health_control(
         if button.clicked() {
             queue.push(Command::OptimizeLayer(layer.key));
         }
-        // The count rather than the step scale: a sculptor can see how many
-        // strokes they have made and cannot see a Lipschitz bound.
+        // The count rather than the step scale: a sculptor can see how much
+        // work is on the layer and cannot see a Lipschitz bound.
+        //
+        // WHICH count depends on what steepened the field, and the two are not
+        // interchangeable. An edit list grows by *items*, so that is the
+        // number for it. A brush chain hangs deformers off an item without
+        // adding any, so a layer sixteen Move gestures deep still holds one
+        // item — printing that beside an offer to collapse it would be
+        // legible and false, which is worse than printing nothing.
+        //
+        // The guard above means only the item case reaches here today. The
+        // routing is written anyway, because the guard is on *which cure
+        // fits*, and a cure for the chain case would open this row to it.
+        let worked = match health.degradation {
+            clayspace_model::FieldDegradation::Deformers => health.chain,
+            _ => health.items,
+        };
         ui.label(
-            egui::RichText::new(health.items.to_string())
+            egui::RichText::new(worked.to_string())
                 .size(type_scale::LABEL)
                 .color(Tokens::text_dim()),
         );

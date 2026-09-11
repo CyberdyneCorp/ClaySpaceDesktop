@@ -3819,6 +3819,12 @@ fn a_costly_subtool_is_offered_the_one_thing_that_helps() {
         if layer.key == active {
             layer.health = Some(clayspace_model::FieldHealth {
                 items: 97,
+                chain: 1,
+                // The mechanism, named rather than left to a default: the
+                // advice is keyed on it, and a fixture that advised a collapse
+                // without saying what for was describing a layer the engine
+                // cannot produce.
+                degradation: clayspace_model::FieldDegradation::Volumes,
                 safe_step_scale: 0.0014,
                 advises_consolidation: true,
                 consolidated: false,
@@ -3834,6 +3840,55 @@ fn a_costly_subtool_is_offered_the_one_thing_that_helps() {
             .is_some(),
         "the engine advised collapsing the active subtool and the interface \
          drew nothing: the advice is computed and read by nobody again"
+    );
+}
+
+/// A layer the collapse cannot help is not offered it.
+///
+/// The advisory is keyed on the *mechanism*: it is false for a layer whose
+/// degradation is all deformer chain, because collapsing that layer is
+/// measured 6x worse than living with it. So today this row is already absent
+/// for that case and the guard in `field_health_control` is belt and braces.
+///
+/// It stops being belt and braces the moment ClayCore lowers the advisory to a
+/// step-scale floor (their #534). The flag would go true on precisely the
+/// layer the collapse is wrong for, this row would draw a button, and
+/// `consolidate_layer` now refuses it — an offer that cannot be honoured.
+/// This fixture is that future: a chain-degraded layer whose flag says yes.
+#[test]
+fn a_subtool_a_collapse_would_slow_down_is_not_offered_one() {
+    let strings = Strings::for_locale(Locale::PtBr);
+    let materials = ["MatCap Cinza 01"];
+    let report = diagnostics();
+
+    let mut chained = scene();
+    let active = chained.active.expect("the fixture has an active layer");
+    for layer in &mut chained.layers {
+        if layer.key == active {
+            layer.health = Some(clayspace_model::FieldHealth {
+                // One item and sixteen gestures on it: a grab hangs off an
+                // item rather than adding one, which is why the item count
+                // cannot stand in for how much work is here.
+                items: 1,
+                chain: 16,
+                degradation: clayspace_model::FieldDegradation::Deformers,
+                safe_step_scale: 0.0008,
+                // The flag as ClayCore's floor would set it.
+                advises_consolidation: true,
+                consolidated: false,
+            });
+        }
+    }
+    let advised = state(strings, &chained, &materials, &report);
+    assert!(
+        probe_shell(&advised)
+            .memory(|memory| memory
+                .data
+                .get_temp::<egui::Rect>(shell::optimize_button_id()))
+            .is_none(),
+        "a layer degraded by a brush chain was offered a whole-layer collapse. \
+         The engine measures that 6x worse there and the model refuses it, so \
+         the interface must not ask"
     );
 }
 
@@ -4970,6 +5025,8 @@ fn each_representation_has_a_section_of_its_own_name() {
         if layer.key == active {
             layer.health = Some(clayspace_model::FieldHealth {
                 items: 12,
+                chain: 1,
+                degradation: clayspace_model::FieldDegradation::None,
                 safe_step_scale: 0.9,
                 advises_consolidation: false,
                 consolidated: false,
