@@ -146,7 +146,8 @@ strokes — are in no baseline and report as `new`.
   arranged](#how-a-document-is-arranged) · [what the pointer
   means](#what-the-pointer-means) · [the build](#what-a-build-actually-does)
 - [Prerequisites](#prerequisites) · [Getting it](#getting-it) · [Common
-  tasks](#common-tasks) · [Testing](#testing) ·
+  tasks](#common-tasks) · [trying an engine
+  fix](#trying-an-engine-fix-before-it-ships) · [Testing](#testing) ·
   [Backends](#choosing-backends-explicitly) · [Layout](#layout) · [Working on
   it](#working-on-it)
 
@@ -1271,13 +1272,31 @@ long-form commands live in one place. `just` on its own lists them.
 | `just bundle` | The distributable: a `.app` on macOS, a tarball on Linux |
 | `just engine` | Which ClayCore this build is pinned to |
 | `just engine-pin v0.60.0` | Move the pin to a release tag |
+| `just engine-main` | Build against ClayCore's `main`, to try a fix before it ships |
+| `just engine-restore` | Back to the pinned release |
 | `just diagnostics` | What this build is and what it decided to run on |
 | `just profile` | The application, optimised, so an exported profile can be quoted |
 
-`just check` runs six gates that are six different tools — formatting, the
-layering rules, clippy, the suite, the specification and the packaging
-scripts. Knowing to run all six should not depend on having read this file
-recently.
+`just check` runs seven gates that are seven different tools — the engine pin,
+formatting, the layering rules, clippy, the suite, the specification and the
+packaging scripts. Knowing to run all seven should not depend on having read
+this file recently.
+
+### Trying an engine fix before it ships
+
+The engine is pinned to a release tag, because a release stays still and their
+`main` is where they are still working. When a fix lands there and the question
+is whether it reaches this application, `just engine-main` checks the submodule
+out at `main` and `just engine-restore` puts the release back. The build says
+it is ahead of the pin and carries on; nothing needs cleaning, because the
+engine rebuilds itself when its sources change.
+
+What must not follow from an afternoon's investigation is a changed engine.
+`git commit -a` stages a moved submodule pointer along with everything else,
+and CI builds from that pointer — so `just check` refuses a pin that is not a
+release tag, reading what is *staged* rather than what is committed, so it
+catches the mistake before it lands rather than after. Being checked out at
+`main` is free; committing it is what gets stopped.
 
 ## Testing
 
