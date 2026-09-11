@@ -220,17 +220,36 @@ real money at the other end — the 0-ball baseline nearly doubles from 512 to 8
 which is the per-submission fixed cost the comment in `drain_dirty` already
 warns about.
 
-Two readings survive and this host cannot separate them:
+Two readings survived this measurement — either the batch union is not the
+mechanism, or it is but `take_dirty` returns bricks in a non-spatial order so
+the union never actually shrank. **ClayCore settled it: the first.** Recorded
+here with their numbers because the conclusion is stronger than what this host
+could reach alone.
 
-1. The batch union is not the mechanism.
-2. It is, but `take_dirty` hands back bricks in an order that is not spatial,
-   so a batch of 8 arbitrary bricks spans nearly the same box as a batch of
-   512 and the union never actually shrank.
+The non-spatial escape hatch was never available. `BrickCache::mark_dirty`
+fills its list with a z→y→x nested loop, `take_dirty` preserves that insertion
+order, and the C paging call hands out a *contiguous slice* of that staged
+vector — so a batch of 8 is 8 x-adjacent bricks, a thin strip rather than a
+spanning sample. The union genuinely does shrink with the batch. It just does
+not matter:
 
-Reading 2 is the one ClayCore's own framing predicts, and it would mean the
-lever is **spatially grouping a batch**, not sizing it — a different and larger
-change than a constant. Distinguishing the two needs the batch region itself
-measured, which is engine-side.
+| batch | union volume | per-brick ms | plans |
+|---|---:|---:|---:|
+| 8 | 3.10 | 0.01521 | 81 |
+| 32 | 7.63 | 0.01517 | 21 |
+| 128 | 14.16 | 0.01446 | 6 |
+| 512 | 28.88 | 0.01367 | 2 |
 
-Recorded as a dead end for the cheap version, so nobody reaches for the
-constant. The thread itself stays open.
+**The union collapses 9.3x and the per-brick cost does not move** — it gets
+slightly worse at batch 8, which is the extra `plan()` calls. That is the flat
+delta above, reproduced independently with the volume printed beside it.
+
+So batch size is a dead end *and so is spatial grouping*: the coarse cull is
+not what retains the far items, and sorting before `take_dirty` would buy
+nothing. Both constants are closed from both sides.
+
+The 4x itself stays **unexplained**. Ruled out: the cull pad, the batch union,
+batch size, and `take_dirty` ordering. Not examined: `CullIndex` construction,
+chain prunability, and what `plan()`'s linear scan does differently for a
+clustered versus a spread entry set. It is small, it is filed, and it is worth
+less than it would cost either side to chase right now.
