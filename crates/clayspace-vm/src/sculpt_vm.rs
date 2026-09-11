@@ -307,6 +307,20 @@ impl SculptViewModel {
             Command::SetBrushIntensity(value) => self.edit_brush(|b| b.intensity = value),
             Command::SetBrushFlow(value) => self.edit_brush(|b| b.flow = value),
             Command::SetBrushNoise(value) => self.edit_brush(|b| b.shaping.noise = value),
+            Command::SetBrushPressureSize(value) => {
+                self.edit_brush(|b| b.dynamics.pressure_size = value)
+            }
+            Command::SetBrushPressureStrength(value) => {
+                self.edit_brush(|b| b.dynamics.pressure_strength = value)
+            }
+            Command::SetBrushPressureCurve(value) => {
+                self.edit_brush(|b| b.dynamics.pressure_curve = value)
+            }
+            Command::SetBrushTaperStart(value) => {
+                self.edit_brush(|b| b.dynamics.taper_start = value)
+            }
+            Command::SetBrushTaperEnd(value) => self.edit_brush(|b| b.dynamics.taper_end = value),
+            Command::SetBrushRake(value) => self.edit_brush(|b| b.dynamics.rake = value),
             Command::SetBrushAzimuth(value) => self.edit_brush(|b| b.shaping.azimuth = value),
             Command::SetBrushFalloff(falloff) => self.edit_brush(|b| b.shaping.falloff = falloff),
             Command::SetBrushAccumulate(on) => self.edit_brush(|b| b.shaping.accumulate = on),

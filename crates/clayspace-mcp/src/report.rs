@@ -477,6 +477,7 @@ mod tests {
             size: 0.2,
             intensity: 0.6,
             flow: 1.0,
+            dynamics: Default::default(),
             shaping: Shaping {
                 noise: 0.0,
                 falloff: Falloff::Gaussian,

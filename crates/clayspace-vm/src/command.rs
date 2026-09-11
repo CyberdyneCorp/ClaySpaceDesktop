@@ -193,6 +193,18 @@ pub enum Command {
     SetBrushIntensity(f32),
     SetBrushFlow(f32),
     SetBrushNoise(f32),
+    /// How far pressure drives the radius, 0..=1. Zero disconnects it.
+    SetBrushPressureSize(f32),
+    /// How far pressure drives the strength, 0..=1.
+    SetBrushPressureStrength(f32),
+    /// The exponent pressure passes through before either of the two above.
+    SetBrushPressureCurve(f32),
+    /// Fraction of the stroke the radius ramps in over.
+    SetBrushTaperStart(f32),
+    /// Fraction of the stroke the radius ramps out over.
+    SetBrushTaperEnd(f32),
+    /// Whether each stamp turns to follow the stroke's direction.
+    SetBrushRake(bool),
     /// How far each stamp is turned about its own facing, in radians.
     ///
     /// The grain. Radians rather than degrees because that is what the engine
@@ -670,6 +682,12 @@ impl Command {
                 | Self::SetBrushIntensity(_)
                 | Self::SetBrushFlow(_)
                 | Self::SetBrushNoise(_)
+                | Self::SetBrushPressureSize(_)
+                | Self::SetBrushPressureStrength(_)
+                | Self::SetBrushPressureCurve(_)
+                | Self::SetBrushTaperStart(_)
+                | Self::SetBrushTaperEnd(_)
+                | Self::SetBrushRake(_)
                 | Self::SetBrushAzimuth(_)
                 | Self::SetBrushFalloff(_)
                 | Self::SetBrushAccumulate(_)
@@ -821,6 +839,12 @@ impl Command {
             Self::MoveZsphere { .. } => "move zsphere",
             Self::ResizeZsphere { .. } => "zsphere radius",
             Self::ReparentZsphere { .. } => "reparent zsphere",
+            Self::SetBrushPressureSize(_) => "pressure size",
+            Self::SetBrushPressureStrength(_) => "pressure strength",
+            Self::SetBrushPressureCurve(_) => "pressure curve",
+            Self::SetBrushTaperStart(_) => "taper start",
+            Self::SetBrushTaperEnd(_) => "taper end",
+            Self::SetBrushRake(_) => "rake",
             Self::BeginStroke { .. } => "begin stroke",
             Self::ContinueStroke { .. } => "continue stroke",
             Self::EndStroke => "stroke",

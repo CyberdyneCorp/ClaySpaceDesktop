@@ -116,6 +116,7 @@ fn every_brush_the_interface_can_produce_moves_the_cache() {
         for intensity in [0.65f32, 1.0] {
             for size in [0.08f32, 0.16, 0.25] {
                 let brush = BrushSettings {
+                    dynamics: Default::default(),
                     size,
                     intensity,
                     flow: 0.8,
