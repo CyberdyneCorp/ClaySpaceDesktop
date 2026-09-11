@@ -746,8 +746,15 @@ impl ToolKind {
                 mesh: Some("clay_mesh_sculptor_stamp (LAYER)"),
                 multires: Some("clay_multires_sculptor_stamp (LAYER)"),
             },
+            // Two verbs on a field, and the row names the one that runs.
+            // A drag on an editable field layer is a transaction —
+            // `clay_sdf_move_begin`, one `update` per pointer event, one
+            // `commit` on release — which is what keeps a whole gesture to a
+            // single grab. `clay_layer_move_surface` is the fallback, taken
+            // when no transaction could be opened, and naming only it was
+            // stale for every drag a sculptor actually makes.
             Self::Mover => Verbs {
-                sdf: Some("clay_layer_move_surface"),
+                sdf: Some("clay_sdf_move_begin/update/commit (clay_layer_move_surface when held)"),
                 voxel: Some("clay_voxel_sculpt_grab"),
                 mesh: Some("clay_mesh_sculptor_stamp (GRAB)"),
                 multires: Some("clay_multires_sculptor_stamp (GRAB)"),

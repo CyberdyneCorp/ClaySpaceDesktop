@@ -839,6 +839,70 @@ fn every_segment_of_a_mesh_drag_replays_it_from_the_anchor() {
     }
 }
 
+/// A field drag that is not previewed still reaches the model from its anchor.
+///
+/// The regression this exists for. When a live Move transaction is open the
+/// anchor lives in the transaction and the samples only have to carry the
+/// pointer; when one is *not* open — a mirror that could not be pointed, or
+/// any caller that never opened one — the drag falls to
+/// `move_surface_stroke`, which takes `samples[0]` as the centre of the grab.
+///
+/// `pending()` hands a path-driven tool the last sample it already sent, so
+/// `samples[0]` on every segment after the first was **where the previous
+/// segment stopped**. The centre moved with the pointer, which is the one
+/// thing `clay_layer_move_surface` cannot coalesce: measured on the pinned
+/// engine, six segments sent that way leave a deformer chain of 6, where six
+/// sent from a fixed anchor leave 1. Six grabs where the sculptor made one
+/// drag, each multiplying the layer's Lipschitz bound for the life of the
+/// edit list.
+///
+/// So a field Move replays from the anchor like a mesh drag does. It does not
+/// need the model to take the last segment back the way a mesh does — the
+/// engine coalesces a grab that repeats its centre and radius — but it does
+/// need every segment to start in the same place, which is what this pins.
+#[test]
+fn every_segment_of_a_field_drag_also_starts_at_the_anchor() {
+    let (mut vm, calls) = fixture_with(|model| {
+        model.representation.set(Representation::Sdf);
+    });
+    vm.dispatch(Command::SelectTool(ToolKind::Mover))
+        .expect("tool");
+    vm.dispatch(Command::BeginStroke {
+        position: [0.0, 0.0, 1.0],
+        pressure: 1.0,
+        modifiers: Default::default(),
+    })
+    .expect("begin");
+    for step in 1..=24 {
+        let t = step as f32 / 24.0;
+        vm.dispatch(Command::ContinueStroke {
+            position: [t * 2.0, t * 0.5, 1.0],
+            pressure: 1.0,
+        })
+        .expect("continue");
+    }
+    vm.dispatch(Command::EndStroke).expect("end");
+
+    let strokes = calls.borrow();
+    let drags: Vec<&Vec<GestureSample>> = strokes.strokes.iter().map(|s| &s.1).collect();
+    assert!(
+        drags.len() > 1,
+        "a field drag reached the model as {} call(s); this test is about what          the segments carry and needs more than one of them",
+        drags.len()
+    );
+
+    let anchor = drags[0][0].position;
+    for (index, samples) in drags.iter().enumerate() {
+        assert_eq!(
+            samples[0].position, anchor,
+            "segment {index} starts at {:?} rather than the gesture's anchor \
+             {anchor:?}, so the grab it writes is centred there and the engine \
+             records it as a new one",
+            samples[0].position
+        );
+    }
+}
+
 /// A mesh stroke is seen while it is made, whichever verb it is.
 ///
 /// Two things kept Suavizar from being seen at all. It is *region-based* —
