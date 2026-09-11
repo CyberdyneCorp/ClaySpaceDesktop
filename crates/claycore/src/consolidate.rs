@@ -25,7 +25,70 @@ pub struct FieldReport {
     pub item_count: i32,
     /// Whether the engine advises consolidating, given the threshold asked
     /// about.
+    ///
+    /// **False is not "nothing is wrong".** It is keyed on the *mechanism*,
+    /// not on the step scale: it is false for a layer whose degradation is all
+    /// deformer chain, because there consolidation is a straight loss. Read
+    /// [`Self::degradation`] to find out which case a `false` is.
     pub advises_consolidation: bool,
+    /// Which mechanism is costing the marcher, and therefore which cure
+    /// applies.
+    ///
+    /// The engine's own instruction is to read this *before* acting on
+    /// [`Self::advises_consolidation`], and the host could not: the field is
+    /// in the ABI and was not carried here, so a degraded layer looked
+    /// identical to a healthy one whenever the advisory declined to fire.
+    pub degradation: Degradation,
+}
+
+/// Which mechanism is costing the marcher.
+///
+/// The two are not interchangeable, and the distinction is the whole reason
+/// the advisory can be `false` on a layer that has become too slow to march.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Degradation {
+    /// The step scale is within the tolerance that was asked about.
+    None,
+    /// A stack of baked volumes, or a long edit list. **Consolidation is the
+    /// cure**: it absorbs the list and redistances the samples.
+    Volumes,
+    /// A chain of brushes on a layer with nothing to absorb — which is what a
+    /// session of Move dabs builds, one grab per dab per mirror image.
+    ///
+    /// **Consolidation is not the cure here and the engine measured it 6x
+    /// worse** on a real gesture: it swaps a cheap analytic item for a dense
+    /// volume, and a 29x better step scale is swamped by what the volume costs
+    /// per sample. The layer is parametric and cheap per sample; it is the
+    /// marching that costs.
+    Deformers,
+    /// Both mechanisms at once.
+    Both,
+    /// A value this build of the wrapper does not know.
+    ///
+    /// Carried rather than collapsed into `None`, for the same reason the
+    /// error table carries an unknown code: a degradation the engine grew and
+    /// this crate has not been taught is still a degradation, and reporting it
+    /// as "nothing is wrong" would be the one answer that is certainly false.
+    Unknown(i32),
+}
+
+impl Degradation {
+    fn from_raw(raw: i32) -> Self {
+        match raw {
+            0 => Self::None,
+            1 => Self::Volumes,
+            2 => Self::Deformers,
+            3 => Self::Both,
+            other => Self::Unknown(other),
+        }
+    }
+
+    /// Whether consolidating the layer would help.
+    ///
+    /// The question a host actually has when it sees a collapsed step scale.
+    pub fn consolidation_would_help(self) -> bool {
+        matches!(self, Self::Volumes | Self::Both)
+    }
 }
 
 /// How a layer would be collapsed.
@@ -135,6 +198,7 @@ impl Document {
             longest_deformer_chain: raw.longest_deformer_chain,
             item_count: raw.item_count,
             advises_consolidation: raw.advises_consolidation != 0,
+            degradation: Degradation::from_raw(raw.degradation),
         })
     }
 
