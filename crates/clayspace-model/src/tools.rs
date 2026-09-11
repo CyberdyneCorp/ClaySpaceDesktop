@@ -1075,6 +1075,8 @@ pub struct BrushSettings {
     pub flow: f32,
     /// Shaping controls, which the design's brush panel exposes.
     pub shaping: Shaping,
+    /// How the stroke varies along its own length.
+    pub dynamics: Dynamics,
     /// Whether this brush is modulated by the loaded alpha stamp.
     ///
     /// A flag rather than the samples: settings are held per tool and per
@@ -1089,6 +1091,81 @@ pub struct BrushSettings {
     /// with the tool. A brush that remembered it would come back inverted the
     /// next time it was chosen, which no reference does and nobody expects.
     pub invert: bool,
+}
+
+/// How a stroke varies along its own length.
+///
+/// [`Shaping`] is about one stamp's footprint. This is about how the footprint
+/// changes between the press and the release: with how hard the sculptor is
+/// pressing, and with how far along the stroke has travelled. Every field maps
+/// to a `clay_stroke_preset` field the engine already resolves and
+/// `clay_layer_apply_stroke` already consumes.
+///
+/// **Not for Move.** A drag anchors its region at the press and carries it by
+/// the motion that follows, so a radius that changes mid-gesture is a
+/// different region rather than a different brush — and on the engine's side a
+/// pressure-driven radius currently costs 101x, because successive grabs
+/// coalesce on bit-exact identity of centre and radius and a moving radius
+/// matches nothing. The drag paths do not read this.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Dynamics {
+    /// How far pressure drives the radius, 0..=1. Zero disconnects it.
+    pub pressure_size: f32,
+    /// How far pressure drives the strength, 0..=1. Zero disconnects it.
+    pub pressure_strength: f32,
+    /// Exponent applied to pressure before either of the two above.
+    ///
+    /// 1 is linear. Above 1 the light end of the range gets finer, which is
+    /// what a sculptor means by asking for more control over a soft touch;
+    /// below 1 the brush reaches full strength sooner.
+    pub pressure_curve: f32,
+    /// Fraction of the stroke the radius ramps in over, 0..=1.
+    pub taper_start: f32,
+    /// Fraction of the stroke the radius ramps out over, 0..=1.
+    pub taper_end: f32,
+    /// Whether each stamp turns to follow the stroke's direction.
+    ///
+    /// The engine's `rotate_along_stroke`. Observable only where the stamp has
+    /// something to orient — a round footprint looks the same at every angle —
+    /// so it reads as inert until an alpha is loaded, the same caveat
+    /// [`Shaping::azimuth`] carries.
+    pub rake: bool,
+}
+
+impl Default for Dynamics {
+    fn default() -> Self {
+        // Every one of them off: a brush that has never been told to vary
+        // along its stroke behaves exactly as it did before these existed,
+        // which is what keeps this a new control rather than a new default.
+        Self {
+            pressure_size: 0.0,
+            pressure_strength: 0.0,
+            pressure_curve: 1.0,
+            taper_start: 0.0,
+            taper_end: 0.0,
+            rake: false,
+        }
+    }
+}
+
+impl Dynamics {
+    /// Clamped to what the engine accepts.
+    pub fn sanitized(self) -> Self {
+        Self {
+            pressure_size: self.pressure_size.clamp(0.0, 1.0),
+            pressure_strength: self.pressure_strength.clamp(0.0, 1.0),
+            // A zero or negative exponent is not a curve; the engine's own
+            // default is 1 and that is what an out-of-range value becomes.
+            pressure_curve: if self.pressure_curve.is_finite() && self.pressure_curve > 0.0 {
+                self.pressure_curve.clamp(0.1, 4.0)
+            } else {
+                1.0
+            },
+            taper_start: self.taper_start.clamp(0.0, 1.0),
+            taper_end: self.taper_end.clamp(0.0, 1.0),
+            rake: self.rake,
+        }
+    }
 }
 
 /// How a stamp is shaped, beyond its size and strength.
@@ -1188,6 +1265,7 @@ impl Default for BrushSettings {
             alpha: false,
             invert: false,
             shaping: Shaping::default(),
+            dynamics: Dynamics::default(),
         }
     }
 }
@@ -1224,6 +1302,7 @@ impl BrushSettings {
                 azimuth: turn_of(self.shaping.azimuth),
                 ..self.shaping
             },
+            dynamics: self.dynamics.sanitized(),
             alpha: self.alpha,
             invert: self.invert,
         }
@@ -1558,6 +1637,16 @@ mod tests {
             intensity: 4.0,
             flow: 0.0,
             invert: false,
+            // Out of range in both directions, so the clamp below has
+            // something to do.
+            dynamics: Dynamics {
+                pressure_size: 3.0,
+                pressure_strength: -1.0,
+                pressure_curve: 0.0,
+                taper_start: 9.0,
+                taper_end: -2.0,
+                rake: true,
+            },
             shaping: Shaping {
                 noise: 8.0,
                 smoothing: 1.0,

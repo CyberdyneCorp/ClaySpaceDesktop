@@ -3078,6 +3078,22 @@ impl ClayDocument {
             // fact about this engine, not about brushes.
             jitter_position: brush.shaping.noise.min(Self::MAX_JITTER),
             steady: brush.shaping.smoothing,
+            // How the stroke varies along itself. Each of these is a preset
+            // field `clay_stroke_resolve` already resolves and
+            // `clay_layer_apply_stroke` already consumes — the engine has
+            // carried them since before this host existed and nothing sent
+            // them, so every brush ran with the engine's defaults for all six.
+            //
+            // Not reached by the drag paths: `move_surface_stroke` and
+            // `live_move_drag` do not build a preset at all, which is what
+            // keeps a pressure-driven radius away from a verb whose grabs
+            // coalesce on bit-exact identity of centre and radius.
+            pressure_size: brush.dynamics.pressure_size,
+            pressure_strength: brush.dynamics.pressure_strength,
+            pressure_curve: brush.dynamics.pressure_curve,
+            taper_start: brush.dynamics.taper_start,
+            taper_end: brush.dynamics.taper_end,
+            rotate_along_stroke: brush.dynamics.rake,
             accumulation: if tool == ToolKind::Camada || !brush.shaping.accumulate {
                 // Camada is the clamped-accumulation tool by definition, and
                 // turning Acumular off means the same thing.

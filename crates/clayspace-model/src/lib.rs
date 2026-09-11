@@ -107,8 +107,8 @@ pub use shape::{
 };
 pub use surface::SurfaceOpacity;
 pub use tools::{
-    BrushSettings, Falloff, LayerOperation, LayerState, Representation, Shaping, ToolKind,
-    ToolNote, Unavailable, Verbs, ViewPresetKind,
+    BrushSettings, Dynamics, Falloff, LayerOperation, LayerState, Representation, Shaping,
+    ToolKind, ToolNote, Unavailable, Verbs, ViewPresetKind,
 };
 pub use units::{Unit, Units, UnitsModel};
 pub use voxel_display::{SmoothBlur, VoxelDisplay};
