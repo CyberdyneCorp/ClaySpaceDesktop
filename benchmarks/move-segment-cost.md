@@ -94,9 +94,12 @@ should be quoted as a device prediction.
 # Follow-up: it is not the cull, it is what is under the brush
 
 Added 2026-09-10, same machine and pin, after ClayCore measured the
-compile/eval split and found the compile share **flat at ~17%** across scene
-sizes — which kills the tape-cache hoist proposed above as anything more than a
-17% win. That measurement also reported that at 400 stamps the median brick
+compile/eval split. Their compile share came out **somewhere around 10–18%**,
+with the trend across scene sizes inside their own noise — a first run read
+16.6→17.4% and a repeat read 10.4→13.8%, on a box that was building
+concurrently. Quoted as a range because that is what it is; the conclusion does
+not depend on where in the range it lands, since at either end a tape-cache
+hoist buys under a fifth and is not the answer. That measurement also reported that at 400 stamps the median brick
 compiles a tape carrying ~449 of the document's ~481 instructions, and raised
 the hypothesis that **the cull is barely culling**, with a blend pad that grows
 with chain length as the suspect.
@@ -173,6 +176,13 @@ Three consequences:
    into one volume so the chain under the brush stops growing. The engine
    already has the verb — `Op::Replace` bake-and-replace, which Suavizar and
    Relaxar use. Nothing decides *when* to apply it during ordinary stamping.
+
+   Note for anyone picking this up: the *whole-layer* version of this question
+   is already answered in our pin. `advises_consolidation` comes off
+   `field_report` (`document.rs:1663`) and the host already surfaces it.
+   `clay_layer_consolidation_advice` is a later entry point and is **not** in
+   0.84.0 — checked, not assumed. Neither answers the local case, which is
+   what the ring table above is asking for.
 
 Not proposing that here. Recording it because it is where the measurements
 point, and because the two cheap fixes that were on the table — the preview
