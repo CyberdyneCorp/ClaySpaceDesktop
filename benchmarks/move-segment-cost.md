@@ -343,28 +343,64 @@ The engine names the mechanism from the second dab onward.
 
 ## Where the fix is
 
-Not in the drag path, not in local item density, and **not in consolidation**.
-Baking is the cure for stacked volumes and a long edit list; it is measured 6x
-worse for a chain of grabs on a layer with nothing to absorb, which is what a
-session of dabs builds. An earlier draft of this note recommended exactly that
-bake, on the strength of the advisory being silent. It was wrong.
+Not in the drag path and not in local item density. **This note previously said
+"not in consolidation" and that was too broad** — corrected here rather than
+edited away, because it is the sentence most likely to be quoted.
 
-What is left is genuinely open:
+There are two consolidations and only one of them has been measured against
+this.
 
-- **The crossover is unmeasured.** The engine's "6x worse" was taken on a real
-  gesture, almost certainly a shallow chain. The table above reaches a 490x
-  degradation. At that depth 6x more per sample against 490x fewer steps may
-  well invert, and nothing in the current condition has an escape hatch for
-  "degraded so badly that even a bad cure wins". ClayCore is taking this.
-- **A collapse that keeps the layer parametric** — resolving N grabs into
-  fewer without going to a volume — would be the right cure if one exists.
-  `price-the-warps-a-layer-carries` declined both available forms as unsound,
-  so it is research rather than a patch.
+**Whole-layer** — `clay_layer_consolidate`, which is what this host's Optimize
+button calls — collapses the entire subtool. That is what the engine measured
+6x worse for a chain of grabs with nothing to absorb, and it is the right scope
+for a degenerate edit list rather than for what a sculptor does.
 
-Host-side, one thing is now possible that was not: `degradation` distinguishes
-a layer that wants nothing from one that is failing, so the application can at
-least *tell*, and warn, rather than treating both as healthy. Whether it should
-is a design question and is not decided here.
+**Regional** — `clay_layer_consolidate_region`, ABI 0.73.0, in our pin already —
+bakes the influence closure of the box you worked and leaves everything outside
+parametric. The header states the property that matters here outright: *"the
+second gesture on a patch has the first gesture's volume inside its closure, so
+it is absorbed rather than stacked on. A patch stays at ONE baked item however
+many times it is worked — O(1) in gestures where appending was O(n)."* It even
+carries the shape of our own table, measured engine-side: *"twelve gestures on
+one patch: 22 ms and 2 items at the first, 244 ms and 13 at the twelfth."*
+
+That is a candidate cure for exactly the degradation this note measured, and
+**nobody has run it against a Move chain.** So the honest status is:
+
+> Whole-layer consolidation was not the cure in the regime it was measured in.
+> Regional consolidation is the existing candidate and is unmeasured against
+> Move-chain collapse.
+
+What is open:
+
+- **The regional crossover.** Whole-layer crosses at a step scale of ~0.148.
+  Regional has a different cost — a closure rather than a subtool — so its
+  crossover is its own number, and it may come much earlier. It also has its
+  own failure mode: the closure can grow to swallow the layer, at which point
+  it *is* the whole-layer bake, and `clay_region_merge.whole_layer` says when.
+- **A ceiling neither escapes.** A sampled lattice declares sqrt(3) times its
+  samples' Lipschitz, so any bake caps the layer's safe step scale at 0.577.
+  Baking buys a floor under the decay, not a fast layer.
+- **A collapse that keeps the layer parametric** would still be better than
+  either. `price-the-warps-a-layer-carries` declined both available forms as
+  unsound, so it remains research.
+
+## Two things this host should know before the pin moves
+
+**Regional consolidation is unreachable from here.** `claycore` binds
+`clay_layer_consolidate` and `clay_layer_consolidation_cost` and neither
+`clay_layer_consolidate_region` nor `clay_layer_plan_region_merge`. It is in
+the pinned ABI and not in the wrapper — the same shape as ClayCore #511 and as
+`degradation` before it, now for the third time.
+
+**And if ClayCore's advisory floor lands first, the Optimize button applies the
+wrong cure.** Today `advises_consolidation` is `false` on a Deformers-degraded
+layer, so the prompt never appears and nothing happens. Lower the threshold —
+which is what that proposal does — and the prompt appears on exactly the Move
+case, and `consolidate_layer` runs the **whole-layer** bake the engine measured
+6x worse for it. The flag change is safe on its own and unsafe against this
+host's current handler, which is an argument for binding the regional call
+first and not for delaying the flag.
 
 ## Caveat
 
