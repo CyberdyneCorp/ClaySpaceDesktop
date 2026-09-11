@@ -88,6 +88,38 @@ pub struct LayerSummary {
     pub multires: Option<crate::multires::MultiresState>,
 }
 
+/// Which mechanism has steepened a field.
+///
+/// Carried because [`FieldHealth::advises_consolidation`] is keyed on it: the
+/// advice is withheld for a layer whose degradation is all deformer chain,
+/// because collapsing that layer is measured *worse* than living with it. A
+/// caller reading only the flag sees the same `false` for a healthy layer and
+/// for one whose march has collapsed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FieldDegradation {
+    /// Within the tolerance that was asked about.
+    #[default]
+    None,
+    /// A stack of baked volumes, or a long edit list. Collapsing the layer is
+    /// the cure.
+    Volumes,
+    /// A chain of brushes on a layer with nothing to absorb — what a session
+    /// of Move gestures builds. **Collapsing the layer is not the cure here**
+    /// and is measured 6x worse; the scope that fits is a region bake.
+    Deformers,
+    /// Both at once.
+    Both,
+    /// Something this build has not been taught. Never reported as health.
+    Unknown,
+}
+
+impl FieldDegradation {
+    /// Whether collapsing the whole layer would help.
+    pub fn whole_layer_bake_would_help(self) -> bool {
+        matches!(self, Self::Volumes | Self::Both)
+    }
+}
+
 /// What a field layer's edit list costs, and whether the engine advises
 /// collapsing it.
 ///
@@ -99,7 +131,16 @@ pub struct LayerSummary {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FieldHealth {
     /// How many items the layer's edit list holds.
+    ///
+    /// **Not how many strokes were made.** A brush chain hangs deformers off
+    /// an item rather than adding items, so a layer sixteen Move dabs deep
+    /// still reports one — see [`Self::chain`], which is the count that moves.
     pub items: i32,
+    /// The longest chain of deformers on any one item.
+    pub chain: i32,
+    /// Which mechanism has steepened the field, and therefore which cure
+    /// applies. The two are not interchangeable.
+    pub degradation: FieldDegradation,
     /// Multiply a distance by this before stepping along a ray. A low value
     /// means the field has steepened and a march takes many small steps.
     pub safe_step_scale: f32,

@@ -1665,6 +1665,21 @@ impl ClayDocument {
     /// asked for when the sculptor is deciding, which is once.
     ///
     /// `None` for a mesh or a grid: neither holds an edit list, so neither has
+    /// The domain's name for the engine's degradation.
+    fn degradation_of(raw: claycore::Degradation) -> clayspace_model::FieldDegradation {
+        use clayspace_model::FieldDegradation as Domain;
+        match raw {
+            claycore::Degradation::None => Domain::None,
+            claycore::Degradation::Volumes => Domain::Volumes,
+            claycore::Degradation::Deformers => Domain::Deformers,
+            claycore::Degradation::Both => Domain::Both,
+            // Never `None`: a mechanism this build has not been taught is
+            // still a mechanism, and reporting it as health is the one answer
+            // that is certainly wrong.
+            claycore::Degradation::Unknown(_) => Domain::Unknown,
+        }
+    }
+
     /// a field to steepen.
     fn field_health(&self, layer: &Layer) -> Option<clayspace_model::FieldHealth> {
         if layer.representation != Representation::Sdf {
@@ -1673,6 +1688,8 @@ impl ClayDocument {
         let report = self.document.field_report(layer.id, 0.5).ok()?;
         Some(clayspace_model::FieldHealth {
             items: report.item_count,
+            chain: report.longest_deformer_chain,
+            degradation: Self::degradation_of(report.degradation),
             safe_step_scale: report.safe_step_scale,
             advises_consolidation: report.advises_consolidation,
             consolidated: self
@@ -8881,6 +8898,39 @@ impl SceneModel for ClayDocument {
 
     fn consolidate_layer(&mut self, key: LayerKey) -> Result<(), ModelError> {
         let id = self.layer_id(key)?;
+        // WHICH BAKE, ASKED BEFORE IT IS PERFORMED.
+        //
+        // This collapses the whole subtool, and that is the cure for a stack
+        // of volumes or a long edit list. It is not the cure for a chain of
+        // brushes on a layer with nothing to absorb — the engine measures it
+        // 6x WORSE there, because it swaps cheap analytic items for a dense
+        // volume and the marching win is swamped by what the volume costs per
+        // sample.
+        //
+        // Today `advises_consolidation` is false for that case, so the offer
+        // never reaches a sculptor and this could not fire. ClayCore #534
+        // proposes lowering the trigger to a step-scale floor, which makes the
+        // flag true on exactly the layer this is wrong for — so the refusal is
+        // here rather than resting on an advisory that is about to change.
+        //
+        // The scope that fits a brush chain is a REGION bake, which
+        // `claycore::Document::consolidate_region` now reaches. What it cannot
+        // be given from here is the region: this is a layer-level action with
+        // no gesture behind it, and the closure of the wrong box is either the
+        // whole layer again or a patch nobody worked. That is a policy
+        // question with measurements outstanding (ClaySpaceDesktop #111), and
+        // guessing it now would bind the wrong answer into the one place a
+        // sculptor can ask for help.
+        let report = self
+            .document
+            .field_report(id, 0.5)
+            .map_err(ModelError::engine)?;
+        if report.degradation == claycore::Degradation::Deformers {
+            return Err(ModelError::engine(
+                "esta camada está pesada por uma cadeia de pincéis, e achatá-la \
+                 inteira deixaria o traço mais lento em vez de mais rápido",
+            ));
+        }
         self.document
             .consolidate(id, self.consolidation_params(), None)
             .map_err(ModelError::engine)?;

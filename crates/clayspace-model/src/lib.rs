@@ -92,8 +92,9 @@ pub use retopo::{
     UvOutcome, UvResult, UvSettings, UvSource,
 };
 pub use scene::{
-    FieldHealth, LayerCost, LayerKey, LayerSummary, Protection, RemeshOutcome, RemeshSettings,
-    Scene, SceneModel, SceneNode, SculptLayer, SculptLayerCost, SculptLayerOp, VoxelStats,
+    FieldDegradation, FieldHealth, LayerCost, LayerKey, LayerSummary, Protection, RemeshOutcome,
+    RemeshSettings, Scene, SceneModel, SceneNode, SculptLayer, SculptLayerCost, SculptLayerOp,
+    VoxelStats,
 };
 pub use sculpt::{
     Detail, EditOutcome, GestureSample, HistoryEntry, HistoryState, ModelError, SceneStats,
