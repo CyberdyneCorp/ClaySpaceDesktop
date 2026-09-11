@@ -187,3 +187,50 @@ Three consequences:
 Not proposing that here. Recording it because it is where the measurements
 point, and because the two cheap fixes that were on the table — the preview
 document and the tape cache — are now both measured and both small.
+
+## The loose thread: smaller batches are not the lever
+
+ClayCore explains the 4x on far-but-spread items structurally: `CullIndex` has
+no spatial hierarchy, and `CullIndex::plan(region)` linear-scans it once per
+**batch**, against the union of every brick box in that batch. A tight far
+cluster misses that union and costs nothing; a spread far set touches it, so
+every one of its items survives the plan and is walked once per brick before
+the per-brick test correctly drops it.
+
+That predicts the measurement. It also suggests an obvious lever — smaller
+batches, tighter unions — so it was worth testing, because this host owns the
+batch size (`drain_dirty`, `self.cache.take_dirty(512)`).
+
+**It is not the lever.** Same fixture, 400 balls spread over a cube of side 16
+and nowhere near the pointer, batch size varied 64-fold. The figure that
+matters is the *delta* against each run's own 0-ball baseline, since the
+baseline itself moves:
+
+| batch | baseline | +400 balls | delta |
+|---|---:|---:|---:|
+| 512 | 2.09 | 7.94 | +5.85 |
+| 128 | 1.40 | 5.67 | +4.26 |
+| 32 | 2.11 | 6.27 | +4.17 |
+| 8 | 3.72 | 8.47 | +4.75 |
+
+The delta does not fall. If shrinking the batch shrank the union, a 64x cut
+should have collapsed it; instead it sits between 4.2 and 5.9 ms throughout,
+which is inside the run-to-run spread of this fixture. Small batches also cost
+real money at the other end — the 0-ball baseline nearly doubles from 512 to 8,
+which is the per-submission fixed cost the comment in `drain_dirty` already
+warns about.
+
+Two readings survive and this host cannot separate them:
+
+1. The batch union is not the mechanism.
+2. It is, but `take_dirty` hands back bricks in an order that is not spatial,
+   so a batch of 8 arbitrary bricks spans nearly the same box as a batch of
+   512 and the union never actually shrank.
+
+Reading 2 is the one ClayCore's own framing predicts, and it would mean the
+lever is **spatially grouping a batch**, not sizing it — a different and larger
+change than a constant. Distinguishing the two needs the batch region itself
+measured, which is engine-side.
+
+Recorded as a dead end for the cheap version, so nobody reaches for the
+constant. The thread itself stays open.
