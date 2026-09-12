@@ -64,6 +64,49 @@ pub struct SyncCost {
     pub vertices: usize,
 }
 
+/// Which of `settle`'s three routes ran, because they cost very different
+/// things and the ledger records them under one label.
+///
+/// `re-malha final` averaged 59.4 ms over a session while ClayCore measures
+/// the whole-field mesh at 3.1 ms on a clean sphere. Those cannot both
+/// describe the same work, and until this existed there was no way to say
+/// which route a given occurrence took, let alone how the time inside it
+/// divided.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettleRoute {
+    /// The whole field through `clay_document_mesh`, which is the ordinary
+    /// end of a stroke.
+    Document,
+    /// A per-key rebuild, taken when the coarse level is the one requested.
+    Coarse,
+    /// The field is empty, so there was nothing to mesh.
+    Empty,
+}
+
+/// What one `settle` cost, split the way `SyncCost` splits a sync.
+///
+/// The point of the split is that it separates the ENGINE's call from ours.
+/// A whole-document mesh that is slow because the engine is slow and one that
+/// is slow because we spend the time copying, masking and uploading afterwards
+/// are different defects with different owners, and the single `re-malha final`
+/// number could not tell them apart.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SettleCost {
+    pub route: SettleRoute,
+    /// `clay_document_mesh` alone — the engine's share.
+    pub engine_mesh_time: std::time::Duration,
+    /// Copying the engine's mesh into the renderer's vertex layout, and
+    /// sampling the mask over it.
+    pub read_time: std::time::Duration,
+    /// Writing to the GPU.
+    pub upload_time: std::time::Duration,
+    /// Everything `settle` spent, so `total - (engine + read + upload)` is
+    /// what the bookkeeping around them cost.
+    pub total_time: std::time::Duration,
+    pub triangles: usize,
+    pub vertices: usize,
+}
+
 /// The surface as the viewport holds it.
 pub struct SurfaceGeometry {
     /// Per-key geometry, so a re-mesh replaces only what changed.
@@ -84,6 +127,8 @@ pub struct SurfaceGeometry {
     /// The union of every key's bounds, exact as of the last full rebuild.
     bounds: Option<([f32; 3], [f32; 3])>,
     last_cost: Option<SyncCost>,
+    /// What the last `settle` cost, by route. `None` until one has run.
+    last_settle: Option<SettleCost>,
     /// Stage timings from the last `remesh`, for `SyncCost`.
     last_engine_mesh: std::time::Duration,
     last_read: std::time::Duration,
@@ -186,6 +231,7 @@ impl SurfaceGeometry {
             relayout: true,
             bounds: None,
             last_cost: None,
+            last_settle: None,
             last_engine_mesh: std::time::Duration::ZERO,
             last_read: std::time::Duration::ZERO,
             last_split: std::time::Duration::ZERO,
@@ -208,6 +254,11 @@ impl SurfaceGeometry {
 
     pub fn last_cost(&self) -> Option<SyncCost> {
         self.last_cost
+    }
+
+    /// What the last `settle` cost, and which route it took.
+    pub fn last_settle(&self) -> Option<SettleCost> {
+        self.last_settle
     }
 
     pub fn triangle_count(&self) -> usize {
@@ -908,8 +959,25 @@ impl SurfaceGeometry {
     /// artifacts even after a full brick rebuild. On completion, the document
     /// mesher supplies a clean whole surface at the same voxel spacing.
     pub fn settle(&mut self, gpu: &Gpu, document: &mut ClayDocument) -> Result<(), ClayError> {
+        let settle_started = std::time::Instant::now();
         if self.requested == Detail::Reduced {
-            return self.rebuild(gpu, document);
+            // Named as its own route rather than pooled with the document
+            // mesh: a coarse settle re-meshes per key and does not call
+            // `clay_document_mesh` at all, so averaging the two together is
+            // what made `re-malha final` unreadable.
+            let outcome = self.rebuild(gpu, document);
+            self.last_settle = Some(SettleCost {
+                route: SettleRoute::Coarse,
+                // The per-key path times itself into `last_cost`'s fields, so
+                // the engine's share is already known and is not re-timed.
+                engine_mesh_time: self.last_engine_mesh,
+                read_time: self.last_read,
+                upload_time: std::time::Duration::ZERO,
+                total_time: settle_started.elapsed(),
+                triangles: self.triangle_count(),
+                vertices: self.vertex_count(),
+            });
+            return outcome;
         }
 
         // **An empty field is not a failure, it is an empty surface.**
@@ -934,16 +1002,36 @@ impl SurfaceGeometry {
             self.surface_epoch = document.surface_epoch();
             self.upload(gpu);
             self.clean_override = true;
+            self.last_settle = Some(SettleCost {
+                route: SettleRoute::Empty,
+                engine_mesh_time: std::time::Duration::ZERO,
+                read_time: std::time::Duration::ZERO,
+                upload_time: std::time::Duration::ZERO,
+                total_time: settle_started.elapsed(),
+                triangles: 0,
+                vertices: 0,
+            });
             return Ok(());
         }
 
+        // THE ENGINE'S SHARE, TIMED ALONE. This is the number that decides
+        // whether a slow settle is ClayCore's or ours: measured engine-side at
+        // 3.1 ms for a whole field on a clean sphere, against a `re-malha
+        // final` that averaged 59.4 ms here.
+        let engine_started = std::time::Instant::now();
         let mesh = document.document().mesh(MeshParams {
             voxel_size: Some(ClayDocument::VOXEL_SIZE),
             mesher: Mesher::SurfaceNets,
             ..MeshParams::default()
         })?;
+        let engine_mesh_time = engine_started.elapsed();
+
+        // And ours: the copy into the renderer's layout, plus the mask sample
+        // over every vertex it produced.
+        let read_started = std::time::Instant::now();
         let (mut vertices, indices) = read_mesh(&mesh)?;
         sample_mask(document, &mut vertices);
+        let read_time = read_started.elapsed();
 
         self.keys.clear();
         self.keys
@@ -953,10 +1041,21 @@ impl SurfaceGeometry {
         self.dirty = true;
         self.detail = Detail::Full;
         self.surface_epoch = document.surface_epoch();
+        let upload_started = std::time::Instant::now();
         self.upload(gpu);
+        let upload_time = upload_started.elapsed();
         self.clean_override = true;
         document.record_geometry(self.triangle_count(), self.vertex_count(), self.detail);
         document.take_dirty_keys();
+        self.last_settle = Some(SettleCost {
+            route: SettleRoute::Document,
+            engine_mesh_time,
+            read_time,
+            upload_time,
+            total_time: settle_started.elapsed(),
+            triangles: self.triangle_count(),
+            vertices: self.vertex_count(),
+        });
         Ok(())
     }
 

@@ -1586,6 +1586,51 @@ impl App {
     /// per-segment path leaves.
     fn settle_geometry(&mut self) {
         self.timed("re-malha final", Self::settle_geometry_now);
+        self.report_settle();
+    }
+
+    /// Says what the settle just spent, and on which of its three routes.
+    ///
+    /// Printed beside the stall line rather than folded into it, because the
+    /// stall ledger records ONE duration per label and this is the split that
+    /// duration was hiding: `re-malha final` averaged 59.4 ms over a session
+    /// while ClayCore measures a whole-field mesh at 3.1 ms on a clean sphere.
+    /// Those cannot both be the same work, and without the split there was no
+    /// way to say whether a slow settle was the engine's call or ours around
+    /// it.
+    ///
+    /// Only over the same threshold the ledger uses, so an ordinary settle
+    /// stays silent and this cannot become the noise that teaches people to
+    /// ignore the console.
+    fn report_settle(&mut self) {
+        let Some(graphics) = self.graphics.as_ref() else {
+            return;
+        };
+        let Some(cost) = graphics.geometry.last_settle() else {
+            return;
+        };
+        if cost.total_time < self.stalls.threshold() {
+            return;
+        }
+        let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
+        // The remainder is ours and is the number worth looking at: it is
+        // everything the settle spent that was neither the engine's mesh, nor
+        // reading it, nor the upload.
+        let ours = cost
+            .total_time
+            .saturating_sub(cost.engine_mesh_time)
+            .saturating_sub(cost.read_time)
+            .saturating_sub(cost.upload_time);
+        eprintln!(
+            "  re-malha final [{:?}] {:.0} ms = motor {:.0} + leitura {:.0} + envio {:.0} + resto {:.0}; {} triângulos",
+            cost.route,
+            ms(cost.total_time),
+            ms(cost.engine_mesh_time),
+            ms(cost.read_time),
+            ms(cost.upload_time),
+            ms(ours),
+            cost.triangles,
+        );
     }
 
     /// Brings the coarse levels up to date, once the surface has settled.
