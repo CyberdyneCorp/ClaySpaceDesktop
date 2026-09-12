@@ -421,6 +421,14 @@ struct App {
     units: Units,
     /// What has held the interface thread longer than a frame.
     stalls: FrameLog,
+    /// A stroke has ended and its clean whole-surface re-mesh has not run yet.
+    ///
+    /// See `flush_pending_settle`. Kept as a flag rather than done on the spot
+    /// because settling costs about 29 ms — measured as 14.6 ms of
+    /// `clay_document_mesh` plus 14.0 ms of full GPU upload — and paying it at
+    /// the instant the pointer lifts is what a sculptor feels as the stroke
+    /// sticking.
+    settle_owed: bool,
     show_attribution: bool,
     /// The exchange panels and what they would do.
     show_import: bool,
@@ -693,6 +701,7 @@ impl App {
             quit_requested: false,
             units: Units::default(),
             stalls: FrameLog::default(),
+            settle_owed: false,
             show_attribution: false,
             show_import: false,
             show_export: false,
@@ -1587,6 +1596,34 @@ impl App {
     fn settle_geometry(&mut self) {
         self.timed("re-malha final", Self::settle_geometry_now);
         self.report_settle();
+    }
+
+    /// Pays a settle a finished stroke owed, at the top of a frame.
+    ///
+    /// A stroke ends by asking for this rather than doing it, so the ~29 ms it
+    /// costs falls on the frame after the pointer lifts instead of on the
+    /// release itself. What the sculptor sees in between is the brick-meshed
+    /// surface the drag was already showing — the same surface, one frame
+    /// longer, and the whole reason the settle exists is that the brick mesher
+    /// can leave slivers whose face normals shade black.
+    ///
+    /// **Never while a gesture is open.** A settle replaces every key with one
+    /// whole-document mesh, so running it under a live drag would throw away
+    /// the preview the drag is drawing and fight the transaction that owns it.
+    /// The debt simply keeps until the gesture ends, and the stroke that ends
+    /// then asks again.
+    fn flush_pending_settle(&mut self) {
+        if !self.settle_owed {
+            return;
+        }
+        if !settle_is_due(
+            self.settle_owed,
+            self.document.with(|d| d.live_gesture_is_open()),
+        ) {
+            return;
+        }
+        self.settle_owed = false;
+        self.settle_geometry();
     }
 
     /// Says what the settle just spent, and on which of its three routes.
@@ -4364,7 +4401,16 @@ impl App {
             if matches!(command, Command::EndStroke)
                 && self.sculpt.active_representation() == Representation::Sdf
             {
-                self.settle_geometry();
+                // OWED, NOT PAID. The brick-meshed surface the drag already
+                // drew is what stays on screen for one more frame, and the
+                // clean whole-surface re-mesh lands on the next one.
+                //
+                // The work is the same; what changes is that it no longer
+                // happens between the pointer lifting and the frame that
+                // acknowledges it. `build_mips` below is deferred for its own
+                // reason and this follows it.
+                self.settle_owed = true;
+                self.request_redraw();
             }
             self.build_mips();
         }
@@ -4384,6 +4430,7 @@ impl App {
         if self.graphics.is_none() {
             return;
         }
+        self.flush_pending_settle();
         self.settle_quality(frame_started);
         // A retopology that has finished is placed here, before the interface
         // is built, so the frame that shows the new subtool is the frame that
@@ -5902,6 +5949,48 @@ impl Session for App {
 
     fn gesture_in_progress(&self) -> bool {
         self.holding_a_gesture()
+    }
+}
+
+/// Whether a frame should pay a settle the last stroke owed.
+///
+/// Pulled out of `App::flush_pending_settle` so the rule can be tested: `App`
+/// lives in the binary and no integration test can reach it, and the rule has
+/// one case that must not regress quietly.
+///
+/// **A gesture being open is the whole guard.** Settling replaces every key
+/// with one whole-document mesh, so doing it under a live drag throws away the
+/// preview that drag is showing and fights the transaction that owns it. The
+/// debt is not cancelled by a gesture starting — it keeps, and the frame after
+/// that gesture ends pays it.
+fn settle_is_due(owed: bool, gesture_open: bool) -> bool {
+    owed && !gesture_open
+}
+
+#[cfg(test)]
+mod settle_deferral {
+    use super::settle_is_due;
+
+    #[test]
+    fn a_frame_with_nothing_owed_settles_nothing() {
+        assert!(!settle_is_due(false, false));
+        assert!(!settle_is_due(false, true));
+    }
+
+    #[test]
+    fn a_debt_is_paid_once_the_pointer_is_up() {
+        assert!(settle_is_due(true, false));
+    }
+
+    #[test]
+    fn a_debt_waits_while_a_gesture_is_drawing() {
+        // The case the guard exists for. A settle here would replace the live
+        // preview mid-drag with a whole-document mesh, which is both wrong on
+        // screen and a document edit under an open transaction.
+        assert!(
+            !settle_is_due(true, true),
+            "a settle owed by the last stroke must not run inside the next one"
+        );
     }
 }
 
