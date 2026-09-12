@@ -190,12 +190,24 @@ fn the_jitter_ceiling_is_where_the_engine_actually_breaks() {
 
 #[test]
 fn the_engine_still_disagrees_about_jitter() {
-    // The reason `MAX_JITTER` exists, asserted rather than described. This is
-    // the test that should fail first when ClayCore fixes the brick path —
-    // and its failure is the signal to raise the ceiling and give Ruído back.
+    // The reason `MAX_JITTER` exists, asserted rather than described.
     //
-    // Re-checked at ClayCore v0.78.0 and unchanged: the word "jitter" does not
-    // appear in that release at all, in its fixes or in its known limits.
+    // **The name of this test is wrong and is kept only so its history reads.**
+    // The engine does not disagree about jitter: `claycore_repros.rs` shows the
+    // same stroke reaching a cache that can represent it, and nothing was ever
+    // filed upstream because there was nothing to file.
+    //
+    // What this pins is a disagreement between THIS configuration and the
+    // document — 0.02 voxels, three across the band. The agreeing
+    // configuration is 0.01 voxels and six, and the band is identical in both
+    // (`band_voxels * voxel_size` = 0.06 either way), so what separates them is
+    // the resolution the band is sampled at and not its width. See
+    // `ClayDocument::MAX_JITTER`, whose own account of this was wrong for
+    // longer than it should have been.
+    //
+    // So this failing is NOT the signal to give Ruído back. The signal is a
+    // cache that can represent the displacement — which costs eight times the
+    // bricks, not a wider band.
     let _ = document();
 
     let _document = document();

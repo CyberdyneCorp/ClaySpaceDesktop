@@ -3045,15 +3045,33 @@ impl ClayDocument {
     /// This was set after measuring a document/brick-cache disagreement on a
     /// jittered stroke at 0.02 voxels with a 3-voxel band. It does **not**
     /// reproduce at 0.01 voxels with a 6-voxel band, where the two agree to
-    /// within 0.002 — so the disagreement is about the narrow band being too
-    /// thin to carry the displacement, not about jitter, and the ClayCore bug
-    /// this once claimed does not exist. `claycore_repros.rs` holds the
-    /// measurement.
+    /// within 0.002. So the ClayCore bug this once claimed does not exist —
+    /// `claycore_repros.rs` holds that measurement, and it stands.
     ///
-    /// It stays at zero for now because the cache we run is the thin-band one
-    /// and a stroke that vanishes is the worst failure this tool can have. The
-    /// honest fix is a band wide enough for the brush, not a clamp; that is
-    /// open work, and raising this is what should happen once it is done.
+    /// **What this comment used to say about WHY is wrong, and the correction
+    /// matters more than the original claim did.** It said the disagreement
+    /// was "the narrow band being too thin to carry the displacement". The two
+    /// configurations have the SAME band: `BrickConfig::band()` is
+    /// `band_voxels * voxel_size`, so 3 x 0.02 and 6 x 0.01 are both 0.06, to
+    /// the float. Nothing about the band's width distinguishes them.
+    ///
+    /// What differs is the **resolution the band is sampled at** — three
+    /// voxels across it against six. So the displacement a jittered stroke
+    /// asks for is one a 0.02 lattice cannot represent and a 0.01 one can,
+    /// which is a sampling limit rather than a reach limit.
+    ///
+    /// That changes what would unblock it, and makes it dearer rather than
+    /// cheaper. Widening `band_voxels` alone moves the band and not the
+    /// resolution, so on this reading it would buy nothing; halving
+    /// `voxel_size` is what the agreeing configuration did, and that is eight
+    /// times the bricks over the same volume. Anyone reaching for the cheap
+    /// fix should know it is the expensive one.
+    ///
+    /// It stays at zero for now because the cache we run is the coarse one and
+    /// a stroke that vanishes is the worst failure this tool can have. The
+    /// honest fix is a cache that can represent what the brush asks for, not a
+    /// clamp; that is open work, and raising this is what should happen once
+    /// it is done.
     pub const MAX_JITTER: f32 = 0.0;
 
     fn preset(&self, brush: BrushSettings, tool: ToolKind) -> StrokePreset {
