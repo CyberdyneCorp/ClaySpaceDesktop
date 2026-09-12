@@ -149,6 +149,16 @@ fn check_cmake() {
 
 fn build_engine(engine: &Path) -> PathBuf {
     let mut cfg = cmake::Config::new(engine);
+    // The same launcher the sibling engine takes. This one is the larger of the
+    // two builds on a cold machine, so it is the one that gains most.
+    if Command::new("ccache")
+        .arg("--version")
+        .output()
+        .is_ok_and(|out| out.status.success())
+    {
+        cfg.define("CMAKE_C_COMPILER_LAUNCHER", "ccache")
+            .define("CMAKE_CXX_COMPILER_LAUNCHER", "ccache");
+    }
     // Every name here was read out of the engine's own `CMakeLists.txt` rather
     // than guessed from the pattern of the sibling engine's. Four of the first
     // set written from that pattern did not exist — the backends are

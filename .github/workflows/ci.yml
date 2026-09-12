@@ -23,6 +23,18 @@ env:
   # A backtrace on a CI failure costs nothing and saves a round trip.
   RUST_BACKTRACE: 1
 
+# Six macOS jobs go out per push — four `test` rows plus the benchmark and the
+# document-bytes check — against a hosted concurrency cap of five. A superseded
+# push therefore keeps holding slots that the push replacing it is queuing for,
+# which is felt as CI being slow when it is really CI being full.
+#
+# Per ref rather than per workflow: two branches must still run at once, and
+# only the older run of the SAME ref is redundant. `main` is excluded, because
+# a cancelled push to main leaves no record that the merge was green.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   # The four configurations the specification names. CPU is always compiled
   # into the engine, so the CPU-only rows are the ones that must pass
@@ -193,6 +205,20 @@ jobs:
       # `--all-targets` in the profile this job tests, so the test step does
       # not silently carry a compile the build step was supposed to have done.
       # That is where twenty-five of the cancelled run's ninety minutes went.
+      # The step this file's own header has claimed since it was written. It was
+      # never here, and nothing set a compiler launcher either, so every job
+      # rebuilt both vendored C++ engines from scratch.
+      #
+      # Keyed on the row and not the profile: both engines hardcode
+      # CMAKE_BUILD_TYPE=Release, so a row's debug and release jobs compile the
+      # same C++ and can share one cache. The Rust cache above stays split by
+      # profile, which is correct for `target/` and for a different reason.
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: ${{ matrix.slug }}
+          max-size: 2G
+
       - name: Build
         run: cargo build --workspace --all-targets ${{ matrix.features }} ${{ matrix.flag }}
 
