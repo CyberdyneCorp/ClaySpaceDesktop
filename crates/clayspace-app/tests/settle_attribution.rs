@@ -41,7 +41,7 @@ fn dab(document: &mut ClayDocument) {
 /// A settle on an ordinary form goes through the document mesher, and says so.
 #[test]
 fn a_settle_reports_the_route_it_took_and_splits_its_time() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(harness) = Harness::new() else {
         println!("no GPU harness; skipping");
         return;
     };
@@ -118,7 +118,7 @@ fn a_settle_reports_the_route_it_took_and_splits_its_time() {
 /// above would still pass.
 #[test]
 fn an_empty_field_settles_by_its_own_route() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(harness) = Harness::new() else {
         return;
     };
     let Ok(policy) = BackendPolicy::discover(None) else {
