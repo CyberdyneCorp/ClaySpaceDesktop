@@ -2212,7 +2212,14 @@ empty mesh. The viewport's whole-field path cleared what it was drawing only
 *after* that call succeeded, so the refusal propagated and the old surface
 stayed in the buffers: a converted subtool was drawn as the field **and** the
 mesh at once, the two interpenetrating, clearing only once mesh sculpting began
-and the per-brick path ran instead. An empty field is a surface with nothing in
+and the per-brick path ran instead.
+
+That failure is now unreachable rather than handled. The viewport no longer
+meshes the whole field at all — a settle rebuilds from the brick cache, which
+clears first and meshes per key, so an empty document leaves an empty surface
+by construction. The whole-field route existed only to hide sliver triangles
+the brick mesher used to emit, and it went when the engine stopped emitting
+them. An empty field is a surface with nothing in
 it rather than a failure, which is what deleting the last field subtool needs
 as well.
 
@@ -3521,6 +3528,30 @@ fast mesher is not manifold, dual contouring is experimental upstream, and a
 mesh layer without normals costs the whole export its normals — the engine's
 concat rule, which drops any attribute that is present on some inputs and
 absent on others.
+
+**And what the file turned out to be is said afterwards**, which is the half
+that cannot be known in advance. The written mesh is validated and a result
+that is not watertight or not 2-manifold is reported, carrying the count rather
+than only the fault: a handful of pinched edges in a large mesh is usually a
+file worth shipping and thousands of them is not, and a sculptor told only
+"not manifold" cannot tell which they have.
+
+The two halves are kept apart deliberately. What is *predicted* comes from the
+format and the settings, so it can be shown before a file is even chosen; what
+is *observed* comes from the bytes, so it can only be shown after the write.
+Neither produces the other's sentence.
+
+It is not a theoretical protection. Decimation can take a watertight
+2-manifold input and return a mesh that is neither — an edge carrying four
+triangles, or a collapse that closes a handle — and which ratios do that is a
+property of the *build*: the same sphere at the same resolution gives different
+results across compilers, because the collapse sequence is chosen from
+floating-point comparisons and a pinch is a transient state of the
+simplification rather than a property of the target size. So the application
+reports what it wrote rather than predicting what it will write, and a
+validator that fails leaves the export silent rather than failing it — the file
+is the sculptor's work, and withholding it because the checker broke is the
+worse trade.
 
 ## Documents and sessions
 

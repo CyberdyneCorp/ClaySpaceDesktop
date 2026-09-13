@@ -115,9 +115,17 @@ defect was fixed. Both fired on the pin and both name the workaround to delete.
 
 ## 8. Documentation
 
-- [ ] 8.1 Move the engine version, the container minor and the export section
+- [x] 8.1 Move the engine version, the container minor and the export section
       forward in `README.md` and `docs/features.md`
-- [ ] 8.2 Correct the passage in `docs/features.md` describing the whole-field
+- [x] 8.2 Correct the passage in `docs/features.md` describing the whole-field
       path as current, which 3.1 removed
-- [ ] 8.3 Record in `docs/roadmap.md` that coarse-during-drag is unblocked
+- [x] 8.3 Correct the README's "618 PNGs" line, which described the visual
+      captures as if they were golden images. They are written to `target/visual/`
+      for looking at and nothing compares them; that line is where the belief
+      came from that a pin move owed a golden refresh
+- [x] 8.4 Give `docs/architecture.md` the two paths it never described — how a
+      gesture reaches the model and when, including the replay-versus-stamping
+      distinction whose ordering was the Move defect, and what settling does now
+      that it rebuilds from bricks
+- [ ] 8.5 Record in `docs/roadmap.md` that coarse-during-drag is unblocked
       rather than refused, and why it is not therefore scheduled
