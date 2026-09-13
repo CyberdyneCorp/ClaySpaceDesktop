@@ -174,19 +174,24 @@ fn the_coarse_surface_is_coarser_than_the_full_one() {
 }
 
 #[test]
-fn level_one_refuses_gradient_normals() {
-    // Load-bearing rather than incidental: the host draws the coarse surface
-    // face-shaded *because* of this, so a release that started downgrading
-    // instead of refusing should show up here rather than as a shading
-    // difference nobody traced back.
+fn level_one_answers_gradient_normals() {
+    // Load-bearing rather than incidental, and it changed direction in
+    // v0.113.0. Level 1 used to REFUSE gradient normals rather than downgrade
+    // them, so the coarse surface was face-shaded by construction — and face
+    // normals on a coarse lattice measure up to 84.78 degrees off the field,
+    // which is why drawing the coarse level during a drag was unattractive
+    // enough to be listed as a "deliberately not doing" in #116.
     //
-    // Re-checked at ClayCore v0.78.0, and not to be confused with that
-    // release's gradient work. "Metal answers a gradient on the device"
-    // (#426, #243) is about `clay_eval_gradients` running on the backend the
-    // caller selected instead of silently on the CPU — same values, different
-    // speed. This is a mip level declining to compute gradient normals at all,
-    // which is a refusal rather than a route, and the mesher this goes through
-    // takes no backend argument.
+    // ClayCore #550 makes `clay_brick_cache_mesh_lod` answer
+    // CLAY_NORMAL_GRADIENT at a level, evaluated through the whole-document
+    // tape. So the coarse path asks for gradients now, and this asserts the
+    // capability it relies on rather than the refusal it used to work around.
+    //
+    // Not to be confused with the earlier gradient work: "Metal answers a
+    // gradient on the device" (#426, #243) is about `clay_eval_gradients`
+    // running on the selected backend instead of silently on the CPU — same
+    // values, different speed. This is a mip level computing gradient normals
+    // at all.
     let document = settled();
     let coarse = document
         .drawable_coarse_keys()
@@ -200,13 +205,15 @@ fn level_one_refuses_gradient_normals() {
         colors: false,
         gradient_eps: None,
     };
-    let refused = document
+    let answered = document
         .cache()
         .mesh_lod(Some(document.document()), gradient, 1, &coarse);
     assert!(
-        refused.is_err(),
-        "level 1 accepted gradient normals; the coarse path can stop \
-         forcing face normals"
+        answered.is_ok(),
+        "level 1 refused gradient normals ({:?}); the coarse path asks for \
+         them and would be drawing a surface up to 84.78 degrees off the \
+         field if it silently fell back to face normals",
+        answered.err()
     );
 }
 

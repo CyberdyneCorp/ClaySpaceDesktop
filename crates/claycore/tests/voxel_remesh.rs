@@ -245,35 +245,31 @@ fn a_layer_rebuild_replaces_the_layer_and_is_undoable() {
         "undoing the rebuild left the rebuilt triangles in the layer"
     );
 
-    // And the revision does NOT move when it does, which is what this holds.
+    // And the revision MOVES when it does, which is what this holds.
     //
-    // The number's own documentation says it is bumped "every time a layer's
-    // triangles are replaced wholesale", and that what it exists for is the
-    // change a cache does not survive — "a rebuild swaps every vertex and
-    // every index, and an adjacency, a BVH or a live sculptor built over the
-    // old ones is wrong in a way nothing else detects". Undoing a rebuild is
-    // exactly that change, and the revision sits still through it: measured on
-    // 0.73.0, attach 1 / rebuild 2 / undo 2 / redo 2, with the triangle count
-    // going 119,100 -> 37,752 -> 119,100 -> 37,752.
+    // It did not, for the whole of 0.73.0 through v0.84.0: measured then as
+    // attach 1 / rebuild 2 / undo 2 / redo 2, with the triangle count going
+    // 119,100 -> 37,752 -> 119,100 -> 37,752. So the one moment the number was
+    // added for — "every time a layer's triangles are replaced wholesale", for
+    // the sake of the cache a wholesale replacement invalidates — was the one
+    // moment it was silent. Reported upstream, and this assertion was written
+    // as an equality so that it would FAIL the day it was fixed.
     //
-    // Re-checked at v0.78.0 and unchanged. The revision work in that release
-    // is all in the new tier — the surface view's four counters and the
-    // hierarchy's three — and `clay_document_mesh_layer_revision` is not among
-    // the entry points it touches.
+    // v0.113.0 fixes it. Measured across the full cycle: attach 1, rebuild 2,
+    // undo 3, redo 4, undo 5 — monotone in both directions, which is what a
+    // cache needs, since what matters is that the number is *different* rather
+    // than which way it went.
     //
-    // So the one moment the number was added for is the one moment it is
-    // silent. Held as an equality rather than left unstated, because
-    // `clayspace-engine` carries a second record — the engine depth a rebuild
-    // sits at — purely to cover this, and that record is dead weight the day
-    // this starts failing. Reported upstream; when it is fixed, this fails and
-    // `ClayDocument::settle_geometry_revisions` loses its history half.
-    assert_eq!(
+    // So `clayspace-engine`'s `Rebuild` record — a list of rebuilds by the
+    // engine depth they sat at, kept purely to recognise a history step across
+    // one — went with this change. The revision is now the whole signal.
+    assert_ne!(
         document.mesh_layer_revision(layer).expect("a revision"),
         after,
-        "the geometry revision now moves when history replaces a layer's \
-         triangles. That is good news and it is what the number is documented \
-         to do: clayspace-engine's `Rebuild` record exists only because it did \
-         not, and should go with this assertion"
+        "the geometry revision no longer moves when history replaces a \
+         layer's triangles. That is the ClayCore defect this assertion was \
+         written to catch coming back, and `settle_geometry_revisions` has \
+         nothing else to notice an undone rebuild with"
     );
 }
 

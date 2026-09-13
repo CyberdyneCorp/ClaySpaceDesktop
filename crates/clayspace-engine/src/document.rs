@@ -912,33 +912,6 @@ struct Crossing {
     steps: usize,
 }
 
-/// A rebuild of a mesh layer's topology, and where it sits in the engine's
-/// history.
-///
-/// Recorded because the engine's own signal does not cover the case that
-/// matters most. `clay_document_mesh_layer_revision` is documented as bumped
-/// "every time a layer's triangles are replaced wholesale", and the reason
-/// given for it existing is the cache that a wholesale replacement invalidates
-/// — an adjacency, a BVH, a live sculptor. Measured on ClayCore 0.73.0, it is
-/// bumped by the rebuild and **not by history moving over one**: a layer
-/// attached at revision 1 and rebuilt to revision 2 comes back to its original
-/// 119,100 triangles under undo, and to the rebuilt 37,752 under redo, at
-/// revision 2 throughout. So the one moment the number was added for is the
-/// one moment it says nothing.
-///
-/// Held here in the way this file already holds a crossing: by the engine
-/// depth the step sits at, so a history move across it is recognisable. The
-/// alternative — dropping every mesh sculptor on every undo — puts the weld
-/// back on the interface thread for a step that usually touched no mesh at
-/// all, which is the cost `crate::sculptors` exists to avoid.
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct Rebuild {
-    layer: LayerKey,
-    /// The engine's undo depth after the rebuild was recorded, as a crossing
-    /// records its own.
-    engine_depth: usize,
-}
-
 /// A layer shown alone, and what the rest looked like before it was.
 ///
 /// The snapshot is the whole of what a release needs: the engine's contract is
@@ -1267,13 +1240,6 @@ pub struct ClayDocument {
     /// reason: any engine edit since has raised the depth, which makes that
     /// edit the more recent one.
     crossing_undo: Vec<Crossing>,
-    /// Where this session's mesh rebuilds sit in the engine's history.
-    ///
-    /// Never pruned by a history step, in either direction: a rebuild undone
-    /// can be redone, and both directions replace the layer's triangles. What
-    /// clears it is the engine truncating the redo stack, which is the only
-    /// event that makes a recorded depth unreachable. See [`Rebuild`].
-    rebuilds: Vec<Rebuild>,
     /// Which layer a retopology now running on a worker was asked about, and
     /// what revision it was at when the work started.
     ///
@@ -1466,7 +1432,6 @@ impl ClayDocument {
             mesh_undo: Vec::new(),
             mesh_redo: Vec::new(),
             crossing_undo: Vec::new(),
-            rebuilds: Vec::new(),
             retopo_target: None,
             crossing_redo: Vec::new(),
             suppressed: std::collections::HashSet::new(),
@@ -9096,13 +9061,6 @@ impl SceneModel for ClayDocument {
         // same again.
         self.refresh_mesh_bounds(key);
         self.settle_geometry_revisions();
-        // Where this rebuild sits in the engine's history, so a step across it
-        // in either direction is recognisable later. The revision alone cannot
-        // do that — see [`Rebuild`] for the measurement.
-        self.rebuilds.push(Rebuild {
-            layer: key,
-            engine_depth: self.engine_undo_depth(),
-        });
         // Ready for the pointer on the frame this returns, as a crossing is.
         // Without it the first stroke after a rebuild has no sculptor, the
         // pick that would place it answers nothing, and the press orbits the
@@ -9239,35 +9197,6 @@ impl ClayDocument {
     /// pointer nor the counts move — and it is why the engine grew this number
     /// in ABI 0.64.0.
     fn settle_geometry_revisions(&mut self) {
-        // Every layer a rebuild in this session could have put back or taken
-        // away with the depth history now stands at. Both directions replace
-        // the triangles, and the engine's revision reports neither, so this is
-        // the only account there is. Cheap: the list holds one entry per
-        // rebuild a sculptor has actually made, which is a handful per
-        // session, and the depth is a field read.
-        let depth = self.engine_undo_depth();
-        let crossed: Vec<LayerKey> = self
-            .rebuilds
-            .iter()
-            .filter(|rebuild| {
-                // At the rebuild's own depth the layer holds the rebuilt
-                // triangles; one step below it holds what they replaced. Both
-                // are reachable by a single step from the other, so both are
-                // the moment a cache over the layer stops describing it.
-                rebuild.engine_depth == depth || rebuild.engine_depth == depth + 1
-            })
-            .map(|rebuild| rebuild.layer)
-            .collect();
-        for key in crossed {
-            // Unconditional, unlike the revision path below: this is the case
-            // where nothing observable moved. Bounded by there having been a
-            // rebuild on this layer at all — a document nobody has run one on
-            // pays nothing, which is what keeps an ordinary undo from putting
-            // the weld back on the interface thread.
-            self.mesh_sculptors.borrow_mut().forget(key);
-            self.refresh_mesh_bounds(key);
-        }
-
         let mesh_layers: Vec<(LayerKey, LayerId)> = self
             .layers
             .iter()
@@ -9702,7 +9631,6 @@ impl ClayDocument {
             mesh_undo: Vec::new(),
             mesh_redo: Vec::new(),
             crossing_undo: Vec::new(),
-            rebuilds: Vec::new(),
             retopo_target: None,
             crossing_redo: Vec::new(),
             suppressed: std::collections::HashSet::new(),
@@ -12676,14 +12604,6 @@ impl ClayDocument {
 
         self.refresh_mesh_bounds(key);
         self.settle_geometry_revisions();
-        // As a rebuild records itself, so a step across this in either
-        // direction is recognisable later. A retopology replaces every vertex
-        // and index exactly as a rebuild does, so the record is the same kind
-        // of event — see [`Rebuild`].
-        self.rebuilds.push(Rebuild {
-            layer: key,
-            engine_depth: self.engine_undo_depth(),
-        });
         Ok(())
     }
 

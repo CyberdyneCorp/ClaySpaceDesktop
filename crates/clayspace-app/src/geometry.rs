@@ -422,15 +422,20 @@ impl SurfaceGeometry {
         lod: i32,
     ) -> Result<(), ClayError> {
         let engine_started = std::time::Instant::now();
-        // No document at level 1, which skips compiling a tape the coarse
-        // mesh cannot use anyway: the level refuses gradient normals and
-        // colours, and face normals come from the triangles.
-        // And no document while a live gesture is drawing: the preview's
-        // lattice is not the document's field, so attributing colours or
-        // gradient normals through the document would shade the previewed
-        // surface with the one it is standing in for.
+        // The document is what a gradient is sampled through, so it goes
+        // wherever gradient normals are asked for — which, since ClayCore
+        // #550, includes level 1. Before that the level refused them outright
+        // and the coarse mesh took face normals from its triangles, so passing
+        // a document there only cost a tape nothing would read.
+        //
+        // Still no document while a live gesture is drawing, and that is a
+        // different rule with a different reason: the preview's lattice is not
+        // the document's field, so attributing gradient normals through the
+        // document would shade the previewed surface with the one it is
+        // standing in for. `level_for` asks for face normals there to match.
         let (cache, offset) = document.drawn_cache();
-        let doc = (lod == 0 && !document.live_gesture_is_open()).then(|| document.document());
+        let doc =
+            (shading.gradient() && !document.live_gesture_is_open()).then(|| document.document());
         // Nothing requested means nothing meshed — *not* what the same words
         // mean one layer down. An empty key list is how the C ABI spells "every
         // surface brick", which is right for an export and catastrophic here:
@@ -1091,9 +1096,14 @@ impl SurfaceGeometry {
         if detail == Detail::Reduced && !live {
             let coarse = document.drawable_coarse_keys()?;
             if !coarse.is_empty() {
-                // Level 1 refuses gradient normals rather than downgrading
-                // them, so the coarse surface is face-shaded by construction.
-                return Ok((coarse, 1, Shading::Fast));
+                // Gradient-shaded, which level 1 could not do until ClayCore
+                // #550. It used to REFUSE gradient normals rather than
+                // downgrade them, so the coarse surface was face-shaded by
+                // construction — and face normals on a coarse lattice measure
+                // up to 84.78 degrees off the field, which is what made
+                // drawing the coarse level a visible downgrade rather than a
+                // cheaper route to the same picture.
+                return Ok((coarse, 1, Shading::Full));
             }
         }
         let shading = if live { Shading::Fast } else { Shading::Full };
