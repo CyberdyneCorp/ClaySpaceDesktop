@@ -9851,7 +9851,7 @@ impl ExchangeModel for ClayDocument {
         &mut self,
         path: &std::path::Path,
         settings: ExportSettings,
-    ) -> Result<(), ModelError> {
+    ) -> Result<Vec<clayspace_model::ExportWarning>, ModelError> {
         if Format::of(path).is_none() {
             return Err(ModelError::engine("formato desconhecido"));
         }
@@ -9880,7 +9880,38 @@ impl ExchangeModel for ClayDocument {
             .document
             .mesh_combined(params)
             .map_err(ModelError::engine)?;
-        mesh.save(path).map_err(ModelError::engine)
+        // Asked of the mesh that is about to be written, not of the field it
+        // came from. Decimation runs inside `mesh_combined`, and it can return
+        // an edge with four incident triangles from an input that had none —
+        // ClayCore #567 measured that on 4 of 20 configurations, one of which
+        // closed a handle. The engine has answered this since the binding
+        // existed; nothing on this path had ever asked.
+        //
+        // A refusal to validate is not a refusal to export. The file is the
+        // sculptor's work and withholding it because the checker failed would
+        // be the worse trade, so a validator that errors leaves the export
+        // silent rather than failing it.
+        //
+        // The full report rather than `validate`, which answers two bits and
+        // drops the nine other quantities the same pass already computed: a
+        // sculptor told "not manifold" and not told whether that is six edges
+        // or six thousand cannot decide whether to ship the file.
+        //
+        // No self-intersection pass — the budget is zero, the engine's own
+        // default. That check is sampled and costs with the cap, and the
+        // defect this path exists for shows up in the edge counts.
+        let report = mesh.validation_report(0).ok();
+        mesh.save(path).map_err(ModelError::engine)?;
+        Ok(report
+            .map(|r| {
+                clayspace_model::ExportWarning::for_written_mesh(clayspace_model::WrittenMesh {
+                    watertight: r.watertight,
+                    manifold: r.manifold,
+                    non_manifold_edges: r.non_manifold_edges,
+                    boundary_edges: r.boundary_edges,
+                })
+            })
+            .unwrap_or_default())
     }
 
     fn has_mesh_layers(&self) -> bool {

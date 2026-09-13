@@ -433,6 +433,14 @@ struct App {
     /// The exchange panels and what they would do.
     show_import: bool,
     show_export: bool,
+    /// What the last export turned out to be, as opposed to what it promised.
+    ///
+    /// Held on the application rather than recomputed, because it is the one
+    /// thing in the export panel that cannot be derived from the settings: it
+    /// is a property of the bytes that were written. Cleared by the next
+    /// export, so it always describes the most recent file and never an older
+    /// one the sculptor has stopped thinking about.
+    export_findings: Vec<ExportWarning>,
     /// The conversion panel, and what it is set to.
     show_repair: bool,
     show_deform: bool,
@@ -705,6 +713,7 @@ impl App {
             show_attribution: false,
             show_import: false,
             show_export: false,
+            export_findings: Vec::new(),
             show_repair: false,
             show_deform: false,
             references,
@@ -1442,8 +1451,18 @@ impl App {
         };
         let settings = self.export;
         match self.timed("exportar", |app| app.document.export_mesh(&path, settings)) {
-            Ok(()) => self.show_export = false,
-            Err(e) => eprintln!("não foi possível exportar: {e}"),
+            // The panel stays OPEN when the written mesh is unsound, because
+            // closing it is how the application says "that went fine" and the
+            // finding has nowhere else to appear. A clean export closes it as
+            // it always did.
+            Ok(findings) => {
+                self.show_export = !findings.is_empty();
+                self.export_findings = findings;
+            }
+            Err(e) => {
+                self.export_findings.clear();
+                eprintln!("não foi possível exportar: {e}");
+            }
         }
         self.request_redraw();
     }
@@ -4484,8 +4503,16 @@ impl App {
         // Assembled for the format the last export used, so the panel says
         // something before a file has been chosen. Re-checked against the
         // actual extension when the write happens.
-        let export_warnings =
+        //
+        // Then whatever the last write turned out to be. The two halves are
+        // kept apart on purpose: everything `for_export` says is derived from
+        // the format and the settings and is therefore knowable in advance,
+        // and everything after it is derived from the bytes and can only be
+        // said afterwards. Concatenated rather than merged so the predictions
+        // keep their order and the findings read as the news they are.
+        let mut export_warnings =
             ExportWarning::for_export(Format::Obj, self.export, self.document.has_mesh_layers());
+        export_warnings.extend(self.export_findings.iter().cloned());
         // Read once and borrowed into the state: the shell wants the loaded
         // stamp's name and the document is what holds it.
         let alpha_name = self.document.with(|document| document.alpha_name());

@@ -279,3 +279,106 @@ fn a_reference_layer_reaches_the_exported_file() {
     let _ = std::fs::remove_file(&source);
     let _ = std::fs::remove_file(&combined);
 }
+
+// -- what the written mesh turned out to be ---------------------------------
+
+/// The export path asks the engine whether what it wrote is sound.
+///
+/// The regression this exists for. `export_mesh` called `mesh_combined` and
+/// then `save`, and nothing between them looked at the result — while
+/// `Mesh::validate` sat bound in `crates/claycore` with no caller on this path
+/// at all. So an export could be non-manifold and nothing said so, which is
+/// the class of defect that breaks a slicer or a boolean engine while a
+/// viewport shows nothing wrong.
+///
+/// Asserted as a *clean* export saying nothing, because that is the half that
+/// can be pinned on every engine: a warning that fires on a sound mesh would
+/// be noise on every export a sculptor ever makes, and noise is how a real
+/// warning gets ignored. The other half — that an unsound mesh does speak — is
+/// `an_unsound_mesh_is_reported` below and the unit tests on
+/// `ExportWarning::for_written_mesh`.
+#[test]
+fn a_sound_export_says_nothing_about_itself() {
+    let mut document = document();
+    let path = scratch("sound.obj");
+    let findings = document
+        .export_mesh(&path, ExportSettings::default())
+        .expect("export");
+    let _ = std::fs::remove_file(&path);
+
+    assert!(
+        findings.is_empty(),
+        "the default export of a plain sphere reported {findings:?}; a warning \
+         on a sound mesh appears on every export and teaches a sculptor to \
+         ignore the panel"
+    );
+}
+
+/// The export panel's own default decimation writes a non-manifold mesh.
+///
+/// **The case this whole change exists for.** Tick "decimate" in the export
+/// panel and the ratio starts at 0.5; leave the resolution at its default
+/// 0.02; keep the Watertight mesher, which is the one that carries no caveat
+/// and therefore promises a 2-manifold. Marching tetrahedra produces one by
+/// construction — and then decimation takes it apart.
+///
+/// ClayCore #567 made decimation check its own result and retry with a
+/// different choice of collapses. Where nothing clean fits at the requested
+/// size it returns the requested size and reports the pinch rather than
+/// repairing it, because at an aggressive ratio merging sheets is what the
+/// ratio *means*. This is that case, on the most ordinary settings the
+/// application offers.
+///
+/// So this test is not a guard against a regression that might happen. It
+/// pins a defect that is live at the pinned engine, and pins that the
+/// application now says so instead of writing the file in silence.
+#[test]
+fn the_default_decimation_is_reported_as_not_manifold() {
+    let mut document = document();
+    let path = scratch("default-decimation.obj");
+    let findings = document
+        .export_mesh(
+            &path,
+            ExportSettings {
+                decimate_to: Some(0.5),
+                ..Default::default()
+            },
+        )
+        .expect("export");
+    let _ = std::fs::remove_file(&path);
+
+    assert!(
+        findings.iter().any(|w| w.message.contains("manifold")),
+        "the export panel's default decimation reported {findings:?}; either \
+         the validator is no longer called on the written mesh, or ClayCore \
+         has started finding a clean collapse set at this ratio — the second \
+         is worth knowing and worth deleting this test for"
+    );
+}
+
+/// A gentler decimation is sound, so the warning is not simply "you decimated".
+///
+/// The companion to the test above, and the one that keeps it honest. If the
+/// finding fired on every decimated export it would be a restatement of the
+/// setting rather than an observation about the file, and a sculptor would
+/// learn to ignore it. At 0.25 the same sphere comes back clean.
+#[test]
+fn a_gentler_decimation_is_still_sound() {
+    let mut document = document();
+    let path = scratch("gentle-decimation.obj");
+    let findings = document
+        .export_mesh(
+            &path,
+            ExportSettings {
+                decimate_to: Some(0.25),
+                ..Default::default()
+            },
+        )
+        .expect("export");
+    let _ = std::fs::remove_file(&path);
+
+    assert!(
+        findings.is_empty(),
+        "a watertight sphere decimated to 25% came back as {findings:?}"
+    );
+}
