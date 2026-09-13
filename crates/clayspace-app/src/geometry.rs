@@ -18,8 +18,7 @@
 use std::collections::HashMap;
 
 use clayspace_engine::claycore::{
-    BrickKey, BrickMeshParams, BrickState, ClayError, Document, Mesh, MeshParams, Mesher,
-    VertexLayout,
+    BrickKey, BrickMeshParams, BrickState, ClayError, Document, Mesh, VertexLayout,
 };
 use clayspace_engine::ClayDocument;
 use clayspace_model::Detail;
@@ -74,10 +73,17 @@ pub struct SyncCost {
 /// divided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettleRoute {
-    /// The whole field through `clay_document_mesh`, which is the ordinary
-    /// end of a stroke.
-    Document,
-    /// A per-key rebuild, taken when the coarse level is the one requested.
+    /// A per-key rebuild at full resolution, which is the ordinary end of a
+    /// stroke.
+    ///
+    /// This used to be a whole-field `clay_document_mesh`. It was there to hide
+    /// the brick mesher's sliver triangles — 2,297 near-zero-area triangles in
+    /// 83,464, whose face normals are cross products of near-parallel edges and
+    /// shade black. ClayCore #549 fixed them at the source in v0.113.0, so the
+    /// workaround went with the defect.
+    Bricks,
+    /// A per-key rebuild at the coarse level, taken when that is the one
+    /// requested.
     Coarse,
     /// The field is empty, so there was nothing to mesh.
     Empty,
@@ -93,7 +99,7 @@ pub enum SettleRoute {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SettleCost {
     pub route: SettleRoute,
-    /// `clay_document_mesh` alone — the engine's share.
+    /// The engine's share of the mesh, and only that.
     pub engine_mesh_time: std::time::Duration,
     /// Copying the engine's mesh into the renderer's vertex layout, and
     /// sampling the mask over it.
@@ -159,8 +165,6 @@ pub struct SurfaceGeometry {
     /// request changes or [`SurfaceGeometry::reapply_detail`] says the mips
     /// have since been built.
     requested: Detail,
-    /// Whether the GPU holds a whole-document mesh instead of the brick store.
-    clean_override: bool,
 }
 
 /// How a mesh is shaded.
@@ -237,7 +241,6 @@ impl SurfaceGeometry {
             last_split: std::time::Duration::ZERO,
             detail: Detail::Full,
             requested: Detail::Full,
-            clean_override: false,
             over_budget: false,
         }
     }
@@ -278,11 +281,6 @@ impl SurfaceGeometry {
         gpu: &Gpu,
         document: &mut ClayDocument,
     ) -> Result<Option<SyncCost>, ClayError> {
-        if self.clean_override {
-            self.clean_override = false;
-            self.rebuild_at(gpu, document, Detail::Full)?;
-            return Ok(None);
-        }
         // An edit while the coarse surface is drawn returns to full resolution
         // first. The two levels do not share a key space — a coarse key names
         // a 2x2x2 block of fine ones — so the dirty keys the engine hands back
@@ -952,111 +950,69 @@ impl SurfaceGeometry {
         self.upload(gpu);
     }
 
-    /// Rebuilds the settled full-resolution SDF from the document.
+    /// Lays the settled surface out again from the document's bricks.
     ///
-    /// The interactive brick mesher is retained while editing because it can
-    /// update only dirty keys. Its output can nevertheless contain isolated
-    /// artifacts even after a full brick rebuild. On completion, the document
-    /// mesher supplies a clean whole surface at the same voxel spacing.
+    /// **This used to mesh the whole field through `clay_document_mesh`.** The
+    /// brick mesher could leave isolated artifacts even after a full rebuild —
+    /// sliver triangles whose face normals are cross products of near-parallel
+    /// edges, which shade black — and a whole-field mesh has none of them
+    /// because it is a different mesher. ClayCore #549 fixed the slivers at
+    /// their source in v0.113.0: 2,297 in 83,464 triangles, now none. So the
+    /// workaround went with the defect it was hiding.
+    ///
+    /// What that costs is negative twice over. The whole-field path has no
+    /// region to cull against, so it evaluates every grab on the layer for
+    /// every sample, and its cost tracks the *document* rather than the edit:
+    /// ClayCore measure 2.8 ms at one dab against 26.2 ms at 48, where the
+    /// per-brick path goes 4.2 ms to 6.3 ms over the same span. And because it
+    /// replaced every key at once it forced a full GPU relayout, 13.96 ms,
+    /// where a per-key rebuild patches the slots it touched.
+    ///
+    /// The second saving is the one that was not in the issue. A whole-document
+    /// mesh cannot be patched incrementally — the store held one giant key
+    /// under `[i32::MIN; 3]` and the brick keys the engine reports dirty do not
+    /// address it — so `clean_override` made the *next* `sync` throw it away
+    /// and rebuild every brick anyway. The field was meshed twice per stroke:
+    /// once whole on release, once per brick on the next edit. Rebuilding from
+    /// bricks here means the store is already what a sync can patch, and that
+    /// second rebuild is simply gone, along with the flag that scheduled it.
     pub fn settle(&mut self, gpu: &Gpu, document: &mut ClayDocument) -> Result<(), ClayError> {
         let settle_started = std::time::Instant::now();
-        if self.requested == Detail::Reduced {
-            // Named as its own route rather than pooled with the document
-            // mesh: a coarse settle re-meshes per key and does not call
-            // `clay_document_mesh` at all, so averaging the two together is
-            // what made `re-malha final` unreadable.
-            let outcome = self.rebuild(gpu, document);
-            self.last_settle = Some(SettleCost {
-                route: SettleRoute::Coarse,
-                // The per-key path times itself into `last_cost`'s fields, so
-                // the engine's share is already known and is not re-timed.
-                engine_mesh_time: self.last_engine_mesh,
-                read_time: self.last_read,
-                upload_time: std::time::Duration::ZERO,
-                total_time: settle_started.elapsed(),
-                triangles: self.triangle_count(),
-                vertices: self.vertex_count(),
-            });
-            return outcome;
-        }
+        let outcome = self.rebuild(gpu, document);
 
-        // **An empty field is not a failure, it is an empty surface.**
-        //
-        // `clay_document_mesh` refuses an empty document rather than returning
-        // an empty mesh, and this meshes the whole field in one call and
-        // clears `keys` only *after* it succeeds. So a field that has just
-        // gone left the refusal propagating and the old surface standing in
-        // the GPU buffers — reported from a session as the field and the mesh
-        // drawn together after an in-place crossing, clearing only once mesh
-        // sculpting began and something else called `sync`.
-        //
-        // `rebuild_at` does not have this: it clears first and re-meshes per
-        // key, so an empty document leaves it correctly empty. Only the
-        // whole-document path had to be told.
-        if !document.has_field_surface() {
-            self.keys.clear();
-            self.touched.clear();
-            self.relayout = true;
-            self.dirty = true;
-            self.detail = Detail::Full;
-            self.surface_epoch = document.surface_epoch();
-            self.upload(gpu);
-            self.clean_override = true;
-            self.last_settle = Some(SettleCost {
-                route: SettleRoute::Empty,
-                engine_mesh_time: std::time::Duration::ZERO,
-                read_time: std::time::Duration::ZERO,
-                upload_time: std::time::Duration::ZERO,
-                total_time: settle_started.elapsed(),
-                triangles: 0,
-                vertices: 0,
-            });
-            return Ok(());
-        }
-
-        // THE ENGINE'S SHARE, TIMED ALONE. This is the number that decides
-        // whether a slow settle is ClayCore's or ours: measured engine-side at
-        // 3.1 ms for a whole field on a clean sphere, against a `re-malha
-        // final` that averaged 59.4 ms here.
-        let engine_started = std::time::Instant::now();
-        let mesh = document.document().mesh(MeshParams {
-            voxel_size: Some(ClayDocument::VOXEL_SIZE),
-            mesher: Mesher::SurfaceNets,
-            ..MeshParams::default()
-        })?;
-        let engine_mesh_time = engine_started.elapsed();
-
-        // And ours: the copy into the renderer's layout, plus the mask sample
-        // over every vertex it produced.
-        let read_started = std::time::Instant::now();
-        let (mut vertices, indices) = read_mesh(&mesh)?;
-        sample_mask(document, &mut vertices);
-        let read_time = read_started.elapsed();
-
-        self.keys.clear();
-        self.keys
-            .insert([i32::MIN; 3], KeyGeometry { vertices, indices });
-        self.touched.clear();
-        self.relayout = true;
-        self.dirty = true;
-        self.detail = Detail::Full;
+        // Taken here rather than left to `sync`. The store now holds exactly
+        // what the document's bricks say, so the epoch it was built from is
+        // this one — and a stale epoch would send the next sync through a
+        // whole rebuild to reach the state it is already in.
         self.surface_epoch = document.surface_epoch();
-        let upload_started = std::time::Instant::now();
-        self.upload(gpu);
-        let upload_time = upload_started.elapsed();
-        self.clean_override = true;
-        document.record_geometry(self.triangle_count(), self.vertex_count(), self.detail);
-        document.take_dirty_keys();
+
+        // An empty field is not a failure, it is an empty surface, and
+        // `rebuild_at` reaches it correctly: it clears the store first and
+        // meshes per key, so no keys means no triangles. The whole-document
+        // path had to be told, because `clay_document_mesh` REFUSES an empty
+        // document rather than returning an empty mesh, and it cleared `keys`
+        // only after succeeding — so a field that had just gone left the
+        // refusal propagating and the old surface standing in the GPU buffers.
+        // That case is now unreachable rather than handled.
+        let route = if self.keys.is_empty() {
+            SettleRoute::Empty
+        } else if self.detail == Detail::Reduced {
+            SettleRoute::Coarse
+        } else {
+            SettleRoute::Bricks
+        };
         self.last_settle = Some(SettleCost {
-            route: SettleRoute::Document,
-            engine_mesh_time,
-            read_time,
-            upload_time,
+            route,
+            // The per-key path times itself into `last_cost`'s fields, so the
+            // engine's share is already known and is not re-timed.
+            engine_mesh_time: self.last_engine_mesh,
+            read_time: self.last_read,
+            upload_time: std::time::Duration::ZERO,
             total_time: settle_started.elapsed(),
             triangles: self.triangle_count(),
             vertices: self.vertex_count(),
         });
-        Ok(())
+        outcome
     }
 
     /// Rebuilds every key from scratch, at the level last asked for.
@@ -1151,7 +1107,6 @@ impl SurfaceGeometry {
         document: &mut ClayDocument,
         detail: Detail,
     ) -> Result<(), ClayError> {
-        self.clean_override = false;
         let (keys, lod, shading) = self.level_for(document, detail)?;
         self.keys.clear();
         self.touched.clear();

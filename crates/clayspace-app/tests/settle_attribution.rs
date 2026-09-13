@@ -84,9 +84,9 @@ fn a_settle_reports_the_route_it_took_and_splits_its_time() {
 
     assert_eq!(
         cost.route,
-        SettleRoute::Document,
-        "a form with a surface, at full detail, settles through the document \
-         mesher — the other two routes are the coarse rebuild and the empty \
+        SettleRoute::Bricks,
+        "a form with a surface, at full detail, settles by rebuilding its \
+         bricks — the other two routes are the coarse rebuild and the empty \
          field"
     );
     assert!(
@@ -114,7 +114,7 @@ fn a_settle_reports_the_route_it_took_and_splits_its_time() {
 
 /// An empty field settles by the third route, and does not pretend to mesh.
 ///
-/// Without this the route field could be hardcoded to `Document` and the test
+/// Without this the route field could be hardcoded to `Bricks` and the test
 /// above would still pass.
 #[test]
 fn an_empty_field_settles_by_its_own_route() {
