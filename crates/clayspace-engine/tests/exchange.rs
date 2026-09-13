@@ -1,5 +1,6 @@
 //! Geometry in and out, against a real engine.
 
+use clayspace_engine::claycore;
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
     ExchangeModel, ExportMesher, ExportSettings, Format, ImportAs, ImportSettings, SceneModel,
@@ -314,99 +315,141 @@ fn a_sound_export_says_nothing_about_itself() {
     );
 }
 
-/// The export panel's own default decimation writes a non-manifold mesh.
+/// What the export reports agrees with what the mesh actually is.
 ///
-/// **The case this whole change exists for**, and it is a live defect in the
-/// pinned engine rather than a tradeoff. Tick "decimate" in the export panel
-/// and the ratio starts at 0.5; leave the resolution at its default 0.02; keep
-/// the Watertight mesher, which is the one carrying no caveat and therefore
-/// promising a 2-manifold. Marching tetrahedra produces one by construction —
-/// and then decimation takes it apart.
+/// **The wiring, asserted platform-independently** — and the second design of
+/// this test, because the first one was wrong in a way only CI could show.
 ///
-/// Measured on `Item::sphere(1.0)` alone, one layer, nothing imported and
-/// nothing sculpted. Sweeping in steps of 0.05 finds six of fifteen ratios
-/// non-manifold and looks non-monotone. **Refined to steps of 0.01 by ClayCore,
-/// it is two contiguous bands and 31 of 76:**
+/// It originally pinned the export panel's own default as a live defect: tick
+/// decimate, the slider lands on 0.5, and the watertight mesher — the one
+/// carrying no caveat and therefore promising a 2-manifold — returned one that
+/// was not. That reproduced here, deterministically, and ClayCore reproduced it
+/// to the triangle and filed their #575.
 ///
-/// ```text
-/// 0.20 .. 0.43   clean
-/// 0.44 .. 0.59   pinched
-/// 0.60           clean   — one isolated lucky ratio
-/// 0.61 .. 0.75   pinched
-/// 0.76 .. 0.95   clean
-/// ```
+/// **It does not reproduce on Linux.** Same source, same engine, same ratio;
+/// the export comes back clean and the assertion fails. Which is the same
+/// finding as ClayCore's, one level further out: they showed the collapse
+/// sequence is chaotic under tiny input perturbations — three meshes of one
+/// sphere gave 0, 31 and 58 pinched ratios of 76 — and a different architecture
+/// is exactly such a perturbation. A pinch is a transient state of the
+/// simplification, created by one collapse and removed by a later one, so
+/// *where* the bands fall is a property of one mesh on one machine.
 ///
-/// So 0.5 is not near an edge, it is the middle of a 16-wide band, and the
-/// coarse grid's apparent non-monotonicity was an artifact of where its points
-/// landed. Deterministic: the same ratio gives the same triangle count and the
-/// same edge every time.
+/// So no test may assert that a particular ratio is unsound. What is true
+/// everywhere is the thing this application is actually responsible for: when
+/// the mesh it wrote is unsound, it says so, and when it is sound, it does not.
 ///
-/// The mechanism, from ClayCore #575: a higher ratio means fewer collapses, so
-/// read the sweep in collapse order — a pinch appears at 0.75, survives down to
-/// 0.61, is resolved at 0.60, a different one appears at 0.59 and is resolved by
-/// 0.43. **A pinch is a transient state of the simplification**, created by one
-/// collapse and removed by a later one, rather than a property of the target
-/// size. Every offending vertex lies exactly on the sphere and every bad edge is
-/// shorter than one voxel.
-///
-/// It is not the combine, and it is not the input. `mesh_combined` and `mesh`
-/// return byte-identical reports on this document, and the undecimated mesh is
-/// watertight, 2-manifold, 281,568 triangles, Euler characteristic 2. At 0.5 it
-/// comes back with one non-manifold edge and an Euler characteristic of 3,
-/// which is a topology change on a closed surface that had none.
-///
-/// So this is not ClayCore #567's documented "at an aggressive ratio, merging
-/// sheets is what the ratio means" — keeping half the triangles of a 0.02 mesh
-/// is gentle, and 0.60 is clean while 0.55 and 0.65 are not. Reported upstream.
-/// Until it is fixed, the application's job is to say so rather than to write
-/// the file in silence, which is what this pins.
+/// Asserted by agreement against an independent validation of the same
+/// parameters, which is what makes it a test of *our* wiring rather than of the
+/// engine's decimator. It cannot pass by accident: an `export_mesh` that
+/// returned `Ok(vec![])` regardless fails on the first ratio that pinches, and
+/// one that cried wolf fails on the first that does not.
 #[test]
-fn the_default_decimation_is_reported_as_not_manifold() {
+fn what_the_export_reports_is_what_the_mesh_is() {
     let mut document = document();
-    let path = scratch("default-decimation.obj");
-    let findings = document
-        .export_mesh(
-            &path,
-            ExportSettings {
-                decimate_to: Some(0.5),
-                ..Default::default()
-            },
-        )
-        .expect("export");
-    let _ = std::fs::remove_file(&path);
+    let mut checked = 0;
+    let mut pinched = 0;
 
-    assert!(
-        findings.iter().any(|w| w.message.contains("manifold")),
-        "the export panel's default decimation reported {findings:?}; either \
-         the validator is no longer called on the written mesh, or ClayCore \
-         has fixed the decimator — the second is the good outcome and is worth \
-         deleting this test for"
-    );
+    for ratio in [0.25f32, 0.4, 0.5, 0.6, 0.75, 0.9] {
+        let settings = ExportSettings {
+            decimate_to: Some(ratio),
+            ..Default::default()
+        };
+
+        // What the mesh IS, asked of the engine directly with the same
+        // parameters the export uses.
+        let truth = document
+            .document()
+            .mesh(claycore::MeshParams {
+                voxel_size: Some(ClayDocument::VOXEL_SIZE),
+                resolution: 128,
+                decimate_ratio: settings.decimate_to,
+                mesher: claycore::Mesher::MarchingTetrahedra,
+            })
+            .expect("mesh the control")
+            .validation_report(0)
+            .expect("validate the control");
+
+        // What the export SAYS about the file it just wrote.
+        let path = scratch(&format!("agreement-{ratio}.obj"));
+        let findings = document.export_mesh(&path, settings).expect("export");
+        let _ = std::fs::remove_file(&path);
+
+        let sound = truth.manifold && truth.watertight;
+        assert_eq!(
+            findings.is_empty(),
+            sound,
+            "at ratio {ratio} the mesh is manifold={} watertight={} \
+             ({} non-manifold edges, {} boundary edges) and the export reported \
+             {findings:?}",
+            truth.manifold,
+            truth.watertight,
+            truth.non_manifold_edges,
+            truth.boundary_edges,
+        );
+        checked += 1;
+        pinched += usize::from(!sound);
+    }
+
+    assert_eq!(checked, 6, "the sweep did not run");
+    // Not an assertion about the engine — a note in the output, so a reader of
+    // a CI log can see which side of ClayCore #575 this machine falls on.
+    println!("{pinched} of {checked} ratios pinched on this platform");
 }
 
-/// A gentler decimation is sound, so the warning is not simply "you decimated".
+/// An export that is open says so, on every platform.
 ///
-/// The companion to the test above, and the one that keeps it honest. If the
-/// finding fired on every decimated export it would be a restatement of the
-/// setting rather than an observation about the file, and a sculptor would
-/// learn to ignore it. At 0.25 the same sphere comes back clean.
+/// The companion that closes the one hole in
+/// `what_the_export_reports_is_what_the_mesh_is`. That test asserts agreement
+/// across a sweep of decimation ratios, which is the right invariant — but on a
+/// machine where *no* ratio pinches, the half that matters is vacuous: an
+/// `export_mesh` returning `Ok(vec![])` regardless would agree with a mesh that
+/// is sound at every ratio, and pass. That is exactly the platform CI runs on.
+///
+/// So this makes an unsound export on purpose and by a route that has nothing
+/// to do with ClayCore #575's chaotic collapse sequence. A single triangle is a
+/// mesh with three boundary edges: not watertight, on any architecture, by
+/// construction rather than by luck.
+///
+/// It reaches the export because `mesh_combined` deliberately includes every
+/// visible mesh layer — meshing the field alone would silently leave imported
+/// geometry out of the file — so the concatenation of a closed sphere and an
+/// open sheet is open.
 #[test]
-fn a_gentler_decimation_is_still_sound() {
+fn an_open_mesh_layer_makes_the_export_say_it_is_not_closed() {
     let mut document = document();
-    let path = scratch("gentle-decimation.obj");
-    let findings = document
-        .export_mesh(
+
+    // Three vertices, one triangle, three edges each carrying one face.
+    let sheet = claycore::Mesh::from_triangles(
+        &[[2.0, 0.0, 0.0], [3.0, 0.0, 0.0], [2.0, 1.0, 0.0]],
+        &[0, 1, 2],
+    )
+    .expect("a single triangle is a mesh");
+    let path = scratch("open-sheet.obj");
+    sheet.save(&path).expect("write the sheet");
+    document
+        .import_mesh(
             &path,
-            ExportSettings {
-                decimate_to: Some(0.25),
+            ImportSettings {
+                becomes: ImportAs::Reference,
                 ..Default::default()
             },
         )
-        .expect("export");
+        .expect("import it as a mesh layer");
     let _ = std::fs::remove_file(&path);
 
+    let out = scratch("open-export.obj");
+    let findings = document
+        .export_mesh(&out, ExportSettings::default())
+        .expect("export");
+    let _ = std::fs::remove_file(&out);
+
     assert!(
-        findings.is_empty(),
-        "a watertight sphere decimated to 25% came back as {findings:?}"
+        findings.iter().any(|w| w.message.contains("fechada")),
+        "a document carrying an open mesh layer exported without saying the \
+         result is not closed; got {findings:?}. Either the validator is no \
+         longer called on the written mesh, or mesh_combined has stopped \
+         including mesh layers — and the second would silently drop imported \
+         geometry from every export"
     );
 }
