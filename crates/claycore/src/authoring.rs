@@ -1206,6 +1206,43 @@ impl Document {
         )
     }
 
+    /// What mirror a layer actually carries, and the seam blend width with it.
+    ///
+    /// The reader for [`Self::set_layer_mirror`], and what makes a cached
+    /// mirror unnecessary rather than merely risky. Before this existed
+    /// (ClayCore 0.105.0) a host could only remember what it had last set, and
+    /// an undo moves the engine's symmetry without telling anybody — which is
+    /// how a host reported an unmirrored dab, an undo, the same dab again, and
+    /// the far side growing 0.28 world units on a stroke asked to be
+    /// unmirrored. Read, compare, and set only if it differs: there is no
+    /// cache to go stale and no need to reason about which undo ranges
+    /// contained a symmetry edit.
+    ///
+    /// Reading is not editing. A ghosted, locked or hidden layer answers
+    /// normally, where setting one is refused. A layer carrying no symmetry
+    /// answers with it off rather than refusing, because "no mirror" is the
+    /// true answer. A non-SDF layer is refused: it cannot express one, and
+    /// zeroes would read as a real answer.
+    pub fn layer_mirror(&self, layer: LayerId) -> Result<([bool; 3], f32)> {
+        let (mut x, mut y, mut z) = (0i32, 0i32, 0i32);
+        let mut mirror_k = 0.0f32;
+        // SAFETY: valid handle and four out-parameters the engine fills.
+        check(
+            unsafe {
+                sys::clay_document_layer_mirror(
+                    self.as_ptr(),
+                    layer.0,
+                    &mut x,
+                    &mut y,
+                    &mut z,
+                    &mut mirror_k,
+                )
+            },
+            "clay_document_layer_mirror",
+        )?;
+        Ok(([x != 0, y != 0, z != 0], mirror_k))
+    }
+
     /// A layer's world bounds, when it has any.
     pub fn layer_bounds(&self, layer: LayerId) -> Result<Option<([f32; 3], [f32; 3])>> {
         let (mut min, mut max) = ([0.0f32; 3], [0.0f32; 3]);

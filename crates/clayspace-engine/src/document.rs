@@ -3157,12 +3157,23 @@ impl ClayDocument {
     /// layer happened to carry.
     fn point_the_mirror(&mut self, symmetry: [bool; 3]) -> Result<(), ModelError> {
         let index = self.active;
-        // `Some(symmetry)` and not `symmetry`: a forgotten mirror is never
-        // equal to anything, so the call is made rather than skipped.
         if self.layers[index].mirror == Some(symmetry) {
             return Ok(());
         }
         let layer = self.layers[index].id;
+        // Unknown means ASK, not assume. Before ClayCore 0.105.0 there was no
+        // reader, so an unknown mirror could only be written over — correct,
+        // and one redundant `clay_set_layer_mirror` on the next stroke after
+        // every history step. Now the engine answers, and a layer that already
+        // carries what was wanted costs nothing at all.
+        if self.layers[index].mirror.is_none() {
+            if let Ok((carried, _)) = self.document.layer_mirror(layer) {
+                self.layers[index].mirror = Some(carried);
+                if carried == symmetry {
+                    return Ok(());
+                }
+            }
+        }
         self.document
             .set_layer_mirror(layer, symmetry, 0.0)
             .map_err(ModelError::engine)?;
@@ -3196,16 +3207,32 @@ impl ClayDocument {
     /// Which axes to dirty the reflections of, when the answer has to be safe
     /// rather than exact.
     ///
-    /// The callers use this to decide which *reflected regions* to re-fill. A
-    /// forgotten mirror has no honest answer, and the two ways of being wrong
-    /// are not equal: dirtying a reflection the engine does not make costs a
-    /// re-fill nobody needed, where missing one the engine does make leaves a
-    /// stale brick on screen with nothing to correct it. So unknown reads as
-    /// all three axes. `snakehook_stroke` reaches this through `baked_stroke`,
-    /// which has already pointed the mirror, so it is the curve paths that can
-    /// see a `None` at all.
-    fn mirror_for_dirtying(layer: &Layer) -> [bool; 3] {
-        layer.mirror.unwrap_or([true; 3])
+    /// The callers use this to decide which *reflected regions* to re-fill.
+    ///
+    /// A cached mirror is used when there is one, and the engine is ASKED when
+    /// there is not — which is most of what ClayCore 0.105.0's reader is for
+    /// here. A history step forgets every layer's mirror, and before the
+    /// reader existed the only safe answer to "which reflections might this
+    /// touch" was all three: dirtying a reflection the engine does not make
+    /// costs a re-fill nobody needed, while missing one it does make leaves a
+    /// stale brick on screen with nothing to correct it. So the first stroke
+    /// after every undo re-filled three reflections of its region whether or
+    /// not the layer had any mirror at all.
+    ///
+    /// `[true; 3]` survives only where the engine cannot answer at all. No
+    /// layer kind this application makes reaches it — a mesh layer answers
+    /// with the mirror off rather than refusing, which
+    /// `every_layer_kind_answers_what_mirror_it_carries` pins — so it is a
+    /// fallback for a refusal rather than for a layer, and it stays because
+    /// over-invalidating is the safe direction and is what this always gave.
+    fn mirror_for_dirtying(&self, layer: &Layer) -> [bool; 3] {
+        if let Some(mirror) = layer.mirror {
+            return mirror;
+        }
+        self.document
+            .layer_mirror(layer.id)
+            .map(|(axes, _)| axes)
+            .unwrap_or([true; 3])
     }
 
     /// A stroke whose verb rewrites the field rather than adding an item.
@@ -3615,9 +3642,31 @@ impl ClayDocument {
 
         let layer = self.active_layer().id;
         let brush = brush.sanitized();
-        let applied = self
+        // One box per drag image, from the engine, rather than one box around
+        // the whole gesture computed here.
+        //
+        // The reconstruction this replaces took the brush around where the
+        // drag started and around where it ended. That is honest for an
+        // unmirrored drag and a guess the moment the layer has a mirror — and
+        // the starting form turns x on. A single box either misses the
+        // reflected image entirely, leaving stale surface on the far side, or
+        // is stretched to cover both and becomes the slab between them, which
+        // under a mirror is most of the document's bricks.
+        //
+        // `expected` is sized from the symmetry because the count is a
+        // property of the layer: one box per image, plus one per layer sharing
+        // the edit list. A wrong guess costs one refused call and no
+        // correctness at all — the buffer check happens before the first edit
+        // is recorded, so there is no half-applied drag to unpick.
+        let images = 1
+            << self
+                .active_layer()
+                .mirror
+                .map(|axes| axes.iter().filter(|on| **on).count())
+                .unwrap_or(3);
+        let (applied, regions) = self
             .document
-            .move_surface(
+            .move_surface_regions(
                 layer,
                 first.position,
                 displacement,
@@ -3626,26 +3675,14 @@ impl ClayDocument {
                     ease: 0,
                     front_only: true,
                 },
+                images,
             )
             .map_err(ModelError::engine)?;
 
         if applied == 0 {
             return Ok(EditOutcome::NOTHING);
         }
-        // The box the move can have touched: the brush around where it started
-        // and around where it ended, and nothing else. `move_surface` reports a
-        // count rather than nodes, which is why this is computed here rather
-        // than asked for.
-        let reach = brush.size + travelled;
-        let mut min = [0.0f32; 3];
-        let mut max = [0.0f32; 3];
-        for axis in 0..3 {
-            let a = first.position[axis];
-            let b = a + displacement[axis];
-            min[axis] = a.min(b) - reach;
-            max[axis] = a.max(b) + reach;
-        }
-        self.refill_region(min, max)?;
+        self.refill_regions(&regions)?;
         Ok(EditOutcome {
             changed: true,
             dirty_bricks: self.dirty.len(),
@@ -3839,7 +3876,7 @@ impl ClayDocument {
             // dirty and the wide bound was the correct answer. The two fixes
             // are one fix.
             let placed = self.active_layer().transform;
-            let mirror = Mirror(Self::mirror_for_dirtying(self.active_layer()));
+            let mirror = Mirror(self.mirror_for_dirtying(self.active_layer()));
             let regions =
                 Self::tendril_tail_regions(&points, hook.points, brush.size, mirror, &placed);
             self.live_hook = Some(LiveHook {
@@ -10611,8 +10648,8 @@ impl ClayDocument {
         let Ok(index) = self.index_of(curve.layer) else {
             return Vec::new();
         };
+        let mirror = Mirror(self.mirror_for_dirtying(&self.layers[index]));
         let layer = &self.layers[index];
-        let mirror = Mirror(Self::mirror_for_dirtying(layer));
         let axes: Vec<usize> = (0..3).filter(|axis| mirror.0[*axis]).collect();
         let placed = layer.transform;
         (0..(1usize << axes.len()))

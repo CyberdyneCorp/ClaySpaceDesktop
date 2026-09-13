@@ -115,8 +115,8 @@ pub use remesh::{
     ResumeStats, SmallComponents, Surface,
 };
 pub use sculpt::{
-    resolve_stroke, FlattenMode, FlattenParams, MoveParams, RelaxParams, TopologicalMoveParams,
-    VolumeParams,
+    resolve_stroke, FlattenMode, FlattenParams, MoveParams, Region, RelaxParams,
+    TopologicalMoveParams, VolumeParams,
 };
 pub use surface_view::{
     ChunkAck, ChunkCopy, ChunkInfo, ChunkOptions, ChunkReadback, ChunkRevisions, SurfaceKind,

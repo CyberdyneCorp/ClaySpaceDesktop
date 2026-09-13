@@ -51,7 +51,7 @@ pub enum ErrorKind {
 }
 
 impl ErrorKind {
-    fn from_raw(code: RawResult) -> Option<Self> {
+    pub(crate) fn from_raw(code: RawResult) -> Option<Self> {
         use sys::clay_result as r;
         Some(match code {
             r::CLAY_OK => return None,
