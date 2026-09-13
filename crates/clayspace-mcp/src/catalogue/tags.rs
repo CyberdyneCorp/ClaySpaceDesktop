@@ -14,9 +14,9 @@
 
 use clayspace_model::CutGesture;
 use clayspace_model::{
-    BlendProfile, BooleanOp, Combine, CurveJoin, CurveProfile, DeformVerb, Direction, ExportMesher,
-    ExtrudeSide, Falloff, GizmoMode, ImportAs, InsertAs, Locale, MaskGesture, RefPlane,
-    Representation, Shape, ToolKind, ViewPresetKind, VoxelDisplay,
+    BlendProfile, BooleanOp, Combine, CurveJoin, CurveProfile, DeformVerb, Direction, DragFalloff,
+    ExportMesher, ExtrudeSide, Falloff, GizmoMode, ImportAs, InsertAs, Locale, MaskGesture,
+    RefPlane, Representation, Shape, ToolKind, ViewPresetKind, VoxelDisplay,
 };
 use clayspace_vm::Axis;
 
@@ -90,6 +90,20 @@ pub const FALLOFFS: &[(&str, Falloff)] = &[
     ("linear", Falloff::Linear),
     ("smooth", Falloff::Smooth),
     ("gaussian", Falloff::Gaussian),
+];
+
+/// How a drag's pull falls off across its ball.
+///
+/// Named rather than numbered, unlike the engine's own easing index: the C ABI
+/// offers thirty-three curves and no names for any of them, so an agent given
+/// a number would be guessing at a table it cannot see.
+pub const DRAG_FALLOFFS: &[(&str, DragFalloff)] = &[
+    ("linear", DragFalloff::Linear),
+    ("smooth", DragFalloff::Smooth),
+    ("smoother", DragFalloff::Smoother),
+    ("broad", DragFalloff::Broad),
+    ("tight", DragFalloff::Tight),
+    ("shouldered", DragFalloff::Shouldered),
 ];
 
 pub const GIZMO_MODES: &[(&str, GizmoMode)] = &[
@@ -188,6 +202,7 @@ mod tests {
     fn every_table_has_distinct_tags() {
         assert!(distinct(REPRESENTATIONS));
         assert!(distinct(FALLOFFS));
+        assert!(distinct(DRAG_FALLOFFS));
         assert!(distinct(GIZMO_MODES));
         assert!(distinct(AXES));
         assert!(distinct(GESTURES));
@@ -216,6 +231,7 @@ mod tests {
     fn every_table_covers_its_enumeration() {
         assert_eq!(REPRESENTATIONS.len(), Representation::ALL.len());
         assert_eq!(FALLOFFS.len(), Falloff::ALL.len());
+        assert_eq!(DRAG_FALLOFFS.len(), DragFalloff::ALL.len());
         assert_eq!(GIZMO_MODES.len(), GizmoMode::ALL.len());
         assert_eq!(AXES.len(), Axis::ALL.len());
         assert_eq!(GESTURES.len(), MaskGesture::ALL.len());

@@ -1077,6 +1077,8 @@ pub struct BrushSettings {
     pub shaping: Shaping,
     /// How the stroke varies along its own length.
     pub dynamics: Dynamics,
+    /// What a drag does, which no other verb reads.
+    pub drag: Drag,
     /// Whether this brush is modulated by the loaded alpha stamp.
     ///
     /// A flag rather than the samples: settings are held per tool and per
@@ -1091,6 +1093,104 @@ pub struct BrushSettings {
     /// with the tool. A brush that remembered it would come back inverted the
     /// next time it was chosen, which no reference does and nobody expects.
     pub invert: bool,
+}
+
+/// How a drag's pull falls off across its ball, by the engine's easing index.
+///
+/// `clay_ease` offers thirty-three curves and the C ABI gives them no names —
+/// only `CLAY_EASE_LINEAR = 0` and `CLAY_EASE_COUNT = 33`. The indices here are
+/// read from the engine's own `kernel/ease.h`, which is the only place the
+/// order is stated.
+///
+/// A curated six rather than all thirty-three. The rest are the same shapes at
+/// different exponents, and four of them — the `back` and `elastic` families —
+/// go **negative inside the ball**, which pushes material the opposite way part
+/// of the way out. That is the curve rather than a defect, and it is not a
+/// falloff a sculptor reaches for by accident.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DragFalloff {
+    /// `ease_linear`. The weight falls off in proportion to distance.
+    Linear,
+    /// `ease_smoothstep`. Flat at the centre and at the rim, which is the
+    /// falloff most sculpting applications use and what a hand expects.
+    Smooth,
+    /// `ease_smootherstep`. Flatter still at both ends; a softer shoulder.
+    Smoother,
+    /// `ease_in_quad`. Holds its strength further out, so more of the ball
+    /// travels together — closer to moving a region than to pulling a point.
+    Broad,
+    /// `ease_out_quad`. Falls away immediately, concentrating the pull near
+    /// the centre.
+    Tight,
+    /// `ease_in_out_circ`. Nearly rigid in the middle with a fast shoulder,
+    /// which is what pulling a whole limb wants.
+    Shouldered,
+}
+
+impl DragFalloff {
+    pub const ALL: [DragFalloff; 6] = [
+        Self::Linear,
+        Self::Smooth,
+        Self::Smoother,
+        Self::Broad,
+        Self::Tight,
+        Self::Shouldered,
+    ];
+
+    /// The engine's easing index, from `clay/kernel/ease.h`.
+    pub fn ease(self) -> i32 {
+        match self {
+            Self::Linear => 0,
+            Self::Smooth => 1,
+            Self::Smoother => 2,
+            Self::Broad => 3,
+            Self::Tight => 4,
+            Self::Shouldered => 23,
+        }
+    }
+}
+
+/// What a drag does, beyond its radius.
+///
+/// Held apart from [`Dynamics`] because the two are opposites: `Dynamics` is
+/// everything a drag deliberately does *not* read, and this is the pair only a
+/// drag reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Drag {
+    pub falloff: DragFalloff,
+    /// Whether only the near side of a form travels.
+    ///
+    /// **Blender's "Front Faces Only" defaults off**, and so does this. With it
+    /// on, a sculptor pulling a limb moves the surface facing them and leaves
+    /// the far side behind, which is what a thin form needs and what a solid
+    /// one does not. This application had it hardcoded on, so a form could
+    /// never be dragged through.
+    ///
+    /// **And the gate is what degrades a layer, not the drag.** Eight dabs on
+    /// a sphere leave a chain of 8 either way, and `safe_step_scale` reads
+    /// **0.2421 with the gate on against 0.5999 with it off** — 2.5x less
+    /// degraded for the same number of warps, which is enough to move the
+    /// layer's own health report from `Deformers` to `None`. A front-only grab
+    /// gates on the surface normal, so its weight field has a discontinuity in
+    /// it and the declared Lipschitz bound has to cover the jump; a two-sided
+    /// grab is smooth and does not.
+    ///
+    /// That is why the default is off rather than merely because Blender's is:
+    /// the parity argument says a sculptor expects it, and the measurement
+    /// says the other setting is the one that costs.
+    pub front_only: bool,
+}
+
+impl Default for Drag {
+    fn default() -> Self {
+        Self {
+            // Linear is what every drag in this application used, hardcoded,
+            // before the control existed. Kept as the default so that turning
+            // the control on changes nothing until a sculptor moves it.
+            falloff: DragFalloff::Linear,
+            front_only: false,
+        }
+    }
 }
 
 /// How a stroke varies along its own length.
@@ -1280,6 +1380,7 @@ impl Default for BrushSettings {
             invert: false,
             shaping: Shaping::default(),
             dynamics: Dynamics::default(),
+            drag: Drag::default(),
         }
     }
 }
@@ -1317,6 +1418,7 @@ impl BrushSettings {
                 ..self.shaping
             },
             dynamics: self.dynamics.sanitized(),
+            drag: self.drag,
             alpha: self.alpha,
             invert: self.invert,
         }
@@ -1660,6 +1762,13 @@ mod tests {
                 taper_start: 9.0,
                 taper_end: -2.0,
                 rake: true,
+            },
+            // Carried through rather than clamped: both are already closed
+            // sets — a named curve and a flag — so there is no out-of-range
+            // value for `sanitized` to bring back.
+            drag: Drag {
+                falloff: DragFalloff::Shouldered,
+                front_only: true,
             },
             shaping: Shaping {
                 noise: 8.0,

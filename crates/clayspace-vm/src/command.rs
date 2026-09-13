@@ -195,6 +195,10 @@ pub enum Command {
     SetBrushNoise(f32),
     /// How far pressure drives the radius, 0..=1. Zero disconnects it.
     SetBrushPressureSize(f32),
+    /// How a drag's pull falls off across its ball.
+    SetBrushDragFalloff(clayspace_model::DragFalloff),
+    /// Whether only the near side of a form travels under a drag.
+    SetBrushFrontOnly(bool),
     /// How far pressure drives the strength, 0..=1.
     SetBrushPressureStrength(f32),
     /// The exponent pressure passes through before either of the two above.
@@ -683,6 +687,8 @@ impl Command {
                 | Self::SetBrushFlow(_)
                 | Self::SetBrushNoise(_)
                 | Self::SetBrushPressureSize(_)
+                | Self::SetBrushDragFalloff(_)
+                | Self::SetBrushFrontOnly(_)
                 | Self::SetBrushPressureStrength(_)
                 | Self::SetBrushPressureCurve(_)
                 | Self::SetBrushTaperStart(_)
@@ -840,6 +846,8 @@ impl Command {
             Self::ResizeZsphere { .. } => "zsphere radius",
             Self::ReparentZsphere { .. } => "reparent zsphere",
             Self::SetBrushPressureSize(_) => "pressure size",
+            Self::SetBrushDragFalloff(_) => "drag falloff",
+            Self::SetBrushFrontOnly(_) => "front only",
             Self::SetBrushPressureStrength(_) => "pressure strength",
             Self::SetBrushPressureCurve(_) => "pressure curve",
             Self::SetBrushTaperStart(_) => "taper start",

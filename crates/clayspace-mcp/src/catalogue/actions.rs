@@ -74,6 +74,8 @@ pub fn home_of(command: &Command) -> Home {
         SetBrushTaperStart(_) => Home::In("brush", "set_taper_start"),
         SetBrushTaperEnd(_) => Home::In("brush", "set_taper_end"),
         SetBrushRake(_) => Home::In("brush", "set_rake"),
+        SetBrushDragFalloff(_) => Home::In("brush", "set_drag_falloff"),
+        SetBrushFrontOnly(_) => Home::In("brush", "set_front_only"),
         SetBrushAzimuth(_) => Home::In("brush", "set_azimuth"),
         SetBrushFalloff(_) => Home::In("brush", "set_falloff"),
         SetBrushAccumulate(_) => Home::In("brush", "set_accumulate"),
@@ -366,6 +368,10 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
         ("brush", "set_taper_start") => C::SetBrushTaperStart(args.number("fraction")?),
         ("brush", "set_taper_end") => C::SetBrushTaperEnd(args.number("fraction")?),
         ("brush", "set_rake") => C::SetBrushRake(args.boolean("rake")?),
+        ("brush", "set_drag_falloff") => {
+            C::SetBrushDragFalloff(args.choice("falloff", tags::DRAG_FALLOFFS)?)
+        }
+        ("brush", "set_front_only") => C::SetBrushFrontOnly(args.boolean("front_only")?),
         ("brush", "set_azimuth") => C::SetBrushAzimuth(args.number("azimuth")?),
         ("brush", "set_falloff") => C::SetBrushFalloff(args.choice("falloff", tags::FALLOFFS)?),
         ("brush", "set_accumulate") => C::SetBrushAccumulate(args.boolean("accumulate")?),

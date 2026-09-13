@@ -3637,8 +3637,8 @@ impl ClayDocument {
                 displacement,
                 claycore::MoveParams {
                     radius: brush.size.max(1e-3),
-                    ease: 0,
-                    front_only: true,
+                    ease: brush.drag.falloff.ease(),
+                    front_only: brush.drag.front_only,
                 },
                 images,
             )
@@ -3683,10 +3683,15 @@ impl ClayDocument {
                 &mut self.document,
                 layer,
                 anchor,
+                // The same two the baked path reads, so a drag previewed
+                // live and a drag applied whole are the same drag. They were
+                // literals at both sites and the consistency was the whole
+                // reason to keep them identical; now it is the reason to read
+                // them from one place.
                 claycore::MoveParams {
                     radius: brush.size.max(1e-3),
-                    ease: 0,
-                    front_only: true,
+                    ease: brush.drag.falloff.ease(),
+                    front_only: brush.drag.front_only,
                 },
             )?;
             self.live_move = Some(live);
@@ -4644,7 +4649,7 @@ impl ClayDocument {
                 // takes the displacement whole and has no strength of its own
                 // here, so this is where the slider has to act.
                 displacement: displacement.map(|axis| axis * brush.intensity),
-                ease: 0,
+                ease: brush.drag.falloff.ease(),
             })
             .map_err(ModelError::engine)?;
 

@@ -488,6 +488,7 @@ mod tests {
             },
             alpha: false,
             invert: false,
+            drag: clayspace_model::Drag::default(),
         };
         let state = tool_state(
             ToolKind::Argila,

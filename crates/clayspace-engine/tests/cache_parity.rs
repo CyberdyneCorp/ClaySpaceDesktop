@@ -130,6 +130,7 @@ fn every_brush_the_interface_can_produce_moves_the_cache() {
                         azimuth: 0.0,
                     },
                     alpha: false,
+                    drag: Default::default(),
                 };
                 let mut document = document();
                 let (_, before) = both(&document);
