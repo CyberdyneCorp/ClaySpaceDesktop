@@ -784,17 +784,40 @@ impl SculptViewModel {
     /// spacing apart, so waiting longer only delays what it was going to do
     /// anyway, and delay is exactly what a sculptor sees.
     ///
-    /// Zero for a dragging verb on a mesh, which replays the whole gesture
-    /// from its anchor and is sent on every pointer move.
+    /// Zero for any dragging verb that replays from its anchor, on any
+    /// representation.
+    ///
+    /// **The representation is the wrong question for a replayed gesture, and
+    /// asking it first is what kept a field's Move from being seen while it
+    /// was made.** The threshold exists because a *stamping* segment costs a
+    /// re-mesh of everything it touched, and it grows with the gesture. A
+    /// replayed one does not: the whole drag is laid down from its anchor
+    /// every time, so the work is the same on the first segment and the
+    /// fortieth, and waiting buys nothing while costing exactly what a
+    /// sculptor sees.
+    ///
+    /// A field's Move and Puxar have replayed from their anchor since #99, and
+    /// a field's Move additionally has a live transaction armed for it before
+    /// the first segment — `open_live_gesture` routes `Mover` into
+    /// `arm_live_move` — whose entire purpose is to draw the drag while the
+    /// pointer is down. None of that machinery ran until the pointer came up,
+    /// because this returned `STAMPS_PER_SEGMENT` for every field gesture
+    /// before it ever asked whether the gesture replays.
+    ///
+    /// At the default flow and a brush of 0.858 that threshold is 1.03 world
+    /// units — most of the way across a unit sphere — so an ordinary drag
+    /// ended before one segment fired. Reported from a session: "on our app we
+    /// only see the effect of the move brush (in sdf) after the stroke
+    /// finishes". Mesh mode was correct, which is exactly the asymmetry this
+    /// ordering produced.
     fn stamps_between_segments(&self, tool: ToolKind) -> f32 {
+        if self.replays_from_the_anchor(tool) {
+            return 0.0;
+        }
         if self.model.active_representation() != Representation::Mesh {
             return STAMPS_PER_SEGMENT;
         }
-        if self.replays_from_the_anchor(tool) {
-            0.0
-        } else {
-            1.0
-        }
+        1.0
     }
 
     /// Selects a tool, bringing its remembered brush with it.

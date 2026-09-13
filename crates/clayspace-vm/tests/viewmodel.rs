@@ -959,6 +959,7 @@ fn a_mesh_stroke_is_applied_while_it_is_made() {
         .dispatch(Command::SelectTool(ToolKind::Suavizar))
         .expect("tool");
     drag(&mut field);
+    println!("PADRAO during={}", calls.borrow().strokes.len());
     assert_eq!(
         calls.borrow().strokes.len(),
         0,
@@ -1170,5 +1171,102 @@ fn the_mask_key_keeps_each_tools_own_brush() {
         (vm.brush().get().size - 0.42).abs() < 1e-6,
         "coming back from the mask left the brush at {}",
         vm.brush().get().size
+    );
+}
+
+/// A field drag is seen while it is made, not when the pointer comes up.
+///
+/// Reported from a session: *"on our app we only see the effect of the move
+/// brush (in sdf) after the stroke finishes (after I leave the mouse button,
+/// not while I'm dabbing)"*, with mesh mode behaving correctly.
+///
+/// `stamps_between_segments` asked the representation before it asked whether
+/// the gesture replays, so every field gesture got `STAMPS_PER_SEGMENT` — three
+/// stamps' worth of travel. That threshold exists because a *stamping* segment
+/// costs a re-mesh of everything it touched and grows with the gesture. A
+/// replayed one does not: the whole drag goes down from its anchor every time,
+/// so the work is the same on the first segment and the fortieth.
+///
+/// A field's Move has replayed from its anchor since #99 *and* has a live
+/// transaction armed for it before the first segment — `open_live_gesture`
+/// routes `Mover` into `arm_live_move`, whose whole purpose is to draw the drag
+/// while the pointer is down. None of it ran until the release.
+///
+/// The drag here is **0.08 world units**, far under the threshold at any
+/// ordinary brush, and well under the 1.03 the default flow and a 0.858 brush
+/// produce. Before the fix this reached the model zero times before `EndStroke`.
+#[test]
+fn a_short_field_drag_is_seen_before_the_pointer_comes_up() {
+    let (mut vm, calls) = fixture_with(|model| {
+        model.representation.set(Representation::Sdf);
+    });
+    vm.dispatch(Command::SelectTool(ToolKind::Mover))
+        .expect("tool");
+    vm.dispatch(Command::BeginStroke {
+        position: [0.0, 0.0, 1.0],
+        pressure: 1.0,
+        modifiers: Default::default(),
+    })
+    .expect("begin");
+    for step in 1..=8 {
+        vm.dispatch(Command::ContinueStroke {
+            position: [step as f32 * 0.01, 0.0, 1.0],
+            pressure: 1.0,
+        })
+        .expect("continue");
+    }
+
+    // Read BEFORE the release, which is the whole point: after `EndStroke`
+    // the drag arrives either way and the bug is invisible.
+    let during = calls.borrow().strokes.len();
+    assert_eq!(
+        during, 8,
+        "a 0.08-unit field drag reached the model {during} times before the \
+         pointer came up, against one per pointer move. At 0 the sculptor \
+         watches a still surface while dragging and the live Move transaction \
+         armed for this gesture is never fed a segment to preview, which is \
+         the reported fault"
+    );
+}
+
+/// And a stamping field stroke still waits, which is what the threshold is for.
+///
+/// The companion that keeps the fix honest. If `stamps_between_segments`
+/// returned zero for everything, a Padrão stroke would send a segment per
+/// pointer move and re-mesh the same neighbourhood over and over — the cost
+/// `STAMPS_PER_SEGMENT` exists to avoid, and the reason the original ordering
+/// looked right.
+///
+/// **One, not zero.** The press applies a dab of its own before any movement —
+/// "the first dab lands on the press rather than on the first move: a click is
+/// a stroke too" — and that is not a segment. Measured across the change: this
+/// verb sends 1 either way, where Move goes from 0 to 8.
+#[test]
+fn a_short_field_stamping_stroke_still_waits() {
+    let (mut vm, calls) = fixture_with(|model| {
+        model.representation.set(Representation::Sdf);
+    });
+    vm.dispatch(Command::SelectTool(ToolKind::Padrao))
+        .expect("tool");
+    vm.dispatch(Command::BeginStroke {
+        position: [0.0, 0.0, 1.0],
+        pressure: 1.0,
+        modifiers: Default::default(),
+    })
+    .expect("begin");
+    for step in 1..=8 {
+        vm.dispatch(Command::ContinueStroke {
+            position: [step as f32 * 0.01, 0.0, 1.0],
+            pressure: 1.0,
+        })
+        .expect("continue");
+    }
+
+    assert_eq!(
+        calls.borrow().strokes.len(),
+        1,
+        "a 0.08-unit stamping stroke sent more than the press's own dab before \
+         travelling one stamp gap; the replay fast path has reached a verb \
+         that does not replay, and every pointer move now costs a re-mesh"
     );
 }
