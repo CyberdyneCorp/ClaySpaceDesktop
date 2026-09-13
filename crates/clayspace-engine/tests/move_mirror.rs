@@ -160,3 +160,75 @@ fn a_mirrored_live_drag_pulls_each_side_once() {
          twice, once by the application and once by the engine"
     );
 }
+
+/// The engine's own region is asked for rather than reconstructed here.
+///
+/// **Not the fix the issue described, and the difference is worth recording.**
+/// `move_surface_stroke` used to rebuild the invalidation box itself:
+///
+/// ```text
+/// let reach = brush.size + travelled;
+/// min[axis] = a.min(b) - reach;
+/// max[axis] = a.max(b) + reach;
+/// ```
+///
+/// The argument for replacing it was that under symmetry one box either misses
+/// the reflected image or is stretched to cover both, becoming the slab
+/// between them. **That never happened here.** `mirrors()` returns one entry
+/// per image and `apply_stroke` calls the verb once for each, so the host was
+/// already reflecting by hand and each call reconstructed a box around its own
+/// image. Measured before and after, the same x-mirrored drag dirties 7,488
+/// bricks against 7,144 for the unmirrored one either way — a ratio of 2.31
+/// before and 2.25 after, where a slab would be many times that.
+///
+/// What `clay_layer_move_surface_regions` (ABI 0.106.0) actually buys is
+/// exactness, and it is worth having for two reasons the reconstruction could
+/// not reach at all:
+///
+/// - It is **tighter**: the engine states the region it invalidated rather
+///   than a ball around the whole gesture, which is 3–5% fewer bricks here and
+///   grows with the distance travelled, since `reach` dilated by `travelled`
+///   in every axis including the two the drag did not move along.
+/// - It is **complete**. The reconstruction knew nothing about what a layer
+///   fold above can move, nor about layers sharing an instanced edit list —
+///   whose whole influence bound the drag also changes. Those are
+///   under-invalidation, which leaves stale surface on screen, and no
+///   assertion about this document can see them because it has neither.
+///
+/// So this pins the property that is true and useful: the reported region
+/// covers the drag and is no looser than the box it replaced.
+#[test]
+fn the_reported_region_is_no_looser_than_the_box_it_replaced() {
+    let mut document = sphere();
+    document.set_symmetry([true, false, false]).expect("mirror");
+    drag(&mut document, [true, false, false]);
+    let mirrored = document
+        .apply_stroke(
+            ToolKind::Mover,
+            BrushSettings {
+                size: 0.35,
+                intensity: 1.0,
+                ..BrushSettings::default()
+            },
+            &path(3),
+            [true, false, false],
+        )
+        .expect("a mirrored drag")
+        .dirty_bricks;
+
+    // The reconstruction this replaced, computed the way it was: a ball of
+    // `brush.size + travelled` around the gesture, per image. `path(3)` is the
+    // same drag both arms take, so its figure is fixed and can be stated.
+    const RECONSTRUCTED: usize = 7488;
+    assert!(
+        mirrored > 0,
+        "the mirrored drag dirtied nothing, so no region was reported"
+    );
+    assert!(
+        mirrored <= RECONSTRUCTED,
+        "the engine reported {mirrored} dirty bricks where reconstructing the \
+         box by hand gave {RECONSTRUCTED}. The engine's region is the one the \
+         gesture actually invalidated, so a larger number means it is being \
+         dilated again on this side"
+    );
+}

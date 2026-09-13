@@ -36,12 +36,22 @@ pub enum ErrorKind {
     /// rather than a fault: a cancelled operation leaves everything it was
     /// given exactly as it found it, so a caller unwinds rather than repairs.
     Cancelled,
+    /// A journal was replayed onto a document that is not the snapshot it
+    /// continues from.
+    ///
+    /// The one replay refusal that leaves the document byte-identical: the
+    /// snapshot's identity is in the journal's header, so nothing has been
+    /// applied when it is raised. Retrying with the right document works,
+    /// which is what separates it from the other refusals — those leave the
+    /// events before the bad one standing, because replay is not a
+    /// transaction.
+    SnapshotMismatch,
     /// A result code this build does not know, carried verbatim.
     Unknown(i32),
 }
 
 impl ErrorKind {
-    fn from_raw(code: RawResult) -> Option<Self> {
+    pub(crate) fn from_raw(code: RawResult) -> Option<Self> {
         use sys::clay_result as r;
         Some(match code {
             r::CLAY_OK => return None,
@@ -54,6 +64,7 @@ impl ErrorKind {
             r::CLAY_ERROR_UNSUPPORTED => Self::Unsupported,
             r::CLAY_ERROR_BACKEND => Self::Backend,
             r::CLAY_ERROR_CANCELLED => Self::Cancelled,
+            r::CLAY_ERROR_SNAPSHOT_MISMATCH => Self::SnapshotMismatch,
             other => Self::Unknown(other as i32),
         })
     }
@@ -69,6 +80,7 @@ impl ErrorKind {
             Self::Unsupported => "unsupported by this backend",
             Self::Backend => "backend error",
             Self::Cancelled => "cancelled",
+            Self::SnapshotMismatch => "the journal continues a different document",
             Self::Unknown(_) => "unknown engine result",
         }
     }
@@ -210,6 +222,10 @@ mod tests {
         ),
         (sys::clay_result::CLAY_ERROR_BACKEND, ErrorKind::Backend),
         (sys::clay_result::CLAY_ERROR_CANCELLED, ErrorKind::Cancelled),
+        (
+            sys::clay_result::CLAY_ERROR_SNAPSHOT_MISMATCH,
+            ErrorKind::SnapshotMismatch,
+        ),
     ];
 
     #[test]

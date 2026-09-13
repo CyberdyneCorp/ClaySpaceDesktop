@@ -218,6 +218,63 @@ impl ExportWarning {
         }
         warnings
     }
+
+    /// What the mesh that was actually written turned out to be.
+    ///
+    /// The other half of [`Self::for_export`], and the half that cannot be
+    /// known in advance. Everything that function says is derived from the
+    /// format and the settings, so a sculptor sees it before choosing a file;
+    /// this is derived from the bytes, so it can only be said afterwards.
+    ///
+    /// It exists because decimation can take a watertight 2-manifold input and
+    /// return a mesh that is neither: an edge carrying four triangles, or a
+    /// collapse that closes a handle and changes the genus. That is invisible
+    /// in a viewport and is exactly what a slicer, a boolean engine or a
+    /// stricter importer refuses. Before this, an export could be non-manifold
+    /// and nothing said so.
+    ///
+    /// The counts are carried into the message rather than dropped, because
+    /// "not manifold" and "not manifold at six edges out of ninety thousand"
+    /// are different decisions — the second is often worth shipping and the
+    /// first reads as a ruined file.
+    ///
+    /// Empty when the mesh is sound, which is the common case: a warning that
+    /// appears on every export is one nobody reads.
+    pub fn for_written_mesh(mesh: WrittenMesh) -> Vec<Self> {
+        let mut warnings = Vec::new();
+        if !mesh.manifold {
+            warnings.push(Self {
+                message: format!(
+                    "a malha exportada não é manifold: {} aresta(s) com mais de duas faces",
+                    mesh.non_manifold_edges
+                ),
+            });
+        }
+        if !mesh.watertight {
+            warnings.push(Self {
+                message: format!(
+                    "a malha exportada não é fechada: {} aresta(s) de borda",
+                    mesh.boundary_edges
+                ),
+            });
+        }
+        warnings
+    }
+}
+
+/// What the validator found in the mesh an export wrote.
+///
+/// Plain numbers rather than the engine's own report: this layer does not know
+/// the engine exists, and the fields it would carry beyond these are ones no
+/// warning is phrased from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct WrittenMesh {
+    /// Every edge is shared by exactly two triangles.
+    pub watertight: bool,
+    /// No edge carries more than two incident triangles.
+    pub manifold: bool,
+    pub non_manifold_edges: usize,
+    pub boundary_edges: usize,
 }
 
 /// Reading and writing geometry.
@@ -226,7 +283,15 @@ pub trait ExchangeModel {
     fn import_mesh(&mut self, path: &Path, settings: ImportSettings) -> Result<(), ModelError>;
 
     /// Writes the document — field and every visible mesh layer — to a file.
-    fn export_mesh(&mut self, path: &Path, settings: ExportSettings) -> Result<(), ModelError>;
+    ///
+    /// Returns what the written mesh turned out to be, which is nothing at all
+    /// when it is sound. A caller that drops this is choosing not to tell the
+    /// sculptor that the file it just wrote may be rejected downstream.
+    fn export_mesh(
+        &mut self,
+        path: &Path,
+        settings: ExportSettings,
+    ) -> Result<Vec<ExportWarning>, ModelError>;
 
     /// Whether the document carries mesh layers, which changes what an export
     /// can promise.
@@ -311,5 +376,91 @@ mod tests {
         let settings = ImportSettings::default();
         assert!(settings.max_vertices < 50_000_000);
         assert!(settings.max_triangles > settings.max_vertices);
+    }
+
+    #[test]
+    fn a_sound_mesh_says_nothing() {
+        assert!(ExportWarning::for_written_mesh(WrittenMesh {
+            watertight: true,
+            manifold: true,
+            non_manifold_edges: 0,
+            boundary_edges: 0,
+        })
+        .is_empty());
+    }
+
+    /// A finding names how bad it is, because that is the decision.
+    ///
+    /// Six pinched edges in a large mesh is usually shippable and six thousand
+    /// is a ruined file, and "não é manifold" alone cannot tell a sculptor
+    /// which they have.
+    #[test]
+    fn a_finding_carries_its_count() {
+        let warnings = ExportWarning::for_written_mesh(WrittenMesh {
+            watertight: true,
+            manifold: false,
+            non_manifold_edges: 6,
+            boundary_edges: 0,
+        });
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].message.contains('6'), "{warnings:?}");
+        assert!(warnings[0].message.contains("manifold"), "{warnings:?}");
+    }
+
+    /// The two faults are separate sentences, because they are separate facts.
+    ///
+    /// A decimation collapse makes an edge carry four triangles; a mesher that
+    /// leaves the surface open makes boundary edges. A mesh can have either
+    /// without the other, and folding them into one message would leave a
+    /// sculptor unable to tell which they are looking at.
+    #[test]
+    fn an_open_mesh_and_a_pinched_one_are_told_apart() {
+        let open = ExportWarning::for_written_mesh(WrittenMesh {
+            watertight: false,
+            manifold: true,
+            non_manifold_edges: 0,
+            boundary_edges: 12,
+        });
+        assert_eq!(open.len(), 1, "{open:?}");
+        assert!(open[0].message.contains("fechada"), "{open:?}");
+
+        let both = ExportWarning::for_written_mesh(WrittenMesh {
+            watertight: false,
+            manifold: false,
+            non_manifold_edges: 3,
+            boundary_edges: 12,
+        });
+        assert_eq!(both.len(), 2, "{both:?}");
+    }
+
+    /// What is predicted and what is observed do not say the same thing twice.
+    ///
+    /// `for_export` speaks from the format and the settings before the write;
+    /// `for_written_mesh` speaks from the bytes after it. The application
+    /// concatenates them, so a message common to both would appear twice in
+    /// one list — and the mesher caveat is the one that comes closest, since
+    /// Surface Nets is described as "não é uma malha manifold" in advance.
+    #[test]
+    fn a_prediction_and_a_finding_are_not_the_same_sentence() {
+        let predicted = ExportWarning::for_export(
+            Format::Obj,
+            ExportSettings {
+                mesher: ExportMesher::Fast,
+                ..ExportSettings::default()
+            },
+            false,
+        );
+        let observed = ExportWarning::for_written_mesh(WrittenMesh {
+            watertight: true,
+            manifold: false,
+            non_manifold_edges: 4,
+            boundary_edges: 0,
+        });
+        for p in &predicted {
+            assert!(
+                !observed.contains(p),
+                "{p:?} is produced by both halves and would be shown twice"
+            );
+        }
     }
 }

@@ -76,7 +76,16 @@ fn probe(symmetry: [bool; 3], label: &str) {
         }
         let mesh_ms = rays_started.elapsed().as_secs_f64() * 1000.0;
 
-        let report = doc.document().field_report(id, 0.0).expect("report");
+        // 0.5, not 0. `advise_below_step_scale` is not only a threshold: it
+        // GATES the advice, and clay.h says so directly above the declaration
+        // — "pass 0 for advise_below_step_scale to measure without asking for
+        // advice". This probe passed 0 to avoid perturbing the measurement and
+        // got `advises_consolidation: false` on every row of both arms, down
+        // to a step scale of 0.001308. Read as "the engine never advises
+        // consolidation for a brush chain", which is wrong, and reported
+        // upstream as a defect before the probe turned out to be the fault.
+        // Every other call site in this workspace passes 0.5.
+        let report = doc.document().field_report(id, 0.5).expect("report");
         let cost = doc.layer_cost(key).expect("cost");
         println!("{dab:>4}  {total_ms:>9.2}  {close_ms:>9.2}  {mesh_ms:>9.2}  {:>6}  {:>12.6}  advise={}",
                  report.longest_deformer_chain, cost.safe_step_scale,

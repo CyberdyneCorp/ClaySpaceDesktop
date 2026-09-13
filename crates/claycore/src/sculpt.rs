@@ -11,7 +11,14 @@ use crate::brush::{StrokePreset, StrokeSample};
 use crate::descriptor::Descriptor;
 use crate::error::{check, Result};
 use crate::mask::MaskField;
+use crate::ErrorKind;
 use crate::{Document, Item, LayerId, NodeId};
+
+/// A world-space box, min-xyz then max-xyz.
+///
+/// Named because the engine reports invalidation as a list of these and an
+/// unnamed pair of three-float arrays reads as a segment just as easily.
+pub type Region = ([f32; 3], [f32; 3]);
 
 /// How many stamps a stroke resolves into, without applying it.
 ///
@@ -366,6 +373,75 @@ impl Document {
             "clay_layer_move_surface",
         )?;
         Ok(applied)
+    }
+
+    /// The same drag, and it reports **where it reached**.
+    ///
+    /// [`Self::move_surface`] answers a count, so a host that has to
+    /// invalidate the edit reconstructs the region itself from the brush size
+    /// and the distance travelled. That reconstruction is looser than the one
+    /// the engine already computes, and under symmetry it is *wrong*: a drag
+    /// states one box per image, and a caller holding one box either misses
+    /// the reflected side or unions them — and the union of two balls a
+    /// diameter apart is the slab between them, which under a mirror is most
+    /// of the document.
+    ///
+    /// The boxes are min-xyz then max-xyz, in **document** space, already
+    /// dilated the way the invalidation itself is: by what a fold above the
+    /// layer can move, and by the whole influence bound of every other layer
+    /// sharing this edit list. They are what the gesture actually invalidates
+    /// rather than an approximation of it, so a caller may mark exactly these
+    /// and nothing else.
+    ///
+    /// The count is a property of the **layer**, not of this gesture — one box
+    /// per drag image plus one per layer sharing the edit list — so `expected`
+    /// can be sized once and reused. Getting it wrong is not a correctness
+    /// problem: a buffer too small is refused *before anything is applied*, so
+    /// this asks again with the size the engine reported. That retry is free
+    /// of any half-applied state by the ABI's own guarantee, which is what
+    /// makes guessing acceptable here rather than paying for a count call
+    /// every drag.
+    pub fn move_surface_regions(
+        &mut self,
+        layer: LayerId,
+        centre: [f32; 3],
+        displacement: [f32; 3],
+        params: MoveParams,
+        expected: usize,
+    ) -> Result<(usize, Vec<Region>)> {
+        let raw = params.to_raw();
+        let mut capacity = expected.max(1);
+        loop {
+            let mut applied = 0usize;
+            let mut boxes = vec![0.0f32; capacity * 6];
+            let mut count = 0usize;
+            // SAFETY: two three-float inputs, a sized descriptor, a valid
+            // handle, and a float buffer of exactly `capacity * 6` the engine
+            // fills with that many boxes or refuses without touching.
+            let result = unsafe {
+                sys::clay_layer_move_surface_regions(
+                    self.as_ptr(),
+                    layer.0,
+                    centre.as_ptr(),
+                    displacement.as_ptr(),
+                    &raw,
+                    &mut applied,
+                    boxes.as_mut_ptr(),
+                    capacity,
+                    &mut count,
+                )
+            };
+            if ErrorKind::from_raw(result) == Some(ErrorKind::BufferTooSmall) && count > capacity {
+                capacity = count;
+                continue;
+            }
+            check(result, "clay_layer_move_surface_regions")?;
+            let regions = boxes[..count * 6]
+                .chunks_exact(6)
+                .map(|b| ([b[0], b[1], b[2]], [b[3], b[4], b[5]]))
+                .collect();
+            return Ok((applied, regions));
+        }
     }
 
     /// Adds one grab warp to a node already placed in a document, undoably.

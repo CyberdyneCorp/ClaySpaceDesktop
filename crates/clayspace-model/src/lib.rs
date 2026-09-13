@@ -61,6 +61,7 @@ pub use diagnostics::{
 pub use document::{DocumentModel, OpenError};
 pub use exchange::{
     ExchangeModel, ExportMesher, ExportSettings, ExportWarning, Format, ImportAs, ImportSettings,
+    WrittenMesh,
 };
 pub use gizmo::{
     drag_plane, perpendicular_frame, ray_hits_segment, ray_hits_sphere, ring_samples, snapped,

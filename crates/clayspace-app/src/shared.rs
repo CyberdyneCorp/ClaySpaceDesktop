@@ -592,7 +592,7 @@ impl ExchangeModel for SharedDocument {
         &mut self,
         path: &std::path::Path,
         settings: ExportSettings,
-    ) -> Result<(), ModelError> {
+    ) -> Result<Vec<clayspace_model::ExportWarning>, ModelError> {
         self.document.borrow_mut().export_mesh(path, settings)
     }
 

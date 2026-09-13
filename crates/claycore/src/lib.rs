@@ -93,7 +93,10 @@ pub use memory::{
     BudgetError, MemoryCategory, MemoryClass, MemoryLedger, MemoryPin, MemoryReport, PinHold,
     Pressure, SculptMemoryProfile, SurfacePreflight, TrimReport,
 };
-pub use mesh::{ImportBudget, Mesh, MeshLayerDesc, MeshParams, MeshValidity, Mesher, VertexLayout};
+pub use mesh::{
+    ImportBudget, Mesh, MeshLayerDesc, MeshParams, MeshValidity, Mesher, ValidationReport,
+    VertexLayout,
+};
 pub use mesh_sculpt::{
     AlphaStamp, Automask, MeshBrush, MeshDeform, MeshDeformer, MeshDeltas, MeshFalloff, MeshHit,
     MeshLattice, MeshSculptor, MeshSeed, MeshStamp,
@@ -112,8 +115,8 @@ pub use remesh::{
     ResumeStats, SmallComponents, Surface,
 };
 pub use sculpt::{
-    resolve_stroke, FlattenMode, FlattenParams, MoveParams, RelaxParams, TopologicalMoveParams,
-    VolumeParams,
+    resolve_stroke, FlattenMode, FlattenParams, MoveParams, Region, RelaxParams,
+    TopologicalMoveParams, VolumeParams,
 };
 pub use surface_view::{
     ChunkAck, ChunkCopy, ChunkInfo, ChunkOptions, ChunkReadback, ChunkRevisions, SurfaceKind,
@@ -207,7 +210,7 @@ pub fn revision() -> &'static str {
 /// constant exists so that a mismatch can also be reported in diagnostics.
 pub const EXPECTED_ABI: Version = Version {
     major: 0,
-    minor: 84,
+    minor: 113,
     patch: 0,
 };
 

@@ -15,6 +15,11 @@ use crate::descriptor::Descriptor;
 use crate::error::{check, ErrorKind, Result};
 use crate::raw_failure;
 
+// SAFETY: generated from the engine header, `#[repr(C)]`, and its first field
+// is the `uint32_t struct_size` the engine reads to know which version of the
+// descriptor it was handed.
+unsafe impl Descriptor for sys::clay_validation_report {}
+
 /// Which mesher produced, or should produce, a mesh.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mesher {
@@ -487,6 +492,49 @@ impl Mesh {
             .ok_or_else(|| raw_failure("clay_mesh_transform", ErrorKind::InvalidArgument))
     }
 
+    /// Everything the validator measures, rather than two bits of it.
+    ///
+    /// [`Self::validate`] answers watertight and manifold and drops the other
+    /// nine quantities the same pass already computed — so a caller could be
+    /// told an export was bad and never told *why*, or by how much. This is
+    /// that pass, reported.
+    ///
+    /// `max_intersection_pairs` caps the SAMPLED self-intersection check.
+    /// Zero skips it, which is the engine's own default and what
+    /// [`Self::validate`] does; `intersecting_pairs` then reads zero because
+    /// nothing looked rather than because nothing intersects, and
+    /// [`ValidationReport::clean`] is false whenever it was skipped. Read
+    /// `intersection_budget` to tell the two apart.
+    pub fn validation_report(&self, max_intersection_pairs: usize) -> Result<ValidationReport> {
+        let mut raw = sys::clay_validation_report::sized();
+        // SAFETY: a valid mesh and a sized descriptor the engine fills.
+        check(
+            unsafe {
+                sys::clay_mesh_validation_report(
+                    self.raw.as_ptr(),
+                    max_intersection_pairs,
+                    &mut raw,
+                )
+            },
+            "clay_mesh_validation_report",
+        )?;
+        Ok(ValidationReport {
+            vertices: raw.vertices,
+            triangles: raw.triangles,
+            watertight: raw.watertight != 0,
+            manifold: raw.manifold != 0,
+            oriented: raw.oriented != 0,
+            clean: raw.clean != 0,
+            boundary_edges: raw.boundary_edges,
+            non_manifold_edges: raw.non_manifold_edges,
+            degenerate_triangles: raw.degenerate_triangles,
+            sliver_triangles: raw.sliver_triangles,
+            intersecting_pairs: raw.intersecting_pairs,
+            intersection_budget: raw.intersection_budget,
+            euler_characteristic: raw.euler_characteristic,
+        })
+    }
+
     /// Whether the mesh is watertight and 2-manifold.
     pub fn validate(&self) -> Result<MeshValidity> {
         let (mut watertight, mut manifold) = (0i32, 0i32);
@@ -538,6 +586,39 @@ impl Mesh {
 pub struct MeshValidity {
     pub watertight: bool,
     pub manifold: bool,
+}
+
+/// Everything the mesh validator measured in one pass.
+///
+/// `clean` is the engine's own conjunction — watertight, manifold, oriented,
+/// no degenerate triangles and no intersecting pairs — and it is false
+/// whenever the intersection pass was skipped, because "none found" and "none
+/// looked for" would otherwise read the same. `sliver_triangles` is
+/// deliberately **not** one of its terms: a near-zero-area triangle is legal
+/// geometry that most consumers tolerate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ValidationReport {
+    pub vertices: usize,
+    pub triangles: usize,
+    /// Every edge is shared by exactly two triangles.
+    pub watertight: bool,
+    /// No edge carries more than two incident triangles.
+    pub manifold: bool,
+    /// The two triangles of every edge disagree in direction.
+    pub oriented: bool,
+    /// The engine's conjunction of the above with the two counts below.
+    pub clean: bool,
+    pub boundary_edges: usize,
+    pub non_manifold_edges: usize,
+    /// Repeated indices within one triangle.
+    pub degenerate_triangles: usize,
+    /// Near-zero area. Informational, and not a term of `clean`.
+    pub sliver_triangles: usize,
+    pub intersecting_pairs: usize,
+    /// The cap this report was produced with. Zero means the pass was skipped.
+    pub intersection_budget: usize,
+    /// V - E + F.
+    pub euler_characteristic: i64,
 }
 
 impl Drop for Mesh {

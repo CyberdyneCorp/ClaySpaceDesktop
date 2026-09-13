@@ -31,6 +31,22 @@ const APART: f32 = 2.2;
 /// The second one is moved by its *layer* transform, which is what a
 /// whole-subtool manipulator addresses — so the widget lands on the middle of
 /// that form rather than at the world origin.
+/// How far two meshers of the same field may differ and still be the same shape.
+///
+/// Measured rather than chosen: an undisturbed sphere renders 0.0157 apart
+/// through the brick mesher and through `clay_document_mesh`'s SurfaceNets,
+/// and the two-sphere fixture below 0.0333. Zero dark specks in any of them.
+///
+/// This was 0.01 and passed only because `settle` used to call the document
+/// mesher itself, so the comparison was against its own output. Once `settle`
+/// rebuilds from bricks (#121) the same assertion reads what it always claimed
+/// to read, and the honest bound is the disagreement between two meshers.
+///
+/// Still far below a surface in the wrong place: the subtool move itself
+/// registers above 0.01 here, and a missing or doubled form is an order above
+/// that.
+const MESHER_AGREEMENT: f64 = 0.05;
+
 fn two_subtools() -> Option<(ClayDocument, LayerKey)> {
     let policy = BackendPolicy::discover(None).ok()?;
     let mut document = ClayDocument::new(policy)
@@ -283,8 +299,13 @@ fn moving_a_whole_subtool_moves_the_drawn_surface() {
         .set_target_transform(target, moved)
         .expect("a layer can be placed");
 
-    // The live SDF move uses the clean document mesher rather than the brick
-    // mesher, so the viewport never shows its isolated pits.
+    // The live SDF move goes through the brick mesher now. It used to go
+    // through the clean document mesher purely so the viewport never showed
+    // the brick mesher's isolated pits — ClayCore #549, 2,297 sliver triangles
+    // in 83,464, whose face normals are cross products of near-parallel edges
+    // and shade black. #549 fixed them at the source in v0.113.0, so the
+    // detour went with them. `dark_specks` below is the assertion that
+    // actually held that property, and it still does.
     geometry
         .settle(&gpu, &mut document)
         .expect("rebuild the moved SDF surface");
@@ -299,18 +320,33 @@ fn moving_a_whole_subtool_moves_the_drawn_surface() {
         support::dark_specks(&moving)
     );
 
-    // Pointer-up takes the final SDF path: one whole-surface rebuild clears
-    // any per-brick residue an incremental move may leave. A later sculpt used
-    // to be the operation that accidentally did this, so artifacts could
-    // persist until the form was edited again.
+    // Pointer-up settles, which now rebuilds every brick rather than meshing
+    // the whole field. It still clears any per-brick residue an incremental
+    // move may leave — a later sculpt used to be the operation that
+    // accidentally did this, so artifacts could persist until the form was
+    // edited again.
     document.end_target_drag();
     geometry
         .settle(&gpu, &mut document)
         .expect("settle the completed move");
     let after = harness.capture(geometry.mesh(), &camera, false, "subtools-move-after");
 
-    // The settled result is visually the same as the document's watertight
-    // mesher, rather than the brick mesher that introduced the defects.
+    // Against the document's own mesher as a control on the SHAPE. Two
+    // meshers of one field do not agree pixel for pixel and are not supposed
+    // to: measured on an undisturbed sphere with no move at all, the brick
+    // mesher and SurfaceNets differ by 0.0157, and this pair of spheres by
+    // 0.0333. Both are sound — zero dark specks in either render.
+    //
+    // Which is why the tolerance moved. It was 0.01, and it passed only
+    // because `settle` was calling the very mesher it is compared against
+    // here: the assertion was reading "we used the same mesher", not "the
+    // surface is right". 0.05 is above the measured mesher disagreement and
+    // far below a surface in the wrong place — the move itself registers at
+    // 0.01 on `mean_difference` and a missing or doubled form is an order
+    // above that.
+    //
+    // The property this was really guarding is the pits, and `dark_specks`
+    // guards it directly at every stage rather than by proxy.
     let engine = document
         .document()
         .mesh(clayspace_engine::claycore::MeshParams {
@@ -326,13 +362,15 @@ fn moving_a_whole_subtool_moves_the_drawn_surface() {
         "the document mesher control contains isolated dark pits"
     );
     assert!(
-        moving.mean_difference(&engine_image) < 0.01,
-        "the live SDF move differs from the clean document mesh by {}",
+        moving.mean_difference(&engine_image) < MESHER_AGREEMENT,
+        "the live SDF move differs from the clean document mesh by {}, beyond \
+         what two meshers of one field disagree by",
         moving.mean_difference(&engine_image)
     );
     assert!(
-        after.mean_difference(&engine_image) < 0.01,
-        "the settled surface after a move differs from the clean document mesh by {}",
+        after.mean_difference(&engine_image) < MESHER_AGREEMENT,
+        "the settled surface after a move differs from the clean document mesh \
+         by {}, beyond what two meshers of one field disagree by",
         after.mean_difference(&engine_image)
     );
 }

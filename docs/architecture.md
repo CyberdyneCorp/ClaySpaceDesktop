@@ -306,6 +306,79 @@ everything.
 the triangles on its boundary while its neighbour still holds the previous
 version of the same seam, which shows as a thin crack tracing the edit.
 
+### How a gesture reaches the model, and when
+
+The diagram above shows a stroke arriving whole. Most do not: the ViewModel
+sends **segments** while the pointer is down, so the surface follows the hand
+instead of appearing on release. What decides the pacing is not the tool and not
+the representation, but whether the gesture **replays from its anchor**.
+
+```mermaid
+flowchart TD
+    P[pointer moves] --> Q{does the gesture<br/>replay from its anchor?}
+    Q -- yes --> R[send the WHOLE gesture,<br/>every pointer move]
+    Q -- no --> T{travelled one<br/>stamp gap x N?}
+    T -- no --> W[wait]
+    T -- yes --> U[send what is new]
+    R --> X[one grab, replaced each time]
+    U --> Y[stamps deposited along the new path]
+```
+
+**A stamping gesture deposits.** Each segment costs a re-mesh of everything it
+touched, and the cost grows with the gesture, so sending one per pointer move
+re-meshes the same neighbourhood over and over. It waits for three stamps' worth
+of travel — enough path for the engine's stroke engine to space stamps along,
+because a single sample gives it no path and it simply deposits at the start.
+
+**A replayed gesture restates.** A drag is a displacement from where the pointer
+went down, so the whole gesture is sent from its anchor every time and the
+engine replaces the grab it already emitted rather than stacking another. The
+work is therefore the same on the first segment and the fortieth, and waiting
+buys nothing while costing exactly what a sculptor sees.
+
+That distinction is load-bearing and the order it is asked in has been a defect.
+Asking the *representation* first — mesh gets the fast path, everything else
+waits — gave a field's Move a threshold of 1.03 world units at the default flow,
+most of the way across a unit sphere, so an ordinary drag ended before one
+segment fired and the surface only moved when the pointer came up. Mesh mode was
+correct throughout, and that asymmetry was the only symptom. **Whether the
+gesture replays is the question; the representation is not.**
+
+A field's Move additionally has a live transaction opened for it at press, whose
+whole purpose is to draw the drag while the pointer is down — it previews,
+samples the region, and takes the preview back inside one segment, so the
+engine's undo depth is where it started. None of that runs without segments to
+feed it.
+
+### What happens when the pointer comes up
+
+```mermaid
+flowchart LR
+    E[EndStroke] --> C[commit the live<br/>transaction, one undo entry]
+    C --> S[settle]
+    S --> B[rebuild every surface brick<br/>from the cache]
+    B --> G[patch the GPU slots<br/>that changed]
+```
+
+**Settling rebuilds from the brick cache**, at full resolution, with gradient
+normals sampled through the document.
+
+It used to mesh the whole field through `clay_document_mesh` instead, and that
+is worth knowing because the reason was not performance. The brick mesher
+emitted sliver triangles — near-zero-area, whose face normals are cross products
+of near-parallel edges and shade black — and a whole-field mesh is a different
+mesher with none of them. The detour cost two things. A whole-field evaluation
+has no region to test against, so the deformer cull cannot fire and its cost
+tracks the *document* rather than the edit; and its output cannot be patched
+incrementally, because the store then holds one mesh under a single key while
+the engine reports dirt per brick. That second one meant the next edit threw the
+whole thing away and rebuilt every brick regardless — **the field was meshed
+twice for one stroke**.
+
+Both went when the engine stopped emitting slivers. The general rule is worth
+stating for the next one: a route that exists only to work around a defect is
+removed when the defect is fixed, rather than kept beside the cheaper path.
+
 ### Getting inside the budget
 
 The specification allows 50 ms median and 100 ms at the 95th percentile from
