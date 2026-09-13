@@ -316,22 +316,50 @@ fn a_sound_export_says_nothing_about_itself() {
 
 /// The export panel's own default decimation writes a non-manifold mesh.
 ///
-/// **The case this whole change exists for.** Tick "decimate" in the export
-/// panel and the ratio starts at 0.5; leave the resolution at its default
-/// 0.02; keep the Watertight mesher, which is the one that carries no caveat
-/// and therefore promises a 2-manifold. Marching tetrahedra produces one by
-/// construction — and then decimation takes it apart.
+/// **The case this whole change exists for**, and it is a live defect in the
+/// pinned engine rather than a tradeoff. Tick "decimate" in the export panel
+/// and the ratio starts at 0.5; leave the resolution at its default 0.02; keep
+/// the Watertight mesher, which is the one carrying no caveat and therefore
+/// promising a 2-manifold. Marching tetrahedra produces one by construction —
+/// and then decimation takes it apart.
 ///
-/// ClayCore #567 made decimation check its own result and retry with a
-/// different choice of collapses. Where nothing clean fits at the requested
-/// size it returns the requested size and reports the pinch rather than
-/// repairing it, because at an aggressive ratio merging sheets is what the
-/// ratio *means*. This is that case, on the most ordinary settings the
-/// application offers.
+/// Measured on `Item::sphere(1.0)` alone, one layer, nothing imported and
+/// nothing sculpted. Sweeping in steps of 0.05 finds six of fifteen ratios
+/// non-manifold and looks non-monotone. **Refined to steps of 0.01 by ClayCore,
+/// it is two contiguous bands and 31 of 76:**
 ///
-/// So this test is not a guard against a regression that might happen. It
-/// pins a defect that is live at the pinned engine, and pins that the
-/// application now says so instead of writing the file in silence.
+/// ```text
+/// 0.20 .. 0.43   clean
+/// 0.44 .. 0.59   pinched
+/// 0.60           clean   — one isolated lucky ratio
+/// 0.61 .. 0.75   pinched
+/// 0.76 .. 0.95   clean
+/// ```
+///
+/// So 0.5 is not near an edge, it is the middle of a 16-wide band, and the
+/// coarse grid's apparent non-monotonicity was an artifact of where its points
+/// landed. Deterministic: the same ratio gives the same triangle count and the
+/// same edge every time.
+///
+/// The mechanism, from ClayCore #575: a higher ratio means fewer collapses, so
+/// read the sweep in collapse order — a pinch appears at 0.75, survives down to
+/// 0.61, is resolved at 0.60, a different one appears at 0.59 and is resolved by
+/// 0.43. **A pinch is a transient state of the simplification**, created by one
+/// collapse and removed by a later one, rather than a property of the target
+/// size. Every offending vertex lies exactly on the sphere and every bad edge is
+/// shorter than one voxel.
+///
+/// It is not the combine, and it is not the input. `mesh_combined` and `mesh`
+/// return byte-identical reports on this document, and the undecimated mesh is
+/// watertight, 2-manifold, 281,568 triangles, Euler characteristic 2. At 0.5 it
+/// comes back with one non-manifold edge and an Euler characteristic of 3,
+/// which is a topology change on a closed surface that had none.
+///
+/// So this is not ClayCore #567's documented "at an aggressive ratio, merging
+/// sheets is what the ratio means" — keeping half the triangles of a 0.02 mesh
+/// is gentle, and 0.60 is clean while 0.55 and 0.65 are not. Reported upstream.
+/// Until it is fixed, the application's job is to say so rather than to write
+/// the file in silence, which is what this pins.
 #[test]
 fn the_default_decimation_is_reported_as_not_manifold() {
     let mut document = document();
@@ -351,8 +379,8 @@ fn the_default_decimation_is_reported_as_not_manifold() {
         findings.iter().any(|w| w.message.contains("manifold")),
         "the export panel's default decimation reported {findings:?}; either \
          the validator is no longer called on the written mesh, or ClayCore \
-         has started finding a clean collapse set at this ratio — the second \
-         is worth knowing and worth deleting this test for"
+         has fixed the decimator — the second is the good outcome and is worth \
+         deleting this test for"
     );
 }
 
