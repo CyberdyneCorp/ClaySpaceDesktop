@@ -611,19 +611,19 @@ impl Document {
     /// whatever the host would have preferred.
     ///
     /// That is also the choice this workspace would make. It has followed the
-    /// engine's current minor through 7, 8, 11, 14, 15 and 16 — each the same
-    /// shape, a field inside a back-to-back record — and it exchanges
+    /// engine's current minor through 7, 8, 11, 14, 15, 16 and 17 — each the
+    /// same shape, a field inside a back-to-back record — and it exchanges
     /// documents with no older build: the format is the engine's, the engine
     /// is vendored and pinned here, and a `.clayspace` this application writes
-    /// is opened by this application. What minor 17 costs is that a document
-    /// written now is *refused* by a build that predates v0.84.0 rather than
+    /// is opened by this application. What minor 19 costs is that a document
+    /// written now is *refused* by a build that predates v0.113.0 rather than
     /// misread, which is the direction the format was designed to fail in.
     ///
     /// [`Self::format_of`] reads what a file actually says, so the constant is
     /// checkable rather than asserted.
     pub const FORMAT: FormatVersion = FormatVersion {
         major: 1,
-        minor: 17,
+        minor: 19,
     };
 
     /// What a `.clayspace` file's own header says it was written at.
