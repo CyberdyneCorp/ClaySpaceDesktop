@@ -162,12 +162,11 @@ fn stroke(document: &mut ClayDocument, tool: ToolKind, invert: bool, symmetry: [
 
 /// The brushes that move the surface. Máscara paints the freeze and Trim is a
 /// shape drawn on the view frame, so neither is a stroke that displaces clay.
-const SURFACE_BRUSHES: [ToolKind; 12] = [
+const SURFACE_BRUSHES: [ToolKind; 11] = [
     ToolKind::Padrao,
     ToolKind::Inflar,
     ToolKind::Suavizar,
     ToolKind::Mover,
-    ToolKind::MoverTopologico,
     ToolKind::Planar,
     ToolKind::Camada,
     ToolKind::Puxar,

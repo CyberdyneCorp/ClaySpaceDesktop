@@ -706,6 +706,14 @@ impl Item {
     /// accuracy note on [`Document::flatten_region`] applies: a drag further
     /// than the band is placed against the bound rather than against the
     /// surface. Sample with a band wide enough for the drag.
+    ///
+    /// No tool calls this. The one that did, Mover Topológico, reached it by
+    /// baking a field's region into a volume and putting the moved result back
+    /// with `Op::Replace`, and the bake — a box of stair-stepping at the brick
+    /// cache's 0.02 cell, hard against the field around it — is what a sculptor
+    /// saw (#128). The binding stays because it is a faithful wrapper of a verb
+    /// the engine has, and it is correct for an item that already carries a
+    /// volume; what it is not is a way to drag a field.
     pub fn move_topological(&mut self, params: &TopologicalMoveParams) -> Result<()> {
         let raw = params.to_raw();
         // SAFETY: valid handle and a sized descriptor.

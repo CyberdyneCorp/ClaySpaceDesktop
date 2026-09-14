@@ -16,14 +16,14 @@ implementation. A tool with no engine counterpart is not offered.
 
 ## Sculpting tools
 
-All twenty-one are bound and each is covered by a before-and-after capture in
+All twenty are bound and each is covered by a before-and-after capture in
 `target/visual/`. Which of the representations each one reaches is in the
-Layers column: fourteen have an SDF verb, thirteen a voxel one, and seventeen a
+Layers column: thirteen have an SDF verb, thirteen a voxel one, and seventeen a
 mesh one.
 
 A fourth representation — a subdivision hierarchy — is left out of the Layers
 column below rather than written into every row, because its column is stated
-against the mesh's rather than as a list: fifteen of the twenty-one name a verb
+against the mesh's rather than as a list: fifteen of the twenty name a verb
 on it, the sixteen mesh brushes less Pintar and Borrar, plus Máscara. See
 [Sculpting a subdivision hierarchy](#sculpting-a-subdivision-hierarchy).
 
@@ -33,7 +33,6 @@ on it, the sixteen mesh brushes less Pintar and Borrar, plus Máscara. See
 | Inflar | `clay_voxel_sculpt_inflate` / relief, wider and softer | all three | Swells the footprint; a negative amount erodes. On a field it is relief like Padrão — the engine binds both to it — with a region and rim 1.35× the brush and 0.32 of the lift, so it swells where Padrão ridges |
 | Suavizar | `clay_sdf_smooth_*` / `clay_item_volume_relax` / `clay_voxel_sculpt_smooth` | all three | Relaxes the surface. Live on the field side, through a transaction |
 | Mover | `clay_sdf_move_*` / `clay_layer_move_surface` | SDF, mesh | Drags the assembled surface. Buds rather than stretches. Live on the field side, through a transaction |
-| Mover Topológico | `clay_item_volume_move_topological` | SDF | The same drag with its reach measured **along the material** rather than through space, so a part close in space and far along the surface is left behind. It bakes, so it costs more than Mover and is the one to reach for when the cheap drag pulls something it should not |
 | Pinçar | `clay_voxel_sculpt_pinch` | voxel, mesh | Moves surface cells toward the brush centre |
 | Raspar | `clay_voxel_sculpt_scrape` | voxel, mesh | Flattens and smooths from one snapshot |
 | Planar | `clay_item_volume_flatten_from`, cut-only / `clay_voxel_sculpt_flatten` | all three | Planes without filling on a field and a mesh, which keeps a facet crisp. **On a grid it is two-sided** — material above the plane goes and hollows below it fill — because that is the verb the grid has; the tooltip says so rather than faking cut-only |
@@ -1113,9 +1112,15 @@ this disc" and whose surface walk would refuse to flatten across a groove.
 air and 2.36 apart around the arc: a brush reaching 1.0 drags one tip and
 leaves the other where it was.
 
-(`clay_item_volume_move_topological` is a different call and is not this one —
-it takes an item carrying a volume and is refused on anything else, so it
-belongs to the SDF side.)
+(`clay_item_volume_move_topological` is a different call and is not this one.
+It takes an item carrying a *volume*, and a field is not one — so the tool that
+named it, Mover Topológico, reached it by baking the stroke's region into a
+volume at the brick cache's 0.02 cell, moving that, and putting the region back
+with `Op::Replace`. What a sculptor got was the bake: a rectangular patch of
+stair-stepping, hard-edged against the untouched field, where every other field
+tool on the same stroke blends. The tool was withdrawn in #128 and the call is
+bound to nothing. On a mesh nothing is lost — the falloff above *is* the
+topological one, so the drag a sculptor wants there is Mover.)
 
 **A mesh stroke never builds on itself — unless it is *converging*.** The field
 and the grid are unaffected and Acumular means what it means there. Not a
@@ -2916,7 +2921,7 @@ between them**: the locale came from `Locale::default()` at startup and was
 never asked about again, so `Locale::from_tag` — written for exactly this — was
 called by nothing.
 
-**The brush names are translated.** All twenty-one, on all four representations —
+**The brush names are translated.** All twenty, on all four representations —
 the shelf and the status bar's last action both read them from the interface's
 own table. They were `ToolKind::label()`, the domain's own Portuguese, shown
 whatever the language was. `ToolKind::label` keeps that Portuguese for the
@@ -3714,8 +3719,8 @@ a while that was five per cent of every frame spent on a section nobody had
 open. It is now assembled only where something is going to read it — the open
 window, the export, an agent that asked — and each window is sorted once rather
 than three times. What the windows hold is bounded by construction: 64 KiB
-full, 320 KiB for a tool's five phases, 6.6 MiB if every one of the
-twenty-one tools is worked to its ceiling.
+full, 320 KiB for a tool's five phases, 6.3 MiB if every one of the
+twenty tools is worked to its ceiling.
 
 **Nothing unmeasured is written as a zero.** A phase that never ran, a backend
 never timed, an adapter with no timestamp queries — all `null`. A zero reads as

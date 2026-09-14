@@ -352,17 +352,20 @@ pub enum ToolKind {
     /// Displaces the accumulated surface along its normal. ZBrush's Standard.
     Padrao,
     /// Drags the assembled surface. Buds rather than stretches.
-    Mover,
-    /// The same drag, weighted by distance *along the material*.
     ///
-    /// Its own tool rather than a modifier on [`ToolKind::Mover`]: the engine
-    /// documents the two as different operations with different reach — the
-    /// Euclidean drag is a deformer on each item it touches, this bakes a
-    /// re-sampled volume — and measured on two fingers 0.32 apart joined only
-    /// through a palm, a Euclidean drag at radius 0.5 pulls the far one and
-    /// this does not. A modifier that silently changed which algorithm runs
-    /// would hide that.
-    MoverTopologico,
+    /// The only drag there is. Mover Topológico stood beside it until #128,
+    /// and its single binding was on a field — where nothing *drags* a field:
+    /// `clay_item_volume_move_topological` takes an item carrying a volume, so
+    /// the tool reached it by baking the stroke's region into one at the brick
+    /// cache's 0.02 cell, moving that, and putting the result back with
+    /// `Op::Replace`. What a sculptor got was the bake rather than the drag —
+    /// a rectangular patch of voxel stair-stepping, hard-edged against the
+    /// untouched field on every side of it. Nothing else bound the tool and
+    /// nothing should: a grid's cells *are* its volume, a hierarchy has none
+    /// to bake, and on a mesh the falloff is measured along the surface for
+    /// every verb already (the engine's `geodesic` flag, on by default), so
+    /// the topological drag there is this tool.
+    Mover,
     /// Relief on the SDF side; dilation on the voxel side.
     Inflar,
     /// Relax on the SDF side; a majority filter on the voxel side.
@@ -473,10 +476,7 @@ impl ToolKind {
     }
 
     pub fn is_path_driven(self) -> bool {
-        matches!(
-            self,
-            Self::Mover | Self::MoverTopologico | Self::Puxar | Self::Nudge
-        )
+        matches!(self, Self::Mover | Self::Puxar | Self::Nudge)
     }
 }
 
@@ -596,12 +596,11 @@ impl std::fmt::Display for Unavailable {
 
 impl ToolKind {
     /// Every tool, in the order the brush shelf presents them.
-    pub const ALL: [ToolKind; 21] = [
+    pub const ALL: [ToolKind; 20] = [
         Self::Padrao,
         Self::Inflar,
         Self::Suavizar,
         Self::Mover,
-        Self::MoverTopologico,
         Self::Pincar,
         Self::Raspar,
         Self::Planar,
@@ -635,7 +634,6 @@ impl ToolKind {
             Self::Inflar => "inflate",
             Self::Suavizar => "smooth",
             Self::Mover => "move",
-            Self::MoverTopologico => "move-topological",
             Self::Pincar => "pinch",
             Self::Raspar => "scrape",
             Self::Planar => "planar",
@@ -660,7 +658,6 @@ impl ToolKind {
         match self {
             Self::Padrao => "Padrão",
             Self::Mover => "Mover",
-            Self::MoverTopologico => "Mover Topológico",
             Self::Inflar => "Inflar",
             Self::Suavizar => "Suavizar",
             Self::Mascara => "Máscara",
@@ -758,20 +755,6 @@ impl ToolKind {
                 voxel: Some("clay_voxel_sculpt_grab"),
                 mesh: Some("clay_mesh_sculptor_stamp (GRAB)"),
                 multires: Some("clay_multires_sculptor_stamp (GRAB)"),
-            },
-            // SDF only, and that is the engine's answer rather than a
-            // shortcut. The verb bakes a re-sampled *volume*, which a grid has
-            // no equivalent of — its cells are the volume — and a mesh's
-            // geodesic Grab is a different thing wearing a similar
-            // description: it walks the surface to weight a stamp, where this
-            // re-samples a field with the move applied.
-            Self::MoverTopologico => Verbs {
-                sdf: Some("clay_item_volume_move_topological"),
-                voxel: None,
-                mesh: None,
-                // A hierarchy has no volume to bake either, and the geodesic
-                // Grab it does have is `Mover`'s verb rather than this one.
-                multires: None,
             },
             Self::Puxar => Verbs {
                 sdf: Some("clay_item_set_curve_points (snakehook)"),
@@ -1410,14 +1393,51 @@ mod tests {
 
     #[test]
     fn an_sdf_only_tool_is_refused_on_a_voxel_layer_with_a_reason() {
-        // Mover used to be the example here and is now on all three, which is
-        // the kind of drift this file's tables exist to make visible. The
-        // topological drag takes its place: it bakes a re-sampled volume, and
-        // a grid's cells *are* its volume.
-        let error = ToolKind::MoverTopologico
+        // Mover was the example here and is now on all three; the topological
+        // drag took its place and then left the vocabulary with #128. Trim is
+        // the one left, and it is the sturdiest of the three: a cut is a shape
+        // drawn on the view frame resolved into a prism against the assembled
+        // field, which is a thing only a field has.
+        let error = ToolKind::Trim
             .availability(LayerState::editable(Representation::Voxel))
-            .expect_err("the topological drag is field-side");
+            .expect_err("the cut is field-side");
         assert!(error.to_string().contains("SDF"), "{error}");
+    }
+
+    /// #128. No tool reaches `clay_item_volume_move_topological`, on a field
+    /// or anywhere else.
+    ///
+    /// Not because the verb is wrong about geodesic reach — it is right, and
+    /// `sdf_named_brushes.rs` measured it before the tool was withdrawn, in the
+    /// numbers its module doc still carries: on a horseshoe whose tips are 0.5
+    /// apart in space and about 1.3 apart through the bend, the topological
+    /// drag lifted the anchored tip 0.295 and the far one 0.000, where the
+    /// Euclidean drag carried it 0.089. The verb is wrong about *what it takes*
+    /// on this side: it takes an item carrying a volume, and a field is not
+    /// one, so Mover Topológico reached it by baking the stroke's region into a
+    /// volume at the brick cache's 0.02 cell, moving that, and putting the
+    /// region back with `Op::Replace`. The bake, not the drag, is what reached
+    /// the sculptor who reported it — a rectangular patch of stair-stepping
+    /// with a hard edge on every side, where every other field tool on the same
+    /// stroke blends.
+    ///
+    /// Asserted on the verb rather than on a tool name, so hanging the binding
+    /// on some other tool fails here too.
+    #[test]
+    fn nothing_reaches_the_topological_move_by_baking_a_field() {
+        for tool in ToolKind::ALL {
+            for representation in Representation::ALL {
+                let verb = tool.verb_on(representation).unwrap_or_default();
+                assert!(
+                    !verb.contains("move_topological"),
+                    "{} names {verb} on {} layers: that verb is reached by \
+                     baking a region into a volume and replacing it, and the \
+                     bake is what a sculptor sees",
+                    tool.label(),
+                    representation.label()
+                );
+            }
+        }
     }
 
     #[test]
@@ -1614,7 +1634,7 @@ mod tests {
         // And the field, which `docs/features.md` states as a count too.
         let sdf = ToolKind::for_representation(Representation::Sdf).len();
         assert_eq!(
-            sdf, 14,
+            sdf, 13,
             "the field vocabulary has moved: {sdf} tools reach an SDF layer. \
              Update this count and `docs/features.md` together."
         );

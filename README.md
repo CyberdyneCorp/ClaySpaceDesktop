@@ -285,8 +285,8 @@ counterpart is not offered.
 **SDF layers, sparse voxel grids, fixed-topology meshes and subdivision
 hierarchies are equals here.** The four stand above the viewport as four cards
 with the crossings beside them, and the tool shelf offers what the *active
-layer* has rather than one list with most of it greyed out. Twenty-one tools
-are bound across the four: fourteen have an SDF verb, thirteen a voxel one,
+layer* has rather than one list with most of it greyed out. Twenty tools
+are bound across the four: thirteen have an SDF verb, thirteen a voxel one,
 seventeen a mesh one — a mesh layer alone carries the engine's sixteen
 fixed-topology brushes — and fifteen a hierarchy one, which is the mesh list
 less the two colour brushes, because a hierarchy stores where a vertex went and
@@ -297,9 +297,8 @@ left switches between what the active layer can run, each representation's own
 list, and the brushes that have been starred; the row scrolls where the
 vocabulary is longer than the window:
 
-![the SDF shelf: Standard, Inflate, Smooth, Move, Topological Move, Planar,
-Layer, Mask, Snake Hook, Polish, Relax, Trim, Clay,
-Crease](docs/images/shelf-sdf.png)
+![the SDF shelf: Standard, Inflate, Smooth, Move, Planar, Layer, Mask, Snake
+Hook, Polish, Relax, Trim, Clay, Crease](docs/images/shelf-sdf.png)
 
 ![the voxel shelf: Standard, Inflate, Smooth, Move, Pinch, Scrape, Planar,
 Fill, Layer, Mask, Nudge, Paint, Erase](docs/images/shelf-voxel.png)

@@ -284,7 +284,7 @@ impl ToolProfile {
 /// Every phase of every stroke this session, by the tool that ran it.
 ///
 /// Keyed by tool because "the smooth brush is the slow one" is a sentence an
-/// engine team can act on, and an aggregate over twenty-one tools cannot
+/// engine team can act on, and an aggregate over twenty tools cannot
 /// produce it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StrokeProfile {

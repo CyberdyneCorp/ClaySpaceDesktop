@@ -1023,7 +1023,7 @@ fn the_options_bar_ends_inside_the_window() {
 /// The colour swatch is offered for the tools that read a colour and for no
 /// others.
 ///
-/// Two of the twenty-one write colour, so a swatch beside the other nineteen
+/// Two of the twenty write colour, so a swatch beside the other eighteen
 /// would be a control that does nothing — and until this change *every* one of
 /// them was that, because nothing in the application chose a colour at all.
 #[test]
