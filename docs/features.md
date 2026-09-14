@@ -3374,9 +3374,24 @@ what a choice's whole set is, and an example that is exercised by the test
 suite — a row that stopped building the command it claims is a row the build
 fails on.
 
+One choice is answered against the session rather than from the table: the
+tools. A tool with no verb on the layer in hand is not on the sculptor's shelf,
+and `describe tool` leaves it out of the choices for the same reason and from
+the same call the shelf is built from — `pinch`, `scrape`, `fill` and `nudge`
+have no field verb and are not offered on a field. The answer names the layer
+it was narrowed against and the tools it left out, in the wire's own words:
+`field`, `grid`, `mesh`, `hierarchy`. The schema sent when a client connects
+still carries all twenty-one, because it is sent once and cannot follow a
+selection made afterwards.
+
 An unknown action is refused with the actions the group *does* have. A missing
 or wrongly typed argument is refused naming the argument, what it should have
-been, and what arrived, and changes nothing.
+been, and what arrived, and changes nothing. A stroke the ViewModel refuses —
+an unavailable tool is the case that happens — is refused to the client too,
+with `unavailable` as the code and the interface's own sentence as the message,
+on the begin and on any sample or close that follows it. A gesture that never
+opened cannot be continued, and answering "applied" to one is how four tools
+came to look like tools that work and do nothing.
 
 A few commands are real and deliberately not offered, each with its reason in
 the source and in `describe`: the five that open a file panel on the sculptor's
