@@ -232,3 +232,126 @@ fn the_reported_region_is_no_looser_than_the_box_it_replaced() {
          dilated again on this side"
     );
 }
+
+/// A drag's falloff and its front-only gate reach the engine.
+///
+/// The regression this exists for. Both Move call sites, and the topological
+/// one, constructed `MoveParams` with the same two literals:
+///
+/// ```text
+/// claycore::MoveParams { radius: brush.size.max(1e-3), ease: 0, front_only: true }
+/// ```
+///
+/// So the falloff was always `ease_linear` while `clay_ease` offers
+/// thirty-three curves, and `front_only: true` meant only the near side of a
+/// form ever travelled — **a form could never be dragged through**. Blender's
+/// own "Front Faces Only" defaults *off*.
+///
+/// Asserted against the surface rather than against the parameters, because a
+/// test that read the struct back would only prove this file passes its own
+/// literals along. A drag with the gate off has to move the far side; a drag
+/// with it on must not.
+#[test]
+fn turning_the_front_only_gate_off_drags_the_whole_form_through() {
+    let far = |symmetry, front_only| {
+        let mut document = sphere();
+        document.set_symmetry(symmetry).expect("symmetry");
+        let before = radius_along(&document, [-1.0, 0.0, 0.0]).expect("the far pole");
+        document
+            .apply_stroke(
+                ToolKind::Mover,
+                BrushSettings {
+                    // Large enough that the ball reaches through the form:
+                    // a gate that is off only matters where the far side is
+                    // inside the drag's reach.
+                    size: 2.5,
+                    intensity: 1.0,
+                    drag: clayspace_model::Drag {
+                        falloff: clayspace_model::DragFalloff::Linear,
+                        front_only,
+                    },
+                    ..BrushSettings::default()
+                },
+                &path(3),
+                symmetry,
+            )
+            .expect("a drag");
+        let after = radius_along(&document, [-1.0, 0.0, 0.0]).expect("the far pole");
+        (after - before).abs()
+    };
+
+    let gated = far([false; 3], true);
+    let through = far([false; 3], false);
+    assert!(
+        through > gated,
+        "with the front-only gate off the far side moved {through}, against \
+         {gated} with it on — so the gate is not reaching the engine and a \
+         sculptor cannot pull a form through"
+    );
+}
+
+/// The falloff curve reaches the engine, and a different curve is a different pull.
+///
+/// The companion. `front_only` is a flag and could be plumbed while `ease`
+/// stayed a literal, so this pins the other half: two named curves over the
+/// same gesture must not produce the same surface.
+///
+/// `Broad` against `Tight` rather than two neighbours, because they sit on
+/// opposite sides of linear and so differ most where a drag is actually read.
+///
+/// **The direction assertion is the point of this test, and it caught a real
+/// inversion.** The weight is `cease(ease_type, 1 - d / radius)` — the argument
+/// is 1 at the CENTRE and 0 at the rim — so `ease_in_quad` gives `(1 - d/r)²`,
+/// which is 0.25 where linear is 0.5: it concentrates the pull at the centre
+/// and is the TIGHT curve. The two names were first attached the other way
+/// round, from the shape of `E(t)` without reading what `t` is, and this
+/// assertion passed anyway because the labels and the test were wrong together.
+/// It now asserts against the engine's convention rather than against itself.
+///
+/// Probed a little off the drag's axis, which is chosen rather than assumed.
+/// Measured across the six named curves at several angles, the separation is
+/// widest around a fifth of a radius off-axis and narrows to noise near the
+/// rim, where every curve has fallen to nothing: on this fixture Broad reads
+/// 1.0356 and Tight 1.0632 there, against 1.0009 and 1.0073 at the rim. A
+/// first version of this test probed near the rim and read both as the
+/// undisturbed sphere.
+#[test]
+fn two_falloff_curves_are_two_different_pulls() {
+    let pulled = |falloff| {
+        let mut document = sphere();
+        document.set_symmetry([false; 3]).expect("symmetry");
+        document
+            .apply_stroke(
+                ToolKind::Mover,
+                BrushSettings {
+                    size: 0.8,
+                    intensity: 1.0,
+                    drag: clayspace_model::Drag {
+                        falloff,
+                        front_only: true,
+                    },
+                    ..BrushSettings::default()
+                },
+                &path(3),
+                [false; 3],
+            )
+            .expect("a drag");
+        radius_along(&document, [1.0, 0.2, 0.0]).expect("a shoulder of the pull")
+    };
+
+    let broad = pulled(clayspace_model::DragFalloff::Broad);
+    let tight = pulled(clayspace_model::DragFalloff::Tight);
+    assert!(
+        (broad - tight).abs() > 0.01,
+        "Broad and Tight pulled the surface to {broad} and {tight}; the ease \
+         index is not reaching the engine and every drag is still linear"
+    );
+    assert!(
+        broad > tight,
+        "Broad ({broad}) did not pull further than Tight ({tight}) a fifth of \
+         a radius off-axis. The weight is cease(ease, 1 - d/radius), so Broad \
+         is ease_out_quad — above linear across the ball — and Tight is \
+         ease_in_quad, below it. Reading the other way round is how these two \
+         were first labelled backwards"
+    );
+}

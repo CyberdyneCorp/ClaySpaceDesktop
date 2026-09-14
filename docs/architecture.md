@@ -336,7 +336,8 @@ engine replaces the grab it already emitted rather than stacking another. The
 work is therefore the same on the first segment and the fortieth, and waiting
 buys nothing while costing exactly what a sculptor sees.
 
-That distinction is load-bearing and the order it is asked in has been a defect.
+That distinction is load-bearing and the order it is asked in has been a defect —
+see [why-move-was-slow.md](why-move-was-slow.md) for the whole account.
 Asking the *representation* first — mesh gets the fast path, everything else
 waits — gave a field's Move a threshold of 1.03 world units at the default flow,
 most of the way across a unit sphere, so an ordinary drag ended before one

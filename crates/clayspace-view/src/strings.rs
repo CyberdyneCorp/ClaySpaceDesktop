@@ -115,6 +115,8 @@ pub struct Strings {
     pub view_preset_names: [&'static str; clayspace_model::ViewPresetKind::ALL.len()],
     /// The brush edge profiles, in `Falloff::ALL` order.
     pub falloff_names: [&'static str; clayspace_model::Falloff::ALL.len()],
+    /// How a drag's pull falls off, in this locale.
+    pub drag_falloff_names: [&'static str; clayspace_model::DragFalloff::ALL.len()],
     /// The reference planes, in `RefPlane::ALL` order.
     pub ref_plane_names: [&'static str; clayspace_model::RefPlane::ALL.len()],
     /// How a curve's points join, in `CurveJoin::ALL` order.
@@ -310,6 +312,20 @@ pub struct Strings {
     pub multires_stroke_open: &'static str,
     pub section_resolution: &'static str,
     pub section_brush_controls: &'static str,
+    /// How a stroke varies between the press and the release.
+    pub section_dynamics: &'static str,
+    pub label_pressure_size: &'static str,
+    pub label_pressure_strength: &'static str,
+    pub label_pressure_curve: &'static str,
+    pub label_taper_start: &'static str,
+    pub label_taper_end: &'static str,
+    pub label_rake: &'static str,
+    /// Why the dynamics section is inert for the tool in hand.
+    pub dynamics_not_for_drags: &'static str,
+    /// The drag section: what a pull does, beyond its radius.
+    pub section_drag: &'static str,
+    pub label_drag_falloff: &'static str,
+    pub label_front_only: &'static str,
     pub section_armature: &'static str,
     pub section_diagnostics: &'static str,
     /// The rendering section of the diagnostics report.
@@ -827,6 +843,7 @@ const PT_BR: Strings = Strings {
     section_objects: "OBJETOS",
     view_preset_names: ["Perspectiva", "Frontal", "Lateral", "Superior"],
     falloff_names: ["Dura", "Linear", "Suave", "Gaussiana"],
+    drag_falloff_names: ["Linear", "Suave", "Ampla", "Estreita"],
     ref_plane_names: ["Frontal", "Lateral", "Superior"],
     curve_join_names: ["Cantos", "Pelos pontos", "Arredondado"],
     curve_profile_names: ["Círculo", "Quadrado", "Hexágono", "Triângulo"],
@@ -950,6 +967,17 @@ libera em vez de congelar.",
     multires_stroke_open: "solte o pincel para mexer na composição",
     section_resolution: "RESOLUÇÃO",
     section_brush_controls: "CONTROLES DE PINCEL",
+    section_dynamics: "DINÂMICA",
+    label_pressure_size: "Pressão → tamanho",
+    label_pressure_strength: "Pressão → força",
+    label_pressure_curve: "Curva de pressão",
+    label_taper_start: "Afinar no início",
+    label_taper_end: "Afinar no fim",
+    label_rake: "Girar com o traço",
+    dynamics_not_for_drags: "um arraste fixa sua região ao pressionar, então não varia ao longo do traço",
+    section_drag: "ARRASTE",
+    label_drag_falloff: "Queda",
+    label_front_only: "Só a face da frente",
     section_armature: "ARMADURA",
     section_diagnostics: "DIAGNÓSTICO",
     section_rendering: "RENDERIZAÇÃO",
@@ -1381,6 +1409,7 @@ const EN_US: Strings = Strings {
     section_objects: "OBJECTS",
     view_preset_names: ["Perspective", "Front", "Side", "Top"],
     falloff_names: ["Hard", "Linear", "Smooth", "Gaussian"],
+    drag_falloff_names: ["Linear", "Smooth", "Broad", "Tight"],
     ref_plane_names: ["Front", "Side", "Top"],
     curve_join_names: ["Corners", "Through the points", "Rounded"],
     curve_profile_names: ["Circle", "Square", "Hexagon", "Triangle"],
@@ -1503,6 +1532,17 @@ instead.",
     multires_stroke_open: "let go of the brush to change the composition",
     section_resolution: "RESOLUTION",
     section_brush_controls: "BRUSH CONTROLS",
+    section_dynamics: "DYNAMICS",
+    label_pressure_size: "Pressure → size",
+    label_pressure_strength: "Pressure → strength",
+    label_pressure_curve: "Pressure curve",
+    label_taper_start: "Taper in",
+    label_taper_end: "Taper out",
+    label_rake: "Rake",
+    dynamics_not_for_drags: "a drag anchors its region at the press, so it does not vary along the stroke",
+    section_drag: "DRAG",
+    label_drag_falloff: "Falloff",
+    label_front_only: "Front faces only",
     section_armature: "ARMATURE",
     section_diagnostics: "DIAGNOSTICS",
     section_rendering: "RENDERING",
@@ -1931,6 +1971,7 @@ const ES_419: Strings = Strings {
     section_objects: "OBJETOS",
     view_preset_names: ["Perspectiva", "Frontal", "Lateral", "Superior"],
     falloff_names: ["Dura", "Lineal", "Suave", "Gaussiana"],
+    drag_falloff_names: ["Lineal", "Suave", "Amplia", "Estrecha"],
     ref_plane_names: ["Frontal", "Lateral", "Superior"],
     curve_join_names: ["Esquinas", "Por los puntos", "Redondeado"],
     curve_profile_names: ["Círculo", "Cuadrado", "Hexágono", "Triángulo"],
@@ -2054,6 +2095,17 @@ lados. Con Ctrl, libera en vez de congelar.",
     multires_stroke_open: "suelta el pincel para cambiar la composición",
     section_resolution: "RESOLUCIÓN",
     section_brush_controls: "CONTROLES DE PINCEL",
+    section_dynamics: "DINÁMICA",
+    label_pressure_size: "Presión → tamaño",
+    label_pressure_strength: "Presión → fuerza",
+    label_pressure_curve: "Curva de presión",
+    label_taper_start: "Afinar al inicio",
+    label_taper_end: "Afinar al final",
+    label_rake: "Girar con el trazo",
+    dynamics_not_for_drags: "un arrastre fija su región al presionar, así que no varía a lo largo del trazo",
+    section_drag: "ARRASTRE",
+    label_drag_falloff: "Caída",
+    label_front_only: "Solo la cara frontal",
     // "Esqueleto", not "Armadura": armadura reads as armour outside of
     // structural engineering, and Spanish-speaking riggers learned the term
     // from Blender.
@@ -2491,6 +2543,15 @@ impl Strings {
         Self::at(&self.falloff_names, clayspace_model::Falloff::ALL, falloff)
     }
 
+    /// The name for a drag's falloff curve, in this locale.
+    pub fn drag_falloff_name(&self, falloff: clayspace_model::DragFalloff) -> &'static str {
+        Self::at(
+            &self.drag_falloff_names,
+            clayspace_model::DragFalloff::ALL,
+            falloff,
+        )
+    }
+
     /// The name for a reference plane, in this locale.
     pub fn ref_plane_name(&self, plane: clayspace_model::RefPlane) -> &'static str {
         Self::at(&self.ref_plane_names, clayspace_model::RefPlane::ALL, plane)
@@ -2656,7 +2717,7 @@ impl Strings {
     }
 
     /// Every string, for tests that check the whole table at once.
-    pub fn all(&self) -> [&'static str; 252] {
+    pub fn all(&self) -> [&'static str; 263] {
         [
             self.label_autosave_in,
             self.state_autosaved,
@@ -2802,6 +2863,17 @@ impl Strings {
             self.section_geometry,
             self.section_resolution,
             self.section_brush_controls,
+            self.section_dynamics,
+            self.label_pressure_size,
+            self.label_pressure_strength,
+            self.label_pressure_curve,
+            self.label_taper_start,
+            self.label_taper_end,
+            self.label_rake,
+            self.dynamics_not_for_drags,
+            self.section_drag,
+            self.label_drag_falloff,
+            self.label_front_only,
             self.section_armature,
             self.section_diagnostics,
             self.section_rendering,

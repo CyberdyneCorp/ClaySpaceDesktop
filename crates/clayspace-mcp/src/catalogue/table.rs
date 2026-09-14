@@ -238,6 +238,9 @@ fn locales() -> Vec<&'static str> {
 fn falloffs() -> Vec<&'static str> {
     tags::tags_of(tags::FALLOFFS)
 }
+fn drag_falloffs() -> Vec<&'static str> {
+    tags::tags_of(tags::DRAG_FALLOFFS)
+}
 fn axes() -> Vec<&'static str> {
     tags::tags_of(tags::AXES)
 }
@@ -468,6 +471,24 @@ pub const TABLE: &[ActionSpec] = &[
         summary: "How a dab fades from its centre to its rim.",
         arguments: &[r("falloff", Kind::Choice(falloffs), "which curve")],
         example: r#"{"falloff":"smooth"}"#,
+    },
+    ActionSpec {
+        group: "brush",
+        name: "set_drag_falloff",
+        summary: "How a drag's pull fades from its anchor to the rim of its ball.",
+        arguments: &[r("falloff", Kind::Choice(drag_falloffs), "which curve")],
+        example: r#"{"falloff":"smooth"}"#,
+    },
+    ActionSpec {
+        group: "brush",
+        name: "set_front_only",
+        summary: "Whether only the near side of a form travels under a drag.",
+        arguments: &[r(
+            "front_only",
+            Kind::Boolean,
+            "off drags the whole form through",
+        )],
+        example: r#"{"front_only":false}"#,
     },
     ActionSpec {
         group: "brush",

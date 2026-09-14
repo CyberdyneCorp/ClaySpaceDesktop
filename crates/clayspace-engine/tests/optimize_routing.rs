@@ -44,6 +44,18 @@ fn dab(document: &mut ClayDocument, index: usize) {
             BrushSettings {
                 size: 0.45,
                 intensity: 1.0,
+                // The front-only gate, explicitly, because this file is about
+                // how a DEGRADED layer is routed and the gate is what degrades
+                // it. Measured on this fixture: eight dabs leave a chain of 8
+                // either way, and `safe_step_scale` reads 0.2421 with the gate
+                // on against 0.5999 with it off — which is the difference
+                // between the layer reporting `Deformers` and reporting
+                // nothing at all. Taking the default would make this test
+                // depend on a drag setting a sculptor is free to change.
+                drag: clayspace_model::Drag {
+                    front_only: true,
+                    ..clayspace_model::Drag::default()
+                },
                 ..BrushSettings::default()
             },
             &samples,

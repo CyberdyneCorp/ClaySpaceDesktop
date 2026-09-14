@@ -243,6 +243,8 @@ pub fn right_panel(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
     }
 
     brush_controls_section(ui, state, queue);
+    dynamics_section(ui, state, queue);
+    drag_section(ui, state, queue);
 }
 
 /// The material: its preview, its name, and how many there are to step through.
@@ -396,5 +398,141 @@ pub(super) fn brush_controls_section(
     let mut accumulate = state.brush.shaping.accumulate;
     if ui.checkbox(&mut accumulate, s.label_accumulate).changed() {
         queue.push(Command::SetBrushAccumulate(accumulate));
+    }
+}
+
+/// How a stroke varies between the press and the release.
+///
+/// Separate from [`brush_controls_section`], which is about one stamp's
+/// footprint. These six are about how that footprint *changes* along the
+/// stroke — with how hard the sculptor presses, and with how far the stroke
+/// has travelled.
+///
+/// Every one of them has been resolved by the engine and consumed by
+/// `clay_layer_apply_stroke` since the preset was plumbed, and every one has
+/// had a command and an agent-facing action for as long. Only the human had no
+/// way to reach them: an agent could drive pressure, taper and rake and a
+/// sculptor could not, which is what #101 came down to once the rest landed.
+///
+/// **Shown inert for a drag rather than hidden.** A drag anchors its region at
+/// the press and carries it by the motion that follows, so a radius that
+/// changed mid-gesture would be a different region rather than a different
+/// brush — and on the engine's side a pressure-driven radius costs 101x,
+/// because successive grabs coalesce on bit-exact identity of centre and
+/// radius and a moving radius matches nothing. The drag paths do not read
+/// `Dynamics` at all. Greyed with the reason attached, because a control that
+/// vanishes when a tool is chosen reads as a bug, and one that silently does
+/// nothing is worse than either.
+pub(super) fn dynamics_section(
+    ui: &mut egui::Ui,
+    state: &ShellState<'_>,
+    queue: &mut CommandQueue,
+) {
+    let s = state.strings;
+    if !heading(ui, s.section_dynamics) {
+        return;
+    }
+    let d = state.brush.dynamics;
+    // Mover alone, not every path-driven verb. `is_path_driven` also covers
+    // Puxar and Nudge, and both of those stay on the STROKE path — document.rs
+    // says so where it routes them: "Snakehook and Nudge stay on the stroke
+    // path deliberately: one re-anchors per segment". A stroke path resolves a
+    // preset, so pressure, taper and rake reach them exactly as they reach a
+    // stamping brush. Greying them said the opposite, and said it with a
+    // sentence about anchoring that is only true of a grab.
+    let reaches_the_stroke = !matches!(
+        state.tool,
+        clayspace_model::ToolKind::Mover | clayspace_model::ToolKind::MoverTopologico
+    );
+
+    ui.add_enabled_ui(reaches_the_stroke, |ui| {
+        if let Some(value) = slider(ui, s.label_pressure_size, d.pressure_size, 0.0..=1.0, 2) {
+            queue.push(Command::SetBrushPressureSize(value));
+        }
+        if let Some(value) = slider(
+            ui,
+            s.label_pressure_strength,
+            d.pressure_strength,
+            0.0..=1.0,
+            2,
+        ) {
+            queue.push(Command::SetBrushPressureStrength(value));
+        }
+        // 0.1 to 4 is what `Dynamics::sanitized` clamps to, and 1 is linear.
+        // Offered at two decimals because the useful range is narrow and the
+        // difference between 1.0 and 1.4 is one a hand feels.
+        if let Some(value) = slider(ui, s.label_pressure_curve, d.pressure_curve, 0.1..=4.0, 2) {
+            queue.push(Command::SetBrushPressureCurve(value));
+        }
+        if let Some(value) = slider(ui, s.label_taper_start, d.taper_start, 0.0..=1.0, 2) {
+            queue.push(Command::SetBrushTaperStart(value));
+        }
+        if let Some(value) = slider(ui, s.label_taper_end, d.taper_end, 0.0..=1.0, 2) {
+            queue.push(Command::SetBrushTaperEnd(value));
+        }
+        let mut rake = d.rake;
+        if ui.checkbox(&mut rake, s.label_rake).changed() {
+            queue.push(Command::SetBrushRake(rake));
+        }
+    });
+
+    if !reaches_the_stroke {
+        ui.label(
+            egui::RichText::new(s.dynamics_not_for_drags)
+                .size(type_scale::LABEL)
+                .color(Tokens::text_dim()),
+        );
+    }
+}
+
+/// What a drag does, beyond its radius.
+///
+/// The mirror of [`dynamics_section`]: those six are everything a drag does
+/// *not* read, and these two are the pair only a drag reads. Shown only with a
+/// dragging verb in hand, because a falloff curve beside a Standard brush would
+/// be a control that decides nothing — the same rule the mask and cut gesture
+/// controls follow in the options bar.
+///
+/// Both were literals. `ease: 0` and `front_only: true` were written at all
+/// three `MoveParams` sites, so the falloff was always linear and a form could
+/// never be dragged through. **Blender's "Front Faces Only" defaults off**, and
+/// so does this; the linear falloff is kept as the default so that gaining the
+/// control changes nothing until a sculptor moves it.
+pub(super) fn drag_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    if !state.tool.is_path_driven() {
+        return;
+    }
+    let s = state.strings;
+    if !heading(ui, s.section_drag) {
+        return;
+    }
+    ui.label(
+        egui::RichText::new(s.label_drag_falloff)
+            .size(type_scale::LABEL)
+            .color(Tokens::text_dim()),
+    );
+    // Its own id scope. `segmented` keys both its interaction id and its
+    // recorded rect on the LOCALISED WORD, and this row shares two of them with
+    // the edge-profile row above — "Linear" and "Smooth" in English, "Linear"
+    // and "Suave" in Portuguese. Sharing a `Ui` therefore made two edge
+    // profiles unclickable whenever a drag tool was in hand, because egui
+    // resolved the collision in favour of whichever was laid out last.
+    let chosen = ui
+        .push_id("drag-falloff", |ui| {
+            segmented(
+                ui,
+                &clayspace_model::DragFalloff::ALL,
+                |falloff| s.drag_falloff_name(falloff),
+                state.brush.drag.falloff,
+            )
+        })
+        .inner;
+    if let Some(falloff) = chosen {
+        queue.push(Command::SetBrushDragFalloff(falloff));
+    }
+
+    let mut front_only = state.brush.drag.front_only;
+    if ui.checkbox(&mut front_only, s.label_front_only).changed() {
+        queue.push(Command::SetBrushFrontOnly(front_only));
     }
 }

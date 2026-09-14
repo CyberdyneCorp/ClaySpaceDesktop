@@ -321,6 +321,8 @@ impl SculptViewModel {
             }
             Command::SetBrushTaperEnd(value) => self.edit_brush(|b| b.dynamics.taper_end = value),
             Command::SetBrushRake(value) => self.edit_brush(|b| b.dynamics.rake = value),
+            Command::SetBrushDragFalloff(value) => self.edit_brush(|b| b.drag.falloff = value),
+            Command::SetBrushFrontOnly(value) => self.edit_brush(|b| b.drag.front_only = value),
             Command::SetBrushAzimuth(value) => self.edit_brush(|b| b.shaping.azimuth = value),
             Command::SetBrushFalloff(falloff) => self.edit_brush(|b| b.shaping.falloff = falloff),
             Command::SetBrushAccumulate(on) => self.edit_brush(|b| b.shaping.accumulate = on),

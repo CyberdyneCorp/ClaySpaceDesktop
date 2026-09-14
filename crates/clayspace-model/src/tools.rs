@@ -1077,6 +1077,8 @@ pub struct BrushSettings {
     pub shaping: Shaping,
     /// How the stroke varies along its own length.
     pub dynamics: Dynamics,
+    /// What a drag does, which no other verb reads.
+    pub drag: Drag,
     /// Whether this brush is modulated by the loaded alpha stamp.
     ///
     /// A flag rather than the samples: settings are held per tool and per
@@ -1091,6 +1093,112 @@ pub struct BrushSettings {
     /// with the tool. A brush that remembered it would come back inverted the
     /// next time it was chosen, which no reference does and nobody expects.
     pub invert: bool,
+}
+
+/// How a drag's pull falls off across its ball, by the engine's easing index.
+///
+/// `clay_ease` offers thirty-three curves and the C ABI gives them no names —
+/// only `CLAY_EASE_LINEAR = 0` and `CLAY_EASE_COUNT = 33`. The indices here are
+/// read from the engine's own `kernel/ease.h`, which is the only place the
+/// order is stated.
+///
+/// **The easing argument runs from the centre outward, not inward**, and that
+/// is what decides which name goes on which index. `cregion_weight` is
+/// `cease(ease_type, 1 - d / radius)` — the argument is **1 at the centre and 0
+/// at the rim** — so a curve that sits *below* linear in `t` sits below it near
+/// the centre and concentrates the pull there. `ease_in_quad` gives
+/// `(1 - d/r)²`, which is 0.25 where linear is 0.5: that is the **tight** one,
+/// not the broad one. Naming these from the shape of `E(t)` without reading
+/// what `t` is gets them exactly backwards.
+///
+/// A curated four rather than all thirty-three. The rest are the same shapes at
+/// different exponents, and two families are actively unsafe to offer:
+///
+/// - **`back` and `elastic` go negative inside the ball**, which pushes
+///   material the opposite way part of the way out.
+/// - **`circ` carries a declared slope of about 70** against 1.0 for linear and
+///   2.0 for the quads, because `E'(t) = t/sqrt(1 - t²)` is unbounded at the
+///   endpoint — `ease_max_slope` in the engine's `bounds.cpp` evaluates it at a
+///   guard rather than in closed form. That slope multiplies a grab's per-link
+///   Lipschitz factor, and a chain multiplies those in turn. Offering it would
+///   hand a sculptor a falloff that degrades a layer tens of times faster than
+///   the one it replaced — the opposite of what [`Drag::front_only`]'s default
+///   was changed to achieve, and over a far larger number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DragFalloff {
+    /// `ease_linear`. The weight falls off in proportion to distance.
+    Linear,
+    /// `ease_smoothstep`. Flat at the centre and at the rim, which is the
+    /// falloff most sculpting applications use and what a hand expects.
+    Smooth,
+    /// `ease_out_quad` — **above** linear across the ball, so more of it
+    /// travels together. Closer to moving a region than to pulling a point.
+    Broad,
+    /// `ease_in_quad` — **below** linear across the ball, so the pull
+    /// concentrates near the centre and the rim barely moves.
+    Tight,
+}
+
+impl DragFalloff {
+    pub const ALL: [DragFalloff; 4] = [Self::Linear, Self::Smooth, Self::Broad, Self::Tight];
+
+    /// The engine's easing index, from `clay/kernel/ease.h`.
+    ///
+    /// Paired with the declared slope `ease_max_slope` gives each, because that
+    /// is what a chain of grabs multiplies: linear 1.0, smoothstep 1.5, and 2.0
+    /// for both quads. Every curve offered here is within a factor of two of
+    /// linear, which is the property that makes the set safe to expose.
+    pub fn ease(self) -> i32 {
+        match self {
+            Self::Linear => 0,
+            Self::Smooth => 1,
+            Self::Broad => 4,
+            Self::Tight => 3,
+        }
+    }
+}
+
+/// What a drag does, beyond its radius.
+///
+/// Held apart from [`Dynamics`] because the two are opposites: `Dynamics` is
+/// everything a drag deliberately does *not* read, and this is the pair only a
+/// drag reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Drag {
+    pub falloff: DragFalloff,
+    /// Whether only the near side of a form travels.
+    ///
+    /// **Blender's "Front Faces Only" defaults off**, and so does this. With it
+    /// on, a sculptor pulling a limb moves the surface facing them and leaves
+    /// the far side behind, which is what a thin form needs and what a solid
+    /// one does not. This application had it hardcoded on, so a form could
+    /// never be dragged through.
+    ///
+    /// **And the gate is what degrades a layer, not the drag.** Eight dabs on
+    /// a sphere leave a chain of 8 either way, and `safe_step_scale` reads
+    /// **0.2421 with the gate on against 0.5999 with it off** — 2.5x less
+    /// degraded for the same number of warps, which is enough to move the
+    /// layer's own health report from `Deformers` to `None`. A front-only grab
+    /// gates on the surface normal, so its weight field has a discontinuity in
+    /// it and the declared Lipschitz bound has to cover the jump; a two-sided
+    /// grab is smooth and does not.
+    ///
+    /// That is why the default is off rather than merely because Blender's is:
+    /// the parity argument says a sculptor expects it, and the measurement
+    /// says the other setting is the one that costs.
+    pub front_only: bool,
+}
+
+impl Default for Drag {
+    fn default() -> Self {
+        Self {
+            // Linear is what every drag in this application used, hardcoded,
+            // before the control existed. Kept as the default so that turning
+            // the control on changes nothing until a sculptor moves it.
+            falloff: DragFalloff::Linear,
+            front_only: false,
+        }
+    }
 }
 
 /// How a stroke varies along its own length.
@@ -1280,6 +1388,7 @@ impl Default for BrushSettings {
             invert: false,
             shaping: Shaping::default(),
             dynamics: Dynamics::default(),
+            drag: Drag::default(),
         }
     }
 }
@@ -1317,6 +1426,7 @@ impl BrushSettings {
                 ..self.shaping
             },
             dynamics: self.dynamics.sanitized(),
+            drag: self.drag,
             alpha: self.alpha,
             invert: self.invert,
         }
@@ -1660,6 +1770,13 @@ mod tests {
                 taper_start: 9.0,
                 taper_end: -2.0,
                 rake: true,
+            },
+            // Carried through rather than clamped: both are already closed
+            // sets — a named curve and a flag — so there is no out-of-range
+            // value for `sanitized` to bring back.
+            drag: Drag {
+                falloff: DragFalloff::Tight,
+                front_only: true,
             },
             shaping: Shaping {
                 noise: 8.0,
