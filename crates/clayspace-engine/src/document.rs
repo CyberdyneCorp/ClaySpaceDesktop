@@ -3246,6 +3246,9 @@ impl ClayDocument {
                 // Drags the assembled surface: the gesture is a displacement,
                 // not a series of stamps.
                 ToolKind::Mover => self.move_surface_stroke(brush, &reflected)?,
+                // The same gesture with the reach measured through the
+                // material instead of through space.
+                ToolKind::MoverTopologico => self.topological_move_stroke(brush, &reflected)?,
                 // Bake-and-relax over the region the stroke covered.
                 ToolKind::Suavizar | ToolKind::Relaxar if self.live_smooth.is_some() => {
                     self.live_relax_dab(brush, &reflected)?
@@ -3276,6 +3279,7 @@ impl ClayDocument {
             // The layer mirror cannot reach those, so their strokes are
             // reflected instead — see `baked_stroke`.
             ToolKind::Mover
+            | ToolKind::MoverTopologico
             | ToolKind::Suavizar
             | ToolKind::Relaxar
             | ToolKind::Planar
@@ -4569,6 +4573,231 @@ impl ClayDocument {
             changed: true,
             dirty_bricks: self.dirty.len(),
         })
+    }
+
+    /// Move Topológico: a drag whose reach is measured along the material.
+    ///
+    /// Beside `flatten_stroke` and `relax_stroke` rather than beside
+    /// `move_surface_stroke`, and that placement is the whole design. The
+    /// Euclidean drag emits a warp per item and touches no samples; this one
+    /// **bakes** — the engine re-samples the volume with the move applied —
+    /// which is what lets it weigh a point by how far it is *through the clay*
+    /// rather than through the air. Two parts of a form close in space and far
+    /// along the surface therefore move independently, which is the whole
+    /// reason the verb exists and what a Euclidean drag at the same radius
+    /// cannot do.
+    ///
+    /// It costs two bakes — one for the verb, and one to put its result back
+    /// feathered, which the verb strips — so it is the tool to reach for when
+    /// the cheap drag pulls something it should not, which is the engine's own
+    /// advice.
+    fn topological_move_stroke(
+        &mut self,
+        brush: BrushSettings,
+        samples: &[GestureSample],
+    ) -> Result<EditOutcome, ModelError> {
+        let brush = brush.sanitized();
+        let (first, last) = (samples[0], samples[samples.len() - 1]);
+        let displacement: [f32; 3] =
+            std::array::from_fn(|axis| last.position[axis] - first.position[axis]);
+        let travelled = displacement.iter().map(|d| d * d).sum::<f32>().sqrt();
+        // A drag under the resolution moves nothing, and reporting it as an
+        // edit would bake the whole region to record a gesture that did not
+        // land. The same floor `move_surface_stroke` uses.
+        if travelled < 1e-4 {
+            return Ok(EditOutcome::NOTHING);
+        }
+
+        let layer = self.active_layer().id;
+        let anchor = first.position;
+        // The ball the reach could walk within, from the anchor and from where
+        // the drag takes it. A shorter box would place the moved material
+        // against the volume's bound rather than against the surface, and a
+        // longer one costs accuracy elsewhere: everything inside the box is
+        // re-approximated at the bake's cell size, so measured on the starting
+        // form, padding the box by the drag's own length as well moved the
+        // surface on the *far side* of the sphere by 0.0015 where the box that
+        // covers exactly the drag's reach moves it by 0.0003.
+        let reach = brush.size.max(1e-3);
+        let mut min = [0.0f32; 3];
+        let mut max = [0.0f32; 3];
+        for axis in 0..3 {
+            let a = anchor[axis];
+            let b = a + displacement[axis];
+            min[axis] = a.min(b) - reach;
+            max[axis] = a.max(b) + reach;
+        }
+        let cell = Self::bake_cell_size(brush.size);
+        Self::grown_for_feather(&mut min, &mut max, cell);
+
+        // A band wide enough to hold what the drag moves, which is the second
+        // half of #128 and the reason the shipped tool could not simply be
+        // feathered.
+        //
+        // `clay_volume_params::feather` states the constraint: a feathered
+        // `CLAY_OP_REPLACE` clamps its correction at the volume's *band*, "so a
+        // verb that moved the surface further than the band from what sits
+        // beneath is expressed only up to the band ... bake with a band that
+        // covers the verb". `bake_volume`'s default band is three cells, 0.06,
+        // and this drag moves the surface by the whole gesture. Measured on the
+        // horseshoe fixture, brush 1.0 and a 0.3 drag, the near tip rose:
+        //
+        //   default band (0.06)          +0.0601   — the band, to four digits
+        //   band + the drag's own length +0.2997
+        //
+        // The far tip stays at -0.0002 either way, so widening the band buys
+        // the displacement back without costing the reach its geodesic shape.
+        let carried = travelled * brush.intensity;
+        let params = claycore::VolumeParams {
+            band: Some(Self::feather_for(cell) + carried),
+            ..Self::bake_volume(cell)
+        };
+
+        // Baked first and moved second, because there is no
+        // `clay_item_volume_move_topological_from`: the verb takes an item
+        // carrying a volume.
+        let mut volume = self
+            .document
+            .volume_from_region(params, min, max)
+            .map_err(ModelError::engine)?;
+        volume
+            .move_topological(&claycore::TopologicalMoveParams {
+                anchor,
+                radius: reach,
+                // Scaled by Intensidade, as every other brush is: the engine
+                // takes the displacement whole and has no strength of its own
+                // here, so this is where the slider has to act.
+                displacement: displacement.map(|axis| axis * brush.intensity),
+                // Smootherstep rather than the linear weight this shipped
+                // with. A linear `1 - g/radius` kinks at both ends of the
+                // reach, and with the feather live that kink reaches the
+                // shading: measured on the issue's stroke it costs 1.45x
+                // against smootherstep's 1.38x on the frame roughness below,
+                // and on the horseshoe it holds the anchored tip 0.2933 where
+                // smootherstep holds it 0.2997.
+                ease: 2,
+            })
+            .map_err(ModelError::engine)?;
+
+        volume.set_op(Op::Replace).map_err(ModelError::engine)?;
+
+        // And re-baked third, which is the first half of #128 and is not an
+        // optimisation.
+        //
+        // `clay_item_volume_move_topological` does not move the volume in
+        // place: it builds a fresh one with `FieldVolume::sample` and swaps it
+        // into the item (`clay_c.cpp:10896`), carrying over only the sample
+        // Lipschitz. `FieldVolume::sample` has no feather argument and
+        // `feather_` defaults to zero, so the feather asked for above is
+        // **discarded by the verb**, and the `Op::Replace` lands hard. That is
+        // the failure `VolumeParams::feather` and `bake_volume` both describe
+        // in their own words — a hard replace holds both fields live at the
+        // boundary, and branch-switching between two fields that touch ripples
+        // the normals at the cell wavelength — and it is what the issue's
+        // capture shows. Suavizar, Relaxar, Planar and Polir never meet it
+        // because they reach the engine through `clay_item_volume_relax_from` /
+        // `_flatten_from`, which take `clay_volume_params` and set the feather
+        // themselves. There is no `clay_item_volume_move_topological_from`.
+        //
+        // So the moved volume is placed, the same region is baked back out of
+        // the document — through a producer that *does* take the feather — and
+        // the hard placement is removed, leaving one feathered replace.
+        //
+        // Measured on the issue's own stroke (brush 0.35, intensity 1.0, a
+        // three-sample 0.4 pull off the pole) with
+        // `visual_field_drag_quality`'s frame roughness, as a ratio against an
+        // untouched sphere rendered in the same run, all at the band above:
+        //
+        // | path | ratio |
+        // |---|---|
+        // | bake and replace, the verb never called | 1.02x |
+        // | bake, move, replace — as it shipped | 2.07x |
+        // | **bake, move, replace, re-bake, remove** | **1.38x** |
+        //
+        // The middle row is the whole defect and none of it is the geodesic:
+        // with the displacement set to zero, where `field::move_topological`
+        // returns `FieldVolume::sample(...)` before `solve()` ever runs and no
+        // geodesic exists, the round trip still read 1.88x. It is the feather,
+        // and nothing else.
+        //
+        // Confirmed against the engine directly rather than argued: with a
+        // local one-line `out.set_feather(v.feather())` in
+        // `field/move_topological.cpp`'s `FieldVolume` overload and this
+        // re-bake switched off, the same stroke reads 1.38x and the horseshoe
+        // lifts 0.2997 — this repair's numbers to four digits. That one line is
+        // the fix to make upstream; this is the same result from the caller's
+        // side of a pinned ABI.
+        //
+        // What is left at 1.38x is the drag's own work. It is the largest of
+        // any field tool — Mover reads 1.10x and Argila 1.31x on this fixture —
+        // and it is the weight's own ripple: `g` is a Dijkstra geodesic over a
+        // 26-neighbour lattice, so it is quantised in steps of the cell. That
+        // is the next thing to ask the engine for, and it is a tenth of what
+        // was blamed on it.
+        //
+        // Bracketed from here, because the repair is three engine edits and a
+        // sculptor asked for one stroke. Measured ungrouped, the stroke spent
+        // four history entries where a baked verb spends two, and undoing past
+        // the first of them **put the hard replace back** — the reported defect,
+        // restored by an undo. `one_undo_takes_the_topological_drag_back_whole`
+        // holds it.
+        self.document
+            .begin_undo_group()
+            .map_err(ModelError::engine)?;
+        let placed = self.placed_feathered(layer, &volume, params, min, max);
+        // Closed on the failing path too: a group left open swallows every edit
+        // after it into one undo step, which is a worse bug than the one that
+        // opened it.
+        let closed = self.document.end_undo_group().map_err(ModelError::engine);
+        let placed = placed?;
+        closed?;
+        self.refill(layer, &[placed])?;
+        Ok(EditOutcome {
+            changed: true,
+            dirty_bricks: self.dirty.len(),
+        })
+    }
+
+    /// Places a volume the engine stripped the feather from, feathered.
+    ///
+    /// The second half of the topological drag's repair: place it as the hard
+    /// replace it has become, bake the same region back out of the document
+    /// through a producer that *does* take `clay_volume_params`, and take the
+    /// hard placement away again.
+    ///
+    /// Split out so the undo group around it has one call in it and no `?` can
+    /// return past `end_undo_group`.
+    fn placed_feathered(
+        &mut self,
+        layer: LayerId,
+        moved: &Item,
+        params: VolumeParams,
+        min: [f32; 3],
+        max: [f32; 3],
+    ) -> Result<NodeId, ModelError> {
+        let hard = self
+            .document
+            .add_item(layer, moved)
+            .map_err(ModelError::engine)?;
+        // No refill between the two: `volume_from_region` samples the
+        // document's own field rather than the brick cache, so an intermediate
+        // mesh would be built only to be thrown away. Measured, taking it out
+        // changes the result by 0.001x, which is this fixture's run-to-run
+        // spread.
+        let mut baked = self
+            .document
+            .volume_from_region(params, min, max)
+            .map_err(ModelError::engine)?;
+        baked.set_op(Op::Replace).map_err(ModelError::engine)?;
+        // Removed *after* the bake, which is the order that matters: the bake
+        // is what carries the move, and it has to sample a document that still
+        // holds it.
+        self.document
+            .remove_node(layer, hard)
+            .map_err(ModelError::engine)?;
+        self.document
+            .add_item(layer, &baked)
+            .map_err(ModelError::engine)
     }
 
     /// A stroke against a mesh layer's own vertices.
@@ -8168,10 +8397,18 @@ fn mesh_verb(tool: ToolKind) -> Option<claycore::MeshBrush> {
         // No mesh binding: a mask stroke, a cavity fill and a frame-drawn cut
         // are not fixed-topology vertex verbs, and erasing a cell would change
         // a mesh's topology, which none of these sixteen may do.
+        // And no mesh binding for the topological drag: it bakes a re-sampled
+        // volume, and a mesh's geodesic Grab is a different operation wearing
+        // a similar description. Inventing the mapping because one exists
+        // nearby is exactly what the table is for preventing.
         // Trim among them: its gesture is a shape on the view frame resolved
         // into a prism, not a stroke across the surface, so it has no stroke
         // operation to route. It reaches the engine through `CutModel`.
-        ToolKind::Mascara | ToolKind::Preencher | ToolKind::Trim | ToolKind::Apagar => return None,
+        ToolKind::Mascara
+        | ToolKind::Preencher
+        | ToolKind::Trim
+        | ToolKind::Apagar
+        | ToolKind::MoverTopologico => return None,
     })
 }
 

@@ -1,10 +1,18 @@
 //! What a stroke on a field leaves behind, as a sculptor sees it.
 //!
 //! Issue #128: Move Topológico on an SDF layer did not deform the surface, it
-//! replaced a patch of it with the lattice the bake was sampled on — a square
-//! of visible stair-stepping, hard-edged against the untouched field. The
-//! defect was reported from ordinary use and is visible in a frame, so it is
-//! measured in a frame here rather than in a table.
+//! replaced a patch of it with a square of visible stair-stepping, hard-edged
+//! against the untouched field. The defect was reported from ordinary use and
+//! is visible in a frame, so it is measured in a frame here rather than in a
+//! table.
+//!
+//! It was a hard `Op::Replace`, not the lattice the bake was sampled on:
+//! `clay_item_volume_move_topological` rebuilds the volume and drops the
+//! feather the bake asked for, so the placement tied with the field beneath it
+//! and the shading rippled. `topological_move_stroke` bakes the region back out
+//! feathered; this guard is what says so in a frame, and it is written over the
+//! whole shelf rather than over that one row so the next tool that places a
+//! hard replace fails here too.
 //!
 //! The measure is the mean neighbour-to-neighbour step over the lit pixels,
 //! against the *same* number for an untouched sphere rendered in the same run.
@@ -41,14 +49,16 @@ const PULL: f32 = 0.4;
 /// | Camada | 1.13 |
 /// | Inflar | 1.15 |
 /// | Puxar, Vinco | 1.18 |
+/// | **Mover Topológico**, repaired | **1.20** |
 /// | Padrão | 1.30 |
 /// | Argila | 1.31 |
-/// | **Mover Topológico**, as it shipped | **2.07** |
+/// | *Mover Topológico, as #128 shipped it* | *2.08* |
 ///
 /// So this separates every brush that shapes the surface from the one that
-/// replaced it with a grid: the nearest good tool sits 13% below it and the
-/// bad one 38% above. Halving the margin either way changes no verdict, which
-/// is what makes it a bar rather than a tuned number.
+/// placed a hard replace over it. The bar sits 15% above the worst tool that
+/// shapes the surface and 39% below the one that did not; halving the margin
+/// either way changes no verdict, which is what makes it a bar rather than a
+/// tuned number.
 const BAR: f64 = 1.5;
 
 fn sphere() -> Option<ClayDocument> {
@@ -58,7 +68,13 @@ fn sphere() -> Option<ClayDocument> {
         .ok()
 }
 
-fn stroked(tool: ToolKind) -> Option<ClayDocument> {
+/// The stroke, and its refusal if it refuses.
+///
+/// `None` only when there is no backend to sculpt on, which is the house idiom
+/// for a machine without a device. A stroke that *errors* comes back as `Err`
+/// and is reported: a tool this guard cannot render is a tool it is not
+/// guarding, and swallowing that is how a guard quietly stops guarding.
+fn stroked(tool: ToolKind) -> Option<Result<ClayDocument, String>> {
     let mut document = sphere()?;
     let samples: Vec<GestureSample> = (0..3)
         .map(|step| {
@@ -70,19 +86,20 @@ fn stroked(tool: ToolKind) -> Option<ClayDocument> {
             }
         })
         .collect();
-    document
-        .apply_stroke(
-            tool,
-            BrushSettings {
-                size: BRUSH,
-                intensity: 1.0,
-                ..BrushSettings::default()
-            },
-            &samples,
-            [false; 3],
-        )
-        .ok()?;
-    Some(document)
+    let stroke = document.apply_stroke(
+        tool,
+        BrushSettings {
+            size: BRUSH,
+            intensity: 1.0,
+            ..BrushSettings::default()
+        },
+        &samples,
+        [false; 3],
+    );
+    Some(match stroke {
+        Ok(_) => Ok(document),
+        Err(error) => Err(error.to_string()),
+    })
 }
 
 /// A camera on the touched cap rather than on the whole sphere.
@@ -135,7 +152,7 @@ fn shot(harness: &mut Harness, name: &str, document: &mut ClayDocument) -> f64 {
 }
 
 #[test]
-fn no_brush_on_a_field_leaves_the_lattice_behind() {
+fn no_brush_on_a_field_leaves_a_hard_replace_behind() {
     let Some(mut harness) = Harness::new() else {
         return;
     };
@@ -153,8 +170,16 @@ fn no_brush_on_a_field_leaves_the_lattice_behind() {
         if !tool.is_stroke_tool() || tool.is_mask_tool() {
             continue;
         }
-        let Some(mut document) = stroked(tool) else {
+        let Some(stroke) = stroked(tool) else {
             return;
+        };
+        let mut document = match stroke {
+            Ok(document) => document,
+            Err(error) => {
+                println!("{:<20} refused: {error}", tool.label());
+                offenders.push(format!("{} refused the stroke: {error}", tool.label()));
+                continue;
+            }
         };
         let name = format!("field-quality-{}", tool.key());
         let ratio = shot(&mut harness, &name, &mut document) / baseline;
@@ -165,9 +190,9 @@ fn no_brush_on_a_field_leaves_the_lattice_behind() {
     }
     assert!(
         offenders.is_empty(),
-        "the shelf offers these on a field and the stroke leaves a surface more \
-         than {BAR}x rougher than the sphere it was drawn on, which is what a \
-         replaced lattice looks like: {}",
+        "the shelf offers these on a field and the stroke either refused or left \
+         a surface more than {BAR}x rougher than the sphere it was drawn on, \
+         which is what a hard replace looks like: {}",
         offenders.join(", ")
     );
 }
