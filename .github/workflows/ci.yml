@@ -51,11 +51,12 @@ jobs:
     # below is that answer, taken without deleting a test or weakening an
     # assertion.
     #
-    # Measured on the run that was cancelled: 3 min to build, **37 min** for
-    # the debug suite, **49 min** for the release step, of which only 24 were
-    # tests and 25 were the release compile the debug step had not done. Two
-    # profiles in one job is two builds and two suites in series, and the
-    # slower one had been carrying the faster one over the line.
+    # Measured on the run that was cancelled, against the one-engine build
+    # this workflow gated before #94: 3 min to build, **37 min** for the debug
+    # suite, **49 min** for the release step, of which only 24 were tests and
+    # 25 were the release compile the debug step had not done. Two profiles in
+    # one job is two builds and two suites in series, and the slower one had
+    # been carrying the faster one over the line.
     #
     # Split on every row and not only on Metal. Linux and macOS CPU-only are
     # not near the wall today, and a matrix whose rows are shaped differently
@@ -63,23 +64,38 @@ jobs:
     #
     # Seventy-five rather than sixty, and this number is measured rather than
     # chosen. Sixty was tried first and cancelled `macOS, Metal (release)` at
-    # 60:50. The slowest job, on the run that followed:
+    # 60:50. Re-measured since, because #94 vendored a second C++ engine
+    # (`vendor/CyberRemesherAndUV`) beside ClayCore and every figure above it
+    # prices a build that no longer exists. `macOS, Metal` is the slowest row;
+    # four consecutive runs of main on the two-engine build, both caches warm:
     #
-    #     build   20 min   the C++ engine, and a restored cache does not spare
-    #                      most of it
-    #     tests   28 min
-    #     total   48 min   against a cold build of 30 min, so ~58 with no cache
+    #     debug     33m  38m  39m  38m
+    #     release   43m  52m  46m  55m
     #
-    # A cache goes cold on eviction, on a lockfile bump and on a toolchain
-    # update, and a budget that only holds while it is warm is a gate that
-    # fails for reasons that have nothing to do with the change under test.
-    # Seventy-five covers the cold case with margin and still measures one
-    # profile of one configuration, so a regression in either shows up as
-    # itself.
+    # And half-cold, on the v0.113.0 pin branch: moving the ClayCore pin
+    # invalidates that engine's cache while CyberRemesherAndUV stays at its pin
+    # and hits, so this is the same build with one of its two engines cold:
+    #
+    #     debug     46m
+    #     release   49m
+    #
+    # Worst observed is 55 minutes against 75 — 27% of the budget unspent. A
+    # cold ClayCore costs roughly 8 to 13 minutes on the debug row, which is
+    # the row that pays for an engine build with no release compile beside it
+    # to amortise the cost.
+    #
+    # What those five runs do not establish, stated plainly because the gap is
+    # the whole risk: a fully cold run, both engines cold, has never been
+    # observed, and that is the case this budget exists to survive. These are
+    # GitHub-hosted runners carrying about 8 minutes of run-to-run variance, so
+    # five runs say 75 is not tight and say nothing about the tail. A cache
+    # goes cold on eviction, on a lockfile bump and on a toolchain update, and
+    # a budget that only holds while it is warm is a gate that fails for
+    # reasons that have nothing to do with the change under test.
     #
     # If this is approached again, the build is where to look and not the
-    # suite: it is twenty of the forty-eight minutes with a cache and thirty
-    # without one.
+    # suite: the entire distance between the warm rows and the half-cold ones
+    # is one engine's cache going cold, and there are two engines.
     timeout-minutes: 75
     strategy:
       # One row failing should not hide the others: a Metal-only regression is
