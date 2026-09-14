@@ -7072,9 +7072,12 @@ impl ClayDocument {
                 cell,
                 &params,
                 mirror.vector(displacement),
-                // As on the other two representations: Mover does not carry
-                // the far side of a form along with the near one.
-                true,
+                // The sculptor's own gate, as on the field path. This was
+                // hardcoded true with a comment claiming the other
+                // representations did the same; once the field's became a
+                // control, that sentence stopped being true and a grid was the
+                // one place a drag could not be pulled through.
+                brush.drag.front_only,
             )
             .map_err(ModelError::engine)?;
         }

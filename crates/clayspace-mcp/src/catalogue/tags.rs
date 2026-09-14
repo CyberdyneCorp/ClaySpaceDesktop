@@ -100,10 +100,8 @@ pub const FALLOFFS: &[(&str, Falloff)] = &[
 pub const DRAG_FALLOFFS: &[(&str, DragFalloff)] = &[
     ("linear", DragFalloff::Linear),
     ("smooth", DragFalloff::Smooth),
-    ("smoother", DragFalloff::Smoother),
     ("broad", DragFalloff::Broad),
     ("tight", DragFalloff::Tight),
-    ("shouldered", DragFalloff::Shouldered),
 ];
 
 pub const GIZMO_MODES: &[(&str, GizmoMode)] = &[

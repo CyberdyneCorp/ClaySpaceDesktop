@@ -296,9 +296,17 @@ fn turning_the_front_only_gate_off_drags_the_whole_form_through() {
 /// stayed a literal, so this pins the other half: two named curves over the
 /// same gesture must not produce the same surface.
 ///
-/// `Broad` against `Tight` rather than two neighbours — `ease_in_quad` holds
-/// its strength further out and `ease_out_quad` falls away immediately, so
-/// they differ most where a drag is actually read.
+/// `Broad` against `Tight` rather than two neighbours, because they sit on
+/// opposite sides of linear and so differ most where a drag is actually read.
+///
+/// **The direction assertion is the point of this test, and it caught a real
+/// inversion.** The weight is `cease(ease_type, 1 - d / radius)` — the argument
+/// is 1 at the CENTRE and 0 at the rim — so `ease_in_quad` gives `(1 - d/r)²`,
+/// which is 0.25 where linear is 0.5: it concentrates the pull at the centre
+/// and is the TIGHT curve. The two names were first attached the other way
+/// round, from the shape of `E(t)` without reading what `t` is, and this
+/// assertion passed anyway because the labels and the test were wrong together.
+/// It now asserts against the engine's convention rather than against itself.
 ///
 /// Probed a little off the drag's axis, which is chosen rather than assumed.
 /// Measured across the six named curves at several angles, the separation is
@@ -339,10 +347,11 @@ fn two_falloff_curves_are_two_different_pulls() {
          index is not reaching the engine and every drag is still linear"
     );
     assert!(
-        tight > broad,
-        "Tight ({tight}) did not pull further than Broad ({broad}) a fifth of \
-         a radius off-axis. `ease_out_quad` concentrates the pull near the \
-         centre and `ease_in_quad` spreads it, so this is the wrong way round \
-         and the two indices may be swapped"
+        broad > tight,
+        "Broad ({broad}) did not pull further than Tight ({tight}) a fifth of \
+         a radius off-axis. The weight is cease(ease, 1 - d/radius), so Broad \
+         is ease_out_quad — above linear across the ball — and Tight is \
+         ease_in_quad, below it. Reading the other way round is how these two \
+         were first labelled backwards"
     );
 }

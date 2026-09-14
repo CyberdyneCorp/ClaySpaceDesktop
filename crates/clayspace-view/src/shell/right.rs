@@ -433,7 +433,17 @@ pub(super) fn dynamics_section(
         return;
     }
     let d = state.brush.dynamics;
-    let reaches_the_stroke = !state.tool.is_path_driven();
+    // Mover alone, not every path-driven verb. `is_path_driven` also covers
+    // Puxar and Nudge, and both of those stay on the STROKE path — document.rs
+    // says so where it routes them: "Snakehook and Nudge stay on the stroke
+    // path deliberately: one re-anchors per segment". A stroke path resolves a
+    // preset, so pressure, taper and rake reach them exactly as they reach a
+    // stamping brush. Greying them said the opposite, and said it with a
+    // sentence about anchoring that is only true of a grab.
+    let reaches_the_stroke = !matches!(
+        state.tool,
+        clayspace_model::ToolKind::Mover | clayspace_model::ToolKind::MoverTopologico
+    );
 
     ui.add_enabled_ui(reaches_the_stroke, |ui| {
         if let Some(value) = slider(ui, s.label_pressure_size, d.pressure_size, 0.0..=1.0, 2) {
@@ -501,12 +511,23 @@ pub(super) fn drag_section(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mu
             .size(type_scale::LABEL)
             .color(Tokens::text_dim()),
     );
-    if let Some(falloff) = segmented(
-        ui,
-        &clayspace_model::DragFalloff::ALL,
-        |falloff| s.drag_falloff_name(falloff),
-        state.brush.drag.falloff,
-    ) {
+    // Its own id scope. `segmented` keys both its interaction id and its
+    // recorded rect on the LOCALISED WORD, and this row shares two of them with
+    // the edge-profile row above — "Linear" and "Smooth" in English, "Linear"
+    // and "Suave" in Portuguese. Sharing a `Ui` therefore made two edge
+    // profiles unclickable whenever a drag tool was in hand, because egui
+    // resolved the collision in favour of whichever was laid out last.
+    let chosen = ui
+        .push_id("drag-falloff", |ui| {
+            segmented(
+                ui,
+                &clayspace_model::DragFalloff::ALL,
+                |falloff| s.drag_falloff_name(falloff),
+                state.brush.drag.falloff,
+            )
+        })
+        .inner;
+    if let Some(falloff) = chosen {
         queue.push(Command::SetBrushDragFalloff(falloff));
     }
 
