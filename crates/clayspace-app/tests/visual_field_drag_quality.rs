@@ -49,16 +49,24 @@ const PULL: f32 = 0.4;
 /// | Camada | 1.13 |
 /// | Inflar | 1.15 |
 /// | Puxar, Vinco | 1.18 |
-/// | **Mover Topológico**, repaired | **1.20** |
 /// | Padrão | 1.30 |
 /// | Argila | 1.31 |
-/// | *Mover Topológico, as #128 shipped it* | *2.08* |
+/// | **Mover Topológico**, repaired | **1.38** |
+/// | *Mover Topológico, as #128 shipped it* | *2.07* |
 ///
 /// So this separates every brush that shapes the surface from the one that
-/// placed a hard replace over it. The bar sits 15% above the worst tool that
-/// shapes the surface and 39% below the one that did not; halving the margin
-/// either way changes no verdict, which is what makes it a bar rather than a
-/// tuned number.
+/// placed a hard replace over it. The bar sits 9% above the worst tool that
+/// shapes the surface and 28% below the one that did not.
+///
+/// **That headroom is thin, and this guard cannot be the only one.** It
+/// measures *roughness*, so it rewards a tool that moves nothing: reverting
+/// `topological_move_stroke`'s widened band — the half of #128's repair that
+/// carries the displacement — clamps the drag to the bake's 0.06 band and
+/// scores **1.14x** here, better than the repaired 1.38x, and passes. A
+/// reviewer did exactly that and the whole suite stayed green. What catches it
+/// is `sdf_named_brushes::a_topological_drag_leaves_behind_what_a_euclidean_one_carries`,
+/// which asserts the anchored tip comes to the gesture and not to the band.
+/// Neither guard is sufficient alone and this one is the weaker of the two.
 const BAR: f64 = 1.5;
 
 fn sphere() -> Option<ClayDocument> {

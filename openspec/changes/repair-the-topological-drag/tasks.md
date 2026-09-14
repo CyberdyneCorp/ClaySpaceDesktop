@@ -45,7 +45,41 @@
       it fails by name: `Mover Topológico at 2.07x`
 - [x] 4.2 Make a tool whose stroke refuses a failure rather than an early
       return, which had been disarming the guard for every tool at once
-- [x] 4.3 Add `one_undo_takes_the_topological_drag_back_whole`. Reverted
-      underneath, it fails: four entries against two
+- [x] 4.3 Add `one_undo_takes_the_topological_drag_back_whole`. It guards the
+      repair's own grouping and **not** the reported defect: `main` makes one
+      `add_item` and passes it unchanged. Deleting the `begin_undo_group` /
+      `end_undo_group` pair fails it at four entries against two
 - [x] 4.4 Keep the horseshoe fixture, which is the only evidence the reach is
-      genuinely geodesic, and which is what caught the band
+      genuinely geodesic
+- [x] 4.5 Tighten the horseshoe's near-tip assertion from `> 0.05` to two
+      thirds of the gesture, which is the scenario the delta spec already
+      wrote and no test implemented. `> 0.05` passed at the band-clamped
+      +0.0601, so the band half of the repair shipped **unguarded** — and the
+      frame guard actively preferred the broken variant, scoring it 1.14x
+      against the repair's 1.38x because a drag that moves nothing is smooth.
+      Reverted underneath, it now fails by name at +0.0601
+- [x] 4.6 Check the two guards are complementary rather than redundant, by
+      reverting each half alone: against `main` the horseshoe passes (+0.2933,
+      a hard replace has no clamp) and the frame guard fails (2.07x); with only
+      the band reverted the frame guard passes (1.14x) and the horseshoe fails
+      (+0.0601). Each half has exactly one guard and neither stands in for the
+      other
+
+## 5. Price it
+
+- [x] 5.1 Measure what the band costs, which the first round of this repair
+      never did: peak RSS 190 → 503 MB and 51 → 111 ms for the issue's own
+      0.4 pull, 405 → 2225 MB and 461 → 799 ms for a two-unit one
+- [x] 5.2 Attribute it. Holding the gesture fixed so the sampled box does not
+      move and sweeping only the band gives 128 / 388 / 505 / 788 MB at bands
+      of 0.06 / 0.26 / 0.46 / 1.06, and it **saturates** — 2.06 reads 683 MB,
+      no worse than 1.06, because past the box's own size every brick already
+      stores samples
+- [x] 5.3 Refute `padding` as the cause, which a review proposed and asked to
+      have pinned. Pinning it is a measured no-op (564 / 2333 MB); widening it
+      alone with the band left at three cells is also a no-op (127 / 347 MB);
+      and `clay_c.cpp:10471` applies `padding` only on the branch that was
+      passed no region, which is not this call
+- [x] 5.4 Record the price where a reader meets the code, on
+      `topological_move_stroke` and beside the band, and say that the engine
+      one-liner removes the second bake and the wide band together

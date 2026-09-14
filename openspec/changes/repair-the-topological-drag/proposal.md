@@ -63,13 +63,62 @@ the material, and reports how far each tip came.
 | bake and replace, the verb never called | 1.02x | — | — |
 | bake, move, replace — as #128 shipped it | **2.07x** | +0.2933 | +0.0000 |
 | the same with the displacement set to **zero** | **1.88x** | — | — |
-| feathered, band left at three cells | 1.20x | **+0.0601** | +0.0000 |
+| feathered, band left at three cells | *1.14x* | **+0.0601** | +0.0000 |
 | feathered, band covering the drag | 1.45x | +0.2933 | -0.0002 |
 | **and with a smootherstep weight — this change** | **1.38x** | **+0.2997** | **-0.0002** |
 
 `+0.0601` is the band, to four digits: that row is what "expressed only up to
 the band" looks like on a surface, and it is why the band is the other half of
 the repair rather than a tuning knob.
+
+Read that row's **1.14x** rather than its tip, and the frame guard prefers it
+to the repair. That is not a flaw in the metric, it is the metric's subject: a
+drag clamped to 0.06 barely moves the surface, and a surface that has barely
+moved is smooth. So roughness cannot guard the band and displacement cannot
+guard the feather — a hard replace is not clamped and lifts the tip the whole
++0.2933 while corrugating the shading. **Two guards, one per half**, and
+reverting either half fails exactly one of them:
+
+| reverted | `visual_field_drag_quality` | the horseshoe |
+|---|---|---|
+| the whole repair (`main`) | **FAILS** 2.07x | passes +0.2933 |
+| the band only | passes 1.14x | **FAILS** +0.0601 |
+
+The horseshoe's assertion was `> 0.05` when this change was first proposed,
+which +0.0601 passes — so the band half shipped with no guard at all, and a
+reviewer took it out with the suite still green. It is now two thirds of the
+gesture.
+
+## What the band costs
+
+The first round of this change measured neither memory nor latency. Measured
+now with `/usr/bin/time -l`, one stroke on the starting sphere, brush 0.35,
+warm builds:
+
+| pull | peak RSS, `main` → here | stroke, `main` → here |
+|---|---|---|
+| 0.4 — the issue's own stroke | 190 MB → **503 MB** | 51 ms → **111 ms** |
+| 2.0 | 405 MB → **2225 MB** | 461 ms → **799 ms** |
+
+It is the band, and it saturates. Holding the gesture at 0.4 so the sampled box
+does not move and sweeping only the band gives 128 MB at 0.06, 388 at 0.26, 505
+at 0.46 and 788 at 1.06 — then 683 at 2.06, no worse, because past the box's
+own size every brick already stores samples. A volume stores samples in the
+bricks its band reaches; a wider band is a thicker shell, until the shell is
+the box.
+
+It is **not** `padding`, which a review named as the cause and asked to have
+pinned so the box would not grow with the drag. Pinning it is a measured no-op
+(564 MB / 2333 MB, unchanged), and widening it alone with the band left at
+three cells is also a no-op (127 MB / 347 MB). `clay_c.cpp:10471` says why:
+`padding` is applied only on the branch that was passed no region, and this
+call passes one. Nor does splitting the band between the two bakes help
+(532 MB / 2431 MB) — they are sequential, so the peak is whichever is larger.
+
+Nothing caller-side buys it back: the feather's clamp is on the correction's
+magnitude, which *is* the displacement, so the band cannot be smaller than the
+drag. The engine one-liner below removes the second bake and the wide band
+together, and with them this entire cost.
 
 ## The engine's own fix, run rather than argued
 
@@ -87,8 +136,12 @@ and it can be deleted the day the engine carries the feather through.
 volume the verb hands back, bakes the same region out of the document again
 through a producer that *does* take `clay_volume_params`, and removes the hard
 placement — leaving one feathered replace. The three engine edits are bracketed
-so the stroke is one undo; ungrouped, the stroke spent four history entries
-where a baked verb spends two, and the second undo put the hard replace back.
+so the stroke is one undo; ungrouped, the stroke spends four history entries
+where a baked verb spends two, and undoing past the first puts the hard replace
+back. `one_undo_takes_the_topological_drag_back_whole` holds that bracket, and
+guards **this change's own internals rather than the reported defect**: `main`
+makes a single `add_item` and passes it unchanged, so the test fails only when
+the grouping is removed from the repair.
 
 The weight's falloff moves from linear to smootherstep. With the feather live,
 the kink at each end of `1 - g/radius` reaches the shading: measured, 1.45x

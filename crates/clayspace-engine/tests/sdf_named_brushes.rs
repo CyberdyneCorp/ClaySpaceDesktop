@@ -279,6 +279,23 @@ fn top_at(document: &ClayDocument, x: f32) -> f32 {
         .unwrap_or(f32::NAN)
 }
 
+/// How far `lift_the_left_tip` drags, in world units.
+///
+/// Named because the assertion below is about this number: a repaired drag
+/// lifts the anchored tip by the *gesture*, and the defect it guards lifts it
+/// by the bake's band instead.
+const GESTURE: f32 = 0.3;
+
+/// The band `Document::bake_volume` asks for when nobody widens it — three
+/// cells at the 0.02 bake spacing.
+///
+/// A feathered `CLAY_OP_REPLACE` clamps its correction at the volume's band
+/// (`clay_volume_params::feather`), so a drag baked at this band expresses
+/// itself only this far however long the gesture was. That is the second half
+/// of #128, and this constant is here so the failure message can say which of
+/// the two numbers the tip actually came to.
+const BAND: f32 = 0.06;
+
 /// Lifts the left tip straight up, and reports how far each tip came.
 fn lift_the_left_tip(tool: ToolKind) -> (f32, f32) {
     let mut document = horseshoe();
@@ -287,7 +304,7 @@ fn lift_the_left_tip(tool: ToolKind) -> (f32, f32) {
         .map(|step| {
             let t = step as f32 / 4.0;
             GestureSample {
-                position: [-0.25, 0.0, 0.8 + t * 0.3],
+                position: [-0.25, 0.0, 0.8 + t * GESTURE],
                 pressure: 1.0,
                 time: t,
             }
@@ -314,13 +331,34 @@ fn lift_the_left_tip(tool: ToolKind) -> (f32, f32) {
     )
 }
 
+/// The anchored tip rises by the gesture, and the far one does not follow.
+///
+/// Two assertions, and they catch the two halves of #128's repair separately.
+///
+/// **The reach** — the far tip staying put — is what the verb is named for, and
+/// what a Euclidean drag at the same radius cannot do.
+///
+/// **The displacement** — the near tip coming to the gesture rather than to the
+/// bake's band — is the half that had no guard at all until this assertion was
+/// tightened, and the frame guard in `visual_field_drag_quality` cannot stand in
+/// for it: that guard measures *roughness*, so a drag that has been clamped to
+/// 0.06 and barely moves anything scores BETTER there than the repaired one
+/// (1.14x against 1.38x, both under its 1.5 bar). A reviewer reverted
+/// `topological_move_stroke`'s widened band on this branch and the whole suite
+/// stayed green, with this fixture printing +0.0601 and passing a `> 0.05`
+/// assertion. Measured here, on this fixture, brush 1.0 and a 0.3 drag:
+///
+///   band left at three cells (0.06)   near +0.0601   — the band, to four digits
+///   band widened to cover the drag    near +0.2997   — the gesture
+///
+/// So the bar is set between them and near the gesture, not above zero.
 #[test]
 fn a_topological_drag_leaves_behind_what_a_euclidean_one_carries() {
     // Measured on the horseshoe with a brush of 1.0 and a drag of 0.3:
     //
     //   verb        near tip   far tip
-    //   Mover        +0.167     +0.089
-    //   Topológico   +0.295     +0.000
+    //   Mover        +0.1666    +0.0866
+    //   Topológico   +0.2997    -0.0002
     //
     // The far tip is 0.5 away in space and about 1.3 away through the material,
     // which is why one verb carries it and the other does not.
@@ -330,10 +368,17 @@ fn a_topological_drag_leaves_behind_what_a_euclidean_one_carries() {
         "near: mover {near_euclidean:.4} topológico {near_topological:.4}\n\
          far:  mover {far_euclidean:.4} topológico {far_topological:.4}"
     );
+    // Two thirds of the gesture. The measured rise is 0.2997 against a gesture
+    // of 0.3, and the defect this separates it from is 0.0601 against a band of
+    // 0.06 — so the bar sits 3.3x above the defect and 1.5x below the repair,
+    // and halving the margin either way changes no verdict.
     assert!(
-        near_topological > 0.05,
-        "the topological drag did not move the tip it was anchored on: \
-         {near_topological:.4}"
+        near_topological > GESTURE * (2.0 / 3.0),
+        "the anchored tip rose {near_topological:.4} against a gesture of \
+         {GESTURE} and a default bake band of {BAND}. A rise at the band and \
+         not at the gesture is #128's second half: a feathered CLAY_OP_REPLACE \
+         clamps its correction at the volume's band, so the bake must ask for \
+         a band that covers the drag"
     );
     assert!(
         far_euclidean > 0.03,
@@ -350,12 +395,19 @@ fn a_topological_drag_leaves_behind_what_a_euclidean_one_carries() {
 
 /// One stroke, one undo — and the sphere it started from back.
 ///
-/// The repair for #128 costs the drag two more engine edits than it used to
-/// make: the hard placement the verb hands back, the feathered bake of the same
-/// region, and the removal of the hard one. Measured ungrouped, the stroke spent
-/// three history entries where a baked verb spends two, and the second undo
-/// **put the hard replace back** — the reported defect, restored by an undo.
-/// Bracketed, the three fold into one and the drag costs what Suavizar costs.
+/// **What this guards, stated honestly.** It does NOT fail against `main`.
+/// `main`'s topological drag makes a single `add_item`, so it spends the same
+/// two entries a baked verb spends and passes this unchanged — verified by
+/// checking out `main`'s `document.rs` underneath it. What it guards is the
+/// *repair's own* grouping: the repair costs three engine edits where the
+/// shipped tool cost one, and deleting the `begin_undo_group` /
+/// `end_undo_group` pair around them fails this by name (`left: 4, right: 2`).
+///
+/// That is worth a test even though it is not a guard on the reported defect,
+/// because the failure it catches is invisible until a sculptor presses undo:
+/// measured ungrouped, the stroke spends **four** history entries where a baked
+/// verb spends two, and undoing past the first of them puts the hard replace
+/// back — #128's own capture, restored by an undo.
 ///
 /// Two entries rather than one because every baked stroke points the mirror
 /// first, which is its own edit: the number that matters is that this verb
@@ -397,7 +449,9 @@ fn one_undo_takes_the_topological_drag_back_whole() {
     );
     assert_eq!(
         spent, smoothing,
-        "the drag spent {spent} history entries where a one-edit baked verb          spends {smoothing}, so its three engine edits are not bracketed and an          undo will put the hard replace back"
+        "the drag spent {spent} history entries where a one-edit baked verb \
+         spends {smoothing}, so its three engine edits are not bracketed and \
+         an undo will put the hard replace back"
     );
 
     assert!(SculptModel::undo(&mut document).expect("undo"), "one entry");

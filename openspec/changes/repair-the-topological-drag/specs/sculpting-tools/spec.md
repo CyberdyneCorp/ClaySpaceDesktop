@@ -32,6 +32,25 @@ producer that takes `clay_volume_params`, and SHALL remove the unfeathered
 placement it sampled through. Every engine edit such a repair costs SHALL be
 bracketed into the one history entry the stroke is.
 
+**Each half SHALL have its own guard, because neither measure sees both.** A
+roughness measure cannot guard the band: a drag clamped to the band moves
+almost nothing, and a surface that has barely moved is smooth, so the clamped
+tool scores **better** than the repaired one (1.14x against 1.38x) and passes.
+A displacement measure cannot guard the feather: a hard `CLAY_OP_REPLACE` is
+not clamped at all, so it lifts the tip the full gesture (+0.2933) while
+corrugating the shading. The application SHALL therefore hold both a roughness
+guard and a displacement guard over this stroke, and reverting either half of
+the repair SHALL fail exactly one of them.
+
+**The band's cost SHALL be measured and stated rather than assumed small.** A
+volume stores samples in the bricks its band reaches, so a band that carries
+the drag thickens what the bake evaluates and holds: measured on the starting
+sphere with brush 0.35, one stroke, peak RSS goes 190 → 503 MB and the stroke
+51 → 111 ms for a 0.4 pull, and 405 → 2225 MB / 461 → 799 ms for a two-unit
+one. The cost saturates once the band exceeds the sampled box, and it is the
+band rather than the box: `padding` does not enter this path at all, because
+the engine applies it only where no explicit region was passed.
+
 #### Scenario: The topological drag leaves no hard edge
 - **WHEN** Mover Topológico is stroked across an SDF layer
 - **THEN** the rendered surface is no more than 1.5x rougher than the same
@@ -43,6 +62,13 @@ bracketed into the one history entry the stroke is.
   space and far along the material
 - **THEN** the anchored tip rises by the gesture and not by the bake's band, and
   the far tip does not follow
+
+#### Scenario: The band is taken out from under the drag
+- **WHEN** the bake's band is left at its three-cell default while the feathered
+  placement stays
+- **THEN** the displacement guard fails and names the tip's rise against the
+  gesture — and the roughness guard does **not**, because the clamped drag is
+  smoother than the repaired one
 
 #### Scenario: One stroke is one undo
 - **WHEN** a bake-and-replace stroke that repairs its own placement is undone

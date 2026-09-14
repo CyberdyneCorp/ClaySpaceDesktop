@@ -4588,9 +4588,19 @@ impl ClayDocument {
     /// cannot do.
     ///
     /// It costs two bakes — one for the verb, and one to put its result back
-    /// feathered, which the verb strips — so it is the tool to reach for when
-    /// the cheap drag pulls something it should not, which is the engine's own
-    /// advice.
+    /// feathered, which the verb strips — and both are baked over a band that
+    /// covers the drag, which is the expensive half. Measured on the starting
+    /// sphere with brush 0.35, one stroke, against the same stroke before the
+    /// repair: **2.6x the peak RSS and 2.2x the wall time** for a 0.4 pull
+    /// (190 -> 503 MB, 51 -> 111 ms), and 5.5x / 1.7x for a two-unit one
+    /// (405 -> 2225 MB, 461 -> 799 ms). The band comment below has the sweep
+    /// that attributes it and says what does *not* cause it.
+    ///
+    /// So it is the tool to reach for when the cheap drag pulls something it
+    /// should not — which is the engine's own advice — and it is the most
+    /// expensive stroke this application makes until
+    /// `out.set_feather(v.feather())` lands upstream and both halves of this
+    /// repair can be deleted.
     fn topological_move_stroke(
         &mut self,
         brush: BrushSettings,
@@ -4647,6 +4657,51 @@ impl ClayDocument {
         //
         // The far tip stays at -0.0002 either way, so widening the band buys
         // the displacement back without costing the reach its geodesic shape.
+        // `a_topological_drag_leaves_behind_what_a_euclidean_one_carries` is
+        // what holds this: it asserts the anchored tip comes to the gesture and
+        // not to the band, and it fails at +0.0601 if this line is reverted.
+        //
+        // WHAT THE BAND COSTS, because it is not free and it is not small.
+        //
+        // A volume stores samples only in the bricks the band reaches, so a
+        // band that carries the drag makes the bake evaluate and hold a thicker
+        // shell. Measured with `/usr/bin/time -l` over one stroke on the
+        // starting sphere, brush 0.35, warm builds, this machine:
+        //
+        //   pull    peak RSS: main -> here    stroke: main -> here
+        //   0.4        190 MB -> 503 MB          51 ms -> 111 ms
+        //   2.0        405 MB -> 2225 MB        461 ms -> 799 ms
+        //
+        // Isolated by holding the gesture at 0.4 — so the sampled box does not
+        // move — and sweeping only the band:
+        //
+        //   band 0.06   128 MB      band 0.46   505 MB
+        //   band 0.26   388 MB      band 1.06   788 MB
+        //                           band 2.06   683 MB
+        //
+        // It SATURATES: past the box's own size every brick stores samples and
+        // a wider band costs nothing more, which is why 2.06 is no worse than
+        // 1.06. The 2225 MB above is the saturated band times a box that grew
+        // with a two-unit drag, and the box grows on `main` too (190 -> 405 MB
+        // there with no band change at all).
+        //
+        // NOT the sampled box, and not `padding`. A reviewer read `padding:
+        // None` as "the engine pads the box by the band" and asked for padding
+        // to be pinned so the box would not grow with the drag. Measured, that
+        // is a no-op — padding pinned to three cells still reads 564 MB and
+        // 2333 MB — and the source says why: `clay_c.cpp:10471` applies
+        // `padding` ONLY on the branch where no region was passed, and this
+        // call passes `min`/`max`. Widening `padding` alone, band left at three
+        // cells, reads 127 MB and 347 MB: it is inert here. The band is the
+        // whole of it.
+        //
+        // Nothing caller-side buys it back. The clamp is on the correction's
+        // magnitude, which IS the displacement, so the band cannot be smaller
+        // than the drag; giving only the second bake the wide band was measured
+        // at 532 MB / 2431 MB, no better, because the two bakes are sequential
+        // and the peak is whichever one is larger. The engine one-liner named
+        // below — `out.set_feather(v.feather())` — removes the second bake AND
+        // the wide band together, and with it this whole cost.
         let carried = travelled * brush.intensity;
         let params = claycore::VolumeParams {
             band: Some(Self::feather_for(cell) + carried),
