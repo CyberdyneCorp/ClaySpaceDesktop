@@ -40,6 +40,13 @@ pub struct FakeSession {
     pub fill: [u8; 4],
     pub document_name: String,
     pub modified: bool,
+    /// What the active layer holds, in the wire's own word for it.
+    ///
+    /// The real session reports this through `report::representation_tag`, and
+    /// the fake says it the same way: a fake that answers in the interface's
+    /// Portuguese would let a surface that reads the tag back pass here and
+    /// fail against the application.
+    pub representation: &'static str,
 }
 
 impl Default for FakeSession {
@@ -63,7 +70,14 @@ impl FakeSession {
             fill: [40, 44, 52, 255],
             document_name: "sem título".to_string(),
             modified: false,
+            representation: "field",
         }
+    }
+
+    /// Puts the session on a layer of a given kind, named as the wire names it.
+    pub fn on_a(mut self, representation: &'static str) -> Self {
+        self.representation = representation;
+        self
     }
 
     /// Makes this session refuse a command, the way the Model would.
@@ -145,7 +159,7 @@ impl Session for FakeSession {
                 layers: vec![LayerState {
                     key: 1,
                     name: "corpo".into(),
-                    representation: "campo".into(),
+                    representation: self.representation.into(),
                     visible: true,
                     locked: false,
                     translation: [0.0; 3],
@@ -164,7 +178,7 @@ impl Session for FakeSession {
                 strength: 0.5,
                 falloff: "suave".into(),
                 symmetry: vec!["x".into()],
-                representation: "campo".into(),
+                representation: self.representation.into(),
             });
         }
         if query.camera {
