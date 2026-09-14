@@ -352,17 +352,22 @@ pub enum ToolKind {
     /// Displaces the accumulated surface along its normal. ZBrush's Standard.
     Padrao,
     /// Drags the assembled surface. Buds rather than stretches.
-    Mover,
-    /// The same drag, weighted by distance *along the material*.
     ///
-    /// Its own tool rather than a modifier on [`ToolKind::Mover`]: the engine
-    /// documents the two as different operations with different reach — the
-    /// Euclidean drag is a deformer on each item it touches, this bakes a
-    /// re-sampled volume — and measured on two fingers 0.32 apart joined only
-    /// through a palm, a Euclidean drag at radius 0.5 pulls the far one and
-    /// this does not. A modifier that silently changed which algorithm runs
-    /// would hide that.
-    MoverTopologico,
+    /// The only drag on a field. A second one — Mover Topológico, whose reach
+    /// was measured *along the material* through
+    /// `clay_item_volume_move_topological` — stood beside it and was withdrawn
+    /// (#128). That verb weights its drag by `1 - g/radius`, where `g` is a
+    /// Dijkstra geodesic solved on the bake's own lattice, so `g` is quantised
+    /// in steps of `cell`, `√2·cell` and `√3·cell`: measured, it carries about
+    /// 3.5e-3 of grid-locked error — a sixth of a cell, and the same however
+    /// far the reach — which the drag then multiplies onto the surface. On the
+    /// reported stroke that is 4e-3 of relief at the cell wavelength, and the
+    /// capture is a square of stair-stepping. The bake and replace alone were
+    /// clean to four decimals, feather and band changed nothing, and a finer
+    /// cell made it *worse*, so there was nothing on this side to fix.
+    /// Re-binding it needs an engine that weights the drag differently, not a
+    /// tool row.
+    Mover,
     /// Relief on the SDF side; dilation on the voxel side.
     Inflar,
     /// Relax on the SDF side; a majority filter on the voxel side.
@@ -473,10 +478,7 @@ impl ToolKind {
     }
 
     pub fn is_path_driven(self) -> bool {
-        matches!(
-            self,
-            Self::Mover | Self::MoverTopologico | Self::Puxar | Self::Nudge
-        )
+        matches!(self, Self::Mover | Self::Puxar | Self::Nudge)
     }
 }
 
@@ -596,12 +598,11 @@ impl std::fmt::Display for Unavailable {
 
 impl ToolKind {
     /// Every tool, in the order the brush shelf presents them.
-    pub const ALL: [ToolKind; 21] = [
+    pub const ALL: [ToolKind; 20] = [
         Self::Padrao,
         Self::Inflar,
         Self::Suavizar,
         Self::Mover,
-        Self::MoverTopologico,
         Self::Pincar,
         Self::Raspar,
         Self::Planar,
@@ -635,7 +636,6 @@ impl ToolKind {
             Self::Inflar => "inflate",
             Self::Suavizar => "smooth",
             Self::Mover => "move",
-            Self::MoverTopologico => "move-topological",
             Self::Pincar => "pinch",
             Self::Raspar => "scrape",
             Self::Planar => "planar",
@@ -660,7 +660,6 @@ impl ToolKind {
         match self {
             Self::Padrao => "Padrão",
             Self::Mover => "Mover",
-            Self::MoverTopologico => "Mover Topológico",
             Self::Inflar => "Inflar",
             Self::Suavizar => "Suavizar",
             Self::Mascara => "Máscara",
@@ -758,20 +757,6 @@ impl ToolKind {
                 voxel: Some("clay_voxel_sculpt_grab"),
                 mesh: Some("clay_mesh_sculptor_stamp (GRAB)"),
                 multires: Some("clay_multires_sculptor_stamp (GRAB)"),
-            },
-            // SDF only, and that is the engine's answer rather than a
-            // shortcut. The verb bakes a re-sampled *volume*, which a grid has
-            // no equivalent of — its cells are the volume — and a mesh's
-            // geodesic Grab is a different thing wearing a similar
-            // description: it walks the surface to weight a stamp, where this
-            // re-samples a field with the move applied.
-            Self::MoverTopologico => Verbs {
-                sdf: Some("clay_item_volume_move_topological"),
-                voxel: None,
-                mesh: None,
-                // A hierarchy has no volume to bake either, and the geodesic
-                // Grab it does have is `Mover`'s verb rather than this one.
-                multires: None,
             },
             Self::Puxar => Verbs {
                 sdf: Some("clay_item_set_curve_points (snakehook)"),
@@ -1411,12 +1396,12 @@ mod tests {
     #[test]
     fn an_sdf_only_tool_is_refused_on_a_voxel_layer_with_a_reason() {
         // Mover used to be the example here and is now on all three, which is
-        // the kind of drift this file's tables exist to make visible. The
-        // topological drag takes its place: it bakes a re-sampled volume, and
-        // a grid's cells *are* its volume.
-        let error = ToolKind::MoverTopologico
+        // the kind of drift this file's tables exist to make visible. Puxar
+        // takes its place: a snakehook is a curve item placed along the path,
+        // and a grid has no items.
+        let error = ToolKind::Puxar
             .availability(LayerState::editable(Representation::Voxel))
-            .expect_err("the topological drag is field-side");
+            .expect_err("the snakehook is not a voxel verb");
         assert!(error.to_string().contains("SDF"), "{error}");
     }
 
@@ -1612,9 +1597,12 @@ mod tests {
              this count and `docs/features.md` together."
         );
         // And the field, which `docs/features.md` states as a count too.
+        // Thirteen since Mover Topológico was withdrawn (#128): its weight was
+        // a geodesic solved on the bake's own lattice, and the lattice came
+        // back with it.
         let sdf = ToolKind::for_representation(Representation::Sdf).len();
         assert_eq!(
-            sdf, 14,
+            sdf, 13,
             "the field vocabulary has moved: {sdf} tools reach an SDF layer. \
              Update this count and `docs/features.md` together."
         );

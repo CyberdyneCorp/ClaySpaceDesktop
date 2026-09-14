@@ -3246,9 +3246,6 @@ impl ClayDocument {
                 // Drags the assembled surface: the gesture is a displacement,
                 // not a series of stamps.
                 ToolKind::Mover => self.move_surface_stroke(brush, &reflected)?,
-                // The same gesture with the reach measured through the
-                // material instead of through space.
-                ToolKind::MoverTopologico => self.topological_move_stroke(brush, &reflected)?,
                 // Bake-and-relax over the region the stroke covered.
                 ToolKind::Suavizar | ToolKind::Relaxar if self.live_smooth.is_some() => {
                     self.live_relax_dab(brush, &reflected)?
@@ -3279,7 +3276,6 @@ impl ClayDocument {
             // The layer mirror cannot reach those, so their strokes are
             // reflected instead — see `baked_stroke`.
             ToolKind::Mover
-            | ToolKind::MoverTopologico
             | ToolKind::Suavizar
             | ToolKind::Relaxar
             | ToolKind::Planar
@@ -4561,91 +4557,6 @@ impl ClayDocument {
                 min,
                 max,
             )
-            .map_err(ModelError::engine)?;
-
-        volume.set_op(Op::Replace).map_err(ModelError::engine)?;
-        let node = self
-            .document
-            .add_item(layer, &volume)
-            .map_err(ModelError::engine)?;
-        self.refill(layer, &[node])?;
-        Ok(EditOutcome {
-            changed: true,
-            dirty_bricks: self.dirty.len(),
-        })
-    }
-
-    /// Move Topológico: a drag whose reach is measured along the material.
-    ///
-    /// Beside `flatten_stroke` and `relax_stroke` rather than beside
-    /// `move_surface_stroke`, and that placement is the whole design. The
-    /// Euclidean drag emits a warp per item and touches no samples; this one
-    /// **bakes** — the engine re-samples the volume with the move applied —
-    /// which is what lets it weigh a point by how far it is *through the clay*
-    /// rather than through the air. Two parts of a form close in space and far
-    /// along the surface therefore move independently, which is the whole
-    /// reason the verb exists and what a Euclidean drag at the same radius
-    /// cannot do.
-    ///
-    /// It costs a bake, so it is the tool to reach for when the cheap drag
-    /// pulls something it should not — which is the engine's own advice.
-    fn topological_move_stroke(
-        &mut self,
-        brush: BrushSettings,
-        samples: &[GestureSample],
-    ) -> Result<EditOutcome, ModelError> {
-        let brush = brush.sanitized();
-        let (first, last) = (samples[0], samples[samples.len() - 1]);
-        let displacement: [f32; 3] =
-            std::array::from_fn(|axis| last.position[axis] - first.position[axis]);
-        let travelled = displacement.iter().map(|d| d * d).sum::<f32>().sqrt();
-        // A drag under the resolution moves nothing, and reporting it as an
-        // edit would bake the whole region to record a gesture that did not
-        // land. The same floor `move_surface_stroke` uses.
-        if travelled < 1e-4 {
-            return Ok(EditOutcome::NOTHING);
-        }
-
-        let layer = self.active_layer().id;
-        let anchor = first.position;
-        // The ball the reach could walk within, from the anchor and from where
-        // the drag takes it. A shorter box would place the moved material
-        // against the volume's bound rather than against the surface, and a
-        // longer one costs accuracy elsewhere: everything inside the box is
-        // re-approximated at the bake's cell size, so measured on the starting
-        // form, padding the box by the drag's own length as well moved the
-        // surface on the *far side* of the sphere by 0.0015 where the box that
-        // covers exactly the drag's reach moves it by 0.0003.
-        let reach = brush.size.max(1e-3);
-        let mut min = [0.0f32; 3];
-        let mut max = [0.0f32; 3];
-        for axis in 0..3 {
-            let a = anchor[axis];
-            let b = a + displacement[axis];
-            min[axis] = a.min(b) - reach;
-            max[axis] = a.max(b) + reach;
-        }
-        let cell = Self::bake_cell_size(brush.size);
-        Self::grown_for_feather(&mut min, &mut max, cell);
-
-        // Baked first and moved second, because there is no
-        // `clay_item_volume_move_topological_from`: the verb takes an item
-        // carrying a volume. The band has to cover the drag, which is what the
-        // box above is sized for.
-        let mut volume = self
-            .document
-            .volume_from_region(Self::bake_volume(cell), min, max)
-            .map_err(ModelError::engine)?;
-        volume
-            .move_topological(&claycore::TopologicalMoveParams {
-                anchor,
-                radius: reach,
-                // Scaled by Intensidade, as every other brush is: the engine
-                // takes the displacement whole and has no strength of its own
-                // here, so this is where the slider has to act.
-                displacement: displacement.map(|axis| axis * brush.intensity),
-                ease: 0,
-            })
             .map_err(ModelError::engine)?;
 
         volume.set_op(Op::Replace).map_err(ModelError::engine)?;
@@ -8257,18 +8168,10 @@ fn mesh_verb(tool: ToolKind) -> Option<claycore::MeshBrush> {
         // No mesh binding: a mask stroke, a cavity fill and a frame-drawn cut
         // are not fixed-topology vertex verbs, and erasing a cell would change
         // a mesh's topology, which none of these sixteen may do.
-        // And no mesh binding for the topological drag: it bakes a re-sampled
-        // volume, and a mesh's geodesic Grab is a different operation wearing
-        // a similar description. Inventing the mapping because one exists
-        // nearby is exactly what the table is for preventing.
         // Trim among them: its gesture is a shape on the view frame resolved
         // into a prism, not a stroke across the surface, so it has no stroke
         // operation to route. It reaches the engine through `CutModel`.
-        ToolKind::Mascara
-        | ToolKind::Preencher
-        | ToolKind::Trim
-        | ToolKind::Apagar
-        | ToolKind::MoverTopologico => return None,
+        ToolKind::Mascara | ToolKind::Preencher | ToolKind::Trim | ToolKind::Apagar => return None,
     })
 }
 

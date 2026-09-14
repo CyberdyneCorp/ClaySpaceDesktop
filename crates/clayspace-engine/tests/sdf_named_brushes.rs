@@ -1,9 +1,9 @@
-//! Argila and Vinco on a field, and Mover Topológico beside Mover.
+//! Argila and Vinco on a field.
 //!
-//! Three brushes the engine has had all along and the shelf did not offer on
-//! an SDF layer. All three are measured against a *neighbouring* brush rather
-//! than against zero, because "it changed something" is what every one of them
-//! did before they were bound properly — the question is whether they changed
+//! Two brushes the engine has had all along and the shelf did not offer on an
+//! SDF layer. Both are measured against a *neighbouring* brush rather than
+//! against zero, because "it changed something" is what each of them did
+//! before they were bound properly — the question is whether they changed
 //! something the neighbour does not.
 //!
 //! - **Argila** is relief with buildup, so what separates it from Padrão is
@@ -11,14 +11,9 @@
 //! - **Vinco** is incise, so what separates it from a subtracting Padrão is
 //!   that it displaces the accumulated field rather than combining a sphere
 //!   with it — and that it cuts a *narrow* trough.
-//! - **Mover Topológico** measures its reach along the material, so what
-//!   separates it from Mover is a form whose parts are close in space and far
-//!   along the surface.
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
-use clayspace_model::{
-    BrushSettings, GestureSample, ObjectModel, Representation, SculptModel, ToolKind,
-};
+use clayspace_model::{BrushSettings, GestureSample, Representation, SculptModel, ToolKind};
 
 fn sphere() -> ClayDocument {
     let policy = BackendPolicy::discover(None).expect("discover backends");
@@ -89,9 +84,9 @@ fn under_the_stroke(document: &ClayDocument) -> f32 {
 }
 
 #[test]
-fn the_shelf_offers_the_three_on_a_field() {
+fn the_shelf_offers_both_on_a_field() {
     let offered = ToolKind::for_representation(Representation::Sdf);
-    for tool in [ToolKind::Argila, ToolKind::Vinco, ToolKind::MoverTopologico] {
+    for tool in [ToolKind::Argila, ToolKind::Vinco] {
         assert!(
             offered.contains(&tool),
             "{tool:?} is not offered on a field"
@@ -237,113 +232,5 @@ fn crease_inverted_raises_the_ridge_it_would_have_cut() {
     assert!(
         down < rest && up > rest,
         "the pair did not straddle the untouched surface: {down} / {rest} / {up}"
-    );
-}
-
-/// A horseshoe: two tips close in space, joined only through the bend.
-///
-/// The engine's own fixture for this verb, in its own words — "two fingers 0.32
-/// apart joined only through a palm". Five overlapping balls in a U, so the
-/// tips are 0.1 apart across the opening and about 1.3 apart along the
-/// material.
-fn horseshoe() -> ClayDocument {
-    const CENTRES: [[f32; 3]; 5] = [
-        // The two tips.
-        [-0.25, 0.0, 0.6],
-        [0.25, 0.0, 0.6],
-        // The stems they stand on.
-        [-0.25, 0.0, 0.2],
-        [0.25, 0.0, 0.2],
-        // The bend joining the stems.
-        [0.0, 0.0, 0.0],
-    ];
-    let policy = BackendPolicy::discover(None).expect("discover backends");
-    let mut document = ClayDocument::new(policy).expect("a document");
-    for centre in CENTRES {
-        document
-            .place_object(
-                clayspace_model::Shape::Sphere,
-                &[0.2],
-                centre,
-                clayspace_model::CombineSettings::default(),
-            )
-            .expect("place a ball");
-    }
-    document
-}
-
-/// Where the surface stands, looking straight down at `x`.
-fn top_at(document: &ClayDocument, x: f32) -> f32 {
-    SculptModel::pick(document, [x, 0.0, 4.0], [0.0, 0.0, -1.0])
-        .map(|hit| hit[2])
-        .unwrap_or(f32::NAN)
-}
-
-/// Lifts the left tip straight up, and reports how far each tip came.
-fn lift_the_left_tip(tool: ToolKind) -> (f32, f32) {
-    let mut document = horseshoe();
-    let (near, far) = (top_at(&document, -0.25), top_at(&document, 0.25));
-    let samples: Vec<GestureSample> = (0..=4)
-        .map(|step| {
-            let t = step as f32 / 4.0;
-            GestureSample {
-                position: [-0.25, 0.0, 0.8 + t * 0.3],
-                pressure: 1.0,
-                time: t,
-            }
-        })
-        .collect();
-    document
-        .apply_stroke(
-            tool,
-            BrushSettings {
-                // Wide enough to span the 0.5 between the tips in *space* and
-                // nowhere near the 1.3 between them through the bend, which is
-                // the whole of what makes the two verbs disagree.
-                size: 1.0,
-                intensity: 1.0,
-                ..BrushSettings::default()
-            },
-            &samples,
-            [false; 3],
-        )
-        .expect("the drag was refused");
-    (
-        top_at(&document, -0.25) - near,
-        top_at(&document, 0.25) - far,
-    )
-}
-
-#[test]
-fn a_topological_drag_leaves_behind_what_a_euclidean_one_carries() {
-    // Measured on the horseshoe with a brush of 1.0 and a drag of 0.3:
-    //
-    //   verb        near tip   far tip
-    //   Mover        +0.167     +0.089
-    //   Topológico   +0.295     +0.000
-    //
-    // The far tip is 0.5 away in space and about 1.3 away through the material,
-    // which is why one verb carries it and the other does not.
-    let (near_euclidean, far_euclidean) = lift_the_left_tip(ToolKind::Mover);
-    let (near_topological, far_topological) = lift_the_left_tip(ToolKind::MoverTopologico);
-    println!(
-        "near: mover {near_euclidean:.4} topológico {near_topological:.4}\n\
-         far:  mover {far_euclidean:.4} topológico {far_topological:.4}"
-    );
-    assert!(
-        near_topological > 0.05,
-        "the topological drag did not move the tip it was anchored on: \
-         {near_topological:.4}"
-    );
-    assert!(
-        far_euclidean > 0.03,
-        "the Euclidean drag left the far tip alone too, so the fixture proves \
-         nothing: it rose {far_euclidean:.4}"
-    );
-    assert!(
-        far_topological < far_euclidean * 0.5,
-        "the topological drag carried the far tip {far_topological:.4} against \
-         the Euclidean {far_euclidean:.4}, so the reach is not being measured \
-         along the material"
     );
 }

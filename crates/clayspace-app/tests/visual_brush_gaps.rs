@@ -206,11 +206,6 @@ fn the_field_brushes_bound_in_this_change_leave_their_own_marks() {
         (ToolKind::Argila, false, "gaps-sdf-argila"),
         (ToolKind::Vinco, false, "gaps-sdf-vinco"),
         (ToolKind::Vinco, true, "gaps-sdf-vinco-invertido"),
-        (
-            ToolKind::MoverTopologico,
-            false,
-            "gaps-sdf-mover-topologico",
-        ),
     ] {
         let Some(mut document) = field() else {
             return;

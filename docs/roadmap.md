@@ -25,7 +25,7 @@ Its one remainder — the per-layer mask reaching the engine's own — is closed
 `close-brush-integration-gaps`, which also bound the brush verbs the engine had
 and the shelf did not reach: a brush colour and a Pintar that changes a pixel,
 Mover and Planar on a grid, Argila and Vinco on a field, and Mover Topológico
-as a tool of its own.
+as a tool of its own — which was later withdrawn, see below.
 
 And a fourth vocabulary. `a-hierarchy-the-domain-can-describe`,
 `a-hierarchy-that-is-sculpted-and-saved` and `a-stack-of-passes-on-a-hierarchy`
@@ -649,7 +649,7 @@ several verbs the pinned engine has had all along. What closed:
 | `sculpt_flatten` bound, unreachable | Planar reached a field and a mesh | Planar reaches a grid, two-sided, with the difference in the tooltip |
 | `Op::Incise` reached no tool | Vinco was mesh-only | Vinco is the field's incise at 0.6 of the brush, inverting to the ridge |
 | `Op::Relief` + buildup reached no tool | Argila was mesh-only | Argila is relief with buildup and a denser stroke |
-| `clay_item_volume_move_topological` not bound at all | — | Mover Topológico, on fields, beside Mover rather than replacing it |
+| `clay_item_volume_move_topological` not bound at all | — | Mover Topológico, on fields, beside Mover rather than replacing it — **withdrawn again** by `withdraw-the-topological-drag`: the verb weights its drag by a geodesic solved on the bake's own lattice, and that lattice's 1–3% metrication error, multiplied by the drag, lands on the surface as a grid-locked ripple a third of a cell deep. Nothing the caller passes changes it (#128) |
 | masks kept beside the document | lost on close | attached to the layer, saved with the file, on the undo stack |
 
 Two things the work found that the audit did not. **A drag on a grid does not

@@ -16,15 +16,20 @@ implementation. A tool with no engine counterpart is not offered.
 
 ## Sculpting tools
 
-All twenty-one are bound and each is covered by a before-and-after capture in
+All twenty are bound and each is covered by a before-and-after capture in
 `target/visual/`. Which of the representations each one reaches is in the
-Layers column: fourteen have an SDF verb, thirteen a voxel one, and seventeen a
+Layers column: thirteen have an SDF verb, thirteen a voxel one, and seventeen a
 mesh one.
+
+A twenty-first, Mover Topológico, was withdrawn: it was the field's only
+binding for `clay_item_volume_move_topological`, and that verb weights its drag
+by a geodesic solved on the bake's own lattice, so the lattice came back on the
+surface with it. See `openspec/changes/withdraw-the-topological-drag`.
 
 A fourth representation — a subdivision hierarchy — is left out of the Layers
 column below rather than written into every row, because its column is stated
-against the mesh's rather than as a list: fifteen of the twenty-one name a verb
-on it, the sixteen mesh brushes less Pintar and Borrar, plus Máscara. See
+against the mesh's rather than as a list: fifteen of the twenty name a verb on
+it, the sixteen mesh brushes less Pintar and Borrar, plus Máscara. See
 [Sculpting a subdivision hierarchy](#sculpting-a-subdivision-hierarchy).
 
 | Tool | Engine verb | Layers | What it does |
@@ -33,7 +38,6 @@ on it, the sixteen mesh brushes less Pintar and Borrar, plus Máscara. See
 | Inflar | `clay_voxel_sculpt_inflate` / relief, wider and softer | all three | Swells the footprint; a negative amount erodes. On a field it is relief like Padrão — the engine binds both to it — with a region and rim 1.35× the brush and 0.32 of the lift, so it swells where Padrão ridges |
 | Suavizar | `clay_sdf_smooth_*` / `clay_item_volume_relax` / `clay_voxel_sculpt_smooth` | all three | Relaxes the surface. Live on the field side, through a transaction |
 | Mover | `clay_sdf_move_*` / `clay_layer_move_surface` | SDF, mesh | Drags the assembled surface. Buds rather than stretches. Live on the field side, through a transaction |
-| Mover Topológico | `clay_item_volume_move_topological` | SDF | The same drag with its reach measured **along the material** rather than through space, so a part close in space and far along the surface is left behind. It bakes, so it costs more than Mover and is the one to reach for when the cheap drag pulls something it should not |
 | Pinçar | `clay_voxel_sculpt_pinch` | voxel, mesh | Moves surface cells toward the brush centre |
 | Raspar | `clay_voxel_sculpt_scrape` | voxel, mesh | Flattens and smooths from one snapshot |
 | Planar | `clay_item_volume_flatten_from`, cut-only / `clay_voxel_sculpt_flatten` | all three | Planes without filling on a field and a mesh, which keeps a facet crisp. **On a grid it is two-sided** — material above the plane goes and hollows below it fill — because that is the verb the grid has; the tooltip says so rather than faking cut-only |
