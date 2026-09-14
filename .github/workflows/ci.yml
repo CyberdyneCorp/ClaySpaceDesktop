@@ -4,10 +4,11 @@
 # ClayCore, and CyberRemesherAndUV since #94 — so every job compiles C++20
 # before it compiles a line of Rust. That is what the ccache step below is for.
 #
-# It is not, measured, what dominates the matrix. The two engines are 300
-# translation units, and compiling all 300 from scratch costs about 2.5 min:
-# `macOS, Metal (debug)` spends 3.8 min in Build on run 34661097385, where
-# ccache reports 0/300 hits, against 1.2 min on run 34669732006 where it
+# It is not, measured, what dominates the matrix. The two engines are about
+# 300 translation units — ccache counted 300 cacheable calls until #126 moved
+# the ClayCore pin and 303 after — and compiling all of them from scratch costs
+# 2.6 min: `macOS, Metal (debug)` spends 3.8 min in Build on run 34661097385,
+# where ccache reports 0/300 hits, against 1.2 min on run 34669732006 where it
 # reports 300/300. The budget note on `test` below carries the step timings
 # that say so.
 name: CI
@@ -71,41 +72,66 @@ jobs:
     # `macOS, Metal (release)` at 60:50. The reasoning recorded here for the
     # seventy-five — that the slowest job was "build 20 min, the C++ engine,
     # and a restored cache does not spare most of it", so ~58 min cold — does
-    # not survive step-level timings. The 20 minutes is cargo's optimised
-    # codegen, not the engine.
+    # not survive step-level timings. The twenty minutes is cargo's optimised
+    # codegen and not the engine: that row built in 20.3 min on run 34669732006
+    # with ccache reporting 300/300 hits, and in 20.3 min on run 34567024927
+    # (#100), which predates the ccache step and so compiled all 300 objects
+    # from scratch. Same number with the engine cached and with it cold, so the
+    # engine is invisible in that step.
     #
-    # Re-measured per step on the four `main` runs that are comparable to what
-    # this now gates: each carries both vendored engines (#94) and the ccache
-    # step (#115), and each ran the same eight-job matrix. Every earlier `main`
-    # run is excluded for lacking one of those two — 34661093529 (#114) is the
-    # near one, pushed four seconds before #115 and with no ccache step at all.
-    # Slowest row, `macOS, Metal (release)`, minutes:
+    # It is separable on the *debug* row, whose Rust compile is small. Only the
+    # four `main` runs carrying both engines (#94) and the ccache step (#115)
+    # report a miss count at all; `macOS, Metal (debug)` Build against it:
     #
-    #     run           build   test    job    ccache on the row
-    #     34661097385    25.2    20.5   46.4   0/300 — both engines cold
-    #     34668263566    23.3    28.2   52.2   300/300
-    #     34669732006    20.3    22.3   43.2   300/300
-    #     34783040917    23.9    25.7   50.2   208/303 — ClayCore pin moved
+    #     run           ccache misses   build
+    #     34669732006         0 / 300    1.2
+    #     34668263566        25 / 300    1.8
+    #     34783040917        95 / 303    2.7   ClayCore pin moved
+    #     34661097385       300 / 300    3.8   both engines cold
     #
-    # The release build is 20-25 min with *every* C++ object a cache hit, so
-    # what costs twenty minutes there is the Rust release compile. The engines'
-    # own cost is only separable on the debug row, where the Rust compile is
-    # small, and there it is monotone in the miss count — Build, same four runs:
-    # 1.2 min at 0 misses, 1.8 at 25, 2.7 at 95 (ClayCore cold, its pin moved),
-    # 3.8 at 300 (both engines cold). Two engines from scratch is ~2.5 min.
+    # Monotone, and both engines from scratch is 2.6 min of a debug job that
+    # ran 33 to 39 min across those four. That is all ccache can buy here.
     #
-    # So nothing measured here derives seventy-five; the budget has headroom
-    # rather than a derivation. The worst job of the four is 52 min, and the
-    # fully cold one is not it — 46.4 min, faster than two of the other three.
-    # Cache state is not what moves this row. The test step is: 20.5 to 28.2 min
-    # on release and 31.1 to 35.4 on debug, across four runs of a suite that
-    # changed by a handful of tests.
+    # Those four are the right sample for the engine and the WRONG one for this
+    # budget: filtering on "has a ccache step" keeps four runs from two days and
+    # drops every slower one. The budget gates the release row, so the sample is
+    # every `macOS, Metal (release)` job on `main` since both engines landed —
+    # runs 34339376851 (#94) through 34783040917 (#126), the same eight-row
+    # matrix throughout, twenty-two of which reached the test step:
     #
-    # Left at seventy-five and not tightened, because four runs bound the middle
-    # of that distribution and say nothing about its tail, and a budget cut to
-    # the worst of four samples is a budget that fails on the fifth. If it is
-    # approached again, the suite is where to look and not the build: 34 of the
-    # 39 minutes of the cold debug job were the test step.
+    #     min 43.2    mean 53.8    sd 6.2    max 70.1
+    #
+    # Three of the twenty-two ran past sixty — that is the shape sixty was
+    # cancelling. The worst, run 34592697101 at 70.1 min, leaves 4.9 min under
+    # this budget. Seventy-five is not headroom; it is one slow runner from a
+    # cancel, and an earlier draft of this note called it headroom because it
+    # was reading four runs out of twenty-two.
+    #
+    # That worst run was not a cold one. Its cargo cache logged `full match:
+    # true` and it ran 2353 passing tests, twenty-six fewer than the 43.2-min
+    # run; Build was 35.0 and Test 34.3, both simply slow. Over the twenty-two,
+    # Build is 41-54% of the job (mean 48%: 25.9 min against 27.2 for Test) and
+    # the two track the job time equally, r = 0.84 and 0.87. Runs 34661093529
+    # (#114) and 34661097385 (#115) show why: pushed four seconds apart, the
+    # same 2374 passing tests, Test 31.9 min against 20.5. Eleven minutes on
+    # identical work, from the runner and nothing else.
+    #
+    # Cache state still belongs in this reasoning, but it is the *cargo* cache
+    # and not ccache. ccache is keyed on `matrix.slug` alone, so a lockfile bump
+    # or a toolchain update leaves it whole; the Swatinem key below ends in a
+    # hash of the dependency graph — `…-083c28b9` on run 34339376851, and
+    # `…-c4775e20` on every run since — and that first run is the only one on
+    # `main` to log `full match: false`. It still restored 247 MB under a
+    # restore-key and finished in 54.8 min, a minute above the median, so a
+    # partial miss costs this row nothing worth measuring. What a *total* miss
+    # costs is unknown: no run on record has had one.
+    #
+    # Left at seventy-five for that combination — a six-minute run-to-run sd, a
+    # worst case within five minutes of the wall, and a cold-cargo case nobody
+    # has sampled. Tightening it means moving the distribution, not lowering
+    # the number, and there is no single step to send someone at: the two
+    # halves cost the same and rise together. The move that touches both is
+    # sharding this row, as ClayCore sharded its own suite for v0.78.0.
     timeout-minutes: 75
     strategy:
       # One row failing should not hide the others: a Metal-only regression is
