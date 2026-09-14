@@ -24,8 +24,8 @@ use clayspace_mcp::{
 use clayspace_model::{
     AutosavePolicy, Detail, DetailPolicy, Diagnostics, ExchangeModel, ExportSettings,
     ExportWarning, Format, FrameLog, GizmoMode, ImportSettings, LayerKey, LayerOperation,
-    RecentDocuments, Recovery, RefFormat, RefPlane, Representation, SceneModel, SculptModel,
-    SkinSettings, StrokeDiagnostics, StrokeModifiers, Units, ViewPresetKind,
+    ModelError, RecentDocuments, Recovery, RefFormat, RefPlane, Representation, SceneModel,
+    SculptModel, SkinSettings, StrokeDiagnostics, StrokeModifiers, Units, ViewPresetKind,
 };
 use clayspace_view::shell::{self, region, ArmatureState, ShellState};
 use clayspace_view::{
@@ -508,6 +508,19 @@ struct App {
     /// the pointer", and that is not the same question as "a gesture is
     /// open".
     agent_gesture: bool,
+    /// What a ViewModel refused while the command being applied ran.
+    ///
+    /// The refusal exists — `SculptViewModel::dispatch` returns it — and until
+    /// this field it went to stderr and no further, so an agent's stroke with
+    /// a tool the layer has no verb for came back `isError: false`,
+    /// `touched_document: true`, `undoes: null` on begin, continue *and* end,
+    /// having banked nothing. Reading the notice channels either side of the
+    /// command is not enough for it: a refusal reaches the options bar through
+    /// `Observable::set_if_changed`, which by design does not move when the
+    /// same sentence is already showing — and a tool with no verb here is
+    /// exactly the case where it already is, standing from the moment the tool
+    /// was chosen.
+    refused_by_a_model: Option<Refusal>,
     /// When the clock on "an agent acted" was last advanced.
     ///
     /// Here rather than in the ViewModel because that layer has no clock,
@@ -738,6 +751,7 @@ impl App {
             agent_door: None,
             agent_proxy: None,
             agent_gesture: false,
+            refused_by_a_model: None,
             agent_ticked: Instant::now(),
             last_ui: Vec::new(),
             last_ppp: 1.0,
@@ -4180,6 +4194,17 @@ impl App {
         )));
     }
 
+    /// Keeps a ViewModel's refusal for whoever asked for the command.
+    ///
+    /// The first one within a command wins, matching `notices_since`: a
+    /// command reaches several ViewModels and the one that refused it first is
+    /// the one that has something to say about it.
+    fn refused(&mut self, error: &ModelError) {
+        if self.refused_by_a_model.is_none() {
+            self.refused_by_a_model = Some(agent_refusal(error));
+        }
+    }
+
     /// Dispatches a command to whichever ViewModel owns it.
     fn apply(&mut self, command: Command) {
         // Timed by the command's own name, so a stall is reported as the thing
@@ -4224,12 +4249,15 @@ impl App {
     /// Hands the command to every ViewModel that has an interest in it.
     fn dispatch_to_models(&mut self, command: &Command) {
         if let Err(e) = self.sculpt.dispatch(command.clone()) {
-            // A refusal is not swallowed; the tool status carries the reason
-            // to the options bar, and this records it for the log.
+            // A refusal is not swallowed: the tool status carries the reason to
+            // the options bar, this records it for the log, and `refused` keeps
+            // it for the agent door, which has no options bar to read.
             eprintln!("{e}");
+            self.refused(&e);
         }
         if let Err(e) = self.scene.dispatch(command) {
             eprintln!("{e}");
+            self.refused(&e);
         }
         self.mask.dispatch(command);
         // The representation is handed in rather than looked up: a cage's
@@ -5623,6 +5651,24 @@ fn tool_status<'a>(from: ToolStatusSources<'a>) -> Option<&'a str> {
         .or(from.sculpt)
 }
 
+/// A ViewModel's refusal, in the two fields the agent door speaks.
+///
+/// The code is what an agent branches on and the message is the interface's
+/// own words, so the mapping has to keep them apart: `Unavailable` is "this
+/// tool has no verb on this layer, and no argument you send will change that",
+/// which is a different instruction to a caller than "the engine would not",
+/// and a single code for both would leave an agent retrying the one it cannot
+/// win.
+fn agent_refusal(error: &ModelError) -> Refusal {
+    let code = match error {
+        ModelError::Unavailable(_) => RefusalCode::Unavailable,
+        ModelError::Engine(_) | ModelError::Conversion(_) | ModelError::Boolean(_) => {
+            RefusalCode::ModelRefused
+        }
+    };
+    Refusal::new(code, error.to_string())
+}
+
 fn next_matcap(current: MatCap) -> MatCap {
     let all = MatCap::ALL;
     let index = all.iter().position(|m| *m == current).unwrap_or(0);
@@ -5644,6 +5690,11 @@ impl Session for App {
         let label = command.label().to_string();
         let touched = command.touches_document();
         let before = self.notice_revisions();
+        // Whatever a person's last click left behind is not this call's
+        // answer. Cleared here rather than in `dispatch_to_models` so that a
+        // command which reaches the models more than once — `SelectLayer`
+        // resolving a standing cage does — is still one refusal.
+        self.refused_by_a_model = None;
 
         // Whose gesture this is, recorded before the command is applied so the
         // next call from the same agent is not refused its own stroke.
@@ -5660,6 +5711,16 @@ impl Session for App {
         }
 
         self.handle(command);
+
+        // The ViewModel's own error first, and the notice channels after it.
+        // The error is the precise answer — it carries *which* refusal this
+        // was, which is what lets an agent tell "no verb here" from "the
+        // engine would not" — and it is the only one of the two that is raised
+        // on every refusal rather than only on refusals whose sentence differs
+        // from the one already on screen.
+        if let Some(refusal) = self.refused_by_a_model.take() {
+            return Err(refusal);
+        }
 
         let (refused, notices) = self.notices_since(before);
         if let Some(said) = refused {
@@ -5992,6 +6053,94 @@ impl Session for App {
 /// that gesture ends pays it.
 fn settle_is_due(owed: bool, gesture_open: bool) -> bool {
     owed && !gesture_open
+}
+
+/// What the agent door is told when a ViewModel refuses.
+///
+/// Against a real `App` — the real ViewModels, the real engine, no window —
+/// because the defect these cover was not in any of those: every layer refused
+/// correctly and the composition root threw the refusal away between them.
+#[cfg(test)]
+mod agent_refusals {
+    use super::*;
+    use clayspace_model::{LayerState, ToolKind};
+
+    /// An application on a scratch session directory.
+    ///
+    /// `App::new` reads and writes the session store, so the marker that says
+    /// "a session is open" would otherwise land in the home directory of
+    /// whoever ran the tests and offer them a recovery of nothing on their
+    /// next real run. `None` where this machine has no backend to discover,
+    /// exactly as `tests/session.rs` skips.
+    fn app(name: &str) -> Option<App> {
+        let root = std::env::temp_dir().join(format!(
+            "clayspace-agent-refusals-{}-{name}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("a scratch session directory");
+        std::env::set_var("HOME", &root);
+        std::env::set_var("XDG_STATE_HOME", root.join("state"));
+
+        let policy = BackendPolicy::discover(None).ok()?;
+        let document = ClayDocument::new(policy.clone())
+            .and_then(ClayDocument::with_starting_form)
+            .ok()?;
+        Some(App::new(SharedDocument::new(document), policy))
+    }
+
+    fn begin_a_stroke() -> Command {
+        Command::BeginStroke {
+            position: [0.0, 0.0, 0.55],
+            pressure: 1.0,
+            modifiers: StrokeModifiers::default(),
+        }
+    }
+
+    /// The bug this exists to stop.
+    ///
+    /// Pincar has `sdf: None`, the shelf does not show it on a field and
+    /// `ensure_tool_available` refuses the stroke — and over MCP the whole
+    /// gesture came back `isError: false`, `touched_document: true`,
+    /// `undoes: null` on begin, continue and end, having banked nothing. An
+    /// agent had no signal at all that the four tools it had been offered were
+    /// doing nothing, which is how the gap went unnoticed.
+    #[test]
+    fn a_stroke_with_a_tool_this_layer_has_no_verb_for_is_reported_as_a_refusal() {
+        let Some(mut app) = app("no-verb") else {
+            return;
+        };
+        Session::apply(&mut app, Command::SelectTool(ToolKind::Pincar)).expect("choosing a tool");
+
+        let refusal = Session::apply(&mut app, begin_a_stroke())
+            .expect_err("a stroke with a tool the layer has no verb for reported success");
+        assert_eq!(refusal.code, RefusalCode::Unavailable);
+        let why = ToolKind::Pincar
+            .availability(LayerState::editable(Representation::Sdf))
+            .expect_err("Pincar has no SDF verb");
+        assert_eq!(
+            refusal.message,
+            why.to_string(),
+            "the refusal does not carry the Model's own sentence"
+        );
+    }
+
+    /// And the guard is a guard rather than a blanket: the same stroke with a
+    /// tool the field does have a verb for is applied and reported applied.
+    /// Without this the test above passes on an `apply` that refuses
+    /// everything.
+    #[test]
+    fn a_stroke_with_a_tool_this_layer_has_a_verb_for_is_still_applied() {
+        let Some(mut app) = app("a-verb") else {
+            return;
+        };
+        Session::apply(&mut app, Command::SelectTool(ToolKind::Argila)).expect("choosing a tool");
+
+        let applied = Session::apply(&mut app, begin_a_stroke()).expect("a stroke with clay");
+        assert!(applied.touched_document);
+        Session::apply(&mut app, Command::EndStroke).expect("the end of a stroke");
+        assert_eq!(app.sculpt.history().get().depth, 1);
+    }
 }
 
 #[cfg(test)]

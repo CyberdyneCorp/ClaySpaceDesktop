@@ -40,6 +40,12 @@ pub struct FakeSession {
     pub fill: [u8; 4],
     pub document_name: String,
     pub modified: bool,
+    /// What the active layer holds, on the wire.
+    ///
+    /// A field, like the document every session opens with. Settable because
+    /// the answers that depend on it — which tools the active layer can take
+    /// — have nothing to say on a session that is only ever on one.
+    pub representation: &'static str,
 }
 
 impl Default for FakeSession {
@@ -63,7 +69,14 @@ impl FakeSession {
             fill: [40, 44, 52, 255],
             document_name: "sem título".to_string(),
             modified: false,
+            representation: "field",
         }
+    }
+
+    /// Puts the session on a layer of another kind.
+    pub fn on_a(mut self, representation: &'static str) -> Self {
+        self.representation = representation;
+        self
     }
 
     /// Makes this session refuse a command, the way the Model would.
@@ -145,7 +158,7 @@ impl Session for FakeSession {
                 layers: vec![LayerState {
                     key: 1,
                     name: "corpo".into(),
-                    representation: "campo".into(),
+                    representation: self.representation.into(),
                     visible: true,
                     locked: false,
                     translation: [0.0; 3],
@@ -158,13 +171,19 @@ impl Session for FakeSession {
             });
         }
         if query.tool {
+            // The stable wire words, which is what `report` emits and what an
+            // agent branches on. This fake answered in the interface's own
+            // Portuguese — "argila", "suave", "campo" — which is `label()`,
+            // the one thing `tags` exists to keep off the wire, so every
+            // answer a test read back through it was a translation of what the
+            // application would have said.
             report.tool = Some(ToolState {
-                tool: "argila".into(),
+                tool: "clay".into(),
                 radius: 0.1,
                 strength: 0.5,
-                falloff: "suave".into(),
+                falloff: "smooth".into(),
                 symmetry: vec!["x".into()],
-                representation: "campo".into(),
+                representation: self.representation.into(),
             });
         }
         if query.camera {

@@ -3378,6 +3378,20 @@ An unknown action is refused with the actions the group *does* have. A missing
 or wrongly typed argument is refused naming the argument, what it should have
 been, and what arrived, and changes nothing.
 
+`tool.select` is described against the layer that is open, because the shelf is:
+its choices are the tools the active representation has a verb for, and the
+rest are listed beside them with the reason and with where they *do* apply —
+Pincar, Raspar, Preencher and Nudge have no verb on a field, so on a field they
+are named as unavailable rather than offered. The tool's JSON Schema still
+names all twenty-one, since a client reads that once per connection and caches
+it while the active layer keeps changing.
+
+And a refusal is reported as one. Where a ViewModel refuses — a tool with no
+verb on this layer, an engine that would not — the call comes back an error
+carrying the Model's own sentence and a code to branch on, rather than a
+success that changed nothing. A stroke refused this way banks no edit and
+enters no history, and says so in the same answer.
+
 A few commands are real and deliberately not offered, each with its reason in
 the source and in `describe`: the five that open a file panel on the sculptor's
 own screen, and the three that open, shut or answer the agent door — an agent

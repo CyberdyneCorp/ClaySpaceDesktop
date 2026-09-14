@@ -439,6 +439,62 @@ fn an_agent_drives_the_running_application() {
         "the stroke changed no pixel past this machine's render floor: {compared}"
     );
 
+    // -- a tool the layer has no verb for is refused, and says so ----------
+    //
+    // Pincar carries `sdf: None`, so on the field this document opens with
+    // there is nothing for it to call. Over this door the whole gesture came
+    // back `isError: false` with `touched_document: true` and banked nothing,
+    // on begin, continue and end alike — the refusal the ViewModel raised was
+    // discarded by the composition root. Nothing here asserts the four tools
+    // gain a verb; what it asserts is that an agent is told.
+    let described = call(&running, &session, "describe", json!({ "group": "tool" }));
+    let choices = described["structuredContent"]["actions"][0]["arguments"][0]["choices"]
+        .as_array()
+        .expect("the tools this layer can take")
+        .clone();
+    assert!(
+        !choices.iter().any(|choice| choice == "pinch"),
+        "describe offers pinch on a field, where it has no verb: {choices:?}"
+    );
+
+    call(
+        &running,
+        &session,
+        "tool",
+        json!({ "action": "select", "tool": "pinch" }),
+    );
+    let body = json!({
+        "jsonrpc": "2.0", "id": 8, "method": "tools/call",
+        "params": { "name": "stroke", "arguments": { "action": "begin", "at": [0.0, 0.0, 0.6] } },
+    })
+    .to_string();
+    let (status, _, answer) = exchange(&running, &body, Some(&session));
+    assert_eq!(status, 200, "{answer}");
+    assert_eq!(
+        answer["result"]["isError"], true,
+        "a stroke with a tool this layer has no verb for reported success: {answer}"
+    );
+    assert_eq!(
+        answer["result"]["structuredContent"]["code"], "unavailable",
+        "the refusal does not say what kind it is: {answer}"
+    );
+    assert!(
+        answer["result"]["structuredContent"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("SDF"),
+        "the refusal does not say why: {answer}"
+    );
+
+    // The refused gesture left nothing open, so the shelf goes back to a tool
+    // this layer has and the history is where the undo below expects it.
+    call(
+        &running,
+        &session,
+        "tool",
+        json!({ "action": "select", "tool": "clay" }),
+    );
+
     // -- and it undoes as one step -----------------------------------------
     let undone = call(&running, &session, "history", json!({ "action": "undo" }));
     assert_eq!(

@@ -445,6 +445,33 @@ impl Catalogue {
         })))
     }
 
+    /// What the active layer holds, for the answers that depend on it.
+    ///
+    /// `None` where the session could not be asked — the interface thread is
+    /// busy, or there is no active layer. A description narrowed to a guess
+    /// would be worse than the whole vocabulary, so the caller falls back to
+    /// every tool there is rather than to a set it invented.
+    fn active_representation(&self) -> Option<clayspace_model::Representation> {
+        let query = StateQuery {
+            tool: true,
+            ..StateQuery::default()
+        };
+        let answer = self
+            .queue
+            .submit(self.bounds.call, move |session| {
+                let report = session.read(query);
+                Ok(Answer::value(json!(report
+                    .tool
+                    .map(|state| state.representation))))
+            })
+            .ok()?;
+        let tag = answer.value.as_str()?;
+        tags::REPRESENTATIONS
+            .iter()
+            .find(|(candidate, _)| *candidate == tag)
+            .map(|(_, representation)| *representation)
+    }
+
     fn call_describe(&self, arguments: &Value) -> Result<CallResult, Refusal> {
         let args = Args::new("describe", "groups", arguments);
         match args.optional_text("group")? {
@@ -466,11 +493,17 @@ impl Catalogue {
                 })))
             }
             Some(group) => {
-                let found: Vec<Value> = TABLE
+                let specs: Vec<&ActionSpec> =
+                    TABLE.iter().filter(|spec| spec.group == group).collect();
+                // Only where a row actually names a tool. Every other group
+                // reads the same on every layer, and asking would spend a
+                // round trip to the interface thread to learn nothing.
+                let on = specs
                     .iter()
-                    .filter(|spec| spec.group == group)
-                    .map(ActionSpec::to_json)
-                    .collect();
+                    .any(|spec| spec.names_a_tool())
+                    .then(|| self.active_representation())
+                    .flatten();
+                let found: Vec<Value> = specs.iter().map(|spec| spec.to_json_on(on)).collect();
                 if found.is_empty() {
                     return Err(Refusal::new(
                         RefusalCode::UnknownAction,
@@ -1490,6 +1523,86 @@ mod tests {
             .as_array()
             .unwrap();
         assert!(choices.iter().any(|choice| choice == "clay"), "{choices:?}");
+    }
+
+    /// The choices are what the *active layer* can take, not what exists.
+    ///
+    /// Pincar, Raspar, Preencher and Nudge carry `sdf: None`, and a field
+    /// layer's shelf does not show them. `describe` offered all twenty-one on
+    /// every representation, so an agent driving a field had four tools on its
+    /// list that the ViewModel would refuse — which is the half of this that a
+    /// sculptor never meets, because the shelf has filtered since it was
+    /// written.
+    #[test]
+    fn describe_offers_a_field_only_the_tools_a_field_has_a_verb_for() {
+        let bench = Bench::new();
+        let value = structured(&bench.call("describe", json!({ "group": "tool" })).unwrap());
+        let argument = &value["actions"][0]["arguments"][0];
+        let choices = argument["choices"].as_array().expect("choices");
+        assert_eq!(argument["on"], "field", "{argument}");
+        assert!(choices.iter().any(|choice| choice == "clay"), "{choices:?}");
+        for absent in ["pinch", "scrape", "fill", "nudge"] {
+            assert!(
+                !choices.iter().any(|choice| choice == absent),
+                "{absent} is offered on a field, where it has no verb: {choices:?}"
+            );
+        }
+    }
+
+    /// And says why, and where they do apply, rather than merely dropping
+    /// them: a tool that vanishes from a list teaches an agent nothing, and it
+    /// would ask for it again on the next layer.
+    #[test]
+    fn describe_says_why_a_tool_is_missing_from_this_layer() {
+        let bench = Bench::new();
+        let value = structured(&bench.call("describe", json!({ "group": "tool" })).unwrap());
+        let unavailable = value["actions"][0]["arguments"][0]["unavailable"]
+            .as_array()
+            .expect("the tools this layer cannot take")
+            .clone();
+        let pinch = unavailable
+            .iter()
+            .find(|entry| entry["tool"] == "pinch")
+            .unwrap_or_else(|| panic!("pinch is not listed as unavailable: {unavailable:?}"));
+        let why = pinch["why"].as_str().unwrap_or_default();
+        assert!(why.contains("SDF"), "{why}");
+        assert!(why.contains("voxel") && why.contains("mesh"), "{why}");
+    }
+
+    /// The same table read on a grid, where all four have a verb.
+    #[test]
+    fn describe_offers_a_grid_the_tools_a_field_refuses() {
+        let bench = Bench::with(FakeSession::new().on_a("grid"));
+        let value = structured(&bench.call("describe", json!({ "group": "tool" })).unwrap());
+        let argument = &value["actions"][0]["arguments"][0];
+        let choices = argument["choices"].as_array().expect("choices");
+        assert_eq!(argument["on"], "grid", "{argument}");
+        for present in ["pinch", "scrape", "fill", "nudge"] {
+            assert!(
+                choices.iter().any(|choice| choice == present),
+                "{present} has a voxel verb and is not offered on a grid: {choices:?}"
+            );
+        }
+    }
+
+    /// The schema is not narrowed, and must not be: `tools/list` hands it out
+    /// once and a client caches it, so a set narrowed to the layer that
+    /// happened to be open would be wrong the moment the agent changed layer.
+    #[test]
+    fn the_schema_still_names_every_tool_there_is() {
+        let bench = Bench::new();
+        let schema = bench
+            .catalogue
+            .tools()
+            .into_iter()
+            .find(|tool| tool.name == "tool")
+            .expect("the tool group")
+            .input_schema;
+        let named = schema["properties"]["tool"]["enum"]
+            .as_array()
+            .expect("an enum")
+            .len();
+        assert_eq!(named, clayspace_model::ToolKind::ALL.len());
     }
 
     #[test]
