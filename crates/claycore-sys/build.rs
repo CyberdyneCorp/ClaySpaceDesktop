@@ -359,8 +359,12 @@ fn has_opencl() -> bool {
 /// This file's sibling comment in `.github/workflows/ci.yml` has claimed since
 /// the workflow was written that "that is what the ccache step is for" — and
 /// there was no ccache step, and nothing here ever set a launcher. Every job
-/// rebuilt both vendored engines from scratch, which is most of what the macOS
-/// rows spend their budget on.
+/// rebuilt both vendored engines from scratch: a median 4.7 min of the
+/// `macOS, Metal (release)` Build step, against 0.3 once this launcher has a
+/// warm cache to route through. Worth having, and not "most of what the macOS
+/// rows spend their budget on" — that sentence stood here until the step
+/// timings in `tools/ci_budget.json` were pulled, and a 53.8-minute mean job
+/// does not have four and a half minutes as most of it.
 ///
 /// Probed rather than assumed: a machine without `ccache` gets the compiler it
 /// always had, so this is a speed-up where it is available and a no-op where it

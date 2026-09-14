@@ -112,7 +112,7 @@ test-one target:
     cargo test -p {{app}} --release --test {{target}} -- --nocapture
 
 # Everything CI checks, in the order that fails fastest.
-check: engine-pinned fmt-check layering lint test spec packaging
+check: engine-pinned ci-budget fmt-check layering lint test spec packaging
     @echo "all gates passed"
 
 # Formatting, without changing anything.
@@ -145,6 +145,13 @@ deny:
 # The packaging scripts, and whether ATTRIBUTION.md is still current.
 packaging:
     python3 tools/test_tools.py
+
+# Whether the budget note in ci.yml still agrees with the step timings it
+# argues from. `just packaging` runs this too; it is separate because a note
+# that has drifted from its measurements reads better as its own red line
+# than as one case inside the packaging tests.
+ci-budget:
+    python3 tools/check_ci_budget.py
 
 # -- looking at it -----------------------------------------------------------
 

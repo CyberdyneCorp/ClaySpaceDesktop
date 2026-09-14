@@ -4,13 +4,18 @@
 # ClayCore, and CyberRemesherAndUV since #94 — so every job compiles C++20
 # before it compiles a line of Rust. That is what the ccache step below is for.
 #
-# It is not, measured, what dominates the matrix. The two engines are about
-# 300 translation units — ccache counted 300 cacheable calls until #126 moved
-# the ClayCore pin and 303 after — and compiling all of them from scratch costs
-# 2.6 min: `macOS, Metal (debug)` spends 3.8 min in Build on run 34661097385,
-# where ccache reports 0/300 hits, against 1.2 min on run 34669732006 where it
-# reports 300/300. The budget note on `test` below carries the step timings
-# that say so.
+# The two engines are about 300 translation units — ccache counted 300
+# cacheable calls until #126 moved the ClayCore pin and 303 after — and
+# compiling all of them costs `macOS, Metal (release)` a median 4.7 min against
+# 0.3 with a warm ccache. Worth caching, and still not what dominates the
+# matrix: 4.7 min is a twelfth of a job that has run 43 to 70.
+#
+# Both of those figures are read inside a single Build step, from cargo's own
+# `Compiling <crate>` timestamps, rather than by pairing one run's Build total
+# against another's — the budget note on `test` below explains why that
+# distinction is the whole of #83. `tools/ci_budget.json` is the Actions-API
+# pull behind every number in it, and `tools/check_ci_budget.py` holds the note
+# to the table so the two cannot drift apart again.
 name: CI
 
 on:
@@ -72,40 +77,69 @@ jobs:
     # `macOS, Metal (release)` at 60:50. The reasoning recorded here for the
     # seventy-five — that the slowest job was "build 20 min, the C++ engine,
     # and a restored cache does not spare most of it", so ~58 min cold — does
-    # not survive step-level timings. The twenty minutes is cargo's optimised
-    # codegen and not the engine: that row built in 20.3 min on run 34669732006
-    # with ccache reporting 300/300 hits, and in 20.3 min on run 34567024927
-    # (#100), which predates the ccache step and so compiled all 300 objects
-    # from scratch. Same number with the engine cached and with it cold, so the
-    # engine is invisible in that step.
+    # not survive step-level timings. Most of that twenty minutes is cargo's
+    # optimised codegen. But the engine is not nothing either, and the place to
+    # separate them is *inside* one Build step, where no choice of runs can
+    # steer the answer: cargo prints `Compiling <crate>` when it starts one, and
+    # `claycore` cannot start until `claycore-sys` — whose build.rs is what runs
+    # CMake over the vendored C++ — has finished. The later of that gap and
+    # cyberremesh's bounds the window both engines were compiled in. Across the
+    # twenty-two `macOS, Metal (release)` jobs sampled below:
     #
-    # It is separable on the *debug* row, whose Rust compile is small. Only the
-    # four `main` runs carrying both engines (#94) and the ccache step (#115)
-    # report a miss count at all; `macOS, Metal (debug)` Build against it:
+    #     ccache              engine window            Build
+    #     no step (18 jobs)   3.3 - 6.0, median 4.7    20.3 - 35.0
+    #       0 / 300 hits      4.6                      25.2
+    #     300 / 300 hits      0.33, 0.36               23.3, 20.3
+    #     208 / 303 hits      1.7                      23.9
     #
-    #     run           ccache misses   build
-    #     34669732006         0 / 300    1.2
-    #     34668263566        25 / 300    1.8
-    #     34783040917        95 / 303    2.7   ClayCore pin moved
-    #     34661097385       300 / 300    3.8   both engines cold
+    # So ccache takes the engines from a median 4.7 min to 0.3 on this row —
+    # about four and a quarter minutes off a job that has run 43 to 70. Not
+    # invisible. What it is not is *separable from a Build total*: the two fully
+    # warm Builds are 23.3 and 20.3, three minutes apart with the same twenty-
+    # second window, and the eighteen with no ccache at all spread fifteen
+    # minutes. One commit's Build set against another's says whatever the pair
+    # was chosen to say — which is how two drafts of this note arrived at "the
+    # engine is invisible in that step" while the row's own cold/warm control
+    # said 25.2 against 20.3.
     #
-    # Monotone, and both engines from scratch is 2.6 min of a debug job that
-    # ran 33 to 39 min across those four. That is all ccache can buy here.
+    # The debug row, whose Rust compile is small, agrees from the other side.
+    # Its Build was 3.5 - 5.9 min (median 4.7) over the eighteen runs with no
+    # ccache step and is 1.2 - 1.8 with one warm:
     #
-    # Those four are the right sample for the engine and the WRONG one for this
-    # budget: filtering on "has a ccache step" keeps four runs from two days and
-    # drops every slower one. The budget gates the release row, so the sample is
-    # every `macOS, Metal (release)` job on `main` since both engines landed —
-    # runs 34339376851 (#94) through 34783040917 (#126), the same eight-row
-    # matrix throughout, twenty-two of which reached the test step:
+    #     run           ccache hits   build
+    #     34669732006     300 / 300     1.2
+    #     34668263566     275 / 300     1.8
+    #     34783040917     208 / 303     2.7   ClayCore pin moved
+    #     34661097385       0 / 300     3.8   the ccache step's own first run
+    #
+    # Monotone — but the bottom row is a floor on the cold case rather than a
+    # measure of it. 3.8 is faster than fifteen of the eighteen Builds that had
+    # no ccache at all, so 3.8 − 1.2 = 2.6 understates what ccache buys here;
+    # the 3.5 - 5.9 range against 1.2 - 1.8 is the figure, and it is the same
+    # three-to-four minutes the release row's window shows.
+    #
+    # Those four ccache-era runs are the right sample for the engine and the
+    # WRONG one for this budget: filtering on "has a ccache step" keeps four
+    # runs from two days, and by job time they rank 1, 2, 8 and 9 of the
+    # twenty-two — mean 48.0 against the row's 53.8. The budget gates the
+    # release row, so the sample is every `macOS, Metal (release)` job on `main`
+    # since both engines landed — runs 34339376851 (#94) through 34783040917
+    # (#126), the same eight-row matrix throughout, twenty-two of which reached
+    # the test step:
     #
     #     min 43.2    mean 53.8    sd 6.2    max 70.1
     #
     # Three of the twenty-two ran past sixty — that is the shape sixty was
     # cancelling. The worst, run 34592697101 at 70.1 min, leaves 4.9 min under
     # this budget. Seventy-five is not headroom; it is one slow runner from a
-    # cancel, and an earlier draft of this note called it headroom because it
-    # was reading four runs out of twenty-two.
+    # cancel.
+    #
+    # One of the twenty-two went red: run 34623657105 failed a single assertion
+    # out of 2363. It is counted anyway, because `--no-fail-fast` below meant it
+    # still ran all 196 suites and paid for them — 52.3 min, against a median of
+    # 53.7; dropping it gives mean 53.9, sd 6.4. Named rather than quietly
+    # folded in, because a distribution offered as an operating envelope should
+    # say which of its jobs did not pass.
     #
     # That worst run was not a cold one. Its cargo cache logged `full match:
     # true` and it ran 2353 passing tests, twenty-six fewer than the 43.2-min
@@ -116,15 +150,29 @@ jobs:
     # same 2374 passing tests, Test 31.9 min against 20.5. Eleven minutes on
     # identical work, from the runner and nothing else.
     #
-    # Cache state still belongs in this reasoning, but it is the *cargo* cache
-    # and not ccache. ccache is keyed on `matrix.slug` alone, so a lockfile bump
-    # or a toolchain update leaves it whole; the Swatinem key below ends in a
-    # hash of the dependency graph — `…-083c28b9` on run 34339376851, and
-    # `…-c4775e20` on every run since — and that first run is the only one on
-    # `main` to log `full match: false`. It still restored 247 MB under a
-    # restore-key and finished in 54.8 min, a minute above the median, so a
-    # partial miss costs this row nothing worth measuring. What a *total* miss
-    # costs is unknown: no run on record has had one.
+    # Cache state belongs in this reasoning, and both caches are in it, for
+    # different reasons.
+    #
+    # ccache is keyed on `matrix.slug` alone, so a lockfile bump or a toolchain
+    # update leaves it whole. What can still cold it is eviction:
+    # `hendrikmuhs/ccache-action` writes a fresh timestamped entry every run and
+    # restores by prefix — `ccache-macos-metal-2026-09-12T05:38:07.246Z` and its
+    # neighbours — so GitHub's seven-day idle expiry and 10 GB repository
+    # ceiling are exactly the events that can take it away, and nothing in the
+    # source is. The one cold run on record is 34661097385, and only because the
+    # step was new there: `No cache found`, 0 / 300 hits, Build 25.2. Run
+    # 34783040917 is not a second one — 95 of its 303 calls missed, but its
+    # cyberremesh window stayed at 17 s while claycore's went to 105 s, so only
+    # ClayCore's objects missed. That is the #126 pin move, which is a source
+    # change and precisely what keying on the row is meant to absorb.
+    #
+    # The cargo cache is the one a source change does move: the Swatinem key
+    # below ends in a hash of the dependency graph — `…-083c28b9` on run
+    # 34339376851, and `…-c4775e20` on every run since — and that first run is
+    # the only one on `main` to log `full match: false`. It still restored
+    # 247 MB under a restore-key and finished in 54.8 min, a minute above the
+    # median, so a partial miss costs this row nothing worth measuring. What a
+    # *total* miss costs is unknown: no run on record has had one.
     #
     # Left at seventy-five for that combination — a six-minute run-to-run sd, a
     # worst case within five minutes of the wall, and a cold-cargo case nobody
@@ -626,6 +674,14 @@ jobs:
       # metadata` reads the manifests rather than compiling anything.
       - name: Check the packaging scripts and the attribution manifest
         run: python3 tools/test_tools.py
+
+      # The budget note at the top of this file argues from step timings, and
+      # #83 was filed because nobody could re-derive them. `tools/ci_budget.json`
+      # is the pull they came from and this holds the note to it, so a figure
+      # edited in one and not the other is a red job rather than a paragraph
+      # that quietly stopped being true.
+      - name: Check this file's budget note against its measurements
+        run: python3 tools/check_ci_budget.py
 
   openspec:
     name: OpenSpec
