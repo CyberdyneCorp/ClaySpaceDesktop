@@ -162,8 +162,43 @@ Five plausible explanations died on measurement:
 | tape-compile cache | 10–18%, inside noise |
 | cull pad / batch union / spatial grouping | refuted; a 9.3x smaller union moves nothing |
 | `point_the_mirror` per press | **0.00 ms** — it short-circuits |
-| regional consolidation | closure is the connected component, and a sculpt is connected by construction |
+| regional consolidation | **see below — this entry was wrong** |
 | whole-layer consolidation | measured **6x worse** for a deformer chain |
+
+### One of those was refuted later, and the correction is worth more than the entry
+
+*"Closure is the connected component, and a sculpt is connected by construction"*
+was our reason for never binding `clay_layer_consolidate_region`. ClayCore
+measured it instead of reasoning about it, and it is false.
+
+A local closure **is** reachable. Eight subtools with disjoint bounds, patching
+one, gives 1 root of 8 and a **61 ms** bake against 500 ms for the whole layer.
+And the boundary is a cliff at exactly zero gap rather than a slope: 0.005 of
+clear air — a quarter of a cell — moves it from 8 roots and 340 ms to 2 roots
+and 94 ms. So the condition on a document is far weaker than "keep subtools
+apart": **strictly non-overlapping bounds is enough**, which most documents
+already satisfy.
+
+What does not survive is *using* it. Maintaining one patch grows the closure by
+about 1.76x per bake with the requested box held fixed, crosses into whole-layer
+by the eighth, and ends wider than the form — 80 ms at the first bake, **4.1 s
+at the twelfth**, for the same request every time. Interactive cost stays flat
+and the surface is held, so the correctness cure is real; it is the maintenance
+that is unbounded. Whole-layer maintenance over the same session is worse at
+every point (580 ms to 13.4 s), so regional is still the better of the two.
+Neither is bounded.
+
+The mechanism is half-identified upstream: `plan_region_merge` expands the
+closure by each absorbed root's full influence bound, and **a previous bake is a
+root like any other**, so a bake can never be partially re-absorbed. For a
+parametric Subtract that is necessary. For a volume it is not — a sampled
+field's value near a point depends only on samples near that point — and the
+planner does not distinguish the two.
+
+So the entry above reached the right operational conclusion (do not bind it) for
+the wrong reason, which meant it would have stayed wrong after the reason
+stopped applying. The honest version is: **its price depends on how many times
+you have already called it.**
 
 ---
 
