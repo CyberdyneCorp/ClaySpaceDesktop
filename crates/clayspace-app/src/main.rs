@@ -24,8 +24,8 @@ use clayspace_mcp::{
 use clayspace_model::{
     AutosavePolicy, Detail, DetailPolicy, Diagnostics, ExchangeModel, ExportSettings,
     ExportWarning, Format, FrameLog, GizmoMode, ImportSettings, LayerKey, LayerOperation,
-    RecentDocuments, Recovery, RefFormat, RefPlane, Representation, SceneModel, SculptModel,
-    SkinSettings, StrokeDiagnostics, StrokeModifiers, Units, ViewPresetKind,
+    ModelError, RecentDocuments, Recovery, RefFormat, RefPlane, Representation, SceneModel,
+    SculptModel, SkinSettings, StrokeDiagnostics, StrokeModifiers, Units, ViewPresetKind,
 };
 use clayspace_view::shell::{self, region, ArmatureState, ShellState};
 use clayspace_view::{
@@ -507,7 +507,15 @@ struct App {
     /// treats it as a person's. What the guard means is "somebody is holding
     /// the pointer", and that is not the same question as "a gesture is
     /// open".
-    agent_gesture: bool,
+    agent_gesture: AgentGesture,
+    /// What a ViewModel refused this command with, for the agent door to
+    /// answer with.
+    ///
+    /// The interface shows a refusal in the options bar; the door has nowhere
+    /// to show anything, so the error itself has to survive as far as
+    /// [`Session::apply`] — which is where a refused stroke used to be
+    /// reported as a success.
+    sculpt_refusal: Option<ModelError>,
     /// When the clock on "an agent acted" was last advanced.
     ///
     /// Here rather than in the ViewModel because that layer has no clock,
@@ -737,7 +745,8 @@ impl App {
             agent_queue: JobQueue::new(),
             agent_door: None,
             agent_proxy: None,
-            agent_gesture: false,
+            agent_gesture: AgentGesture::default(),
+            sculpt_refusal: None,
             agent_ticked: Instant::now(),
             last_ui: Vec::new(),
             last_ppp: 1.0,
@@ -857,7 +866,7 @@ impl App {
     /// finish a stroke it started. A person cannot open a second gesture while
     /// the engine holds one, so the two cannot be confused in practice.
     fn holding_a_gesture(&self) -> bool {
-        if self.agent_gesture {
+        if self.agent_gesture.held() {
             return false;
         }
         self.sculpt.is_stroking()
@@ -4227,6 +4236,12 @@ impl App {
             // A refusal is not swallowed; the tool status carries the reason
             // to the options bar, and this records it for the log.
             eprintln!("{e}");
+            // And it is kept, because the options bar is not a surface the
+            // agent door can read: a stroke the ViewModel refused reported
+            // `isError: false` all the way out to the client, which is what
+            // made four tools with no verb on a field look like tools that
+            // worked and did nothing.
+            self.sculpt_refusal = Some(e);
         }
         if let Err(e) = self.scene.dispatch(command) {
             eprintln!("{e}");
@@ -5629,6 +5644,95 @@ fn next_matcap(current: MatCap) -> MatCap {
     all[(index + 1) % all.len()]
 }
 
+/// Whether the gesture the engine is holding belongs to the agent.
+///
+/// Its own type, and not a bare `bool`, because the bool had one owner and two
+/// moments: it was raised on the *intent* to open a gesture and lowered only by
+/// a close. A begin the ViewModel refused therefore left it raised for the rest
+/// of the session, and [`App::holding_a_gesture`] reads it as "no person is
+/// holding anything" — so one refused agent stroke stopped a **person's** real
+/// stroke from ever being reported at the door again. Raising on the intent and
+/// then settling against what actually opened is what closes that.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct AgentGesture {
+    held: bool,
+}
+
+impl AgentGesture {
+    /// What the agent means to do, before the command is applied — so the next
+    /// call from the same agent is not refused its own stroke.
+    fn opening(&mut self, command: &Command) {
+        match command {
+            Command::BeginStroke { .. }
+            | Command::BeginGizmoDrag(..)
+            | Command::BeginMaskOutline(..) => self.held = true,
+            Command::EndStroke
+            | Command::CancelStroke
+            | Command::EndGizmoDrag
+            | Command::EndMaskOutline(_)
+            | Command::CancelMaskOutline => self.held = false,
+            _ => {}
+        }
+    }
+
+    /// What actually happened, once the command has been applied.
+    ///
+    /// `began_a_stroke` is whether the command was a begin, and `open` whether
+    /// the ViewModel holds a stroke now that it has run. A begin that was
+    /// refused holds none, and an agent holding nothing must not go on masking
+    /// a person's gesture.
+    fn settled(&mut self, began_a_stroke: bool, open: bool) {
+        if began_a_stroke {
+            self.held = open;
+        }
+    }
+
+    fn held(self) -> bool {
+        self.held
+    }
+}
+
+/// Why the door refuses a stroke command outright, or `None` where it may go
+/// through.
+///
+/// A sample or a close with no gesture open reaches a ViewModel that has
+/// nothing to add it to and answers `Ok(())` — correct for a person, whose
+/// pointer release arrives whether or not the press opened anything, and a
+/// silent lie to an agent, which is told its stroke landed. An agent's begin
+/// having been refused is exactly when this happens, so it is the case that
+/// most needs saying.
+fn stroke_needs_a_gesture(command: &Command, open: bool) -> Option<&'static str> {
+    if open {
+        return None;
+    }
+    match command {
+        Command::ContinueStroke { .. } => Some(
+            "no stroke is open, so there is nothing to add this sample to. \
+             stroke.begin opens one, and it refuses where the tool has no verb \
+             on the layer in hand.",
+        ),
+        Command::EndStroke => Some(
+            "no stroke is open, so there is nothing to close. stroke.begin \
+             opens one, and it refuses where the tool has no verb on the layer \
+             in hand.",
+        ),
+        _ => None,
+    }
+}
+
+/// How a ViewModel's refusal reaches an agent.
+///
+/// The code is the part an agent branches on, so an unavailable tool is not
+/// folded in with an engine failure: one is answered by choosing another tool
+/// or another layer, and the other is not answerable at all.
+fn refusal_for(refused: &ModelError) -> Refusal {
+    let code = match refused {
+        ModelError::Unavailable(_) => RefusalCode::Unavailable,
+        _ => RefusalCode::ModelRefused,
+    };
+    Refusal::new(code, refused.to_string())
+}
+
 /// What the agent-facing door can ask of the running application.
 ///
 /// Every method here runs on the interface thread, between frames, because
@@ -5647,19 +5751,28 @@ impl Session for App {
 
         // Whose gesture this is, recorded before the command is applied so the
         // next call from the same agent is not refused its own stroke.
-        match &command {
-            Command::BeginStroke { .. }
-            | Command::BeginGizmoDrag(..)
-            | Command::BeginMaskOutline(..) => self.agent_gesture = true,
-            Command::EndStroke
-            | Command::CancelStroke
-            | Command::EndGizmoDrag
-            | Command::EndMaskOutline(_)
-            | Command::CancelMaskOutline => self.agent_gesture = false,
-            _ => {}
+        let began_a_stroke = matches!(command, Command::BeginStroke { .. });
+        self.agent_gesture.opening(&command);
+
+        // A sample or a close with nothing open, before it reaches a ViewModel
+        // that would answer `Ok(())` to it.
+        if let Some(why) = stroke_needs_a_gesture(&command, self.sculpt.is_stroking()) {
+            return Err(Refusal::new(RefusalCode::Unavailable, why));
         }
 
+        // Cleared rather than assumed empty: a refusal left over from a
+        // person's own click is not this command's.
+        self.sculpt_refusal = None;
         self.handle(command);
+        self.agent_gesture
+            .settled(began_a_stroke, self.sculpt.is_stroking());
+
+        // The ViewModel's own refusal, which the interface answers by putting
+        // it in the options bar and the door has to answer with an error — a
+        // stroke reported as applied is one an agent goes on building on.
+        if let Some(refused) = self.sculpt_refusal.take() {
+            return Err(refusal_for(&refused));
+        }
 
         let (refused, notices) = self.notices_since(before);
         if let Some(said) = refused {
@@ -6178,9 +6291,111 @@ mod double_press {
 
 #[cfg(test)]
 mod tests {
-    use super::{gizmo_geometry_update, tool_status, GizmoGeometryUpdate, ToolStatusSources};
-    use clayspace_model::Representation;
+    use super::{
+        gizmo_geometry_update, refusal_for, stroke_needs_a_gesture, tool_status, AgentGesture,
+        GizmoGeometryUpdate, ToolStatusSources,
+    };
+    use clayspace_mcp::RefusalCode;
+    use clayspace_model::{ModelError, Representation, Unavailable};
     use clayspace_vm::Command;
+
+    fn begin() -> Command {
+        Command::BeginStroke {
+            position: [0.0; 3],
+            pressure: 1.0,
+            modifiers: Default::default(),
+        }
+    }
+
+    fn sample() -> Command {
+        Command::ContinueStroke {
+            position: [0.1, 0.0, 0.0],
+            pressure: 1.0,
+        }
+    }
+
+    /// A begin the ViewModel refused opened nothing, and the flag that says
+    /// "the gesture in progress is the agent's" must not stay up on the
+    /// intent alone.
+    ///
+    /// Left up, `App::holding_a_gesture` answers "no person is holding
+    /// anything" for the rest of the session — so a **person's** real stroke
+    /// stops being reported at the door, and their edits stop being protected
+    /// from an agent's. That is worse than the silence issue #127 reported.
+    #[test]
+    fn a_refused_begin_leaves_the_agent_holding_nothing() {
+        let mut gesture = AgentGesture::default();
+        gesture.opening(&begin());
+        assert!(
+            gesture.held(),
+            "the intent stands while the command is applied, or the agent is \
+             refused its own stroke"
+        );
+        gesture.settled(true, false);
+        assert!(!gesture.held());
+    }
+
+    /// And a begin that did open one is still the agent's, or it could not
+    /// finish the stroke it started.
+    #[test]
+    fn a_begin_that_opened_a_stroke_is_still_the_agent_s() {
+        let mut gesture = AgentGesture::default();
+        gesture.opening(&begin());
+        gesture.settled(true, true);
+        assert!(gesture.held());
+        gesture.opening(&Command::EndStroke);
+        assert!(!gesture.held());
+    }
+
+    /// A command that is not a begin settles nothing: a sample arriving while
+    /// the agent holds a stroke leaves it holding one.
+    #[test]
+    fn a_sample_does_not_settle_who_holds_the_gesture() {
+        let mut gesture = AgentGesture::default();
+        gesture.opening(&begin());
+        gesture.settled(true, true);
+        gesture.opening(&sample());
+        gesture.settled(false, true);
+        assert!(gesture.held());
+    }
+
+    /// A sample or a close with nothing open is refused rather than answered
+    /// `Ok`.
+    ///
+    /// The ViewModel returns `Ok(())` for both, which is right for a person —
+    /// their pointer release arrives whether or not the press opened anything
+    /// — and is what let an agent whose begin was refused go on stroking and
+    /// be told twice more that it had worked.
+    #[test]
+    fn a_sample_or_a_close_with_no_stroke_open_is_refused() {
+        assert!(stroke_needs_a_gesture(&sample(), false).is_some());
+        assert!(stroke_needs_a_gesture(&Command::EndStroke, false).is_some());
+        assert!(stroke_needs_a_gesture(&sample(), true).is_none());
+        assert!(stroke_needs_a_gesture(&Command::EndStroke, true).is_none());
+        // A begin is what opens one, and a cancel with nothing open is a
+        // no-op an agent may safely repeat.
+        assert!(stroke_needs_a_gesture(&begin(), false).is_none());
+        assert!(stroke_needs_a_gesture(&Command::CancelStroke, false).is_none());
+    }
+
+    /// The refusal an agent gets carries the code it branches on.
+    ///
+    /// An unavailable tool is answerable — choose another tool, or another
+    /// layer — and an engine failure is not, so they do not share a code.
+    #[test]
+    fn a_tool_with_no_verb_here_is_refused_as_unavailable() {
+        let refusal = refusal_for(&ModelError::Unavailable(Unavailable::NoVerbHere {
+            active: Representation::Sdf,
+            verbs: clayspace_model::ToolKind::Pincar.verbs(),
+            note: None,
+        }));
+        assert_eq!(refusal.code, RefusalCode::Unavailable);
+        assert!(!refusal.message.is_empty(), "{refusal:?}");
+        assert_eq!(
+            refusal_for(&ModelError::engine("the engine said no")).code,
+            RefusalCode::ModelRefused
+        );
+    }
 
     /// Nothing to explain, which is the state the options bar is in almost
     /// always.

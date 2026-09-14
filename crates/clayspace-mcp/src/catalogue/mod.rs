@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Map, Value};
 
+use clayspace_model::Representation;
 use clayspace_vm::Command;
 
 use crate::access;
@@ -33,7 +34,7 @@ use crate::session::{
 };
 
 use self::args::Args;
-use self::table::{ActionSpec, GROUPS, TABLE};
+use self::table::{Kind, GROUPS, TABLE};
 
 /// How long each kind of work may take before a client is told rather than
 /// left waiting.
@@ -466,12 +467,7 @@ impl Catalogue {
                 })))
             }
             Some(group) => {
-                let found: Vec<Value> = TABLE
-                    .iter()
-                    .filter(|spec| spec.group == group)
-                    .map(ActionSpec::to_json)
-                    .collect();
-                if found.is_empty() {
+                if !TABLE.iter().any(|spec| spec.group == group) {
                     return Err(Refusal::new(
                         RefusalCode::UnknownAction,
                         format!(
@@ -484,12 +480,64 @@ impl Catalogue {
                         ),
                     ));
                 }
-                Ok(CallResult::data(json!({
+                // What the layer in hand is, for the one group whose choices
+                // depend on it. Asked only then: the other twenty describe the
+                // same whatever is open, and a read is a trip to the interface
+                // thread.
+                let layer = match narrows_by_layer(&group) {
+                    true => Some(self.active_representation()?),
+                    false => None,
+                };
+                let found: Vec<Value> = TABLE
+                    .iter()
+                    .filter(|spec| spec.group == group)
+                    .map(|spec| spec.to_json(layer))
+                    .collect();
+                let mut answer = json!({
                     "group": group,
                     "actions": found,
-                })))
+                });
+                if let Some(layer) = layer {
+                    answer["layer"] = json!(tags::tag_of(tags::REPRESENTATIONS, layer));
+                }
+                Ok(CallResult::data(answer))
             }
         }
+    }
+
+    /// What the active layer holds, read through the same path an agent reads
+    /// state through.
+    ///
+    /// A read that does not come back is a refusal here, and deliberately: the
+    /// full unnarrowed list is exactly the answer this call exists to stop
+    /// being given, so it is not what a timeout falls back to.
+    fn active_representation(&self) -> Result<Representation, Refusal> {
+        let answer = self.queue.submit(self.bounds.call, move |session| {
+            let report = session.read(StateQuery {
+                tool: true,
+                ..StateQuery::nothing()
+            });
+            Ok(Answer::value(json!(report
+                .tool
+                .map(|state| state.representation))))
+        })?;
+        let tag = answer.value.as_str().ok_or_else(|| {
+            Refusal::new(
+                RefusalCode::Failed,
+                "the session did not say what the active layer holds, so the tools \
+                 it offers cannot be narrowed to it",
+            )
+        })?;
+        tags::REPRESENTATIONS
+            .iter()
+            .find(|(known, _)| *known == tag)
+            .map(|(_, representation)| *representation)
+            .ok_or_else(|| {
+                Refusal::new(
+                    RefusalCode::Failed,
+                    format!("the session named a layer this surface has no word for: {tag}"),
+                )
+            })
     }
 }
 
@@ -766,6 +814,19 @@ fn differing(one: &Frame, two: &Frame) -> u64 {
         .zip(two.rows.chunks_exact(4))
         .filter(|(a, b)| a != b)
         .count() as u64
+}
+
+/// Whether describing this group has to know what the active layer holds.
+///
+/// One does: the sculpting tools. `ToolKind::for_representation` is what the
+/// shelf draws its buttons from, and an agent is owed the same list rather
+/// than one that includes four tools the ViewModel would refuse a stroke with.
+fn narrows_by_layer(group: &str) -> bool {
+    TABLE
+        .iter()
+        .filter(|spec| spec.group == group)
+        .flat_map(|spec| spec.arguments)
+        .any(|argument| matches!(argument.kind, Kind::Tool))
 }
 
 /// The commands that are real and deliberately not offered, with the reason.
@@ -1490,6 +1551,95 @@ mod tests {
             .as_array()
             .unwrap();
         assert!(choices.iter().any(|choice| choice == "clay"), "{choices:?}");
+    }
+
+    /// The choices an agent is offered are the buttons the shelf draws.
+    ///
+    /// Issue #127: four tools — pinch, scrape, fill and nudge — have no verb on
+    /// a field, which `ToolKind::verbs` says outright and the shelf acts on by
+    /// not drawing them. This surface offered all twenty-one on every layer, so
+    /// an agent chose one of the four, stroked, and was told it had worked.
+    #[test]
+    fn describe_offers_only_the_tools_the_layer_has_a_verb_for() {
+        let bench = Bench::with(FakeSession::new().on_a("field"));
+        let value = structured(&bench.call("describe", json!({ "group": "tool" })).unwrap());
+        let argument = &value["actions"][0]["arguments"][0];
+        let choices = argument["choices"].as_array().unwrap();
+        let missing = argument["no_verb_here"].as_array().unwrap();
+
+        assert_eq!(value["layer"], "field");
+        assert_eq!(argument["choices_on"], "field");
+        for absent in ["pinch", "scrape", "fill", "nudge"] {
+            assert!(
+                !choices.iter().any(|choice| choice == absent),
+                "{absent} is offered on a field: {choices:?}"
+            );
+            assert!(
+                missing.iter().any(|tool| tool == absent),
+                "{absent} is not named as having no verb here: {missing:?}"
+            );
+        }
+        assert!(choices.iter().any(|choice| choice == "clay"), "{choices:?}");
+    }
+
+    /// And narrowing is not deletion: the same four are on a mesh shelf, so
+    /// they are offered there.
+    #[test]
+    fn describe_offers_a_tool_on_a_layer_that_has_a_verb_for_it() {
+        let bench = Bench::with(FakeSession::new().on_a("mesh"));
+        let value = structured(&bench.call("describe", json!({ "group": "tool" })).unwrap());
+        let argument = &value["actions"][0]["arguments"][0];
+        let choices = argument["choices"].as_array().unwrap();
+        assert_eq!(value["layer"], "mesh");
+        assert!(
+            choices.iter().any(|choice| choice == "pinch"),
+            "{choices:?}"
+        );
+        assert!(
+            !argument["no_verb_here"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tool| tool == "pinch"),
+            "{argument}"
+        );
+    }
+
+    /// Walked against every representation, which is the test the issue asked
+    /// for: what a surface offers is what the shelf shows, layer by layer.
+    #[test]
+    fn what_the_surface_offers_is_what_the_shelf_shows_on_every_layer() {
+        for (tag, representation) in tags::REPRESENTATIONS {
+            let bench = Bench::with(FakeSession::new().on_a(tag));
+            let value = structured(&bench.call("describe", json!({ "group": "tool" })).unwrap());
+            let offered: Vec<&str> = value["actions"][0]["arguments"][0]["choices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|choice| choice.as_str().unwrap())
+                .collect();
+            let shelf: Vec<&str> = clayspace_model::ToolKind::for_representation(*representation)
+                .into_iter()
+                .map(clayspace_model::ToolKind::key)
+                .collect();
+            assert_eq!(offered, shelf, "on a {tag} layer");
+        }
+    }
+
+    /// The wire's word for a layer, and only the wire's.
+    ///
+    /// "SDF" and "voxel" are the interface's names for two of these and
+    /// "field" and "grid" are the wire's. A surface that says both has two
+    /// vocabularies on it, and an agent that learned either is right half the
+    /// time.
+    #[test]
+    fn describe_names_the_layer_in_the_wire_s_own_words() {
+        let bench = Bench::with(FakeSession::new().on_a("field"));
+        let value = structured(&bench.call("describe", json!({ "group": "tool" })).unwrap());
+        let said = value.to_string().to_lowercase();
+        for interface_word in ["sdf", "voxel", "multires", "campo", "grade"] {
+            assert!(!said.contains(interface_word), "{interface_word} in {said}");
+        }
     }
 
     #[test]

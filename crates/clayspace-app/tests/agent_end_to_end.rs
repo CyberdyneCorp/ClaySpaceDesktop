@@ -248,6 +248,41 @@ fn call(running: &Running, session: &str, tool: &str, arguments: Value) -> Value
     answer["result"].clone()
 }
 
+/// One tool call that has to come back refused, returning the refusal.
+///
+/// `call` asserts the opposite, and a refusal an agent is owed is exactly as
+/// much a property of this surface as an answer is.
+fn refused(running: &Running, session: &str, tool: &str, arguments: Value) -> Value {
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": tool, "arguments": arguments },
+    })
+    .to_string();
+    let (status, _, answer) = exchange(running, &body, Some(session));
+    assert_eq!(status, 200, "{answer}");
+    assert_eq!(
+        answer["result"]["isError"], true,
+        "{tool} answered success: {answer}"
+    );
+    answer["result"].clone()
+}
+
+/// One tool call whose outcome this test does not judge.
+fn attempt(running: &Running, session: &str, tool: &str, arguments: Value) -> Value {
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": tool, "arguments": arguments },
+    })
+    .to_string();
+    let (status, _, answer) = exchange(running, &body, Some(session));
+    assert_eq!(status, 200, "{answer}");
+    answer["result"].clone()
+}
+
 /// A PNG content block back to its pixels, so a test can say what it shows.
 fn decode(base64: &str) -> Vec<u8> {
     let bytes = from_base64(base64);
@@ -444,6 +479,97 @@ fn an_agent_drives_the_running_application() {
     assert_eq!(
         undone["structuredContent"]["history_depth"], 0,
         "one undo did not return the document: {undone}"
+    );
+
+    // -- a tool with no verb on this layer is not offered, and refuses ------
+    //
+    // Issue #127. Four tools have no SDF verb — `ToolKind::verbs` says so
+    // outright — so the shelf does not draw them for a field layer. The agent
+    // surface offered all twenty-one whatever was open, and then answered
+    // `isError: false` with `history_depth: 0` to the begin, the continue and
+    // the end of a stroke made with one. Nothing anywhere told the caller.
+    let described = call(&running, &session, "describe", json!({ "group": "tool" }));
+    let argument = &described["structuredContent"]["actions"][0]["arguments"][0];
+    let offered = argument["choices"].as_array().expect("the tool choices");
+    let absent: Vec<String> = argument["no_verb_here"]
+        .as_array()
+        .expect("the tools with no verb here")
+        .iter()
+        .filter_map(|tool| tool.as_str().map(str::to_string))
+        .collect();
+    assert_eq!(
+        argument["choices_on"], described["structuredContent"]["layer"],
+        "the choices do not say which layer narrowed them: {described}"
+    );
+    assert!(
+        !absent.is_empty(),
+        "no tool is missing a verb on this layer, so the case #127 reports \
+         cannot be reached from here: {described}"
+    );
+    for tool in &absent {
+        assert!(
+            !offered.iter().any(|choice| choice == tool),
+            "{tool} has no verb here and is offered anyway: {described}"
+        );
+    }
+
+    // Whether taking one up is itself refused or merely remarked on is the
+    // interface's business — the shelf's answer is not to show the button —
+    // so this asks for it and judges only what the stroke does.
+    let unavailable = absent[0].clone();
+    attempt(
+        &running,
+        &session,
+        "tool",
+        json!({ "action": "select", "tool": unavailable }),
+    );
+
+    // Begin, continue and end. All three: an agent that ignored the first
+    // error used to be told twice more that its stroke was landing.
+    let begin = refused(
+        &running,
+        &session,
+        "stroke",
+        json!({ "action": "begin", "at": [0.0, 0.0, 0.6], "pressure": 1.0 }),
+    );
+    assert_eq!(
+        begin["structuredContent"]["code"], "unavailable",
+        "a stroke with no verb on this layer was refused as something else: {begin}"
+    );
+    assert!(
+        !begin["structuredContent"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .is_empty(),
+        "the refusal says nothing: {begin}"
+    );
+    refused(
+        &running,
+        &session,
+        "stroke",
+        json!({ "action": "continue", "at": [0.12, 0.0, 0.6], "pressure": 1.0 }),
+    );
+    refused(&running, &session, "stroke", json!({ "action": "end" }));
+
+    // And the refusals were refusals: nothing was banked behind them. (That
+    // the refused begin also lowers "this gesture is the agent's" cannot be
+    // seen from here — it shows only when a *person* is holding a stroke —
+    // and is asserted over `AgentGesture` in the binary's own tests.)
+    let after = call(
+        &running,
+        &session,
+        "state",
+        json!({ "sections": ["history"] }),
+    );
+    assert_eq!(
+        after["structuredContent"]["history"]["depth"], 0,
+        "the refused stroke banked an edit: {after}"
+    );
+    call(
+        &running,
+        &session,
+        "tool",
+        json!({ "action": "select", "tool": "clay" }),
     );
 
     // -- what can destroy work is gated ------------------------------------

@@ -7,6 +7,7 @@
 //! a row an agent is misled by, and the round trip is what stops that being
 //! possible.
 
+use clayspace_model::{Representation, ToolKind};
 use serde_json::{json, Map, Value};
 
 use super::tags;
@@ -26,6 +27,15 @@ pub enum Kind {
     Indices,
     /// One of a named set, which `describe` and the schema both spell out.
     Choice(fn() -> Vec<&'static str>),
+    /// One of the sculpting tools.
+    ///
+    /// Its own kind rather than a [`Kind::Choice`], because this is the one
+    /// set that depends on what is open: a tool with no verb on the active
+    /// representation is not on the sculptor's shelf — `ToolKind::for_representation`
+    /// is what the shelf is built from — and an agent asking `describe` is
+    /// given the same list rather than four tools whose stroke the ViewModel
+    /// would refuse.
+    Tool,
 }
 
 impl Kind {
@@ -41,14 +51,35 @@ impl Kind {
             Self::IVec3 => "three whole numbers",
             Self::Numbers => "a list of numbers",
             Self::Indices => "a list of whole numbers",
-            Self::Choice(_) => "one of a set",
+            Self::Choice(_) | Self::Tool => "one of a set",
         }
     }
 
+    /// Every value this kind names, whatever is open.
+    ///
+    /// What the schema carries: it is sent once, when a client connects, and
+    /// cannot follow the layer a sculptor selects afterwards.
     pub fn choices(self) -> Option<Vec<&'static str>> {
         match self {
             Self::Choice(of) => Some(of()),
+            Self::Tool => Some(tools()),
             _ => None,
+        }
+    }
+
+    /// What this kind names on the layer in hand.
+    ///
+    /// Only the tools narrow. Everything else offers the same set whatever is
+    /// open, so `describe` answering per layer changes nothing for them.
+    pub fn choices_on(self, layer: Representation) -> Option<Vec<&'static str>> {
+        match self {
+            Self::Tool => Some(
+                ToolKind::for_representation(layer)
+                    .into_iter()
+                    .map(ToolKind::key)
+                    .collect(),
+            ),
+            other => other.choices(),
         }
     }
 
@@ -74,6 +105,14 @@ impl Kind {
             Self::Numbers => json!({ "type": "array", "items": { "type": "number" } }),
             Self::Indices => json!({ "type": "array", "items": { "type": "integer" } }),
             Self::Choice(of) => json!({ "type": "string", "enum": of() }),
+            // Every tool: a schema is sent once, when a client connects, and
+            // cannot follow the layer a sculptor selects afterwards. Which of
+            // them the layer in hand offers is what `describe` answers, and
+            // the argument's own wording says so.
+            Self::Tool => json!({
+                "type": "string",
+                "enum": self.choices().unwrap_or_default(),
+            }),
         }
     }
 }
@@ -97,21 +136,17 @@ pub struct ActionSpec {
 }
 
 impl ActionSpec {
-    pub fn to_json(&self) -> Value {
+    /// The action as `describe` answers it.
+    ///
+    /// `layer` is what the active layer holds, where this group's choices
+    /// depend on it, and `None` where nothing in the group does — which is
+    /// every group but `tool`, and is why the read that finds it out is not
+    /// paid for describing the other twenty.
+    pub fn to_json(&self, layer: Option<Representation>) -> Value {
         let arguments: Vec<Value> = self
             .arguments
             .iter()
-            .map(|arg| {
-                let mut object = Map::new();
-                object.insert("name".into(), json!(arg.name));
-                object.insert("kind".into(), json!(arg.kind.word()));
-                object.insert("required".into(), json!(arg.required));
-                object.insert("about".into(), json!(arg.about));
-                if let Some(choices) = arg.kind.choices() {
-                    object.insert("choices".into(), json!(choices));
-                }
-                Value::Object(object)
-            })
+            .map(|arg| argument_json(arg, layer))
             .collect();
         json!({
             "action": self.name,
@@ -120,6 +155,45 @@ impl ActionSpec {
             "example": serde_json::from_str::<Value>(self.example).unwrap_or(json!({})),
         })
     }
+}
+
+/// One argument, with its choices narrowed to the layer in hand.
+///
+/// A narrowed list carries the layer it was narrowed against and what it left
+/// out, in the wire's own words for both: a client that asked for `pinch` and
+/// no longer sees it is owed the reason, and "it has no verb on a field" is
+/// the reason the shelf gives a sculptor by not drawing the button.
+fn argument_json(arg: &Arg, layer: Option<Representation>) -> Value {
+    let mut object = Map::new();
+    object.insert("name".into(), json!(arg.name));
+    object.insert("kind".into(), json!(arg.kind.word()));
+    object.insert("required".into(), json!(arg.required));
+    object.insert("about".into(), json!(arg.about));
+
+    let choices = match layer {
+        Some(layer) => arg.kind.choices_on(layer),
+        None => arg.kind.choices(),
+    };
+    if let Some(choices) = choices {
+        object.insert("choices".into(), json!(choices));
+    }
+    if let (Kind::Tool, Some(layer)) = (arg.kind, layer) {
+        object.insert(
+            "choices_on".into(),
+            json!(tags::tag_of(tags::REPRESENTATIONS, layer)),
+        );
+        object.insert("no_verb_here".into(), json!(without_a_verb(layer)));
+    }
+    Value::Object(object)
+}
+
+/// The tools this layer has no verb for, which is what the narrowing removed.
+fn without_a_verb(layer: Representation) -> Vec<&'static str> {
+    ToolKind::ALL
+        .into_iter()
+        .filter(|tool| !tool.exists_on(layer))
+        .map(ToolKind::key)
+        .collect()
 }
 
 const fn r(name: &'static str, kind: Kind, about: &'static str) -> Arg {
@@ -344,7 +418,12 @@ pub const TABLE: &[ActionSpec] = &[
         group: "tool",
         name: "select",
         summary: "Takes up a sculpting tool.",
-        arguments: &[r("tool", Kind::Choice(tools), "which tool")],
+        arguments: &[r(
+            "tool",
+            Kind::Tool,
+            "which tool; not every tool has a verb on every layer, and describe \
+             names the ones the layer in hand offers",
+        )],
         example: r#"{"tool":"clay"}"#,
     },
     // -- brush --------------------------------------------------------------
