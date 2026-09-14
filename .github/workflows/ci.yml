@@ -1,9 +1,15 @@
 # The gate. Everything that has to hold before a change lands.
 #
-# The engine is a submodule built from source with CMake, so every job pays for
-# a C++20 build before it can compile a line of Rust. That is what the ccache
-# step is for; without it the matrix is dominated by rebuilding ClayCore four
-# times over.
+# Two C++ engines are vendored as submodules and built from source with CMake —
+# ClayCore, and CyberRemesherAndUV since #94 — so every job compiles C++20
+# before it compiles a line of Rust. That is what the ccache step below is for.
+#
+# It is not, measured, what dominates the matrix. The two engines are 300
+# translation units, and compiling all 300 from scratch costs about 2.5 min:
+# `macOS, Metal (debug)` spends 3.8 min in Build on run 34661097385, where
+# ccache reports 0/300 hits, against 1.2 min on run 34669732006 where it
+# reports 300/300. The budget note on `test` below carries the step timings
+# that say so.
 name: CI
 
 on:
@@ -61,25 +67,45 @@ jobs:
     # not near the wall today, and a matrix whose rows are shaped differently
     # is one where the row that matters is the one nobody has looked at.
     #
-    # Seventy-five rather than sixty, and this number is measured rather than
-    # chosen. Sixty was tried first and cancelled `macOS, Metal (release)` at
-    # 60:50. The slowest job, on the run that followed:
+    # Seventy-five rather than sixty: sixty was tried first and cancelled
+    # `macOS, Metal (release)` at 60:50. The reasoning recorded here for the
+    # seventy-five — that the slowest job was "build 20 min, the C++ engine,
+    # and a restored cache does not spare most of it", so ~58 min cold — does
+    # not survive step-level timings. The 20 minutes is cargo's optimised
+    # codegen, not the engine.
     #
-    #     build   20 min   the C++ engine, and a restored cache does not spare
-    #                      most of it
-    #     tests   28 min
-    #     total   48 min   against a cold build of 30 min, so ~58 with no cache
+    # Re-measured per step on the four `main` runs that are comparable to what
+    # this now gates: each carries both vendored engines (#94) and the ccache
+    # step (#115), and each ran the same eight-job matrix. Every earlier `main`
+    # run is excluded for lacking one of those two — 34661093529 (#114) is the
+    # near one, pushed four seconds before #115 and with no ccache step at all.
+    # Slowest row, `macOS, Metal (release)`, minutes:
     #
-    # A cache goes cold on eviction, on a lockfile bump and on a toolchain
-    # update, and a budget that only holds while it is warm is a gate that
-    # fails for reasons that have nothing to do with the change under test.
-    # Seventy-five covers the cold case with margin and still measures one
-    # profile of one configuration, so a regression in either shows up as
-    # itself.
+    #     run           build   test    job    ccache on the row
+    #     34661097385    25.2    20.5   46.4   0/300 — both engines cold
+    #     34668263566    23.3    28.2   52.2   300/300
+    #     34669732006    20.3    22.3   43.2   300/300
+    #     34783040917    23.9    25.7   50.2   208/303 — ClayCore pin moved
     #
-    # If this is approached again, the build is where to look and not the
-    # suite: it is twenty of the forty-eight minutes with a cache and thirty
-    # without one.
+    # The release build is 20-25 min with *every* C++ object a cache hit, so
+    # what costs twenty minutes there is the Rust release compile. The engines'
+    # own cost is only separable on the debug row, where the Rust compile is
+    # small, and there it is monotone in the miss count — Build, same four runs:
+    # 1.2 min at 0 misses, 1.8 at 25, 2.7 at 95 (ClayCore cold, its pin moved),
+    # 3.8 at 300 (both engines cold). Two engines from scratch is ~2.5 min.
+    #
+    # So nothing measured here derives seventy-five; the budget has headroom
+    # rather than a derivation. The worst job of the four is 52 min, and the
+    # fully cold one is not it — 46.4 min, faster than two of the other three.
+    # Cache state is not what moves this row. The test step is: 20.5 to 28.2 min
+    # on release and 31.1 to 35.4 on debug, across four runs of a suite that
+    # changed by a handful of tests.
+    #
+    # Left at seventy-five and not tightened, because four runs bound the middle
+    # of that distribution and say nothing about its tail, and a budget cut to
+    # the worst of four samples is a budget that fails on the fifth. If it is
+    # approached again, the suite is where to look and not the build: 34 of the
+    # 39 minutes of the cold debug job were the test step.
     timeout-minutes: 75
     strategy:
       # One row failing should not hide the others: a Metal-only regression is
