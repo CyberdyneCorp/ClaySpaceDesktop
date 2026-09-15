@@ -25,3 +25,27 @@ Format, Clippy with warnings denied and all 46 strict OpenSpec items pass. Clipp
 The combined release build succeeds in 4m 15s against Core `cd215a7a`. All 87 enabled cases pass in one complete isolated-display run, with one informational test ignored and no adapter skips. The rendered timing ratio is 21.9 ms for Snake Hook versus 5.0 ms for Standard. These are correctness checks, not proof of the 16 ms application target.
 
 The combined application binary is preserved separately (SHA-256 `1e6cc20ddccdc603078dc4482077e3683e506d17092467a7f2fb77b4c3689e1f`). The vendor checkout is restored to the committed v0.113.0 pin. The same-base live comparison uses the previously preserved host application with Core `cd215a7a` as its control; only the host remapping changes. Application measurements remain pending.
+
+The first live run stopped after 134 of 260 cases when fixture-reset undo after Inflate exceeded the application command response limit (10 seconds). Five complete alternating pairs are preserved; the incomplete sixth pair is excluded from comparisons. The unfinished pairs are being repeated with failure-command and thread-stack capture. This timeout is unresolved and is not classified as pre-existing or as a measured brush action.
+
+## Same-base application timing
+
+The remaining five alternating pairs complete without another timeout. Combining the first five complete pairs with these five gives 260 complete cases across all 13 brushes; the four rows from the interrupted pair are excluded. All paired begin/continue/end uploaded byte counts match. Both runs passed the quiet-start CPU guard and neither was interrupted for sustained CPU contention. The single fixture-reset timeout remains unexplained; successful repetition does not establish its cause.
+
+| Brush | Begin before / dense ms | Continue before / dense ms | Release before / dense ms |
+|---|---:|---:|---:|
+| mask | 6.310 / 5.960 | 0.035 / 0.027 | 7.822 / 7.815 |
+| crease | 1.270 / 1.096 | 0.016 / 0.017 | 22.972 / 23.555 |
+| clay | 2.498 / 2.215 | 0.020 / 0.019 | 17.730 / 17.799 |
+| inflate | 2.683 / 2.143 | 0.019 / 0.017 | 18.730 / 17.695 |
+| layer | 1.187 / 1.164 | 0.017 / 0.017 | 17.217 / 17.524 |
+| standard | 1.150 / 1.202 | 0.021 / 0.021 | 16.776 / 17.071 |
+| polish | 0.023 / 0.026 | 0.015 / 0.020 | 37.573 / 36.000 |
+| planar | 0.020 / 0.023 | 0.012 / 0.012 | 37.048 / 35.581 |
+| move-topological | 0.024 / 0.023 | 0.014 / 0.015 | 49.852 / 48.411 |
+| move | 0.022 / 0.022 | 3.565 / 3.383 | 57.953 / 54.971 |
+| relax | 83.846 / 75.201 | 0.025 / 0.029 | 77.967 / 72.106 |
+| smooth | 75.077 / 68.750 | 0.026 / 0.028 | 80.114 / 71.245 |
+| snake-hook | 0.027 / 0.027 | 16.654 / 14.763 | 31.199 / 28.121 |
+
+These are fixture medians, not a per-run guarantee. Smooth/Relax improve materially, while several ordinary-brush release medians are approximately unchanged or slightly higher. Dense remapping does not remove their separate compaction cost. The 16 ms target remains unmet. Raw complete measurements and summaries are retained locally as `/tmp/clay-531-dense-remap-live-complete.json` and `/tmp/clay-531-dense-remap-live-summary.json`.

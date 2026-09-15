@@ -1,5 +1,6 @@
 - [x] Attribute the per-brick splitting cost and specify the candidate.
 - [x] Compare a dense-remap prototype with the original algorithm on exact output and realistic workloads.
 - [x] Implement the selected approach with reference, invalid-index and reuse regressions.
-- [ ] Measure scratch memory and isolated/live performance.
-- [ ] Complete format, Clippy/complexity, OpenSpec and native/rendered verification; update PR evidence.
+- [x] Measure scratch memory and isolated/live performance.
+- [x] Complete format, Clippy/complexity, OpenSpec and native/rendered verification; update PR evidence.
+- [ ] Finish platform CI and investigate any recurrence of the fixture-reset timeout.
