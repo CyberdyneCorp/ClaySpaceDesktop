@@ -164,6 +164,29 @@ fn only_the_passes_that_ran_are_reported() {
     assert!(with.total() > 0.0, "every pass reported zero time");
 
     harness.renderer.set_occlusion(false);
+    // Captured until the frame reports SOMETHING, rather than a fixed eight
+    // times and then asserted on whatever had arrived.
+    //
+    // The comment below already says a pass whose start and end timestamps come
+    // back equal is dropped rather than reported as zero. With occlusion off
+    // the frame is cheap enough that this reaches the Scene pass itself, so
+    // `measured` comes back EMPTY — about half the time on this machine,
+    // measured at 3 runs in 5 with no other GPU test running. The assertion
+    // then failed against `[Scene]` for a reason that has nothing to do with
+    // what it is testing.
+    //
+    // Waiting rather than loosening the assertion, because an empty list also
+    // satisfies "no occlusion pass was reported" — so accepting it would turn
+    // this into a gate that passes whenever the measurement fails to arrive,
+    // which is the one outcome it must not have.
+    //
+    // Two phases, and the order is the whole point. The eight frames FLUSH: a
+    // timing report lags the state that produced it, so a frame read too soon
+    // after `set_occlusion(false)` is a measurement of a frame that still had
+    // occlusion on. Breaking out of the flush at the first non-empty report
+    // reads exactly that stale frame — it reports `[Scene, DepthReduce, Ao]`
+    // with occlusion off, and looks like the defect this test exists to catch.
+    // Only after the flush is it safe to wait.
     for _ in 0..8 {
         let _ = harness.target.capture(
             &harness.gpu,
@@ -173,7 +196,26 @@ fn only_the_passes_that_ran_are_reported() {
             false,
         );
     }
-    let without = harness.renderer.gpu_timing().expect("a measured frame");
+    let mut without = None;
+    for _ in 0..64 {
+        let frame = harness.renderer.gpu_timing().expect("a measured frame");
+        if frame.measured().next().is_some() {
+            without = Some(frame);
+            break;
+        }
+        let _ = harness.target.capture(
+            &harness.gpu,
+            &harness.renderer,
+            &camera,
+            geometry.mesh(),
+            false,
+        );
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    let without = without.expect(
+        "sixty-four frames with occlusion off and not one reported a pass; the \
+         timestamps are not arriving at all rather than arriving late",
+    );
     let measured: Vec<GpuPass> = without.measured().map(|(pass, _)| pass).collect();
     println!("occlusion off: {measured:?}");
 
