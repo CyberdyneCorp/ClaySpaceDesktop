@@ -1643,8 +1643,8 @@ impl App {
     /// Pays a settle a finished stroke owed, at the top of a frame.
     ///
     /// A stroke asks for settlement after release. Independently meshed
-    /// regions can retain boundary copies with different shading, so a single
-    /// complete request restores consistent ownership when old regions remain.
+    /// regions retain boundary copies. Document-gradient copies can be
+    /// compacted exactly; preview shading still requires a complete request.
     ///
     /// Never while a live gesture is open: that would replace its preview.
     /// If synchronization already replaced every stored triangle, consuming
@@ -1667,11 +1667,12 @@ impl App {
             .as_ref()
             .is_some_and(|g| g.geometry.needs_settle())
         {
-            self.settle_geometry();
+            self.timed("re-malha final", |app| app.settle_geometry_using(true));
+            self.report_settle();
         }
     }
 
-    /// Says what the settle just spent, and on which of its three routes.
+    /// Says what the settle just spent, and which route it took.
     ///
     /// Printed beside the stall line rather than folded into it, because the
     /// stall ledger records ONE duration per label and this is the split that
@@ -1974,13 +1975,21 @@ impl App {
     }
 
     fn settle_geometry_now(&mut self) {
+        self.settle_geometry_using(false);
+    }
+
+    fn settle_geometry_using(&mut self, after_edit: bool) {
         let Some(graphics) = self.graphics.as_mut() else {
             return;
         };
         let gpu = graphics.gpu.clone();
-        let result = self
-            .document
-            .with(|document| graphics.geometry.settle(&gpu, document));
+        let result = self.document.with(|document| {
+            if after_edit {
+                graphics.geometry.settle_after_edit(&gpu, document)
+            } else {
+                graphics.geometry.settle(&gpu, document)
+            }
+        });
         match result {
             Ok(()) => self.sculpt.acknowledge_remesh(),
             Err(e) => eprintln!("the surface could not be re-meshed: {e}"),
@@ -4466,18 +4475,16 @@ impl App {
             self.drag_anchor = None;
             // Partial requests can retain boundary copies from older
             // requests. The deferred flush checks whether synchronization
-            // already replaced the complete surface before rebuilding it.
+            // already replaced the complete surface, then compacts eligible
+            // document geometry or rebuilds the remaining cases.
             if matches!(command, Command::EndStroke)
                 && self.sculpt.active_representation() == Representation::Sdf
             {
                 // OWED, NOT PAID. The brick-meshed surface the drag already
                 // drew is what stays on screen for one more frame, and the
-                // clean whole-surface re-mesh lands on the next one.
-                //
-                // The work is the same; what changes is that it no longer
-                // happens between the pointer lifting and the frame that
-                // acknowledges it. `build_mips` below is deferred for its own
-                // reason and this follows it.
+                // required compaction or rebuild lands on the next one.
+                // `build_mips` below is deferred for its own reason and this
+                // follows it.
                 self.settle_owed = true;
                 self.request_redraw();
             }

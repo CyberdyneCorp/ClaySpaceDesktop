@@ -55,3 +55,35 @@ settlement and rendered-brush tests with Core `9cc0d181`, CPU fields and RTX 506
 Vulkan rendering, without adapter skips. The host's committed engine pin remains
 v0.113.0 (`260b7797`). These results do not establish the wider issue's 16 ms target;
 required settlement and expensive region operations remain above that budget.
+
+## Follow-up: exact release compaction (in progress)
+
+Attribution on host e99ace5b with the committed Core v0.113.0 pin compares complete vertex float bits, including normals, colors and masks. Six Standard dabs produce 283,682 stored triangles but exactly the same 283,152 distinct triangles as a full rebuild. Eight ordinary tools with 24 two-sample dabs each also match exactly. The existing long mixed-session geometry fixture stores 599,465 triangles, of which 588,184 are distinct; the full rebuild has exactly those 588,184 triangles. Its remaining 11,281 copies are exact duplicates. This does not change the known rendered long-session defect or count its ignored visual test as passing.
+
+These probes justify investigating release compaction for synchronized document-gradient geometry. Preview/face shading is excluded. The new repeated-release regression fails with the previous full-rebuild route (Standard reports Bricks instead of Compact), then passes for all eight tools after implementation. The final pinned-engine build passes 17 cases: five settlement regressions, three native MCP end-to-end, four sculpt-latency, two rendered-brush and three rendered-incremental cases. Preview deferral, unsynchronized preview fallback and explicit rebuild semantics are covered. Strict OpenSpec validation passes all 45 items. After extracting mesh reading, world-coordinate conversion and mask sampling into a focused helper, all 17 cases pass again. Clippy with warnings treated as errors passes; no changed geometry function or new release/test helper exceeds cognitive complexity 12. Live performance measurement, combined-engine validation and new platform CI are still pending.
+
+### Release compaction timing attempt
+
+Three alternating before/fixed application runs covered all 13 brushes, 78 tool/run cases. Both binaries used Core `9cc0d181`; the baseline host was `e99ace5b`, and the fixed binary was the release-compaction prototype before storage cleanup. Each tool started after undoing previous edits, then measured begin at `[0,0,1]`, continue at `[0.12,0,1]`, and end, pressure 1. CPU fields and RTX 5060/Vulkan rendering were unchanged. No local builds/tests ran concurrently, but external C/C++ compilers raised one-minute machine load from 10.07 to 32.19. A fixed Move control release took 5.39 seconds in one run. These are contended observations, not an interactive-latency claim or validation of the final storage-cleanup code's speed.
+
+| Tool | Baseline median end ms | Prototype median end ms |
+|---|---:|---:|
+| mask | 35.251 | 18.588 |
+| crease | 448.520 | 148.435 |
+| clay | 368.220 | 87.050 |
+| inflate | 495.968 | 144.809 |
+| layer | 536.460 | 199.581 |
+| standard | 443.028 | 68.409 |
+| polish | 367.696 | 233.497 |
+| planar | 408.331 | 201.833 |
+| move-topological | 658.715 | 232.855 |
+| move | 387.187 | 318.410 |
+| relax | 504.416 | 589.078 |
+| smooth | 599.770 | 601.498 |
+| snake-hook | 534.898 | 185.560 |
+
+### Storage cleanup verification
+
+A release previously relied on the full rebuild to discard empty entries and old vertex allocations. The new storage regression fails with three retained entries where one is expected. Release compaction now removes empty and duplicate-only entries, removes unreferenced vertices, remaps surviving indices without changing order or winding, and shrinks spare vertex/index capacity. One scratch remap buffer is reused across keys. Ordinary duplicate-pruning diagnostics keep their original vertex-array contract. Layout consumes prepared release geometry without repeating duplicate pruning.
+
+The pinned-engine build passes 67 library tests (one informational timing test intentionally ignored) and 17 native/rendered integration tests. The final unit rerun additionally checks that oversized backing capacities are released. Clippy with warnings denied and all 45 strict OpenSpec items pass. Changed geometry and new release/test helpers remain within cognitive complexity 12. The final combined host/Core `9cc0d181` build also passes all 84 enabled cases (67 library and 17 native/rendered integration), with only the library timing probe intentionally ignored. The committed engine pin is restored to v0.113.0. New platform CI and a clean final latency comparison remain pending.

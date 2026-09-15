@@ -73,8 +73,10 @@ pub struct SyncCost {
 /// divided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettleRoute {
-    /// A per-key rebuild at full resolution, which is the ordinary end of a
-    /// stroke.
+    /// Exact duplicate compaction without evaluating or meshing the field.
+    Compact,
+    /// A per-key rebuild at full resolution, used for explicit rebuilding and
+    /// release geometry that cannot be compacted.
     ///
     /// This used to be a whole-field `clay_document_mesh`. It was there to hide
     /// the brick mesher's sliver triangles — 2,297 near-zero-area triangles in
@@ -104,7 +106,8 @@ pub struct SettleCost {
     /// Copying the engine's mesh into the renderer's vertex layout, and
     /// sampling the mask over it.
     pub read_time: std::time::Duration,
-    /// Writing to the GPU.
+    /// Separately timed GPU writes, when available. Rebuild and compaction
+    /// currently include layout/upload work in `total_time` instead.
     pub upload_time: std::time::Duration,
     /// Everything `settle` spent, so `total - (engine + read + upload)` is
     /// what the bookkeeping around them cost.
@@ -153,8 +156,10 @@ pub struct SurfaceGeometry {
     /// again when this stops matching the document's.
     surface_epoch: u64,
     /// Separate partial requests may assign the same boundary triangle to
-    /// different keys. Only a complete replacement clears that possibility.
+    /// different keys. A full replacement or eligible release compaction clears it.
     needs_settle: bool,
+    /// Every retained triangle uses request-independent document gradients.
+    document_gradients: bool,
     /// The level the stored geometry was meshed at.
     ///
     /// Distinct from `requested` because a coarse surface is not always
@@ -231,6 +236,7 @@ impl SurfaceGeometry {
             cage_rest: HashMap::new(),
             surface_epoch: 0,
             needs_settle: false,
+            document_gradients: true,
             keys: HashMap::new(),
             mesh: GpuMesh::new(gpu),
             dirty: false,
@@ -266,6 +272,48 @@ impl SurfaceGeometry {
 
     pub fn last_cost(&self) -> Option<SyncCost> {
         self.last_cost
+    }
+
+    /// Finish an already synchronized stroke without re-evaluating unchanged
+    /// geometry. Document gradients depend on vertex position, so partial
+    /// requests differ only in ownership and exact duplicate copies. Preview
+    /// face normals depend on the requested neighborhood and cannot use this.
+    /// Explicit `settle` and `rebuild` still perform a complete rebuild.
+    pub fn settle_after_edit(
+        &mut self,
+        gpu: &Gpu,
+        document: &mut ClayDocument,
+    ) -> Result<(), ClayError> {
+        if document.live_gesture_is_open() {
+            return Ok(());
+        }
+        if !self.document_gradients
+            || self.surface_epoch != document.surface_epoch()
+            || self.detail != Detail::Full
+            || !self.cage_rest.is_empty()
+        {
+            return self.settle(gpu, document);
+        }
+        let started = std::time::Instant::now();
+        compact_release_geometry(&mut self.keys);
+        self.relayout = true;
+        self.dirty = true;
+        self.lay_out_prepared(gpu);
+        // A refused layout must retain its debt and dirty geometry.
+        if !self.dirty {
+            self.needs_settle = false;
+        }
+        self.last_settle = Some(SettleCost {
+            route: SettleRoute::Compact,
+            engine_mesh_time: std::time::Duration::ZERO,
+            read_time: std::time::Duration::ZERO,
+            upload_time: std::time::Duration::ZERO,
+            total_time: started.elapsed(),
+            triangles: self.triangle_count(),
+            vertices: self.vertex_count(),
+        });
+        document.record_geometry(self.triangle_count(), self.vertex_count(), self.detail);
+        Ok(())
     }
 
     /// What the last `settle` cost, and which route it took.
@@ -433,6 +481,9 @@ impl SurfaceGeometry {
         // Even a dirty-key request can replace the entire stored surface
         // (for example undo). Only retained old triangles mix ownership.
         let needs_settle = retains_unreplaced_triangles(&self.keys, replace);
+        let document_gradients = shading.gradient()
+            && !document.live_gesture_is_open()
+            && (!needs_settle || self.document_gradients);
         let engine_started = std::time::Instant::now();
         // The document is what a gradient is sampled through, so it goes
         // wherever gradient normals are asked for — which, since ClayCore
@@ -478,28 +529,7 @@ impl SurfaceGeometry {
         self.last_engine_mesh = engine_started.elapsed();
 
         let read_started = std::time::Instant::now();
-        let (mut vertices, indices) = match &mesh {
-            Some(mesh) => read_mesh(mesh)?,
-            None => (Vec::new(), Vec::new()),
-        };
-        // The preview lattice is the cache's lattice in a world translated by
-        // its own origin, so the translation is undone here — on the vertices
-        // and nowhere else, which is what keeps every reader of this geometry
-        // (bounds, picking, the mask below) working in one space.
-        if offset != [0.0; 3] {
-            for vertex in &mut vertices {
-                for (axis, by) in offset.iter().enumerate() {
-                    vertex.position[axis] += by;
-                }
-            }
-        }
-        // The frozen region, on the vertices this re-mesh just produced.
-        //
-        // Only these, which is the dirty subset: a dab that re-meshes twenty
-        // bricks samples twenty bricks' worth rather than the whole surface.
-        // A mask that *changes* is the other direction and is
-        // `refresh_mask`'s job.
-        sample_mask(document, &mut vertices);
+        let (vertices, indices) = read_drawn_mesh(mesh.as_ref(), offset, document)?;
         self.last_read = read_started.elapsed();
         let split_started = std::time::Instant::now();
 
@@ -624,6 +654,7 @@ impl SurfaceGeometry {
         self.cage_rest.clear();
         self.dirty = true;
         self.needs_settle = needs_settle;
+        self.document_gradients = document_gradients;
         Ok(())
     }
 
@@ -714,6 +745,12 @@ impl SurfaceGeometry {
     /// after a rebuild stay incremental rather than immediately re-homing
     /// everything.
     fn lay_out(&mut self, gpu: &Gpu) {
+        self.prune_duplicates();
+        self.lay_out_prepared(gpu);
+    }
+
+    /// Allocate and upload geometry after its duplicate pass has completed.
+    fn lay_out_prepared(&mut self, gpu: &Gpu) {
         let vertices_needed = self.vertex_count() + self.keys.len() * 64;
         let indices_needed = self.triangle_count() * 3 + self.keys.len() * 64;
         // Twice the need where the device allows it, so the strokes after a
@@ -749,7 +786,6 @@ impl SurfaceGeometry {
         self.layout = SlotMap::new(vertex_slots as u32, index_slots as u32);
         self.bounds = None;
         self.touched.clear();
-        self.prune_duplicates();
 
         let keys: Vec<BrickKey> = self.keys.keys().copied().collect();
         for key in keys {
@@ -1208,6 +1244,46 @@ fn retains_unreplaced_triangles(
     })
 }
 
+/// Reclaim storage a complete remesh would have discarded, preserving each
+/// surviving vertex bit and triangle order. Scratch space is reused per key.
+fn compact_release_geometry(geometries: &mut HashMap<BrickKey, KeyGeometry>) {
+    prune_exact_triangles(geometries);
+    geometries.retain(|_, geometry| !geometry.indices.is_empty());
+    let mut remap = Vec::new();
+    for geometry in geometries.values_mut() {
+        compact_referenced_vertices(geometry, &mut remap);
+        geometry.vertices.shrink_to_fit();
+        geometry.indices.shrink_to_fit();
+    }
+}
+
+fn compact_referenced_vertices(geometry: &mut KeyGeometry, remap: &mut Vec<u32>) {
+    remap.clear();
+    remap.resize(geometry.vertices.len(), u32::MAX);
+    for &index in &geometry.indices {
+        remap[index as usize] = 0;
+    }
+    if remap.iter().all(|&index| index != u32::MAX) {
+        return;
+    }
+    let mut old = 0;
+    let mut next = 0usize;
+    geometry.vertices.retain(|_| {
+        let index = old;
+        old += 1;
+        if remap[index] == u32::MAX {
+            return false;
+        }
+        // A retained vertex's new index cannot exceed its old u32 index.
+        remap[index] = next as u32;
+        next += 1;
+        true
+    });
+    for index in &mut geometry.indices {
+        *index = remap[*index as usize];
+    }
+}
+
 /// Match complete vertex bits once, then use compact exact triangle keys.
 fn prune_exact_triangles(geometries: &mut HashMap<BrickKey, KeyGeometry>) {
     let triangle_count: usize = geometries.values().map(|g| g.indices.len() / 3).sum();
@@ -1270,6 +1346,37 @@ fn contains_coincident_triangles(keys: &HashMap<BrickKey, KeyGeometry>) -> bool 
         }
     }
     false
+}
+
+/// Read the drawn cache's mesh in world coordinates and sample its mask.
+fn read_drawn_mesh(
+    mesh: Option<&Mesh>,
+    offset: [f32; 3],
+    document: &ClayDocument,
+) -> Result<(Vec<Vertex>, Vec<u32>), ClayError> {
+    let (mut vertices, indices) = match mesh {
+        Some(mesh) => read_mesh(mesh)?,
+        None => (Vec::new(), Vec::new()),
+    };
+    // The preview lattice is the cache's lattice in a world translated by
+    // its own origin, so the translation is undone here — on the vertices
+    // and nowhere else, which is what keeps every reader of this geometry
+    // (bounds, picking, the mask below) working in one space.
+    if offset != [0.0; 3] {
+        for vertex in &mut vertices {
+            for (axis, by) in offset.iter().enumerate() {
+                vertex.position[axis] += by;
+            }
+        }
+    }
+    // The frozen region, on the vertices this re-mesh just produced.
+    //
+    // Only these, which is the dirty subset: a dab that re-meshes twenty
+    // bricks samples twenty bricks' worth rather than the whole surface.
+    // A mask that *changes* is the other direction and is
+    // `refresh_mask`'s job.
+    sample_mask(document, &mut vertices);
+    Ok((vertices, indices))
 }
 
 /// Reads an engine mesh into the renderer's vertex layout in one pass.
@@ -1421,6 +1528,50 @@ mod tests {
             ],
             indices: vec![0, 1, 2],
         }
+    }
+
+    #[test]
+    fn release_compaction_reclaims_empty_bricks_and_unused_vertices() {
+        let reference = triangle([0.0, 0.0, 1.0]);
+        let expected: Vec<_> = reference.vertices.iter().map(vertex_key).collect();
+        let mut used = triangle([0.0, 0.0, 1.0]);
+        used.vertices.insert(1, vertex([99.0; 3], [0.0; 3]));
+        used.indices = vec![0, 2, 3];
+        used.vertices.reserve(4096);
+        used.indices.reserve(4096);
+        let mut empty = triangle([0.0, 0.0, 1.0]);
+        empty.vertices.reserve(4096);
+        empty.vertices.clear();
+        empty.indices.clear();
+        let mut keys = HashMap::from([
+            ([0, 0, 0], used),
+            ([1, 0, 0], reference),
+            ([2, 0, 0], empty),
+        ]);
+        super::compact_release_geometry(&mut keys);
+        assert_eq!(
+            keys.len(),
+            1,
+            "empty and duplicate-only entries retain allocations"
+        );
+        let actual = keys.get(&[0, 0, 0]).expect("first surviving owner");
+        assert!(
+            actual.vertices.capacity() < 64,
+            "release old vertex backing storage"
+        );
+        assert!(
+            actual.indices.capacity() < 64,
+            "release old index backing storage"
+        );
+        assert_eq!(
+            actual.vertices.iter().map(vertex_key).collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(
+            actual.indices,
+            [0, 1, 2],
+            "preserve winding while remapping references"
+        );
     }
 
     #[test]

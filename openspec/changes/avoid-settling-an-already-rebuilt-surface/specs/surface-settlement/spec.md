@@ -14,7 +14,8 @@ The renderer SHALL retain deferred settlement for geometry combining separate pa
 #### Scenario: Mixed partial requests
 - **WHEN** a partial meshing request is merged into an existing store
 - **THEN** deferred settlement remains required
-- **AND** exact duplicate compaction does not clear that requirement
+- **AND** release MAY satisfy that requirement by exact duplicate compaction when all stored triangles use current document-gradient shading at full resolution
+- **AND** otherwise release retains the full rebuild path
 
 #### Scenario: Live gesture guard
 - **WHEN** a live gesture is open
@@ -27,3 +28,18 @@ The renderer SHALL retain deferred settlement for geometry combining separate pa
 #### Scenario: Complete dirty-key replacement
 - **WHEN** a dirty-key request replaces every stored triangle, including a store with empty bookkeeping entries
 - **THEN** no old request ownership remains to settle
+
+#### Scenario: Exact release compaction
+- **WHEN** a synchronized full-resolution document surface contains only document-gradient geometry and no cage preview
+- **THEN** release removes only duplicate triangles with identical complete vertex attributes without invoking engine meshing
+- **AND** later incremental edits retain the same distinct triangle set as a full rebuild
+- **AND** settlement telemetry identifies compaction and reports zero engine mesh and mesh-read time
+
+#### Scenario: Explicit rebuild
+- **WHEN** an explicit settle or rebuild is requested
+- **THEN** the renderer retains its full rebuild semantics
+
+#### Scenario: Reclaim removed geometry
+- **WHEN** release compaction removes duplicate triangles or retains emptied brick entries
+- **THEN** empty entries and vertices referenced by no surviving triangle are discarded
+- **AND** surviving triangle order and every referenced vertex attribute remain unchanged
