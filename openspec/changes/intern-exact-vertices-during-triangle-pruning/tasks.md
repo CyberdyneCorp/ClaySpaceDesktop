@@ -2,4 +2,4 @@
 - [x] Verify all-attribute equality, output order and rendered compaction.
 - [x] Measure repeated live release and representative pruning workloads.
 - [x] Run lint/complexity/OpenSpec checks and update PR documentation.
-- [ ] Verify platform CI and record remaining latency limitations.
+- [x] Verify platform CI and record remaining latency limitations.

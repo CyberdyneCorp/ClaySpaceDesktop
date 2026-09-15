@@ -47,3 +47,16 @@ Median milliseconds across the three runs:
 The common measurement floor is removed from ordinary begin/continue operations, while genuine expensive edits and release work remain. Some end medians worsen in this contended run; they are retained here rather than treated as a portable regression or discarded. Source inspection also confirms that epoch-changing tools can rebuild in command synchronization and then pay the existing unconditional release settlement again. That is a remaining host lifecycle cost, not removed by vertex interning.
 
 The Mask begin figures in this historical comparison also exclude the deferred mask attribute refresh at those revisions. The subsequent mask-completion correction in the measurement change adds that work to the timed operation; see its validation record. Do not interpret the historical Mask timings as complete rendering costs.
+
+
+## Final platform and combined validation
+
+All 16 applicable GitHub checks pass at production revision `e99ace5b`, including
+Linux CPU/Vulkan, macOS CPU/Metal, formatting/lint, performance and cross-platform
+document agreement. The baseline-recording job is intentionally skipped.
+
+The same host revision also passes all 12 combined native MCP, sculpt-latency,
+settlement and rendered-brush tests with Core `9cc0d181`, CPU fields and RTX 5060
+Vulkan rendering, without adapter skips. The host's committed engine pin remains
+v0.113.0 (`260b7797`). These results do not establish the wider issue's 16 ms target;
+required settlement and expensive region operations remain above that budget.

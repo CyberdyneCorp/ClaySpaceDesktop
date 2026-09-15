@@ -42,3 +42,16 @@ Three alternating before/fixed runs across 13 tools (78 completed tool/run cases
 Mask, Move, Relax and Smooth halve their release upload counts. In this multi-sample mask stroke the final stroke sample still changes mask attributes, so release legitimately uploads those attributes once; the one-sample native regression proves zero uploads when attributes are already current. The eliminated work is the extra field rebuild. Standard's unchanged upload count and roughly unchanged latency are a control: partial-request settlement remains.
 
 These measurements establish the release-work reduction for this configuration. Genuine region processing and required full rebuilds remain above 16 ms in several cases; no universal interactive budget is claimed.
+
+
+## Final platform and combined validation
+
+All 16 applicable GitHub checks pass at production revision `e99ace5b`, including
+Linux CPU/Vulkan, macOS CPU/Metal, formatting/lint, performance and cross-platform
+document agreement. The baseline-recording job is intentionally skipped.
+
+The same host revision also passes all 12 combined native MCP, sculpt-latency,
+settlement and rendered-brush tests with Core `9cc0d181`, CPU fields and RTX 5060
+Vulkan rendering, without adapter skips. The host's committed engine pin remains
+v0.113.0 (`260b7797`). These results do not establish the wider issue's 16 ms target;
+required settlement and expensive region operations remain above that budget.

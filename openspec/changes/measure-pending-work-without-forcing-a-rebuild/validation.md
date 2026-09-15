@@ -42,3 +42,16 @@ The existing large E2E scenario measures 27 on the main version (`9a7ec9c`) and 
 The early Mask begin timings above did not include its GPU attribute refresh: mask edits dirty no field bricks, and that refresh ran only during redraw. A new live regression fails on `41237d8`: measured Mask begin returns 0 uploaded bytes (0.291 ms). Completion now invokes the existing revision-guarded mask refresh, and pending mask revisions are reported by wait. Renderer initialization completes its initial refresh so an idle command does not inherit startup work.
 
 Both native E2E tests pass after the fix, including positive uploads during measured mask painting, zero uploads on a following idle wait, idle selection, real field edits, rendered changes and undo. This corrects attribution; the old 0.3 ms Mask figure is not its complete render-update latency. New helpers remain below the 12-point Clippy complexity threshold.
+
+
+## Final platform and combined validation
+
+All 16 applicable GitHub checks pass at production revision `e99ace5b`, including
+Linux CPU/Vulkan, macOS CPU/Metal, formatting/lint, performance and cross-platform
+document agreement. The baseline-recording job is intentionally skipped.
+
+The same host revision also passes all 12 combined native MCP, sculpt-latency,
+settlement and rendered-brush tests with Core `9cc0d181`, CPU fields and RTX 5060
+Vulkan rendering, without adapter skips. The host's committed engine pin remains
+v0.113.0 (`260b7797`). These results do not establish the wider issue's 16 ms target;
+required settlement and expensive region operations remain above that budget.
