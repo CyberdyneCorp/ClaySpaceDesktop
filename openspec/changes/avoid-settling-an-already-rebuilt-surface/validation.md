@@ -109,3 +109,7 @@ The final `b47c2633` implementation, including storage cleanup, was compared wit
 | snake-hook | 82.948 | 34.973 |
 
 Standard release falls from 69.329 to 23.843 ms, Clay from 75.037 to 22.288 ms, and Snake Hook from 82.948 to 34.973 ms. Move and Smooth retain their necessary preview/epoch work and remain roughly unchanged. The final application's logs report `Compact` with zero engine mesh/read time; compaction itself still takes roughly 17–22 ms in logged cases. These results establish the release improvement, not a universal 16 ms outcome. Smooth/Relax pointer-down remains around 90–103 ms in this run.
+
+## Release-compaction platform verification
+
+All 16 applicable GitHub checks pass at production revision `b47c2633`, including Linux CPU/Vulkan, macOS CPU/Metal, formatting/lint, performance, packaging and cross-platform document agreement. The baseline-recording job is intentionally skipped. This verifies the final release-compaction/storage implementation; the later fast-hashing follow-up has its own pending CI.
