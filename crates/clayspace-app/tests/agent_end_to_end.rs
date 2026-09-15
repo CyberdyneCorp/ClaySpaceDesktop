@@ -316,6 +316,57 @@ fn from_base64(text: &str) -> Vec<u8> {
     out
 }
 
+/// A synchronized session needs no geometry work to answer a meter or wait.
+fn assert_idle_measure(running: &Running, session: &str) {
+    // A meter must not manufacture work. This catches a forced whole-surface
+    // rebuild without depending on the machine's frame-time performance.
+    let idle = call(
+        running,
+        session,
+        "measure",
+        json!({ "group": "tool", "action": "select", "arguments": { "tool": "standard" } }),
+    );
+    assert_eq!(
+        idle["structuredContent"]["uploaded_bytes"], 0,
+        "measuring an unchanged selection uploaded geometry: {idle}"
+    );
+    assert_idle_wait(running, session);
+}
+
+fn assert_idle_wait(running: &Running, session: &str) {
+    let quiet = call(running, session, "wait", json!({ "bound_ms": 5000 }));
+    assert_eq!(quiet["structuredContent"]["quiet"], true);
+    assert_eq!(
+        quiet["structuredContent"]["uploaded_bytes"], 0,
+        "waiting on an idle session uploaded geometry: {quiet}"
+    );
+}
+
+/// Measuring a real edit must still deliver its geometry to the renderer.
+fn measure_clay_stroke(running: &Running, session: &str) {
+    let began = call(
+        running,
+        session,
+        "measure",
+        json!({ "group": "stroke", "action": "begin", "arguments": { "at": [0.0, 0.0, 0.6], "pressure": 1.0 } }),
+    );
+    let continued = call(
+        running,
+        session,
+        "measure",
+        json!({ "group": "stroke", "action": "continue", "arguments": { "at": [0.12, 0.0, 0.6], "pressure": 1.0 } }),
+    );
+    let stroke_uploads = [&began, &continued]
+        .iter()
+        .map(|reply| {
+            reply["structuredContent"]["uploaded_bytes"]
+                .as_u64()
+                .expect("uploaded bytes")
+        })
+        .sum::<u64>();
+    assert!(stroke_uploads > 0, "measured edits did not upload geometry");
+}
+
 // -- the tests ---------------------------------------------------------------
 
 /// One test, not several: starting the application costs a window, an engine
@@ -327,6 +378,8 @@ fn an_agent_drives_the_running_application() {
         return;
     };
     let session = initialize(&running);
+
+    assert_idle_measure(&running, &session);
 
     // -- it answers a session nobody is touching ---------------------------
     //
@@ -421,18 +474,7 @@ fn an_agent_drives_the_running_application() {
         "brush",
         json!({ "action": "set_size", "size": 0.25 }),
     );
-    call(
-        &running,
-        &session,
-        "stroke",
-        json!({ "action": "begin", "at": [0.0, 0.0, 0.6], "pressure": 1.0 }),
-    );
-    call(
-        &running,
-        &session,
-        "stroke",
-        json!({ "action": "continue", "at": [0.12, 0.0, 0.6], "pressure": 1.0 }),
-    );
+    measure_clay_stroke(&running, &session);
     let ended = call(
         &running,
         &session,
@@ -453,7 +495,7 @@ fn an_agent_drives_the_running_application() {
         "the frame was taken before the surface settled: {ended}"
     );
 
-    call(&running, &session, "wait", json!({ "bound_ms": 5000 }));
+    assert_idle_wait(&running, &session);
     call(
         &running,
         &session,

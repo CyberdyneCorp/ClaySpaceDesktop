@@ -881,14 +881,20 @@ impl App {
     /// What has not finished, in words an agent can act on.
     fn outstanding_work(&self) -> Vec<Outstanding> {
         let pending = *self.sculpt.pending_remesh().get();
-        if pending == 0 {
-            Vec::new()
-        } else {
-            vec![Outstanding {
+        let mut outstanding = Vec::new();
+        if pending > 0 {
+            outstanding.push(Outstanding {
                 what: format!("re-mesh of {pending} bricks"),
                 fraction: None,
-            }]
+            });
         }
+        if self.settle_owed {
+            outstanding.push(Outstanding {
+                what: "deferred surface settle".to_string(),
+                fraction: None,
+            });
+        }
+        outstanding
     }
 
     /// The revisions of every channel a refusal or a notice arrives on.
@@ -1968,6 +1974,21 @@ impl App {
             Ok(()) => self.sculpt.acknowledge_remesh(),
             Err(e) => eprintln!("the surface could not be re-meshed: {e}"),
         }
+    }
+
+    fn uploaded_bytes(&self) -> u64 {
+        self.graphics
+            .as_ref()
+            .map_or(0, |graphics| graphics.gpu.uploaded_bytes())
+    }
+
+    /// Finish what a frame actually owes, without creating a full rebuild for
+    /// a meter or an idle wait. A live gesture retains its deferred settle.
+    fn finish_pending_geometry(&mut self) {
+        if *self.sculpt.pending_remesh().get() > 0 {
+            self.sync_geometry_now();
+        }
+        self.flush_pending_settle();
     }
 
     fn frame_all(&mut self) {
@@ -6004,12 +6025,15 @@ impl Session for App {
 
     fn settle(&mut self, budget: Duration) -> Settled {
         let started = Instant::now();
-        // The same synchronous re-mesh the next frame would do, done now, and
-        // repeated while anything is still dirty: an edit can dirty more than
-        // one pass settles.
+        let uploaded = self.uploaded_bytes();
+        // Drain actual debt. A blocked live gesture cannot finish its settle
+        // on this thread, so return its outstanding work when a pass makes no
+        // progress instead of spinning until the budget expires.
         loop {
-            self.settle_geometry_now();
-            if self.outstanding_work().is_empty() || started.elapsed() >= budget {
+            let before = self.outstanding_work();
+            self.finish_pending_geometry();
+            let after = self.outstanding_work();
+            if after.is_empty() || after == before || started.elapsed() >= budget {
                 break;
             }
         }
@@ -6017,6 +6041,7 @@ impl Session for App {
         Settled {
             quiet: outstanding.is_empty(),
             waited_millis: started.elapsed().as_millis() as u64,
+            uploaded_bytes: self.uploaded_bytes().saturating_sub(uploaded),
             outstanding,
         }
     }
@@ -6024,16 +6049,18 @@ impl Session for App {
     fn measure(&mut self, command: Command) -> Result<Measured, Refusal> {
         let label = command.label().to_string();
         let started = Instant::now();
+        let uploaded = self.uploaded_bytes();
         Session::apply(self, command)?;
-        // The surface too: a figure that stops at the edit and leaves the
-        // re-mesh out is a figure that says a stroke costs two milliseconds.
-        self.settle_geometry_now();
+        // Include required geometry, but do not manufacture a full rebuild
+        // after the command already synchronized its dirty region.
+        self.finish_pending_geometry();
         let took = started.elapsed();
 
         let diagnostics = self.policy.diagnostics();
         Ok(Measured {
             label,
             millis: took.as_secs_f64() * 1000.0,
+            uploaded_bytes: self.uploaded_bytes().saturating_sub(uploaded),
             stalled: took > clayspace_model::FRAME,
             backend: diagnostics.active_backend,
             platform: diagnostics.platform,

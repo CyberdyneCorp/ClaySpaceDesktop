@@ -237,6 +237,13 @@ already has panels for — `tool`, `brush`, `stroke`, `mask`, `curve`, `shape`,
 menu item does, so an agent's edit is one history entry and one undo away, and
 is refused wherever the interface would refuse it.
 
+`measure` includes geometry work owed by the command, and `wait` drains pending
+geometry. Neither forces a full surface rebuild when there is no pending work.
+Both return `uploaded_bytes`, the tracked GPU upload delta for the operation.
+A deferred surface settle blocked by an open gesture remains in `outstanding`;
+`wait` returns without spinning on the interface thread. Stroke-end settlement
+and expensive region brushes still contribute their actual costs.
+
 The armature is driven too: `armature.add` grows a ZSphere out of another at a
 point, where the pointer needs a press, a drag and a release to say the same
 thing, and `move` takes a point rather than a displacement.

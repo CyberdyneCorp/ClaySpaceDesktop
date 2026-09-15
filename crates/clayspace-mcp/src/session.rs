@@ -563,6 +563,8 @@ pub struct Outstanding {
 pub struct Settled {
     pub quiet: bool,
     pub waited_millis: u64,
+    /// Bytes recorded by the GPU upload counter while completing this operation.
+    pub uploaded_bytes: u64,
     /// Named rather than merely counted: "time ran out" is not something an
     /// agent can act on.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -574,6 +576,8 @@ pub struct Settled {
 pub struct Measured {
     pub label: String,
     pub millis: f64,
+    /// Bytes recorded by the GPU upload counter during dispatch and geometry work.
+    pub uploaded_bytes: u64,
     /// Whether this held the interface thread longer than a frame.
     pub stalled: bool,
     pub backend: String,
