@@ -9,4 +9,4 @@
 - [x] Use a randomized fast hasher only for temporary pruning tables.
 - [x] Verify forced collisions, different seeds and exact reference output.
 - [x] Run native correctness, lint, complexity and OpenSpec checks.
-- [ ] Measure live release performance and document platform CI.
+- [x] Measure live release performance and document platform CI.

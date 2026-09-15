@@ -61,7 +61,7 @@ Vulkan rendering, without adapter skips. The host's committed engine pin remains
 v0.113.0 (`260b7797`). These results do not establish the wider issue's 16 ms target;
 required settlement and expensive region operations remain above that budget.
 
-## Randomized scratch-table hashing (in progress)
+## Randomized scratch-table hashing
 
 An isolated release-mode comparison extracts the same pruning algorithm and existing workloads, replacing only the two temporary table hashers. Fifteen alternating pairs per workload compare complete vertex bits and surviving indices after every run (60 total runs). On this Linux i9-12900K host, median shared-grid pruning is 4.195 ms with the standard hasher and 3.014 ms with ahash; triangle soup is 15.769 versus 10.938 ms. These are isolated algorithm timings, not live release latency.
 
@@ -93,4 +93,4 @@ Three alternating runs compare host `b47c2633` with `4e8d1af`, both using Core `
 | smooth | 85.543 | 85.976 |
 | snake-hook | 34.963 | 29.702 |
 
-Standard and Clay release improve in each paired run, while individual timings still vary. Snake Hook has a 48.377 ms fixed-side outlier versus 36.878 ms in that paired baseline run; its median improvement is not a per-run guarantee. Smooth release is essentially unchanged by the median. Its fixed pointer-down median is 83.894 ms, Relax is 89.897 ms, and Snake Hook continue is 17.071 ms. The hash change reduces compaction cost but does not establish a universal 16 ms budget. Current platform CI for the hashing follow-up remains pending.
+Standard and Clay release improve in each paired run, while individual timings still vary. Snake Hook has a 48.377 ms fixed-side outlier versus 36.878 ms in that paired baseline run; its median improvement is not a per-run guarantee. Smooth release is essentially unchanged by the median. Its fixed pointer-down median is 83.894 ms, Relax is 89.897 ms, and Snake Hook continue is 17.071 ms. The hash change reduces compaction cost but does not establish a universal 16 ms budget. All 16 applicable platform checks pass at `c665af3` (production code `4e8d1af`), including macOS CPU/Metal debug/release, Linux CPU/Vulkan debug/release, document parity, packaging, lint/audit, performance, layering and OpenSpec. The baseline-recording job is intentionally skipped. This CI evidence covers the committed Core pin; combined engine experiments have separate local validation.
