@@ -9,3 +9,5 @@
 - [x] Run formatting, relevant lint/tests and live same-configuration measurements.
 - [x] Update README/OpenSpec and open a descriptive PR linking ClayCore #531 and #602.
 - [ ] Verify CI and record limitations of the original full-latency goal.
+
+- [x] Include pending mask uploads in measurement and verify the failing-before live regression.

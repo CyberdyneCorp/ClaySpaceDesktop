@@ -894,6 +894,12 @@ impl App {
                 fraction: None,
             });
         }
+        if self.mask_revision != Some(self.document.with(|document| document.mask_revision())) {
+            outstanding.push(Outstanding {
+                what: "mask attribute refresh".to_string(),
+                fraction: None,
+            });
+        }
         outstanding
     }
 
@@ -1024,6 +1030,8 @@ impl App {
         // time, masking whatever a drag actually cost. A hitch before the
         // first frame is a different thing from a hitch under the pointer.
         self.timed("malha inicial", Self::sync_geometry_now);
+        // Finish initial attributes before serving an otherwise idle command.
+        self.sync_mask();
         self.frame_all();
         true
     }
@@ -1989,6 +1997,9 @@ impl App {
             self.sync_geometry_now();
         }
         self.flush_pending_settle();
+        // Mask painting dirties attributes, not field bricks. Include the
+        // same revision-guarded refresh the next frame would otherwise do.
+        self.sync_mask();
     }
 
     fn frame_all(&mut self) {

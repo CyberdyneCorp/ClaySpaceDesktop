@@ -45,3 +45,5 @@ Median milliseconds across the three runs:
 | snake-hook | 523.24 / 0.09 | 492.13 / 99.69 | 520.86 / 660.63 |
 
 The common measurement floor is removed from ordinary begin/continue operations, while genuine expensive edits and release work remain. Some end medians worsen in this contended run; they are retained here rather than treated as a portable regression or discarded. Source inspection also confirms that epoch-changing tools can rebuild in command synchronization and then pay the existing unconditional release settlement again. That is a remaining host lifecycle cost, not removed by vertex interning.
+
+The Mask begin figures in this historical comparison also exclude the deferred mask attribute refresh at those revisions. The subsequent mask-completion correction in the measurement change adds that work to the timed operation; see its validation record. Do not interpret the historical Mask timings as complete rendering costs.

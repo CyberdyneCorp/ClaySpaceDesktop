@@ -32,3 +32,11 @@ Measured and Settled replies SHALL include uploaded_bytes, the bytes written thr
 #### Scenario: Work and timing are distinguishable
 - **WHEN** an idle operation and an actual geometry change are measured
 - **THEN** their upload counts distinguish no work from a geometry upload independently of elapsed time
+
+### Requirement: Measurement includes pending mask rendering
+A measured SDF mask operation SHALL synchronize changed mask attributes before returning, without forcing a geometry rebuild solely to refresh the mask.
+
+#### Scenario: Painted mask
+- **WHEN** a measured mask stroke changes frozen weights on the visible surface
+- **THEN** its upload count includes the mask attribute refresh
+- **AND** a subsequent idle wait does not repeat that refresh

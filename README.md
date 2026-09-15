@@ -238,7 +238,8 @@ menu item does, so an agent's edit is one history entry and one undo away, and
 is refused wherever the interface would refuse it.
 
 `measure` includes geometry work owed by the command, and `wait` drains pending
-geometry. Neither forces a full surface rebuild when there is no pending work.
+geometry and changed mask attributes. Neither forces a full surface rebuild
+when there is no pending work.
 Both return `uploaded_bytes`, the tracked GPU upload delta for the operation.
 A deferred surface settle blocked by an open gesture remains in `outstanding`;
 `wait` returns without spinning on the interface thread. Stroke-end settlement

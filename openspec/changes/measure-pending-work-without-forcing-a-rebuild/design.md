@@ -15,3 +15,9 @@ Reuse the GPU's existing cumulative uploaded-byte counter. Read before/after eac
 First add the counter and a real-process MCP regression while retaining the old settlement behavior; it must fail because idle measure/wait upload a full mesh. Then change the pending-work path and rerun. Exercise a real stroke as well: edits must still upload geometry, one gesture remains one undo step, capture must see the updated surface, and a following idle wait performs no upload. Test deferred work that cannot complete while a live gesture is open.
 
 Repeat the clean-sphere 13-tool live measure sweep with the same engine revision and brush samples as the reproduction. Report command work and remaining expensive operations honestly; do not call every brush interactive merely because the artificial floor disappears.
+
+## Mask rendering completion
+
+Mask strokes dirty no field bricks. Their attribute refresh previously ran only during redraw, so pending-work measurement could return zero uploads while leaving that rendering work for the next frame. Include the existing revision-guarded `sync_mask` after required geometry. Report a mask revision mismatch as outstanding work. A live regression must fail on the omitted refresh, then prove the measured operation uploads attributes and the following idle wait does no work.
+
+Renderer initialization completes its initial mask synchronization before accepting idle commands; otherwise the first measured no-op would inherit startup attribute work.

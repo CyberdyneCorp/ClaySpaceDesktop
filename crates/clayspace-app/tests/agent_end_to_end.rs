@@ -367,6 +367,35 @@ fn measure_clay_stroke(running: &Running, session: &str) {
     assert!(stroke_uploads > 0, "measured edits did not upload geometry");
 }
 
+/// A mask changes rendered attributes even though it dirties no field bricks.
+fn measure_mask_stroke(running: &Running, session: &str) {
+    call(
+        running,
+        session,
+        "tool",
+        json!({ "action": "select", "tool": "mask" }),
+    );
+    let painted = call(
+        running,
+        session,
+        "measure",
+        json!({
+            "group": "stroke", "action": "begin",
+            "arguments": { "at": [0.0, 0.0, 1.0], "pressure": 1.0 }
+        }),
+    );
+    assert!(
+        painted["structuredContent"]["uploaded_bytes"]
+            .as_u64()
+            .expect("upload count")
+            > 0,
+        "the measured mask left its attribute upload for a later frame: {painted}"
+    );
+    assert_idle_wait(running, session);
+    call(running, session, "stroke", json!({ "action": "end" }));
+    call(running, session, "history", json!({ "action": "undo" }));
+}
+
 // -- the tests ---------------------------------------------------------------
 
 /// One test, not several: starting the application costs a window, an engine
@@ -522,6 +551,8 @@ fn an_agent_drives_the_running_application() {
         undone["structuredContent"]["history_depth"], 0,
         "one undo did not return the document: {undone}"
     );
+
+    measure_mask_stroke(&running, &session);
 
     // -- a tool with no verb on this layer is not offered, and refuses ------
     //
