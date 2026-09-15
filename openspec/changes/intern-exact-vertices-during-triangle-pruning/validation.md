@@ -60,3 +60,13 @@ settlement and rendered-brush tests with Core `9cc0d181`, CPU fields and RTX 506
 Vulkan rendering, without adapter skips. The host's committed engine pin remains
 v0.113.0 (`260b7797`). These results do not establish the wider issue's 16 ms target;
 required settlement and expensive region operations remain above that budget.
+
+## Randomized scratch-table hashing (in progress)
+
+An isolated release-mode comparison extracts the same pruning algorithm and existing workloads, replacing only the two temporary table hashers. Fifteen alternating pairs per workload compare complete vertex bits and surviving indices after every run (60 total runs). On this Linux i9-12900K host, median shared-grid pruning is 4.195 ms with the standard hasher and 3.014 ms with ahash; triangle soup is 15.769 versus 10.938 ms. These are isolated algorithm timings, not live release latency.
+
+The production follow-up has an explicit ahash 0.8.12 dependency (already present in the lockfile), randomized state per pruning call, and full key equality. A regression forces all hashes to zero and separately tests four seeds against the original full-vertex reference across attributes, signed zero, NaN payloads, reversed duplicates and sorted owners. All 68 library correctness tests pass on the committed Core v0.113.0 pin; one informational timing test is intentionally ignored. Native integration, live timing and platform checks remain pending for this follow-up.
+
+Formatting, Clippy with warnings denied and all 45 strict OpenSpec items pass for the hashing follow-up. An explicit Clippy cognitive-complexity run at threshold 12 reports no changed geometry or new test helper above that threshold. The broader application still reports other functions above 12; this is not a claim that every function meets the target.
+
+All 17 native integration cases also pass on the pinned engine: three command-interface, four sculpt-latency, five settlement, two rendered-brush and three rendered-incremental tests. No adapter skips occurred. This establishes 85 enabled local cases for the follow-up; the isolated timing test remains ignored in the ordinary library run. Combined-engine validation, uncontended live timing and platform CI remain pending.

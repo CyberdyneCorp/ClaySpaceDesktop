@@ -553,6 +553,7 @@ dependencies = [
 name = "clayspace-app"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "clayspace-engine",
  "clayspace-mcp",
  "clayspace-model",

@@ -18,3 +18,11 @@ Pruning SHALL allocate its vertex and triangle lookup tables only for the curren
 #### Scenario: Empty store
 - **WHEN** no triangles are stored
 - **THEN** pruning leaves the store unchanged
+
+### Requirement: Hashing preserves exact identity
+Temporary lookup tables SHALL resolve collisions by full key equality and SHALL produce the same geometry independently of randomized hash seeds.
+
+#### Scenario: Distinct vertices collide
+- **WHEN** distinct complete vertex keys and triangle ID triples receive identical hashes
+- **THEN** distinct triangles survive and exact duplicates are removed
+- **AND** complete vertex bits, surviving indices and ownership match the original pruning algorithm

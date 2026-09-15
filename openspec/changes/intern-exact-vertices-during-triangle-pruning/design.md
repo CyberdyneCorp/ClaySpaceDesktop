@@ -9,3 +9,9 @@ Memory trades the large 120-byte triangle key for a 3-usize triangle key plus on
 ## Verification
 
 Compare exact per-key vertices and indices against the original algorithm, including permutations, empty stores, duplicates within/across keys, all ten attributes, signed zero and NaN payloads. Run existing visual_holes, visual_incremental, lod_switching and sculpt_latency tests as applicable. Repeat live same-configuration measurements and report release separately from drag. Check Clippy complexity, formatting, strict OpenSpec and CI.
+
+## Scratch-table hashing follow-up
+
+Use `ahash::RandomState` for the temporary exact vertex-ID map and triangle-ID set. Add an explicit application dependency on the already locked ahash 0.8.12 package. Each pruning call creates a randomized state; full key equality still resolves collisions. Sorted brick traversal and first occurrence determine output independently of table iteration or seeds. Keep other maps unchanged.
+
+A private helper accepts a build-hasher to verify multiple seeds and a deliberately constant hasher against the original full-vertex reference. Test exact attributes, duplicate permutations and distinct triangles under collisions. Compare isolated shared-vertex and triangle-soup workloads, then measure actual releases before claiming application speedups.

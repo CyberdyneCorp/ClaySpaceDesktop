@@ -1286,13 +1286,21 @@ fn compact_referenced_vertices(geometry: &mut KeyGeometry, remap: &mut Vec<u32>)
 
 /// Match complete vertex bits once, then use compact exact triangle keys.
 fn prune_exact_triangles(geometries: &mut HashMap<BrickKey, KeyGeometry>) {
+    prune_exact_triangles_with_hasher(geometries, ahash::RandomState::new());
+}
+
+fn prune_exact_triangles_with_hasher<S: std::hash::BuildHasher + Clone>(
+    geometries: &mut HashMap<BrickKey, KeyGeometry>,
+    state: S,
+) {
     let triangle_count: usize = geometries.values().map(|g| g.indices.len() / 3).sum();
     if triangle_count == 0 {
         return;
     }
     let vertex_count: usize = geometries.values().map(|g| g.vertices.len()).sum();
-    let mut vertex_ids: HashMap<[u32; 10], usize> = HashMap::with_capacity(vertex_count);
-    let mut seen = std::collections::HashSet::with_capacity(triangle_count);
+    let mut vertex_ids: HashMap<[u32; 10], usize, S> =
+        HashMap::with_capacity_and_hasher(vertex_count, state.clone());
+    let mut seen = std::collections::HashSet::with_capacity_and_hasher(triangle_count, state);
     let mut keys: Vec<_> = geometries.keys().copied().collect();
     keys.sort_unstable();
     for key in keys {
@@ -1664,6 +1672,56 @@ mod tests {
             }
         }
     }
+    #[derive(Default)]
+    struct CollidingHasher;
+
+    impl std::hash::Hasher for CollidingHasher {
+        fn finish(&self) -> u64 {
+            0
+        }
+
+        fn write(&mut self, _: &[u8]) {}
+    }
+
+    fn assert_pruning_hash_independent<S: std::hash::BuildHasher + Clone>(state: S) {
+        let mut keys = HashMap::new();
+        for component in 0..10 {
+            for (variant, bits) in [0, 0x8000_0000, 0x3f80_0001, 0x7fc0_0001, 0x7fc0_0002]
+                .into_iter()
+                .enumerate()
+            {
+                let mut geometry = triangle([0.0, 0.0, 1.0]);
+                let vertex = &mut geometry.vertices[0];
+                let channels = [
+                    &mut vertex.position[..],
+                    &mut vertex.normal[..],
+                    &mut vertex.color[..],
+                    std::slice::from_mut(&mut vertex.mask),
+                ];
+                *channels.into_iter().flatten().nth(component).unwrap() = f32::from_bits(bits);
+                // A reversed copy must lose to the first owner even when every key collides.
+                let duplicate = KeyGeometry {
+                    vertices: geometry.vertices.clone(),
+                    indices: vec![2, 1, 0],
+                };
+                keys.insert([component as i32, variant as i32, 0], geometry);
+                keys.insert([component as i32, variant as i32, 1], duplicate);
+            }
+        }
+        let mut expected = copy_geometry(&keys);
+        prune_reference(&mut expected);
+        super::prune_exact_triangles_with_hasher(&mut keys, state);
+        assert_eq!(snapshot(&keys), snapshot(&expected));
+    }
+
+    #[test]
+    fn pruning_preserves_exact_geometry_despite_hash_collisions_and_seeds() {
+        assert_pruning_hash_independent(std::hash::BuildHasherDefault::<CollidingHasher>::default());
+        for seed in 0..4 {
+            assert_pruning_hash_independent(ahash::RandomState::with_seeds(seed, 17, 29, 41));
+        }
+    }
+
     fn pruning_workload(shared: bool) -> HashMap<super::BrickKey, KeyGeometry> {
         let mut keys = HashMap::new();
         for key in 0..8 {
