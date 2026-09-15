@@ -243,7 +243,10 @@ when there is no pending work.
 Both return `uploaded_bytes`, the tracked GPU upload delta for the operation.
 A deferred surface settle blocked by an open gesture remains in `outstanding`;
 `wait` returns without spinning on the interface thread. Stroke-end settlement
-and expensive region brushes still contribute their actual costs.
+runs when stored triangles still combine separate partial meshing requests; an
+already complete replacement, including a mask-only edit on a consistent surface,
+does not force another rebuild.
+Expensive region brushes and required settlement still contribute their actual costs.
 
 The armature is driven too: `armature.add` grows a ZSphere out of another at a
 point, where the pointer needs a press, a drag and a release to say the same

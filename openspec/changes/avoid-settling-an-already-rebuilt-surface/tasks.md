@@ -1,5 +1,5 @@
 - [x] Reproduce redundant release uploads in a native regression.
 - [x] Implement conservative settlement state and host consumption.
 - [x] Verify state transitions, exact geometry, rendering and live gestures.
-- [ ] Measure release work and update documentation/PR.
+- [x] Measure release work and update documentation/PR.
 - [ ] Complete lint, complexity, OpenSpec and platform CI.
