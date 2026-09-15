@@ -42,6 +42,88 @@ struct KeyGeometry {
     indices: Vec<u32>,
 }
 
+/// One mesh's global indices, reused across its brick ranges.
+/// Only touched entries are cleared between bricks; nothing survives the split.
+struct VertexRemap {
+    indices: Vec<Option<u32>>,
+    touched: Vec<usize>,
+}
+
+impl VertexRemap {
+    fn new(vertices: usize) -> Self {
+        Self {
+            indices: vec![None; vertices],
+            touched: Vec::new(),
+        }
+    }
+
+    fn local_index(&mut self, global: usize, source: &[Vertex], local: &mut Vec<Vertex>) -> u32 {
+        if let Some(index) = self.indices[global] {
+            return index;
+        }
+        let index = local.len() as u32;
+        local.push(source[global]);
+        self.indices[global] = Some(index);
+        self.touched.push(global);
+        index
+    }
+
+    fn clear(&mut self) {
+        for global in self.touched.drain(..) {
+            self.indices[global] = None;
+        }
+    }
+}
+
+fn write_key_geometry(
+    into: &mut KeyGeometry,
+    vertices: &[Vertex],
+    triangles: &[[u32; 3]],
+    remap: &mut VertexRemap,
+) {
+    // Preserve the former placeholder behavior for malformed engine indices.
+    if triangles
+        .iter()
+        .flatten()
+        .any(|&index| index as usize >= vertices.len())
+    {
+        write_key_geometry_sparse(into, vertices, triangles);
+        return;
+    }
+    into.vertices.clear();
+    into.indices.clear();
+    for &global in triangles.iter().flatten() {
+        let index = remap.local_index(global as usize, vertices, &mut into.vertices);
+        into.indices.push(index);
+    }
+    remap.clear();
+}
+
+/// The original remapping algorithm, retained for out-of-range indices.
+fn write_key_geometry_sparse(into: &mut KeyGeometry, vertices: &[Vertex], triangles: &[[u32; 3]]) {
+    into.vertices.clear();
+    into.indices.clear();
+    let mut local = HashMap::new();
+    for &global in triangles.iter().flatten() {
+        let next = local.len() as u32;
+        into.indices.push(*local.entry(global).or_insert(next));
+    }
+    into.vertices.resize(
+        local.len(),
+        Vertex {
+            position: [0.0; 3],
+            normal: [0.0, 1.0, 0.0],
+            color: [1.0; 3],
+            mask: 0.0,
+        },
+    );
+    for (global, index) in local {
+        if let Some(vertex) = vertices.get(global as usize) {
+            into.vertices[index as usize] = *vertex;
+        }
+    }
+}
+
 /// What a sync cost, for the latency budget.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SyncCost {
@@ -605,46 +687,20 @@ impl SurfaceGeometry {
             .enumerate()
             .map(|(slot, range)| (range.key, slot))
             .collect();
+        let mut remap = VertexRemap::new(vertices.len());
         for key in &to_replace {
             self.touched.insert(*key);
-            let slot = slot_of.get(key).copied();
-            let entry = self.keys.entry(*key).or_default();
-            entry.vertices.clear();
-            entry.indices.clear();
-
-            let Some(triangles) = slot.map(|slot| &owned[slot]) else {
-                // Asked for and not returned: the surface has left this brick.
-                // Cleared above, and kept as an empty slot so a later edit
-                // finds it.
-                continue;
-            };
-            if triangles.is_empty() {
-                continue;
-            }
-
-            // A local vertex table holding exactly what these triangles use.
-            let mut local = std::collections::HashMap::new();
-            for triangle in triangles {
-                for global in triangle {
-                    let next = local.len() as u32;
-                    let index = *local.entry(*global).or_insert(next);
-                    entry.indices.push(index);
-                }
-            }
-            entry.vertices.resize(
-                local.len(),
-                Vertex {
-                    position: [0.0; 3],
-                    normal: [0.0, 1.0, 0.0],
-                    color: [1.0; 3],
-                    mask: 0.0,
-                },
+            let triangles = slot_of
+                .get(key)
+                .map(|&slot| owned[slot].as_slice())
+                .unwrap_or_default();
+            // An absent or empty range clears the previous contribution too.
+            write_key_geometry(
+                self.keys.entry(*key).or_default(),
+                &vertices,
+                triangles,
+                &mut remap,
             );
-            for (global, index) in local {
-                if let Some(vertex) = vertices.get(global as usize) {
-                    entry.vertices[index as usize] = *vertex;
-                }
-            }
         }
         self.last_split = split_started.elapsed();
         // The vertices a preview was holding the originals of have been
@@ -1487,6 +1543,80 @@ mod tests {
         contains_coincident_triangles, prune_exact_triangles, vertex_key, HashMap, KeyGeometry,
         Vertex,
     };
+
+    fn remap_fixture() -> Vec<Vertex> {
+        let words = [0, 0x8000_0000, 0x7fc0_0001, 0x3f80_0000, 0x7fa0_0002];
+        (0..32)
+            .map(|i| {
+                let values: [f32; 10] =
+                    std::array::from_fn(|j| f32::from_bits(words[(i + j) % words.len()]));
+                Vertex {
+                    position: [values[0], values[1], values[2]],
+                    normal: [values[3], values[4], values[5]],
+                    color: [values[6], values[7], values[8]],
+                    mask: values[9],
+                }
+            })
+            .collect()
+    }
+
+    fn geometry_bits(geometry: &KeyGeometry) -> (Vec<[u32; 10]>, Vec<u32>) {
+        (
+            geometry.vertices.iter().map(vertex_key).collect(),
+            geometry.indices.clone(),
+        )
+    }
+
+    #[test]
+    fn dense_vertex_remapping_preserves_bits_order_and_reused_bricks() {
+        let vertices = remap_fixture();
+        let groups = [
+            vec![[9, 1, 5], [5, 2, 9]],
+            vec![[1, 6, 1]],
+            vec![],
+            vec![[31, 0, 31]],
+        ];
+        let mut remap = super::VertexRemap::new(vertices.len());
+        let mut expected = KeyGeometry::default();
+        let mut actual = KeyGeometry::default();
+        for order in [[0, 1, 2, 3], [3, 2, 1, 0]] {
+            for at in order {
+                super::write_key_geometry_sparse(&mut expected, &vertices, &groups[at]);
+                super::write_key_geometry(&mut actual, &vertices, &groups[at], &mut remap);
+                assert_eq!(geometry_bits(&actual), geometry_bits(&expected));
+                assert!(remap.indices.iter().all(Option::is_none));
+                assert!(remap.touched.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn dense_vertex_remapping_preserves_invalid_placeholders_and_empty_replacements() {
+        let vertices = remap_fixture();
+        let mut remap = super::VertexRemap::new(vertices.len());
+        let mut actual = KeyGeometry::default();
+        let triangles = [
+            [u32::MAX, 0, u32::MAX],
+            [vertices.len() as u32, 0, u32::MAX],
+        ];
+        super::write_key_geometry(&mut actual, &vertices, &triangles, &mut remap);
+        let placeholder = vertex([0.0; 3], [0.0, 1.0, 0.0]);
+        let expected = KeyGeometry {
+            vertices: vec![placeholder, vertices[0], placeholder],
+            indices: vec![0, 1, 0, 2, 1, 0],
+        };
+        assert_eq!(geometry_bits(&actual), geometry_bits(&expected));
+        super::write_key_geometry(&mut actual, &vertices, &[], &mut remap);
+        assert!(actual.vertices.is_empty());
+        assert!(actual.indices.is_empty());
+
+        let mut empty = super::VertexRemap::new(0);
+        super::write_key_geometry(&mut actual, &[], &[[7, 7, 7]], &mut empty);
+        assert_eq!(
+            geometry_bits(&actual),
+            (vec![vertex_key(&placeholder)], vec![0, 0, 0])
+        );
+    }
 
     fn prune_reference(geometries: &mut HashMap<super::BrickKey, KeyGeometry>) {
         let mut keys: Vec<_> = geometries.keys().copied().collect();
