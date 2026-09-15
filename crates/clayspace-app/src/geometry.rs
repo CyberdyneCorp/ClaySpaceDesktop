@@ -1493,27 +1493,22 @@ fn read_drawn_mesh(
 /// Reads an engine mesh into the renderer's vertex layout in one pass.
 fn read_mesh(mesh: &Mesh) -> Result<(Vec<Vertex>, Vec<u32>), ClayError> {
     let count = mesh.vertex_count();
-    // A brick with no surface in it comes back as a mesh with no attributes at
-    // all, and the engine refuses a layout naming positions on it — "the
-    // layout names positions, which this mesh does not carry" — which is not
-    // a failure to mesh, it is nothing to mesh.
+    // Empty meshes have no attributes, so do not request a vertex layout.
     if count == 0 {
         return Ok((Vec::new(), Vec::new()));
     }
-    let mut bytes = vec![0u8; count * Vertex::STRIDE];
-
     let has_colors = mesh.colors().is_some();
-    if !has_colors {
-        // The engine refuses a layout naming an attribute the mesh lacks, so
-        // white is written here and the copy writes around it.
-        for vertex in bytes.chunks_exact_mut(Vertex::STRIDE) {
-            for channel in 0..3 {
-                let at = Vertex::COLOR_OFFSET + channel * 4;
-                vertex[at..at + 4].copy_from_slice(&1.0f32.to_le_bytes());
-            }
-        }
-    }
-
+    let mut vertices = vec![
+        Vertex {
+            position: [0.0; 3],
+            normal: [0.0; 3],
+            color: [1.0; 3],
+            mask: 0.0,
+        };
+        count
+    ];
+    // Vertex is Pod with the renderer's declared layout. The engine writes
+    // only requested attributes; default color and mask remain initialized.
     mesh.copy_vertices(
         VertexLayout {
             stride: Some(Vertex::STRIDE as u32),
@@ -1522,25 +1517,18 @@ fn read_mesh(mesh: &Mesh) -> Result<(Vec<Vertex>, Vec<u32>), ClayError> {
             color_offset: has_colors.then_some(Vertex::COLOR_OFFSET as i32),
             uv_offset: None,
         },
-        &mut bytes,
+        bytemuck::cast_slice_mut(&mut vertices),
     )?;
-
-    let read = |v: &[u8], offset: usize| -> [f32; 3] {
-        std::array::from_fn(|i| {
-            let at = offset + i * 4;
-            f32::from_le_bytes(v[at..at + 4].try_into().unwrap())
-        })
-    };
-    let vertices = bytes
-        .chunks_exact(Vertex::STRIDE)
-        .map(|v| Vertex {
-            position: read(v, Vertex::POSITION_OFFSET),
-            normal: read(v, Vertex::NORMAL_OFFSET),
-            color: read(v, Vertex::COLOR_OFFSET),
-            mask: 0.0,
-        })
-        .collect();
-
+    // Preserve the original reader's little-endian decoding on other hosts.
+    #[cfg(target_endian = "big")]
+    for vertex in &mut vertices {
+        let decode = |value: f32| f32::from_bits(value.to_bits().swap_bytes());
+        vertex.position = vertex.position.map(decode);
+        vertex.normal = vertex.normal.map(decode);
+        if has_colors {
+            vertex.color = vertex.color.map(decode);
+        }
+    }
     let mut indices = vec![0u32; mesh.index_count()];
     mesh.copy_indices(&mut indices)?;
     Ok((vertices, indices))
@@ -1587,9 +1575,181 @@ fn vertex_key(vertex: &Vertex) -> [u32; 10] {
 #[cfg(test)]
 mod tests {
     use super::{
-        contains_coincident_triangles, prune_exact_triangles, vertex_key, HashMap, KeyGeometry,
-        Vertex,
+        contains_coincident_triangles, prune_exact_triangles, vertex_key, ClayError, HashMap,
+        KeyGeometry, Mesh, Vertex, VertexLayout,
     };
+
+    fn read_mesh_reference(mesh: &Mesh) -> Result<(Vec<Vertex>, Vec<u32>), ClayError> {
+        let count = mesh.vertex_count();
+        // A brick with no surface in it comes back as a mesh with no attributes at
+        // all, and the engine refuses a layout naming positions on it — "the
+        // layout names positions, which this mesh does not carry" — which is not
+        // a failure to mesh, it is nothing to mesh.
+        if count == 0 {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let mut bytes = vec![0u8; count * Vertex::STRIDE];
+
+        let has_colors = mesh.colors().is_some();
+        if !has_colors {
+            // The engine refuses a layout naming an attribute the mesh lacks, so
+            // white is written here and the copy writes around it.
+            for vertex in bytes.chunks_exact_mut(Vertex::STRIDE) {
+                for channel in 0..3 {
+                    let at = Vertex::COLOR_OFFSET + channel * 4;
+                    vertex[at..at + 4].copy_from_slice(&1.0f32.to_le_bytes());
+                }
+            }
+        }
+
+        mesh.copy_vertices(
+            VertexLayout {
+                stride: Some(Vertex::STRIDE as u32),
+                position_offset: Some(Vertex::POSITION_OFFSET as i32),
+                normal_offset: Some(Vertex::NORMAL_OFFSET as i32),
+                color_offset: has_colors.then_some(Vertex::COLOR_OFFSET as i32),
+                uv_offset: None,
+            },
+            &mut bytes,
+        )?;
+
+        let read = |v: &[u8], offset: usize| -> [f32; 3] {
+            std::array::from_fn(|i| {
+                let at = offset + i * 4;
+                f32::from_le_bytes(v[at..at + 4].try_into().unwrap())
+            })
+        };
+        let vertices = bytes
+            .chunks_exact(Vertex::STRIDE)
+            .map(|v| Vertex {
+                position: read(v, Vertex::POSITION_OFFSET),
+                normal: read(v, Vertex::NORMAL_OFFSET),
+                color: read(v, Vertex::COLOR_OFFSET),
+                mask: 0.0,
+            })
+            .collect();
+
+        let mut indices = vec![0u32; mesh.index_count()];
+        mesh.copy_indices(&mut indices)?;
+        Ok((vertices, indices))
+    }
+
+    #[test]
+    fn direct_readback_preserves_colored_uncolored_and_empty_meshes() {
+        use clayspace_engine::claycore::{
+            BrickCache, BrickConfig, BrickMeshParams, Document, Item,
+        };
+        let mut document = Document::new().unwrap();
+        let layer = document.add_sdf_layer("readback").unwrap();
+        document
+            .add_item(layer, &Item::sphere(1.0).unwrap())
+            .unwrap();
+        for colors in [false, true] {
+            let mut cache = BrickCache::new(BrickConfig {
+                dim: 8,
+                voxel_size: 0.1,
+                band_voxels: 3,
+                memory_budget: None,
+                colors,
+            })
+            .unwrap();
+            let params = BrickMeshParams {
+                colors,
+                ..Default::default()
+            };
+            let (empty, _) = cache.mesh(Some(&document), params, &[]).unwrap();
+            let (vertices, indices) = super::read_mesh(&empty).unwrap();
+            assert!(vertices.is_empty() && indices.is_empty());
+            cache.mark_dirty_layer(&document, layer).unwrap();
+            assert!(cache.refill_all(&document, None, 256).unwrap() > 0);
+            let (mesh, _) = cache.mesh(Some(&document), params, &[]).unwrap();
+            assert!(!mesh.is_empty());
+            assert_eq!(mesh.colors().is_some(), colors);
+            let expected = read_mesh_reference(&mesh).unwrap();
+            let actual = super::read_mesh(&mesh).unwrap();
+            assert_eq!(actual.1, expected.1);
+            assert_eq!(
+                actual.0.iter().map(vertex_key).collect::<Vec<_>>(),
+                expected.0.iter().map(vertex_key).collect::<Vec<_>>()
+            );
+            assert!(actual.0.iter().all(|v| v.mask.to_bits() == 0));
+        }
+    }
+
+    #[test]
+    #[ignore = "informational release timing; no portable timing threshold"]
+    fn profile_mesh_readback() {
+        use clayspace_engine::claycore::{
+            BrickCache, BrickConfig, BrickMeshParams, Document, Item,
+        };
+        let mut document = Document::new().unwrap();
+        let layer = document.add_sdf_layer("readback timing").unwrap();
+        document
+            .add_item(layer, &Item::sphere(1.0).unwrap())
+            .unwrap();
+        eprintln!("readback,voxel_size,colors,repeat,variant,ms");
+        for voxel_size in [0.2, 0.1, 0.025] {
+            for colors in [false, true] {
+                let mut cache = BrickCache::new(BrickConfig {
+                    dim: 8,
+                    voxel_size,
+                    band_voxels: 3,
+                    memory_budget: None,
+                    colors,
+                })
+                .unwrap();
+                cache.mark_dirty_layer(&document, layer).unwrap();
+                cache.refill_all(&document, None, 256).unwrap();
+                let (mesh, _) = cache
+                    .mesh(
+                        Some(&document),
+                        BrickMeshParams {
+                            colors,
+                            ..Default::default()
+                        },
+                        &[],
+                    )
+                    .unwrap();
+                compare_readback_timing(&mesh, voxel_size, colors);
+            }
+        }
+    }
+
+    fn compare_readback_timing(mesh: &Mesh, voxel_size: f32, colors: bool) {
+        let expected = read_mesh_reference(mesh).unwrap();
+        let expected_bits: Vec<_> = expected.0.iter().map(vertex_key).collect();
+        for repeat in 0..7 {
+            for slot in 0..2 {
+                let variant = (repeat + slot) % 2;
+                let start = std::time::Instant::now();
+                let actual = if variant == 0 {
+                    read_mesh_reference(mesh)
+                } else {
+                    super::read_mesh(mesh)
+                }
+                .unwrap();
+                let ms = start.elapsed().as_secs_f64() * 1000.0;
+                assert_eq!(actual.1, expected.1);
+                assert_eq!(
+                    actual.0.iter().map(vertex_key).collect::<Vec<_>>(),
+                    expected_bits
+                );
+                eprintln!("readback,{voxel_size},{colors},{repeat},{variant},{ms:.6}");
+            }
+        }
+    }
+
+    #[test]
+    fn direct_readback_preserves_missing_normal_errors() {
+        let mesh = super::Mesh::from_triangles(
+            &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            &[0, 1, 2],
+        )
+        .unwrap();
+        assert!(mesh.normals().is_none());
+        assert!(read_mesh_reference(&mesh).is_err());
+        assert!(super::read_mesh(&mesh).is_err());
+    }
 
     fn remap_fixture() -> Vec<Vertex> {
         let words = [0, 0x8000_0000, 0x7fc0_0001, 0x3f80_0000, 0x7fa0_0002];

@@ -39,6 +39,8 @@ opencl = ["clayspace-engine/opencl"]
 [dependencies]
 # Randomized hashing for temporary exact geometry lookup tables.
 ahash = "0.8.12"
+# Safe access to the renderer Vertex Pod layout for engine readback.
+bytemuck = "1.25.2"
 clayspace-engine = { path = "../clayspace-engine" }
 clayspace-model = { version = "0.1.0", path = "../clayspace-model" }
 clayspace-vm = { version = "0.1.0", path = "../clayspace-vm" }
