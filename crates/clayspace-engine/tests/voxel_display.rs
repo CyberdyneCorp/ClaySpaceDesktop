@@ -50,6 +50,36 @@ fn sculpted() -> ClayDocument {
             )
             .expect("deposit");
     }
+
+    // Detail for the blur to take down, placed on purpose: four single cells
+    // standing off the surface. Before #139 a fractional falloff dithered the
+    // rim of every dab and left specks like these by accident, and the blur
+    // test read those as its subject — so the fixture measured the defect. A
+    // grid dab is solid now, and an isolated voxel is one this fixture put
+    // there.
+    for at in [
+        [0.62f32, 0.0, 0.0],
+        [-0.62, 0.1, 0.0],
+        [0.0, 0.52, 0.12],
+        [0.0, -0.52, -0.12],
+    ] {
+        document
+            .apply_stroke(
+                ToolKind::Padrao,
+                BrushSettings {
+                    size: 0.04,
+                    intensity: 1.0,
+                    ..BrushSettings::default()
+                },
+                &[GestureSample {
+                    position: at,
+                    pressure: 1.0,
+                    time: 0.0,
+                }],
+                [false; 3],
+            )
+            .expect("a speck");
+    }
     document
 }
 
