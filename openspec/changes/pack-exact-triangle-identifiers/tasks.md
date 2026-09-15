@@ -1,0 +1,5 @@
+- [x] Compare index-width, packed-key and in-place-compaction prototypes on exact output and timing.
+- [x] Implement bounded packing with the wide fallback and stable in-place compaction.
+- [x] Add boundary, fallback, exact-output and collision regressions.
+- [ ] Complete native/rendered tests, lint, complexity and strict OpenSpec checks.
+- [ ] Measure production memory and application latency; update PR evidence and preserve the full 16 ms goal.

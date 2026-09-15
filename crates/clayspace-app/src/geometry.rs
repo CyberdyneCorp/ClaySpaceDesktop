@@ -1345,15 +1345,42 @@ fn prune_exact_triangles(geometries: &mut HashMap<BrickKey, KeyGeometry>) {
     prune_exact_triangles_with_hasher(geometries, ahash::RandomState::new());
 }
 
+fn triangle_ids_fit_packed(vertex_count: usize) -> bool {
+    vertex_count <= u32::MAX as usize
+}
+
+fn packed_triangle_ids(ids: [usize; 3]) -> u128 {
+    debug_assert!(ids.iter().all(|&id| id <= u32::MAX as usize));
+    ids[0] as u128 | ((ids[1] as u128) << 32) | ((ids[2] as u128) << 64)
+}
+
 fn prune_exact_triangles_with_hasher<S: std::hash::BuildHasher + Clone>(
     geometries: &mut HashMap<BrickKey, KeyGeometry>,
     state: S,
 ) {
+    let vertex_count = geometries.values().map(|g| g.vertices.len()).sum();
+    // Every assigned ID is smaller than the input vertex count. Keep the
+    // original representation when that bound cannot prove lossless packing.
+    if triangle_ids_fit_packed(vertex_count) {
+        prune_triangles_with_keys(geometries, state, vertex_count, packed_triangle_ids);
+    } else {
+        prune_triangles_with_keys(geometries, state, vertex_count, std::convert::identity);
+    }
+}
+
+fn prune_triangles_with_keys<S, K>(
+    geometries: &mut HashMap<BrickKey, KeyGeometry>,
+    state: S,
+    vertex_count: usize,
+    triangle_key: impl Fn([usize; 3]) -> K,
+) where
+    S: std::hash::BuildHasher + Clone,
+    K: Eq + std::hash::Hash,
+{
     let triangle_count: usize = geometries.values().map(|g| g.indices.len() / 3).sum();
     if triangle_count == 0 {
         return;
     }
-    let vertex_count: usize = geometries.values().map(|g| g.vertices.len()).sum();
     let mut vertex_ids: HashMap<[u32; 10], usize, S> =
         HashMap::with_capacity_and_hasher(vertex_count, state.clone());
     let mut seen = std::collections::HashSet::with_capacity_and_hasher(triangle_count, state);
@@ -1372,21 +1399,22 @@ fn prune_exact_triangles_with_hasher<S: std::hash::BuildHasher + Clone>(
                 *vertex_ids.entry(vertex_key(vertex)).or_insert(next)
             })
             .collect();
-        let mut kept = Vec::with_capacity(geometry.indices.len());
-        for triangle in geometry.indices.chunks_exact(3) {
+        let mut kept = 0;
+        for read in (0..geometry.indices.len() / 3 * 3).step_by(3) {
             let mut corners = [
-                ids[triangle[0] as usize],
-                ids[triangle[1] as usize],
-                ids[triangle[2] as usize],
+                ids[geometry.indices[read] as usize],
+                ids[geometry.indices[read + 1] as usize],
+                ids[geometry.indices[read + 2] as usize],
             ];
             corners.sort_unstable();
-            if seen.insert(corners) {
-                kept.extend_from_slice(triangle);
+            if seen.insert(triangle_key(corners)) {
+                if read != kept {
+                    geometry.indices.copy_within(read..read + 3, kept);
+                }
+                kept += 3;
             }
         }
-        if kept.len() != geometry.indices.len() {
-            geometry.indices = kept;
-        }
+        geometry.indices.truncate(kept);
     }
 }
 
@@ -1802,6 +1830,61 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn packed_triangle_identifiers_preserve_all_lanes_and_use_a_bounded_domain() {
+        let values = [0, 1, u32::MAX as usize - 1, u32::MAX as usize];
+        let mut seen = std::collections::HashSet::new();
+        for selector in 0..64 {
+            let ids = std::array::from_fn(|lane| values[(selector >> (lane * 2)) & 3]);
+            let packed = super::packed_triangle_ids(ids);
+            let restored: [usize; 3] =
+                std::array::from_fn(|lane| ((packed >> (lane * 32)) & u32::MAX as u128) as usize);
+            assert_eq!(restored, ids);
+            assert!(seen.insert(packed));
+        }
+        assert!(super::triangle_ids_fit_packed(0));
+        assert!(super::triangle_ids_fit_packed(u32::MAX as usize));
+        if let Some(wide) = (u32::MAX as usize).checked_add(1) {
+            assert!(!super::triangle_ids_fit_packed(wide));
+            assert!(!super::triangle_ids_fit_packed(usize::MAX));
+        }
+    }
+
+    #[test]
+    fn packed_and_wide_pruning_preserve_order_under_collisions_and_trailing_indices() {
+        let geometry = KeyGeometry {
+            vertices: (0..6)
+                .map(|i| vertex([i as f32, 0.0, 0.0], [0.0, 1.0, 0.0]))
+                .collect(),
+            indices: vec![0, 1, 2, 2, 1, 0, 3, 4, 5, 4, 3, 5, 5, 4],
+        };
+        let mut input = HashMap::from([([-1, 0, 0], geometry)]);
+        let mut duplicate = copy_geometry(&input).remove(&[-1, 0, 0]).unwrap();
+        duplicate.indices = vec![5, 4, 3, 2, 0, 1];
+        input.insert([1, 0, 0], duplicate);
+        let mut expected = copy_geometry(&input);
+        prune_reference(&mut expected);
+        assert_eq!(expected[&[-1, 0, 0]].indices, vec![0, 1, 2, 3, 4, 5]);
+        assert!(expected[&[1, 0, 0]].indices.is_empty());
+        let mut packed = copy_geometry(&input);
+        let mut wide = copy_geometry(&input);
+        let state = std::hash::BuildHasherDefault::<CollidingHasher>::default();
+        super::prune_exact_triangles_with_hasher(&mut packed, state.clone());
+        super::prune_triangles_with_keys(&mut wide, state, 12, std::convert::identity);
+        assert_eq!(snapshot(&packed), snapshot(&expected));
+        assert_eq!(snapshot(&wide), snapshot(&expected));
+    }
+
+    #[test]
+    fn pruning_without_complete_triangles_preserves_the_existing_no_op() {
+        let mut geometry = triangle([0.0, 1.0, 0.0]);
+        geometry.indices = vec![0, 1];
+        let mut keys = HashMap::from([([0, 0, 0], geometry)]);
+        let before = snapshot(&keys);
+        prune_exact_triangles(&mut keys);
+        assert_eq!(snapshot(&keys), before);
+    }
+
     #[derive(Default)]
     struct CollidingHasher;
 
