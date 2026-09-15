@@ -368,7 +368,7 @@ fn measure_clay_stroke(running: &Running, session: &str) {
 }
 
 /// A mask changes rendered attributes even though it dirties no field bricks.
-fn measure_mask_stroke(running: &Running, session: &str) {
+fn measure_mask_stroke(running: &Running, session: &str, settlement_needed: bool) {
     call(
         running,
         session,
@@ -392,8 +392,32 @@ fn measure_mask_stroke(running: &Running, session: &str) {
         "the measured mask left its attribute upload for a later frame: {painted}"
     );
     assert_idle_wait(running, session);
-    call(running, session, "stroke", json!({ "action": "end" }));
+    let ended = call(
+        running,
+        session,
+        "measure",
+        json!({
+            "group": "stroke", "action": "end", "arguments": {}
+        }),
+    );
+    let uploaded = ended["structuredContent"]["uploaded_bytes"]
+        .as_u64()
+        .expect("upload count");
+    assert_eq!(
+        uploaded > 0,
+        settlement_needed,
+        "mask release must respect existing geometry debt: {ended}"
+    );
     call(running, session, "history", json!({ "action": "undo" }));
+}
+
+#[test]
+fn a_mask_release_does_not_rebuild_a_single_request_surface() {
+    let Some(running) = start() else {
+        return;
+    };
+    let session = initialize(&running);
+    measure_mask_stroke(&running, &session, false);
 }
 
 // -- the tests ---------------------------------------------------------------
@@ -552,7 +576,7 @@ fn an_agent_drives_the_running_application() {
         "one undo did not return the document: {undone}"
     );
 
-    measure_mask_stroke(&running, &session);
+    measure_mask_stroke(&running, &session, true);
 
     // -- a tool with no verb on this layer is not offered, and refuses ------
     //

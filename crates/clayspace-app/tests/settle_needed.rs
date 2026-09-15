@@ -95,3 +95,114 @@ fn an_incremental_sync_draws_the_same_surface_a_rebuild_would() {
         "the incremental surface holds {extra} triangles a rebuild does not"
     );
 }
+
+#[test]
+fn settlement_tracks_partial_requests_and_complete_replacements() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let policy = BackendPolicy::discover(None).expect("CPU policy");
+    let mut empty = ClayDocument::new(policy.clone()).expect("empty document");
+    let mut document = ClayDocument::new(policy)
+        .and_then(ClayDocument::with_starting_form)
+        .expect("sphere");
+    let mut geometry = SurfaceGeometry::new(&harness.gpu);
+    geometry
+        .sync(&harness.gpu, &mut document)
+        .expect("initial sync");
+    assert!(
+        !geometry.needs_settle(),
+        "one initial request is already consistent"
+    );
+    document
+        .apply_stroke(
+            ToolKind::Padrao,
+            BrushSettings::default(),
+            &[GestureSample {
+                position: [0.0, 0.0, 1.02],
+                pressure: 1.0,
+                time: 0.0,
+            }],
+            [false; 3],
+        )
+        .expect("dab");
+    geometry
+        .sync(&harness.gpu, &mut document)
+        .expect("partial sync");
+    assert!(
+        geometry.needs_settle(),
+        "partial ownership must still be settled"
+    );
+    geometry.settle_layout(&harness.gpu);
+    assert!(
+        geometry.needs_settle(),
+        "exact duplicate pruning is not a full remesh"
+    );
+    geometry
+        .rebuild(&harness.gpu, &mut document)
+        .expect("full rebuild");
+    assert!(!geometry.needs_settle());
+    geometry
+        .rebuild(&harness.gpu, &mut empty)
+        .expect("empty rebuild");
+    assert_eq!(geometry.triangle_count(), 0);
+    assert!(!geometry.needs_settle());
+}
+
+#[test]
+fn committing_a_live_preview_already_replaces_the_surface() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let policy = BackendPolicy::discover(None).expect("CPU policy");
+    let mut document = ClayDocument::new(policy)
+        .and_then(ClayDocument::with_starting_form)
+        .expect("sphere");
+    let mut geometry = SurfaceGeometry::new(&harness.gpu);
+    geometry
+        .sync(&harness.gpu, &mut document)
+        .expect("initial sync");
+    assert!(document.open_live_gesture(ToolKind::Mover, [false; 3]));
+    document
+        .apply_stroke(
+            ToolKind::Mover,
+            BrushSettings::default(),
+            &[
+                GestureSample {
+                    position: [0.0, 0.0, 1.0],
+                    pressure: 1.0,
+                    time: 0.0,
+                },
+                GestureSample {
+                    position: [0.1, 0.0, 1.0],
+                    pressure: 1.0,
+                    time: 0.01,
+                },
+            ],
+            [false; 3],
+        )
+        .expect("preview");
+    geometry
+        .sync(&harness.gpu, &mut document)
+        .expect("preview sync");
+    document.close_live_gesture().expect("commit");
+    geometry
+        .sync(&harness.gpu, &mut document)
+        .expect("committed epoch sync");
+    assert!(
+        !geometry.needs_settle(),
+        "the epoch change already rebuilt every key"
+    );
+    let mut expected = SurfaceGeometry::new(&harness.gpu);
+    expected
+        .rebuild(&harness.gpu, &mut document)
+        .expect("reference rebuild");
+    let mut actual = geometry.stored_triangles_exact();
+    let mut reference = expected.stored_triangles_exact();
+    actual.sort_unstable();
+    reference.sort_unstable();
+    assert_eq!(
+        actual, reference,
+        "skipping another settle must preserve every attribute"
+    );
+}

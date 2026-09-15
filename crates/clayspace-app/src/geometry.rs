@@ -152,6 +152,9 @@ pub struct SurfaceGeometry {
     /// bricks, so the store cannot be patched across the swap and is laid out
     /// again when this stops matching the document's.
     surface_epoch: u64,
+    /// Separate partial requests may assign the same boundary triangle to
+    /// different keys. Only a complete replacement clears that possibility.
+    needs_settle: bool,
     /// The level the stored geometry was meshed at.
     ///
     /// Distinct from `requested` because a coarse surface is not always
@@ -227,6 +230,7 @@ impl SurfaceGeometry {
         Self {
             cage_rest: HashMap::new(),
             surface_epoch: 0,
+            needs_settle: false,
             keys: HashMap::new(),
             mesh: GpuMesh::new(gpu),
             dirty: false,
@@ -243,6 +247,11 @@ impl SurfaceGeometry {
             requested: Detail::Full,
             over_budget: false,
         }
+    }
+
+    /// Whether stored geometry combines separate partial meshing requests.
+    pub fn needs_settle(&self) -> bool {
+        self.needs_settle
     }
 
     /// Whether the surface, at the level being drawn, is more than the device
@@ -421,6 +430,9 @@ impl SurfaceGeometry {
         shading: Shading,
         lod: i32,
     ) -> Result<(), ClayError> {
+        // Even a dirty-key request can replace the entire stored surface
+        // (for example undo). Only retained old triangles mix ownership.
+        let needs_settle = retains_unreplaced_triangles(&self.keys, replace);
         let engine_started = std::time::Instant::now();
         // The document is what a gradient is sampled through, so it goes
         // wherever gradient normals are asked for — which, since ClayCore
@@ -611,6 +623,7 @@ impl SurfaceGeometry {
         // there now.
         self.cage_rest.clear();
         self.dirty = true;
+        self.needs_settle = needs_settle;
         Ok(())
     }
 
@@ -1071,6 +1084,7 @@ impl SurfaceGeometry {
         if keys.is_empty() {
             self.mesh.upload(gpu, &[], &[]);
             self.layout = SlotMap::default();
+            self.needs_settle = false;
             document.take_dirty_keys();
             return Ok(());
         }
@@ -1180,6 +1194,18 @@ fn sample_mask(document: &ClayDocument, vertices: &mut [Vertex]) {
             }
         }
     }
+}
+
+/// A replacement covering all stored triangles is one consistent request,
+/// including when empty bookkeeping entries remain under other keys.
+fn retains_unreplaced_triangles(
+    keys: &HashMap<BrickKey, KeyGeometry>,
+    replace: Option<&std::collections::HashSet<BrickKey>>,
+) -> bool {
+    replace.is_some_and(|replace| {
+        keys.iter()
+            .any(|(key, geometry)| !geometry.indices.is_empty() && !replace.contains(key))
+    })
 }
 
 /// Match complete vertex bits once, then use compact exact triangle keys.
@@ -1554,5 +1580,16 @@ mod tests {
                 times[0][3], times[1][3]
             );
         }
+    }
+    #[test]
+    fn empty_bookkeeping_keys_do_not_keep_old_triangle_ownership_alive() {
+        let mut keys = HashMap::from([
+            ([0, 0, 0], triangle([0.0, 0.0, 1.0])),
+            ([1, 0, 0], triangle([0.0, 0.0, 1.0])),
+        ]);
+        let replaced = std::collections::HashSet::from([[0, 0, 0]]);
+        assert!(super::retains_unreplaced_triangles(&keys, Some(&replaced)));
+        keys.get_mut(&[1, 0, 0]).unwrap().indices.clear();
+        assert!(!super::retains_unreplaced_triangles(&keys, Some(&replaced)));
     }
 }

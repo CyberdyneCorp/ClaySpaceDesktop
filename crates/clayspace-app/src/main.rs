@@ -1642,18 +1642,13 @@ impl App {
 
     /// Pays a settle a finished stroke owed, at the top of a frame.
     ///
-    /// A stroke ends by asking for this rather than doing it, so the ~29 ms it
-    /// costs falls on the frame after the pointer lifts instead of on the
-    /// release itself. What the sculptor sees in between is the brick-meshed
-    /// surface the drag was already showing — the same surface, one frame
-    /// longer, and the whole reason the settle exists is that the brick mesher
-    /// can leave slivers whose face normals shade black.
+    /// A stroke asks for settlement after release. Independently meshed
+    /// regions can retain boundary copies with different shading, so a single
+    /// complete request restores consistent ownership when old regions remain.
     ///
-    /// **Never while a gesture is open.** A settle replaces every key with one
-    /// whole-document mesh, so running it under a live drag would throw away
-    /// the preview the drag is drawing and fight the transaction that owns it.
-    /// The debt simply keeps until the gesture ends, and the stroke that ends
-    /// then asks again.
+    /// Never while a live gesture is open: that would replace its preview.
+    /// If synchronization already replaced every stored triangle, consuming
+    /// the debt requires no additional rebuild.
     fn flush_pending_settle(&mut self) {
         if !self.settle_owed {
             return;
@@ -1665,7 +1660,15 @@ impl App {
             return;
         }
         self.settle_owed = false;
-        self.settle_geometry();
+        // Epoch synchronization may already have rebuilt every key. Mask
+        // painting also leaves a single-request surface intact.
+        if self
+            .graphics
+            .as_ref()
+            .is_some_and(|g| g.geometry.needs_settle())
+        {
+            self.settle_geometry();
+        }
     }
 
     /// Says what the settle just spent, and on which of its three routes.
@@ -4461,9 +4464,9 @@ impl App {
         // much as a finished one.
         if matches!(command, Command::EndStroke | Command::CancelStroke) {
             self.drag_anchor = None;
-            // The brick mesher can leave isolated dark pits even in a fresh
-            // rebuild. The completed SDF uses the document mesher so that the
-            // artifact cannot remain after a stroke.
+            // Partial requests can retain boundary copies from older
+            // requests. The deferred flush checks whether synchronization
+            // already replaced the complete surface before rebuilding it.
             if matches!(command, Command::EndStroke)
                 && self.sculpt.active_representation() == Representation::Sdf
             {
