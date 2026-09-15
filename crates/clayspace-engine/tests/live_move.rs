@@ -306,9 +306,10 @@ fn a_press_that_never_drags_leaves_nothing_open() {
 /// when no transaction is open — a mirror that could not be pointed, or a
 /// caller that never opened one — `baked_stroke` falls to
 /// `move_surface_stroke`, which writes the drag with
-/// `clay_layer_move_surface`. That call coalesces successive grabs only while
-/// the centre and the radius repeat **exactly**, so what the segments carry
-/// decides whether the fallback costs one grab or one per pointer event.
+/// `clay_layer_move_surface`. Unnamed, that call coalesces successive grabs
+/// only while the centre and the radius repeat **exactly**, so what the
+/// segments carry decides whether the fallback costs one grab or one per
+/// pointer event.
 ///
 /// It used to cost one per pointer event. `Stroke::pending` hands a
 /// path-driven tool the last sample it already sent, so every segment after
@@ -322,6 +323,12 @@ fn a_press_that_never_drags_leaves_nothing_open() {
 /// the decision; this one pins the consequence and the engine contract the
 /// decision leans on. If a future engine stops coalescing a repeated centre,
 /// the replay silently buys nothing and only this notices.
+///
+/// **A named drag coalesces however it is anchored.** `begin_gesture` names the
+/// gesture (#122), and the engine then folds by the name alone, so inside a
+/// gesture even re-anchored segments are one grab per image. The replay stays
+/// load-bearing for a caller that never begins one, and the arms below state
+/// both.
 ///
 /// **One grab per mirror image, not one in total.** The layer mirror does not
 /// reach this verb, so `baked_stroke` reflects the gesture by hand and calls
@@ -339,10 +346,14 @@ fn the_unpreviewed_drag_coalesces_to_one_grab_per_image() {
         })
         .collect();
 
-    let chain_of = |from_the_anchor: bool, symmetry: [bool; 3]| -> i32 {
+    let chain_of = |from_the_anchor: bool, symmetry: [bool; 3], named: bool| -> i32 {
         let mut document = sphere();
         // No `open_live_gesture`, which is what puts this on the fallback.
-        SculptModel::begin_gesture(&mut document);
+        // No `begin_gesture` either, when unnamed: that is what leaves the
+        // engine deciding by centre and radius.
+        if named {
+            SculptModel::begin_gesture(&mut document);
+        }
         let mut applied = 0usize;
         for end in 2..=path.len() {
             let from = if from_the_anchor {
@@ -368,32 +379,44 @@ fn the_unpreviewed_drag_coalesces_to_one_grab_per_image() {
 
     // Unmirrored: the sculptor made one drag, so the field carries one grab.
     assert_eq!(
-        chain_of(true, [false; 3]),
+        chain_of(true, [false; 3], true),
         1,
         "sent from the anchor and unmirrored, {SEGMENTS} segments must coalesce \
          into the single grab the drag asked for"
     );
     // Mirrored: one per image, and the images do not stack each other.
     assert_eq!(
-        chain_of(true, STARTING_SYMMETRY),
+        chain_of(true, STARTING_SYMMETRY, true),
         2,
         "under one mirror the drag is written once per image, so two — a third \
          would mean the images are being appended rather than coalesced"
     );
-    // And the shape the replay replaced, so this states the defect and not
-    // only the fix. If these ever match the numbers above, the engine has
-    // started coalescing a moving centre and the replay is no longer
-    // load-bearing.
+    // And the shape the replay replaced, sent unnamed, so this states the
+    // defect and not only the fix. If these ever match the numbers above, the
+    // engine has started coalescing an unnamed moving centre and the replay is
+    // no longer load-bearing.
     assert_eq!(
-        chain_of(false, [false; 3]) as usize,
+        chain_of(false, [false; 3], false) as usize,
         SEGMENTS,
         "re-anchoring each segment is what used to happen, and it is what costs \
          a grab per pointer event"
     );
     assert_eq!(
-        chain_of(false, STARTING_SYMMETRY) as usize,
+        chain_of(false, STARTING_SYMMETRY, false) as usize,
         SEGMENTS * 2,
         "and mirrored it cost one per image per segment"
+    );
+    // Named, the same re-anchored segments are one drag, per image.
+    assert_eq!(
+        chain_of(false, [false; 3], true),
+        1,
+        "a named gesture must coalesce however its segments are anchored"
+    );
+    assert_eq!(
+        chain_of(false, STARTING_SYMMETRY, true),
+        2,
+        "named and mirrored, one grab per image; one would mean an image \
+         replaced the other"
     );
 }
 

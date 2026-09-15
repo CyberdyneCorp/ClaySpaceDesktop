@@ -140,6 +140,12 @@ defect was fixed. Both fired on the pin and both name the workaround to delete.
 - [x] 9.3 Hold the held door to it in `move_gesture_identity.rs`: a second drag
       from the same press adds to the first rather than replacing it — red
       before 9.2, with the surface at 1.1460 after one drag and after two
+- [x] 9.7 Restate `the_unpreviewed_drag_coalesces_to_one_grab_per_image`: its
+      re-anchored arms asserted one grab per segment inside `begin_gesture`,
+      which naming ends. They now run unnamed, and named arms assert one grab
+      per image however the segments are anchored
+- [x] 9.8 Guard that naming does not cost a mirror its far side: a named
+      mirrored held drag leaves both sides where the unnamed one does
 - [x] 9.5 Keep a tripwire on the live door, which cannot carry the name on this
       pin because `clay_sdf_move_begin` drops `gesture_id`
 - [ ] 9.6 Report the dropped `gesture_id` to ClayCore, and turn the tripwire into

@@ -176,3 +176,50 @@ fn a_second_live_drag_from_the_same_press_still_replaces_the_first_on_this_pin()
          held door does"
     );
 }
+
+/// Rest, near side and far side of a mirrored drag sent in anchored segments.
+fn mirrored_held_drag(named: bool) -> (f32, f32, f32) {
+    const MIRROR_X: [bool; 3] = [true, false, false];
+    let mut document = sphere();
+    let rest = radius_along(&document, OUTWARD);
+    if named {
+        SculptModel::begin_gesture(&mut document);
+    }
+    for step in 1..=6 {
+        document
+            .apply_stroke(ToolKind::Mover, brush(), &path(step), MIRROR_X)
+            .expect("the drag was refused");
+    }
+    if named {
+        SculptModel::end_gesture(&mut document);
+    }
+    let near = radius_along(&document, OUTWARD);
+    let far = radius_along(&document, OUTWARD.map(|c| -c));
+    (rest, near, far)
+}
+
+/// A GUARD rather than a regression: naming must not cost a mirror its far side.
+///
+/// The held door calls the engine once per mirror image, and every image
+/// carries the gesture's one name. A named grab folds into any leading grab of
+/// that name, so were one image's grab able to replace the other's, a mirrored
+/// drag would pull one side only. Compared against the unnamed drag, where each
+/// image keeps its own centre and cannot be taken for the other.
+#[test]
+fn naming_a_mirrored_held_drag_keeps_both_sides() {
+    let (rest, near_unnamed, far_unnamed) = mirrored_held_drag(false);
+    let (_, near_named, far_named) = mirrored_held_drag(true);
+    eprintln!(
+        "rest {rest:.4}; unnamed near {near_unnamed:.4} far {far_unnamed:.4}; \
+         named near {near_named:.4} far {far_named:.4}"
+    );
+    assert!(
+        far_unnamed - rest > 0.02,
+        "the mirrored drag did not reach the far side, so this compares nothing"
+    );
+    assert!(
+        (near_named - near_unnamed).abs() < 1e-4 && (far_named - far_unnamed).abs() < 1e-4,
+        "naming the gesture changed a mirrored drag: near {near_unnamed:.4} -> \
+         {near_named:.4}, far {far_unnamed:.4} -> {far_named:.4}"
+    );
+}
