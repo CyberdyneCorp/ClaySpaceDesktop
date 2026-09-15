@@ -88,8 +88,8 @@ pub struct Harness {
     pub gpu: Gpu,
     pub renderer: Renderer,
     pub target: OffscreenTarget,
-    /// Held for the harness's life, so only one GPU device exists at a time —
-    /// within this process and across the other test binaries.
+    /// Held for the harness's life, so only one GPU device exists at a time
+    /// **within this process**.
     ///
     /// Cargo runs a test binary's tests as threads in ONE process, and every
     /// `Harness::new` used to build a whole `Gpu::headless` — a fresh wgpu
@@ -108,8 +108,22 @@ pub struct Harness {
     /// Serialising the GPU rather than the suite: the other ~2,300 tests in the
     /// workspace still run in parallel, and only the handful that want a device
     /// queue behind this.
+    ///
+    /// **Within a process and not across them**, and that boundary is measured
+    /// rather than chosen. A cross-process lock was tried — `create_dir` in the
+    /// temp directory — and it cost 6% here while costing about thirteen
+    /// minutes on a CI runner. The difference is device creation: it is
+    /// near-instant on this hardware and about **twenty seconds** on a hosted
+    /// macOS runner, which a per-binary log makes plain — a binary with 95
+    /// tests finishes in 15.3s, a binary with 1 test and a harness takes 21.9s,
+    /// and a binary with no harness at all takes 0.78s. Serialising that
+    /// twenty seconds across the forty-odd binaries that want a device is the
+    /// whole cost, and letting them overlap is the whole saving.
+    ///
+    /// The cross-binary flake it was added for turned out to be
+    /// `only_the_passes_that_ran_are_reported`'s own timestamp race, fixed in
+    /// its own right — so the lock was paying for a bug somewhere else.
     _device: std::sync::MutexGuard<'static, ()>,
-    _across: AcrossProcesses,
 }
 
 /// The one GPU device at a time, within this process.
@@ -121,54 +135,6 @@ pub struct Harness {
 fn one_device_at_a_time() -> std::sync::MutexGuard<'static, ()> {
     static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
     GPU.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-/// The same, ACROSS processes.
-///
-/// A mutex is not enough on its own: `cargo test` runs each test binary as its
-/// own process and may run several at once, so two binaries that each hold
-/// their own in-process lock still build two devices. Measured — with only the
-/// mutex, `visual_lattice` alone passed 4 runs of 4, while `visual_lattice`
-/// and `gpu_profiling` together still failed 1 run of 3.
-///
-/// `create_dir` is the lock because it is an atomic test-and-set on every
-/// platform this builds for, and it needs no dependency for something only the
-/// tests want.
-struct AcrossProcesses(std::path::PathBuf);
-
-impl AcrossProcesses {
-    /// Waits for the device to be free, and takes it.
-    ///
-    /// A stale lock is STOLEN rather than waited on. A test binary killed while
-    /// holding this — Ctrl-C, an OOM kill, a CI timeout — would otherwise wedge
-    /// every later GPU test on the machine until someone deleted a directory
-    /// they had no reason to know about. Thirty seconds is far longer than any
-    /// harness holds it and far shorter than a person's patience.
-    fn take() -> Self {
-        let path = std::env::temp_dir().join("clayspace-test-gpu.lock");
-        let started = std::time::Instant::now();
-        loop {
-            match std::fs::create_dir(&path) {
-                Ok(()) => return Self(path),
-                Err(_) => {
-                    let stale = std::fs::metadata(&path)
-                        .and_then(|m| m.modified())
-                        .map(|t| t.elapsed().unwrap_or_default().as_secs() > 30)
-                        .unwrap_or(true);
-                    if stale || started.elapsed().as_secs() > 120 {
-                        let _ = std::fs::remove_dir(&path);
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                }
-            }
-        }
-    }
-}
-
-impl Drop for AcrossProcesses {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir(&self.0);
-    }
 }
 
 impl Harness {
@@ -185,7 +151,6 @@ impl Harness {
         // so the window in which two devices could exist is closed rather than
         // narrowed.
         let _device = one_device_at_a_time();
-        let _across = AcrossProcesses::take();
         let gpu = match pollster::block_on(Gpu::headless()) {
             Ok(gpu) => gpu,
             Err(e) => {
@@ -200,7 +165,6 @@ impl Harness {
             renderer,
             target,
             _device,
-            _across,
         })
     }
 

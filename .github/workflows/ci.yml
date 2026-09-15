@@ -92,7 +92,7 @@ jobs:
         # means anything in. They were always both run; they are no longer run
         # one after the other.
         profile: [debug, release]
-        target: [macos-cpu, macos-metal, linux-cpu, linux-vulkan]
+        target: [macos-cpu, macos-metal, macos-metal-app, linux-cpu, linux-vulkan]
         include:
           # What each profile costs cargo on the command line, carried here
           # rather than spelled as a conditional at both call sites: an
@@ -109,23 +109,49 @@ jobs:
             os: macos-14
             features: ""
             cpu_only: true
+            scope: "--workspace"
+          # Split in two, and on the seam that exists rather than an arbitrary
+          # one. Measured on the run that merged #133: Build 22 min and Test 26
+          # min against a 75-minute budget, where the same macOS runner in the
+          # CPU-only row spends 9 min on the same test step — so the 17-minute
+          # difference is the GPU work, and every one of those tests lives in
+          # `clayspace-app`.
+          #
+          # NOT redundant with the CPU-only row, which is the reason the whole
+          # row cannot simply be narrowed: that row sets CLAYCORE_CPU_ONLY, so
+          # this one is the only place the ENGINE runs on Metal. Both halves
+          # below keep that.
+          #
+          # Sharding rather than raising the budget, because raising it moves
+          # the wall without moving the job: the worst release run measured 62
+          # min, and eight minutes of runner variance on top of that is already
+          # inside 75. Two jobs of about 22 + 13 sit where one of 22 + 26 did.
           - target: macos-metal
             name: macOS, Metal
             slug: macos-metal
             os: macos-14
             features: "--features clayspace-engine/metal"
+            scope: "--workspace --exclude clayspace-app"
+          - target: macos-metal-app
+            name: macOS, Metal (app)
+            slug: macos-metal
+            os: macos-14
+            features: "--features clayspace-engine/metal"
+            scope: "-p clayspace-app"
           - target: linux-cpu
             name: Linux, CPU only
             slug: linux-cpu
             os: ubuntu-24.04
             features: ""
             cpu_only: true
+            scope: "--workspace"
           - target: linux-vulkan
             name: Linux, Vulkan
             slug: linux-vulkan
             os: ubuntu-24.04
             features: "--features clayspace-engine/vulkan"
             vulkan: true
+            scope: "--workspace"
 
     steps:
       - uses: actions/checkout@v4
@@ -240,7 +266,7 @@ jobs:
       # anything, which `sculpt_latency`, `gesture_end` and `visual_brushes`
       # each say in their own words before declining to assert one in debug.
       - name: Test
-        run: cargo test --workspace --no-fail-fast ${{ matrix.features }} ${{ matrix.flag }}
+        run: cargo test ${{ matrix.scope }} --no-fail-fast ${{ matrix.features }} ${{ matrix.flag }}
 
       # A visual test that fails says "see target/visual/…", and until now that
       # file went into the bin with the runner. The whole reason those tests
