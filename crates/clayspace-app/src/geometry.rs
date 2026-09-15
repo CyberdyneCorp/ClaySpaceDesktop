@@ -771,74 +771,12 @@ impl SurfaceGeometry {
     ///
     /// A true duplicate costs upload and draw rather than correctness: the
     /// copies agree in every attribute, so whichever one the depth test keeps
-    /// draws the same pixels. Which is why this runs *here* rather than on the
-    /// interaction path, and why it is worth so little: 55 triangles is nine
-    /// thousandths of a per cent of the buffer. It is kept because a relayout
-    /// already walks and rewrites everything, so one pass over it is free, and
-    /// because the engine's header asks a host holding geometry per brick to
-    /// dedupe by triangle. It would not be worth a pass of its own.
+    /// draws the same pixels. This runs during layout rather than ordinary
+    /// patches, as required for a host retaining independently meshed bricks.
+    /// Hashing complete corners for every triangle was itself expensive, so
+    /// the lookup interns exact vertex values and compares triples of IDs.
     fn prune_duplicates(&mut self) {
-        // In key order, so the copy that survives is the one under the
-        // lexicographically lowest key. Two things follow, and both matter.
-        // The result does not depend on how a `HashMap` happens to iterate, so
-        // the drawn buffer is the same from one run to the next. And it is the
-        // same copy the engine would have chosen for a whole-surface request —
-        // it attributes to the lowest requested key owning a corner — so a
-        // store pruned this way still agrees with a rebuild key for key, which
-        // is what `visual_incremental` and `lod_switching` check.
-        let mut keys: Vec<BrickKey> = self.keys.keys().copied().collect();
-        keys.sort_unstable();
-        let mut seen: std::collections::HashSet<[[u32; 10]; 3]> = std::collections::HashSet::new();
-        for key in keys {
-            let Some(geometry) = self.keys.get_mut(&key) else {
-                continue;
-            };
-            if geometry.indices.is_empty() {
-                continue;
-            }
-            let mut kept: Vec<u32> = Vec::with_capacity(geometry.indices.len());
-            for triangle in geometry.indices.chunks_exact(3) {
-                // The whole vertex, bit-exact, sorted so the same triangle
-                // reached from two keys is the same value however each key
-                // numbered its own vertices.
-                //
-                // Every attribute, not the position alone. Dropping a copy is
-                // only safe if the copy that stays draws the same pixels, and
-                // the shader reads the normal, the colour and the mask too.
-                // Vertices are welded across a seam, so the normal at a welded
-                // vertex depends on which bricks the meshing call covered:
-                // two copies of a straddler can sit at exactly the same three
-                // points and be shaded differently. Keyed on position alone
-                // they looked identical, and pruning picked one -- which is
-                // what made a settled surface differ from a full re-mesh by
-                // twelve levels over a thin trace of the seams.
-                //
-                // Exact rather than rounded, for the same reason at a smaller
-                // scale: a near-match is not a match. Missing a duplicate
-                // leaves a coincident copy costing its own memory, while a
-                // false match removes surface or changes its shading. Two
-                // copies of one triangle come from two meshings of an
-                // unchanged field, so they agree bit for bit when they agree
-                // at all.
-                let mut corners = [
-                    &geometry.vertices[triangle[0] as usize],
-                    &geometry.vertices[triangle[1] as usize],
-                    &geometry.vertices[triangle[2] as usize],
-                ]
-                .map(vertex_key);
-                corners.sort_unstable();
-                if seen.insert(corners) {
-                    kept.extend_from_slice(triangle);
-                }
-            }
-            if kept.len() != geometry.indices.len() {
-                geometry.indices = kept;
-                // The vertices a dropped triangle used may still be referenced
-                // by the ones kept, so the table is left alone: it is bounded
-                // by what this key's triangles ever used, and the next re-mesh
-                // of the key rebuilds it exactly.
-            }
-        }
+        prune_exact_triangles(&mut self.keys);
     }
 
     /// Whether independently re-meshed bricks left the same triangle in more
@@ -1244,6 +1182,48 @@ fn sample_mask(document: &ClayDocument, vertices: &mut [Vertex]) {
     }
 }
 
+/// Match complete vertex bits once, then use compact exact triangle keys.
+fn prune_exact_triangles(geometries: &mut HashMap<BrickKey, KeyGeometry>) {
+    let triangle_count: usize = geometries.values().map(|g| g.indices.len() / 3).sum();
+    if triangle_count == 0 {
+        return;
+    }
+    let vertex_count: usize = geometries.values().map(|g| g.vertices.len()).sum();
+    let mut vertex_ids: HashMap<[u32; 10], usize> = HashMap::with_capacity(vertex_count);
+    let mut seen = std::collections::HashSet::with_capacity(triangle_count);
+    let mut keys: Vec<_> = geometries.keys().copied().collect();
+    keys.sort_unstable();
+    for key in keys {
+        let geometry = geometries.get_mut(&key).expect("a stored key");
+        if geometry.indices.is_empty() {
+            continue;
+        }
+        let ids: Vec<_> = geometry
+            .vertices
+            .iter()
+            .map(|vertex| {
+                let next = vertex_ids.len();
+                *vertex_ids.entry(vertex_key(vertex)).or_insert(next)
+            })
+            .collect();
+        let mut kept = Vec::with_capacity(geometry.indices.len());
+        for triangle in geometry.indices.chunks_exact(3) {
+            let mut corners = [
+                ids[triangle[0] as usize],
+                ids[triangle[1] as usize],
+                ids[triangle[2] as usize],
+            ];
+            corners.sort_unstable();
+            if seen.insert(corners) {
+                kept.extend_from_slice(triangle);
+            }
+        }
+        if kept.len() != geometry.indices.len() {
+            geometry.indices = kept;
+        }
+    }
+}
+
 fn position_key(vertex: &Vertex) -> [u32; 3] {
     vertex.position.map(f32::to_bits)
 }
@@ -1362,7 +1342,40 @@ fn vertex_key(vertex: &Vertex) -> [u32; 10] {
 
 #[cfg(test)]
 mod tests {
-    use super::{contains_coincident_triangles, HashMap, KeyGeometry, Vertex};
+    use super::{
+        contains_coincident_triangles, prune_exact_triangles, vertex_key, HashMap, KeyGeometry,
+        Vertex,
+    };
+
+    fn prune_reference(geometries: &mut HashMap<super::BrickKey, KeyGeometry>) {
+        let mut keys: Vec<_> = geometries.keys().copied().collect();
+        keys.sort_unstable();
+        let mut seen: std::collections::HashSet<[[u32; 10]; 3]> = std::collections::HashSet::new();
+        for key in keys {
+            let Some(geometry) = geometries.get_mut(&key) else {
+                continue;
+            };
+            if geometry.indices.is_empty() {
+                continue;
+            }
+            let mut kept: Vec<u32> = Vec::with_capacity(geometry.indices.len());
+            for triangle in geometry.indices.chunks_exact(3) {
+                let mut corners = [
+                    &geometry.vertices[triangle[0] as usize],
+                    &geometry.vertices[triangle[1] as usize],
+                    &geometry.vertices[triangle[2] as usize],
+                ]
+                .map(vertex_key);
+                corners.sort_unstable();
+                if seen.insert(corners) {
+                    kept.extend_from_slice(triangle);
+                }
+            }
+            if kept.len() != geometry.indices.len() {
+                geometry.indices = kept;
+            }
+        }
+    }
 
     fn vertex(position: [f32; 3], normal: [f32; 3]) -> Vertex {
         Vertex {
@@ -1399,5 +1412,147 @@ mod tests {
         second.vertices[0].position[2] = 0.1;
         let keys = HashMap::from([([0, 0, 0], triangle([0.0, 0.0, 1.0])), ([1, 0, 0], second)]);
         assert!(!contains_coincident_triangles(&keys));
+    }
+    fn snapshot(
+        keys: &HashMap<super::BrickKey, KeyGeometry>,
+    ) -> std::collections::BTreeMap<super::BrickKey, (Vec<[u32; 10]>, Vec<u32>)> {
+        keys.iter()
+            .map(|(key, g)| {
+                (
+                    *key,
+                    (
+                        g.vertices.iter().map(vertex_key).collect(),
+                        g.indices.clone(),
+                    ),
+                )
+            })
+            .collect()
+    }
+
+    fn copy_geometry(
+        keys: &HashMap<super::BrickKey, KeyGeometry>,
+    ) -> HashMap<super::BrickKey, KeyGeometry> {
+        keys.iter()
+            .map(|(key, g)| {
+                (
+                    *key,
+                    KeyGeometry {
+                        vertices: g.vertices.clone(),
+                        indices: g.indices.clone(),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn compact_duplicate_keys_preserve_the_original_exact_result() {
+        let mut keys = HashMap::new();
+        prune_exact_triangles(&mut keys);
+        assert!(keys.is_empty());
+        for component in 0..10 {
+            for bits in [0, 0x8000_0000, 0x3f80_0001, 0x7fc0_0001, 0x7fc0_0002] {
+                let original = triangle([0.0, 0.0, 1.0]);
+                let mut changed = triangle([0.0, 0.0, 1.0]);
+                let v = &mut changed.vertices[0];
+                let channels = [
+                    &mut v.position[..],
+                    &mut v.normal[..],
+                    &mut v.color[..],
+                    std::slice::from_mut(&mut v.mask),
+                ];
+                *channels.into_iter().flatten().nth(component).unwrap() = f32::from_bits(bits);
+                let mut duplicate = triangle([0.0, 0.0, 1.0]);
+                duplicate.indices = vec![2, 1, 0, 0, 1, 2];
+                let mut keys = HashMap::from([
+                    ([-1, 0, 0], original),
+                    ([0, 0, 0], changed),
+                    ([1, 0, 0], duplicate),
+                    (
+                        [2, 0, 0],
+                        KeyGeometry {
+                            vertices: vec![],
+                            indices: vec![],
+                        },
+                    ),
+                ]);
+                let mut expected = copy_geometry(&keys);
+                prune_reference(&mut expected);
+                prune_exact_triangles(&mut keys);
+                assert_eq!(
+                    snapshot(&keys),
+                    snapshot(&expected),
+                    "component {component}, bits {bits:x}"
+                );
+            }
+        }
+    }
+    fn pruning_workload(shared: bool) -> HashMap<super::BrickKey, KeyGeometry> {
+        let mut keys = HashMap::new();
+        for key in 0..8 {
+            let mut vertices = Vec::new();
+            let mut indices = Vec::new();
+            let mut vertex = |x: f32, y: f32| {
+                vertices.push(Vertex {
+                    position: [x, y, key as f32],
+                    normal: [0., 0., 1.],
+                    color: [1.; 3],
+                    mask: 0.,
+                });
+            };
+            if shared {
+                for y in 0..65 {
+                    for x in 0..65 {
+                        vertex(x as f32, y as f32);
+                    }
+                }
+                for y in 0..64 {
+                    for x in 0..64 {
+                        let a = y * 65 + x;
+                        indices.extend([a, a + 1, a + 65, a + 1, a + 66, a + 65]);
+                    }
+                }
+            } else {
+                for t in 0..8192 {
+                    let x = t as f32 * 2.;
+                    vertex(x, 0.);
+                    vertex(x + 1., 0.);
+                    vertex(x, 1.);
+                    indices.extend([t * 3, t * 3 + 1, t * 3 + 2]);
+                }
+            }
+            keys.insert([key, 0, 0], KeyGeometry { vertices, indices });
+        }
+        keys
+    }
+
+    #[test]
+    #[ignore = "informational release timing; no portable timing threshold"]
+    fn profile_exact_triangle_pruning() {
+        for shared in [true, false] {
+            let keys = pruning_workload(shared);
+            let mut expected = copy_geometry(&keys);
+            let mut actual = copy_geometry(&keys);
+            prune_reference(&mut expected);
+            prune_exact_triangles(&mut actual);
+            assert_eq!(snapshot(&actual), snapshot(&expected));
+            let mut times = [Vec::new(), Vec::new()];
+            for run in 0..7 {
+                for which in [run % 2, 1 - run % 2] {
+                    let mut copy = copy_geometry(&keys);
+                    let start = std::time::Instant::now();
+                    [prune_reference, prune_exact_triangles][which](&mut copy);
+                    times[which].push(start.elapsed().as_secs_f64() * 1000.0);
+                    std::hint::black_box(copy);
+                }
+            }
+            for samples in &mut times {
+                samples.sort_by(f64::total_cmp);
+            }
+            println!(
+                "shared={shared} reference_ms={:.3} compact_ms={:.3}",
+                times[0][3], times[1][3]
+            );
+        }
     }
 }
