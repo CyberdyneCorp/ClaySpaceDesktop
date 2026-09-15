@@ -316,6 +316,112 @@ fn from_base64(text: &str) -> Vec<u8> {
     out
 }
 
+/// A synchronized session needs no geometry work to answer a meter or wait.
+fn assert_idle_measure(running: &Running, session: &str) {
+    // A meter must not manufacture work. This catches a forced whole-surface
+    // rebuild without depending on the machine's frame-time performance.
+    let idle = call(
+        running,
+        session,
+        "measure",
+        json!({ "group": "tool", "action": "select", "arguments": { "tool": "standard" } }),
+    );
+    assert_eq!(
+        idle["structuredContent"]["uploaded_bytes"], 0,
+        "measuring an unchanged selection uploaded geometry: {idle}"
+    );
+    assert_idle_wait(running, session);
+}
+
+fn assert_idle_wait(running: &Running, session: &str) {
+    let quiet = call(running, session, "wait", json!({ "bound_ms": 5000 }));
+    assert_eq!(quiet["structuredContent"]["quiet"], true);
+    assert_eq!(
+        quiet["structuredContent"]["uploaded_bytes"], 0,
+        "waiting on an idle session uploaded geometry: {quiet}"
+    );
+}
+
+/// Measuring a real edit must still deliver its geometry to the renderer.
+fn measure_clay_stroke(running: &Running, session: &str) {
+    // The starting sphere has radius 1: a radius-0.25 dab at z=0.6
+    // is buried inside it and cannot establish a visible-stroke regression.
+    let began = call(
+        running,
+        session,
+        "measure",
+        json!({ "group": "stroke", "action": "begin", "arguments": { "at": [0.0, 0.0, 1.0], "pressure": 1.0 } }),
+    );
+    let continued = call(
+        running,
+        session,
+        "measure",
+        json!({ "group": "stroke", "action": "continue", "arguments": { "at": [0.12, 0.0, 1.0], "pressure": 1.0 } }),
+    );
+    let stroke_uploads = [&began, &continued]
+        .iter()
+        .map(|reply| {
+            reply["structuredContent"]["uploaded_bytes"]
+                .as_u64()
+                .expect("uploaded bytes")
+        })
+        .sum::<u64>();
+    assert!(stroke_uploads > 0, "measured edits did not upload geometry");
+}
+
+/// A mask changes rendered attributes even though it dirties no field bricks.
+fn measure_mask_stroke(running: &Running, session: &str, settlement_needed: bool) {
+    call(
+        running,
+        session,
+        "tool",
+        json!({ "action": "select", "tool": "mask" }),
+    );
+    let painted = call(
+        running,
+        session,
+        "measure",
+        json!({
+            "group": "stroke", "action": "begin",
+            "arguments": { "at": [0.0, 0.0, 1.0], "pressure": 1.0 }
+        }),
+    );
+    assert!(
+        painted["structuredContent"]["uploaded_bytes"]
+            .as_u64()
+            .expect("upload count")
+            > 0,
+        "the measured mask left its attribute upload for a later frame: {painted}"
+    );
+    assert_idle_wait(running, session);
+    let ended = call(
+        running,
+        session,
+        "measure",
+        json!({
+            "group": "stroke", "action": "end", "arguments": {}
+        }),
+    );
+    let uploaded = ended["structuredContent"]["uploaded_bytes"]
+        .as_u64()
+        .expect("upload count");
+    assert_eq!(
+        uploaded > 0,
+        settlement_needed,
+        "mask release must respect existing geometry debt: {ended}"
+    );
+    call(running, session, "history", json!({ "action": "undo" }));
+}
+
+#[test]
+fn a_mask_release_does_not_rebuild_a_single_request_surface() {
+    let Some(running) = start() else {
+        return;
+    };
+    let session = initialize(&running);
+    measure_mask_stroke(&running, &session, false);
+}
+
 // -- the tests ---------------------------------------------------------------
 
 /// One test, not several: starting the application costs a window, an engine
@@ -327,6 +433,8 @@ fn an_agent_drives_the_running_application() {
         return;
     };
     let session = initialize(&running);
+
+    assert_idle_measure(&running, &session);
 
     // -- it answers a session nobody is touching ---------------------------
     //
@@ -421,18 +529,7 @@ fn an_agent_drives_the_running_application() {
         "brush",
         json!({ "action": "set_size", "size": 0.25 }),
     );
-    call(
-        &running,
-        &session,
-        "stroke",
-        json!({ "action": "begin", "at": [0.0, 0.0, 0.6], "pressure": 1.0 }),
-    );
-    call(
-        &running,
-        &session,
-        "stroke",
-        json!({ "action": "continue", "at": [0.12, 0.0, 0.6], "pressure": 1.0 }),
-    );
+    measure_clay_stroke(&running, &session);
     let ended = call(
         &running,
         &session,
@@ -453,7 +550,7 @@ fn an_agent_drives_the_running_application() {
         "the frame was taken before the surface settled: {ended}"
     );
 
-    call(&running, &session, "wait", json!({ "bound_ms": 5000 }));
+    assert_idle_wait(&running, &session);
     call(
         &running,
         &session,
@@ -480,6 +577,8 @@ fn an_agent_drives_the_running_application() {
         undone["structuredContent"]["history_depth"], 0,
         "one undo did not return the document: {undone}"
     );
+
+    measure_mask_stroke(&running, &session, true);
 
     // -- a tool with no verb on this layer is not offered, and refuses ------
     //

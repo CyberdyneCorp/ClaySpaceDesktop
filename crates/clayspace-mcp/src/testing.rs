@@ -275,6 +275,7 @@ impl Session for FakeSession {
         Settled {
             quiet: self.outstanding.is_empty(),
             waited_millis: 0,
+            uploaded_bytes: 0,
             outstanding: self.outstanding.clone(),
         }
     }
@@ -285,6 +286,7 @@ impl Session for FakeSession {
         Ok(Measured {
             label,
             millis: 2.1,
+            uploaded_bytes: 0,
             stalled: false,
             backend: "cpu".into(),
             platform: "test".into(),

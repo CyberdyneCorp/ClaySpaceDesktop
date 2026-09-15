@@ -42,6 +42,88 @@ struct KeyGeometry {
     indices: Vec<u32>,
 }
 
+/// One mesh's global indices, reused across its brick ranges.
+/// Only touched entries are cleared between bricks; nothing survives the split.
+struct VertexRemap {
+    indices: Vec<Option<u32>>,
+    touched: Vec<usize>,
+}
+
+impl VertexRemap {
+    fn new(vertices: usize) -> Self {
+        Self {
+            indices: vec![None; vertices],
+            touched: Vec::new(),
+        }
+    }
+
+    fn local_index(&mut self, global: usize, source: &[Vertex], local: &mut Vec<Vertex>) -> u32 {
+        if let Some(index) = self.indices[global] {
+            return index;
+        }
+        let index = local.len() as u32;
+        local.push(source[global]);
+        self.indices[global] = Some(index);
+        self.touched.push(global);
+        index
+    }
+
+    fn clear(&mut self) {
+        for global in self.touched.drain(..) {
+            self.indices[global] = None;
+        }
+    }
+}
+
+fn write_key_geometry(
+    into: &mut KeyGeometry,
+    vertices: &[Vertex],
+    triangles: &[[u32; 3]],
+    remap: &mut VertexRemap,
+) {
+    // Preserve the former placeholder behavior for malformed engine indices.
+    if triangles
+        .iter()
+        .flatten()
+        .any(|&index| index as usize >= vertices.len())
+    {
+        write_key_geometry_sparse(into, vertices, triangles);
+        return;
+    }
+    into.vertices.clear();
+    into.indices.clear();
+    for &global in triangles.iter().flatten() {
+        let index = remap.local_index(global as usize, vertices, &mut into.vertices);
+        into.indices.push(index);
+    }
+    remap.clear();
+}
+
+/// The original remapping algorithm, retained for out-of-range indices.
+fn write_key_geometry_sparse(into: &mut KeyGeometry, vertices: &[Vertex], triangles: &[[u32; 3]]) {
+    into.vertices.clear();
+    into.indices.clear();
+    let mut local = HashMap::new();
+    for &global in triangles.iter().flatten() {
+        let next = local.len() as u32;
+        into.indices.push(*local.entry(global).or_insert(next));
+    }
+    into.vertices.resize(
+        local.len(),
+        Vertex {
+            position: [0.0; 3],
+            normal: [0.0, 1.0, 0.0],
+            color: [1.0; 3],
+            mask: 0.0,
+        },
+    );
+    for (global, index) in local {
+        if let Some(vertex) = vertices.get(global as usize) {
+            into.vertices[index as usize] = *vertex;
+        }
+    }
+}
+
 /// What a sync cost, for the latency budget.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SyncCost {
@@ -73,8 +155,10 @@ pub struct SyncCost {
 /// divided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettleRoute {
-    /// A per-key rebuild at full resolution, which is the ordinary end of a
-    /// stroke.
+    /// Exact duplicate compaction without evaluating or meshing the field.
+    Compact,
+    /// A per-key rebuild at full resolution, used for explicit rebuilding and
+    /// release geometry that cannot be compacted.
     ///
     /// This used to be a whole-field `clay_document_mesh`. It was there to hide
     /// the brick mesher's sliver triangles — 2,297 near-zero-area triangles in
@@ -104,7 +188,8 @@ pub struct SettleCost {
     /// Copying the engine's mesh into the renderer's vertex layout, and
     /// sampling the mask over it.
     pub read_time: std::time::Duration,
-    /// Writing to the GPU.
+    /// Separately timed GPU writes, when available. Rebuild and compaction
+    /// currently include layout/upload work in `total_time` instead.
     pub upload_time: std::time::Duration,
     /// Everything `settle` spent, so `total - (engine + read + upload)` is
     /// what the bookkeeping around them cost.
@@ -152,6 +237,11 @@ pub struct SurfaceGeometry {
     /// bricks, so the store cannot be patched across the swap and is laid out
     /// again when this stops matching the document's.
     surface_epoch: u64,
+    /// Separate partial requests may assign the same boundary triangle to
+    /// different keys. A full replacement or eligible release compaction clears it.
+    needs_settle: bool,
+    /// Every retained triangle uses request-independent document gradients.
+    document_gradients: bool,
     /// The level the stored geometry was meshed at.
     ///
     /// Distinct from `requested` because a coarse surface is not always
@@ -227,6 +317,8 @@ impl SurfaceGeometry {
         Self {
             cage_rest: HashMap::new(),
             surface_epoch: 0,
+            needs_settle: false,
+            document_gradients: true,
             keys: HashMap::new(),
             mesh: GpuMesh::new(gpu),
             dirty: false,
@@ -245,6 +337,11 @@ impl SurfaceGeometry {
         }
     }
 
+    /// Whether stored geometry combines separate partial meshing requests.
+    pub fn needs_settle(&self) -> bool {
+        self.needs_settle
+    }
+
     /// Whether the surface, at the level being drawn, is more than the device
     /// can hold — the cue to draw it coarser.
     pub fn over_budget(&self) -> bool {
@@ -257,6 +354,48 @@ impl SurfaceGeometry {
 
     pub fn last_cost(&self) -> Option<SyncCost> {
         self.last_cost
+    }
+
+    /// Finish an already synchronized stroke without re-evaluating unchanged
+    /// geometry. Document gradients depend on vertex position, so partial
+    /// requests differ only in ownership and exact duplicate copies. Preview
+    /// face normals depend on the requested neighborhood and cannot use this.
+    /// Explicit `settle` and `rebuild` still perform a complete rebuild.
+    pub fn settle_after_edit(
+        &mut self,
+        gpu: &Gpu,
+        document: &mut ClayDocument,
+    ) -> Result<(), ClayError> {
+        if document.live_gesture_is_open() {
+            return Ok(());
+        }
+        if !self.document_gradients
+            || self.surface_epoch != document.surface_epoch()
+            || self.detail != Detail::Full
+            || !self.cage_rest.is_empty()
+        {
+            return self.settle(gpu, document);
+        }
+        let started = std::time::Instant::now();
+        compact_release_geometry(&mut self.keys);
+        self.relayout = true;
+        self.dirty = true;
+        self.lay_out_prepared(gpu);
+        // A refused layout must retain its debt and dirty geometry.
+        if !self.dirty {
+            self.needs_settle = false;
+        }
+        self.last_settle = Some(SettleCost {
+            route: SettleRoute::Compact,
+            engine_mesh_time: std::time::Duration::ZERO,
+            read_time: std::time::Duration::ZERO,
+            upload_time: std::time::Duration::ZERO,
+            total_time: started.elapsed(),
+            triangles: self.triangle_count(),
+            vertices: self.vertex_count(),
+        });
+        document.record_geometry(self.triangle_count(), self.vertex_count(), self.detail);
+        Ok(())
     }
 
     /// What the last `settle` cost, and which route it took.
@@ -421,6 +560,12 @@ impl SurfaceGeometry {
         shading: Shading,
         lod: i32,
     ) -> Result<(), ClayError> {
+        // Even a dirty-key request can replace the entire stored surface
+        // (for example undo). Only retained old triangles mix ownership.
+        let needs_settle = retains_unreplaced_triangles(&self.keys, replace);
+        let document_gradients = shading.gradient()
+            && !document.live_gesture_is_open()
+            && (!needs_settle || self.document_gradients);
         let engine_started = std::time::Instant::now();
         // The document is what a gradient is sampled through, so it goes
         // wherever gradient normals are asked for — which, since ClayCore
@@ -466,28 +611,7 @@ impl SurfaceGeometry {
         self.last_engine_mesh = engine_started.elapsed();
 
         let read_started = std::time::Instant::now();
-        let (mut vertices, indices) = match &mesh {
-            Some(mesh) => read_mesh(mesh)?,
-            None => (Vec::new(), Vec::new()),
-        };
-        // The preview lattice is the cache's lattice in a world translated by
-        // its own origin, so the translation is undone here — on the vertices
-        // and nowhere else, which is what keeps every reader of this geometry
-        // (bounds, picking, the mask below) working in one space.
-        if offset != [0.0; 3] {
-            for vertex in &mut vertices {
-                for (axis, by) in offset.iter().enumerate() {
-                    vertex.position[axis] += by;
-                }
-            }
-        }
-        // The frozen region, on the vertices this re-mesh just produced.
-        //
-        // Only these, which is the dirty subset: a dab that re-meshes twenty
-        // bricks samples twenty bricks' worth rather than the whole surface.
-        // A mask that *changes* is the other direction and is
-        // `refresh_mask`'s job.
-        sample_mask(document, &mut vertices);
+        let (vertices, indices) = read_drawn_mesh(mesh.as_ref(), offset, document)?;
         self.last_read = read_started.elapsed();
         let split_started = std::time::Instant::now();
 
@@ -563,46 +687,20 @@ impl SurfaceGeometry {
             .enumerate()
             .map(|(slot, range)| (range.key, slot))
             .collect();
+        let mut remap = VertexRemap::new(vertices.len());
         for key in &to_replace {
             self.touched.insert(*key);
-            let slot = slot_of.get(key).copied();
-            let entry = self.keys.entry(*key).or_default();
-            entry.vertices.clear();
-            entry.indices.clear();
-
-            let Some(triangles) = slot.map(|slot| &owned[slot]) else {
-                // Asked for and not returned: the surface has left this brick.
-                // Cleared above, and kept as an empty slot so a later edit
-                // finds it.
-                continue;
-            };
-            if triangles.is_empty() {
-                continue;
-            }
-
-            // A local vertex table holding exactly what these triangles use.
-            let mut local = std::collections::HashMap::new();
-            for triangle in triangles {
-                for global in triangle {
-                    let next = local.len() as u32;
-                    let index = *local.entry(*global).or_insert(next);
-                    entry.indices.push(index);
-                }
-            }
-            entry.vertices.resize(
-                local.len(),
-                Vertex {
-                    position: [0.0; 3],
-                    normal: [0.0, 1.0, 0.0],
-                    color: [1.0; 3],
-                    mask: 0.0,
-                },
+            let triangles = slot_of
+                .get(key)
+                .map(|&slot| owned[slot].as_slice())
+                .unwrap_or_default();
+            // An absent or empty range clears the previous contribution too.
+            write_key_geometry(
+                self.keys.entry(*key).or_default(),
+                &vertices,
+                triangles,
+                &mut remap,
             );
-            for (global, index) in local {
-                if let Some(vertex) = vertices.get(global as usize) {
-                    entry.vertices[index as usize] = *vertex;
-                }
-            }
         }
         self.last_split = split_started.elapsed();
         // The vertices a preview was holding the originals of have been
@@ -611,6 +709,8 @@ impl SurfaceGeometry {
         // there now.
         self.cage_rest.clear();
         self.dirty = true;
+        self.needs_settle = needs_settle;
+        self.document_gradients = document_gradients;
         Ok(())
     }
 
@@ -701,6 +801,12 @@ impl SurfaceGeometry {
     /// after a rebuild stay incremental rather than immediately re-homing
     /// everything.
     fn lay_out(&mut self, gpu: &Gpu) {
+        self.prune_duplicates();
+        self.lay_out_prepared(gpu);
+    }
+
+    /// Allocate and upload geometry after its duplicate pass has completed.
+    fn lay_out_prepared(&mut self, gpu: &Gpu) {
         let vertices_needed = self.vertex_count() + self.keys.len() * 64;
         let indices_needed = self.triangle_count() * 3 + self.keys.len() * 64;
         // Twice the need where the device allows it, so the strokes after a
@@ -736,7 +842,6 @@ impl SurfaceGeometry {
         self.layout = SlotMap::new(vertex_slots as u32, index_slots as u32);
         self.bounds = None;
         self.touched.clear();
-        self.prune_duplicates();
 
         let keys: Vec<BrickKey> = self.keys.keys().copied().collect();
         for key in keys {
@@ -771,74 +876,12 @@ impl SurfaceGeometry {
     ///
     /// A true duplicate costs upload and draw rather than correctness: the
     /// copies agree in every attribute, so whichever one the depth test keeps
-    /// draws the same pixels. Which is why this runs *here* rather than on the
-    /// interaction path, and why it is worth so little: 55 triangles is nine
-    /// thousandths of a per cent of the buffer. It is kept because a relayout
-    /// already walks and rewrites everything, so one pass over it is free, and
-    /// because the engine's header asks a host holding geometry per brick to
-    /// dedupe by triangle. It would not be worth a pass of its own.
+    /// draws the same pixels. This runs during layout rather than ordinary
+    /// patches, as required for a host retaining independently meshed bricks.
+    /// Hashing complete corners for every triangle was itself expensive, so
+    /// the lookup interns exact vertex values and compares triples of IDs.
     fn prune_duplicates(&mut self) {
-        // In key order, so the copy that survives is the one under the
-        // lexicographically lowest key. Two things follow, and both matter.
-        // The result does not depend on how a `HashMap` happens to iterate, so
-        // the drawn buffer is the same from one run to the next. And it is the
-        // same copy the engine would have chosen for a whole-surface request —
-        // it attributes to the lowest requested key owning a corner — so a
-        // store pruned this way still agrees with a rebuild key for key, which
-        // is what `visual_incremental` and `lod_switching` check.
-        let mut keys: Vec<BrickKey> = self.keys.keys().copied().collect();
-        keys.sort_unstable();
-        let mut seen: std::collections::HashSet<[[u32; 10]; 3]> = std::collections::HashSet::new();
-        for key in keys {
-            let Some(geometry) = self.keys.get_mut(&key) else {
-                continue;
-            };
-            if geometry.indices.is_empty() {
-                continue;
-            }
-            let mut kept: Vec<u32> = Vec::with_capacity(geometry.indices.len());
-            for triangle in geometry.indices.chunks_exact(3) {
-                // The whole vertex, bit-exact, sorted so the same triangle
-                // reached from two keys is the same value however each key
-                // numbered its own vertices.
-                //
-                // Every attribute, not the position alone. Dropping a copy is
-                // only safe if the copy that stays draws the same pixels, and
-                // the shader reads the normal, the colour and the mask too.
-                // Vertices are welded across a seam, so the normal at a welded
-                // vertex depends on which bricks the meshing call covered:
-                // two copies of a straddler can sit at exactly the same three
-                // points and be shaded differently. Keyed on position alone
-                // they looked identical, and pruning picked one -- which is
-                // what made a settled surface differ from a full re-mesh by
-                // twelve levels over a thin trace of the seams.
-                //
-                // Exact rather than rounded, for the same reason at a smaller
-                // scale: a near-match is not a match. Missing a duplicate
-                // leaves a coincident copy costing its own memory, while a
-                // false match removes surface or changes its shading. Two
-                // copies of one triangle come from two meshings of an
-                // unchanged field, so they agree bit for bit when they agree
-                // at all.
-                let mut corners = [
-                    &geometry.vertices[triangle[0] as usize],
-                    &geometry.vertices[triangle[1] as usize],
-                    &geometry.vertices[triangle[2] as usize],
-                ]
-                .map(vertex_key);
-                corners.sort_unstable();
-                if seen.insert(corners) {
-                    kept.extend_from_slice(triangle);
-                }
-            }
-            if kept.len() != geometry.indices.len() {
-                geometry.indices = kept;
-                // The vertices a dropped triangle used may still be referenced
-                // by the ones kept, so the table is left alone: it is bounded
-                // by what this key's triangles ever used, and the next re-mesh
-                // of the key rebuilds it exactly.
-            }
-        }
+        prune_exact_triangles(&mut self.keys);
     }
 
     /// Whether independently re-meshed bricks left the same triangle in more
@@ -1133,6 +1176,7 @@ impl SurfaceGeometry {
         if keys.is_empty() {
             self.mesh.upload(gpu, &[], &[]);
             self.layout = SlotMap::default();
+            self.needs_settle = false;
             document.take_dirty_keys();
             return Ok(());
         }
@@ -1244,6 +1288,155 @@ fn sample_mask(document: &ClayDocument, vertices: &mut [Vertex]) {
     }
 }
 
+/// A replacement covering all stored triangles is one consistent request,
+/// including when empty bookkeeping entries remain under other keys.
+fn retains_unreplaced_triangles(
+    keys: &HashMap<BrickKey, KeyGeometry>,
+    replace: Option<&std::collections::HashSet<BrickKey>>,
+) -> bool {
+    replace.is_some_and(|replace| {
+        keys.iter()
+            .any(|(key, geometry)| !geometry.indices.is_empty() && !replace.contains(key))
+    })
+}
+
+/// Reclaim storage a complete remesh would have discarded, preserving each
+/// surviving vertex bit and triangle order. Scratch space is reused per key.
+fn compact_release_geometry(geometries: &mut HashMap<BrickKey, KeyGeometry>) {
+    prune_exact_triangles(geometries);
+    geometries.retain(|_, geometry| !geometry.indices.is_empty());
+    let mut remap = Vec::new();
+    for geometry in geometries.values_mut() {
+        compact_referenced_vertices(geometry, &mut remap);
+        geometry.vertices.shrink_to_fit();
+        geometry.indices.shrink_to_fit();
+    }
+}
+
+fn compact_referenced_vertices(geometry: &mut KeyGeometry, remap: &mut Vec<u32>) {
+    remap.clear();
+    remap.resize(geometry.vertices.len(), u32::MAX);
+    for &index in &geometry.indices {
+        remap[index as usize] = 0;
+    }
+    if remap.iter().all(|&index| index != u32::MAX) {
+        return;
+    }
+    let mut old = 0;
+    let mut next = 0usize;
+    geometry.vertices.retain(|_| {
+        let index = old;
+        old += 1;
+        if remap[index] == u32::MAX {
+            return false;
+        }
+        // A retained vertex's new index cannot exceed its old u32 index.
+        remap[index] = next as u32;
+        next += 1;
+        true
+    });
+    for index in &mut geometry.indices {
+        *index = remap[*index as usize];
+    }
+}
+
+/// Match complete vertex bits once, then use compact exact triangle keys.
+fn prune_exact_triangles(geometries: &mut HashMap<BrickKey, KeyGeometry>) {
+    prune_exact_triangles_with_hasher(geometries, ahash::RandomState::new());
+}
+
+fn triangle_ids_fit_packed(vertex_count: usize) -> bool {
+    vertex_count <= u32::MAX as usize
+}
+
+fn packed_triangle_ids(ids: [usize; 3]) -> u128 {
+    debug_assert!(ids.iter().all(|&id| id <= u32::MAX as usize));
+    ids[0] as u128 | ((ids[1] as u128) << 32) | ((ids[2] as u128) << 64)
+}
+
+fn prune_exact_triangles_with_hasher<S: std::hash::BuildHasher + Clone>(
+    geometries: &mut HashMap<BrickKey, KeyGeometry>,
+    state: S,
+) {
+    let vertex_count = geometries.values().map(|g| g.vertices.len()).sum();
+    // Every assigned ID is smaller than the input vertex count. Keep the
+    // original representation when that bound cannot prove lossless packing.
+    if triangle_ids_fit_packed(vertex_count) {
+        prune_triangles_with_keys(geometries, state, vertex_count, packed_triangle_ids);
+    } else {
+        prune_triangles_with_keys(geometries, state, vertex_count, std::convert::identity);
+    }
+}
+
+// Borrow immutable vertex storage only for the duration of pruning. Equality
+// uses complete float bits, so separate allocations, NaNs and signed zero
+// behave exactly like the owned vertex_key representation.
+#[derive(Clone, Copy)]
+struct VertexBits<'a>(&'a Vertex);
+
+impl std::hash::Hash for VertexBits<'_> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::hash::Hash::hash(&vertex_key(self.0), state);
+    }
+}
+
+impl PartialEq for VertexBits<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        vertex_key(self.0) == vertex_key(other.0)
+    }
+}
+
+impl Eq for VertexBits<'_> {}
+
+fn prune_triangles_with_keys<S, K>(
+    geometries: &mut HashMap<BrickKey, KeyGeometry>,
+    state: S,
+    vertex_count: usize,
+    triangle_key: impl Fn([usize; 3]) -> K,
+) where
+    S: std::hash::BuildHasher + Clone,
+    K: Eq + std::hash::Hash,
+{
+    let triangle_count: usize = geometries.values().map(|g| g.indices.len() / 3).sum();
+    if triangle_count == 0 {
+        return;
+    }
+    let mut vertex_ids: HashMap<VertexBits<'_>, usize, S> =
+        HashMap::with_capacity_and_hasher(vertex_count, state.clone());
+    let mut seen = std::collections::HashSet::with_capacity_and_hasher(triangle_count, state);
+    let mut entries: Vec<_> = geometries.iter_mut().collect();
+    entries.sort_unstable_by_key(|(key, _)| **key);
+    for (_, geometry) in entries {
+        let KeyGeometry { vertices, indices } = geometry;
+        if indices.is_empty() {
+            continue;
+        }
+        let ids: Vec<_> = vertices
+            .iter()
+            .map(|vertex| {
+                let next = vertex_ids.len();
+                *vertex_ids.entry(VertexBits(vertex)).or_insert(next)
+            })
+            .collect();
+        let mut kept = 0;
+        for read in (0..indices.len() / 3 * 3).step_by(3) {
+            let mut corners = [
+                ids[indices[read] as usize],
+                ids[indices[read + 1] as usize],
+                ids[indices[read + 2] as usize],
+            ];
+            corners.sort_unstable();
+            if seen.insert(triangle_key(corners)) {
+                if read != kept {
+                    indices.copy_within(read..read + 3, kept);
+                }
+                kept += 3;
+            }
+        }
+        indices.truncate(kept);
+    }
+}
+
 fn position_key(vertex: &Vertex) -> [u32; 3] {
     vertex.position.map(f32::to_bits)
 }
@@ -1266,30 +1459,56 @@ fn contains_coincident_triangles(keys: &HashMap<BrickKey, KeyGeometry>) -> bool 
     false
 }
 
-/// Reads an engine mesh into the renderer's vertex layout in one pass.
-fn read_mesh(mesh: &Mesh) -> Result<(Vec<Vertex>, Vec<u32>), ClayError> {
-    let count = mesh.vertex_count();
-    // A brick with no surface in it comes back as a mesh with no attributes at
-    // all, and the engine refuses a layout naming positions on it — "the
-    // layout names positions, which this mesh does not carry" — which is not
-    // a failure to mesh, it is nothing to mesh.
-    if count == 0 {
-        return Ok((Vec::new(), Vec::new()));
-    }
-    let mut bytes = vec![0u8; count * Vertex::STRIDE];
-
-    let has_colors = mesh.colors().is_some();
-    if !has_colors {
-        // The engine refuses a layout naming an attribute the mesh lacks, so
-        // white is written here and the copy writes around it.
-        for vertex in bytes.chunks_exact_mut(Vertex::STRIDE) {
-            for channel in 0..3 {
-                let at = Vertex::COLOR_OFFSET + channel * 4;
-                vertex[at..at + 4].copy_from_slice(&1.0f32.to_le_bytes());
+/// Read the drawn cache's mesh in world coordinates and sample its mask.
+fn read_drawn_mesh(
+    mesh: Option<&Mesh>,
+    offset: [f32; 3],
+    document: &ClayDocument,
+) -> Result<(Vec<Vertex>, Vec<u32>), ClayError> {
+    let (mut vertices, indices) = match mesh {
+        Some(mesh) => read_mesh(mesh)?,
+        None => (Vec::new(), Vec::new()),
+    };
+    // The preview lattice is the cache's lattice in a world translated by
+    // its own origin, so the translation is undone here — on the vertices
+    // and nowhere else, which is what keeps every reader of this geometry
+    // (bounds, picking, the mask below) working in one space.
+    if offset != [0.0; 3] {
+        for vertex in &mut vertices {
+            for (axis, by) in offset.iter().enumerate() {
+                vertex.position[axis] += by;
             }
         }
     }
+    // The frozen region, on the vertices this re-mesh just produced.
+    //
+    // Only these, which is the dirty subset: a dab that re-meshes twenty
+    // bricks samples twenty bricks' worth rather than the whole surface.
+    // A mask that *changes* is the other direction and is
+    // `refresh_mask`'s job.
+    sample_mask(document, &mut vertices);
+    Ok((vertices, indices))
+}
 
+/// Reads an engine mesh into the renderer's vertex layout in one pass.
+fn read_mesh(mesh: &Mesh) -> Result<(Vec<Vertex>, Vec<u32>), ClayError> {
+    let count = mesh.vertex_count();
+    // Empty meshes have no attributes, so do not request a vertex layout.
+    if count == 0 {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let has_colors = mesh.colors().is_some();
+    let mut vertices = vec![
+        Vertex {
+            position: [0.0; 3],
+            normal: [0.0; 3],
+            color: [1.0; 3],
+            mask: 0.0,
+        };
+        count
+    ];
+    // Vertex is Pod with the renderer's declared layout. The engine writes
+    // only requested attributes; default color and mask remain initialized.
     mesh.copy_vertices(
         VertexLayout {
             stride: Some(Vertex::STRIDE as u32),
@@ -1298,25 +1517,18 @@ fn read_mesh(mesh: &Mesh) -> Result<(Vec<Vertex>, Vec<u32>), ClayError> {
             color_offset: has_colors.then_some(Vertex::COLOR_OFFSET as i32),
             uv_offset: None,
         },
-        &mut bytes,
+        bytemuck::cast_slice_mut(&mut vertices),
     )?;
-
-    let read = |v: &[u8], offset: usize| -> [f32; 3] {
-        std::array::from_fn(|i| {
-            let at = offset + i * 4;
-            f32::from_le_bytes(v[at..at + 4].try_into().unwrap())
-        })
-    };
-    let vertices = bytes
-        .chunks_exact(Vertex::STRIDE)
-        .map(|v| Vertex {
-            position: read(v, Vertex::POSITION_OFFSET),
-            normal: read(v, Vertex::NORMAL_OFFSET),
-            color: read(v, Vertex::COLOR_OFFSET),
-            mask: 0.0,
-        })
-        .collect();
-
+    // Preserve the original reader's little-endian decoding on other hosts.
+    #[cfg(target_endian = "big")]
+    for vertex in &mut vertices {
+        let decode = |value: f32| f32::from_bits(value.to_bits().swap_bytes());
+        vertex.position = vertex.position.map(decode);
+        vertex.normal = vertex.normal.map(decode);
+        if has_colors {
+            vertex.color = vertex.color.map(decode);
+        }
+    }
     let mut indices = vec![0u32; mesh.index_count()];
     mesh.copy_indices(&mut indices)?;
     Ok((vertices, indices))
@@ -1362,7 +1574,286 @@ fn vertex_key(vertex: &Vertex) -> [u32; 10] {
 
 #[cfg(test)]
 mod tests {
-    use super::{contains_coincident_triangles, HashMap, KeyGeometry, Vertex};
+    use super::{
+        contains_coincident_triangles, prune_exact_triangles, vertex_key, ClayError, HashMap,
+        KeyGeometry, Mesh, Vertex, VertexLayout,
+    };
+
+    fn read_mesh_reference(mesh: &Mesh) -> Result<(Vec<Vertex>, Vec<u32>), ClayError> {
+        let count = mesh.vertex_count();
+        // A brick with no surface in it comes back as a mesh with no attributes at
+        // all, and the engine refuses a layout naming positions on it — "the
+        // layout names positions, which this mesh does not carry" — which is not
+        // a failure to mesh, it is nothing to mesh.
+        if count == 0 {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let mut bytes = vec![0u8; count * Vertex::STRIDE];
+
+        let has_colors = mesh.colors().is_some();
+        if !has_colors {
+            // The engine refuses a layout naming an attribute the mesh lacks, so
+            // white is written here and the copy writes around it.
+            for vertex in bytes.chunks_exact_mut(Vertex::STRIDE) {
+                for channel in 0..3 {
+                    let at = Vertex::COLOR_OFFSET + channel * 4;
+                    vertex[at..at + 4].copy_from_slice(&1.0f32.to_le_bytes());
+                }
+            }
+        }
+
+        mesh.copy_vertices(
+            VertexLayout {
+                stride: Some(Vertex::STRIDE as u32),
+                position_offset: Some(Vertex::POSITION_OFFSET as i32),
+                normal_offset: Some(Vertex::NORMAL_OFFSET as i32),
+                color_offset: has_colors.then_some(Vertex::COLOR_OFFSET as i32),
+                uv_offset: None,
+            },
+            &mut bytes,
+        )?;
+
+        let read = |v: &[u8], offset: usize| -> [f32; 3] {
+            std::array::from_fn(|i| {
+                let at = offset + i * 4;
+                f32::from_le_bytes(v[at..at + 4].try_into().unwrap())
+            })
+        };
+        let vertices = bytes
+            .chunks_exact(Vertex::STRIDE)
+            .map(|v| Vertex {
+                position: read(v, Vertex::POSITION_OFFSET),
+                normal: read(v, Vertex::NORMAL_OFFSET),
+                color: read(v, Vertex::COLOR_OFFSET),
+                mask: 0.0,
+            })
+            .collect();
+
+        let mut indices = vec![0u32; mesh.index_count()];
+        mesh.copy_indices(&mut indices)?;
+        Ok((vertices, indices))
+    }
+
+    #[test]
+    fn direct_readback_preserves_colored_uncolored_and_empty_meshes() {
+        use clayspace_engine::claycore::{
+            BrickCache, BrickConfig, BrickMeshParams, Document, Item,
+        };
+        let mut document = Document::new().unwrap();
+        let layer = document.add_sdf_layer("readback").unwrap();
+        document
+            .add_item(layer, &Item::sphere(1.0).unwrap())
+            .unwrap();
+        for colors in [false, true] {
+            let mut cache = BrickCache::new(BrickConfig {
+                dim: 8,
+                voxel_size: 0.1,
+                band_voxels: 3,
+                memory_budget: None,
+                colors,
+            })
+            .unwrap();
+            let params = BrickMeshParams {
+                colors,
+                ..Default::default()
+            };
+            let (empty, _) = cache.mesh(Some(&document), params, &[]).unwrap();
+            let (vertices, indices) = super::read_mesh(&empty).unwrap();
+            assert!(vertices.is_empty() && indices.is_empty());
+            cache.mark_dirty_layer(&document, layer).unwrap();
+            assert!(cache.refill_all(&document, None, 256).unwrap() > 0);
+            let (mesh, _) = cache.mesh(Some(&document), params, &[]).unwrap();
+            assert!(!mesh.is_empty());
+            assert_eq!(mesh.colors().is_some(), colors);
+            let expected = read_mesh_reference(&mesh).unwrap();
+            let actual = super::read_mesh(&mesh).unwrap();
+            assert_eq!(actual.1, expected.1);
+            assert_eq!(
+                actual.0.iter().map(vertex_key).collect::<Vec<_>>(),
+                expected.0.iter().map(vertex_key).collect::<Vec<_>>()
+            );
+            assert!(actual.0.iter().all(|v| v.mask.to_bits() == 0));
+        }
+    }
+
+    #[test]
+    #[ignore = "informational release timing; no portable timing threshold"]
+    fn profile_mesh_readback() {
+        use clayspace_engine::claycore::{
+            BrickCache, BrickConfig, BrickMeshParams, Document, Item,
+        };
+        let mut document = Document::new().unwrap();
+        let layer = document.add_sdf_layer("readback timing").unwrap();
+        document
+            .add_item(layer, &Item::sphere(1.0).unwrap())
+            .unwrap();
+        eprintln!("readback,voxel_size,colors,repeat,variant,ms");
+        for voxel_size in [0.2, 0.1, 0.025] {
+            for colors in [false, true] {
+                let mut cache = BrickCache::new(BrickConfig {
+                    dim: 8,
+                    voxel_size,
+                    band_voxels: 3,
+                    memory_budget: None,
+                    colors,
+                })
+                .unwrap();
+                cache.mark_dirty_layer(&document, layer).unwrap();
+                cache.refill_all(&document, None, 256).unwrap();
+                let (mesh, _) = cache
+                    .mesh(
+                        Some(&document),
+                        BrickMeshParams {
+                            colors,
+                            ..Default::default()
+                        },
+                        &[],
+                    )
+                    .unwrap();
+                compare_readback_timing(&mesh, voxel_size, colors);
+            }
+        }
+    }
+
+    fn compare_readback_timing(mesh: &Mesh, voxel_size: f32, colors: bool) {
+        let expected = read_mesh_reference(mesh).unwrap();
+        let expected_bits: Vec<_> = expected.0.iter().map(vertex_key).collect();
+        for repeat in 0..7 {
+            for slot in 0..2 {
+                let variant = (repeat + slot) % 2;
+                let start = std::time::Instant::now();
+                let actual = if variant == 0 {
+                    read_mesh_reference(mesh)
+                } else {
+                    super::read_mesh(mesh)
+                }
+                .unwrap();
+                let ms = start.elapsed().as_secs_f64() * 1000.0;
+                assert_eq!(actual.1, expected.1);
+                assert_eq!(
+                    actual.0.iter().map(vertex_key).collect::<Vec<_>>(),
+                    expected_bits
+                );
+                eprintln!("readback,{voxel_size},{colors},{repeat},{variant},{ms:.6}");
+            }
+        }
+    }
+
+    #[test]
+    fn direct_readback_preserves_missing_normal_errors() {
+        let mesh = super::Mesh::from_triangles(
+            &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            &[0, 1, 2],
+        )
+        .unwrap();
+        assert!(mesh.normals().is_none());
+        assert!(read_mesh_reference(&mesh).is_err());
+        assert!(super::read_mesh(&mesh).is_err());
+    }
+
+    fn remap_fixture() -> Vec<Vertex> {
+        let words = [0, 0x8000_0000, 0x7fc0_0001, 0x3f80_0000, 0x7fa0_0002];
+        (0..32)
+            .map(|i| {
+                let values: [f32; 10] =
+                    std::array::from_fn(|j| f32::from_bits(words[(i + j) % words.len()]));
+                Vertex {
+                    position: [values[0], values[1], values[2]],
+                    normal: [values[3], values[4], values[5]],
+                    color: [values[6], values[7], values[8]],
+                    mask: values[9],
+                }
+            })
+            .collect()
+    }
+
+    fn geometry_bits(geometry: &KeyGeometry) -> (Vec<[u32; 10]>, Vec<u32>) {
+        (
+            geometry.vertices.iter().map(vertex_key).collect(),
+            geometry.indices.clone(),
+        )
+    }
+
+    #[test]
+    fn dense_vertex_remapping_preserves_bits_order_and_reused_bricks() {
+        let vertices = remap_fixture();
+        let groups = [
+            vec![[9, 1, 5], [5, 2, 9]],
+            vec![[1, 6, 1]],
+            vec![],
+            vec![[31, 0, 31]],
+        ];
+        let mut remap = super::VertexRemap::new(vertices.len());
+        let mut expected = KeyGeometry::default();
+        let mut actual = KeyGeometry::default();
+        for order in [[0, 1, 2, 3], [3, 2, 1, 0]] {
+            for at in order {
+                super::write_key_geometry_sparse(&mut expected, &vertices, &groups[at]);
+                super::write_key_geometry(&mut actual, &vertices, &groups[at], &mut remap);
+                assert_eq!(geometry_bits(&actual), geometry_bits(&expected));
+                assert!(remap.indices.iter().all(Option::is_none));
+                assert!(remap.touched.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn dense_vertex_remapping_preserves_invalid_placeholders_and_empty_replacements() {
+        let vertices = remap_fixture();
+        let mut remap = super::VertexRemap::new(vertices.len());
+        let mut actual = KeyGeometry::default();
+        let triangles = [
+            [u32::MAX, 0, u32::MAX],
+            [vertices.len() as u32, 0, u32::MAX],
+        ];
+        super::write_key_geometry(&mut actual, &vertices, &triangles, &mut remap);
+        let placeholder = vertex([0.0; 3], [0.0, 1.0, 0.0]);
+        let expected = KeyGeometry {
+            vertices: vec![placeholder, vertices[0], placeholder],
+            indices: vec![0, 1, 0, 2, 1, 0],
+        };
+        assert_eq!(geometry_bits(&actual), geometry_bits(&expected));
+        super::write_key_geometry(&mut actual, &vertices, &[], &mut remap);
+        assert!(actual.vertices.is_empty());
+        assert!(actual.indices.is_empty());
+
+        let mut empty = super::VertexRemap::new(0);
+        super::write_key_geometry(&mut actual, &[], &[[7, 7, 7]], &mut empty);
+        assert_eq!(
+            geometry_bits(&actual),
+            (vec![vertex_key(&placeholder)], vec![0, 0, 0])
+        );
+    }
+
+    fn prune_reference(geometries: &mut HashMap<super::BrickKey, KeyGeometry>) {
+        let mut keys: Vec<_> = geometries.keys().copied().collect();
+        keys.sort_unstable();
+        let mut seen: std::collections::HashSet<[[u32; 10]; 3]> = std::collections::HashSet::new();
+        for key in keys {
+            let Some(geometry) = geometries.get_mut(&key) else {
+                continue;
+            };
+            if geometry.indices.is_empty() {
+                continue;
+            }
+            let mut kept: Vec<u32> = Vec::with_capacity(geometry.indices.len());
+            for triangle in geometry.indices.chunks_exact(3) {
+                let mut corners = [
+                    &geometry.vertices[triangle[0] as usize],
+                    &geometry.vertices[triangle[1] as usize],
+                    &geometry.vertices[triangle[2] as usize],
+                ]
+                .map(vertex_key);
+                corners.sort_unstable();
+                if seen.insert(corners) {
+                    kept.extend_from_slice(triangle);
+                }
+            }
+            if kept.len() != geometry.indices.len() {
+                geometry.indices = kept;
+            }
+        }
+    }
 
     fn vertex(position: [f32; 3], normal: [f32; 3]) -> Vertex {
         Vertex {
@@ -1385,6 +1876,50 @@ mod tests {
     }
 
     #[test]
+    fn release_compaction_reclaims_empty_bricks_and_unused_vertices() {
+        let reference = triangle([0.0, 0.0, 1.0]);
+        let expected: Vec<_> = reference.vertices.iter().map(vertex_key).collect();
+        let mut used = triangle([0.0, 0.0, 1.0]);
+        used.vertices.insert(1, vertex([99.0; 3], [0.0; 3]));
+        used.indices = vec![0, 2, 3];
+        used.vertices.reserve(4096);
+        used.indices.reserve(4096);
+        let mut empty = triangle([0.0, 0.0, 1.0]);
+        empty.vertices.reserve(4096);
+        empty.vertices.clear();
+        empty.indices.clear();
+        let mut keys = HashMap::from([
+            ([0, 0, 0], used),
+            ([1, 0, 0], reference),
+            ([2, 0, 0], empty),
+        ]);
+        super::compact_release_geometry(&mut keys);
+        assert_eq!(
+            keys.len(),
+            1,
+            "empty and duplicate-only entries retain allocations"
+        );
+        let actual = keys.get(&[0, 0, 0]).expect("first surviving owner");
+        assert!(
+            actual.vertices.capacity() < 64,
+            "release old vertex backing storage"
+        );
+        assert!(
+            actual.indices.capacity() < 64,
+            "release old index backing storage"
+        );
+        assert_eq!(
+            actual.vertices.iter().map(vertex_key).collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(
+            actual.indices,
+            [0, 1, 2],
+            "preserve winding while remapping references"
+        );
+    }
+
+    #[test]
     fn the_same_triangle_in_two_bricks_is_contamination_even_if_its_normals_differ() {
         let keys = HashMap::from([
             ([0, 0, 0], triangle([0.0, 0.0, 1.0])),
@@ -1399,5 +1934,287 @@ mod tests {
         second.vertices[0].position[2] = 0.1;
         let keys = HashMap::from([([0, 0, 0], triangle([0.0, 0.0, 1.0])), ([1, 0, 0], second)]);
         assert!(!contains_coincident_triangles(&keys));
+    }
+    fn snapshot(
+        keys: &HashMap<super::BrickKey, KeyGeometry>,
+    ) -> std::collections::BTreeMap<super::BrickKey, (Vec<[u32; 10]>, Vec<u32>)> {
+        keys.iter()
+            .map(|(key, g)| {
+                (
+                    *key,
+                    (
+                        g.vertices.iter().map(vertex_key).collect(),
+                        g.indices.clone(),
+                    ),
+                )
+            })
+            .collect()
+    }
+
+    fn copy_geometry(
+        keys: &HashMap<super::BrickKey, KeyGeometry>,
+    ) -> HashMap<super::BrickKey, KeyGeometry> {
+        keys.iter()
+            .map(|(key, g)| {
+                (
+                    *key,
+                    KeyGeometry {
+                        vertices: g.vertices.clone(),
+                        indices: g.indices.clone(),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn compact_duplicate_keys_preserve_the_original_exact_result() {
+        let mut keys = HashMap::new();
+        prune_exact_triangles(&mut keys);
+        assert!(keys.is_empty());
+        for component in 0..10 {
+            for bits in [0, 0x8000_0000, 0x3f80_0001, 0x7fc0_0001, 0x7fc0_0002] {
+                let original = triangle([0.0, 0.0, 1.0]);
+                let mut changed = triangle([0.0, 0.0, 1.0]);
+                let v = &mut changed.vertices[0];
+                let channels = [
+                    &mut v.position[..],
+                    &mut v.normal[..],
+                    &mut v.color[..],
+                    std::slice::from_mut(&mut v.mask),
+                ];
+                *channels.into_iter().flatten().nth(component).unwrap() = f32::from_bits(bits);
+                let mut duplicate = triangle([0.0, 0.0, 1.0]);
+                duplicate.indices = vec![2, 1, 0, 0, 1, 2];
+                let mut keys = HashMap::from([
+                    ([-1, 0, 0], original),
+                    ([0, 0, 0], changed),
+                    ([1, 0, 0], duplicate),
+                    (
+                        [2, 0, 0],
+                        KeyGeometry {
+                            vertices: vec![],
+                            indices: vec![],
+                        },
+                    ),
+                ]);
+                let mut expected = copy_geometry(&keys);
+                prune_reference(&mut expected);
+                prune_exact_triangles(&mut keys);
+                assert_eq!(
+                    snapshot(&keys),
+                    snapshot(&expected),
+                    "component {component}, bits {bits:x}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn packed_triangle_identifiers_preserve_all_lanes_and_use_a_bounded_domain() {
+        let values = [0, 1, u32::MAX as usize - 1, u32::MAX as usize];
+        let mut seen = std::collections::HashSet::new();
+        for selector in 0..64 {
+            let ids = std::array::from_fn(|lane| values[(selector >> (lane * 2)) & 3]);
+            let packed = super::packed_triangle_ids(ids);
+            let restored: [usize; 3] =
+                std::array::from_fn(|lane| ((packed >> (lane * 32)) & u32::MAX as u128) as usize);
+            assert_eq!(restored, ids);
+            assert!(seen.insert(packed));
+        }
+        assert!(super::triangle_ids_fit_packed(0));
+        assert!(super::triangle_ids_fit_packed(u32::MAX as usize));
+        if let Some(wide) = (u32::MAX as usize).checked_add(1) {
+            assert!(!super::triangle_ids_fit_packed(wide));
+            assert!(!super::triangle_ids_fit_packed(usize::MAX));
+        }
+    }
+
+    #[test]
+    fn packed_and_wide_pruning_preserve_order_under_collisions_and_trailing_indices() {
+        let geometry = KeyGeometry {
+            vertices: (0..6)
+                .map(|i| vertex([i as f32, 0.0, 0.0], [0.0, 1.0, 0.0]))
+                .collect(),
+            indices: vec![0, 1, 2, 2, 1, 0, 3, 4, 5, 4, 3, 5, 5, 4],
+        };
+        let mut input = HashMap::from([([-1, 0, 0], geometry)]);
+        let mut duplicate = copy_geometry(&input).remove(&[-1, 0, 0]).unwrap();
+        duplicate.indices = vec![5, 4, 3, 2, 0, 1];
+        input.insert([1, 0, 0], duplicate);
+        let mut expected = copy_geometry(&input);
+        prune_reference(&mut expected);
+        assert_eq!(expected[&[-1, 0, 0]].indices, vec![0, 1, 2, 3, 4, 5]);
+        assert!(expected[&[1, 0, 0]].indices.is_empty());
+        let mut packed = copy_geometry(&input);
+        let mut wide = copy_geometry(&input);
+        let state = std::hash::BuildHasherDefault::<CollidingHasher>::default();
+        super::prune_exact_triangles_with_hasher(&mut packed, state.clone());
+        super::prune_triangles_with_keys(&mut wide, state, 12, std::convert::identity);
+        assert_eq!(snapshot(&packed), snapshot(&expected));
+        assert_eq!(snapshot(&wide), snapshot(&expected));
+    }
+
+    #[test]
+    fn repeated_release_pruning_preserves_bits_after_vertex_storage_changes() {
+        let mut first = triangle([0.0, 0.0, 1.0]);
+        first.vertices[0].mask = f32::from_bits(0x7fc0_0001);
+        first.vertices.insert(0, vertex([99.0; 3], [-0.0; 3]));
+        first.indices = vec![1, 2, 3];
+        let duplicate = KeyGeometry {
+            vertices: first.vertices.clone(),
+            indices: vec![3, 2, 1],
+        };
+        let mut keys = HashMap::from([([-1, 0, 0], first), ([1, 0, 0], duplicate)]);
+        super::compact_release_geometry(&mut keys);
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[&[-1, 0, 0]].vertices.len(), 3);
+        // Force new backing storage and a new brick after the first pass.
+        keys.insert([2, 0, 0], copy_geometry(&keys).remove(&[-1, 0, 0]).unwrap());
+        let mut expected = copy_geometry(&keys);
+        prune_reference(&mut expected);
+        expected.retain(|_, geometry| !geometry.indices.is_empty());
+        super::compact_release_geometry(&mut keys);
+        assert_eq!(snapshot(&keys), snapshot(&expected));
+        assert_eq!(keys[&[-1, 0, 0]].vertices[0].mask.to_bits(), 0x7fc0_0001);
+    }
+
+    #[test]
+    fn pruning_without_complete_triangles_preserves_the_existing_no_op() {
+        let mut geometry = triangle([0.0, 1.0, 0.0]);
+        geometry.indices = vec![0, 1];
+        let mut keys = HashMap::from([([0, 0, 0], geometry)]);
+        let before = snapshot(&keys);
+        prune_exact_triangles(&mut keys);
+        assert_eq!(snapshot(&keys), before);
+    }
+
+    #[derive(Default)]
+    struct CollidingHasher;
+
+    impl std::hash::Hasher for CollidingHasher {
+        fn finish(&self) -> u64 {
+            0
+        }
+
+        fn write(&mut self, _: &[u8]) {}
+    }
+
+    fn assert_pruning_hash_independent<S: std::hash::BuildHasher + Clone>(state: S) {
+        let mut keys = HashMap::new();
+        for component in 0..10 {
+            for (variant, bits) in [0, 0x8000_0000, 0x3f80_0001, 0x7fc0_0001, 0x7fc0_0002]
+                .into_iter()
+                .enumerate()
+            {
+                let mut geometry = triangle([0.0, 0.0, 1.0]);
+                let vertex = &mut geometry.vertices[0];
+                let channels = [
+                    &mut vertex.position[..],
+                    &mut vertex.normal[..],
+                    &mut vertex.color[..],
+                    std::slice::from_mut(&mut vertex.mask),
+                ];
+                *channels.into_iter().flatten().nth(component).unwrap() = f32::from_bits(bits);
+                // A reversed copy must lose to the first owner even when every key collides.
+                let duplicate = KeyGeometry {
+                    vertices: geometry.vertices.clone(),
+                    indices: vec![2, 1, 0],
+                };
+                keys.insert([component as i32, variant as i32, 0], geometry);
+                keys.insert([component as i32, variant as i32, 1], duplicate);
+            }
+        }
+        let mut expected = copy_geometry(&keys);
+        prune_reference(&mut expected);
+        super::prune_exact_triangles_with_hasher(&mut keys, state);
+        assert_eq!(snapshot(&keys), snapshot(&expected));
+    }
+
+    #[test]
+    fn pruning_preserves_exact_geometry_despite_hash_collisions_and_seeds() {
+        assert_pruning_hash_independent(std::hash::BuildHasherDefault::<CollidingHasher>::default());
+        for seed in 0..4 {
+            assert_pruning_hash_independent(ahash::RandomState::with_seeds(seed, 17, 29, 41));
+        }
+    }
+
+    fn pruning_workload(shared: bool) -> HashMap<super::BrickKey, KeyGeometry> {
+        let mut keys = HashMap::new();
+        for key in 0..8 {
+            let mut vertices = Vec::new();
+            let mut indices = Vec::new();
+            let mut vertex = |x: f32, y: f32| {
+                vertices.push(Vertex {
+                    position: [x, y, key as f32],
+                    normal: [0., 0., 1.],
+                    color: [1.; 3],
+                    mask: 0.,
+                });
+            };
+            if shared {
+                for y in 0..65 {
+                    for x in 0..65 {
+                        vertex(x as f32, y as f32);
+                    }
+                }
+                for y in 0..64 {
+                    for x in 0..64 {
+                        let a = y * 65 + x;
+                        indices.extend([a, a + 1, a + 65, a + 1, a + 66, a + 65]);
+                    }
+                }
+            } else {
+                for t in 0..8192 {
+                    let x = t as f32 * 2.;
+                    vertex(x, 0.);
+                    vertex(x + 1., 0.);
+                    vertex(x, 1.);
+                    indices.extend([t * 3, t * 3 + 1, t * 3 + 2]);
+                }
+            }
+            keys.insert([key, 0, 0], KeyGeometry { vertices, indices });
+        }
+        keys
+    }
+
+    #[test]
+    #[ignore = "informational release timing; no portable timing threshold"]
+    fn profile_exact_triangle_pruning() {
+        for shared in [true, false] {
+            let keys = pruning_workload(shared);
+            let mut expected = copy_geometry(&keys);
+            let mut actual = copy_geometry(&keys);
+            prune_reference(&mut expected);
+            prune_exact_triangles(&mut actual);
+            assert_eq!(snapshot(&actual), snapshot(&expected));
+            let mut times = [Vec::new(), Vec::new()];
+            for run in 0..7 {
+                for which in [run % 2, 1 - run % 2] {
+                    let mut copy = copy_geometry(&keys);
+                    let start = std::time::Instant::now();
+                    [prune_reference, prune_exact_triangles][which](&mut copy);
+                    times[which].push(start.elapsed().as_secs_f64() * 1000.0);
+                    std::hint::black_box(copy);
+                }
+            }
+            for samples in &mut times {
+                samples.sort_by(f64::total_cmp);
+            }
+            println!(
+                "shared={shared} reference_ms={:.3} compact_ms={:.3}",
+                times[0][3], times[1][3]
+            );
+        }
+    }
+    #[test]
+    fn empty_bookkeeping_keys_do_not_keep_old_triangle_ownership_alive() {
+        let mut keys = HashMap::from([
+            ([0, 0, 0], triangle([0.0, 0.0, 1.0])),
+            ([1, 0, 0], triangle([0.0, 0.0, 1.0])),
+        ]);
+        let replaced = std::collections::HashSet::from([[0, 0, 0]]);
+        assert!(super::retains_unreplaced_triangles(&keys, Some(&replaced)));
+        keys.get_mut(&[1, 0, 0]).unwrap().indices.clear();
+        assert!(!super::retains_unreplaced_triangles(&keys, Some(&replaced)));
     }
 }

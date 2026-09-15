@@ -881,14 +881,26 @@ impl App {
     /// What has not finished, in words an agent can act on.
     fn outstanding_work(&self) -> Vec<Outstanding> {
         let pending = *self.sculpt.pending_remesh().get();
-        if pending == 0 {
-            Vec::new()
-        } else {
-            vec![Outstanding {
+        let mut outstanding = Vec::new();
+        if pending > 0 {
+            outstanding.push(Outstanding {
                 what: format!("re-mesh of {pending} bricks"),
                 fraction: None,
-            }]
+            });
         }
+        if self.settle_owed {
+            outstanding.push(Outstanding {
+                what: "deferred surface settle".to_string(),
+                fraction: None,
+            });
+        }
+        if self.mask_revision != Some(self.document.with(|document| document.mask_revision())) {
+            outstanding.push(Outstanding {
+                what: "mask attribute refresh".to_string(),
+                fraction: None,
+            });
+        }
+        outstanding
     }
 
     /// The revisions of every channel a refusal or a notice arrives on.
@@ -1018,6 +1030,8 @@ impl App {
         // time, masking whatever a drag actually cost. A hitch before the
         // first frame is a different thing from a hitch under the pointer.
         self.timed("malha inicial", Self::sync_geometry_now);
+        // Finish initial attributes before serving an otherwise idle command.
+        self.sync_mask();
         self.frame_all();
         true
     }
@@ -1628,18 +1642,13 @@ impl App {
 
     /// Pays a settle a finished stroke owed, at the top of a frame.
     ///
-    /// A stroke ends by asking for this rather than doing it, so the ~29 ms it
-    /// costs falls on the frame after the pointer lifts instead of on the
-    /// release itself. What the sculptor sees in between is the brick-meshed
-    /// surface the drag was already showing — the same surface, one frame
-    /// longer, and the whole reason the settle exists is that the brick mesher
-    /// can leave slivers whose face normals shade black.
+    /// A stroke asks for settlement after release. Independently meshed
+    /// regions retain boundary copies. Document-gradient copies can be
+    /// compacted exactly; preview shading still requires a complete request.
     ///
-    /// **Never while a gesture is open.** A settle replaces every key with one
-    /// whole-document mesh, so running it under a live drag would throw away
-    /// the preview the drag is drawing and fight the transaction that owns it.
-    /// The debt simply keeps until the gesture ends, and the stroke that ends
-    /// then asks again.
+    /// Never while a live gesture is open: that would replace its preview.
+    /// If synchronization already replaced every stored triangle, consuming
+    /// the debt requires no additional rebuild.
     fn flush_pending_settle(&mut self) {
         if !self.settle_owed {
             return;
@@ -1651,10 +1660,19 @@ impl App {
             return;
         }
         self.settle_owed = false;
-        self.settle_geometry();
+        // Epoch synchronization may already have rebuilt every key. Mask
+        // painting also leaves a single-request surface intact.
+        if self
+            .graphics
+            .as_ref()
+            .is_some_and(|g| g.geometry.needs_settle())
+        {
+            self.timed("re-malha final", |app| app.settle_geometry_using(true));
+            self.report_settle();
+        }
     }
 
-    /// Says what the settle just spent, and on which of its three routes.
+    /// Says what the settle just spent, and which route it took.
     ///
     /// Printed beside the stall line rather than folded into it, because the
     /// stall ledger records ONE duration per label and this is the split that
@@ -1957,17 +1975,43 @@ impl App {
     }
 
     fn settle_geometry_now(&mut self) {
+        self.settle_geometry_using(false);
+    }
+
+    fn settle_geometry_using(&mut self, after_edit: bool) {
         let Some(graphics) = self.graphics.as_mut() else {
             return;
         };
         let gpu = graphics.gpu.clone();
-        let result = self
-            .document
-            .with(|document| graphics.geometry.settle(&gpu, document));
+        let result = self.document.with(|document| {
+            if after_edit {
+                graphics.geometry.settle_after_edit(&gpu, document)
+            } else {
+                graphics.geometry.settle(&gpu, document)
+            }
+        });
         match result {
             Ok(()) => self.sculpt.acknowledge_remesh(),
             Err(e) => eprintln!("the surface could not be re-meshed: {e}"),
         }
+    }
+
+    fn uploaded_bytes(&self) -> u64 {
+        self.graphics
+            .as_ref()
+            .map_or(0, |graphics| graphics.gpu.uploaded_bytes())
+    }
+
+    /// Finish what a frame actually owes, without creating a full rebuild for
+    /// a meter or an idle wait. A live gesture retains its deferred settle.
+    fn finish_pending_geometry(&mut self) {
+        if *self.sculpt.pending_remesh().get() > 0 {
+            self.sync_geometry_now();
+        }
+        self.flush_pending_settle();
+        // Mask painting dirties attributes, not field bricks. Include the
+        // same revision-guarded refresh the next frame would otherwise do.
+        self.sync_mask();
     }
 
     fn frame_all(&mut self) {
@@ -4429,20 +4473,18 @@ impl App {
         // much as a finished one.
         if matches!(command, Command::EndStroke | Command::CancelStroke) {
             self.drag_anchor = None;
-            // The brick mesher can leave isolated dark pits even in a fresh
-            // rebuild. The completed SDF uses the document mesher so that the
-            // artifact cannot remain after a stroke.
+            // Partial requests can retain boundary copies from older
+            // requests. The deferred flush checks whether synchronization
+            // already replaced the complete surface, then compacts eligible
+            // document geometry or rebuilds the remaining cases.
             if matches!(command, Command::EndStroke)
                 && self.sculpt.active_representation() == Representation::Sdf
             {
                 // OWED, NOT PAID. The brick-meshed surface the drag already
                 // drew is what stays on screen for one more frame, and the
-                // clean whole-surface re-mesh lands on the next one.
-                //
-                // The work is the same; what changes is that it no longer
-                // happens between the pointer lifting and the frame that
-                // acknowledges it. `build_mips` below is deferred for its own
-                // reason and this follows it.
+                // required compaction or rebuild lands on the next one.
+                // `build_mips` below is deferred for its own reason and this
+                // follows it.
                 self.settle_owed = true;
                 self.request_redraw();
             }
@@ -6004,12 +6046,15 @@ impl Session for App {
 
     fn settle(&mut self, budget: Duration) -> Settled {
         let started = Instant::now();
-        // The same synchronous re-mesh the next frame would do, done now, and
-        // repeated while anything is still dirty: an edit can dirty more than
-        // one pass settles.
+        let uploaded = self.uploaded_bytes();
+        // Drain actual debt. A blocked live gesture cannot finish its settle
+        // on this thread, so return its outstanding work when a pass makes no
+        // progress instead of spinning until the budget expires.
         loop {
-            self.settle_geometry_now();
-            if self.outstanding_work().is_empty() || started.elapsed() >= budget {
+            let before = self.outstanding_work();
+            self.finish_pending_geometry();
+            let after = self.outstanding_work();
+            if after.is_empty() || after == before || started.elapsed() >= budget {
                 break;
             }
         }
@@ -6017,6 +6062,7 @@ impl Session for App {
         Settled {
             quiet: outstanding.is_empty(),
             waited_millis: started.elapsed().as_millis() as u64,
+            uploaded_bytes: self.uploaded_bytes().saturating_sub(uploaded),
             outstanding,
         }
     }
@@ -6024,16 +6070,18 @@ impl Session for App {
     fn measure(&mut self, command: Command) -> Result<Measured, Refusal> {
         let label = command.label().to_string();
         let started = Instant::now();
+        let uploaded = self.uploaded_bytes();
         Session::apply(self, command)?;
-        // The surface too: a figure that stops at the edit and leaves the
-        // re-mesh out is a figure that says a stroke costs two milliseconds.
-        self.settle_geometry_now();
+        // Include required geometry, but do not manufacture a full rebuild
+        // after the command already synchronized its dirty region.
+        self.finish_pending_geometry();
         let took = started.elapsed();
 
         let diagnostics = self.policy.diagnostics();
         Ok(Measured {
             label,
             millis: took.as_secs_f64() * 1000.0,
+            uploaded_bytes: self.uploaded_bytes().saturating_sub(uploaded),
             stalled: took > clayspace_model::FRAME,
             backend: diagnostics.active_backend,
             platform: diagnostics.platform,
