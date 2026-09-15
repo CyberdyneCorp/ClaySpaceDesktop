@@ -25,3 +25,22 @@ The actual old and new pruning function bodies complete 168 timings across twelv
 ## Application comparison interrupted by contention
 
 The first comparison completed seven alternating pairs (182 cases across all thirteen brushes), then was deliberately interrupted by the CPU guard during pair eight after 205 total cases. The 23 cases in the incomplete pair are excluded from paired analysis. This was sustained CPU contention, not an application command timeout. The full ten-pair comparison remains unfinished; no complete application latency benefit is claimed for this increment. Raw partial measurements and CPU history are retained under `/tmp/clay-531-packed-pruning-live*`. The remaining pairs must run in a quiet window.
+
+## Completed application comparison
+
+The remaining three alternating pairs complete in a quiet window without sustained contention or command timeouts. Combining those 78 cases with the first seven complete pairs gives 260 cases across all thirteen brushes; every paired begin/continue/end upload count matches. The incomplete 23-case pair remains excluded.
+
+| Action | Previous median ms | Packed median ms |
+|---|---:|---:|
+| Standard release | 16.245 | 15.940 |
+| Inflate release | 17.341 | 15.848 |
+| Layer release | 16.983 | 15.885 |
+| Clay release | 17.005 | 16.623 |
+| Crease release | 22.371 | 19.989 |
+| Move release | 47.096 | 45.002 |
+| Relax preparation | 74.433 | 69.148 |
+| Smooth preparation | 63.633 | 65.820 |
+| Smooth release | 67.344 | 67.027 |
+| Snake Hook release | 27.199 | 26.068 |
+
+These are fixture medians, not per-run guarantees. Results are mixed, including slower Smooth preparation and a small Mask release increase. Nine brush release medians still exceed 16 ms. The goal remains open. Complete rows and summary are `/tmp/clay-531-packed-pruning-live-{complete,summary}.json`.

@@ -2,4 +2,5 @@
 - [x] Implement bounded packing with the wide fallback and stable in-place compaction.
 - [x] Add boundary, fallback, exact-output and collision regressions.
 - [x] Complete native/rendered tests, lint, complexity and strict OpenSpec checks.
-- [ ] Measure production memory and application latency; update PR evidence and preserve the full 16 ms goal.
+- [x] Measure production memory and application latency; update PR evidence and preserve the full 16 ms goal.
+- [ ] Complete platform CI and retain the full 16 ms goal for further work.
