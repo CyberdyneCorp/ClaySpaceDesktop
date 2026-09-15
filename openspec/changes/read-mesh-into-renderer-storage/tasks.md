@@ -4,5 +4,5 @@
 
 ## Verification
 - [x] Run pinned and combined application tests, formatting, Clippy, complexity and OpenSpec.
-- [ ] Measure production readback and allocation requests.
-- [ ] Complete the paired all-brush application comparison and update PR evidence.
+- [x] Measure production readback and allocation requests.
+- [x] Complete the paired all-brush application comparison and update PR evidence.
