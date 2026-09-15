@@ -1368,6 +1368,26 @@ fn prune_exact_triangles_with_hasher<S: std::hash::BuildHasher + Clone>(
     }
 }
 
+// Borrow immutable vertex storage only for the duration of pruning. Equality
+// uses complete float bits, so separate allocations, NaNs and signed zero
+// behave exactly like the owned vertex_key representation.
+#[derive(Clone, Copy)]
+struct VertexBits<'a>(&'a Vertex);
+
+impl std::hash::Hash for VertexBits<'_> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::hash::Hash::hash(&vertex_key(self.0), state);
+    }
+}
+
+impl PartialEq for VertexBits<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        vertex_key(self.0) == vertex_key(other.0)
+    }
+}
+
+impl Eq for VertexBits<'_> {}
+
 fn prune_triangles_with_keys<S, K>(
     geometries: &mut HashMap<BrickKey, KeyGeometry>,
     state: S,
@@ -1381,40 +1401,39 @@ fn prune_triangles_with_keys<S, K>(
     if triangle_count == 0 {
         return;
     }
-    let mut vertex_ids: HashMap<[u32; 10], usize, S> =
+    let mut vertex_ids: HashMap<VertexBits<'_>, usize, S> =
         HashMap::with_capacity_and_hasher(vertex_count, state.clone());
     let mut seen = std::collections::HashSet::with_capacity_and_hasher(triangle_count, state);
-    let mut keys: Vec<_> = geometries.keys().copied().collect();
-    keys.sort_unstable();
-    for key in keys {
-        let geometry = geometries.get_mut(&key).expect("a stored key");
-        if geometry.indices.is_empty() {
+    let mut entries: Vec<_> = geometries.iter_mut().collect();
+    entries.sort_unstable_by_key(|(key, _)| **key);
+    for (_, geometry) in entries {
+        let KeyGeometry { vertices, indices } = geometry;
+        if indices.is_empty() {
             continue;
         }
-        let ids: Vec<_> = geometry
-            .vertices
+        let ids: Vec<_> = vertices
             .iter()
             .map(|vertex| {
                 let next = vertex_ids.len();
-                *vertex_ids.entry(vertex_key(vertex)).or_insert(next)
+                *vertex_ids.entry(VertexBits(vertex)).or_insert(next)
             })
             .collect();
         let mut kept = 0;
-        for read in (0..geometry.indices.len() / 3 * 3).step_by(3) {
+        for read in (0..indices.len() / 3 * 3).step_by(3) {
             let mut corners = [
-                ids[geometry.indices[read] as usize],
-                ids[geometry.indices[read + 1] as usize],
-                ids[geometry.indices[read + 2] as usize],
+                ids[indices[read] as usize],
+                ids[indices[read + 1] as usize],
+                ids[indices[read + 2] as usize],
             ];
             corners.sort_unstable();
             if seen.insert(triangle_key(corners)) {
                 if read != kept {
-                    geometry.indices.copy_within(read..read + 3, kept);
+                    indices.copy_within(read..read + 3, kept);
                 }
                 kept += 3;
             }
         }
-        geometry.indices.truncate(kept);
+        indices.truncate(kept);
     }
 }
 
@@ -1873,6 +1892,30 @@ mod tests {
         super::prune_triangles_with_keys(&mut wide, state, 12, std::convert::identity);
         assert_eq!(snapshot(&packed), snapshot(&expected));
         assert_eq!(snapshot(&wide), snapshot(&expected));
+    }
+
+    #[test]
+    fn repeated_release_pruning_preserves_bits_after_vertex_storage_changes() {
+        let mut first = triangle([0.0, 0.0, 1.0]);
+        first.vertices[0].mask = f32::from_bits(0x7fc0_0001);
+        first.vertices.insert(0, vertex([99.0; 3], [-0.0; 3]));
+        first.indices = vec![1, 2, 3];
+        let duplicate = KeyGeometry {
+            vertices: first.vertices.clone(),
+            indices: vec![3, 2, 1],
+        };
+        let mut keys = HashMap::from([([-1, 0, 0], first), ([1, 0, 0], duplicate)]);
+        super::compact_release_geometry(&mut keys);
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[&[-1, 0, 0]].vertices.len(), 3);
+        // Force new backing storage and a new brick after the first pass.
+        keys.insert([2, 0, 0], copy_geometry(&keys).remove(&[-1, 0, 0]).unwrap());
+        let mut expected = copy_geometry(&keys);
+        prune_reference(&mut expected);
+        expected.retain(|_, geometry| !geometry.indices.is_empty());
+        super::compact_release_geometry(&mut keys);
+        assert_eq!(snapshot(&keys), snapshot(&expected));
+        assert_eq!(keys[&[-1, 0, 0]].vertices[0].mask.to_bits(), 0x7fc0_0001);
     }
 
     #[test]
