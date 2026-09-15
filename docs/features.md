@@ -175,6 +175,21 @@ One grab **per image**, not one in total: the layer mirror cannot reach a verb
 that rewrites the field (see *Symmetry*), so a mirrored drag is reflected and
 applied once per image, and each image folds within itself.
 
+Both doors **name the gesture** (`clay_move_params.gesture_id`, issued fresh by
+`begin_gesture`), and a named grab folds only into a grab of the same name. The
+fold replaces — the drag re-sends its whole displacement — so leaving it to the
+centre-and-radius rule was not only a question of cost: a second drag pressed
+exactly where the first was, at the same size, compared equal and replaced the
+first, and the first pull was lost. Named, two drags are always two grabs, and a
+radius that changes mid-drag stays one. The id is not saved; a reopened
+document's grabs are unnamed and never match a new gesture.
+
+**Not yet on the live door.** ClayCore v0.113.0's `clay_sdf_move_begin` does
+not copy `gesture_id` into the transaction, so a live drag still goes unnamed
+and still folds by centre and radius. The application sends the name anyway;
+`move_gesture_identity.rs` keeps a tripwire that fails on the pin that carries
+the fix.
+
 A press arriving while a drag is still open **abandons that drag** and starts
 its own. A gesture that never received its pointer-up has not earned a commit,
 which is the rule the whole live path runs on — the document carries no part of

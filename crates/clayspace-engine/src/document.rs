@@ -1125,6 +1125,13 @@ pub struct ClayDocument {
     /// answered at pointer-down and the transaction begins on the first
     /// segment, which is the first thing that carries a position.
     live_move_armed: bool,
+    /// The engine's name for the gesture in progress; 0 when none is open.
+    ///
+    /// The engine folds a Move grab into the one leading an item's chain when
+    /// both belong to the same drag, and the fold replaces. Unnamed it decides
+    /// by centre and radius compared bit for bit, so a second drag pressed
+    /// where the first was, at the same size, used to replace the first.
+    gesture_id: u64,
     /// History entries opening the live gesture recorded before it began.
     live_opening_entries: usize,
     /// The gesture the preview has been showing, kept so that closing it can
@@ -1422,6 +1429,7 @@ impl ClayDocument {
             live_smooth: None,
             live_move: None,
             live_move_armed: false,
+            gesture_id: 0,
             live_opening_entries: 0,
             live_gesture: None,
             surface_epoch: 0,
@@ -3635,11 +3643,7 @@ impl ClayDocument {
                 layer,
                 first.position,
                 displacement,
-                claycore::MoveParams {
-                    radius: brush.size.max(1e-3),
-                    ease: brush.drag.falloff.ease(),
-                    front_only: brush.drag.front_only,
-                },
+                self.move_params(&brush),
                 images,
             )
             .map_err(ModelError::engine)?;
@@ -3652,6 +3656,17 @@ impl ClayDocument {
             changed: true,
             dirty_bricks: self.dirty.len(),
         })
+    }
+
+    /// What both Move doors send the engine, read from one place so a drag
+    /// previewed live and a drag applied whole are the same drag.
+    fn move_params(&self, brush: &BrushSettings) -> claycore::MoveParams {
+        claycore::MoveParams {
+            radius: brush.size.max(1e-3),
+            ease: brush.drag.falloff.ease(),
+            front_only: brush.drag.front_only,
+            gesture_id: self.gesture_id,
+        }
     }
 
     /// One segment of a live Move drag.
@@ -3679,21 +3694,8 @@ impl ClayDocument {
             self.live_move_armed = false;
             let layer = self.active_layer().id;
             let anchor = samples[0].position;
-            let live = crate::live::LiveMove::begin(
-                &mut self.document,
-                layer,
-                anchor,
-                // The same two the baked path reads, so a drag previewed
-                // live and a drag applied whole are the same drag. They were
-                // literals at both sites and the consistency was the whole
-                // reason to keep them identical; now it is the reason to read
-                // them from one place.
-                claycore::MoveParams {
-                    radius: brush.size.max(1e-3),
-                    ease: brush.drag.falloff.ease(),
-                    front_only: brush.drag.front_only,
-                },
-            )?;
+            let params = self.move_params(&brush);
+            let live = crate::live::LiveMove::begin(&mut self.document, layer, anchor, params)?;
             self.live_move = Some(live);
         }
 
@@ -7365,6 +7367,15 @@ impl ClayDocument {
     }
 }
 
+/// A gesture name no document in this process has used.
+///
+/// Process-wide rather than per document, so no document can be handed grabs
+/// already carrying the id it is about to issue. Never 0, which names none.
+fn next_gesture_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 impl SculptModel for ClayDocument {
     fn active_representation(&self) -> Representation {
         self.active_layer().representation
@@ -7747,6 +7758,7 @@ impl SculptModel for ClayDocument {
 
     fn begin_gesture(&mut self) {
         self.set_previewing(true);
+        self.gesture_id = next_gesture_id();
         // A drag is anchored where the press landed, so the last one's anchor
         // must not be lying around when the next one opens.
         self.voxel_grab = None;
@@ -7766,6 +7778,7 @@ impl SculptModel for ClayDocument {
 
     fn end_gesture(&mut self) {
         self.set_previewing(false);
+        self.gesture_id = 0;
         // The tendril is finished; the next pull is its own.
         self.live_hook = None;
         // As is the drag.
@@ -9629,6 +9642,7 @@ impl ClayDocument {
             live_smooth: None,
             live_move: None,
             live_move_armed: false,
+            gesture_id: 0,
             live_opening_entries: 0,
             live_gesture: None,
             surface_epoch: 0,

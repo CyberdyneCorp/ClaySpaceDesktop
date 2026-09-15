@@ -135,6 +135,7 @@ fn mover_drags_the_surface_outward() {
                 radius: 0.7,
                 ease: 0,
                 front_only: false,
+                gesture_id: 0,
             },
         )
         .expect("move surface");

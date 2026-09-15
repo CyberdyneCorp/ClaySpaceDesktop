@@ -41,6 +41,7 @@ fn drag_params() -> MoveParams {
         radius: 0.3,
         ease: 0,
         front_only: true,
+        gesture_id: 0,
     }
 }
 

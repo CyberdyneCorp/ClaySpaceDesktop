@@ -28,7 +28,7 @@ fn declared_at_48(sphere_r: f32, grab_r: f32, d: f32) -> Option<(f32, f32, i32)>
             layer,
             at,
             [0.02, 0.0, 0.0],
-            MoveParams { radius: grab_r, ease: 0, front_only: false },
+            MoveParams { radius: grab_r, ease: 0, front_only: false, gesture_id: 0 },
         )
         .ok()?;
     }

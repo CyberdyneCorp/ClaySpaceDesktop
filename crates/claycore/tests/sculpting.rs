@@ -527,6 +527,7 @@ fn the_move_brush_drags_the_assembled_surface() {
                 radius: 0.6,
                 ease: 0,
                 front_only: false,
+                gesture_id: 0,
             },
         )
         .expect("move surface");
@@ -539,6 +540,74 @@ fn the_move_brush_drags_the_assembled_surface() {
     assert!(
         value < 0.0,
         "the surface was not dragged upward: {value} at y = 1.1"
+    );
+}
+
+/// How many deformers the deepest item on `layer` carries.
+fn chain(doc: &Document, layer: claycore::LayerId) -> i32 {
+    doc.field_report(layer, 0.5)
+        .expect("a report")
+        .longest_deformer_chain
+}
+
+/// One frame of a drag on the top of the sphere, `pull` from its anchor.
+fn drag_top(doc: &mut Document, layer: claycore::LayerId, pull: f32, radius: f32, gesture_id: u64) {
+    let params = claycore::MoveParams {
+        radius,
+        ease: 0,
+        front_only: false,
+        gesture_id,
+    };
+    let applied = doc
+        .move_surface(layer, [0.0, 1.0, 0.0], [0.0, pull, 0.0], params)
+        .expect("move surface");
+    assert!(applied > 0, "the drag warped no items");
+}
+
+#[test]
+fn a_named_drag_is_one_warp_whatever_its_radius_does() {
+    // The control: unnamed, a radius that changes between two frames reads as
+    // a second drag. Without it the named arm could pass by the old centre and
+    // radius rule and say nothing about the id.
+    let (mut unnamed, layer) = sphere_doc();
+    drag_top(&mut unnamed, layer, 0.1, 0.6, 0);
+    drag_top(&mut unnamed, layer, 0.2, 0.7, 0);
+    assert_eq!(
+        chain(&unnamed, layer),
+        2,
+        "an unnamed drag whose radius changed still folded"
+    );
+
+    let (mut named, layer) = sphere_doc();
+    drag_top(&mut named, layer, 0.1, 0.6, 7);
+    drag_top(&mut named, layer, 0.2, 0.7, 7);
+    assert_eq!(
+        chain(&named, layer),
+        1,
+        "two frames of one named drag left two warps, so the id did not reach the engine"
+    );
+}
+
+#[test]
+fn two_named_drags_never_fold_into_each_other() {
+    // The control: unnamed, a second drag at a bit-equal anchor and radius is
+    // taken for the first one continuing, and replaces it.
+    let (mut unnamed, layer) = sphere_doc();
+    drag_top(&mut unnamed, layer, 0.1, 0.6, 0);
+    drag_top(&mut unnamed, layer, 0.1, 0.6, 0);
+    assert_eq!(
+        chain(&unnamed, layer),
+        1,
+        "unnamed drags at one anchor and radius did not fold"
+    );
+
+    let (mut named, layer) = sphere_doc();
+    drag_top(&mut named, layer, 0.1, 0.6, 1);
+    drag_top(&mut named, layer, 0.1, 0.6, 2);
+    assert_eq!(
+        chain(&named, layer),
+        2,
+        "two differently named drags folded into one warp"
     );
 }
 
@@ -557,6 +626,7 @@ fn a_move_can_be_previewed_without_applying_it() {
                 radius: 0.6,
                 ease: 0,
                 front_only: false,
+                gesture_id: 0,
             },
             16,
         )
