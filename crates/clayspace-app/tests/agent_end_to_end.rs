@@ -344,17 +344,19 @@ fn assert_idle_wait(running: &Running, session: &str) {
 
 /// Measuring a real edit must still deliver its geometry to the renderer.
 fn measure_clay_stroke(running: &Running, session: &str) {
+    // The starting sphere has radius 1: a radius-0.25 dab at z=0.6
+    // is buried inside it and cannot establish a visible-stroke regression.
     let began = call(
         running,
         session,
         "measure",
-        json!({ "group": "stroke", "action": "begin", "arguments": { "at": [0.0, 0.0, 0.6], "pressure": 1.0 } }),
+        json!({ "group": "stroke", "action": "begin", "arguments": { "at": [0.0, 0.0, 1.0], "pressure": 1.0 } }),
     );
     let continued = call(
         running,
         session,
         "measure",
-        json!({ "group": "stroke", "action": "continue", "arguments": { "at": [0.12, 0.0, 0.6], "pressure": 1.0 } }),
+        json!({ "group": "stroke", "action": "continue", "arguments": { "at": [0.12, 0.0, 1.0], "pressure": 1.0 } }),
     );
     let stroke_uploads = [&began, &continued]
         .iter()

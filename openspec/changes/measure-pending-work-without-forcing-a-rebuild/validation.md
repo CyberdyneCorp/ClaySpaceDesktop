@@ -55,3 +55,9 @@ settlement and rendered-brush tests with Core `9cc0d181`, CPU fields and RTX 506
 Vulkan rendering, without adapter skips. The host's committed engine pin remains
 v0.113.0 (`260b7797`). These results do not establish the wider issue's 16 ms target;
 required settlement and expensive region operations remain above that budget.
+
+## Visible-stroke fixture
+
+The end-to-end Clay stroke now begins at z=1 on the starting radius-1 sphere. Its previous z=0.6 position buried the radius-0.25 dab inside the sphere, making the image-change expectation unreliable. The existing image-difference and consent assertions remain. Combined validation with Core `db802faa` passes all 85 enabled library/native/rendered cases on an isolated virtual X display, with one intentionally ignored timing test and no adapter skips. This records correctness, not an application latency result.
+
+The corrected end-to-end case also passes against the committed Core v0.113.0 application build. Six isolated alternating repeats pass against the previous and new experimental engines (three per engine), retaining image, history, synchronization and consent assertions.
