@@ -1,5 +1,5 @@
 - [x] Implement exact vertex interning and reference regressions.
-- [ ] Verify all-attribute equality, output order and rendered compaction.
-- [ ] Measure repeated live release and representative pruning workloads.
-- [ ] Run lint/complexity/OpenSpec checks and update PR documentation.
+- [x] Verify all-attribute equality, output order and rendered compaction.
+- [x] Measure repeated live release and representative pruning workloads.
+- [x] Run lint/complexity/OpenSpec checks and update PR documentation.
 - [ ] Verify platform CI and record remaining latency limitations.

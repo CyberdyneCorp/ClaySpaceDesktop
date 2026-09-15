@@ -7,5 +7,5 @@
 ## Validation and documentation
 
 - [x] Run formatting, relevant lint/tests and live same-configuration measurements.
-- [ ] Update README/OpenSpec and open a descriptive PR linking ClayCore #531 and #602.
+- [x] Update README/OpenSpec and open a descriptive PR linking ClayCore #531 and #602.
 - [ ] Verify CI and record limitations of the original full-latency goal.
