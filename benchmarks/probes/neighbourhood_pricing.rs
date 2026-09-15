@@ -46,7 +46,7 @@ fn run(label: &str, sphere_r: f32, grab_r: f32, packed: bool) {
             spread(n, 48, sphere_r)
         };
         doc.move_surface(layer, at, [0.02, 0.01, 0.0],
-            MoveParams { radius: grab_r, ease: 0, front_only: false })
+            MoveParams { radius: grab_r, ease: 0, front_only: false, gesture_id: 0 })
             .expect("a gesture");
         let m = n + 1;
         if !matches!(m, 1 | 8 | 24 | 48) { continue; }

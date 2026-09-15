@@ -57,6 +57,19 @@ pub struct MoveParams {
     pub ease: i32,
     /// Do not drag the far side of a form.
     pub front_only: bool,
+    /// Which drag this frame belongs to; 0 names none.
+    ///
+    /// The engine folds a grab into the one leading an item's chain when both
+    /// belong to the drag in progress, and the fold *replaces*: a drag re-sends
+    /// its whole displacement from the anchor, so the earlier frame is
+    /// superseded. Named, that decision is the id and nothing else, so the
+    /// radius may change mid-drag and two drags never fold. Unnamed, it is the
+    /// centre and radius compared bit for bit — and a second drag pressed where
+    /// the first was, at the same size, replaces the first.
+    ///
+    /// Not saved: a reopened document's grabs read 0, so ids need only be
+    /// unique for the life of the process.
+    pub gesture_id: u64,
 }
 
 impl Default for MoveParams {
@@ -65,6 +78,7 @@ impl Default for MoveParams {
             radius: 0.25,
             ease: 0,
             front_only: true,
+            gesture_id: 0,
         }
     }
 }
@@ -75,6 +89,7 @@ impl MoveParams {
         raw.radius = self.radius;
         raw.ease = self.ease;
         raw.front_only = i32::from(self.front_only);
+        raw.gesture_id = self.gesture_id;
         raw
     }
 }

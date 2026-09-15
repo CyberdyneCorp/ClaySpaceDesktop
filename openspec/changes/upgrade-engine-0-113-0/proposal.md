@@ -113,10 +113,20 @@ asymmetry was the whole tell.
 
 ## What this does not do
 
-- **`clay_move_params.gesture_id`** stays unset. Our Move already replays from
-  its anchor and its chain is one warp per dab per mirror image, so naming the
-  gesture buys nothing until someone animates a radius or adopts `steady`. It is
-  filed with the measurement attached rather than landed untestable.
+- ~~**`clay_move_params.gesture_id`** stays unset.~~ Landed after all (#122),
+  and the reason given here for leaving it was wrong. It said naming the gesture
+  "buys nothing until someone animates a radius or adopts `steady`", reasoning
+  only about grabs *within* one drag. The engine's fold also reaches *across*
+  drags, and it replaces: unnamed, a second drag pressed at the first one's
+  anchor at the same size compares equal on centre and radius and is taken for
+  the first continuing, so the first drag's pull is lost (measured: 1.1460 after
+  one drag, 1.1460 after two, chain 1). Each gesture is now named in
+  `begin_gesture` and both doors send the name. The held door is fixed (1.2310,
+  chain 2). The live door is not, on this pin: `clay_sdf_move_begin` copies
+  `radius`, `ease` and `front_only` into its settings and not `gesture_id`, so
+  the name never reaches the transaction. `move_gesture_identity.rs` holds the
+  held door to the property and the live door to a tripwire that fails when a
+  pin carries the engine fix.
 - **Coarse-during-drag** is unblocked, not built. What it is worth now depends
   on what a drag costs after the re-mesh deletion, which needs a flat profile
   this workspace still cannot produce: `timed()` spans are nested and `FrameLog`

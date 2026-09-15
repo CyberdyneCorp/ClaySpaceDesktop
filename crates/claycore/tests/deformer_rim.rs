@@ -53,6 +53,7 @@ fn shifted_by_the_grab(offsets: &[f32]) -> Option<Vec<f32>> {
             radius: RADIUS,
             ease: 0,
             front_only: false,
+            gesture_id: 0,
         },
     )
     .ok()?;

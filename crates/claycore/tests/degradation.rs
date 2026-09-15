@@ -42,6 +42,7 @@ fn dab(doc: &mut Document, layer: LayerId, index: usize) {
             radius: 0.35,
             ease: 0,
             front_only: true,
+            gesture_id: 0,
         },
     )
     .expect("a dab");

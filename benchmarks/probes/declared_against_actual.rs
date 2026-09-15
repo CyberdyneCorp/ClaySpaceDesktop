@@ -73,7 +73,7 @@ fn declared_against_actual_as_the_chain_deepens() {
         let a = n as f32 * 0.41;
         let at = [0.92 * a.cos(), 0.30 * a.sin(), 0.25];
         doc.move_surface(layer, at, [0.035, 0.02, 0.0],
-            MoveParams { radius: 0.42, ease: 0, front_only: false })
+            MoveParams { radius: 0.42, ease: 0, front_only: false, gesture_id: 0 })
             .expect("a gesture");
         if !matches!(n, 1 | 4 | 8 | 16 | 32 | 48) { continue; }
         let r = doc.field_report(layer, 0.5).expect("report");
