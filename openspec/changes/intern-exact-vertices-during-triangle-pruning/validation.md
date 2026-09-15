@@ -70,3 +70,27 @@ The production follow-up has an explicit ahash 0.8.12 dependency (already presen
 Formatting, Clippy with warnings denied and all 45 strict OpenSpec items pass for the hashing follow-up. An explicit Clippy cognitive-complexity run at threshold 12 reports no changed geometry or new test helper above that threshold. The broader application still reports other functions above 12; this is not a claim that every function meets the target.
 
 All 17 native integration cases also pass on the pinned engine: three command-interface, four sculpt-latency, five settlement, two rendered-brush and three rendered-incremental tests. No adapter skips occurred. This establishes 85 enabled local cases for the follow-up; the isolated timing test remains ignored in the ordinary library run. Combined-engine validation, uncontended live timing and platform CI remain pending.
+
+## Final hashing live comparison
+
+Host `4e8d1af` passes all 85 enabled combined cases with Core `9cc0d181` (68 library, 17 native integration), with one intentionally ignored informational library timing test and no adapter skips. The committed engine pin remains v0.113.0.
+
+Three alternating runs compare host `b47c2633` with `4e8d1af`, both using Core `9cc0d181`, CPU fields and the RTX 5060 Vulkan renderer. All 78 tool/run cases complete. Each tool starts from the same fresh sphere by undoing to history depth zero, then measures begin at (0,0,1), continue at (0.12,0,1), and end with pressure 1. No builds or tests from this task run concurrently. One-minute load stays between 4.120 and 4.419 on 24 logical CPUs. Uploaded byte counts match between versions for every action in every paired case.
+
+| Tool | Before median release ms | Fast-hash median release ms |
+|---|---:|---:|
+| mask | 7.182 | 7.318 |
+| crease | 25.567 | 22.196 |
+| clay | 25.008 | 15.751 |
+| inflate | 25.744 | 20.635 |
+| layer | 26.197 | 21.018 |
+| standard | 21.654 | 19.818 |
+| polish | 49.223 | 34.663 |
+| planar | 47.338 | 32.666 |
+| move-topological | 59.661 | 51.129 |
+| move | 74.241 | 68.250 |
+| relax | 83.527 | 82.199 |
+| smooth | 85.543 | 85.976 |
+| snake-hook | 34.963 | 29.702 |
+
+Standard and Clay release improve in each paired run, while individual timings still vary. Snake Hook has a 48.377 ms fixed-side outlier versus 36.878 ms in that paired baseline run; its median improvement is not a per-run guarantee. Smooth release is essentially unchanged by the median. Its fixed pointer-down median is 83.894 ms, Relax is 89.897 ms, and Snake Hook continue is 17.071 ms. The hash change reduces compaction cost but does not establish a universal 16 ms budget. Current platform CI for the hashing follow-up remains pending.
