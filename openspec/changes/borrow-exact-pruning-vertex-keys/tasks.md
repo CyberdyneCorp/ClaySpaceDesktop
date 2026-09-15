@@ -4,5 +4,5 @@
 
 ## Validation
 - [x] Run pinned and combined application tests, formatting, Clippy and complexity checks.
-- [ ] Measure production timing and allocation changes with exact output checks.
-- [ ] Complete all-brush application comparison and document remaining 16 ms gaps.
+- [x] Measure production timing and allocation changes with exact output checks.
+- [x] Complete all-brush application comparison and document remaining 16 ms gaps.
