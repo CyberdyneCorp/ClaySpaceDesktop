@@ -88,6 +88,87 @@ pub struct Harness {
     pub gpu: Gpu,
     pub renderer: Renderer,
     pub target: OffscreenTarget,
+    /// Held for the harness's life, so only one GPU device exists at a time —
+    /// within this process and across the other test binaries.
+    ///
+    /// Cargo runs a test binary's tests as threads in ONE process, and every
+    /// `Harness::new` used to build a whole `Gpu::headless` — a fresh wgpu
+    /// device on the same adapter. Enough of those at once and the adapter runs
+    /// out: on this machine `Device::create_query_set` starts failing, the
+    /// device is lost, and whichever tests happened to be mid-frame report
+    /// `Validation Error` or a blank capture.
+    ///
+    /// Measured: `visual_lattice` and `gpu_profiling` run together give 5
+    /// failures and exit 101; the same two with `--test-threads=1` pass. A
+    /// DIFFERENT set fails each run, which is the signature of a resource race
+    /// rather than of a defect — and is exactly what makes it expensive, because
+    /// a red `just check` then tells you nothing about whether your change is
+    /// sound.
+    ///
+    /// Serialising the GPU rather than the suite: the other ~2,300 tests in the
+    /// workspace still run in parallel, and only the handful that want a device
+    /// queue behind this.
+    _device: std::sync::MutexGuard<'static, ()>,
+    _across: AcrossProcesses,
+}
+
+/// The one GPU device at a time, within this process.
+///
+/// Poisoning is ignored on purpose. A test that panicked while holding this
+/// tells us nothing about whether the *adapter* is usable, and treating one
+/// failed assertion as a reason to fail every later GPU test would turn a
+/// single red into a cascade that hides it.
+fn one_device_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+    static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    GPU.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// The same, ACROSS processes.
+///
+/// A mutex is not enough on its own: `cargo test` runs each test binary as its
+/// own process and may run several at once, so two binaries that each hold
+/// their own in-process lock still build two devices. Measured — with only the
+/// mutex, `visual_lattice` alone passed 4 runs of 4, while `visual_lattice`
+/// and `gpu_profiling` together still failed 1 run of 3.
+///
+/// `create_dir` is the lock because it is an atomic test-and-set on every
+/// platform this builds for, and it needs no dependency for something only the
+/// tests want.
+struct AcrossProcesses(std::path::PathBuf);
+
+impl AcrossProcesses {
+    /// Waits for the device to be free, and takes it.
+    ///
+    /// A stale lock is STOLEN rather than waited on. A test binary killed while
+    /// holding this — Ctrl-C, an OOM kill, a CI timeout — would otherwise wedge
+    /// every later GPU test on the machine until someone deleted a directory
+    /// they had no reason to know about. Thirty seconds is far longer than any
+    /// harness holds it and far shorter than a person's patience.
+    fn take() -> Self {
+        let path = std::env::temp_dir().join("clayspace-test-gpu.lock");
+        let started = std::time::Instant::now();
+        loop {
+            match std::fs::create_dir(&path) {
+                Ok(()) => return Self(path),
+                Err(_) => {
+                    let stale = std::fs::metadata(&path)
+                        .and_then(|m| m.modified())
+                        .map(|t| t.elapsed().unwrap_or_default().as_secs() > 30)
+                        .unwrap_or(true);
+                    if stale || started.elapsed().as_secs() > 120 {
+                        let _ = std::fs::remove_dir(&path);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            }
+        }
+    }
+}
+
+impl Drop for AcrossProcesses {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir(&self.0);
+    }
 }
 
 impl Harness {
@@ -100,6 +181,11 @@ impl Harness {
     /// rather than fails on a machine with no GPU of any kind — including a
     /// software one.
     pub fn new() -> Option<Self> {
+        // Taken BEFORE the device is built and released when the harness drops,
+        // so the window in which two devices could exist is closed rather than
+        // narrowed.
+        let _device = one_device_at_a_time();
+        let _across = AcrossProcesses::take();
         let gpu = match pollster::block_on(Gpu::headless()) {
             Ok(gpu) => gpu,
             Err(e) => {
@@ -113,6 +199,8 @@ impl Harness {
             gpu,
             renderer,
             target,
+            _device,
+            _across,
         })
     }
 
