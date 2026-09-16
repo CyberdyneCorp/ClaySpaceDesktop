@@ -777,3 +777,177 @@ fn a_quiet_client_and_a_slow_one_do_not_stall_the_application() {
         json!({ "sections": ["document"] }),
     );
 }
+
+/// The undo history the agent door reports, which is the ViewModel's — the one
+/// Cmd+Z reads — rather than the engine's.
+fn history_depth(running: &Running, session: &str) -> u64 {
+    let state = call(
+        running,
+        session,
+        "state",
+        json!({ "sections": ["history"] }),
+    );
+    state["structuredContent"]["history"]["depth"]
+        .as_u64()
+        .expect("a history depth")
+}
+
+fn layer_count(running: &Running, session: &str) -> usize {
+    let state = call(running, session, "state", json!({ "sections": ["scene"] }));
+    state["structuredContent"]["scene"]["layers"]
+        .as_array()
+        .expect("layers")
+        .len()
+}
+
+fn settle(running: &Running, session: &str) {
+    call(running, session, "wait", json!({ "bound_ms": 90000 }));
+}
+
+/// A crossing and a grid repair are each ONE undo, taken back without the edit
+/// before them.
+///
+/// The ViewModel keeps its own stack of how many engine entries each action
+/// spent, and Cmd+Z pops one count and undoes that many. A stroke and an
+/// armature edit pushed their counts; a crossing and a repair pushed nothing.
+/// So after a crossing the top of the stack was still the PREVIOUS stroke's
+/// count, and one Cmd+Z took back the crossing and then kept going into that
+/// stroke. Measured on the running application before the fix: depth 1 after
+/// a stroke, still 1 after the crossing, 0 after one undo, with the stroke
+/// mostly gone from the frame.
+///
+/// `a_crossing_is_taken_back_by_undo` could not see this: it calls
+/// `SculptModel::undo` on the document directly, below the ViewModel that owns
+/// the history a sculptor presses.
+#[test]
+fn one_undo_takes_back_a_crossing_or_a_repair_and_nothing_before_it() {
+    let Some(running) = start() else {
+        return;
+    };
+    let session = initialize(&running);
+
+    // A stroke across the front of the starting sphere.
+    call(
+        &running,
+        &session,
+        "tool",
+        json!({ "action": "select", "tool": "standard" }),
+    );
+    let surface = |x: f32| [x, 0.25, (1.0 - x * x - 0.0625).max(0.0).sqrt()];
+    call(
+        &running,
+        &session,
+        "stroke",
+        json!({ "action": "begin", "at": surface(0.15), "pressure": 1.0 }),
+    );
+    for step in 1..12 {
+        let x = 0.15 + 0.45 * step as f32 / 11.0;
+        call(
+            &running,
+            &session,
+            "stroke",
+            json!({ "action": "continue", "at": surface(x), "pressure": 1.0 }),
+        );
+    }
+    call(&running, &session, "stroke", json!({ "action": "end" }));
+    settle(&running, &session);
+    let stroked = history_depth(&running, &session);
+    let layers = layer_count(&running, &session);
+    assert!(stroked > 0, "the stroke banked no undo step");
+
+    // The crossing: one step, and one layer more.
+    call(
+        &running,
+        &session,
+        "convert",
+        json!({ "action": "set", "direction": "field-to-grid", "cell_size": 0.04 }),
+    );
+    call(&running, &session, "convert", json!({ "action": "run" }));
+    settle(&running, &session);
+    assert_eq!(
+        layer_count(&running, &session),
+        layers + 1,
+        "the crossing added no layer"
+    );
+    let crossed = history_depth(&running, &session);
+    assert_eq!(
+        crossed,
+        stroked + 1,
+        "a crossing banked {} undo steps; it has to be exactly one, or the next \
+         Cmd+Z takes back the edit before it as well",
+        crossed as i64 - stroked as i64
+    );
+
+    // An enclosed void inside the grid, then the repair that fills it.
+    call(
+        &running,
+        &session,
+        "tool",
+        json!({ "action": "select", "tool": "erase" }),
+    );
+    call(
+        &running,
+        &session,
+        "brush",
+        json!({ "action": "set_size", "size": 0.12 }),
+    );
+    call(
+        &running,
+        &session,
+        "stroke",
+        json!({ "action": "begin", "at": [0.0, 0.0, 0.0], "pressure": 1.0 }),
+    );
+    call(&running, &session, "stroke", json!({ "action": "end" }));
+    settle(&running, &session);
+    let carved = history_depth(&running, &session);
+    assert_eq!(carved, crossed + 1, "the carve banked no undo step");
+
+    let repaired = call(
+        &running,
+        &session,
+        "repair",
+        json!({ "action": "fill_voids" }),
+    );
+    settle(&running, &session);
+    let filled = history_depth(&running, &session);
+    assert_eq!(
+        repaired["structuredContent"]["touched_document"], true,
+        "fill voids found no void to fill, so this measures nothing: {repaired}"
+    );
+    assert_eq!(
+        filled,
+        carved + 1,
+        "a repair banked {} undo steps; it has to be exactly one",
+        filled as i64 - carved as i64
+    );
+
+    // One Cmd+Z each, and each takes back only its own action.
+    call(&running, &session, "history", json!({ "action": "undo" }));
+    settle(&running, &session);
+    assert_eq!(
+        history_depth(&running, &session),
+        carved,
+        "undoing the repair took back more than the repair"
+    );
+
+    call(&running, &session, "history", json!({ "action": "undo" }));
+    settle(&running, &session);
+    assert_eq!(
+        history_depth(&running, &session),
+        crossed,
+        "undoing the carve took back more than the carve"
+    );
+
+    call(&running, &session, "history", json!({ "action": "undo" }));
+    settle(&running, &session);
+    assert_eq!(
+        layer_count(&running, &session),
+        layers,
+        "undoing the crossing left its layer standing"
+    );
+    assert_eq!(
+        history_depth(&running, &session),
+        stroked,
+        "undoing the crossing also took back the stroke before it"
+    );
+}

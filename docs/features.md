@@ -2685,6 +2685,18 @@ host takes it out. A grid's own edits undo like any other layer's, which
 And the panel agrees rather than being the source of the old claim:
 `convert_undo_note` reads "one undo takes the whole crossing back".
 
+**That test proves it of the document, not of the application**, and for a
+while the two disagreed. It calls `SculptModel::undo` directly, below the sculpt
+ViewModel that owns the history Cmd+Z reads — and that ViewModel banked nothing
+for a crossing or a grid repair. So after either, the next Cmd+Z popped the
+*previous* stroke's count and took back the crossing and most of that stroke
+together. Both now bank one step, the way an armature edit already did, and
+`one_undo_takes_back_a_crossing_or_a_repair_and_nothing_before_it` drives the
+running application through its agent door to hold it: a stroke, a crossing, a
+carve, a void filled, then one undo each, every one taking back only its own
+action. It runs under `just test-agent-e2e`, not in the default suite, because it
+starts the real windowed application.
+
 Refused rather than approximated: a layer with no bounds and no region, a
 resolution whose grid would exceed the memory budget — with the budget named —
 an empty source, and a crossing that starts from a different representation.
