@@ -36,4 +36,4 @@
 - [x] 3.7 Check the two timing failures against main rather than assuming:
       `scaling_probe` was load alone, `dab_profile` fails on main too (62%
       against 60% here)
-- [x] 3.5 `docs/features.md`: what Intensidade means on a grid
+- [x] 3.8 `docs/features.md`: what Intensidade means on a grid
