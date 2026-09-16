@@ -2652,11 +2652,22 @@ triangles through an incremental sync and a full rebuild alike, against 17,160
 once its region is re-evaluated. Hiding a layer was always right; both are held
 by `a_removed_layer_stops_being_drawn`.
 
-**A crossing produces a new layer and leaves the source alone**, and it is
-**not undoable** — the panel says so. A conversion produces no engine undo
-entry at all: layer creation and rasterization are not recorded, and a voxel
-layer carries no history by construction. Taking a crossing back means removing
-the layer it added, which is exactly what the surviving source is for.
+**A crossing is one undo**, as stated above — and this paragraph used to say the
+opposite, which is why the correction is written out rather than quietly
+swapped. It claimed a crossing was *not undoable*, that a conversion produced
+no engine undo entry at all, and that a voxel layer carried no history by
+construction. All three stopped being true when crossing undo landed, and the
+claim was the more dangerous for citing the panel: a reader who checked it
+against the interface would have found it confirmed at the time.
+
+What holds now, each with the test that says so.
+`a_crossing_is_taken_back_by_undo` drives a crossing and asserts the stack grew
+by exactly one step, then undoes it and asserts the layer it added is off the
+scene again — an engine undo empties that layer without removing it, so the
+host takes it out. A grid's own edits undo like any other layer's, which
+`undo_takes_the_paint_back_and_redo_puts_it_on_again` holds on a painted grid.
+And the panel agrees rather than being the source of the old claim:
+`convert_undo_note` reads "one undo takes the whole crossing back".
 
 Refused rather than approximated: a layer with no bounds and no region, a
 resolution whose grid would exceed the memory budget — with the budget named —
