@@ -102,8 +102,18 @@ fn stroke(document: &mut ClayDocument, tool: ToolKind, invert: bool, symmetry: [
     let samples: Vec<GestureSample> = (0..9)
         .map(|step| {
             let t = step as f32 / 8.0;
+            // Mover pulls the slab SIDEWAYS. A drag along the rod's own axis
+            // slides solid material into solid material and barely moves the
+            // silhouette, which is all a picture can see — it showed up before
+            // #139 only because the slab was porous and the holes travelled
+            // with it. `voxel_brushes.rs` measures the cells either way.
+            let lift = if matches!(tool, ToolKind::Mover) {
+                t * 0.3
+            } else {
+                0.0
+            };
             GestureSample {
-                position: [0.35 + t * 0.4, 0.0, 0.0],
+                position: [0.35 + t * 0.4, lift, 0.0],
                 pressure: 1.0,
                 time: t,
             }
@@ -293,6 +303,33 @@ fn a_grid_can_be_drawn_as_boxes_or_as_a_surface() {
                 name: &str|
      -> (Image, usize) {
         let mut document = packed().expect("a slab");
+        // Four single cells standing clear of the slab, so the blur has detail
+        // to dissolve. Before #139 a dithered rim left specks like these by
+        // accident and this test read them as its subject; a grid dab is solid
+        // now, so the fixture places them itself.
+        for at in [
+            [0.0f32, 0.45, 0.0],
+            [0.4, -0.45, 0.0],
+            [-0.4, 0.45, 0.1],
+            [0.2, 0.0, 0.45],
+        ] {
+            document
+                .apply_stroke(
+                    ToolKind::Padrao,
+                    BrushSettings {
+                        size: 0.04,
+                        intensity: 1.0,
+                        ..BrushSettings::default()
+                    },
+                    &[GestureSample {
+                        position: at,
+                        pressure: 1.0,
+                        time: 0.0,
+                    }],
+                    [false; 3],
+                )
+                .expect("a speck");
+        }
         document
             .set_voxel_display(display, SmoothBlur::new(blur))
             .expect("the picture was refused");

@@ -145,6 +145,31 @@ Settings are held **per tool**: switching away and back returns what you left,
 not a default. Values are clamped to what the engine accepts rather than
 producing an error you cannot act on.
 
+**On a grid, Intensidade is the bite rather than the density.** A cell holds
+material or it does not, so a field's reading of intensity — press lighter,
+deposit less — has nowhere to live. ClayCore spends a fractional weight by
+*dithering*: it writes a scattered subset of the footprint, chosen by a hash of
+each cell's coordinate. Sent 0.65 and a smooth falloff, that dithered away 63%
+of the cells in the middle of a stroke, and because the seed never changed
+between dabs, the cells one dab skipped were skipped by all of them — a stroke
+could be crossed any number of times and never fill in. Every grid brush left
+the same crust, which is what made them look alike (#139).
+
+So a grid dab is written **solid**, and intensity scales its radius between half
+and full instead. A lighter brush takes a smaller bite; the falloff shapes
+nothing here, because a hard edge is the only edge binary cells can hold. The
+one exception is an alpha stamp, whose own greys can only be spelled as partial
+coverage — it still dithers, now with a seed that differs per dab so a dragged
+stamp fills in rather than repeating its holes.
+
+**A masked grid layer is the other exception, and it is a trade rather than a
+choice.** The engine gates a cell by scaling the weight the dither reads, so a
+footprint written at full strength turns a mask's soft skirt into a half-open
+door — measured, Padrão moved 70 through a frozen region against 167 without
+it, where the bar is a quarter of it. So a layer carrying a mask keeps the
+engine's own weighting, dithered edge and all, until a voxel verb can refuse a
+masked cell outright. A fully frozen cell was never at risk either way.
+
 ### A drag on a field replays from where it started
 
 A drag arrives in segments as the pointer moves, and **every segment carries

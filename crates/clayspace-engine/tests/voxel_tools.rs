@@ -22,24 +22,16 @@ fn packed() -> ClayDocument {
         .expect("add a grid");
 
     // A ridge rather than one blob, so a tool that only acts where the surface
-    // has curvature has something to bite on — and stamped at less than full
-    // strength, which is what leaves cavities to fill.
+    // has curvature has something to bite on.
     //
-    // The engine's note on `clay_voxel_sculpt_fill_cavities`: occupancy is
-    // binary, so any strength or falloff below 1 is dithered against a hash of
-    // the cell coordinate, leaving a pepper of single-cell holes through the
-    // material it just deposited. That pepper is what this verb exists to
-    // close. A solid ridge has nothing for it to do, and it correctly reported
-    // no change until the subject had some.
-    // Stamped at just under full strength, which is what leaves cavities.
-    //
-    // The engine's note on `clay_voxel_sculpt_fill_cavities`: occupancy is
-    // binary, so any strength below 1 is dithered against a hash of the cell
-    // coordinate, leaving single-cell holes through the material it just
-    // deposited. That pepper is what this verb exists to close, and a solid
-    // ridge gives it nothing to do. Near-solid is the case that matters: at
-    // 0.9 the deposit is 68 of 80 cells, which is holes in material rather
-    // than the sparse speckle a light dither leaves.
+    // The cavities Preencher needs are punched DELIBERATELY below, and that is
+    // the correction: this fixture used to deposit at 0.9 and rely on the
+    // dither to leave "a pepper of single-cell holes through the material it
+    // just deposited". That pepper was the defect in #139 — every grid brush
+    // wrote a porous crust because a fractional strength dithered against a
+    // fixed seed — so a fixture that depended on it was measuring the bug.
+    // Grid dabs are solid now, and a hole this verb is asked to close is one
+    // the test made on purpose.
     let brush = BrushSettings {
         size: 0.25,
         intensity: 0.9,
@@ -59,6 +51,28 @@ fn packed() -> ClayDocument {
                 [false; 3],
             )
             .expect("deposit");
+    }
+
+    // Three single-cell holes inside the ridge, each enclosed by material: one
+    // cell of erase at the grid's own resolution, placed well within the
+    // deposit's radius. That is what `clay_voxel_sculpt_fill_cavities` closes.
+    for at in [[-0.1f32, 0.0, 0.0], [0.0, 0.02, 0.0], [0.1, -0.02, 0.0]] {
+        document
+            .apply_stroke(
+                ToolKind::Apagar,
+                BrushSettings {
+                    size: 0.05,
+                    intensity: 1.0,
+                    ..Default::default()
+                },
+                &[GestureSample {
+                    position: at,
+                    pressure: 1.0,
+                    time: 0.0,
+                }],
+                [false; 3],
+            )
+            .expect("punch a cavity");
     }
     document
 }

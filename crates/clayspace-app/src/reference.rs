@@ -169,7 +169,12 @@ impl Scene {
         match self {
             Self::Reference => "r1",
             Self::TenTimesLarger => "r1",
-            Self::VoxelReference => "r1",
+            // r2: grid dabs write their footprint solid (#139). The same
+            // seventeen strokes at intensity 1.0 deposited 3070 cells when a
+            // smooth falloff still dithered the rim of every dab, and 12005
+            // now. The figures under it were recorded on r1 and do not carry
+            // over.
+            Self::VoxelReference => "r2",
             Self::MeshReference => "r1",
             Self::VoxelPocked => "r1",
         }
@@ -495,7 +500,7 @@ impl Scene {
         match self {
             Self::Reference => (1049, "surface bricks"),
             Self::TenTimesLarger => (9466, "surface bricks"),
-            Self::VoxelReference => (3070, "occupied cells"),
+            Self::VoxelReference => (12_005, "occupied cells"),
             Self::MeshReference => (296_216, "triangles"),
             Self::VoxelPocked => (33_543, "occupied cells"),
         }

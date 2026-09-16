@@ -7056,6 +7056,15 @@ impl ClayDocument {
             seed: 0,
             mask: mask.as_deref(),
         };
+        // A dithered drag carries only some of the cells it reaches, which
+        // tears the lump it is dragging. Same footprint rule as a stamp, and
+        // the same exception: a masked layer keeps the engine's weighting so
+        // the mask goes on gating (#139).
+        let params = if params.mask.is_some() {
+            params
+        } else {
+            solid_footprint(params)
+        };
         let before = grid.change_count().map_err(ModelError::engine)?;
 
         for mirror in mirrors(symmetry) {
@@ -7172,6 +7181,19 @@ impl ClayDocument {
             seed: 0,
             mask: mask.as_deref(),
         };
+        // What every verb but the alpha carve writes: solid, sized by intensity
+        // — unless the layer is masked. A mask gates a cell by scaling the
+        // weight the dither reads, so a footprint written at weight 1 turns the
+        // mask's soft skirt into a half-open door: measured, Padrão moved 70
+        // through a frozen region against 167 without it, where the bar is a
+        // quarter of it. Until a voxel verb can refuse a masked cell outright,
+        // a masked layer keeps the engine's own weighting — main's behaviour,
+        // dither and all — and only an unmasked one gets the solid dab.
+        let solid = if params.mask.is_some() {
+            params
+        } else {
+            solid_footprint(params)
+        };
 
         // Index 0 is the engine's empty slot, so a fresh grid has no colour to
         // deposit and every set would write emptiness.
@@ -7229,9 +7251,23 @@ impl ClayDocument {
                     // deposits would have nothing to modulate.
                     _ if alpha.is_some() => {
                         let alpha = alpha.expect("checked in the guard");
+                        // The one verb that still dithers, because the stamp's
+                        // own greys have nowhere else to go on binary cells.
+                        let carve = BrushParams {
+                            // A masked layer keeps main's fixed seed too: a
+                            // seed that varies per dab writes a different
+                            // subset each time, which is more ways through the
+                            // mask's skirt rather than fewer.
+                            seed: if params.mask.is_some() {
+                                0
+                            } else {
+                                dab_seed(cell)
+                            },
+                            ..params
+                        };
                         grid.sculpt_carve_alpha(
                             cell,
-                            &params,
+                            &carve,
                             &alpha.samples,
                             alpha.width as i32,
                             alpha.height as i32,
@@ -7248,18 +7284,18 @@ impl ClayDocument {
                     // A majority filter over the neighbourhood: spurs
                     // dissolve, notches fill. It has no sign to turn — the
                     // same reason smoothing has none on a field or a mesh.
-                    ToolKind::Suavizar | ToolKind::Relaxar => grid.sculpt_smooth(cell, &params),
+                    ToolKind::Suavizar | ToolKind::Relaxar => grid.sculpt_smooth(cell, &solid),
                     // "amount > 0 dilates, < 0 erodes", says the engine, and
                     // only the dilating half was ever asked for.
                     ToolKind::Inflar => {
-                        grid.sculpt_inflate(cell, &params, if brush.invert { -1 } else { 1 })
+                        grid.sculpt_inflate(cell, &solid, if brush.invert { -1 } else { 1 })
                     }
                     // Magnify is pinch's inverse and the engine says so
                     // outright — "sharing its walk so the two cannot drift
                     // apart", the pair the SDF side spells as one signed
                     // strength. Held, the key reaches the other half.
-                    ToolKind::Pincar if brush.invert => grid.sculpt_magnify(cell, &params),
-                    ToolKind::Pincar => grid.sculpt_pinch(cell, &params),
+                    ToolKind::Pincar if brush.invert => grid.sculpt_magnify(cell, &solid),
+                    ToolKind::Pincar => grid.sculpt_pinch(cell, &solid),
                     // No opposite bound, deliberately. Turning the scrape's
                     // normal over looks like one and is not: measured on a
                     // slab, both directions remove material and differ by 12
@@ -7269,7 +7305,7 @@ impl ClayDocument {
                     // guess dressed as a feature is worse than an honest
                     // absence.
                     ToolKind::Raspar => {
-                        grid.sculpt_scrape(cell, &params, mirror.vector([0.0, 1.0, 0.0]), 0.0)
+                        grid.sculpt_scrape(cell, &solid, mirror.vector([0.0, 1.0, 0.0]), 0.0)
                     }
                     // Two-sided, which is what the grid's flatten is: material
                     // above the plane goes *and* hollows below it fill. The
@@ -7286,7 +7322,7 @@ impl ClayDocument {
                     // No inverse bound: the engine defines none, and a
                     // two-sided verb has no side to swap.
                     ToolKind::Planar => {
-                        grid.sculpt_flatten(cell, &params, mirror.vector([0.0, 1.0, 0.0]), 0.0)
+                        grid.sculpt_flatten(cell, &solid, mirror.vector([0.0, 1.0, 0.0]), 0.0)
                     }
                     // At full strength, whatever Intensidade says.
                     //
@@ -7298,37 +7334,36 @@ impl ClayDocument {
                     // it was asked to make. Measured, with the same perforated
                     // material: 0 cells closed at the default intensity, 6 at
                     // full strength. `voxel_tools.rs` is the regression.
-                    ToolKind::Preencher => {
-                        let solid = BrushParams {
-                            strength: 1.0,
-                            ..params
-                        };
-                        grid.sculpt_fill_cavities(cell, &solid, 2)
-                    }
+                    // The solid footprint already carries the full strength a
+                    // repair needs: a dithered Preencher scattered the very
+                    // repairs it was asked to make (0 cells closed at the
+                    // default intensity, 6 at full strength). `voxel_tools.rs`
+                    // is the regression.
+                    ToolKind::Preencher => grid.sculpt_fill_cavities(cell, &solid, 2),
                     // The smudge direction turns over with the stroke, or the
                     // mirrored half would be dragged the same way in world space
                     // rather than as a reflection.
                     ToolKind::Nudge => {
-                        grid.sculpt_smudge(cell, &params, mirror.vector([1.0, 0.0, 0.0]))
+                        grid.sculpt_smudge(cell, &solid, mirror.vector([1.0, 0.0, 0.0]))
                     }
                     // Colours cells that are already there rather than depositing
                     // any: a grid's palette always exists, so this creates nothing
                     // that was not already stored — unlike on a mesh, where the
                     // colour attribute is twelve bytes a vertex and is refused
                     // rather than created.
-                    ToolKind::Pintar => grid.paint_brush(cell, &params, painted),
+                    ToolKind::Pintar => grid.paint_brush(cell, &solid, painted),
                     // The one tool whose upright verb is the removal, so its
                     // opposite is the deposit rather than the other way round.
-                    ToolKind::Apagar if brush.invert => grid.set_brush(cell, &params, material),
-                    ToolKind::Apagar => grid.erase_brush(cell, &params),
+                    ToolKind::Apagar if brush.invert => grid.set_brush(cell, &solid, material),
+                    ToolKind::Apagar => grid.erase_brush(cell, &solid),
                     // Anything else deposits material, which is what a default
                     // brush does on a voxel grid — or takes it away, where the
                     // invert modifier is held. Occupancy is binary, so there is no
                     // sign to turn over here as there is on a field and on a mesh:
                     // the opposite of putting a cell there is removing it, which is
                     // the verb Apagar already names.
-                    _ if brush.invert => grid.erase_brush(cell, &params),
-                    _ => grid.set_brush(cell, &params, material),
+                    _ if brush.invert => grid.erase_brush(cell, &solid),
+                    _ => grid.set_brush(cell, &solid, material),
                 };
                 result.map_err(ModelError::engine)?;
             }
@@ -7365,6 +7400,48 @@ impl ClayDocument {
             dirty_bricks: 1,
         })
     }
+}
+
+/// The footprint a grid verb writes, from the brush the sculptor is holding.
+///
+/// Occupancy is binary: a cell is material or it is not. ClayCore resolves a
+/// weight between 0 and 1 by dithering against a hash of the cell coordinate
+/// and the brush's seed, so a falloff shows up as fractional COVERAGE across
+/// the footprint rather than as partial density anywhere. Sent the shelf's
+/// defaults — 0.65 intensity, a smooth falloff — that dithered away 63% of the
+/// cells in the middle of a stroke, and because the seed was fixed at 0 every
+/// dab skipped the SAME cells: a stroke never filled in however many times it
+/// was crossed. Every grid brush therefore left the same crust (#139).
+///
+/// So intensity scales the dab's RADIUS, between half and full, and the
+/// footprint is written solid. A lighter brush takes a smaller bite rather than
+/// a porous one, which is the only reading of "lighter" that binary occupancy
+/// can honour.
+fn solid_footprint(params: BrushParams<'_>) -> BrushParams<'_> {
+    let bite = 0.5 + 0.5 * params.strength.clamp(0.0, 1.0);
+    BrushParams {
+        size: ((params.size as f32 * bite).round() as i32).max(1),
+        falloff: Falloff::Constant,
+        strength: 1.0,
+        ..params
+    }
+}
+
+/// A dither seed that differs between neighbouring dabs.
+///
+/// For the one verb that still dithers: an alpha stamp carries its own greys,
+/// and grey on a binary grid can only be spelled as partial coverage. A seed
+/// fixed for the whole stroke made every dab skip the same cells, so a stamp
+/// dragged across a surface left holes that no later dab could close. Derived
+/// from the cell rather than from a counter, so a replayed stroke dithers
+/// identically.
+fn dab_seed(cell: [i32; 3]) -> u32 {
+    let mut h = 0x9E37_79B9u32;
+    for c in cell {
+        h ^= (c as u32).wrapping_mul(0x85EB_CA6B);
+        h = (h ^ (h >> 13)).wrapping_mul(0xC2B2_AE35);
+    }
+    h ^ (h >> 16)
 }
 
 /// A gesture name no document in this process has used.

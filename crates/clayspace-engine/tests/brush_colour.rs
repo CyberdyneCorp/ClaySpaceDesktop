@@ -177,7 +177,35 @@ fn a_structural_deposit_keeps_the_clay_tone() {
     // otherwise find every dab red.
     let mut document = packed();
     document.set_colour(RED);
-    assert!(stroke(&mut document, ToolKind::Padrao, [false; 3]).changed);
+    // Above the rod rather than along it. The fixture's deposit is solid now
+    // (#139), so a second stroke down its middle writes cells that are already
+    // material and reports no change — which used to be an edit only because
+    // the dither had left holes through it to fill.
+    let above: Vec<GestureSample> = (0..9)
+        .map(|step| {
+            let t = step as f32 / 8.0;
+            GestureSample {
+                position: [0.2 + t * 0.5, 0.15, 0.0],
+                pressure: 1.0,
+                time: t,
+            }
+        })
+        .collect();
+    let outcome = document
+        .apply_stroke(
+            ToolKind::Padrao,
+            BrushSettings {
+                size: 0.25,
+                ..BrushSettings::default()
+            },
+            &above,
+            [false; 3],
+        )
+        .expect("the deposit was refused");
+    assert!(
+        outcome.changed,
+        "the deposit added no material to deposit a tone on"
+    );
     let (_, colours) = drawn(&mut document);
     assert_eq!(
         wearing(&colours, RED),
@@ -189,9 +217,10 @@ fn a_structural_deposit_keeps_the_clay_tone() {
 #[test]
 fn a_fully_frozen_cell_keeps_the_colour_it_had() {
     let mut document = packed();
-    // A wide mask over the stroke, so its 1.0 core covers material rather than
-    // only its soft edge: the tool paints a mask with a smooth falloff by
-    // design, and a cell at half a mask is half protected rather than frozen.
+    // A wide mask over the rod's SURFACE, so its 1.0 core covers cells the
+    // viewport draws. Centred on the rod's axis it covers the interior, which
+    // a solid deposit fills and draws no vertex for — the porous deposit this
+    // fixture was written against had hole walls in there to find (#139).
     document
         .apply_stroke(
             ToolKind::Mascara,
@@ -204,7 +233,7 @@ fn a_fully_frozen_cell_keeps_the_colour_it_had() {
                 .map(|step| {
                     let t = step as f32 / 8.0;
                     GestureSample {
-                        position: [0.2 + t * 0.5, 0.0, 0.0],
+                        position: [0.2 + t * 0.5, 0.12, 0.0],
                         pressure: 1.0,
                         time: t,
                     }
