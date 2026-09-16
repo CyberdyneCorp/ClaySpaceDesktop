@@ -209,11 +209,13 @@ first, and the first pull was lost. Named, two drags are always two grabs, and a
 radius that changes mid-drag stays one. The id is not saved; a reopened
 document's grabs are unnamed and never match a new gesture.
 
-**Not yet on the live door.** ClayCore v0.113.0's `clay_sdf_move_begin` does
-not copy `gesture_id` into the transaction, so a live drag still goes unnamed
-and still folds by centre and radius. The application sends the name anyway;
-`move_gesture_identity.rs` keeps a tripwire that fails on the pin that carries
-the fix.
+**On both doors since v0.116.0.** `clay_sdf_move_begin` did not copy
+`gesture_id` into the transaction, so a live drag went unnamed however this
+application labelled it — and it always did label it — and folded by centre and
+radius like any other. Two separate presses at one anchor compared equal, the
+second replaced the first, and **the first pull was lost**. ClayCore #604 fixed
+it and the tripwire in `move_gesture_identity.rs` fired on the pin move, which
+is what it was written to do; it now asserts the property both doors share.
 
 A press arriving while a drag is still open **abandons that drag** and starts
 its own. A gesture that never received its pointer-up has not earned a commit,

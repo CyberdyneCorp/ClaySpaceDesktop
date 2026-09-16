@@ -97,7 +97,6 @@ struct TwoDrags {
     once: f32,
     twice: f32,
     unwarped: i32,
-    after_one: i32,
     after_two: i32,
 }
 
@@ -115,7 +114,6 @@ impl TwoDrags {
             once,
             twice,
             unwarped,
-            after_one,
             after_two,
         };
         eprintln!(
@@ -136,12 +134,13 @@ impl TwoDrags {
         measured
     }
 
-    /// The fold replaces, so a folded second drag leaves the surface exactly
-    /// where one drag left it and the chain where one drag left it.
-    fn folded(&self) -> bool {
-        self.after_two == self.after_one && self.twice == self.once
-    }
-
+    /// Two drags are two warps, and the second moved the surface further.
+    ///
+    /// The opposite — `after_two == after_one && twice == once` — is what a
+    /// FOLD looks like: the second drag taken for the first one continuing, so
+    /// it replaces rather than adds and the first pull is lost. Both doors were
+    /// checked against that shape until v0.116.0 carried `gesture_id` through
+    /// the live one.
     fn added(&self) -> bool {
         self.after_two == self.unwarped + 2
             && self.twice > self.once + 0.25 * (self.once - self.rest)
@@ -158,22 +157,29 @@ fn a_second_held_drag_from_the_same_press_adds_to_the_first() {
     );
 }
 
-/// A TRIPWIRE, not the property: on this pin the live door cannot name its
-/// gesture, so its second drag still replaces its first.
+/// The property, now that the pin carries it.
 ///
-/// `clay_sdf_move_begin` in ClayCore v0.113.0 reads `clay_move_params` and
-/// copies `radius`, `ease` and `front_only` into the transaction's settings,
-/// and not `gesture_id`, which `clay_layer_move_surface` does copy. The id this
-/// application sends is correct and never arrives. This fails the day a pin
-/// carries the fix; turn it into the held door's assertion then.
+/// This was a TRIPWIRE asserting the opposite. `clay_sdf_move_begin` read
+/// `clay_move_params` and copied `radius`, `ease` and `front_only` into the
+/// transaction's settings and not `gesture_id`, which `clay_layer_move_surface`
+/// did copy — so the id this application has always sent was correct and never
+/// arrived, and every drag through the live door was unnamed however it was
+/// labelled. ClayCore #604 fixed it in v0.116.0 and the tripwire fired on the
+/// pin move, which is what it was written to do.
+///
+/// **It lost work rather than costing time**, which is why this is the door's
+/// assertion and not a performance note: unnamed, `continues_gesture` compares
+/// centre and radius bit for bit, so two SEPARATE presses at one anchor compare
+/// equal and the second REPLACES the first. A sculptor who pressed twice in the
+/// same place kept only the second pull.
 #[test]
-fn a_second_live_drag_from_the_same_press_still_replaces_the_first_on_this_pin() {
+fn a_second_live_drag_from_the_same_press_adds_to_the_first() {
     let drags = TwoDrags::measure(live_drag);
     assert!(
-        drags.folded(),
-        "the live door kept two drags apart, so the pinned engine now carries \
-         gesture_id through clay_sdf_move_begin: assert `added()` here as the \
-         held door does"
+        drags.added(),
+        "the live door folded two drags into one: pressed at the same point at \
+         the same size, the second was taken for the first one continuing, and \
+         the first pull is lost"
     );
 }
 

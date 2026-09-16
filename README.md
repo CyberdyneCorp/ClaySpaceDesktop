@@ -26,11 +26,13 @@ task, a macOS re-recording that needs a macOS machine.
 [docs/roadmap.md](docs/roadmap.md) carries the milestone table, what the engine
 currently gets wrong, and what that costs.
 
-**The engine pin now stands at v0.113.0** — twenty-nine minors in one move,
-carrying two releases that were never pinned here. Nothing had to change to
-build against it: nothing was removed from the C ABI across the whole span, no
-signature changed, and every struct that grew did so behind the `struct_size`
-this workspace already writes.
+**The engine pin now stands at v0.116.0.** Nothing had to change to build
+against it — the symbol diff from v0.113.0 is one addition and zero removals,
+and every struct that grew did so behind the `struct_size` this workspace
+already writes. Two defects it carries were ours to feel rather than to fix:
+a topological move discarded the volume's feather, which put a lattice into
+every drag it made on a field, and the live Move door dropped `gesture_id`, so
+two presses at one anchor folded into one and the first pull was lost.
 
 What a sculptor gets arrives before any of this repository's code does. Picking
 on a worked form is roughly **halved** — 39.30 ms to 19.35 ms for 256 raycasts
@@ -75,7 +77,7 @@ report says which part of a document a byte belongs to.
 | Visual captures | ~640 PNGs written to `target/visual/` for looking at — **not** golden images; the visual tests assert properties, because a pixel-exact golden fails on every driver |
 | Dab latency | 2.1 ms median, 4.2 ms p95 on the reference scene · budget 50 / 100 |
 | Startup to first document | 11.4 ms |
-| Engine | ClayCore 0.113.0, pinned to the release tag as a submodule |
+| Engine | ClayCore 0.116.0, pinned to the release tag as a submodule |
 | Sculpting tools | 21 across four representations · 14 SDF, 13 voxel, 17 mesh, 15 on a subdivision hierarchy |
 | Languages | English, Português do Brasil, Español latinoamericano |
 
@@ -112,7 +114,7 @@ carries the spread it was reduced from — the sample count, the minimum, the
 median, the 95th percentile and the maximum — so a change landing inside the
 range the baseline's own samples covered is marked as such rather than read as
 movement; and the conditions name the vendored engine's git revision beside its
-version, because two builds can both say 0.113.0 and differ by a commit. A
+version, because two builds can both say 0.116.0 and differ by a commit. A
 comparison across two engine pins is announced above the table rather than
 refused: refusing would leave an upgrade with no instrument at all. The
 twenty-three figures this pin added — the hierarchy's own group, the deferred
@@ -1367,8 +1369,8 @@ just diagnostics   # or: cargo run -p claycore --example diagnostics
 ```
 
 ```
-engine version   : 0.113.0
-expected ABI     : 0.113.0
+engine version   : 0.116.0
+expected ABI     : 0.116.0
 compiled backends: metal
 registered       : cpu, metal
 ```
