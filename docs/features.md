@@ -162,6 +162,14 @@ one exception is an alpha stamp, whose own greys can only be spelled as partial
 coverage — it still dithers, now with a seed that differs per dab so a dragged
 stamp fills in rather than repeating its holes.
 
+**A masked grid layer is the other exception, and it is a trade rather than a
+choice.** The engine gates a cell by scaling the weight the dither reads, so a
+footprint written at full strength turns a mask's soft skirt into a half-open
+door — measured, Padrão moved 70 through a frozen region against 167 without
+it, where the bar is a quarter of it. So a layer carrying a mask keeps the
+engine's own weighting, dithered edge and all, until a voxel verb can refuse a
+masked cell outright. A fully frozen cell was never at risk either way.
+
 ### A drag on a field replays from where it started
 
 A drag arrives in segments as the pointer moves, and **every segment carries

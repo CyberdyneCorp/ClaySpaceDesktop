@@ -23,6 +23,17 @@
 - [x] 3.2 Keep the dither for an alpha carve, with a per-dab seed
 - [x] 3.3 Guard that intensity still reaches the footprint, so a later change
       cannot make it inert unnoticed
-- [x] 3.4 Correct `voxel_tools` and `voxel_display`, whose fixtures depended on
-      the dither's pepper, and say so beside the correction
+- [x] 3.4 Keep the engine's weighting on a masked layer: written solid, the
+      footprint let 70 through a frozen region against 167 unmasked, where the
+      bar is a quarter. Found by `tool_table`, not by inspection
+- [x] 3.5 Correct the six fixtures that depended on the dither's pepper, and say
+      so beside each: `voxel_tools` (cavities to fill), `brush_colour` twice (a
+      deposit into solid material, and a mask core with no surface under it),
+      `voxel_display` and `visual_voxel_brushes` (specks for a blur to take
+      down), and the visual Mover case (a drag along a rod that is now solid)
+- [x] 3.6 Bump the `voxel-reference` scene to r2 and re-record its size, 3070
+      cells to 12005; its benchmark baseline stops comparing until re-recorded
+- [x] 3.7 Check the two timing failures against main rather than assuming:
+      `scaling_probe` was load alone, `dab_profile` fails on main too (62%
+      against 60% here)
 - [x] 3.5 `docs/features.md`: what Intensidade means on a grid
