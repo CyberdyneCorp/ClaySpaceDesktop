@@ -59,23 +59,64 @@ mod tests {
     /// The pin is the submodule commit, and this is the informational check
     /// beside it.
     ///
-    /// **There is no ABI number to assert on.** The engine's `SOVERSION` is its
-    /// project major, still 0, so `libcyber_capi.so.0` names v0.7.0 and v0.8.0
-    /// alike — a mismatched library links without complaint and surfaces later
-    /// as behaviour rather than as an error. So this is weaker than the
-    /// `EXPECTED_ABI` assertion the sibling engine gets, and it is weaker
-    /// *because of the engine* rather than by choice. Its authors know and have
-    /// put an ABI-level number to their user; the day one exists, assert on it
-    /// here instead.
+    /// **The ABI number now exists, and this asserts on it.** Until v0.9.0 the
+    /// engine's `SOVERSION` was its project major, still 0, so
+    /// `libcyber_capi.so.0` named v0.7.0 and v0.8.0 alike — a mismatched
+    /// library linked without complaint and surfaced later as behaviour rather
+    /// than as an error. The note that used to sit here said "the day one
+    /// exists, assert on it here instead", and v0.9.0 is that day:
+    /// `CYBER_ABI_VERSION_MAJOR`/`_MINOR` are 1 and 16, and `cyber_abi_check`
+    /// applies the compatibility rule rather than leaving a caller to compare
+    /// numbers by hand — which its own header tells you not to do.
+    ///
+    /// The release version is still asserted below it. The two answer different
+    /// questions: the ABI check says this library can serve a client compiled
+    /// against these headers, and the release number says the submodule is the
+    /// one this workspace pins. A library could satisfy the first and still be
+    /// the wrong build.
+    /// The library can serve a client compiled against the headers we built with.
+    ///
+    /// `cyber_abi_check` takes the numbers as the CALLING translation unit saw
+    /// them — which is the whole point of the call, in the header's own words:
+    /// "the header you built with answers, not the header you are reading now."
+    /// Comparing `cyber_abi_version` against our constants by hand would ask
+    /// the second question, and the header says not to.
+    ///
+    /// It never aborts or exits, because "a library that kills its host is
+    /// unusable inside a DCC". So the reaction is ours, and here it is a failed
+    /// test rather than a refusal at runtime: a build that links the wrong
+    /// library should not reach a sculptor at all.
+    #[test]
+    fn the_linked_library_can_serve_this_client() {
+        // SAFETY: two plain ints in, a status out. The call takes no pointers
+        // and no handles, its header states it cannot abort or exit, and it is
+        // safe to call before any document exists.
+        let status = unsafe {
+            cyberremesh_sys::cyber_abi_check(
+                cyberremesh_sys::CYBER_ABI_VERSION_MAJOR as i32,
+                cyberremesh_sys::CYBER_ABI_VERSION_MINOR as i32,
+            )
+        };
+        assert_eq!(
+            status,
+            cyberremesh_sys::CyberStatus::CYBER_OK,
+            "the linked retopology library refused the ABI these headers \
+             compiled against ({}.{}), so it is not a build this client can \
+             use however the release number reads",
+            cyberremesh_sys::CYBER_ABI_VERSION_MAJOR,
+            cyberremesh_sys::CYBER_ABI_VERSION_MINOR,
+        );
+    }
+
     #[test]
     fn the_pinned_engine_is_the_one_this_workspace_expects() {
         let found = version();
         assert_eq!(
             (found.major, found.minor),
-            (0, 8),
+            (0, 9),
             "the retopology engine reports {found}, and this workspace pins \
-             v0.8.0. The submodule and this constant disagree — the pin is the \
-             submodule commit, and there is no soname change to have caught it"
+             v0.9.0. The submodule and this constant disagree — the pin is the \
+             submodule commit, and the soname is not what would have caught it"
         );
     }
 }
