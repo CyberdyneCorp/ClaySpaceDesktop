@@ -170,6 +170,20 @@ it, where the bar is a quarter of it. So a layer carrying a mask keeps the
 engine's own weighting, dithered edge and all, until a voxel verb can refuse a
 masked cell outright. A fully frozen cell was never at risk either way.
 
+**A drag reaches about as far as its own radius, on a field and on a grid
+alike.** The engine's grab is an inverse map: every point in the ball samples
+from `p - displacement x w`, where `w` is 1 at the centre and 0 at the rim. A
+point outside the ball is not touched at all, so the bulge cannot outrun the
+brush however far the pointer travels — pulling harder past that deepens the
+taper rather than moving the form further. Measured on a grid at a four-cell
+radius: asking for 1, 2, 4, 8 and 16 cells of lift raised the surface 1, 2, 2, 3
+and 4 cells. On a field at radius 0.18: asking for 0.05, 0.10, 0.20, 0.40 and
+0.80 moved it 0.0391, 0.0643, 0.0947, 0.1241 and 0.1476, saturating near 0.15.
+The two agree, which is what makes this a property of Move rather than of either
+representation. To move form further, take a larger brush — or a snakehook,
+which is the verb for drawing material out. `voxel_grab_taper.rs` and
+`move_reach.rs` hold both halves.
+
 ### A drag on a field replays from where it started
 
 A drag arrives in segments as the pointer moves, and **every segment carries
