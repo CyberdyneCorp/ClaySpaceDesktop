@@ -83,6 +83,22 @@ fn indices(document: &mut ClayDocument) -> usize {
     document.visible_mesh_geometry().3.len()
 }
 
+/// Occupied cells, which is what "took material away" means.
+///
+/// The sign tests below used to count mesh indices, and that proxy cannot say
+/// whether material went. A dab that carves THROUGH a thin slab opens hole
+/// walls with more surface than the top it removed, so the index count rises
+/// while material falls: measured once the grid footprint matched the brush
+/// radius, Padrão held inverted took 3324 cells to 2230 and indices from 11928
+/// to 12552. The brush was right and the assertion read it as a deposit.
+fn cells(document: &ClayDocument) -> usize {
+    let (_, reader) = document
+        .document()
+        .voxel_reader("Voxels")
+        .expect("the grid reads back");
+    reader.occupied_count().expect("a count")
+}
+
 fn stroke(document: &mut ClayDocument, tool: ToolKind, invert: bool, symmetry: [bool; 3]) -> bool {
     let samples: Vec<GestureSample> = (0..9)
         .map(|step| {
@@ -212,23 +228,22 @@ fn no_brush_mirrors_when_it_is_not_asked_to() {
 
 #[test]
 fn the_depositing_brushes_take_material_away_when_inverted() {
-    let mut base = packed();
-    let rest = indices(&mut base);
+    let rest = cells(&packed());
     for tool in [ToolKind::Padrao, ToolKind::Camada] {
         let mut up = packed();
         let mut down = packed();
         stroke(&mut up, tool, false, [false; 3]);
         stroke(&mut down, tool, true, [false; 3]);
         assert!(
-            indices(&mut up) > rest,
-            "{tool:?} did not deposit: {} from {rest}",
-            indices(&mut up)
+            cells(&up) > rest,
+            "{tool:?} did not deposit: {} cells from {rest}",
+            cells(&up)
         );
         assert!(
-            indices(&mut down) < rest,
-            "{tool:?} held inverted left {} indices from {rest}, so it added \
+            cells(&down) < rest,
+            "{tool:?} held inverted left {} cells from {rest}, so it added \
              material where the sculptor asked to take it away",
-            indices(&mut down)
+            cells(&down)
         );
     }
 }
@@ -237,17 +252,16 @@ fn the_depositing_brushes_take_material_away_when_inverted() {
 fn inflating_inverted_erodes() {
     // "amount > 0 dilates, < 0 erodes", says the engine. The binding passed a
     // hard 1, so only the dilating half was ever reachable.
-    let mut base = packed();
-    let rest = indices(&mut base);
+    let rest = cells(&packed());
     let mut out = packed();
     let mut inward = packed();
     stroke(&mut out, ToolKind::Inflar, false, [false; 3]);
     stroke(&mut inward, ToolKind::Inflar, true, [false; 3]);
-    assert!(indices(&mut out) > rest, "Inflar did not dilate");
+    assert!(cells(&out) > rest, "Inflar did not dilate");
     assert!(
-        indices(&mut inward) < rest,
-        "Inflar held inverted left {} indices from {rest} rather than eroding",
-        indices(&mut inward)
+        cells(&inward) < rest,
+        "Inflar held inverted left {} cells from {rest} rather than eroding",
+        cells(&inward)
     );
 }
 
@@ -277,18 +291,17 @@ fn pinching_inverted_spreads() {
 fn erasing_inverted_deposits() {
     // The one tool whose upright verb is the removal, so its opposite runs the
     // other way round from every other brush's.
-    let mut base = packed();
-    let rest = indices(&mut base);
+    let rest = cells(&packed());
     let mut gone = packed();
     let mut put = packed();
     stroke(&mut gone, ToolKind::Apagar, false, [false; 3]);
     stroke(&mut put, ToolKind::Apagar, true, [false; 3]);
-    assert!(indices(&mut gone) < rest, "Apagar did not erase");
+    assert!(cells(&gone) < rest, "Apagar did not erase");
     assert!(
-        indices(&mut put) > rest,
-        "Apagar held inverted left {} indices from {rest} rather than \
+        cells(&put) > rest,
+        "Apagar held inverted left {} cells from {rest} rather than \
          depositing",
-        indices(&mut put)
+        cells(&put)
     );
 }
 

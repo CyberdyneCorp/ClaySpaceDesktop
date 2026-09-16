@@ -7044,7 +7044,13 @@ impl ClayDocument {
             .voxel_layer_masked(&engine_name)
             .map_err(ModelError::engine)?;
         let params = BrushParams {
-            size: ((brush.size / voxel_size).round() as i32).clamp(1, 64),
+            // TWICE the radius, because `size` is the footprint's span ACROSS
+            // — "cells the footprint spans per axis", says clay.h — and
+            // `brush.size` is a radius. Passing the radius straight in made a
+            // grid brush act at half the ring the sculptor sees: measured, the
+            // same brush saturates a drag at 0.20 on a grid against ~0.40 on a
+            // field, and at 4 cells for size 0.4 against 8 for size 0.8.
+            size: ((2.0 * brush.size / voxel_size).round() as i32).clamp(1, 64),
             shape: BrushShape::Sphere,
             falloff: match brush.shaping.falloff {
                 clayspace_model::Falloff::Constant => Falloff::Constant,
@@ -7169,7 +7175,13 @@ impl ClayDocument {
             .map_err(ModelError::engine)?;
         let brush = brush.sanitized();
         let params = BrushParams {
-            size: ((brush.size / voxel_size).round() as i32).clamp(1, 64),
+            // TWICE the radius, because `size` is the footprint's span ACROSS
+            // — "cells the footprint spans per axis", says clay.h — and
+            // `brush.size` is a radius. Passing the radius straight in made a
+            // grid brush act at half the ring the sculptor sees: measured, the
+            // same brush saturates a drag at 0.20 on a grid against ~0.40 on a
+            // field, and at 4 cells for size 0.4 against 8 for size 0.8.
+            size: ((2.0 * brush.size / voxel_size).round() as i32).clamp(1, 64),
             shape: BrushShape::Sphere,
             falloff: match brush.shaping.falloff {
                 clayspace_model::Falloff::Constant => Falloff::Constant,

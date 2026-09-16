@@ -56,12 +56,17 @@ fn packed() -> ClayDocument {
     // Three single-cell holes inside the ridge, each enclosed by material: one
     // cell of erase at the grid's own resolution, placed well within the
     // deposit's radius. That is what `clay_voxel_sculpt_fill_cavities` closes.
+    //
+    // Size 0.025 on a 0.05 grid, which is one cell ACROSS: the footprint is
+    // `round(2 * size / cell)` now that a grid brush's size is read as a
+    // radius. At 0.05 each punch spanned two cells and stopped being the
+    // single-cell pocket this verb exists to close.
     for at in [[-0.1f32, 0.0, 0.0], [0.0, 0.02, 0.0], [0.1, -0.02, 0.0]] {
         document
             .apply_stroke(
                 ToolKind::Apagar,
                 BrushSettings {
-                    size: 0.05,
+                    size: 0.025,
                     intensity: 1.0,
                     ..Default::default()
                 },

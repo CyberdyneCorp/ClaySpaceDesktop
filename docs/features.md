@@ -175,14 +175,35 @@ alike.** The engine's grab is an inverse map: every point in the ball samples
 from `p - displacement x w`, where `w` is 1 at the centre and 0 at the rim. A
 point outside the ball is not touched at all, so the bulge cannot outrun the
 brush however far the pointer travels — pulling harder past that deepens the
-taper rather than moving the form further. Measured on a grid at a four-cell
-radius: asking for 1, 2, 4, 8 and 16 cells of lift raised the surface 1, 2, 2, 3
-and 4 cells. On a field at radius 0.18: asking for 0.05, 0.10, 0.20, 0.40 and
-0.80 moved it 0.0391, 0.0643, 0.0947, 0.1241 and 0.1476, saturating near 0.15.
-The two agree, which is what makes this a property of Move rather than of either
-representation. To move form further, take a larger brush — or a snakehook,
-which is the verb for drawing material out. `voxel_grab_taper.rs` and
+taper rather than moving the form further. Measured at brush size 0.4, asking
+each for the same drag:
+
+| drag | grid (0.05 cells) | field |
+|---|---|---|
+| 0.05 | 0.05 | 0.0444 |
+| 0.10 | 0.10 | 0.0800 |
+| 0.20 | 0.15 | 0.1333 |
+| 0.40 | 0.20 | 0.2000 |
+| 0.80 | 0.30 | 0.2667 |
+
+The field keeps climbing toward its radius (0.3702 at a drag of 6.4). The grid
+moves in whole cells, which is the only difference left between the columns.
+
+**This table was not always true.** Until the footprint fix below, a grid brush
+reached half as far as the same brush on a field, and this page compared the two
+in their own units — a grid saturating at "its radius" and a field at its — and
+called that agreement. `clay_brush_params.size` is the footprint's span *across*;
+this application passed it the brush *radius*, so every grid dab was half the
+ring the sculptor saw. It now passes `round(2 x size / cell)`, and the same brush
+means the same reach on both. To move form further, take a larger brush — or a
+snakehook, which is the verb for drawing material out. `voxel_grab_taper.rs` and
 `move_reach.rs` hold both halves.
+
+**A grid brush stops growing at 64 cells across.** The footprint is clamped
+there, so past `32 x cell size` of radius — 0.64 on a 0.02 grid — Tamanho keeps
+moving the ring and the dab stops following it. The cells a dab decides grow
+with the cube of its span, and correcting the footprint already made every dab
+roughly eight times the cells it was.
 
 ### A drag on a field replays from where it started
 
