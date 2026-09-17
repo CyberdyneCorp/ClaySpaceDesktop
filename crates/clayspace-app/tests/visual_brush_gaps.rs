@@ -46,9 +46,11 @@ fn grid() -> Option<ClayDocument> {
             .apply_stroke(
                 ToolKind::Padrao,
                 BrushSettings {
-                    // A brush size is a footprint *span* in cells by the time
-                    // it reaches the grid, so this is a tube about 0.5 thick
-                    // rather than 1.0 — enough of a slab to read on screen.
+                    // A radius, like a brush size everywhere else, so this is a
+                    // tube about 1.0 thick. It read "a footprint span in cells
+                    // by the time it reaches the grid, so about 0.5 thick" while
+                    // the grid footprint was half the brush; that was the bug,
+                    // written down as the rule.
                     size: 0.5,
                     intensity: 1.0,
                     // A hard edge, so the slab is solid. Every voxel verb
@@ -338,7 +340,11 @@ fn paint(document: &mut ClayDocument, y: f32) {
         .map(|step| {
             let t = step as f32 / 8.0;
             GestureSample {
-                position: [(t - 0.5) * 1.0, y, 0.2],
+                // On the tube's front surface, at radius 0.5. At z = 0.2 this
+                // sat just under a 0.25-thick tube's surface; once the grid
+                // footprint matched the brush radius it was 0.3 inside, and a
+                // 0.18 paint ball coloured only cells no vertex is drawn for.
+                position: [(t - 0.5) * 1.0, y, 0.45],
                 pressure: 1.0,
                 time: t,
             }

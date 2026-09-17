@@ -24,7 +24,13 @@ const RIM: f32 = 0.9;
 /// that writes only inside its footprint, so material can never be carried
 /// further than the ball reaches: a 0.3 lift on a 0.2-radius ball moved the
 /// surface not at all (centre 3 -> 3), which is the "small blob" in #139.
-const LIFT: f32 = 0.15;
+const LIFT: f32 = 0.3;
+// 0.3, not 0.15. This test is the tripwire for ClayCore 0.117.0, where a
+// Constant grab stops tapering, and it has to fail on a rigid pull by a margin
+// rather than at its bound. At 0.15 the centre rose 2 cells and the rim 1 — the
+// assertion `rim * 2 <= centre` held exactly, and it held that way twice, first
+// at an even footprint span and again at the odd one. A cell of rounding either
+// way would have flipped it without the pull changing at all.
 
 fn slab() -> ClayDocument {
     let policy = BackendPolicy::discover(None).expect("discover backends");

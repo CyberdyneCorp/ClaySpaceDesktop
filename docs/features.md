@@ -195,12 +195,18 @@ in their own units — a grid saturating at "its radius" and a field at its — 
 called that agreement. `clay_brush_params.size` is the footprint's span *across*;
 this application passed it the brush *radius*, so every grid dab was half the
 ring the sculptor saw. It now passes `round(2 x size / cell)`, and the same brush
-means the same reach on both. To move form further, take a larger brush — or a
-snakehook, which is the verb for drawing material out. `voxel_grab_taper.rs` and
+means the same reach on both. The span it passes is always **odd**: ClayCore centres a
+footprint on its cell only then, and an even span reaches one cell further toward
++axis than toward −axis. A mirrored stroke reflects a dab's centre and not that
+offset, so an even span left every symmetric stroke lopsided by a cell — a dab at
+x = 0.4 reached 0.70 on one side and −0.60 on its reflection. To move form
+further, take a larger brush — or a snakehook, which is the verb for drawing
+material out. `voxel_grab_taper.rs` and
 `move_reach.rs` hold both halves.
 
-**A grid brush stops growing at 64 cells across.** The footprint is clamped
-there, so past `32 x cell size` of radius — 0.64 on a 0.02 grid — Tamanho keeps
+**A grid brush stops growing at 63 cells across.** The footprint is clamped
+there — 63 rather than 64, so the ceiling stays odd — so past `31 x cell size` of
+radius, 0.62 on a 0.02 grid, Tamanho keeps
 moving the ring and the dab stops following it. The cells a dab decides grow
 with the cube of its span, and correcting the footprint already made every dab
 roughly eight times the cells it was.

@@ -18,6 +18,11 @@ the host SHALL convert between them rather than passing one as the other.
   sizes
 - **THEN** the distance it saturates at doubles when the brush size doubles
 
+#### Scenario: A mirrored stroke is a true reflection
+- **WHEN** a stroke is made on a voxel layer with a mirror axis on, at any brush size
+- **THEN** the deposit and its reflection reach the same distance either side of
+  the mirror plane, because the footprint's span is odd and centred on its cell
+
 #### Scenario: A brush past the size ceiling
-- **WHEN** a voxel brush is set larger than 32 cells of radius
-- **THEN** the dab stops growing at 64 cells across, and the documentation says so
+- **WHEN** a voxel brush is set larger than 31 cells of radius
+- **THEN** the dab stops growing at 63 cells across, and the documentation says so

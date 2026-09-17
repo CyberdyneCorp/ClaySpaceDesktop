@@ -6,7 +6,9 @@
 
 ## 2. Correct the footprint
 
-- [x] 2.1 Pass `round(2 × size / cell)` in `stroke_voxel` and `voxel_grab_stroke`
+- [x] 2.1 Pass twice the radius in `stroke_voxel` and `voxel_grab_stroke`
+- [x] 2.2 Keep the span odd, `2 × round(size / cell) + 1` from one helper, after CI
+      found an even span lopsided a mirrored stroke by a cell (0.70 against −0.60)
 
 ## 3. Correct what measured the old footprint
 
@@ -18,7 +20,9 @@
 - [x] 3.4 Move `brush_colour`'s strokes onto the rod's surface and saturate its freeze
 - [x] 3.5 Punch `voxel_tools`' cavities at one cell across
 - [x] 3.6 Probe `voxel_grab_taper`'s rim at 0.9 of the radius for margin
-- [x] 3.7 Bump `voxel-reference` to r3, 48805 cells
+- [x] 3.7 Bump `voxel-reference` to r3, 58047 cells
+- [x] 3.8 Widen the visual slab's wobble so Suavizar has bumps to smooth
+- [x] 3.9 Stroke the mesh paint test through a real vertex, not a fixed path
 
 ## 4. Say it
 
