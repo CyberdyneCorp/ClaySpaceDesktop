@@ -41,7 +41,11 @@ fn packed() -> Option<ClayDocument> {
                     ..BrushSettings::default()
                 },
                 &[GestureSample {
-                    position: [(t - 0.5) * 1.6, (t * 9.0).sin() * 0.08, 0.0],
+                    // A wobble of 0.2, not 0.08: a grid dab now reaches the
+                    // brush's full radius, and at 0.08 the wobble fell inside
+                    // one dab, the slab came out smooth and Suavizar had nothing
+                    // to smooth — it changed 0 pixels.
+                    position: [(t - 0.5) * 1.6, (t * 9.0).sin() * 0.2, 0.0],
                     pressure: 1.0,
                     time: t,
                 }],

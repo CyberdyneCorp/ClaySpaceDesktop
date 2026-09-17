@@ -387,7 +387,47 @@ fn painting_a_mesh_blends_toward_the_chosen_colour() {
     );
 
     document.set_colour(RED);
-    let outcome = stroke(&mut document, ToolKind::Pintar, [false; 3]);
+    // Through a vertex the conversion actually made, not along a line chosen in
+    // advance. Mesh paint blends VERTEX colours by the stamp's falloff, and a
+    // grid crosses into greedy merged quads, so where vertices fall is the
+    // mesher's business. Measured when this used a fixed path: 123 vertices
+    // within the brush radius, and still a reddest of 0.0757, because every one
+    // sat near a stamp's rim where a smooth falloff gives almost nothing. It
+    // passed before only because a slightly different footprint happened to put
+    // a corner near a stamp. The middle sample below lands on the vertex, so it
+    // takes the stamp's full weight wherever the mesher put the corners.
+    let (positions, _) = drawn(&mut document);
+    let target = positions
+        .iter()
+        .copied()
+        .filter(|p| p[0] > 0.1 && p[0] < 0.8)
+        .fold(None, |best: Option<[f32; 3]>, p| match best {
+            Some(b) if b[1] >= p[1] => Some(b),
+            _ => Some(p),
+        })
+        .expect("the crossing made no vertex over the paint path");
+    let samples: Vec<GestureSample> = (0..=8)
+        .map(|step| {
+            let offset = (step as f32 - 4.0) / 40.0;
+            GestureSample {
+                position: [target[0] + offset, target[1], target[2]],
+                pressure: 1.0,
+                time: step as f32 / 8.0,
+            }
+        })
+        .collect();
+    let outcome = document
+        .apply_stroke(
+            ToolKind::Pintar,
+            BrushSettings {
+                size: 0.2,
+                intensity: 1.0,
+                ..BrushSettings::default()
+            },
+            &samples,
+            [false; 3],
+        )
+        .expect("the paint stroke was refused");
     assert!(outcome.changed, "the mesh paint stroke changed nothing");
 
     let (_, colours) = drawn(&mut document);

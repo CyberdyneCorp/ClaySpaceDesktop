@@ -68,14 +68,15 @@ fn holes_in_the_core(document: &ClayDocument) -> (usize, usize) {
         .voxel_reader("Voxels")
         .expect("the grid reads back");
     // Derived from the engine's own rule rather than from the brush radius:
-    // `round(2 * size / cell)` cells ACROSS, now that a grid brush's size is read
-    // as the radius it always claimed to be, so `size / cell` of radius, and the
-    // inner 60% of that is where a deposit is unambiguously meant.
+    // `2 * round(size / cell) + 1` cells ACROSS, an odd span centred on the dab's
+    // cell now that a grid brush's size is read as the radius it always claimed
+    // to be, so `round(size / cell)` of radius either side, and the inner 60% of
+    // that is where a deposit is unambiguously meant.
     //
     // Left on the old rule — `round(size / cell)` across — this core stayed put
     // while the dab doubled around it. The guard kept passing while asking about
     // half as much of the footprint, which is the failure it exists to catch.
-    let across = (2.0 * RADIUS / CELL).round() as i32;
+    let across = 2 * (RADIUS / CELL).round() as i32 + 1;
     let span = ((across as f32 / 2.0) * 0.6) as i32;
     let (mut empty, mut total) = (0usize, 0usize);
     let from = (FROM / CELL).round() as i32;

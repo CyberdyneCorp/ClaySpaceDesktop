@@ -200,7 +200,7 @@ fn a_drag_cannot_outrun_its_own_radius() {
         eprintln!(
             "asked {lift:.2} ({asked_cells} cells), surface rose {rise} cells, \
              radius is {} cells",
-            // `round(2 * size / cell)` across, so `size / cell` of radius.
+            // `2 * round(size / cell) + 1` across, so `round(size / cell)` either side.
             (RADIUS / CELL).round() as i32
         );
         reached.push((asked_cells, rise));
