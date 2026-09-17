@@ -42,6 +42,51 @@ struct KeyGeometry {
     indices: Vec<u32>,
 }
 
+/// Contiguous upload for a fresh layout. Only live vertices contribute bounds;
+/// gaps preserve each brick's headroom for later isolated patches.
+struct LayoutUpload {
+    vertices: Vec<Vertex>,
+    indices: Vec<u32>,
+    bounds: Option<([f32; 3], [f32; 3])>,
+}
+
+impl LayoutUpload {
+    fn new(keys: &HashMap<BrickKey, KeyGeometry>, layout: &mut SlotMap) -> Option<Self> {
+        let mut upload = Self {
+            vertices: Vec::new(),
+            indices: Vec::new(),
+            bounds: None,
+        };
+        for (&key, geometry) in keys {
+            if geometry.indices.is_empty() {
+                continue;
+            }
+            let slot = layout
+                .place(
+                    key,
+                    geometry.vertices.len() as u32,
+                    geometry.indices.len() as u32,
+                )?
+                .slot;
+            // Only the gaps between live runs need transferring; omit the
+            // unused tail after the last brick. No index references a gap.
+            upload
+                .vertices
+                .resize(slot.vertex_base as usize, bytemuck::Zeroable::zeroed());
+            upload.vertices.extend_from_slice(&geometry.vertices);
+            upload
+                .indices
+                .extend(geometry.indices.iter().map(|i| i + slot.vertex_base));
+            upload.indices.resize(
+                (slot.index_base + slot.index_capacity) as usize,
+                slot.vertex_base,
+            );
+            upload.bounds = union(upload.bounds, Vertex::bounds(&geometry.vertices));
+        }
+        Some(upload)
+    }
+}
+
 /// One mesh's global indices, reused across its brick ranges.
 /// Only touched entries are cleared between bricks; nothing survives the split.
 struct VertexRemap {
@@ -834,22 +879,21 @@ impl SurfaceGeometry {
             self.over_budget = true;
             return;
         };
-        self.over_budget = false;
+        let mut layout = SlotMap::new(vertex_slots as u32, index_slots as u32);
+        let Some(upload) = LayoutUpload::new(&self.keys, &mut layout) else {
+            self.over_budget = true;
+            return;
+        };
         if !self.mesh.reserve(gpu, vertex_slots, index_slots) {
             self.over_budget = true;
             return;
         }
-        self.layout = SlotMap::new(vertex_slots as u32, index_slots as u32);
-        self.bounds = None;
+        self.over_budget = false;
+        self.layout = layout;
+        self.bounds = upload.bounds;
         self.touched.clear();
-
-        let keys: Vec<BrickKey> = self.keys.keys().copied().collect();
-        for key in keys {
-            // A fresh layout has room for everything it was sized from, so a
-            // refusal here would be a sizing bug rather than a full buffer.
-            let placed = self.patch(gpu, key);
-            debug_assert!(placed, "a fresh layout ran out of room");
-        }
+        self.mesh.patch_vertices(gpu, 0, &upload.vertices);
+        self.mesh.patch_indices(gpu, 0, &upload.indices);
         self.mesh.set_index_count(self.layout.index_count());
         self.mesh.set_bounds(self.bounds);
         self.relayout = false;
@@ -1578,6 +1622,124 @@ mod tests {
         contains_coincident_triangles, prune_exact_triangles, vertex_key, ClayError, HashMap,
         KeyGeometry, Mesh, Vertex, VertexLayout,
     };
+
+    fn layout_fixture() -> HashMap<clayspace_engine::claycore::BrickKey, KeyGeometry> {
+        let mut keys = HashMap::new();
+        for (key, count) in [(1, 3), (2, 65), (3, 132)] {
+            let vertices = (0..count)
+                .map(|i| Vertex {
+                    position: [10.0 + i as f32, 20.0, 30.0],
+                    normal: [-0.0, 1.0, 0.0],
+                    color: [0.25, 0.5, 0.75],
+                    mask: f32::from_bits(0x3eaaaaab),
+                })
+                .collect();
+            keys.insert(
+                [key, 0, 0],
+                KeyGeometry {
+                    vertices,
+                    indices: vec![0, count - 1, 1],
+                },
+            );
+        }
+        // Unreferenced vertices in an empty key must not allocate a slot or
+        // expand bounds. The zero-filled headroom must not expand them either.
+        keys.insert(
+            [4, 0, 0],
+            KeyGeometry {
+                vertices: vec![vertex([-100.0; 3], [0.0; 3])],
+                indices: Vec::new(),
+            },
+        );
+        keys
+    }
+
+    #[test]
+    fn fresh_layout_upload_preserves_brick_bits_slots_and_degenerate_tails() {
+        let keys = layout_fixture();
+        let mut layout = crate::slots::SlotMap::new(4096, 4096);
+        let upload = super::LayoutUpload::new(&keys, &mut layout).unwrap();
+        let mut reference = crate::slots::SlotMap::new(4096, 4096);
+        for (&key, geometry) in &keys {
+            if geometry.indices.is_empty() {
+                assert_eq!(layout.get(key), None);
+                continue;
+            }
+            let expected = reference
+                .place(
+                    key,
+                    geometry.vertices.len() as u32,
+                    geometry.indices.len() as u32,
+                )
+                .unwrap()
+                .slot;
+            assert_eq!(layout.get(key), Some(expected));
+            let base = expected.vertex_base as usize;
+            assert_eq!(
+                bytemuck::cast_slice::<Vertex, u8>(
+                    &upload.vertices[base..base + geometry.vertices.len()]
+                ),
+                bytemuck::cast_slice::<Vertex, u8>(&geometry.vertices)
+            );
+            let span = &upload.indices[expected.index_base as usize
+                ..(expected.index_base + expected.index_capacity) as usize];
+            let rebased: Vec<_> = geometry
+                .indices
+                .iter()
+                .map(|i| i + expected.vertex_base)
+                .collect();
+            assert_eq!(&span[..rebased.len()], rebased);
+            for triangle in span[rebased.len()..].chunks_exact(3) {
+                assert_eq!(triangle, &[expected.vertex_base; 3]);
+            }
+        }
+        assert_eq!(upload.indices.len(), layout.index_count() as usize);
+        assert!(upload.vertices.len() <= layout.vertex_count() as usize);
+        assert_eq!(
+            upload.bounds,
+            Some(([10.0, 20.0, 30.0], [141.0, 20.0, 30.0]))
+        );
+    }
+
+    #[test]
+    fn fresh_layout_retains_headroom_for_incremental_growth_and_relocation() {
+        let keys = layout_fixture();
+        let mut layout = crate::slots::SlotMap::new(4096, 4096);
+        let _upload = super::LayoutUpload::new(&keys, &mut layout).unwrap();
+        let first = layout.get([1, 0, 0]).unwrap();
+        let neighbor = layout.get([2, 0, 0]).unwrap();
+        let grown = layout.place([1, 0, 0], 4, 6).unwrap();
+        assert_eq!(grown.slot, first);
+        assert_eq!(grown.stranded, None);
+        let moved = layout
+            .place([1, 0, 0], first.vertex_capacity + 1, 6)
+            .unwrap();
+        assert_eq!(
+            moved.stranded,
+            Some((first.index_base, first.index_base + first.index_capacity))
+        );
+        assert_eq!(layout.get([2, 0, 0]), Some(neighbor));
+    }
+
+    #[test]
+    fn fresh_layout_of_empty_geometry_uploads_nothing() {
+        let mut keys = HashMap::new();
+        keys.insert([0, 0, 0], KeyGeometry::default());
+        let mut layout = crate::slots::SlotMap::new(1024, 1024);
+        let upload = super::LayoutUpload::new(&keys, &mut layout).unwrap();
+        assert!(upload.vertices.is_empty());
+        assert!(upload.indices.is_empty());
+        assert_eq!(upload.bounds, None);
+        assert_eq!(layout.index_count(), 0);
+        assert_eq!(layout.vertex_count(), 0);
+    }
+
+    #[test]
+    fn fresh_layout_refuses_insufficient_slot_capacity() {
+        let keys = layout_fixture();
+        let mut layout = crate::slots::SlotMap::new(1, 1);
+        assert!(super::LayoutUpload::new(&keys, &mut layout).is_none());
+    }
 
     fn read_mesh_reference(mesh: &Mesh) -> Result<(Vec<Vertex>, Vec<u32>), ClayError> {
         let count = mesh.vertex_count();
