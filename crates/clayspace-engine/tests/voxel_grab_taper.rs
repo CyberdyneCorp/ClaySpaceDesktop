@@ -16,13 +16,21 @@ use clayspace_model::{BrushSettings, GestureSample, SculptModel, ToolKind};
 
 const CELL: f32 = 0.05;
 const RADIUS: f32 = 0.4;
+/// Where the rim probe stands, as a fraction of the drag's radius.
+const RIM: f32 = 0.9;
 /// How far the drag lifts, in world units.
 ///
 /// WITHIN the footprint's own radius, deliberately. The grab is an inverse map
 /// that writes only inside its footprint, so material can never be carried
 /// further than the ball reaches: a 0.3 lift on a 0.2-radius ball moved the
 /// surface not at all (centre 3 -> 3), which is the "small blob" in #139.
-const LIFT: f32 = 0.15;
+const LIFT: f32 = 0.3;
+// 0.3, not 0.15. This test is the tripwire for ClayCore 0.117.0, where a
+// Constant grab stops tapering, and it has to fail on a rigid pull by a margin
+// rather than at its bound. At 0.15 the centre rose 2 cells and the rim 1 — the
+// assertion `rim * 2 <= centre` held exactly, and it held that way twice, first
+// at an even footprint span and again at the odd one. A cell of rounding either
+// way would have flipped it without the pull changing at all.
 
 fn slab() -> ClayDocument {
     let policy = BackendPolicy::discover(None).expect("discover backends");
@@ -121,14 +129,20 @@ fn a_grid_drag_pulls_a_bulge_rather_than_shoving_a_block() {
     let centre_before = surface_at(&document, 0.0);
     // Near the rim of the footprint: inside it, so it is dragged, but where a
     // tapered pull is weakest.
-    let rim_before = surface_at(&document, RADIUS * 0.8);
+    //
+    // At 0.9 of the radius, not 0.8. This test is the tripwire for ClayCore
+    // 0.117.0, where a Constant grab stops tapering and pulls rigidly; at 0.8
+    // it passed exactly at its bound (rim +1 against centre +2), so a change in
+    // how cells round could flip it either way without the pull changing at
+    // all. Further out the taper is weaker and the margin is real.
+    let rim_before = surface_at(&document, RADIUS * RIM);
 
     // The press lands on the surface, one cell above the top.
     let changed = drag_up(&mut document, 0.0, (centre_before + 1) as f32 * CELL);
 
     let cells_after = occupied(&document);
     let centre_after = surface_at(&document, 0.0);
-    let rim_after = surface_at(&document, RADIUS * 0.8);
+    let rim_after = surface_at(&document, RADIUS * RIM);
     let (centre_rise, rim_rise) = (centre_after - centre_before, rim_after - rim_before);
     eprintln!(
         "changed {changed}; cells {cells_before} -> {cells_after}; \
@@ -192,7 +206,8 @@ fn a_drag_cannot_outrun_its_own_radius() {
         eprintln!(
             "asked {lift:.2} ({asked_cells} cells), surface rose {rise} cells, \
              radius is {} cells",
-            (RADIUS / CELL).round() as i32 / 2
+            // `2 * round(size / cell) + 1` across, so `round(size / cell)` either side.
+            (RADIUS / CELL).round() as i32
         );
         reached.push((asked_cells, rise));
     }

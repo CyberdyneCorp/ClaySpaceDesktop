@@ -263,19 +263,12 @@ fn a_frozen_region_resists_every_tool_a_grid_or_a_mesh_offers() {
             if !strokes(tool) {
                 continue;
             }
-            let mut free = worked(representation);
-            let rest = drawn(&mut free);
-            drag(&mut free, tool, representation);
-            let unmasked = moved(representation, &rest, &drawn(&mut free));
+            let unmasked = change(representation, tool, false);
             if unmasked <= 0.0 {
                 continue;
             }
 
-            let mut frozen = worked(representation);
-            freeze(&mut frozen, representation);
-            let before = drawn(&mut frozen);
-            drag(&mut frozen, tool, representation);
-            let masked = moved(representation, &before, &drawn(&mut frozen));
+            let masked = change(representation, tool, true);
             if masked > unmasked * 0.25 {
                 ignored.push(format!(
                     "{} on {} moved {masked:.4} through the mask against \
@@ -300,6 +293,59 @@ fn a_frozen_region_resists_every_tool_a_grid_or_a_mesh_offers() {
 /// and with a brush twice the stroke's: the mask tool paints with a smooth
 /// falloff by design, so a mask sized to the stroke freezes its middle and
 /// half-freezes its ends — which reads as a mask half the tools ignore.
+/// How much one stroke changed the layer, in the units that can express it.
+///
+/// A mesh keeps its vertex count, so its change is how far a vertex moved. A
+/// grid's change is MATERIAL: the cells whose occupancy the stroke flipped.
+///
+/// This used to count fresh vertex positions on a grid as well, and that cannot
+/// say whether a mask held. A dithered nibble scattered over a frozen region
+/// opens many small faces, while a clean scrape leaves one tidy plane. Measured,
+/// Raspar under the freeze took 40 cells against 1060 without it (3.8%) yet
+/// counted 483 fresh vertices against 972; Apagar's 84 cells under the mask
+/// counted MORE vertices than its 2409 without. The mask held both times and the
+/// assertion read it as a leak.
+fn change(representation: Representation, tool: ToolKind, frozen: bool) -> f32 {
+    let mut document = worked(representation);
+    if frozen {
+        freeze(&mut document, representation);
+    }
+    match representation {
+        Representation::Voxel => {
+            let before = occupied(&document);
+            drag(&mut document, tool, representation);
+            before.symmetric_difference(&occupied(&document)).count() as f32
+        }
+        _ => {
+            let rest = drawn(&mut document);
+            drag(&mut document, tool, representation);
+            moved(representation, &rest, &drawn(&mut document))
+        }
+    }
+}
+
+/// Every occupied cell of the grid, so two states can be compared cell by cell.
+fn occupied(document: &ClayDocument) -> std::collections::HashSet<[i32; 3]> {
+    let (_, reader) = document
+        .document()
+        .voxel_reader("Voxels")
+        .expect("the grid reads back");
+    let mut cells = std::collections::HashSet::new();
+    let Some((lo, hi)) = reader.bounds().expect("bounds") else {
+        return cells;
+    };
+    for z in lo[2]..=hi[2] {
+        for y in lo[1]..=hi[1] {
+            for x in lo[0]..=hi[0] {
+                if reader.get([x, y, z]).expect("a cell reads back").is_some() {
+                    cells.insert([x, y, z]);
+                }
+            }
+        }
+    }
+    cells
+}
+
 fn freeze(document: &mut ClayDocument, representation: Representation) {
     let at = over(representation);
     let path: Vec<GestureSample> = (0..=8)

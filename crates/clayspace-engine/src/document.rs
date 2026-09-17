@@ -7044,7 +7044,7 @@ impl ClayDocument {
             .voxel_layer_masked(&engine_name)
             .map_err(ModelError::engine)?;
         let params = BrushParams {
-            size: ((brush.size / voxel_size).round() as i32).clamp(1, 64),
+            size: grid_span(brush.size, voxel_size),
             shape: BrushShape::Sphere,
             falloff: match brush.shaping.falloff {
                 clayspace_model::Falloff::Constant => Falloff::Constant,
@@ -7169,7 +7169,7 @@ impl ClayDocument {
             .map_err(ModelError::engine)?;
         let brush = brush.sanitized();
         let params = BrushParams {
-            size: ((brush.size / voxel_size).round() as i32).clamp(1, 64),
+            size: grid_span(brush.size, voxel_size),
             shape: BrushShape::Sphere,
             falloff: match brush.shaping.falloff {
                 clayspace_model::Falloff::Constant => Falloff::Constant,
@@ -7400,6 +7400,26 @@ impl ClayDocument {
             dirty_bricks: 1,
         })
     }
+}
+
+/// The span, in cells ACROSS, of a grid brush whose size is `radius`.
+///
+/// `clay_brush_params.size` is "cells the footprint spans per axis", and a brush
+/// size is a radius, so the span is twice it. Passing the radius straight in made
+/// a grid brush act at half the ring the sculptor sees: measured, the same brush
+/// saturated a drag at 0.20 on a grid against ~0.40 on a field.
+///
+/// And always ODD. The engine centres a footprint on its cell only then:
+/// `brush_extent(n)` is `-((n - 1) / 2) ..= n / 2`, so an even span reaches one
+/// cell further toward +axis than toward -axis. A mirrored stroke reflects the
+/// dab's centre and not that offset, so an even span left every symmetric stroke
+/// lopsided by a cell — measured, a dab at x = 0.4 reached 0.70 on the right and
+/// -0.60 on its reflection. Doubling the span made nearly every size even, which
+/// is how CI found it; `2 * round(r / cell) + 1` cannot be.
+///
+/// Clamped at 63 rather than 64 so the ceiling is odd too.
+fn grid_span(radius: f32, voxel_size: f32) -> i32 {
+    (2 * (radius / voxel_size).round() as i32 + 1).clamp(1, 63)
 }
 
 /// The footprint a grid verb writes, from the brush the sculptor is holding.

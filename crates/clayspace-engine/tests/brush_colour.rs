@@ -67,11 +67,15 @@ fn stroke(
     tool: ToolKind,
     symmetry: [bool; 3],
 ) -> clayspace_model::EditOutcome {
+    // Along the rod's SURFACE, not its axis. The fixture's rod is deposited at
+    // size 0.25, and a grid brush's size is now read as the radius it always
+    // claimed to be — so the rod is 0.25 thick in radius, and a 0.2 paint ball
+    // run down its axis colours only cells no vertex is drawn for.
     let samples: Vec<GestureSample> = (0..9)
         .map(|step| {
             let t = step as f32 / 8.0;
             GestureSample {
-                position: [0.2 + t * 0.5, 0.0, 0.0],
+                position: [0.2 + t * 0.5, 0.2, 0.0],
                 pressure: 1.0,
                 time: t,
             }
@@ -185,7 +189,7 @@ fn a_structural_deposit_keeps_the_clay_tone() {
         .map(|step| {
             let t = step as f32 / 8.0;
             GestureSample {
-                position: [0.2 + t * 0.5, 0.15, 0.0],
+                position: [0.2 + t * 0.5, 0.3, 0.0],
                 pressure: 1.0,
                 time: t,
             }
@@ -221,27 +225,36 @@ fn a_fully_frozen_cell_keeps_the_colour_it_had() {
     // viewport draws. Centred on the rod's axis it covers the interior, which
     // a solid deposit fills and draws no vertex for — the porous deposit this
     // fixture was written against had hole walls in there to find (#139).
-    document
-        .apply_stroke(
-            ToolKind::Mascara,
-            BrushSettings {
-                size: 0.45,
-                intensity: 1.0,
-                ..BrushSettings::default()
-            },
-            &(0..9)
-                .map(|step| {
-                    let t = step as f32 / 8.0;
-                    GestureSample {
-                        position: [0.2 + t * 0.5, 0.12, 0.0],
-                        pressure: 1.0,
-                        time: t,
-                    }
-                })
-                .collect::<Vec<_>>(),
-            [false; 3],
-        )
-        .expect("paint a mask");
+    // Four passes along the rod's surface rather than one. The assertion below
+    // asks for vertices at a mask of 0.999 or more, and Máscara paints with a
+    // smooth falloff, so one pass reaches that only within a hair of its own
+    // path — the fixture passed before only because its path happened to sit
+    // almost exactly on the surface of a thinner rod. Each pass moves a cell
+    // toward 1 by its weight, so repeating it saturates a band that holds
+    // wherever the greedy mesher happens to put the surface vertices.
+    for _ in 0..4 {
+        document
+            .apply_stroke(
+                ToolKind::Mascara,
+                BrushSettings {
+                    size: 0.45,
+                    intensity: 1.0,
+                    ..BrushSettings::default()
+                },
+                &(0..9)
+                    .map(|step| {
+                        let t = step as f32 / 8.0;
+                        GestureSample {
+                            position: [0.2 + t * 0.5, 0.25, 0.0],
+                            pressure: 1.0,
+                            time: t,
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+                [false; 3],
+            )
+            .expect("paint a mask");
+    }
     assert!(document.mask_state().present, "nothing was frozen");
 
     document.set_colour(RED);
@@ -374,7 +387,47 @@ fn painting_a_mesh_blends_toward_the_chosen_colour() {
     );
 
     document.set_colour(RED);
-    let outcome = stroke(&mut document, ToolKind::Pintar, [false; 3]);
+    // Through a vertex the conversion actually made, not along a line chosen in
+    // advance. Mesh paint blends VERTEX colours by the stamp's falloff, and a
+    // grid crosses into greedy merged quads, so where vertices fall is the
+    // mesher's business. Measured when this used a fixed path: 123 vertices
+    // within the brush radius, and still a reddest of 0.0757, because every one
+    // sat near a stamp's rim where a smooth falloff gives almost nothing. It
+    // passed before only because a slightly different footprint happened to put
+    // a corner near a stamp. The middle sample below lands on the vertex, so it
+    // takes the stamp's full weight wherever the mesher put the corners.
+    let (positions, _) = drawn(&mut document);
+    let target = positions
+        .iter()
+        .copied()
+        .filter(|p| p[0] > 0.1 && p[0] < 0.8)
+        .fold(None, |best: Option<[f32; 3]>, p| match best {
+            Some(b) if b[1] >= p[1] => Some(b),
+            _ => Some(p),
+        })
+        .expect("the crossing made no vertex over the paint path");
+    let samples: Vec<GestureSample> = (0..=8)
+        .map(|step| {
+            let offset = (step as f32 - 4.0) / 40.0;
+            GestureSample {
+                position: [target[0] + offset, target[1], target[2]],
+                pressure: 1.0,
+                time: step as f32 / 8.0,
+            }
+        })
+        .collect();
+    let outcome = document
+        .apply_stroke(
+            ToolKind::Pintar,
+            BrushSettings {
+                size: 0.2,
+                intensity: 1.0,
+                ..BrushSettings::default()
+            },
+            &samples,
+            [false; 3],
+        )
+        .expect("the paint stroke was refused");
     assert!(outcome.changed, "the mesh paint stroke changed nothing");
 
     let (_, colours) = drawn(&mut document);
