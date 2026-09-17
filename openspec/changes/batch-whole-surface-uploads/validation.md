@@ -29,3 +29,21 @@ The paired executables are retained locally under `/tmp/clay-531-batch/{before,f
 Build: `CARGO_TARGET_DIR=/tmp/clay-531-host-target CARGO_BUILD_JOBS=4 LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libstdc++.so.6 cargo build --release -p clayspace-app --bin clayspace-app`.
 
 Tests: `cargo test --release -p clayspace-app --features agent-e2e --lib --test agent_end_to_end --test sculpt_latency --test settle_needed --test visual_sculpting --no-run`, followed by each produced executable with `--nocapture --test-threads=1`, real GPU/display, and `CLAYSPACE_AGENT_E2E=1`. End-to-end tests run the preserved default-feature application.
+
+## Incomplete pilot — not acceptance evidence
+The ten-minute quiet-window wait collected no timing samples. A subsequent guarded pilot obtained one baseline/candidate pair (13 brushes, 26 cases), then stopped when the next application did not publish its startup marker within 30 seconds. System load had increased again. Startup is excluded from the brush measurements; the timeout is retained as a validation limitation, not attributed to a code change.
+
+The one pair is mixed and does not establish a latency win. Representative individual samples (not medians):
+
+| Action | Baseline ms | Candidate ms | Extra upload bytes |
+|---|---:|---:|---:|
+| smooth begin | 50.901 | 53.215 | 2,537,080 |
+| smooth end | 58.420 | 60.659 | 2,492,160 |
+| relax begin | 50.770 | 52.827 | 2,537,080 |
+| relax end | 64.516 | 63.413 | 2,492,160 |
+| move begin | 0.019 | 0.030 | 0 |
+| move end | 36.144 | 37.660 | 2,492,160 |
+| clay begin | 2.762 | 2.213 | 0 |
+| clay end | 16.817 | 14.396 | 2,519,160 |
+
+A full Smooth/Relax release uploaded 10,982,672 bytes before and 13,474,832 bytes after (+2,492,160 bytes, approximately 22.7%). The staged arrays also require temporary CPU memory. Raw observations are retained in `evidence/pilot.json`. Keep the PR as a draft: fewer queue calls alone are not a demonstrated performance improvement. The planned ten-pair comparison remains incomplete.
