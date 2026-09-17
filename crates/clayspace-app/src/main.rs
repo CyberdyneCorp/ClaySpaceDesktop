@@ -4017,6 +4017,7 @@ impl App {
     /// Unbounded like a conversion: a repair walks the whole grid rather than
     /// what a brush reached.
     fn run_operation(&mut self, operation: LayerOperation) {
+        let before = self.engine_undo_depth();
         let outcome = self.busy(|app| {
             app.timed(operation.label(), |app| {
                 app.document
@@ -4025,6 +4026,12 @@ impl App {
         });
         match outcome {
             Ok(_) => {
+                // Banked on the history Cmd+Z reads, as an armature edit's is.
+                // A repair recorded its engine entry and pushed nothing here, so
+                // the next Cmd+Z popped the PREVIOUS stroke's count and took the
+                // repair back along with part of that stroke.
+                self.sculpt
+                    .record_external_action(self.engine_undo_depth().saturating_sub(before));
                 self.scene.refresh();
                 self.document_vm.touched();
                 self.sync_geometry();
@@ -4115,6 +4122,7 @@ impl App {
     /// refusal does.
     fn run_conversion(&mut self) {
         let settings = self.conversion;
+        let before = self.engine_undo_depth();
         let outcome = self.busy(|app| {
             app.timed("converter", |app| {
                 app.document.with(|document| {
@@ -4130,6 +4138,14 @@ impl App {
         });
         match outcome {
             Ok(_) => {
+                // One undo for the whole crossing. The reported depth folds a
+                // crossing's removal and reorder entries into one step, and one
+                // `undo()` takes a whole crossing back, so this banks exactly one.
+                // Measured before the fix: depth 1 after a stroke, still 1 after
+                // the crossing, 0 after one Cmd+Z — which took the crossing and
+                // most of the stroke with it.
+                self.sculpt
+                    .record_external_action(self.engine_undo_depth().saturating_sub(before));
                 self.show_convert = false;
                 self.scene.refresh();
                 self.sculpt.refresh_after_conversion();
