@@ -1,0 +1,261 @@
+# app-shell Specification
+
+## Purpose
+The window a sculptor works in: which regions it is divided into, what the
+menu bar, the status area and the window title say, how the chrome folds away,
+which preferences survive a restart, and who is asked before the application
+lets anything else in.
+## Requirements
+### Requirement: The window is organized into fixed functional regions
+The application window SHALL present: a menu bar; a tool rail along the leading edge; a tool options bar under the menu bar carrying the active tool's primary parameters; a left region holding the scene tree, the layer stack and sculpting settings; a central viewport; a right region holding material, geometry, resolution and brush-control inspectors; a brush shelf along the trailing edge of the window; and a status area.
+
+The tool rail SHALL offer, as icon buttons with their name and shortcut on
+hover, the controls a sculptor reaches for between strokes: mask painting,
+frame, polyframe, the reference images, the shapes section, the boolean
+section, the deformation cage, the curve, the deformations, undo and redo. Each
+SHALL dispatch the
+same command as its menu entry under the same enabled conditions, and SHALL
+show its on/off state where it has one.
+
+#### Scenario: A panel is opened from the rail
+- **WHEN** the shapes button on the rail is clicked
+- **THEN** the same command the Arquivo → Formas menu entry dispatches is
+  emitted, and the button reads as on while the section is open
+
+The shapes and the boolean SHALL be sections of the right region rather than
+windows over the viewport, because the viewport holds the form a shape is
+placed into or cut from. Each section SHALL carry a close control on its
+heading that dispatches the same command its rail button and menu entry do.
+
+#### Scenario: A docked section is put away from its heading
+- **WHEN** the close control on the shapes section's heading is clicked
+- **THEN** the same command the rail's shapes button dispatches is emitted,
+  and the section is no longer drawn
+
+#### Scenario: The rail greys what the menu greys
+- **WHEN** the active layer cannot be caged
+- **THEN** the rail's cage button is disabled with the same reason the menu
+  entry carries
+
+The tool options bar SHALL be headed by the active brush — its mark, its name
+and a one-line description — separated from the brush's parameters by a rule,
+and the head SHALL change with the active brush. Where the window is narrower
+than the bar, the bar SHALL scroll rather than clip its last control.
+
+#### Scenario: The options bar names its brush
+- **WHEN** the active brush changes from Standard to Move
+- **THEN** the head of the options bar shows Move's mark and name
+
+#### Scenario: Regions are present on first run
+- **WHEN** the application starts with no stored layout
+- **THEN** every region is present and populated at its default size
+
+#### Scenario: The viewport takes the remaining space
+- **WHEN** the window is resized
+- **THEN** the panel regions keep their widths and the viewport absorbs the difference
+
+### Requirement: Panel sections fold from their headings
+Every section of the left and right regions SHALL fold from its heading: a
+click on the heading row hides the section's body, a second shows it again,
+and a chevron at the row's trailing end SHALL say which way the section
+stands. The fold SHALL be interface state rather than document state — it
+SHALL enter no history, dispatch no command and SHALL NOT be persisted — and
+every section SHALL open shown. The shapes and boolean sections, which have a
+close control instead, are exempt.
+
+#### Scenario: A section is folded and unfolded
+- **WHEN** the GEOMETRY heading is clicked
+- **THEN** the geometry section's readouts are no longer drawn, the command
+  queue is unchanged, and a second click on the heading draws them again
+
+#### Scenario: A fold does not outlive the session
+- **WHEN** a section is folded and the application is restarted
+- **THEN** the section opens shown
+
+### Requirement: Panels can be resized, collapsed and restored
+The user SHALL be able to resize and collapse each panel region and restore the default layout in one action. Layout SHALL persist across sessions.
+
+#### Scenario: Layout survives a restart
+- **WHEN** the user resizes and collapses panels and restarts the application
+- **THEN** the layout is as it was left
+
+#### Scenario: Restoring defaults is one action
+- **WHEN** the user chooses to reset the layout
+- **THEN** every region returns to its default size and expansion state
+
+### Requirement: The menu bar carries the application's commands
+The menu bar SHALL present File, Edit, View, Sculpt, Brushes, Masks, Window and Help menus. Every menu item SHALL dispatch through the same command path as its equivalent control elsewhere in the interface, SHALL display its keyboard shortcut where one exists, and SHALL be disabled with the same conditions as that equivalent control.
+
+#### Scenario: A menu item and a panel control agree
+- **WHEN** an operation is unavailable and is present both in a menu and as a panel control
+- **THEN** both are disabled, and for the same stated reason
+
+#### Scenario: Shortcuts are discoverable
+- **WHEN** a menu is opened
+- **THEN** each item with a shortcut displays it
+
+### Requirement: Keyboard shortcuts cover the sculpting loop and are remappable
+The application SHALL provide keyboard shortcuts for the operations used continuously while sculpting — brush selection, size, intensity, symmetry, masking, undo, redo, view presets and frame — and SHALL let the user remap them. A conflicting assignment SHALL be reported rather than silently overriding.
+
+#### Scenario: A conflicting assignment is reported
+- **WHEN** the user assigns a shortcut already bound to another command
+- **THEN** the conflict is shown with the command that holds it, and the assignment is not applied until the user resolves it
+
+### Requirement: The status area reports document, memory and backend state
+The status area SHALL display the current document name and modified state, the working unit, the memory in use against the configured budget, the active evaluation backend, and whether the application is listening for an agent.
+
+The listening indicator SHALL say whether a client is currently connected, and
+SHALL show when an agent last changed the document. A surface that moved while
+nobody touched the window is otherwise a defect report with no cause in it.
+
+#### Scenario: Memory reflects the engine's own accounting
+- **WHEN** memory usage is displayed
+- **THEN** the figures come from the engine's brick cache statistics and budget, not from an estimate maintained by the application
+
+#### Scenario: Approaching the budget is visible before it is reached
+- **WHEN** memory in use approaches the configured budget
+- **THEN** the indicator changes state before the budget is exhausted, rather than only at failure
+
+#### Scenario: Listening is visible
+- **WHEN** the application is listening for an agent
+- **THEN** the status area says so, and says whether a client is connected
+
+#### Scenario: A change made by an agent is attributable
+- **WHEN** an agent changes the document
+- **THEN** the status area records that an agent acted and when
+
+### Requirement: Memory budget exhaustion is handled without data loss
+When the engine reports that an operation would exceed the memory budget, the application SHALL present the shortfall, offer to raise the budget or reduce resolution, and SHALL leave the document and existing data intact.
+
+#### Scenario: A budget-exceeded operation leaves the document valid
+- **WHEN** an operation is refused for exceeding the memory budget
+- **THEN** the document is unchanged, existing cached data remains valid, and the user is told what was needed
+
+### Requirement: The window title identifies the document and its state
+The window title SHALL show the document name and indicate unsaved changes.
+
+#### Scenario: The title marks unsaved work
+- **WHEN** a document has unsaved changes
+- **THEN** the title indicates it, and the indication clears on save
+
+### Requirement: Interface text is externalized and localizable
+All user-facing text SHALL be externalized into resource files with no literal user-facing strings in code. The application SHALL ship Brazilian Portuguese and SHALL follow the system locale where a translation exists, falling back to a defined default otherwise.
+
+#### Scenario: No literal user-facing strings
+- **WHEN** the source is inspected for user-facing text
+- **THEN** every such string is resolved from a resource file
+
+#### Scenario: The untitled document is named in the interface's language
+- **WHEN** a fresh document is shown in the menu bar, or offered as a file
+  name by the save or export dialog, in any shipped locale
+- **THEN** its name is that locale's word for an untitled document, while a
+  name that came from a file passes through untouched
+
+#### Scenario: An untranslated locale falls back
+- **WHEN** the system locale has no shipped translation
+- **THEN** the interface presents in the default locale rather than showing untranslated keys
+
+#### Scenario: Layout survives longer translations
+- **WHEN** the interface is displayed in a locale whose labels are substantially longer
+- **THEN** labels wrap or elide within their regions without overlapping or clipping adjacent controls
+
+### Requirement: Errors are reported where they occurred, with a cause
+Failures SHALL be reported near the action that caused them, stating what failed and why in the user's terms. Engine result codes and internal identifiers SHALL NOT be presented as the primary message, though they SHALL be available in the diagnostics view.
+
+#### Scenario: A failed export explains itself
+- **WHEN** an export fails
+- **THEN** the message states what could not be written and why, and the engine's detail message is available in diagnostics
+
+#### Scenario: An error does not discard work
+- **WHEN** any recoverable error occurs
+- **THEN** the open document and its undo history are preserved
+
+### Requirement: The chrome can be cleared away
+The application SHALL offer a mode that hides the tool rail, the tool options
+bar, the representation bar, both inspector regions, the brush shelf and the
+status area, leaving the sculpt. It SHALL be reachable by a keyboard shortcut
+and from a menu.
+
+The menu bar SHALL remain on screen, so that the mode can be left without
+knowing the shortcut.
+
+While the chrome is hidden, the application SHALL show the active brush, the
+representation a stroke would land on, and the brush's primary numbers, so that
+sculpting does not become blind.
+
+The mode SHALL be a presentation override: it SHALL NOT change which regions
+the user had put away or how wide they are, and leaving it SHALL restore exactly
+what was on screen before. It SHALL NOT persist across sessions.
+
+#### Scenario: The chrome goes and the sculpt stays
+- **WHEN** the user clears the chrome away
+- **THEN** the inspectors, the shelf, the rail, the options bar and the status area are not drawn, and the menu bar is
+
+#### Scenario: The brush is still readable
+- **WHEN** the chrome is hidden
+- **THEN** the active brush, its representation, and its size, intensity and flow are shown over the viewport
+
+#### Scenario: The arrangement is untouched
+- **WHEN** the user has put a region away, clears the chrome, and brings it back
+- **THEN** that region is still put away and the others are as they were
+
+#### Scenario: It does not survive a restart
+- **WHEN** the chrome is hidden and the application is restarted
+- **THEN** the interface opens with its chrome
+
+### Requirement: A preference the user set is remembered
+Where the application offers a choice that belongs to the person rather than to
+the document — the arrangement of the regions, a shortlist of brushes, how much
+an idle frame is worth spending on — that choice SHALL be stored between
+sessions, beside the recent documents and the chosen language.
+
+A stored preference SHALL be written under a name that does not change with the
+interface's language or with presentation order. An entry this build does not
+recognise SHALL be dropped rather than failing the file, and an unrecognised
+value SHALL NOT become a preference the user never set.
+
+#### Scenario: A shortlist survives a restart
+- **WHEN** the user stars brushes and restarts the application
+- **THEN** the same brushes are starred
+
+#### Scenario: An unknown entry costs its own line
+- **WHEN** a stored shortlist names something this build does not recognise
+- **THEN** that entry is dropped and the rest are read
+
+#### Scenario: An unrecognised value is not adopted
+- **WHEN** a stored preference holds a value this build does not recognise
+- **THEN** the application uses its own default rather than treating it as a choice
+
+### Requirement: The person at the window controls the door
+The interface SHALL offer, from the menu bar, the means to stop the server, to
+start it again, and to see the address and secret a client would need.
+
+The choice SHALL be remembered in the session store: a server stopped by hand
+SHALL stay stopped when the application is opened again, and one started by
+hand SHALL start with it.
+
+Where a gated operation asks for the person's consent, the request SHALL be
+presented in the interface saying what is being asked for, by which client, and
+on which path where a path is involved, and SHALL be refusable. Consent SHALL
+be for the operation asked for, and SHALL NOT stand for later ones unless the
+person records an opt-in for that kind of operation.
+
+#### Scenario: The server is stopped from the menu
+- **WHEN** the person stops the server from the menu bar
+- **THEN** it stops listening, existing connections are closed, and the choice
+  survives reopening the application
+
+#### Scenario: The person can find the address
+- **WHEN** the person asks how to connect a client
+- **THEN** the interface shows the address and the secret a client would need
+
+#### Scenario: Consent names what is being asked
+- **WHEN** an agent asks for an operation that would write over a file
+- **THEN** the request presented names the operation and the path, and can be
+  refused
+
+#### Scenario: Consent does not generalise
+- **WHEN** the person agrees to one export and the agent asks for a second
+- **THEN** the second is asked for again, unless an opt-in for exports has been
+  recorded
+

@@ -25,28 +25,11 @@ is asked, and not after it.
 - **THEN** nothing beyond the press's own dab has been sent, because that verb
   does not replay and every segment would cost a re-mesh
 
-## ADDED Requirements
-
-### Requirement: Every Move drag is its own gesture
-Each gesture SHALL be given a name no other gesture in the process has used, and
-both Move doors — the live transaction and the held drag — SHALL send that name
-with every grab they write.
-
-The engine folds a grab into the one leading an item's chain when both belong to
-the drag in progress, and the fold replaces the earlier grab. Unnamed, it decides
-by centre and radius compared bit for bit, which cannot tell a drag continuing
-from a second drag pressed at the same point at the same size.
-
-The live transaction cannot carry the name on ClayCore v0.113.0, whose
-`clay_sdf_move_begin` does not read `gesture_id`; the scenario below holds the
-held drag until a pin carries that fix.
-
-#### Scenario: A second drag from the same press
-- **WHEN** a held Move drag is made, released, and a second is made from the
-  same press point at the same brush size
-- **THEN** the item carries one grab more than after the first drag, and the
-  surface has moved further than the first drag left it
-
-#### Scenario: One drag sent in segments
-- **WHEN** a Move drag is sent to the model in several segments
-- **THEN** the item carries one grab for the whole drag
+<!-- "Every Move drag is its own gesture" stood here. It asked for a name on
+     every grab both Move doors write, and held its second scenario to the held
+     drag because ClayCore v0.113.0's `clay_sdf_move_begin` did not read
+     `gesture_id`. v0.116.0 carries that fix, so the rule is now part of "A drag
+     costs the field the gesture, not the segments" in the living
+     `sculpting-tools` spec, covering both doors. Keeping a second copy here
+     would leave two texts for one rule, with nothing to say which the
+     application obeys. -->

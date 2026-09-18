@@ -659,3 +659,8 @@ jobs:
       # whose intent has been lost.
       - name: Validate the change and the specs
         run: openspec validate --all --strict
+      # `openspec validate` reads one spec or one change at a time, so it cannot
+      # see one requirement written down in two capabilities with two different
+      # texts. That is what #197 cost an audit, and this is the check for it.
+      - name: Check the living specification says each thing once
+        run: python3 tools/check_specs.py

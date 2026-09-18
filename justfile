@@ -135,8 +135,14 @@ layering:
     python3 tools/check_layering.py
 
 # The specification and the code have to describe the same application.
+#
+# Two gates, because they catch different things. `openspec validate` reads one
+# spec or one change at a time and cannot see a requirement written down twice;
+# `check_specs.py` reads the living specification whole and fails where two
+# capabilities state the same rule in two different ways.
 spec:
     openspec validate --all --strict
+    python3 tools/check_specs.py
 
 # Licence policy and advisories.
 deny:
