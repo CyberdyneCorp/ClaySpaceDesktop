@@ -185,6 +185,32 @@ fn the_shared_document_keeps_the_alpha_it_is_given() {
     );
 }
 
+/// The frequency a smooth acts on reaches the document.
+///
+/// `smooth_mode` and `set_smooth_mode` are provided, and the shared document
+/// did not forward either — so the options bar chose a frequency, the
+/// ViewModel handed it over, the default discarded it, and every smooth on a
+/// hierarchy went on acting at the default frequency while the bar reported
+/// the choice back from the default too.
+#[test]
+fn the_shared_document_keeps_the_smooth_mode_it_is_given() {
+    use clayspace_model::{SculptModel, SmoothFrequency};
+
+    let mut shared = shared();
+    assert_eq!(
+        SculptModel::smooth_mode(&shared),
+        SmoothFrequency::default()
+    );
+
+    SculptModel::set_smooth_mode(&mut shared, SmoothFrequency::DetailOnly);
+    assert_eq!(
+        SculptModel::smooth_mode(&shared),
+        SmoothFrequency::DetailOnly,
+        "the chosen frequency did not reach the document, so a smooth would \
+         act on whichever one the default names"
+    );
+}
+
 /// Every *provided* method of every model trait the shared document
 /// implements is overridden by it.
 ///
