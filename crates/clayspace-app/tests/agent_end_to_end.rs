@@ -1003,3 +1003,57 @@ fn the_same_refusal_twice_is_two_errors() {
         );
     }
 }
+
+/// A boolean the engine will not run comes back as an error.
+///
+/// `BooleanViewModel` has written its refusal onto a notice channel since it
+/// was written, and the door read five channels that did not include it — so a
+/// `boolean run` with no pair chosen, or over a hierarchy the panel is happy to
+/// accept and the engine is not, answered
+/// `{"label":"run boolean","touched_document":true}` with `isError: false`.
+/// Measured on the running application: seventy-three seconds, no layer, and no
+/// sentence on any surface.
+#[test]
+fn a_refused_boolean_run_is_an_error() {
+    let Some(running) = start() else {
+        return;
+    };
+    let session = initialize(&running);
+
+    // Nothing chosen, which is the cheapest refusal the engine gives: a boolean
+    // is a pair, and there is no pair.
+    let refusal = refused(&running, &session, "boolean", json!({ "action": "run" }));
+    let said = refusal["content"][0]["text"].as_str().unwrap_or_default();
+    assert!(
+        !said.is_empty(),
+        "the boolean was refused without saying why: {refusal}"
+    );
+}
+
+/// And so does a cage the layer will not take.
+///
+/// The same silence on the deformation side: a grid layer has no lattice route
+/// at all, `begin_lattice` says so in the sculptor's own terms, and the
+/// sentence went onto a channel nobody read — so the cage button did nothing,
+/// said nothing, and the door reported that a cage had been raised.
+#[test]
+fn a_refused_cage_command_is_an_error() {
+    let Some(running) = start() else {
+        return;
+    };
+    let session = initialize(&running);
+
+    call(
+        &running,
+        &session,
+        "layer",
+        json!({ "action": "add", "representation": "grid" }),
+    );
+
+    let refusal = refused(&running, &session, "lattice", json!({ "action": "toggle" }));
+    let said = refusal["content"][0]["text"].as_str().unwrap_or_default();
+    assert!(
+        !said.is_empty(),
+        "the cage was refused without saying why: {refusal}"
+    );
+}

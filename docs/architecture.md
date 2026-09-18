@@ -573,9 +573,20 @@ The composition root runs a few operations itself rather than dispatching them
 each carries an answer back rather than a `Result<(), _>`, and those had no
 channel: their refusals went to `eprintln!`, which the options bar cannot draw
 and the door cannot count, so a repair that changed nothing was reported to an
-agent as work that had happened. They share one channel now, and the list of
-channels the door compares is a function with a test on it rather than a list
-inside a method.
+agent as work that had happened. They share one channel now.
+
+The list itself was the other half of the same defect. It was written out twice
+— once to sample each channel's count before the command, once to read each
+channel's words after — and it named five channels out of fifteen. The cage,
+the curve, the boolean, the rig, the cut, the reference and the four jobbed
+panels each wrote a refusal onto a channel nobody read, so a boolean over a
+hierarchy answered success and produced no layer, and a scale the brick cache
+refused answered success and left the readout showing a size that does not
+exist. The list is written once now, in `App::refusal_channels`, and
+`tests/notice_channels.rs` reads the composition root's own `struct App` for
+the ViewModels it holds and fails naming any notice channel the list does not
+read — so the next panel that can refuse is registered or the build is red,
+rather than being found by hand the way the last four were.
 
 Work that outlasts a frame goes to a job runner that never blocks the interface
 thread and discards a result whose generation is behind the current one. A

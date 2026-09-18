@@ -36,7 +36,8 @@ use clayspace_view::{
 use clayspace_vm::{
     AgentAnswer, AgentAsk, AgentViewModel, ArmatureViewModel, Axis, BooleanViewModel, Command,
     CommandQueue, CurveViewModel, DocumentViewModel, Door, Grab, Guard, LatticeViewModel,
-    MaskViewModel, ObjectViewModel, ReferenceViewModel, SceneViewModel, SculptViewModel, UNTITLED,
+    MaskViewModel, ObjectViewModel, Observable, ReferenceViewModel, SceneViewModel,
+    SculptViewModel, UNTITLED,
 };
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -922,6 +923,54 @@ impl App {
         outstanding
     }
 
+    /// Every channel a refusal arrives on, in the order the answer belongs to
+    /// the command.
+    ///
+    /// The list, and not two lists. The door reads each channel's *count*
+    /// before a command and its *words* after, and those were two hand-written
+    /// arrays that had to agree position by position — a channel added to one
+    /// and forgotten in the other would have read one ViewModel's count
+    /// against another's sentence. Written once here, they agree by
+    /// construction, and a channel added without widening
+    /// [`NOTICE_REFUSAL_CHANNELS`] is a compile error rather than a silence.
+    ///
+    /// The first channel written wins, so the order is how direct an answer
+    /// the channel gives: an operation the composition root ran itself is the
+    /// most direct there is, and a panel's own notice the least.
+    ///
+    /// Everything from the cage down was missing altogether, and each was a
+    /// panel writing a refusal nobody read: a boolean over a hierarchy came
+    /// back as a success that produced no layer, a scale the brick cache
+    /// refused came back as a scale that happened, and a refused cage apply
+    /// discarded the drags without a word on any surface. Their order among
+    /// themselves is not something a caller can observe — a command reaches
+    /// one panel, so no two of them answer the same command.
+    fn refusal_channels(&self) -> [&Observable<Option<String>>; NOTICE_REFUSAL_CHANNELS] {
+        [
+            &self.operation_refusal,
+            self.scene.refusal(),
+            self.objects.notice(),
+            self.mask.notice(),
+            self.document_vm.notice(),
+            self.lattice.notice(),
+            self.curve.notice(),
+            self.boolean.notice(),
+            self.armature.notice(),
+            self.cut.notice(),
+            self.references.notice(),
+            self.retopo.notice(),
+            self.uv.notice(),
+            self.conform.notice(),
+            self.bake.notice(),
+        ]
+    }
+
+    /// Every channel a remark arrives on — something that *did* happen, said
+    /// beside the answer rather than in place of it.
+    fn remark_channels(&self) -> [&Observable<Option<String>>; NOTICE_REMARK_CHANNELS] {
+        [self.sculpt.tool_status(), self.mask.remark()]
+    }
+
     /// How many times each channel a refusal or a notice arrives on has been
     /// written to.
     ///
@@ -936,34 +985,32 @@ impl App {
     /// one nothing was said about, which this reported to the agent as
     /// success.
     fn notice_occurrences(&self) -> [u64; NOTICE_CHANNELS] {
-        [
-            self.operation_refusal.occurrences(),
-            self.scene.refusal().occurrences(),
-            self.objects.notice().occurrences(),
-            self.mask.notice().occurrences(),
-            self.document_vm.notice().occurrences(),
-            self.sculpt.tool_status().occurrences(),
-            self.mask.remark().occurrences(),
-        ]
+        let mut occurrences = [0; NOTICE_CHANNELS];
+        let channels = self
+            .refusal_channels()
+            .into_iter()
+            .chain(self.remark_channels());
+        for (slot, channel) in occurrences.iter_mut().zip(channels) {
+            *slot = channel.occurrences();
+        }
+        occurrences
     }
 
-    /// What the interface would have shown, of the five channels that carry a
-    /// refusal and the two that carry a remark.
+    /// What the interface would have shown, of the channels that carry a
+    /// refusal and the ones that carry a remark.
     fn notices_since(&self, before: [u64; NOTICE_CHANNELS]) -> (Option<String>, Vec<String>) {
         let now = self.notice_occurrences();
         let written = |channel: usize| now[channel] != before[channel];
+        let refusals = self.refusal_channels();
+        let remarks = self.remark_channels();
         notices_written(
-            [
-                (written(0), self.operation_refusal.get().as_deref()),
-                (written(1), self.scene.refusal().get().as_deref()),
-                (written(2), self.objects.notice().get().as_deref()),
-                (written(3), self.mask.notice().get().as_deref()),
-                (written(4), self.document_vm.notice().get().as_deref()),
-            ],
-            [
-                (written(5), self.sculpt.tool_status().get().as_deref()),
-                (written(6), self.mask.remark().get().as_deref()),
-            ],
+            std::array::from_fn(|channel| (written(channel), refusals[channel].get().as_deref())),
+            std::array::from_fn(|remark| {
+                (
+                    written(NOTICE_REFUSAL_CHANNELS + remark),
+                    remarks[remark].get().as_deref(),
+                )
+            }),
         )
     }
 
@@ -1686,9 +1733,11 @@ impl App {
         self.scene.refresh();
         self.armature.refresh();
         self.document_vm.touched();
-        if let Some(notice) = self.armature.notice().get() {
-            eprintln!("{notice}");
-        }
+        // The rig's own refusal used to be printed here and nowhere else,
+        // which is the same as nowhere: the options bar draws it now, and the
+        // door compares the channel either side of the command. Printing it as
+        // well would only put a sentence in a terminal nobody has open beside
+        // the one the sculptor is reading.
         self.request_redraw();
     }
 
@@ -4827,6 +4876,9 @@ impl App {
                 reference: self.references.notice().get().as_deref(),
                 mask: self.mask.notice().get().as_deref(),
                 object: self.objects.notice().get().as_deref(),
+                lattice: self.lattice.notice().get().as_deref(),
+                curve: self.curve.notice().get().as_deref(),
+                armature: self.armature.notice().get().as_deref(),
                 scene: self.scene.refusal().get().as_deref(),
                 sculpt: self.sculpt.tool_status().get().as_deref(),
             }),
@@ -5731,10 +5783,10 @@ impl ApplicationHandler<AgentWake> for App {
 /// Every source that can explain "why that did not happen", in the order the
 /// options bar prefers them.
 ///
-/// Named rather than positional because the order *is* the behaviour: four of
-/// these six were Observables that nothing read, and each was found the same
-/// way — an action refused, a sentence written, and no sentence on screen. A
-/// tuple of six `Option<&str>` would let a reorder pass review unnoticed.
+/// Named rather than positional because the order *is* the behaviour: most of
+/// these were Observables that nothing read, and each was found the same way —
+/// an action refused, a sentence written, and no sentence on screen. A tuple
+/// of `Option<&str>` would let a reorder pass review unnoticed.
 struct ToolStatusSources<'a> {
     /// A save or an open that failed. First because it is the most recent
     /// explicit action there is, and the one whose silence costs work rather
@@ -5755,6 +5807,16 @@ struct ToolStatusSources<'a> {
     mask: Option<&'a str>,
     /// A re-shape, a re-combine, a removal or a refused transform.
     object: Option<&'a str>,
+    /// A cage refused, dragged past what the layer will take, or applied onto
+    /// a form that cannot be warped. The cage had no line of its own at all,
+    /// so a refused apply threw away every drag the sculptor had made and the
+    /// screen said nothing had happened.
+    lattice: Option<&'a str>,
+    /// A curve edit the model would not make.
+    curve: Option<&'a str>,
+    /// A ZSphere verb refused. It went to stderr from the composition root,
+    /// which is the same as nowhere.
+    armature: Option<&'a str>,
     /// A rebuild refused for an unusable resolution, and now a level refused
     /// for its peak. `run_remesh` has claimed this reaches the screen since it
     /// was written and it did not.
@@ -5773,12 +5835,20 @@ fn tool_status<'a>(from: ToolStatusSources<'a>) -> Option<&'a str> {
         .or(from.reference)
         .or(from.mask)
         .or(from.object)
+        .or(from.lattice)
+        .or(from.curve)
+        .or(from.armature)
         .or(from.scene)
         .or(from.sculpt)
 }
 
 /// How many channels carry a refusal — a reason the command did not happen.
-const NOTICE_REFUSAL_CHANNELS: usize = 5;
+///
+/// One per ViewModel that can refuse, plus the composition root's own.
+/// [`App::refusal_channels`] is the list this counts, and the two have to
+/// agree or that array does not build — which is the only thing standing
+/// between a new panel and a refusal nobody reads.
+const NOTICE_REFUSAL_CHANNELS: usize = 15;
 
 /// How many channels carry a remark — something that did happen, said beside
 /// the answer rather than in place of it.
@@ -6601,9 +6671,23 @@ mod tests {
             reference: None,
             mask: None,
             object: None,
+            lattice: None,
+            curve: None,
+            armature: None,
             scene: None,
             sculpt: None,
         }
+    }
+
+    /// A refusal on one channel, with every other channel silent.
+    ///
+    /// Built from the width the door actually reads rather than written out,
+    /// so a channel added to `App::refusal_channels` does not turn a test of
+    /// the rule into a test of an old channel count.
+    fn only(channel: usize, said: &str) -> [(bool, Option<&str>); NOTICE_REFUSAL_CHANNELS] {
+        let mut refusals = [(false, None); NOTICE_REFUSAL_CHANNELS];
+        refusals[channel] = (true, Some(said));
+        refusals
     }
 
     /// A save that failed reaches the options bar.
@@ -6659,6 +6743,9 @@ mod tests {
                 reference: Some("reference"),
                 mask: Some("mask"),
                 object: Some("object"),
+                lattice: Some("lattice"),
+                curve: Some("curve"),
+                armature: Some("armature"),
                 scene: Some("scene"),
                 sculpt: Some("standing"),
             }),
@@ -6699,6 +6786,39 @@ mod tests {
         );
     }
 
+    /// And so does a refused cage, which had no line at all.
+    ///
+    /// `LatticeViewModel::notice` has carried a refusal since it was written
+    /// and the options bar never read it, so a cage refused on a layer that
+    /// will not take one, a control point dragged past what the field allows
+    /// and an apply the engine would not make were each a button that did
+    /// nothing and said nothing. Dropping `lattice` from `tool_status` fails
+    /// here.
+    #[test]
+    fn a_refused_cage_reaches_the_options_bar() {
+        assert_eq!(
+            tool_status(ToolStatusSources {
+                lattice: Some("esta camada não aceita uma gaiola"),
+                ..quiet()
+            }),
+            Some("esta camada não aceita uma gaiola")
+        );
+        assert_eq!(
+            tool_status(ToolStatusSources {
+                curve: Some("a curva não aceita outro ponto"),
+                ..quiet()
+            }),
+            Some("a curva não aceita outro ponto")
+        );
+        assert_eq!(
+            tool_status(ToolStatusSources {
+                armature: Some("não há esfera 7 neste esqueleto"),
+                ..quiet()
+            }),
+            Some("não há esfera 7 neste esqueleto")
+        );
+    }
+
     /// And it reaches the agent door, which reads no other surface.
     ///
     /// The door decides a command was refused by comparing the notice channels
@@ -6710,16 +6830,33 @@ mod tests {
     #[test]
     fn a_refused_operation_reaches_the_agent_door() {
         let (refused, notices) = notices_written(
-            [
-                (true, Some("a operação foi recusada")),
-                (false, None),
-                (false, None),
-                (false, None),
-                (false, None),
-            ],
+            only(0, "a operação foi recusada"),
             [(false, None); NOTICE_REMARK_CHANNELS],
         );
         assert_eq!(refused.as_deref(), Some("a operação foi recusada"));
+        assert!(notices.is_empty());
+    }
+
+    /// And so does the last one, which is what the panels were added as.
+    ///
+    /// A cage, a curve, a boolean and a rig each wrote their refusal onto a
+    /// channel the door did not read, so the answer was success-shaped: a
+    /// boolean over a hierarchy produced no layer and said nothing, and a
+    /// refused cage apply threw the drags away in silence. The rule is that
+    /// *every* channel in the list is read, not the first few.
+    #[test]
+    fn a_refusal_on_the_last_channel_is_still_the_command_s_answer() {
+        let (refused, notices) = notices_written(
+            only(
+                NOTICE_REFUSAL_CHANNELS - 1,
+                "uma hierarquia não pode ser operando",
+            ),
+            [(false, None); NOTICE_REMARK_CHANNELS],
+        );
+        assert_eq!(
+            refused.as_deref(),
+            Some("uma hierarquia não pode ser operando")
+        );
         assert!(notices.is_empty());
     }
 
@@ -6730,16 +6867,10 @@ mod tests {
     /// written between the two readings — not that it holds words.
     #[test]
     fn a_sentence_left_over_from_the_last_command_is_not_this_one_s() {
-        let (refused, notices) = notices_written(
-            [
-                (false, Some("a operação foi recusada")),
-                (false, Some("essa camada é uma grade")),
-                (false, None),
-                (false, None),
-                (false, None),
-            ],
-            [(false, None); NOTICE_REMARK_CHANNELS],
-        );
+        let mut refusals = [(false, None); NOTICE_REFUSAL_CHANNELS];
+        refusals[0] = (false, Some("a operação foi recusada"));
+        refusals[1] = (false, Some("essa camada é uma grade"));
+        let (refused, notices) = notices_written(refusals, [(false, None); NOTICE_REMARK_CHANNELS]);
         assert_eq!(refused, None);
         assert!(notices.is_empty());
     }
