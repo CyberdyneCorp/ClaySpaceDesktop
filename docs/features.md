@@ -658,34 +658,6 @@ engine's own document — `clay_document_add_mask` attaches it and
 `clay_document_save` writes it — so painting one, saving, closing and opening
 again finds the same region frozen and still gating.
 
-**And it now protects against the *operation*, not only against the brush.**
-Those are two different things, and until the ClayCore 0.73.0 pin only the
-first worked. A mask gates *authoring*: a stroke consumes it as it becomes
-items, so a brush does not deposit where you painted. It said nothing about
-what those items then do — so a **subtracting** stroke crossing a masked ear
-took the ear anyway, which is precisely the case a sculptor paints a mask for.
-Measured through the application now: an unmasked subtracting stroke takes the
-centre of the starting form from 1.0 to **0.825**, and a masked one leaves it
-at **1.0**.
-
-The entry point that does this, `clay_item_set_gate`, had been in this
-codebase's engine wrapper doing nothing since v0.39.0 — accepted, and inert at
-every width and threshold tried. The cause was never the tuning: the gate was
-placed by the transform of *the item it protects*, while the mask it measures
-is stored in world units, so a cut with a placement carried its protection away
-from where the mask was painted. Fixed upstream as
-[#394](https://github.com/CyberdyneCorp/ClayCore/issues/394), and the header
-now states the rule the fix rests on — the gate is in world space and does not
-travel with the item, so it can be set once on a stroke's template and be right
-for every mark the stroke makes.
-
-The protection **fades** rather than stopping at a step, across four cells of
-the brick cache. That is not a softness setting: the engine measures the mask
-into a distance and derives the falloff from that width, because a step in the
-field has no finite bound and nothing could march it.
-`mask_persistence.rs` is the round trip, and `claycore_mask_persistence.rs` is
-the boundary measurement underneath it.
-
 It did not, and the reason was never the engine. `Document::mask` handed back a
 mask borrowing the document — it had to, since the handle may not outlive it —
 while every masked verb in the wrapper wanted that handle *and* the document
@@ -713,6 +685,34 @@ keys on whether anything is frozen rather than on whether a mask exists, and
 on. And a mask edit records on the engine's history, so **one mask gesture is
 one undo**; before, an undo after a mask stroke spent itself on whatever came
 before it.
+
+**And it now protects against the *operation*, not only against the brush.**
+Those are two different things, and until the ClayCore 0.73.0 pin only the
+first worked. A mask gates *authoring*: a stroke consumes it as it becomes
+items, so a brush does not deposit where you painted. It said nothing about
+what those items then do — so a **subtracting** stroke crossing a masked ear
+took the ear anyway, which is precisely the case a sculptor paints a mask for.
+Measured through the application now: an unmasked subtracting stroke takes the
+centre of the starting form from 1.0 to **0.825**, and a masked one leaves it
+at **1.0**.
+
+The entry point that does this, `clay_item_set_gate`, had been in this
+codebase's engine wrapper doing nothing since v0.39.0 — accepted, and inert at
+every width and threshold tried. The cause was never the tuning: the gate was
+placed by the transform of *the item it protects*, while the mask it measures
+is stored in world units, so a cut with a placement carried its protection away
+from where the mask was painted. Fixed upstream as
+[#394](https://github.com/CyberdyneCorp/ClayCore/issues/394), and the header
+now states the rule the fix rests on — the gate is in world space and does not
+travel with the item, so it can be set once on a stroke's template and be right
+for every mark the stroke makes.
+
+The protection **fades** rather than stopping at a step, across four cells of
+the brick cache. That is not a softness setting: the engine measures the mask
+into a distance and derives the falloff from that width, because a step in the
+field has no finite bound and nothing could march it.
+`mask_persistence.rs` is the round trip, and `claycore_mask_persistence.rs` is
+the boundary measurement underneath it.
 
 ### Freezing a region by drawing round it
 
@@ -1421,9 +1421,14 @@ until something needs the model to be solid — a print, a boolean, a
 fabrication — so the panel reports what is wrong *before* offering to change
 anything, and offers *Preencher vazios* only when there is something to fill.
 
-**Regional refinement** adds a level over a region rather than everywhere,
-which is the point of the level stack: block out coarse, then pay for detail
-only where the detail goes.
+**Regional refinement is bound and not routed.** `clay_voxel_add_level_region`
+adds a level over a region rather than everywhere, which is the point of the
+level stack: block out coarse, then pay for detail only where the detail goes.
+`LayerOperation::RefineRegion` carries it through the model and the document,
+and the only caller outside the tests is a benchmark — there is no control in
+the interface and no tool on the agent door, so a sculptor cannot reach it. It
+is listed here because the binding is real and the gap is the route, not because
+the operation is available.
 
 **A grid is drawn, framed and picked by its own routes**, not by the ones the
 field uses. The engine is explicit that a voxel layer carries no SDF content,
@@ -1431,18 +1436,22 @@ and three parts of the application had assumed otherwise:
 
 - The viewport builds its surface from the brick cache, which holds the
   document's field. A grid is not in it, so a sculpted voxel layer meshed to
-  nothing and rendered as bare ground. It travels the mesh-layer path instead,
-  as the **boxes it is** — greedy quads, meshed a chunk at a time.
+  nothing and rendered as bare ground. It travels the mesh-layer path instead —
+  either as the **boxes it is**, greedy quads meshed a chunk at a time, or as a
+  rounded surface. Which of the two is a display choice with **Suave as the
+  default**; see *Boxes or a surface* below for the control, the measurements
+  and the two engine facts that shape how it is wired.
 
-  The rounded form was the first choice and it does not survive measurement.
-  `clay_voxel_mesh_smooth` carries **no vertex normals**, so it draws as a flat
-  white silhouette with no form to read; and it is whole-grid with no chunked
-  variant, so an edit costs the model. On a 0.01 grid a 3.2 ms dab cost
-  **309 ms** to re-mesh, against a 50 ms budget and rising with the sculpt.
-  Draining the engine's own dirty-chunk set and meshing only those keys costs
-  **3.3 ms** and does not rise — a 24-chunk sculpt re-meshes 7 chunks for a
-  dab. The rounded surface is a **conversion away**: cross the grid to SDF,
-  which is what that direction is for and where the `Suavização` control lives.
+  The boxes were the first and only choice for a while, and the reason was
+  measurement rather than taste. `clay_voxel_mesh_smooth` carries **no vertex
+  normals**, so it drew as a flat white silhouette with no form to read; and it
+  is whole-grid with no chunked variant, so an edit cost the model. On a 0.01
+  grid a 3.2 ms dab cost **309 ms** to re-mesh, against a 50 ms budget and
+  rising with the sculpt, where draining the engine's own dirty-chunk set and
+  meshing only those keys costs **3.3 ms** and does not rise. Computing the
+  normals area-weighted on the way through answered the first, and the smooth
+  mesh being re-meshed whole rather than per chunk is the price the default
+  pays — stated in *Boxes or a surface*, not hidden.
 - The polygon counters count what is on screen. They were fed by the brick
   cache alone, so a document whose only layer was a sculpted grid drew
   triangles and reported none of them — "Triângulos 0" over a visible sculpt.
@@ -1915,6 +1924,17 @@ layer *behind* the ghost is the one that becomes active. A **locked** layer is
 still pickable, so it activates and then refuses the dab with its reason —
 locked is not hidden and not ghosted, and the three say different things.
 
+**Neither state can be set yet, and neither can the stack's order.** The engine
+carries all three states, `SceneModel` writes them, and `SceneViewModel` has
+`set_protection` and `reorder` — but no `Command` dispatches either, so the
+layer row's ghost and lock badges are drawn on the rows that already carry one
+and do nothing when pressed, and a layer row cannot be dragged to a new position
+the way a hierarchy's pass row can. Everything above describes what a protected
+layer *does*; what is missing is the last hop from a click to the ViewModel, and
+the agent door is missing it for the same reason, since every tool dispatches
+the command path the interface dispatches. `route-layer-reorder-and-protection`
+is the change that closes it.
+
 There is one active layer and not two. Clicking a row in the layer stack and
 clicking geometry in the viewport reach the same command, so the selected
 subtool and the sculpted one cannot come to disagree; the scene tree and the
@@ -1961,20 +1981,21 @@ mesh, or a curve's control points. All the rules are the cage's: it sits on the
 middle of what it acts on, an axis handle constrains the drag, a wandering hand
 lands where it settles, and a scale never passes through zero.
 
-**Scale is uniform, and the widget says so.** Every transform in the engine's
-interface takes one scale factor and not three, so scale mode offers the centre
-alone on an object, a layer or a mesh — there are no axis boxes, because three
-handles for one number is either two that do nothing or three that lie. A cage
-keeps all three: it scales its own control points and carries no engine
-transform. Use the cage when you mean to stretch along one axis.
+**Scale is per axis, and the widget says so.** A box on an axis stretches that
+axis; the centre handle takes all three together. The same three boxes are
+offered on a placed object, a whole layer, an imported mesh and a cage, because
+since ClayCore 0.74.0 the layer transform carries three factors as the node
+transform already did — see *A placed object stretches per axis, and so does a
+whole subtool* below for what a stretch costs and what it refuses. The widget is
+one widget wherever it stands rather than two chosen by what it is pointed at.
 
 A whole drag is **one undo step**, however many frames it took.
 
 ### The manipulator on a whole subtool
 
 At the head of the options bar, **Transformar** puts the same widget on the
-whole active layer: it moves, turns and uniformly scales everything the layer
-holds as one engine transform, and the drag is one undo step. Pressing the lit
+whole active layer: it moves, turns and stretches everything the layer holds as
+one engine transform, and the drag is one undo step. Pressing the lit
 chip puts the manipulator away. It stood under the layer stack as three chips
 first and is one chip at the top of the window now, where a mode a sculptor has
 entered can be seen without looking for it.
@@ -2095,12 +2116,15 @@ The refill takes the union of the layer's bounds before and after now, the way
 a moved object's already did. `visual_subtools` moves a subtool on the
 viewport's incremental path and holds the picture to what a rebuild draws.
 
-**Scale is uniform until the engine can carry three factors.** ZBrush's gizmo
-scales per axis; here the axis boxes are absent in scale mode because
-`clay_layer_set_transform` and the node transform take one `scale`, and an axis
-handle would measure a stretch the engine cannot apply. Filed as ClayCore
-[#373](https://github.com/CyberdyneCorp/ClayCore/issues/373); the handles come
-back when it lands.
+**A whole subtool stretches per axis, as ZBrush's gizmo does.** The axis boxes
+were absent in scale mode for as long as `clay_layer_set_transform` took one
+`scale`, and an axis handle would have measured a stretch the engine could not
+apply. ClayCore
+[#373](https://github.com/CyberdyneCorp/ClayCore/issues/373) landed in 0.74.0
+and the handles came back — the layer transform now takes three factors, as the
+node transform has since 0.54.0. *A placed object stretches per axis, and so
+does a whole subtool* is the whole of it, including the two things a stretched
+subtool costs.
 
 **A centre scale is metered from one arm's length.** A scale is a ratio of
 distances from the pivot, and a press on the centre handle starts a hair from

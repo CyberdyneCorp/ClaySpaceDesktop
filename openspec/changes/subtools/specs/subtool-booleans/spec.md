@@ -108,11 +108,28 @@ application SHALL say so rather than creating an empty subtool.
 - **WHEN** one of the two chosen subtools is ghosted
 - **THEN** the refusal names that subtool and why it cannot take part
 
-### Requirement: Every representation can be an operand
+### Requirement: Every representation that can be sampled where it stands is an operand
 A subtool SHALL be usable as an operand whatever it is made of — an SDF edit
 list, a voxel grid or an imported mesh — with the crossing each one needs
 performed as part of the operation rather than demanded of the sculptor
 beforehand.
+
+This is a *resolved* boolean and not a live one, which is why an imported mesh
+is an operand here while `scene-and-layers` says a mesh layer is not one. There,
+the operand would be an entry in another layer's edit list, evaluated with it;
+here each operand is sampled into a volume of its own and the result is a new
+subtool. The two rules describe different operations, and the reason they read
+as a contradiction is that neither said which it meant.
+
+A subdivision hierarchy SHALL be refused, with the level-to-mesh crossing named
+as the route. A hierarchy's layer holds the *cage*, so sampling the layer where
+it stands would sample the form as it was before anybody sculpted on it — a
+boolean against a subtool the sculptor can see, using geometry they cannot.
+
+#### Scenario: A subdivision hierarchy is refused with its route
+- **WHEN** a subdivision hierarchy subtool is named as an operand
+- **THEN** the boolean is refused, naming the hierarchy and saying that a level
+  must be converted to a mesh first
 
 #### Scenario: A mesh is cut by a primitive
 - **WHEN** an imported mesh subtool is subtracted from with a box subtool

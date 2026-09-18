@@ -44,6 +44,14 @@ The menu bar SHALL present File, Edit, View, Sculpt, Brushes, Masks, Window and 
 No menu the bar presents SHALL be empty. A menu with nothing under it is a
 promise the interface does not keep.
 
+#### Scenario: A menu item and a panel control agree
+- **WHEN** an operation is unavailable and is present both in a menu and as a panel control
+- **THEN** both are disabled, and for the same stated reason
+
+#### Scenario: Shortcuts are discoverable
+- **WHEN** a menu is opened
+- **THEN** each item with a shortcut displays it
+
 #### Scenario: The Window menu carries the regions
 - **WHEN** the user opens the Window menu
 - **THEN** each resizable region is offered, showing whether it is on screen, together with a reset

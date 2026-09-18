@@ -11,6 +11,12 @@ A form put into the scene to be worked on its own is a subtool; a form put
 into the layer being worked is a part of that form. Both are wanted, and
 guessing between them from context would be wrong half the time.
 
+The shapes SHALL be offered in a section of the right region rather than in a
+window over the viewport, because the viewport holds the surface the shape is
+placed onto; the section SHALL open from the tool rail's shapes button or its
+menu entry and SHALL close from a control on its own heading, each dispatching
+the same command.
+
 An unbounded primitive SHALL NOT be offered. The engine names two — a plane and
 an infinite cylinder — and neither has an extent to draw a manipulator around
 or bounds for the brick cache to work from, so offering one would be offering a
@@ -25,6 +31,10 @@ control whose result cannot be shown.
 - **WHEN** the user inserts a sphere as a subtool
 - **THEN** a new subtool holds the sphere, it is the active subtool, and
   sculpting lands on it rather than on the form that was active before
+
+#### Scenario: The picker stands beside the viewport
+- **WHEN** the shapes section is open
+- **THEN** it is drawn in the right region and the viewport is not covered by it
 
 #### Scenario: The list is what the engine can bound
 - **WHEN** the primitive list is presented

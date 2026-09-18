@@ -1,0 +1,254 @@
+## REMOVED Requirements
+
+### Requirement: A tool unavailable on the active layer is disabled with a reason
+Withdrawn rather than edited, and not replaced here. The rule it stated — every
+tool is shown for every layer, greyed with a reason where it does not apply — is
+reversed by this change: with three representations carrying substantially
+different vocabularies, a single list would be mostly disabled entries whatever
+the active layer, and the reason would read the same on all of them. Absence
+carries that better than a greyed row.
+
+What survives of it moves to `representation-modes`, which is where the
+representation-driven shelf now lives, and is split in two there: "The tool shelf
+offers the verbs the active representation has" says a tool without a verb is
+absent, and "A tool unavailable for a reason other than its representation says
+so" keeps the greyed-with-a-reason case for a protected layer, a hidden layer or
+a missing prerequisite. Leaving a third copy of the same rule in
+`sculpting-tools` is what made the two disagree in the first place.
+
+## ADDED Requirements
+
+### Requirement: The engine's combine operations and blend profiles are selectable
+The application SHALL let a sculptor choose the combine operation an SDF edit
+uses from those the engine provides, and the blend profile it is applied under.
+
+#### Scenario: An operation is chosen
+- **WHEN** the user chooses a combine operation before making an edit
+- **THEN** the edit is recorded with that operation
+
+#### Scenario: A blend profile is chosen
+- **WHEN** the user chooses a blend profile
+- **THEN** edits made under it use that profile
+
+### Requirement: Alphas modulate a stamp
+The application SHALL let a sculptor supply a scalar stamp pattern and apply it
+through a brush on the representations where the engine accepts one. The
+application SHALL state where an alpha is not available.
+
+#### Scenario: An alpha is stamped
+- **WHEN** the user applies a brush carrying an alpha
+- **THEN** the surface shows the pattern under the brush's falloff
+
+#### Scenario: An alpha where none is accepted
+- **WHEN** the active representation accepts no alpha
+- **THEN** the alpha control is unavailable and says so
+
+### Requirement: Deformers act on a layer as authoring operations
+The application SHALL offer the engine's deformers as operations on a layer,
+distinct from brushes, with the parameters each takes and without requiring a
+brush position.
+
+#### Scenario: A deformer is applied
+- **WHEN** the user applies a deformer to a layer with its parameters
+- **THEN** the layer's form changes accordingly and the operation is one undo
+  step
+
+### Requirement: A voxel grid can be repaired before baking
+The application SHALL offer the engine's pre-bake repair on a voxel layer:
+reporting what is wrong, closing holes, and filling voids. The report SHALL be
+shown before any repair is applied.
+
+#### Scenario: A report precedes a repair
+- **WHEN** the user opens repair on a voxel layer
+- **THEN** the count of holes and voids is stated before anything is changed
+
+#### Scenario: Holes are closed
+- **WHEN** the user closes holes on a pierced shell
+- **THEN** the report afterwards states fewer holes
+
+### Requirement: Masks gate operations, not only brushes
+The application SHALL apply a painted mask to any operation the engine can gate,
+including combine operations, and not only to brush strokes.
+
+#### Scenario: A mask protects against a boolean
+- **WHEN** a region is masked and a subtracting edit crosses it
+- **THEN** the masked region is not cut
+
+### Requirement: Held keys substitute the verb and the sign for one gesture
+The application SHALL let a sculptor smooth or take material away with the tool
+already in hand, by holding a key for the length of one stroke, without
+changing what the shelf has selected.
+
+The keys SHALL be read at the press and held for the whole gesture, so a key
+caught or released mid-drag does not change the verb under the sculptor's hand.
+
+Inverting SHALL mean what it means on the active representation: a field turns
+its combine operation over, a mesh negates its brush strength, and a grid
+erases rather than deposits. An operation with no opposite SHALL be left as it
+is rather than becoming a different verb.
+
+#### Scenario: Shift smooths whatever is selected
+- **WHEN** a stroke is begun with Shift held while a build-up tool is selected
+- **THEN** every segment of that stroke smooths
+- **AND** the next stroke, made without the key, builds up again
+
+#### Scenario: The invert key digs on every representation
+- **WHEN** the same stroke is made with the invert key held
+- **THEN** a field is cut where it would have been raised
+- **AND** a mesh vertex moves inward where it would have moved outward
+- **AND** a grid's cells are cleared where they would have been set
+
+### Requirement: A mask is painted and seen on every representation
+The application SHALL offer the mask tool on SDF, voxel and mesh layers alike,
+and painting one SHALL freeze a region rather than change the surface.
+
+The frozen region SHALL be drawn over the surface it protects, on both the
+brick-cache surface and the carried mesh and voxel layers.
+
+A single key SHALL start mask painting and put the previous tool back.
+
+#### Scenario: The mask tool freezes rather than deposits
+- **WHEN** the mask tool is stroked across a voxel layer
+- **THEN** a mask exists afterwards
+- **AND** no material was added to the grid
+
+#### Scenario: A painted mask is visible
+- **WHEN** a mask is painted on the surface
+- **THEN** the drawn surface is darker where the mask covers it
+- **AND** clearing the mask returns the surface to what it was
+
+#### Scenario: An edit beside a mask does not erase what is drawn
+- **WHEN** a stroke re-meshes bricks that carried mask shading
+- **THEN** the frozen region is still drawn afterwards
+
+### Requirement: The mask operations take an amount the interface can set
+The application SHALL let a sculptor set how far Expandir, Contrair and
+Suavizar máscara reach, and what an extrusion's thickness, rim rounding and rim
+smoothing are, and SHALL apply those amounts rather than fixed defaults.
+
+Each menu entry SHALL show the amount it would apply.
+
+#### Scenario: An expansion reaches as far as the panel says
+- **WHEN** the amount is set to four and Expandir is chosen
+- **THEN** the frozen region grows further than it would at one
+
+#### Scenario: An extrusion is as thick as the panel says
+- **WHEN** the thickness is set and the patch is extruded outward
+- **THEN** the wall stands that far off the surface
+
+#### Scenario: An operation with no amount is left alone
+- **WHEN** an amount is set and Inverter is chosen
+- **THEN** the operation carries no amount
+
+### Requirement: A deformation cage bends the whole form
+The application SHALL offer a lattice cage around the active layer, sized to
+what that layer contains, with control points drawn in the viewport and
+draggable directly.
+
+The cage SHALL be worked in rather than applied per drag: the form follows when
+the cage is applied, and the whole cage SHALL be one undo step however many
+control points were dragged.
+
+The cage SHALL be offered wherever the engine has a route for it, at the
+resolution that route accepts, and refused readably where it has none.
+
+#### Scenario: A cage wraps the form and bends it
+- **WHEN** a cage is put around a layer and its top control points are dragged up
+- **AND** the cage is applied
+- **THEN** the top of the form has moved by the same amount
+- **AND** one undo puts it back
+
+#### Scenario: An untouched cage changes nothing
+- **WHEN** a cage is put up and applied without dragging anything
+- **THEN** the form is unchanged and no history entry is recorded
+
+#### Scenario: A layer with no lattice route says so
+- **WHEN** a cage is asked for on a voxel layer
+- **THEN** it is refused with a reason naming the crossing that would work
+
+### Requirement: A manipulator transforms a selection of control points
+The application SHALL let a sculptor select more than one lattice control point
+and move, turn or scale the selection with one manipulator.
+
+The manipulator SHALL sit on the middle of the selection, and an axis handle
+SHALL constrain its drag to that axis.
+
+A drag SHALL be resolved from where it started rather than accumulated across
+frames, and a scale SHALL never pass through zero.
+
+#### Scenario: A whole face is moved at once
+- **WHEN** the four control points of a cage's face are selected
+- **AND** the manipulator's vertical axis is dragged up
+- **THEN** all four move up together and none moves sideways
+
+#### Scenario: A turn is about the selection's own middle
+- **WHEN** a selection is turned a quarter about an axis
+- **THEN** each point ends a quarter turn about the selection's middle
+- **AND** nothing moves along the axis turned about
+
+#### Scenario: A wandering drag lands where it ends
+- **WHEN** a drag passes through an intermediate point before settling
+- **THEN** the result is the same as a drag straight to where it settled
+
+### Requirement: A mesh cage shows the bend while it is dragged
+The application SHALL show what a lattice cage would do to a mesh layer while
+its control points are being dragged, without committing to it.
+
+The preview SHALL NOT compound across frames, SHALL leave the gesture one undo
+step, and SHALL be taken back when the cage is abandoned.
+
+#### Scenario: The form follows the cage
+- **WHEN** a control point is dragged
+- **THEN** the drawn surface has moved before anything is applied
+- **AND** nothing has been recorded in the history
+
+#### Scenario: A long drag lands where a short one does
+- **WHEN** a drag arrives over twenty frames rather than one
+- **THEN** the form ends in the same place
+
+#### Scenario: Abandoning a cage abandons its preview
+- **WHEN** a cage is dragged and then cancelled
+- **THEN** the form is exactly as it was
+
+### Requirement: Symmetry reaches every representation
+The application SHALL apply the enabled symmetry axes to strokes on mesh and
+voxel layers as well as on fields.
+
+Each enabled axis SHALL add a full-strength copy of the stroke reflected
+through that plane, and several axes SHALL give every combination of their
+reflections. A reflected stroke's direction SHALL be reflected with it.
+
+A symmetric stroke SHALL remain one undo step.
+
+#### Scenario: The other side comes out the same
+- **WHEN** a dab is made on a mesh layer with X symmetry on
+- **THEN** the form stands the same at the dab and at its mirror
+- **AND** the halves the other axes would reach are untouched
+
+#### Scenario: Two axes give four
+- **WHEN** a dab is made with X and Y symmetry on
+- **THEN** all four quadrants carry the same form
+
+#### Scenario: A mirrored drag is a reflection
+- **WHEN** a drag is made outward along an axis with symmetry on that axis
+- **THEN** the far side travels the opposite way by the same amount
+
+### Requirement: A curve places a tube that can be edited afterwards
+The application SHALL let a sculptor place a curve by putting control points
+down, move those points afterwards, and sweep a tube along it.
+
+Editing a control point SHALL replace the swept form rather than adding
+another, and abandoning the curve SHALL take its form with it.
+
+#### Scenario: A tube follows its control points
+- **WHEN** a control point of a placed curve is moved
+- **THEN** the tube follows it
+- **AND** the layer holds one swept form, not one per move
+
+#### Scenario: A curve needs two points to sweep along
+- **WHEN** a curve has one control point
+- **THEN** nothing is swept
+
+#### Scenario: Abandoning a curve leaves nothing behind
+- **WHEN** a curve is taken down without being applied
+- **THEN** the form is exactly as it was
