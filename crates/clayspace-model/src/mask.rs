@@ -181,6 +181,19 @@ impl MaskState {
 pub trait MaskModel {
     fn mask_state(&self) -> MaskState;
 
+    /// How many things the history holds, as the interface counts them.
+    ///
+    /// Read either side of an edit so the ViewModel can bank what that edit
+    /// actually cost. The count is not something this side may guess at: a
+    /// mask edit is one undo to a sculptor and one *or more* entries
+    /// underneath — an outline enclosing two pieces of the form is a group of
+    /// strokes, and an extrusion adds a layer beside the item it made.
+    ///
+    /// The same number [`crate::SculptModel::history`] reports, because it is
+    /// the same history: a sculptor has one Cmd+Z and does not care which part
+    /// of the application produced the thing they want back.
+    fn history_depth(&self) -> usize;
+
     /// Applies an operation to the mask itself.
     fn apply_mask_op(&mut self, op: MaskOp) -> Result<(), ModelError>;
 

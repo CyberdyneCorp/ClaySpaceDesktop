@@ -943,11 +943,12 @@ impl App {
             self.mask.notice().occurrences(),
             self.document_vm.notice().occurrences(),
             self.sculpt.tool_status().occurrences(),
+            self.mask.remark().occurrences(),
         ]
     }
 
     /// What the interface would have shown, of the five channels that carry a
-    /// refusal and the one that carries a remark.
+    /// refusal and the two that carry a remark.
     fn notices_since(&self, before: [u64; NOTICE_CHANNELS]) -> (Option<String>, Vec<String>) {
         let now = self.notice_occurrences();
         let written = |channel: usize| now[channel] != before[channel];
@@ -959,7 +960,10 @@ impl App {
                 (written(3), self.mask.notice().get().as_deref()),
                 (written(4), self.document_vm.notice().get().as_deref()),
             ],
-            (written(5), self.sculpt.tool_status().get().as_deref()),
+            [
+                (written(5), self.sculpt.tool_status().get().as_deref()),
+                (written(6), self.mask.remark().get().as_deref()),
+            ],
         )
     }
 
@@ -4363,6 +4367,14 @@ impl App {
             eprintln!("{e}");
         }
         self.mask.dispatch(command);
+        // The mask edits the document, and the history Cmd+Z reads belongs to
+        // the sculpting ViewModel: an edit banked nowhere left the next undo
+        // spending the previous command's count on the mask's own entries. One
+        // count per edit, because two edits banked as one would be one undo
+        // where the sculptor made two. See `MaskViewModel::edit`.
+        for entries in self.mask.take_unbanked_actions() {
+            self.sculpt.record_external_action(entries);
+        }
         // The representation is handed in rather than looked up: a cage's
         // resolution ceiling is the layer's, and the ViewModel may not reach
         // past its own interface to ask.
@@ -5763,8 +5775,15 @@ fn tool_status<'a>(from: ToolStatusSources<'a>) -> Option<&'a str> {
         .or(from.sculpt)
 }
 
+/// How many channels carry a refusal — a reason the command did not happen.
+const NOTICE_REFUSAL_CHANNELS: usize = 5;
+
+/// How many channels carry a remark — something that did happen, said beside
+/// the answer rather than in place of it.
+const NOTICE_REMARK_CHANNELS: usize = 2;
+
 /// How many channels a refusal or a remark can arrive on.
-const NOTICE_CHANNELS: usize = 6;
+const NOTICE_CHANNELS: usize = NOTICE_REFUSAL_CHANNELS + NOTICE_REMARK_CHANNELS;
 
 /// What the interface would have shown, out of the channels compared either
 /// side of a command.
@@ -5778,22 +5797,29 @@ const NOTICE_CHANNELS: usize = 6;
 ///
 /// The first channel written wins, so `refusals` is in the order the answer
 /// belongs to the command: an operation the composition root ran itself is the
-/// most direct answer there is, and a panel's standing notice the least.
+/// most direct answer there is, and a panel's standing notice the least. A
+/// remark does not compete that way — every one written is carried, because
+/// two of them are two separate things that happened.
 fn notices_written(
-    refusals: [(bool, Option<&str>); NOTICE_CHANNELS - 1],
-    remark: (bool, Option<&str>),
+    refusals: [(bool, Option<&str>); NOTICE_REFUSAL_CHANNELS],
+    remarks: [(bool, Option<&str>); NOTICE_REMARK_CHANNELS],
 ) -> (Option<String>, Vec<String>) {
     let refusal = refusals
         .into_iter()
         .find_map(|(written, said)| written.then_some(said).flatten())
         .map(str::to_string);
-    // The tool status is a remark rather than a refusal: a substituted tool
-    // did happen, and an agent told "this was refused" would undo something
-    // that worked.
-    let notices = match remark {
-        (true, Some(said)) => vec![said.to_string()],
-        _ => Vec::new(),
-    };
+    // A remark is carried beside the answer rather than in place of it,
+    // because what it reports did happen. A substituted tool did draw, and an
+    // agent told "this was refused" would undo something that worked. The
+    // mask's remark is the same shape: clearing a mask that freezes nothing
+    // leaves the mask exactly as it was asked to be, so a caller told "this
+    // was refused" would ask again, and one told nothing at all would go
+    // looking for the entry in the history.
+    let notices = remarks
+        .into_iter()
+        .filter_map(|(written, said)| written.then_some(said).flatten())
+        .map(str::to_string)
+        .collect();
     (refusal, notices)
 }
 
@@ -6458,7 +6484,8 @@ mod double_press {
 mod tests {
     use super::{
         gizmo_geometry_update, notices_written, refusal_for, stroke_needs_a_gesture, tool_status,
-        AgentGesture, GizmoGeometryUpdate, ToolStatusSources,
+        AgentGesture, GizmoGeometryUpdate, ToolStatusSources, NOTICE_REFUSAL_CHANNELS,
+        NOTICE_REMARK_CHANNELS,
     };
     use clayspace_mcp::RefusalCode;
     use clayspace_model::{ModelError, Representation, Unavailable};
@@ -6687,7 +6714,7 @@ mod tests {
                 (false, None),
                 (false, None),
             ],
-            (false, None),
+            [(false, None); NOTICE_REMARK_CHANNELS],
         );
         assert_eq!(refused.as_deref(), Some("a operação foi recusada"));
         assert!(notices.is_empty());
@@ -6708,7 +6735,7 @@ mod tests {
                 (false, None),
                 (false, None),
             ],
-            (false, None),
+            [(false, None); NOTICE_REMARK_CHANNELS],
         );
         assert_eq!(refused, None);
         assert!(notices.is_empty());
@@ -6721,11 +6748,36 @@ mod tests {
     #[test]
     fn a_substituted_tool_is_a_remark_and_not_a_refusal() {
         let (refused, notices) = notices_written(
-            [(false, None); 5],
-            (true, Some("Padrão no lugar de Pincar")),
+            [(false, None); NOTICE_REFUSAL_CHANNELS],
+            [(true, Some("Padrão no lugar de Pincar")), (false, None)],
         );
         assert_eq!(refused, None);
         assert_eq!(notices, vec!["Padrão no lugar de Pincar".to_string()]);
+    }
+
+    /// Two remarks written by one command are two sentences, not one.
+    ///
+    /// The remark channels do not compete the way the refusal channels do: a
+    /// substituted tool and a mask that froze nothing are separate things that
+    /// both happened, and dropping either leaves the caller looking in the
+    /// history for something nobody mentioned.
+    #[test]
+    fn every_remark_written_is_carried_beside_the_answer() {
+        let (refused, notices) = notices_written(
+            [(false, None); NOTICE_REFUSAL_CHANNELS],
+            [
+                (true, Some("Padrão no lugar de Pincar")),
+                (true, Some("a máscara não congelou nada")),
+            ],
+        );
+        assert_eq!(refused, None);
+        assert_eq!(
+            notices,
+            vec![
+                "Padrão no lugar de Pincar".to_string(),
+                "a máscara não congelou nada".to_string(),
+            ]
+        );
     }
 
     #[test]

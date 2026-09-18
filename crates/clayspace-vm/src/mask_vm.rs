@@ -7,8 +7,8 @@
 #[cfg(test)]
 use clayspace_model::ExtrudeSide;
 use clayspace_model::{
-    ExtrudeSettings, MaskGesture, MaskModel, MaskOp, MaskState, OutlineDraft, OutlineFrame,
-    OutlineMode,
+    ExtrudeSettings, MaskGesture, MaskModel, MaskOp, MaskState, ModelError, OutlineDraft,
+    OutlineFrame, OutlineMode,
 };
 
 use crate::command::Command;
@@ -38,6 +38,19 @@ pub struct MaskViewModel {
     draft: Observable<Option<OutlineDraft>>,
     /// The last refusal, for the status area.
     notice: Observable<Option<String>>,
+    /// The last remark: something that happened, or deliberately did not.
+    ///
+    /// Separate from the refusal because the door answers the two differently,
+    /// and rightly — a caller told "this was refused" tries again or gives up.
+    /// Clearing an empty mask is the case this exists for: the mask ends up
+    /// exactly as the caller asked for it, and there was nothing to take back.
+    remark: Observable<Option<String>>,
+    /// What the mask's own edits have cost the history, one count per edit,
+    /// waiting for the ViewModel that owns Cmd+Z to bank them.
+    ///
+    /// A list rather than a running total: two edits banked as one would be
+    /// one undo where the sculptor made two.
+    unbanked: Vec<usize>,
 }
 
 impl MaskViewModel {
@@ -51,6 +64,8 @@ impl MaskViewModel {
             gesture: Observable::new(MaskGesture::default()),
             draft: Observable::new(None),
             notice: Observable::new(None),
+            remark: Observable::new(None),
+            unbanked: Vec::new(),
         }
     }
 
@@ -85,24 +100,53 @@ impl MaskViewModel {
         painting_the_mask && self.gesture.get().draws_an_outline()
     }
 
-    /// The operation with the panel's amount filled in.
+    /// The operation with its amount brought inside what the engine accepts.
     ///
-    /// Asked here rather than in the View so a menu and a shortcut cannot come
-    /// to different answers about how far Expandir reaches.
-    pub fn sized(&self, op: MaskOp) -> MaskOp {
-        let steps = *self.steps.get();
+    /// The amount applied is the **command's own**. The menu fills it in from
+    /// the panel before it dispatches — that is where a menu entry gets to
+    /// spell out what it would do — and a caller that comes in through the
+    /// agent door names its own. This used to overwrite whatever arrived with
+    /// the panel's number, which made `steps` a parameter the door accepted
+    /// and ignored: every expansion asked for over the wire reached one cell.
+    ///
+    /// The bounds are `SetMaskSteps`', so the panel and the door cannot come
+    /// to different answers about how far Expandir may reach.
+    pub fn bounded(&self, op: MaskOp) -> MaskOp {
         match op {
-            MaskOp::Expand(_) => MaskOp::Expand(steps),
-            MaskOp::Contract(_) => MaskOp::Contract(steps),
-            MaskOp::Smooth(_) => MaskOp::Smooth(steps),
+            MaskOp::Expand(steps) => MaskOp::Expand(Self::steps_within(steps)),
+            MaskOp::Contract(steps) => MaskOp::Contract(Self::steps_within(steps)),
+            MaskOp::Smooth(passes) => MaskOp::Smooth(Self::steps_within(passes)),
             // Invert, the bounded complement and Clear have no amount: there
             // is no "invert twice as much".
             other => other,
         }
     }
 
+    /// What the engine will take: at least one step, and at most sixteen.
+    ///
+    /// Zero and negative are not requests — the engine refuses both outright —
+    /// and a refusal in the middle of a gesture is worse than an amount
+    /// brought to the nearest one that means something.
+    fn steps_within(steps: i32) -> i32 {
+        steps.clamp(1, 16)
+    }
+
     pub fn notice(&self) -> &Observable<Option<String>> {
         &self.notice
+    }
+
+    /// Something that happened, or deliberately did not, in the sculptor's own
+    /// words. See [`Self::remark`].
+    pub fn remark(&self) -> &Observable<Option<String>> {
+        &self.remark
+    }
+
+    /// What the mask's edits have cost the history, one count per edit.
+    ///
+    /// Taken rather than read: the ViewModel that owns Cmd+Z banks each count
+    /// as one action, and a count banked twice is one undo too many.
+    pub fn take_unbanked_actions(&mut self) -> Vec<usize> {
+        std::mem::take(&mut self.unbanked)
     }
 
     /// Whether an operation would do anything right now.
@@ -124,6 +168,39 @@ impl MaskViewModel {
         self.state.set_if_changed(state);
     }
 
+    /// Applies one edit to the mask and banks what it cost as one action.
+    ///
+    /// **Every entry point that writes to the mask comes through here**, which
+    /// is the point of it: an operation added without a history entry is a
+    /// defect nobody sees until an undo takes back something else.
+    ///
+    /// The sculpting ViewModel owns the history a sculptor presses. It holds
+    /// one count per action and spends exactly that many entries per undo, so
+    /// a mask edit that banked nothing left the next Cmd+Z spending the
+    /// *previous* command's count on entries that belonged to the mask.
+    /// Measured before this: a layer removal, a clear, a lasso and a dab, then
+    /// two undos — which walked back seven entries and took two subtools with
+    /// them.
+    ///
+    /// What it cost is counted rather than assumed to be one. An outline
+    /// enclosing two pieces of the form is a group, an extrusion adds a layer
+    /// beside the item it made, and an operation the engine recorded nothing
+    /// for banks nothing — which is what clearing an empty mask is.
+    fn edit(&mut self, run: impl FnOnce(&mut dyn MaskModel) -> Result<(), ModelError>) {
+        let before = self.model.history_depth();
+        match run(self.model.as_mut()) {
+            Ok(()) => {
+                self.notice.set_if_changed(None);
+            }
+            Err(e) => self.notice.set(Some(e.to_string())),
+        }
+        let spent = self.model.history_depth().saturating_sub(before);
+        if spent > 0 {
+            self.unbanked.push(spent);
+        }
+        self.refresh();
+    }
+
     /// Carries the drawn outline onto the frame it was drawn over and applies
     /// it.
     ///
@@ -142,19 +219,40 @@ impl MaskViewModel {
             // quietly.
             return;
         }
-        match self.model.apply_outline(&outline) {
-            Ok(()) => {
-                self.notice.set_if_changed(None);
-            }
-            Err(e) => self.notice.set(Some(e.to_string())),
+        self.edit(|model| model.apply_outline(&outline));
+    }
+
+    /// One operation over the whole mask, as the menu and the door both ask
+    /// for it.
+    fn apply_op(&mut self, asked: MaskOp) {
+        let op = self.bounded(asked);
+        if let (true, Some(amount)) = (op != asked, op.amount()) {
+            // Said rather than done quietly. An amount outside what the engine
+            // takes is a caller's mistake, and one brought silently to sixteen
+            // reads as an expansion that stopped early for no reason anybody
+            // can see.
+            self.remark
+                .set(Some(format!("os passos foram trazidos para {amount}")));
         }
-        self.refresh();
+        if !self.can_apply(op) {
+            self.notice.set(Some("não há máscara para editar".into()));
+            return;
+        }
+        if matches!(op, MaskOp::Clear) && !self.state.get().is_active() {
+            // Not a refusal: the mask ends up exactly as the caller asked for
+            // it. A remark, because there is nothing to take back — the model
+            // finds nothing to clear and records no entry — and a caller told
+            // an edit happened would go looking for it in the history.
+            self.remark
+                .set(Some("não havia máscara para limpar".into()));
+        }
+        self.edit(|model| model.apply_mask_op(op));
     }
 
     pub fn dispatch(&mut self, command: &Command) {
         match command {
             Command::SetMaskSteps(steps) => {
-                self.steps.set_if_changed((*steps).clamp(1, 16));
+                self.steps.set_if_changed(Self::steps_within(*steps));
             }
             Command::SetMaskGesture(gesture) => {
                 if self.gesture.set_if_changed(*gesture) {
@@ -193,35 +291,14 @@ impl MaskViewModel {
             Command::SetExtrudeSettings(settings) => {
                 self.extrude.set_if_changed(settings.sanitized());
             }
-            Command::ApplyMaskOp(op) => {
-                // The panel's amount filled in here rather than by the View,
-                // so a menu entry and a shortcut cannot come to different
-                // answers about how far Expandir reaches.
-                let op = self.sized(*op);
-                if !self.can_apply(op) {
-                    self.notice.set(Some("não há máscara para editar".into()));
-                    return;
-                }
-                match self.model.apply_mask_op(op) {
-                    Ok(()) => {
-                        self.notice.set_if_changed(None);
-                    }
-                    Err(e) => self.notice.set(Some(e.to_string())),
-                }
-                self.refresh();
-            }
+            Command::ApplyMaskOp(op) => self.apply_op(*op),
             Command::ExtrudeMask(settings) => {
-                match self.model.extrude_mask(*settings) {
-                    Ok(()) => {
-                        self.notice.set_if_changed(None);
-                    }
-                    Err(e) => self.notice.set(Some(e.to_string())),
-                }
+                let settings = *settings;
                 // Extruding reads the mask rather than consuming it, but the
-                // count is re-read anyway: assuming it is unchanged would make
-                // this ViewModel the one place that believes something about
-                // the model without asking.
-                self.refresh();
+                // count is re-read anyway — `edit` refreshes — since assuming
+                // it is unchanged would make this ViewModel the one place that
+                // believes something about the model without asking.
+                self.edit(|model| model.extrude_mask(settings));
             }
             _ => {}
         }
@@ -241,6 +318,9 @@ mod tests {
         ops: Vec<MaskOp>,
         extrusions: Vec<ExtrudeSettings>,
         outlines: Vec<clayspace_model::MaskOutline>,
+        /// What the history holds, as the engine's does: one entry per call
+        /// that actually wrote to the mask.
+        entries: usize,
     }
 
     struct FakeMask {
@@ -265,11 +345,21 @@ mod tests {
             }
         }
 
+        fn history_depth(&self) -> usize {
+            self.recorded.borrow().entries
+        }
+
         fn apply_mask_op(&mut self, op: MaskOp) -> Result<(), ModelError> {
             if let Some(refusal) = self.refusal() {
                 return Err(refusal);
             }
-            self.recorded.borrow_mut().ops.push(op);
+            let mut recorded = self.recorded.borrow_mut();
+            recorded.ops.push(op);
+            // As the engine does: clearing a mask that freezes nothing writes
+            // nothing, so there is nothing to take back.
+            if !(matches!(op, MaskOp::Clear) && self.cells == 0) {
+                recorded.entries += 1;
+            }
             Ok(())
         }
 
@@ -277,7 +367,9 @@ mod tests {
             if let Some(refusal) = self.refusal() {
                 return Err(refusal);
             }
-            self.recorded.borrow_mut().extrusions.push(settings);
+            let mut recorded = self.recorded.borrow_mut();
+            recorded.extrusions.push(settings);
+            recorded.entries += 1;
             Ok(())
         }
 
@@ -288,7 +380,9 @@ mod tests {
             if let Some(refusal) = self.refusal() {
                 return Err(refusal);
             }
-            self.recorded.borrow_mut().outlines.push(outline.clone());
+            let mut recorded = self.recorded.borrow_mut();
+            recorded.outlines.push(outline.clone());
+            recorded.entries += 1;
             Ok(())
         }
     }
@@ -323,18 +417,41 @@ mod tests {
     }
 
     #[test]
-    fn the_panels_amount_reaches_the_operation() {
-        // The menu dispatched `Expand(1)` and nothing could change the 1, so
-        // expanding a mask by four cells meant clicking four times.
+    fn the_amount_the_command_carries_is_the_one_applied() {
+        // The menu fills the amount in from the panel before it dispatches —
+        // `visual_shell` holds that — and a caller at the agent door names its
+        // own. This used to overwrite whatever arrived with the panel's
+        // number, so `mask/apply {op:"expand", steps:4}` expanded by one.
         let (mut vm, recorded) = fixture();
-        vm.dispatch(&Command::SetMaskSteps(4));
-        for op in [MaskOp::Expand(1), MaskOp::Contract(1), MaskOp::Smooth(1)] {
+        vm.dispatch(&Command::SetMaskSteps(1));
+        for op in [MaskOp::Expand(4), MaskOp::Contract(3), MaskOp::Smooth(2)] {
             vm.dispatch(&Command::ApplyMaskOp(op));
         }
         assert_eq!(
             recorded.borrow().ops,
-            vec![MaskOp::Expand(4), MaskOp::Contract(4), MaskOp::Smooth(4)]
+            vec![MaskOp::Expand(4), MaskOp::Contract(3), MaskOp::Smooth(2)],
+            "the panel's amount was written over the one the command carried"
         );
+    }
+
+    #[test]
+    fn an_amount_outside_what_the_engine_takes_is_brought_in_and_said() {
+        // The engine refuses a zero or negative count outright, and a refusal
+        // in the middle of a gesture is worse than an amount brought to the
+        // nearest one that means something — said, so it is not a silent
+        // sixteen that reads as an expansion stopping early.
+        let (mut vm, recorded) = fixture();
+        vm.dispatch(&Command::ApplyMaskOp(MaskOp::Expand(0)));
+        vm.dispatch(&Command::ApplyMaskOp(MaskOp::Smooth(9999)));
+        assert_eq!(
+            recorded.borrow().ops,
+            vec![MaskOp::Expand(1), MaskOp::Smooth(16)]
+        );
+        assert!(
+            vm.remark().get().is_some(),
+            "the amount was changed and nothing said so"
+        );
+        assert!(vm.notice().get().is_none(), "a clamp is not a refusal");
     }
 
     #[test]
@@ -408,6 +525,107 @@ mod tests {
         // pressing it should do the obvious nothing.
         vm.dispatch(&Command::ApplyMaskOp(MaskOp::Clear));
         assert_eq!(recorded.borrow().ops, vec![MaskOp::Clear]);
+        assert!(vm.notice().get().is_none(), "clearing nothing was refused");
+    }
+
+    /// Clearing a mask that freezes nothing is a no-op end to end: nothing is
+    /// written, nothing is banked, and the caller is told why rather than left
+    /// to look for an undo entry that was never made.
+    ///
+    /// Measured before this: 1.78 MB of the layer re-uploaded and an entry
+    /// spent, for a clear with nothing to clear.
+    #[test]
+    fn clear_with_no_mask_is_a_no_op() {
+        let recorded = Rc::new(RefCell::new(Recorded::default()));
+        let model = FakeMask {
+            recorded: recorded.clone(),
+            cells: 0,
+            refuse: None,
+        };
+        let mut vm = MaskViewModel::new(Box::new(model));
+
+        vm.dispatch(&Command::ApplyMaskOp(MaskOp::Clear));
+        assert!(
+            vm.take_unbanked_actions().is_empty(),
+            "an undo entry was banked for a clear that cleared nothing"
+        );
+        assert_eq!(
+            vm.remark().get().as_deref(),
+            Some("não havia máscara para limpar"),
+            "the caller was told nothing about a command that did nothing"
+        );
+    }
+
+    /// Every operation the mask offers is one thing to take back.
+    ///
+    /// The ViewModel that owns Cmd+Z holds one count per action and spends
+    /// exactly that many entries per undo. A mask edit banked nowhere left the
+    /// next undo spending the *previous* command's count on the mask's
+    /// entries, and the one after that reaching further still: in the audit a
+    /// clear, a lasso and a dab cost two undos that walked back seven entries
+    /// and removed two subtools.
+    #[test]
+    fn every_mask_op_records_one_history_entry() {
+        let (mut vm, _) = fixture();
+        vm.dispatch(&Command::SetMaskGesture(MaskGesture::Lasso));
+
+        for op in [
+            MaskOp::Invert,
+            MaskOp::Expand(2),
+            MaskOp::Contract(2),
+            MaskOp::Smooth(2),
+            MaskOp::InvertWithinBounds,
+            MaskOp::Clear,
+        ] {
+            vm.dispatch(&Command::ApplyMaskOp(op));
+            assert_eq!(
+                vm.take_unbanked_actions(),
+                vec![1],
+                "{op:?} is not exactly one thing to take back"
+            );
+        }
+
+        draw_a_square(&mut vm, false);
+        assert_eq!(
+            vm.take_unbanked_actions(),
+            vec![1],
+            "an outline is not exactly one thing to take back"
+        );
+
+        vm.dispatch(&Command::ExtrudeMask(ExtrudeSettings::default()));
+        assert_eq!(
+            vm.take_unbanked_actions(),
+            vec![1],
+            "an extrusion is not exactly one thing to take back"
+        );
+    }
+
+    /// And the counts are taken once. Banked twice, one mask edit would be two
+    /// undos, the second of which reaches whatever came before it.
+    #[test]
+    fn what_an_edit_cost_is_handed_over_once() {
+        let (mut vm, _) = fixture();
+        vm.dispatch(&Command::ApplyMaskOp(MaskOp::Invert));
+        assert_eq!(vm.take_unbanked_actions(), vec![1]);
+        assert!(vm.take_unbanked_actions().is_empty());
+    }
+
+    /// An operation the model refused never happened, so there is nothing to
+    /// take back. A count banked for it would spend an entry belonging to the
+    /// command before.
+    #[test]
+    fn a_refused_operation_banks_nothing() {
+        let recorded = Rc::new(RefCell::new(Recorded::default()));
+        let model = FakeMask {
+            recorded: recorded.clone(),
+            cells: 4096,
+            refuse: Some("uma camada de malha não tem campo para extrudar"),
+        };
+        let mut vm = MaskViewModel::new(Box::new(model));
+
+        vm.dispatch(&Command::ExtrudeMask(ExtrudeSettings::default()));
+        vm.dispatch(&Command::ApplyMaskOp(MaskOp::Invert));
+        assert!(vm.take_unbanked_actions().is_empty());
     }
 
     /// The ViewModel's own guard is not the only refusal there is. A mask can

@@ -6867,6 +6867,28 @@ impl ClayDocument {
         }
     }
 
+    /// Tells the viewport to look at the frozen region again after a step
+    /// through the history.
+    ///
+    /// Every site that writes to a mask bumps the revision beside the write.
+    /// The engine's history writes to one through a snapshot of its own, past
+    /// all of those sites, so a step that reverted a mask edit restored a
+    /// region nothing would redraw — the mask on the screen stayed the one the
+    /// operation had left, over clay the undo had already put back.
+    ///
+    /// Bumped for any step that moved rather than for the mask's own steps,
+    /// because which entry the engine reverted is not something it says — and
+    /// neither is whether the layer carried a mask *before* the step, which is
+    /// the case that matters: a mask stroke taken back has to stop being
+    /// drawn. The cost is one re-sample of the surface per step through the
+    /// history, at a sculptor's pace; the alternative is a frozen region drawn
+    /// where it is not.
+    fn mask_may_have_moved(&mut self, stepped: bool) {
+        if stepped {
+            self.mask_revision = self.mask_revision.wrapping_add(1);
+        }
+    }
+
     /// The stamp on the engine's newest entry, or zero for an empty stack.
     ///
     /// Zero is a state and not an absence: an undo that reaches the bottom has
@@ -7992,6 +8014,7 @@ impl SculptModel for ClayDocument {
         let moved = self.undo_step();
         self.settle_history_room();
         self.forget_the_mirrors();
+        self.mask_may_have_moved(matches!(moved, Ok(true)));
         moved
     }
 
@@ -8000,6 +8023,7 @@ impl SculptModel for ClayDocument {
         let moved = self.redo_step();
         self.settle_history_room();
         self.forget_the_mirrors();
+        self.mask_may_have_moved(matches!(moved, Ok(true)));
         moved
     }
 
@@ -11581,6 +11605,12 @@ impl ClayDocument {
 }
 
 impl MaskModel for ClayDocument {
+    /// The history the interface counts, which is the one a mask edit is
+    /// banked on. See [`SculptModel::history`].
+    fn history_depth(&self) -> usize {
+        SculptModel::history(self).depth
+    }
+
     fn mask_state(&self) -> MaskState {
         match self.active_mask() {
             Some(mask) => MaskState {
@@ -11592,25 +11622,34 @@ impl MaskModel for ClayDocument {
     }
 
     fn apply_mask_op(&mut self, op: MaskOp) -> Result<(), ModelError> {
-        // Bumped up front, and whatever the operation turns out to do: every
+        let layer = self.active_layer().id;
+        // Clearing a mask that was never painted is a no-op rather than a
+        // refusal: the menu entry is always there, and pressing it on an empty
+        // mask should do the obvious nothing.
+        //
+        // The obvious nothing costs nothing, which is the *whole* of this
+        // branch. A mask writes a snapshot of its chunk map to the history on
+        // every call that reaches it, and the revision below sends the frozen
+        // region to the viewport again — measured at 1.78 MB re-uploaded, and
+        // an undo entry banked, for a clear that had nothing to clear.
+        if matches!(op, MaskOp::Clear) {
+            if !self.mask_state().is_active() {
+                return Ok(());
+            }
+            // Cleared rather than dropped: the mask belongs to the layer inside
+            // the document, which has no verb for taking one away. An empty
+            // mask freezes nothing, which is what Limpar means.
+            if let Some(mut mask) = self.document.layer_mask_mut(layer) {
+                mask.clear().map_err(ModelError::engine)?;
+            }
+            self.mask_revision = self.mask_revision.wrapping_add(1);
+            return Ok(());
+        }
+        // Bumped before the operation, and whatever it turns out to do: every
         // one of them changes what is frozen, and a viewport that missed one
         // would keep drawing the mask as it was. A redundant re-sample costs a
         // buffer write; a missed one is a lie on the screen.
         self.mask_revision = self.mask_revision.wrapping_add(1);
-        // Clearing a mask that was never painted is a no-op rather than a
-        // refusal: the menu entry is always there, and pressing it on an empty
-        // mask should do the obvious nothing.
-        let layer = self.active_layer().id;
-        // Cleared rather than dropped: the mask belongs to the layer inside
-        // the document, which has no verb for taking one away. An empty mask
-        // freezes nothing, which is what Limpar means, and `mask_state`
-        // reports it as absent so the panel closes exactly as it did.
-        if matches!(op, MaskOp::Clear) {
-            if let Some(mut mask) = self.document.layer_mask_mut(layer) {
-                mask.clear().map_err(ModelError::engine)?;
-            }
-            return Ok(());
-        }
 
         // Refused where nothing is frozen, which is the same refusal as before
         // and now has to be spelled out: a document-owned mask stays attached

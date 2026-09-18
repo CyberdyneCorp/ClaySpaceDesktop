@@ -174,9 +174,17 @@ pub fn history_state(
 /// The engine counts painted cells and does not answer a share, so the
 /// coverage is `None` where nothing says what the whole is. A ratio invented
 /// here would be a number an agent would act on.
+///
+/// **`present` answers "is anything frozen", not "does a mask exist".** They
+/// are two different questions inside the application — a document has no verb
+/// for detaching a mask, so Limpar empties one and it stays attached — and
+/// only one of them is a question about the document an agent is editing. It
+/// reported the other, so a clear was followed by `present: true` and an agent
+/// went on believing a region was still protected against the stroke it was
+/// about to make.
 pub fn mask_state(state: &DomainMask, cells_in_layer: Option<usize>) -> MaskState {
     MaskState {
-        present: state.present,
+        present: state.is_active(),
         coverage: cells_in_layer
             .and_then(|whole| (whole > 0).then(|| state.painted_cells as f32 / whole as f32)),
         inverted: false,
