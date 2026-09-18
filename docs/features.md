@@ -1258,8 +1258,9 @@ forward to vertices and an implicit field cannot.
 A mesh gesture is **one undo step and reverts exactly**. It has to be recorded
 on this side: a vertex displacement is destructive and is not an edit item, so
 the document holds nothing to take back — the engine's undo depth is the same
-before and after a mesh stroke. The two histories interleave by depth, so one
-undo means "the last thing I did" whichever kind of edit that was.
+before and after a mesh stroke. The two histories interleave by a sequence the
+document keeps of its own, so one undo means "the last thing I did" whichever
+kind of edit that was. See *History* for why a depth could not say that.
 
 Sculpting **stretches** the triangles it has, and a large grab or a snakehook
 stretches them to the extreme. Nothing here retessellates, because that spends
@@ -3625,6 +3626,21 @@ that can destroy work need a consent the file cannot supply.
 ## History
 
 - Undo and redo over the engine's own vocabulary.
+- **One undo means the last thing you did**, whichever history holds it. Some
+  edits the engine records and some it cannot — a gesture on carried geometry
+  is reverted from a record this side keeps, and a crossing is a layer plus the
+  entries that fill it — so the two have to be ordered against each other. They
+  are ordered by a sequence the document keeps of its own: every engine entry
+  is stamped as it lands, every record on this side takes a stamp from the same
+  counter, and nothing ever lowers it. The engine's undo *depth* cannot do this
+  job. It is a stack size, so two records made at one depth both answer
+  "newest", a depth reached again matches a record whose future has already
+  been built over, and a depth stops moving altogether when a command coalesces
+  or a history budget evicts as fast as it gains — each of which walks an undo
+  back to the wrong entry, up to and including removing a layer the undone
+  command never touched.
+- **A new edit ends the redo line**, on this side as well as the engine's. A
+  stroke taken back and then built over is not put back by a later redo.
 - A stroke of any length is **one** history entry, mirrored halves included.
 - An edit that changed nothing adds no entry and does not mark the document
   modified. This matters because the engine documents several verbs as

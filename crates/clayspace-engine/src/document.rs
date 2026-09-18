@@ -846,21 +846,45 @@ enum Step {
     Forward,
 }
 
+/// Which history holds the thing a step should move next.
+///
+/// The answer to one question asked in one place. It used to be several
+/// questions asked in sequence — "is a mesh gesture newest?", then "is a
+/// crossing?" — each answered by comparing a recorded depth against the
+/// engine's current one, so the *order* they were asked in decided ties. See
+/// [`ClayDocument::newest_undoable`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Undoable {
+    /// A gesture on geometry the host carries, which costs the engine nothing.
+    Mesh,
+    /// The engine's own newest entry, taken back whole as a crossing.
+    Crossing,
+    /// The engine's own newest entry, which a visibility gesture put there.
+    Visibility,
+    /// The engine's own newest entry, and nothing on this side claims it.
+    Engine,
+}
+
 /// One gesture on geometry the host holds, and where it sits against the
 /// engine's own history.
 ///
 /// Both representations the host carries are here rather than in two stacks
 /// beside each other, and that is not tidiness. Each record orders itself
-/// against the engine's history by the depth it was made at, and two stacks
-/// ordering themselves against the same depth cannot order themselves against
+/// against the engine's history by the stamp it was made at, and two stacks
+/// ordering themselves against the same stamp cannot order themselves against
 /// each other — a session that sculpted a mesh subtool and a hierarchy in turn
 /// would have two records both answering "newest" and an undo would take back
 /// whichever was asked first.
 struct MeshGesture {
     layer: LayerKey,
     what: GestureRecord,
-    /// The engine's undo depth when this was recorded. See `mesh_undo`.
-    engine_depth: usize,
+    /// Where this sits in the document's history order. See
+    /// [`ClayDocument::history_seq`].
+    ///
+    /// A gesture adds no engine entry, so its stamp is its own: it is the
+    /// newer thing exactly when it is greater than the stamp on the engine's
+    /// top entry.
+    stamp: u64,
 }
 
 /// What it takes to put one gesture back.
@@ -899,8 +923,10 @@ enum GestureRecord {
 struct Crossing {
     /// The layer the crossing added, hidden while the crossing is undone.
     layer: LayerId,
-    /// The engine's undo depth when this was recorded. See `mesh_undo`.
-    engine_depth: usize,
+    /// The stamp on the topmost engine entry the crossing left behind, which
+    /// is what says the crossing is that entry rather than something else.
+    /// See [`ClayDocument::history_seq`].
+    stamp: u64,
     /// How many engine entries the crossing left behind.
     ///
     /// One for an ordinary crossing. An in-place one also removes the layer
@@ -934,10 +960,14 @@ struct Solo {
 /// surface cannot drop a layer any other way than engine visibility. So the
 /// entries are made and then stepped over: undo hops a whole gesture the way
 /// it already hops between `mesh_undo` and the engine's own stack, and for the
-/// same reason — depth is what says which record is the more recent one.
+/// same reason — the stamp is what says which record is the more recent one.
 struct VisibilityGesture {
-    /// The engine's undo depths the batch produced, ascending. See `mesh_undo`.
-    depths: Vec<usize>,
+    /// The stamps on the engine entries the batch produced, oldest first.
+    ///
+    /// A visibility gesture *is* those entries rather than something recorded
+    /// beside them, so it borrows their stamps instead of taking one of its
+    /// own. See [`ClayDocument::history_seq`].
+    stamps: Vec<u64>,
     /// What was shown alone before the batch, and after it.
     ///
     /// Carried so that hopping the gesture in either direction restores the
@@ -1207,6 +1237,37 @@ pub struct ClayDocument {
     /// counter is what lets the frozen region be shown without re-sampling
     /// every vertex on every frame.
     mask_revision: u64,
+    /// The document's own history order, which nothing ever lowers.
+    ///
+    /// **This replaced the engine's undo depth**, which every ordering
+    /// decision on this side used to be a comparison against. A depth is a
+    /// stack *size*, and a stack size is not an ordering: two records made at
+    /// the same depth both answered "newest" and the order the questions
+    /// happened to be asked in decided which one an undo took back, which is
+    /// what the long comment `undo_step` used to carry was describing. It is
+    /// not an ordering in the other direction either — an engine that drops
+    /// its oldest entry to stay inside its budget, or folds a coalescing
+    /// command into the one before it, leaves the depth where it was while the
+    /// history underneath it moved on.
+    ///
+    /// So the document counts for itself. Every engine entry is stamped as it
+    /// is noticed and every record this side keeps takes a stamp of its own,
+    /// from the same counter, in the order they happened. Nothing decrements
+    /// it: an undo moves a stamp from one stack to the other rather than
+    /// giving the number back, so a stamp names one thing for the life of the
+    /// process and `>` on two stamps is a real answer.
+    ///
+    /// A `u64` at one stamp per edit is not a counter a session can exhaust.
+    history_seq: u64,
+    /// One stamp per entry the engine holds on its undo side, oldest last.
+    ///
+    /// The document's copy of the engine's stack, which is what lets a record
+    /// on this side say *which* engine entry it belongs to rather than how
+    /// many there were. Kept level with the engine by
+    /// [`Self::note_engine_entries`].
+    engine_undo_marks: Vec<u64>,
+    /// The same for the entries the engine holds forward, newest undone last.
+    engine_redo_marks: Vec<u64>,
     /// The sculptor for the mesh layer being sculpted, and which layer it is.
     ///
     /// One at a time rather than one per layer: the adjacency is the expensive
@@ -1224,12 +1285,12 @@ pub struct ClayDocument {
     /// engine does offer the machinery: `clay_mesh_deltas` reverts a gesture
     /// bit exactly.
     ///
-    /// The two histories interleave by *depth*. Each record remembers the
-    /// engine's undo depth when it was made, and an undo reverts the mesh
-    /// gesture only when that depth still matches — any engine edit since has
-    /// raised it, so the engine's entry is the more recent one and goes first.
-    /// Undoing that engine entry lowers the depth back, and the mesh gesture
-    /// becomes the most recent again.
+    /// The two histories interleave by *stamp*. Each record remembers where it
+    /// sits in [`Self::history_seq`], and an undo reverts the mesh gesture only
+    /// when its stamp is greater than the one on the engine's top entry — any
+    /// engine edit since carries a greater stamp, so the engine's entry is the
+    /// more recent one and goes first. Undoing that engine entry takes its
+    /// stamp off the top, and the mesh gesture becomes the most recent again.
     mesh_undo: Vec<MeshGesture>,
     mesh_redo: Vec<MeshGesture>,
     /// Crossings undo can take back whole, newest last.
@@ -1243,9 +1304,9 @@ pub struct ClayDocument {
     /// the same crossing: 0.39.0 left the layer's 3,952 vertices alone,
     /// 0.52.2 left the layer in the list at zero.
     ///
-    /// Interleaved by depth exactly as `mesh_undo` is, and for the same
-    /// reason: any engine edit since has raised the depth, which makes that
-    /// edit the more recent one.
+    /// Interleaved by stamp exactly as `mesh_undo` is, and for the same
+    /// reason: a crossing is the engine entry it left on top, and any engine
+    /// edit since has put an entry with a greater stamp above it.
     crossing_undo: Vec<Crossing>,
     /// Which layer a retopology now running on a worker was asked about, and
     /// what revision it was at when the work started.
@@ -1325,9 +1386,9 @@ pub struct ClayDocument {
     /// redo stack that has gone empty, since a visibility gesture is hopped by
     /// redoing the engine's own entries and there are none.
     ///
-    /// Without it a gesture left on the redo side went on matching
-    /// `depths.first() == engine_undo_depth() + 1` whenever the depth happened
-    /// to return to that value. Measured: solo, undo, an ordinary dab, undo,
+    /// Without it a gesture left on the redo side went on matching the entry
+    /// one past the engine's depth whenever the depth happened to return to
+    /// that value. Measured: solo, undo, an ordinary dab, undo,
     /// redo — the redo was spent putting the dab back through the *hop*, so
     /// `resync_objects`, `resync_layer_transforms` and `resync_armature` were
     /// all skipped for it, and the interface was left showing a solo engaged
@@ -1367,17 +1428,23 @@ pub struct ClayDocument {
     /// While one is, every transform written goes into a single undo group, so
     /// a drag is one entry however many frames it took.
     dragging: Option<GizmoTarget>,
-    /// The table as it stood at each of the engine's undo depths.
+    /// The table as it stood on top of each of the engine's entries.
     ///
     /// The engine reverts an object's transform and has no way to tell the
-    /// table it did, so the table follows by depth — the same way `mesh_undo`
-    /// interleaves with the engine's history, and for the same reason. An
+    /// table it did, so the table follows the engine's own entries — the same
+    /// way `mesh_undo` interleaves with them, and for the same reason. An
     /// object edit records the table on both sides of itself, so undoing
-    /// across it finds the state before and redoing finds the state after.
-    /// A stroke raises the depth without touching objects and records
-    /// nothing, which leaves the table alone: correct, because it did not
-    /// change.
-    object_states: std::collections::BTreeMap<usize, Vec<PlacedObject>>,
+    /// across it finds the state before and redoing finds the state after. A
+    /// stroke adds an entry without touching objects and records nothing,
+    /// which leaves the table alone: correct, because it did not change.
+    ///
+    /// Filed under the entry's *stamp* rather than the depth it was made at.
+    /// A depth is reached again by any later edit, so a table recorded at one
+    /// depth was handed back after an undo that had reached a different edit
+    /// entirely; a stamp names one entry for the life of the process. Zero is
+    /// the empty stack, which is a state an undo can reach and so is a state
+    /// the table has to be able to name.
+    object_states: std::collections::BTreeMap<u64, Vec<PlacedObject>>,
     // There is no `layer_states` beside this, and there was until ABI 0.74.0.
     // A layer's placement had exactly the object table's problem — written to
     // the engine, cached here, reverted by an undo the engine could not report
@@ -1437,6 +1504,9 @@ impl ClayDocument {
             surface_brick_count: 0,
             mesh_sculptors: std::cell::RefCell::default(),
             picked_seed: std::cell::Cell::default(),
+            history_seq: 0,
+            engine_undo_marks: Vec::new(),
+            engine_redo_marks: Vec::new(),
             mesh_undo: Vec::new(),
             mesh_redo: Vec::new(),
             crossing_undo: Vec::new(),
@@ -2050,14 +2120,20 @@ impl ClayDocument {
         // the layer it just made. See `crossing_undo`.
         if let Ok(row) = self.index_of(made) {
             let layer = self.layers[row].id;
-            let engine_depth = self.engine_undo_depth();
+            // The stamp on the entry the crossing left on top, which is what
+            // names the crossing as that entry. Taken after the entries are
+            // noticed, so it is the crossing's own and not the one under it.
+            self.note_engine_entries();
+            let Some(&stamp) = self.engine_undo_marks.last() else {
+                return Ok(made);
+            };
             self.crossing_undo.push(Crossing {
                 layer,
-                engine_depth,
+                stamp,
                 // Measured across the whole crossing rather than assumed to be
                 // one: an in-place crossing removes a layer and moves another,
                 // and neither goes into the group.
-                steps: engine_depth.saturating_sub(depth_before).max(1),
+                steps: self.engine_undo_depth().saturating_sub(depth_before).max(1),
             });
             self.crossing_redo.clear();
         }
@@ -2071,14 +2147,6 @@ impl ClayDocument {
         crossings.iter().map(|c| c.steps.saturating_sub(1)).sum()
     }
 
-    /// Whether the newest crossing is more recent than the newest engine
-    /// entry, and so the thing an undo should take back.
-    fn crossing_is_newest(&self) -> bool {
-        self.crossing_undo
-            .last()
-            .is_some_and(|crossing| crossing.engine_depth == self.engine_undo_depth())
-    }
-
     /// Takes one crossing back: the engine takes back the filling, and the
     /// layer it filled leaves the scene.
     fn undo_crossing(&mut self) -> Result<bool, ModelError> {
@@ -2090,6 +2158,7 @@ impl ClayDocument {
         for _ in 0..crossing.steps {
             self.document.undo().map_err(ModelError::engine)?;
         }
+        self.engine_marks_stepped_back();
         self.suppressed.insert(crossing.layer);
         self.crossing_redo.push(crossing);
         self.after_crossing_history()
@@ -2103,6 +2172,7 @@ impl ClayDocument {
         for _ in 0..crossing.steps {
             self.document.redo().map_err(ModelError::engine)?;
         }
+        self.engine_marks_stepped_forward();
         self.suppressed.remove(&crossing.layer);
         self.crossing_undo.push(crossing);
         self.after_crossing_history()
@@ -2139,8 +2209,8 @@ impl ClayDocument {
         after: Option<Solo>,
     ) -> Result<(), ModelError> {
         let before = self.solo.clone();
-        let mut depths = Vec::new();
-        let outcome = self.write_each_visibility(wanted, &mut depths);
+        let mut stamps = Vec::new();
+        let outcome = self.write_each_visibility(wanted, &mut stamps);
         // Owed whether the batch finished or stopped halfway: the flags that
         // did land have marked their layers, and a mark left standing is a
         // cache disagreeing with the document until something else drains it.
@@ -2158,9 +2228,9 @@ impl ClayDocument {
         }
         // Recorded even when it failed halfway, because half a batch is still
         // entries in the engine's history and undo has to step over those too.
-        if !depths.is_empty() {
+        if !stamps.is_empty() {
             self.visibility_undo.push(VisibilityGesture {
-                depths,
+                stamps,
                 before,
                 after: self.solo.clone(),
             });
@@ -2172,7 +2242,7 @@ impl ClayDocument {
         outcome.and(settled)
     }
 
-    /// The writes themselves, recording each depth as it lands.
+    /// The writes themselves, recording the stamp on each entry as it lands.
     ///
     /// Apart from [`Self::write_visibility`] so that the record is kept by a
     /// caller that owns it however this ends — including where a layer refuses
@@ -2180,7 +2250,7 @@ impl ClayDocument {
     fn write_each_visibility(
         &mut self,
         wanted: &[(LayerKey, bool)],
-        depths: &mut Vec<usize>,
+        stamps: &mut Vec<u64>,
     ) -> Result<(), ModelError> {
         for &(key, visible) in wanted {
             // A layer the snapshot names and the document no longer has: undo
@@ -2194,7 +2264,13 @@ impl ClayDocument {
                 continue;
             }
             self.write_layer_visible(key, visible)?;
-            depths.push(self.engine_undo_depth());
+            // The entry the write just made, stamped now so the gesture is
+            // named by the entries it owns rather than by how many the engine
+            // held at the time.
+            self.note_engine_entries();
+            if let Some(&stamp) = self.engine_undo_marks.last() {
+                stamps.push(stamp);
+            }
         }
         Ok(())
     }
@@ -2265,18 +2341,6 @@ impl ClayDocument {
         self.with_visibility(&wanted, body)
     }
 
-    /// Whether the newest thing in the engine's history is a visibility
-    /// gesture this side made.
-    ///
-    /// True when no engine edit has landed since — any that had would have
-    /// raised the depth past the last one the gesture recorded.
-    fn visibility_is_newest(&self) -> bool {
-        self.visibility_undo
-            .last()
-            .and_then(|gesture| gesture.depths.last())
-            .is_some_and(|depth| *depth == self.engine_undo_depth())
-    }
-
     /// Steps back over every visibility gesture sitting on top of the history.
     ///
     /// Hopped rather than stopped on: the spec says a solo "SHALL NOT change
@@ -2287,15 +2351,16 @@ impl ClayDocument {
     /// what the sculptor set is what remains — so a ⌘Z after a released solo
     /// reaches the edit underneath it.
     fn hop_visibility_back(&mut self) -> Result<(), ModelError> {
-        while self.visibility_is_newest() {
+        while self.newest_undoable() == Some(Undoable::Visibility) {
             let Some(gesture) = self.visibility_undo.pop() else {
                 break;
             };
-            for _ in &gesture.depths {
+            for _ in &gesture.stamps {
                 if !self.document.undo().map_err(ModelError::engine)? {
                     break;
                 }
             }
+            self.engine_marks_stepped_back();
             self.solo = gesture.before.clone();
             self.visibility_redo.push(gesture);
             self.after_visibility_history()?;
@@ -2305,20 +2370,16 @@ impl ClayDocument {
 
     /// The mirror: steps forward over the gestures a hop back put away.
     fn hop_visibility_forward(&mut self) -> Result<(), ModelError> {
-        while self
-            .visibility_redo
-            .last()
-            .and_then(|gesture| gesture.depths.first())
-            .is_some_and(|depth| *depth == self.engine_undo_depth() + 1)
-        {
+        while self.next_redoable() == Some(Undoable::Visibility) {
             let Some(gesture) = self.visibility_redo.pop() else {
                 break;
             };
-            for _ in &gesture.depths {
+            for _ in &gesture.stamps {
                 if !self.document.redo().map_err(ModelError::engine)? {
                     break;
                 }
             }
+            self.engine_marks_stepped_forward();
             self.solo = gesture.after.clone();
             self.visibility_undo.push(gesture);
             self.after_visibility_history()?;
@@ -2387,39 +2448,33 @@ impl ClayDocument {
     }
 
     fn undo_step(&mut self) -> Result<bool, ModelError> {
-        // A mesh gesture is asked about *before* the hop as well as after.
-        //
-        // It records the engine's depth and does not raise it, so a solo
-        // engaged before the stroke ends at exactly the depth the gesture
-        // remembers and both answer "newest" — and only one of them can be.
-        // The stroke is: had the solo come after it, its writes would have
-        // carried the depth past what the gesture recorded. Hopping first
-        // stepped over the solo and then undid the engine entry *underneath*
-        // the stroke — measured, a dab on a soloed mesh subtool undone once
-        // released the solo and took back the import that made the layer, and
-        // the stroke's own gesture was stranded at a depth the engine would
-        // never return to.
-        if self.mesh_gesture_is_newest() {
-            return self.undo_mesh_gesture();
-        }
         // Solo, and the hide-and-restore a bake borrows, sit on top of the
         // engine's history without being anything the sculptor did. Stepped
         // over here, so that what follows is asked of the newest *edit*
         // rather than of a way of looking at the scene.
+        //
+        // **This used to be asked around rather than before.** A mesh gesture
+        // was tested for first, then the hop ran, then the gesture was tested
+        // for again, because a gesture and a solo engaged before it both
+        // reported the same engine depth and only one of them could be the
+        // newer. The stamps say which, so the question is asked once and the
+        // hop is what it says it is: a step over the entries nobody asked for.
         self.hop_visibility_back()?;
         // Whichever history holds the more recent edit answers. See
-        // `mesh_undo` for why depth is what orders them.
-        if self.mesh_gesture_is_newest() {
-            return self.undo_mesh_gesture();
-        }
-        // A crossing sits on its own engine entry, so it is tested the same
-        // way and before the plain path: undoing only the engine's half would
-        // leave the layer it made standing and empty.
-        if self.crossing_is_newest() {
-            return self.undo_crossing();
+        // [`Self::history_seq`] for why a stamp is what orders them.
+        match self.newest_undoable() {
+            // A mesh gesture costs the engine nothing, so the engine is not
+            // stepped at all.
+            Some(Undoable::Mesh) => return self.undo_mesh_gesture(),
+            // A crossing sits on its own engine entry, and taking back only
+            // the engine's half would leave the layer it made standing and
+            // empty.
+            Some(Undoable::Crossing) => return self.undo_crossing(),
+            _ => {}
         }
         let stepped = self.document.undo_bound().map_err(ModelError::engine)?;
         let moved = stepped.moved;
+        self.engine_marks_stepped_back();
         if moved {
             self.reconcile_layers();
             self.refill_what_a_step_reached(stepped.reached)?;
@@ -2434,36 +2489,25 @@ impl ClayDocument {
     }
 
     fn redo_step(&mut self) -> Result<bool, ModelError> {
-        // The mirror of `undo`'s first check, and it is first here for the same
-        // reason. A mesh undo moves no engine depth, so a solo undone under the
-        // stroke leaves its gesture sitting at depth + 1 and the hop's guard is
-        // satisfied by a gesture that is not what was taken back last. Measured:
-        // the redo went to the solo, the engine depth moved past what the mesh
-        // gesture recorded, and the stroke could never be put back — the
-        // interface said "nothing to redo" over a stroke it still held.
-        if self.mesh_redo_is_next() {
-            return self.redo_mesh_gesture();
-        }
         // The mirror of the hop in `undo`, and it runs on both sides of the
         // step: a gesture may be the next entry forward — a solo taken back
         // with no edit under it — and more of them may sit above whatever is
         // redone here.
+        //
+        // Asked once rather than around the hop, and for the reason `undo_step`
+        // gives. Redo runs the other way, so the next thing forward is the
+        // *oldest* of what was taken back: a mesh gesture undone before a solo
+        // was hopped goes back first, which is what the hop's old guard — the
+        // gesture's first depth is one past the engine's — could not express.
         self.hop_visibility_forward()?;
-        // The mirror of `undo`: a mesh gesture on the redo stack recorded at
-        // the current engine depth is the one that was taken back last.
-        if self.mesh_redo_is_next() {
-            return self.redo_mesh_gesture();
-        }
-        // The mirror: an undone crossing's entry is the next one forward.
-        if self
-            .crossing_redo
-            .last()
-            .is_some_and(|crossing| crossing.engine_depth == self.engine_undo_depth() + 1)
-        {
-            return self.redo_crossing();
+        match self.next_redoable() {
+            Some(Undoable::Mesh) => return self.redo_mesh_gesture(),
+            Some(Undoable::Crossing) => return self.redo_crossing(),
+            _ => {}
         }
         let stepped = self.document.redo_bound().map_err(ModelError::engine)?;
         let moved = stepped.moved;
+        self.engine_marks_stepped_forward();
         if moved {
             self.reconcile_layers();
             self.refill_what_a_step_reached(stepped.reached)?;
@@ -2485,7 +2529,7 @@ impl ClayDocument {
     /// sculptor would have to undo, and a history that counted its commands
     /// would offer an Undo that takes back a way of looking at the scene.
     fn visibility_entries(stack: &[VisibilityGesture]) -> usize {
-        stack.iter().map(|gesture| gesture.depths.len()).sum()
+        stack.iter().map(|gesture| gesture.stamps.len()).sum()
     }
 
     fn rasterize_to_voxels(&mut self, name: &str, cell_size: f32) -> Result<LayerKey, ModelError> {
@@ -4922,12 +4966,12 @@ impl ClayDocument {
             }
             self.live_generation = self.live_generation.wrapping_add(1);
         } else if reached {
-            let engine_depth = self.engine_undo_depth();
+            let stamp = self.stamp_history();
             let (layer, deltas) = live.finish();
             self.mesh_undo.push(MeshGesture {
                 layer,
                 what: GestureRecord::Deltas(deltas),
-                engine_depth,
+                stamp,
             });
             // A new edit ends the redo line, exactly as the engine's own does.
             self.mesh_redo.clear();
@@ -5291,11 +5335,11 @@ impl ClayDocument {
         let Some(bytes) = hierarchy.close_gesture() else {
             return;
         };
-        let engine_depth = self.engine_undo_depth();
+        let stamp = self.stamp_history();
         self.mesh_undo.push(MeshGesture {
             layer: key,
             what: GestureRecord::Hierarchy(bytes),
-            engine_depth,
+            stamp,
         });
         // A new edit ends the redo line, exactly as the engine's own does.
         self.mesh_redo.clear();
@@ -6763,7 +6807,12 @@ impl ClayDocument {
             .request(claycore::MaintenanceKind::IndexRebuild, layer.0 as u32);
     }
 
-    /// The engine's own undo depth, which is what the two histories order by.
+    /// The engine's own undo depth.
+    ///
+    /// No longer what anything orders by — see [`Self::history_seq`] — but
+    /// still how many entries the engine holds, which is what
+    /// [`Self::note_engine_entries`] watches and what the counts a crossing
+    /// and a live gesture measure are measured in.
     fn engine_undo_depth(&self) -> usize {
         self.document
             .undo_state()
@@ -6771,23 +6820,195 @@ impl ClayDocument {
             .unwrap_or(0)
     }
 
-    /// Whether the newest mesh gesture is more recent than the newest engine
-    /// entry.
+    /// Brings the document's stamps level with the entries the engine holds,
+    /// and stamps whatever landed since the last look.
     ///
-    /// True when no engine edit has landed since it was recorded: any that had
-    /// would have raised the depth past what the record remembers.
-    fn mesh_gesture_is_newest(&self) -> bool {
-        self.mesh_undo
-            .last()
-            .is_some_and(|gesture| gesture.engine_depth == self.engine_undo_depth())
+    /// Called before every ordering decision and before every stamp handed
+    /// out, which is what makes the order the stamps describe the order things
+    /// actually happened in: an engine entry noticed here is stamped now, so a
+    /// record stamped immediately afterwards is stamped above it.
+    ///
+    /// **A shrunken stack is the engine's doing, never this side's.** Every
+    /// path here that undoes an engine entry moves its stamp across to the
+    /// redo marks first, so a stack shorter than the marks means the engine
+    /// dropped entries by itself — the oldest, to stay inside its history
+    /// budget, or the newest folded into the one before it by a command that
+    /// coalesced. The surviving stamps are the newest ones either way, and the
+    /// records belonging to the entries that went are dropped rather than left
+    /// to be matched by a stamp whose entry is gone.
+    fn note_engine_entries(&mut self) {
+        let Ok(state) = self.document.undo_state() else {
+            return;
+        };
+        let landed = self.engine_undo_marks.len() < state.undo_depth;
+        while self.engine_undo_marks.len() < state.undo_depth {
+            self.history_seq += 1;
+            self.engine_undo_marks.push(self.history_seq);
+        }
+        if landed {
+            // An entry landed, so the future this side was holding is as
+            // unreachable as the one the engine has just discarded. Dropped
+            // here rather than at each recording site, because the sites that
+            // matter are the ones that record nothing — an ordinary engine
+            // edit ends the redo line too.
+            self.forget_the_redo_line();
+        }
+        if self.engine_undo_marks.len() > state.undo_depth {
+            let gone = self.engine_undo_marks.len() - state.undo_depth;
+            self.engine_undo_marks.drain(..gone);
+            self.drop_records_the_engine_no_longer_holds();
+        }
+        // The engine discards its whole redo stack on a new command and evicts
+        // from it before it evicts anything a sculptor can still reach, so
+        // marks past what it reports name entries that have gone.
+        if self.engine_redo_marks.len() > state.redo_depth {
+            let gone = self.engine_redo_marks.len() - state.redo_depth;
+            self.engine_redo_marks.drain(..gone);
+        }
     }
 
-    /// The mirror on the redo side: whether the newest undone mesh gesture is
-    /// the next thing forward.
-    fn mesh_redo_is_next(&self) -> bool {
-        self.mesh_redo
+    /// The stamp on the engine's newest entry, or zero for an empty stack.
+    ///
+    /// Zero is a state and not an absence: an undo that reaches the bottom has
+    /// reached the document as it opened, and the object table has a row for
+    /// that the way it has one for any other entry.
+    fn engine_top_stamp(&mut self) -> u64 {
+        self.note_engine_entries();
+        self.engine_undo_marks.last().copied().unwrap_or(0)
+    }
+
+    /// The next number in the document's history order, with the engine's
+    /// entries stamped first.
+    fn stamp_history(&mut self) -> u64 {
+        self.note_engine_entries();
+        self.history_seq += 1;
+        self.history_seq
+    }
+
+    /// Lets go of every record on this side that describes a future the engine
+    /// has just discarded.
+    ///
+    /// A mesh gesture on the redo stack is the one that used to survive this:
+    /// it costs the engine nothing, so nothing about the engine's own
+    /// truncation reached it, and it sat there until an undo brought the
+    /// depth back to the number it remembered and re-applied a gesture the
+    /// new edit had already built over.
+    fn forget_the_redo_line(&mut self) {
+        self.mesh_redo.clear();
+        self.crossing_redo.clear();
+        self.visibility_redo.clear();
+        self.engine_redo_marks.clear();
+    }
+
+    /// Drops the records whose engine entry the engine has evicted.
+    ///
+    /// A crossing and a visibility gesture are both *named by* an engine
+    /// entry, so once that entry is gone there is nothing for the record to
+    /// move and matching it again would spend an engine entry belonging to
+    /// something else. A mesh gesture is not an engine entry and is left
+    /// alone; what bounds that stack is [`Self::trim_gesture_history`].
+    fn drop_records_the_engine_no_longer_holds(&mut self) {
+        let Some(&oldest) = self.engine_undo_marks.first() else {
+            self.crossing_undo.clear();
+            self.visibility_undo.clear();
+            return;
+        };
+        self.crossing_undo
+            .retain(|crossing| crossing.stamp >= oldest);
+        self.visibility_undo
+            .retain(|gesture| gesture.stamps.first().is_some_and(|&first| first >= oldest));
+    }
+
+    /// Follows the engine back over the entries a step has just reverted.
+    ///
+    /// Depth-driven rather than counted, so a step that reverted more than one
+    /// entry is followed exactly. The stamps move to the redo side rather than
+    /// being dropped: the same entry going forward again is the same entry.
+    fn engine_marks_stepped_back(&mut self) {
+        let depth = self.engine_undo_depth();
+        while self.engine_undo_marks.len() > depth {
+            let Some(mark) = self.engine_undo_marks.pop() else {
+                break;
+            };
+            self.engine_redo_marks.push(mark);
+        }
+    }
+
+    /// The mirror: follows the engine forward over the entries a step has just
+    /// put back.
+    ///
+    /// An entry the redo marks cannot account for is stamped afresh. That is
+    /// the honest answer rather than a refusal: it is newer than everything
+    /// this side holds, which is exactly what the engine has just made it.
+    fn engine_marks_stepped_forward(&mut self) {
+        let depth = self.engine_undo_depth();
+        while self.engine_undo_marks.len() < depth {
+            let mark = match self.engine_redo_marks.pop() {
+                Some(mark) => mark,
+                None => {
+                    self.history_seq += 1;
+                    self.history_seq
+                }
+            };
+            self.engine_undo_marks.push(mark);
+        }
+    }
+
+    /// Which history holds the newest thing, asked once.
+    ///
+    /// This is the whole of the ordering. A mesh gesture adds no engine entry,
+    /// so it wins when its stamp is above the engine's top one; everything
+    /// else *is* the engine's top entry, and the question is only which record
+    /// on this side claims it.
+    fn newest_undoable(&mut self) -> Option<Undoable> {
+        self.note_engine_entries();
+        let engine = self.engine_undo_marks.last().copied();
+        if let Some(gesture) = self.mesh_undo.last() {
+            if engine.is_none_or(|top| gesture.stamp > top) {
+                return Some(Undoable::Mesh);
+            }
+        }
+        let top = engine?;
+        if self.crossing_undo.last().is_some_and(|c| c.stamp == top) {
+            return Some(Undoable::Crossing);
+        }
+        if self
+            .visibility_undo
             .last()
-            .is_some_and(|gesture| gesture.engine_depth == self.engine_undo_depth())
+            .and_then(|gesture| gesture.stamps.last())
+            .is_some_and(|&stamp| stamp == top)
+        {
+            return Some(Undoable::Visibility);
+        }
+        Some(Undoable::Engine)
+    }
+
+    /// The mirror: which history holds the next thing forward.
+    ///
+    /// Redo runs the other way, so the answer is the *oldest* record among the
+    /// undone ones — the thing the last undo took back is the thing the next
+    /// redo puts back.
+    fn next_redoable(&mut self) -> Option<Undoable> {
+        self.note_engine_entries();
+        let engine = self.engine_redo_marks.last().copied();
+        if let Some(gesture) = self.mesh_redo.last() {
+            if engine.is_none_or(|next| gesture.stamp < next) {
+                return Some(Undoable::Mesh);
+            }
+        }
+        let next = engine?;
+        if self.crossing_redo.last().is_some_and(|c| c.stamp == next) {
+            return Some(Undoable::Crossing);
+        }
+        if self
+            .visibility_redo
+            .last()
+            .and_then(|gesture| gesture.stamps.first())
+            .is_some_and(|&stamp| stamp == next)
+        {
+            return Some(Undoable::Visibility);
+        }
+        Some(Undoable::Engine)
     }
 
     /// Takes back one carried gesture, bit exactly.
@@ -6835,11 +7056,7 @@ impl ClayDocument {
         let Ok(index) = self.index_of(gesture.layer) else {
             return Ok(None);
         };
-        let MeshGesture {
-            layer,
-            what,
-            engine_depth,
-        } = gesture;
+        let MeshGesture { layer, what, stamp } = gesture;
         let what = match what {
             GestureRecord::Deltas(deltas) => {
                 let engine_name = self.layers[index].engine_name.clone();
@@ -6871,11 +7088,7 @@ impl ClayDocument {
                 GestureRecord::Hierarchy(leaving)
             }
         };
-        Ok(Some(MeshGesture {
-            layer,
-            what,
-            engine_depth,
-        }))
+        Ok(Some(MeshGesture { layer, what, stamp }))
     }
 
     /// Drops the oldest hierarchy records until the history fits its budget.
@@ -7714,10 +7927,11 @@ impl SculptModel for ClayDocument {
         self.request_index_rebuild(key);
 
         if deltas.vertex_count().map_err(ModelError::engine)? > 0 {
+            let stamp = self.stamp_history();
             self.mesh_undo.push(MeshGesture {
                 layer: key,
                 what: GestureRecord::Deltas(deltas),
-                engine_depth: self.engine_undo_depth(),
+                stamp,
             });
             self.mesh_redo.clear();
         }
@@ -7887,12 +8101,12 @@ impl SculptModel for ClayDocument {
         // `finish` settles first: a gesture that deferred its normals owes the
         // record the recomputation before the record becomes an undo entry.
         if let Some(live) = self.live_mesh.take() {
-            let engine_depth = self.engine_undo_depth();
+            let stamp = self.stamp_history();
             let (layer, deltas) = live.finish();
             self.mesh_undo.push(MeshGesture {
                 layer,
                 what: GestureRecord::Deltas(deltas),
-                engine_depth,
+                stamp,
             });
             self.mesh_redo.clear();
         }
@@ -9747,6 +9961,9 @@ impl ClayDocument {
             surface_brick_count: 0,
             mesh_sculptors: std::cell::RefCell::default(),
             picked_seed: std::cell::Cell::default(),
+            history_seq: 0,
+            engine_undo_marks: Vec::new(),
+            engine_redo_marks: Vec::new(),
             mesh_undo: Vec::new(),
             mesh_redo: Vec::new(),
             crossing_undo: Vec::new(),
@@ -11127,12 +11344,12 @@ impl ClayDocument {
             // the brick cache, so nothing else about this edit would.
             self.live_generation = self.live_generation.wrapping_add(1);
         } else if moved > 0 {
-            let engine_depth = self.engine_undo_depth();
+            let stamp = self.stamp_history();
             let (layer, deltas) = live.finish();
             self.mesh_undo.push(MeshGesture {
                 layer,
                 what: GestureRecord::Deltas(deltas),
-                engine_depth,
+                stamp,
             });
             self.mesh_redo.clear();
         }
@@ -12275,22 +12492,23 @@ impl ClayDocument {
     /// Records the table on both sides of an edit, so history can find it.
     ///
     /// Before and after, because undoing across an object edit lands on the
-    /// depth the edit started from and redoing lands on the one it ended at.
+    /// entry the edit started from and redoing lands on the one it ended at.
     fn remember_objects_before(&mut self) {
-        let depth = self.engine_undo_depth();
-        self.object_states.insert(depth, self.objects.clone());
+        let stamp = self.engine_top_stamp();
+        self.object_states.insert(stamp, self.objects.clone());
     }
 
     fn remember_objects_after(&mut self) {
-        let depth = self.engine_undo_depth();
-        self.object_states.insert(depth, self.objects.clone());
+        let stamp = self.engine_top_stamp();
+        self.object_states.insert(stamp, self.objects.clone());
     }
 
-    /// Brings the table back to what it was at the engine's current depth.
+    /// Brings the table back to what it was on top of the engine's newest
+    /// entry.
     ///
-    /// Called after an undo or a redo has moved the engine. A depth nothing
-    /// recorded leaves the table alone, which is right: the entry that moved
-    /// was not an object edit.
+    /// Called after an undo or a redo has moved the engine. An entry nothing
+    /// recorded a table against leaves the table alone, which is right: what
+    /// moved was not an object edit.
     /// Brings the cached layer transforms back to what the engine holds.
     ///
     /// **This used to be a snapshot table.** Every route that placed a layer
@@ -12321,8 +12539,8 @@ impl ClayDocument {
     }
 
     fn resync_objects(&mut self) {
-        let depth = self.engine_undo_depth();
-        if let Some(table) = self.object_states.get(&depth) {
+        let stamp = self.engine_top_stamp();
+        if let Some(table) = self.object_states.get(&stamp) {
             self.objects = table.clone();
             // A selection outlives the nodes in it — but not the ones history
             // has taken away.
@@ -14355,5 +14573,115 @@ impl clayspace_model::CutModel for ClayDocument {
     /// cut — and it is no longer a second opinion on the same question.
     fn apply_cut(&mut self, cut: &DrawnCut) -> Result<(), ModelError> {
         self.place_drawn_cut(cut)
+    }
+}
+
+#[cfg(test)]
+mod history_order {
+    use super::*;
+
+    fn document() -> ClayDocument {
+        let policy = crate::BackendPolicy::discover(None).expect("discover backends");
+        ClayDocument::new(policy)
+            .and_then(ClayDocument::with_starting_form)
+            .expect("a document with a starting form")
+    }
+
+    /// A stamp is handed out once and never handed out again.
+    ///
+    /// The whole of what makes `>` on two stamps an answer, and every ordering
+    /// test in `tests/undo_ordering.rs` is only as good as this.
+    #[test]
+    fn a_stamp_names_one_thing_for_the_life_of_the_document() {
+        let mut doc = document();
+        let mut seen = std::collections::BTreeSet::new();
+        for _ in 0..8 {
+            doc.add_layer("Mais", Representation::Sdf)
+                .expect("another subtool");
+            doc.note_engine_entries();
+            for mark in doc.engine_undo_marks.clone() {
+                seen.insert(mark);
+            }
+            let stamp = doc.stamp_history();
+            assert!(seen.insert(stamp), "stamp {stamp} was handed out twice");
+        }
+        // And a step gives nothing back: the marks move between the two stacks,
+        // so the same entry going forward again is the same entry.
+        let before = doc.engine_undo_marks.clone();
+        doc.undo().expect("undo");
+        doc.redo().expect("redo");
+        assert_eq!(
+            doc.engine_undo_marks, before,
+            "a step there and back renamed the engine's entries"
+        );
+    }
+
+    /// An entry the engine has dropped takes this side's record with it.
+    ///
+    /// The engine evicts its oldest entries to stay inside a history budget,
+    /// and a record left behind by one of them can never be honoured: a
+    /// crossing whose filling is gone would hide a layer and have nothing to
+    /// take back. Staged from inside the crate rather than provoked, because
+    /// the budget is not something the bound ABI lets a host set —
+    /// `clay_document_undo_state` reports the depth and nothing beside it
+    /// reaches the budget underneath.
+    #[test]
+    fn an_evicted_engine_entry_drops_its_side_record() {
+        let mut doc = document();
+        doc.convert_layer(clayspace_model::Direction::SdfToMesh, 0.05, 0)
+            .expect("into a mesh");
+        let crossing = doc
+            .crossing_undo
+            .last()
+            .expect("the crossing recorded itself")
+            .stamp;
+
+        // Everything up to and including the crossing's own entry, gone the way
+        // the budget takes them: from the oldest end.
+        let surviving = doc
+            .engine_undo_marks
+            .iter()
+            .position(|&mark| mark == crossing)
+            .expect("the crossing names an entry the engine holds")
+            + 1;
+        doc.engine_undo_marks.drain(..surviving);
+        doc.drop_records_the_engine_no_longer_holds();
+
+        assert!(
+            doc.crossing_undo.is_empty(),
+            "a crossing whose engine entry has been evicted is still on the \
+             stack, where the next undo will match it against an entry \
+             belonging to something else"
+        );
+    }
+
+    /// A mesh gesture is not an engine entry, so an eviction leaves it
+    /// standing.
+    ///
+    /// The other half of the rule, and the one that would quietly throw a
+    /// sculptor's work away if it were got wrong: what bounds that stack is its
+    /// own byte budget, not the engine's.
+    #[test]
+    fn an_eviction_leaves_the_gestures_the_engine_never_held() {
+        let mut doc = document();
+        doc.convert_layer(clayspace_model::Direction::SdfToMesh, 0.05, 0)
+            .expect("into a mesh");
+        let layer = doc.active_layer().key;
+        let stamp = doc.stamp_history();
+        doc.mesh_undo.push(MeshGesture {
+            layer,
+            what: GestureRecord::Hierarchy(Vec::new()),
+            stamp,
+        });
+
+        doc.engine_undo_marks.clear();
+        doc.drop_records_the_engine_no_longer_holds();
+
+        assert_eq!(
+            doc.mesh_undo.len(),
+            1,
+            "an eviction from the engine's history threw away a gesture the \
+             engine was never holding"
+        );
     }
 }
