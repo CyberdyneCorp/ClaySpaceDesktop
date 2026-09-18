@@ -717,8 +717,13 @@ impl SculptViewModel {
         // else to report, and the swap is the part that needs explaining.
         if self.substituted {
             self.substituted = false;
+            // Announced: a swap is something that just happened, and two
+            // swaps in a row are two of them even though the sentence is the
+            // same. The availability reason below is state rather than an
+            // event — it goes on being true between commands — so it stays a
+            // plain set.
             self.tool_status
-                .set_if_changed(Some(TOOL_SUBSTITUTED.to_string()));
+                .announce(Some(TOOL_SUBSTITUTED.to_string()));
             return;
         }
         let status = self

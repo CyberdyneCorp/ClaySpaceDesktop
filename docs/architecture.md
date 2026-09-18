@@ -560,6 +560,13 @@ Observable state carries a revision. Reading never marks anything dirty, and
 setting a control to the value it already holds is not a change — which matters
 because an immediate-mode interface does both constantly.
 
+It carries a second count beside the revision, for the channels whose writes
+are events rather than state: a refusal, a substituted tool. The revision
+answers "must this be redrawn?" and a repeated sentence must not move it; the
+count answers "did it happen again?", and a reader that can only see the
+revision reads the second identical refusal as a command nothing was said
+about. The agent door reads the count.
+
 Work that outlasts a frame goes to a job runner that never blocks the interface
 thread and discards a result whose generation is behind the current one. A
 stale export writing itself over a newer document is the failure that exists to

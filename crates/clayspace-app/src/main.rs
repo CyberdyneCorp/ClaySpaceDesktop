@@ -903,24 +903,33 @@ impl App {
         outstanding
     }
 
-    /// The revisions of every channel a refusal or a notice arrives on.
+    /// How many times each channel a refusal or a notice arrives on has been
+    /// written to.
     ///
     /// Compared either side of a command so that a notice already on screen is
     /// not reported as this command's refusal.
-    fn notice_revisions(&self) -> [u64; 5] {
+    ///
+    /// Counts rather than revisions, because a revision deliberately does not
+    /// move when a channel is written the words it already holds — that is
+    /// what stops the options bar redrawing a sentence that did not change.
+    /// Asking the same impossible thing twice produces the same sentence
+    /// twice, and reading revisions here made the second attempt look like
+    /// one nothing was said about, which this reported to the agent as
+    /// success.
+    fn notice_occurrences(&self) -> [u64; 5] {
         [
-            self.scene.refusal().revision(),
-            self.objects.notice().revision(),
-            self.mask.notice().revision(),
-            self.document_vm.notice().revision(),
-            self.sculpt.tool_status().revision(),
+            self.scene.refusal().occurrences(),
+            self.objects.notice().occurrences(),
+            self.mask.notice().occurrences(),
+            self.document_vm.notice().occurrences(),
+            self.sculpt.tool_status().occurrences(),
         ]
     }
 
     /// What the interface would have shown, of the four channels that carry a
     /// refusal and the one that carries a remark.
     fn notices_since(&self, before: [u64; 5]) -> (Option<String>, Vec<String>) {
-        let now = self.notice_revisions();
+        let now = self.notice_occurrences();
         let mut refusal = None;
         let mut notices = Vec::new();
         let mut refusing = |moved: bool, said: Option<&String>| {
@@ -5805,7 +5814,7 @@ impl Session for App {
     fn apply(&mut self, command: Command) -> Result<Applied, Refusal> {
         let label = command.label().to_string();
         let touched = command.touches_document();
-        let before = self.notice_revisions();
+        let before = self.notice_occurrences();
 
         // Whose gesture this is, recorded before the command is applied so the
         // next call from the same agent is not refused its own stroke.

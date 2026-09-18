@@ -15,6 +15,7 @@ use std::cell::Cell;
 pub struct Observable<T> {
     value: T,
     revision: Cell<u64>,
+    occurrences: Cell<u64>,
 }
 
 impl<T> Observable<T> {
@@ -22,6 +23,7 @@ impl<T> Observable<T> {
         Self {
             value,
             revision: Cell::new(1),
+            occurrences: Cell::new(0),
         }
     }
 
@@ -34,6 +36,17 @@ impl<T> Observable<T> {
     /// whether a redraw is needed.
     pub fn revision(&self) -> u64 {
         self.revision.get()
+    }
+
+    /// How many times a value has been written here, whether or not it moved.
+    ///
+    /// The revision answers "must this be redrawn?"; this answers "did it
+    /// happen again?". They are the same question for most state and a
+    /// different one for a channel carrying events — a refusal repeated word
+    /// for word is still a second refusal, and a reader that can only see the
+    /// revision reads the second one as nothing having happened.
+    pub fn occurrences(&self) -> u64 {
+        self.occurrences.get()
     }
 
     /// Replaces the value and bumps the revision.
@@ -54,6 +67,11 @@ impl<T> Observable<T> {
     fn bump(&self) {
         self.revision
             .set(self.revision.get().wrapping_add(1).max(1));
+        self.record_occurrence();
+    }
+
+    fn record_occurrence(&self) {
+        self.occurrences.set(self.occurrences.get().wrapping_add(1));
     }
 }
 
@@ -68,6 +86,20 @@ impl<T: PartialEq> Observable<T> {
         }
         self.set(value);
         true
+    }
+
+    /// Records a value that may be the one already held, and counts it.
+    ///
+    /// For channels whose writes are *events* rather than state: a refusal, a
+    /// substituted tool. Saying the same thing again is a second event and has
+    /// to be visible as one, or a reader watching the channel either side of a
+    /// command is told the command was never refused. It still does not
+    /// redraw: the words on screen did not move, so neither does the revision,
+    /// and only [`Self::occurrences`] counts the repeat.
+    pub fn announce(&mut self, value: T) {
+        if !self.set_if_changed(value) {
+            self.record_occurrence();
+        }
     }
 }
 
@@ -152,6 +184,50 @@ mod tests {
 
         assert!(value.set_if_changed(4));
         assert!(watcher.take_change(&value));
+    }
+
+    #[test]
+    fn an_announcement_that_repeats_is_still_a_second_occurrence() {
+        let mut value = Observable::new(None);
+        value.announce(Some("essa camada é uma grade"));
+        let once = value.occurrences();
+
+        value.announce(Some("essa camada é uma grade"));
+        assert_ne!(
+            value.occurrences(),
+            once,
+            "the same refusal twice counted once, so the second one is reported as success"
+        );
+    }
+
+    #[test]
+    fn an_announcement_that_repeats_does_not_schedule_a_redraw() {
+        let mut value = Observable::new(None);
+        value.announce(Some("essa camada é uma grade"));
+        let mut watcher = Watcher::new();
+        watcher.accept(&value);
+
+        value.announce(Some("essa camada é uma grade"));
+        assert!(
+            !watcher.take_change(&value),
+            "repeating the sentence already on screen scheduled a redraw of it"
+        );
+    }
+
+    #[test]
+    fn writing_the_value_already_held_is_not_an_occurrence() {
+        // The counter belongs to channels that announce. A control being set
+        // to what it already shows — which an immediate-mode interface does
+        // constantly — is not an event, and counting it would make every
+        // frame look like a refusal to a reader comparing the count.
+        let mut value = Observable::new(3);
+        let steady = value.occurrences();
+
+        assert!(!value.set_if_changed(3));
+        assert_eq!(value.occurrences(), steady);
+
+        assert!(value.set_if_changed(4));
+        assert_ne!(value.occurrences(), steady);
     }
 
     #[test]

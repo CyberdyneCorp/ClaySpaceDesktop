@@ -150,6 +150,32 @@ fn a_failed_save_does_not_look_like_a_saved_document() {
     assert!(vm.notice().get().is_some(), "a failed save said nothing");
 }
 
+/// Trying the same unwritable path again fails again.
+///
+/// The words do not change — it is the same file and the same reason — and a
+/// reader that decides whether a command was refused by watching this channel
+/// would take the second attempt for a save that worked.
+#[test]
+fn a_second_failed_save_is_refused_again() {
+    let model = FakeDocument {
+        recorded: Rc::new(RefCell::new(Recorded::default())),
+        save_fails: true,
+        open_fails: None,
+    };
+    let mut vm = DocumentViewModel::new(Box::new(model), UNTITLED);
+
+    let path = Path::new("/read-only/bust.clayspace");
+    vm.save_as(path).expect_err("the save should have failed");
+    let once = vm.notice().occurrences();
+
+    vm.save_as(path).expect_err("and failed again");
+    assert_ne!(
+        vm.notice().occurrences(),
+        once,
+        "the second failure said the same thing and was counted as nothing"
+    );
+}
+
 #[test]
 fn opening_adopts_the_file_and_clears_the_flag() {
     let (mut vm, recorded) = fixture();

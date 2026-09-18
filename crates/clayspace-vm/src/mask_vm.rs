@@ -437,6 +437,32 @@ mod tests {
         assert_eq!(vm.notice().get().as_deref(), Some(NO_FIELD));
     }
 
+    /// Two runs refused in the same words are two refusals.
+    ///
+    /// A reader that tells a refused command from one that worked by watching
+    /// this channel — the agent door does — must see the second one. Counting
+    /// it once is how the same impossible request came back as success.
+    #[test]
+    fn a_refusal_that_repeats_word_for_word_is_counted_again() {
+        let recorded = Rc::new(RefCell::new(Recorded::default()));
+        let model = FakeMask {
+            recorded: recorded.clone(),
+            cells: 4096,
+            refuse: Some("uma camada de malha não tem campo para extrudar"),
+        };
+        let mut vm = MaskViewModel::new(Box::new(model));
+
+        vm.dispatch(&Command::ExtrudeMask(ExtrudeSettings::default()));
+        let once = vm.notice().occurrences();
+
+        vm.dispatch(&Command::ExtrudeMask(ExtrudeSettings::default()));
+        assert_ne!(
+            vm.notice().occurrences(),
+            once,
+            "the second identical refusal was not counted, so it reads as a success"
+        );
+    }
+
     /// And the other direction: a run that succeeds takes the last refusal
     /// down, so the status area is not still explaining something that has
     /// since been put right.

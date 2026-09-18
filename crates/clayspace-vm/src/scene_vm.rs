@@ -133,7 +133,11 @@ impl SceneViewModel {
                 Ok(outcome)
             }
             Err(error) => {
-                self.refusal.set_if_changed(Some(error.to_string()));
+                // Announced for the reason `finish` announces: asking a grid
+                // layer to re-mesh says the same sentence every time, and a
+                // refusal that only registers when the words change is a
+                // refusal the second attempt never hears.
+                self.refusal.announce(Some(error.to_string()));
                 Err(error)
             }
         }
@@ -216,7 +220,15 @@ impl SceneViewModel {
                 // happen" line — which it did not until the hierarchy's levels
                 // needed it, so a rebuild refused for an unusable resolution
                 // set this and nothing read it.
-                self.refusal.set_if_changed(Some(error.to_string()));
+                //
+                // Announced rather than set only when the words move. A
+                // reader that tells a refusal from a success by watching this
+                // channel — the agent door does — would read the second
+                // "essa camada é uma grade" as no refusal at all, and answer
+                // the same impossible request with success. The line beside
+                // the viewport still does not redraw for a repeat: the
+                // revision only moves when the sentence does.
+                self.refusal.announce(Some(error.to_string()));
                 Err(error)
             }
         }

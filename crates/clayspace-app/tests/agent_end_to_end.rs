@@ -951,3 +951,55 @@ fn one_undo_takes_back_a_crossing_or_a_repair_and_nothing_before_it() {
         "undoing the crossing also took back the stroke before it"
     );
 }
+
+/// Which layer the session is on, as the door reports it.
+fn active_layer(running: &Running, session: &str) -> u64 {
+    let state = call(running, session, "state", json!({ "sections": ["scene"] }));
+    state["structuredContent"]["scene"]["active_layer"]
+        .as_u64()
+        .expect("an active layer")
+}
+
+/// The same impossible request, three times, refused three times.
+///
+/// Whether a command was refused is read off the channels the interface would
+/// have put the sentence on, compared either side of the command. Those
+/// channels do not move when they are written the words they already hold —
+/// that is what keeps an interface drawing on demand from redrawing a line
+/// that did not change — so the second `layer remesh` on a grid layer wrote
+/// the sentence already up, nothing moved, and the door answered
+/// `{"label":"remesh layer","touched_document":true}` with `isError: false`.
+/// Measured on the running application before the fix: refused, then applied,
+/// then applied, having done nothing at all.
+#[test]
+fn the_same_refusal_twice_is_two_errors() {
+    let Some(running) = start() else {
+        return;
+    };
+    let session = initialize(&running);
+
+    call(
+        &running,
+        &session,
+        "layer",
+        json!({ "action": "add", "representation": "grid" }),
+    );
+    let grid = active_layer(&running, &session);
+
+    // Three, not two. The first attempt is the one that moves the channel, so
+    // a reader that could only see a change passed the first and failed the
+    // two after it — which is the shape it failed in.
+    for attempt in 1..=3 {
+        let refusal = refused(
+            &running,
+            &session,
+            "layer",
+            json!({ "action": "remesh", "layer": grid }),
+        );
+        let said = refusal["content"][0]["text"].as_str().unwrap_or_default();
+        assert!(
+            !said.is_empty(),
+            "attempt {attempt} was refused without saying why: {refusal}"
+        );
+    }
+}
