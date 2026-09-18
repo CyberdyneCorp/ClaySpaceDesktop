@@ -14,7 +14,7 @@
 //!     withdrew it. The guard this replaces asserted the string began `clay_`,
 //!     which passes for a renamed entry point, a removed one, and a verb the
 //!     dispatch does not use;
-//!   * the name is a symbol, and it is not the one that runs. That is the
+//!   * the name is a symbol, and it is not the one that runs. That was the
 //!     multires smooth (#199), and it is the failure that made this file worth
 //!     writing: a row can be plausible, well commented and describe a call
 //!     nobody makes.
@@ -31,8 +31,8 @@
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
     entry_points, every_entry_point, BrushSettings, ConversionSettings, Direction, ExchangeModel,
-    GestureSample, ImportSettings, MultiresLevelOp, Representation, SceneModel, SculptModel,
-    ToolKind, ToolNote,
+    GestureSample, ImportSettings, MultiresLevelOp, MultiresSculptLayerOp, Representation,
+    SceneModel, SculptModel, SmoothFrequency, ToolKind, ToolNote,
 };
 use std::collections::BTreeSet;
 
@@ -66,21 +66,6 @@ fn every_verb_the_table_names_is_a_symbol_the_engine_has() {
 
 // -- the calls ---------------------------------------------------------------
 
-/// The pair whose row names a call the application does not yet reach.
-///
-/// One, and it is a known defect with an issue of its own: every hierarchy
-/// smooth goes through the stamp with the plain Laplacian, and
-/// `clay_multires_sculpt_layer_stroke_smooth` — the call that takes a mode, and
-/// the whole reason a hierarchy smooth is worth having — is never opened
-/// (#199). The row is left naming the right call, because the row is right and
-/// the code is wrong.
-///
-/// Pinned here rather than skipped, in the shape this workspace uses for an
-/// upstream defect: the exception is *asserted*, so the day #199 lands is the
-/// day a test says so. Delete this and the assertion below it then.
-const DRIFTED_UNTIL_199: (ToolKind, Representation) =
-    (ToolKind::Suavizar, Representation::Multires);
-
 /// Every offered pair reaches an entry point its row names.
 ///
 /// **Why an intersection and not an equality.** The trace records every engine
@@ -111,15 +96,6 @@ fn every_pair_calls_an_entry_point_its_row_names() {
             .collect();
             let reached = !called.is_disjoint(&named);
 
-            if (tool, representation) == DRIFTED_UNTIL_199 {
-                assert!(
-                    !reached,
-                    "the hierarchy smooth now reaches {named:?}, so #199 has \
-                     landed. Delete DRIFTED_UNTIL_199 and the arm in \
-                     `every_tool_note_is_proved_here` that pins the same gap."
-                );
-                continue;
-            }
             if !reached {
                 wrong.push(format!(
                     "{} on {} names {named:?} and called none of them; it called {called:?}",
@@ -178,10 +154,7 @@ fn every_tool_note_is_proved_here() {
     for note in ToolNote::ALL {
         let proof = match note {
             ToolNote::VoxelPlanarIsTwoSided => "a_grid_flatten_fills_as_well_as_cuts",
-            // Proved by its absence, until #199. See `DRIFTED_UNTIL_199`.
-            ToolNote::MultiresSmoothChoosesAFrequency => {
-                "a_hierarchy_smooth_does_not_pick_a_frequency_yet"
-            }
+            ToolNote::MultiresSmoothChoosesAFrequency => "a_hierarchy_smooth_picks_a_frequency",
             ToolNote::MultiresStoresNoColour => "a_colour_brush_on_a_hierarchy_is_refused_for_real",
         };
         assert!(!proof.is_empty(), "a note with no test naming it: {note:?}");
@@ -252,7 +225,7 @@ fn a_colour_brush_on_a_hierarchy_is_refused_for_real() {
     )
     .expect("a mesh layer takes a colour brush, which is where the note sends an artist");
 
-    let (mut hierarchy, _) = with_a_hierarchy();
+    let (mut hierarchy, _) = with_a_hierarchy_of(2);
     let refused = hierarchy.apply_stroke(
         ToolKind::Pintar,
         painting(),
@@ -267,30 +240,199 @@ fn a_colour_brush_on_a_hierarchy_is_refused_for_real() {
     );
 }
 
-/// The hierarchy smooth does not pick a frequency, and that is #199.
+/// The hierarchy smooth picks a frequency, and the choice changes the surface.
 ///
-/// A tripwire, in this workspace's usual shape: it pins a defect so the day it
-/// is fixed is a failing test naming the workaround to delete, rather than a
-/// day nobody notices. When it fires, the note has become true — route the
-/// smooth through `SculptLayerStroke::smooth`, delete this test and
-/// `DRIFTED_UNTIL_199`, and write the measurement #199 asks for in its place:
-/// a `PreserveDetail` smooth leaves the pores and moves the form.
+/// The note's claim is that this one verb has a mode where the other three
+/// have none, so what proves it is a *difference between two modes* rather
+/// than a call being reached: `clay_multires_sculpt_layer_stroke_smooth` being
+/// opened is already asserted, once and for every row, by
+/// `every_pair_calls_an_entry_point_its_row_names`. What that cannot say is
+/// whether the mode it was handed meant anything.
+///
+/// So both modes are run on the same fixture and the detail is measured after
+/// each. `FormWithDetail` — what a sculptor who has not chosen gets — leaves
+/// the pores at their own height *while* the form under them moves, and `Form`
+/// takes them off, which is the plain Laplacian a mesh has. Either half alone
+/// would pass for the wrong reason: a smooth that reached nothing at all would
+/// keep the detail perfectly.
+///
+/// The measurement is `multires.rs`'s, in the two tests that landed with the
+/// routing — a pair of hierarchies alike but for a pass deposit, so the detail
+/// is a subtraction rather than a guess about which part of one surface was
+/// which. It is repeated here because this is where the note is proved, and
+/// `every_tool_note_is_proved_here` names this test.
 #[test]
-fn a_hierarchy_smooth_does_not_pick_a_frequency_yet() {
-    let called = what_one_stroke_called(ToolKind::Suavizar, Representation::Multires);
+fn a_hierarchy_smooth_picks_a_frequency() {
+    let (mut pored, mut plain) = a_pored_pair();
+    let before = detail_between(&mut pored, &mut plain);
+    assert!(before > 1e-3, "the fixture deposited pores: {before}");
+    let form_before = drawn(&mut plain);
+
+    for document in [&mut pored, &mut plain] {
+        smooth_at(document, SmoothFrequency::FormWithDetail);
+    }
+    let kept = detail_between(&mut pored, &mut plain);
     assert!(
-        !called.contains("clay_multires_sculpt_layer_stroke_smooth"),
-        "a hierarchy smooth now opens the call that takes a mode, so #199 has \
-         landed and `ToolNote::MultiresSmoothChoosesAFrequency` is true. \
-         Replace this with the measurement: PreserveDetail leaves the detail \
-         and moves the form, Geometry removes it."
+        (kept - before).abs() < before * 0.05,
+        "the default mode is supposed to carry the detail through unchanged, \
+         and the pores went from {before} to {kept}. That is the operation the \
+         note tells an artist a hierarchy can do and a flat mesh cannot."
     );
+    let form_moved = travelled(&form_before, &drawn(&mut plain));
     assert!(
-        called.contains("clay_multires_sculptor_stamp")
-            || called.contains("clay_multires_sculptor_apply_stroke"),
-        "a hierarchy smooth reached neither the mode-taking call nor the plain \
-         one: {called:?}. Something else changed and this tripwire is now \
-         measuring nothing."
+        form_moved > 1e-3,
+        "and the form underneath did move ({form_moved}); a smooth that \
+         reached nothing would have kept the detail just as well, and the note \
+         would be describing a mode that does nothing."
+    );
+
+    let (mut pored, mut plain) = a_pored_pair();
+    let before = detail_between(&mut pored, &mut plain);
+    for document in [&mut pored, &mut plain] {
+        smooth_at(document, SmoothFrequency::Form);
+    }
+    let removed = detail_between(&mut pored, &mut plain);
+    assert!(
+        removed < before * 0.9,
+        "the other mode is the plain Laplacian over the positions, which takes \
+         the pores off with the lump: {before} before, {removed} after. If \
+         both modes leave the surface alike then the row's mode is not reaching \
+         the engine and the note names a choice that is not offered."
+    );
+}
+
+/// Two hierarchies alike in every way but a pass full of pores.
+///
+/// Two documents rather than one, and the second is not a spare: what a smooth
+/// did to the *detail* is the difference between a hierarchy that has the pass
+/// deposit and one that is alike in every other way. Both carry a pass, so both
+/// strokes go into the same write domain and the comparison is between the
+/// modes and nothing else.
+fn a_pored_pair() -> (ClayDocument, ClayDocument) {
+    let (mut pored, pored_key) = with_a_hierarchy_of(PORED_LEVELS);
+    let (mut plain, plain_key) = with_a_hierarchy_of(PORED_LEVELS);
+
+    // The form: a bump at the level the brush is bound to, so there is
+    // something with curvature for a smooth to take out. A lump put on the cage
+    // comes up through the subdivisions already smooth, and a test whose form
+    // barely moves cannot tell "the form moved" from noise.
+    for document in [&mut pored, &mut plain] {
+        for _ in 0..3 {
+            dab(document, [0.0, 0.0, 0.0], 1.2);
+        }
+    }
+
+    // The pores: a pass of their own on both, filled on one. A pass is where
+    // the engine keeps detail apart from the form, which is the whole subject.
+    add_pass(&mut plain, plain_key);
+    add_pass(&mut pored, pored_key);
+    dab(&mut pored, PORES_AT, 0.3);
+    (pored, plain)
+}
+
+/// Smooths the pored region of a hierarchy at the stated frequency.
+fn smooth_at(document: &mut ClayDocument, mode: SmoothFrequency) {
+    document.set_smooth_mode(mode);
+    // Four passes over the same place: one dab of a smooth moves a surface by
+    // very little, and a difference that small is one the tolerances above
+    // could not tell from arithmetic noise.
+    for _ in 0..4 {
+        document.begin_gesture();
+        let outcome = document.apply_stroke(
+            ToolKind::Suavizar,
+            BrushSettings {
+                size: 1.2,
+                intensity: 1.0,
+                ..BrushSettings::default()
+            },
+            &[GestureSample {
+                position: PORES_AT,
+                pressure: 1.0,
+                time: 0.0,
+            }],
+            [false; 3],
+        );
+        document.end_gesture();
+        assert!(
+            outcome.expect("the smooth is applied").changed,
+            "the smooth reached the surface"
+        );
+    }
+}
+
+/// How far the tallest vertex of one surface stands from the other's.
+fn detail_between(pored: &mut ClayDocument, plain: &mut ClayDocument) -> f32 {
+    let (here, there) = (drawn(pored), drawn(plain));
+    assert_eq!(
+        here.len(),
+        there.len(),
+        "the two hierarchies are the same subject, so they are the same size"
+    );
+    tallest_difference(&here, &there)
+}
+
+/// How far the farthest vertex travelled between two pictures of one surface.
+fn travelled(before: &[[f32; 3]], after: &[[f32; 3]]) -> f32 {
+    assert_eq!(before.len(), after.len(), "the same surface, twice");
+    tallest_difference(after, before)
+}
+
+/// The tallest per-vertex distance between two same-sized point sets.
+fn tallest_difference(a: &[[f32; 3]], b: &[[f32; 3]]) -> f32 {
+    a.iter()
+        .zip(b)
+        .map(|(here, there)| {
+            (0..3)
+                .map(|axis| (here[axis] - there[axis]).powi(2))
+                .sum::<f32>()
+                .sqrt()
+        })
+        .fold(0.0f32, f32::max)
+}
+
+/// The triangles the viewport is handed for the whole document.
+fn drawn(document: &mut ClayDocument) -> Vec<[f32; 3]> {
+    document.visible_mesh_geometry().0
+}
+
+/// One dab of the default brush at the level the brush is bound to.
+fn dab(document: &mut ClayDocument, at: [f32; 3], size: f32) {
+    document.begin_gesture();
+    let outcome = document.apply_stroke(
+        ToolKind::Padrao,
+        BrushSettings {
+            size,
+            intensity: 1.0,
+            ..BrushSettings::default()
+        },
+        &[GestureSample {
+            position: at,
+            pressure: 1.0,
+            time: 0.0,
+        }],
+        [false; 3],
+    );
+    document.end_gesture();
+    assert!(
+        outcome.expect("the dab is applied").changed,
+        "the dab reached the surface"
+    );
+}
+
+/// Adds a pass to the hierarchy, which is where detail is kept apart from form.
+fn add_pass(document: &mut ClayDocument, key: clayspace_model::LayerKey) {
+    document
+        .apply_multires_sculpt_layer_op(MultiresSculptLayerOp::Add {
+            name: "Poros".to_string(),
+        })
+        .expect("a hierarchy takes a pass");
+    assert!(
+        document
+            .scene()
+            .layer(key)
+            .and_then(|layer| layer.multires.as_ref())
+            .is_some_and(|state| !state.sculpt_layers.is_empty()),
+        "the pass is on the stack the row draws"
     );
 }
 
@@ -319,7 +461,7 @@ fn over(representation: Representation) -> [f32; 3] {
 fn worked(representation: Representation) -> ClayDocument {
     let policy = BackendPolicy::discover(None).expect("discover backends");
     match representation {
-        Representation::Multires => with_a_hierarchy().0,
+        Representation::Multires => with_a_hierarchy_of(2).0,
         Representation::Voxel => {
             let mut document = ClayDocument::new(policy).expect("a document");
             document
@@ -388,12 +530,25 @@ fn worked(representation: Representation) -> ClayDocument {
     }
 }
 
-/// A document whose only layer is a hierarchy, two levels over a flat cage.
+/// How deep the hierarchy the pored pair is built on goes.
+///
+/// Deeper than the pairs walked by the table, and `multires.rs` uses the same
+/// depth for the same reason: the pores have to land on a level finer than the
+/// one the form bump is on, or there is no detail to keep apart from the form.
+const PORED_LEVELS: u32 = 3;
+
+/// Where the pores are deposited, and where the smooths are made.
+///
+/// Off the centre of the sheet, so the form bump under them is a slope rather
+/// than a summit and a smooth that moves the form has somewhere to move it.
+const PORES_AT: [f32; 3] = [0.45, 0.0, 0.45];
+
+/// A document whose only layer is a hierarchy, `levels` deep over a flat cage.
 ///
 /// Built the way `multires.rs` builds one, because it is the only route there
 /// is: a hierarchy arrives through the crossing from a mesh and there is no
 /// call anywhere that makes an empty one.
-fn with_a_hierarchy() -> (ClayDocument, clayspace_model::LayerKey) {
+fn with_a_hierarchy_of(levels: u32) -> (ClayDocument, clayspace_model::LayerKey) {
     let policy = BackendPolicy::discover(None).expect("discover backends");
     let mut document = ClayDocument::new(policy).expect("a document");
     let path = scratch();
@@ -416,7 +571,7 @@ fn with_a_hierarchy() -> (ClayDocument, clayspace_model::LayerKey) {
     let key = document
         .convert_layer_in_place(Direction::MeshToMultires, settings.cell_size, settings.blur)
         .expect("a flat quad grid is a cage");
-    for _ in 0..2 {
+    for _ in 0..levels {
         document
             .apply_multires_level_op(MultiresLevelOp::AddLevel)
             .expect("subdivide");

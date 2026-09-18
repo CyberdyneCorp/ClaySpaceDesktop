@@ -25,8 +25,9 @@ Five kinds of row had gone quietly wrong under that guard:
 - fifteen mesh rows and twelve hierarchy rows named the stamp where a resolved
   stroke runs, which is a different entry point and not a flag.
 
-A sixth is knowingly ahead of the code: the hierarchy's smooth names the call
-that takes a frequency and no stroke opens it (#199).
+A sixth was knowingly ahead of the code: the hierarchy's smooth named the call
+that takes a frequency and no stroke opened it (#199). That has since landed,
+and the pin that held the gap is now the measurement of the difference.
 
 This matters beyond tidiness. When the table drifts, the interface makes
 promises the engine call does not keep — the same class of defect the audit
