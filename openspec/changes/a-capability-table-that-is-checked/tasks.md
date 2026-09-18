@@ -29,17 +29,21 @@
       same plane (#202)
 - [x] 3.2 `a_colour_brush_on_a_hierarchy_is_refused_for_real`, against the mesh
       route the note sends an artist to (#202)
-- [x] 3.3 `a_hierarchy_smooth_does_not_pick_a_frequency_yet` — a tripwire, not a
-      measurement, because the note is not true yet (#199)
+- [x] 3.3 `a_hierarchy_smooth_picks_a_frequency` — the tripwire fired when #199
+      landed and is now the measurement it named: `FormWithDetail` leaves the
+      pores at their own height while the form under them moves, and `Form`
+      takes them off (#199)
 - [x] 3.4 `every_tool_note_is_proved_here`, whose `match` stops compiling when a
       note arrives without one (#202)
 
 ## 4. What this change does not do
 
-- It does not route the hierarchy smooth through the call that takes a mode.
-  That is #199, and the row is left naming the right call because the row is
-  right and the code is wrong. The tripwire in 3.3 and `DRIFTED_UNTIL_199` in
-  `table_truth.rs` both fail the day it lands, and both say what to delete.
+- It did not route the hierarchy smooth through the call that takes a mode. That
+  was #199, and the row was left naming the right call because the row was right
+  and the code was wrong. The tripwire in 3.3 and `DRIFTED_UNTIL_199` in
+  `table_truth.rs` both failed the day it landed and both said what to delete;
+  both are gone and the hierarchy's row is now held to the truth like every
+  other, with no exception.
 - It does not check the *brush kind* a row names in brackets — `(DRAW)`,
   `(FLATTEN)` — only the entry point. Sixteen mesh brushes reach the engine
   through one call, and telling them apart needs the descriptor traced as well
