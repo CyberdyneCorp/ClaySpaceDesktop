@@ -3499,6 +3499,16 @@ on the begin and on any sample or close that follows it. A gesture that never
 opened cannot be continued, and answering "applied" to one is how four tools
 came to look like tools that work and do nothing.
 
+**Asking the same impossible thing twice is refused twice.** Whether a command
+was refused is read off the channels the interface would have put the sentence
+on, compared either side of the command. Those channels exist to spare an
+interface that draws on demand a redraw of a line that did not change, so
+writing them the words they already hold used to count as nothing happening —
+and re-meshing the same grid layer came back refused, then applied, then
+applied again, having done nothing at all. The same refusal in the same words,
+and two different commands refused in the same words, are each their own
+refusal now. The options bar still does not redraw for a repeat.
+
 A few commands are real and deliberately not offered, each with its reason in
 the source and in `describe`: the five that open a file panel on the sculptor's
 own screen, and the three that open, shut or answer the agent door — an agent

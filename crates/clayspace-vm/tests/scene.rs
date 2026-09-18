@@ -416,6 +416,72 @@ fn a_refusal_clears_once_something_succeeds() {
     assert!(vm.refusal().get().is_none());
 }
 
+/// Whether a command was refused is decided by reading this channel either
+/// side of it — the agent door does exactly that. So the same refusal twice
+/// has to be two things happening, not one sentence that never changed.
+#[test]
+fn a_repeated_identical_refusal_is_counted_again() {
+    let (mut vm, _) = fixture_with(|model| model.refuse = Some("essa camada está bloqueada"));
+
+    vm.dispatch(&Command::SelectLayer(LayerKey(2)))
+        .expect_err("the model refused");
+    let once = vm.refusal().occurrences();
+
+    vm.dispatch(&Command::SelectLayer(LayerKey(2)))
+        .expect_err("the model refused again");
+    assert_ne!(
+        vm.refusal().occurrences(),
+        once,
+        "asking the same impossible thing twice counted once, and a caller \
+         comparing this either side of the second command is told it worked"
+    );
+}
+
+/// The refusal is the same sentence, and the two commands are not the same
+/// command. Attributing the second to "nothing was said" is the same defect
+/// wearing different clothes.
+#[test]
+fn two_commands_refused_in_the_same_words_are_two_refusals() {
+    let (mut vm, _) = fixture_with(|model| model.refuse = Some("essa camada está bloqueada"));
+
+    vm.dispatch(&Command::SelectLayer(LayerKey(2)))
+        .expect_err("the model refused");
+    let said = vm.refusal().get().clone();
+    let once = vm.refusal().occurrences();
+
+    vm.dispatch(&Command::RemoveLayer(LayerKey(1)))
+        .expect_err("the model refused");
+    assert_eq!(
+        vm.refusal().get(),
+        &said,
+        "the fixture refuses in one voice"
+    );
+    assert_ne!(
+        vm.refusal().occurrences(),
+        once,
+        "a second command refused in the first one's words was reported as applied"
+    );
+}
+
+/// And the other half of it: counting the repeat must not cost a redraw. The
+/// options bar already says this, and an interface that draws on demand would
+/// otherwise redraw for every press that changes nothing.
+#[test]
+fn a_repeated_identical_refusal_does_not_schedule_a_redraw() {
+    let (mut vm, _) = fixture_with(|model| model.refuse = Some("essa camada está bloqueada"));
+    vm.dispatch(&Command::SelectLayer(LayerKey(2)))
+        .expect_err("the model refused");
+
+    let mut watcher = Watcher::new();
+    watcher.accept(vm.refusal());
+    vm.dispatch(&Command::SelectLayer(LayerKey(2)))
+        .expect_err("the model refused again");
+    assert!(
+        !watcher.take_change(vm.refusal()),
+        "repeating the sentence already in the options bar scheduled a redraw of it"
+    );
+}
+
 #[test]
 fn reordering_moves_the_layer_and_reports_where() {
     let (mut vm, calls) = fixture();

@@ -247,8 +247,12 @@ impl ObjectViewModel {
                 }
             }
             Some((_, layer)) => {
+                // Announced, because a second press on the same sculptable
+                // item is a second refusal. Only the count moves when the
+                // sentence repeats, so the notice is not redrawn to say what
+                // it already says.
                 self.notice
-                    .set_if_changed(Some(ITEM_NOT_TRANSFORMABLE.to_string()));
+                    .announce(Some(ITEM_NOT_TRANSFORMABLE.to_string()));
                 Picked::NotTransformable(layer)
             }
         }

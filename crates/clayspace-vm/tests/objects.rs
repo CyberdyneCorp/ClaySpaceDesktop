@@ -1100,6 +1100,29 @@ fn a_press_on_a_stroke_says_why_it_carries_no_manipulator() {
     );
 }
 
+/// And pressing it again is a second refusal.
+///
+/// The notice is the only account of what the press did, and a reader that
+/// tells refusals from successes by watching this channel — the agent door —
+/// would read the second identical sentence as no refusal at all.
+#[test]
+fn a_second_press_on_the_same_stroke_is_refused_again() {
+    let calls = Rc::new(RefCell::new(Calls::default()));
+    let mut model = FakeObjects::new(calls.clone());
+    model.hit = Some(ItemKind::Stroke);
+    let mut vm = ObjectViewModel::new(Box::new(model));
+
+    let _ = vm.pick_at([0.0, 4.0, 0.0], [0.0, -1.0, 0.0]);
+    let once = vm.notice().occurrences();
+
+    let _ = vm.pick_at([0.0, 4.0, 0.0], [0.0, -1.0, 0.0]);
+    assert_ne!(
+        vm.notice().occurrences(),
+        once,
+        "pressing the same stroke twice was counted once"
+    );
+}
+
 /// A press that meets a placed object selects it and says nothing: the
 /// manipulator arriving is the answer.
 #[test]

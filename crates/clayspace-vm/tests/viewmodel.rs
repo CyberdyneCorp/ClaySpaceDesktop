@@ -727,6 +727,46 @@ mod following_the_active_layer {
         );
     }
 
+    /// Every substitution is counted, not only the ones whose sentence is new.
+    ///
+    /// This channel is read either side of a command to decide what to tell an
+    /// agent, and a swap says the same thing every time it happens. It cannot
+    /// repeat back to back today — the tool a swap lands on is the shelf's
+    /// first, which every representation carries, so the second move has
+    /// nothing to replace — but nothing about the shelf's order is a
+    /// guarantee, and a swap that went unreported would be a tool changing
+    /// under the sculptor in silence.
+    #[test]
+    fn each_substitution_is_reported_in_its_own_right() {
+        let (mut vm, representation) = fixture_with_layer_changes();
+        let mut swaps = 0;
+
+        for _ in 0..2 {
+            representation.set(Representation::Voxel);
+            vm.dispatch(Command::SelectLayer(clayspace_model::LayerKey(1)))
+                .expect("select");
+            vm.dispatch(Command::SelectTool(ToolKind::Raspar))
+                .expect("scrape is a voxel tool");
+            let before = vm.tool_status().occurrences();
+
+            representation.set(Representation::Sdf);
+            vm.dispatch(Command::SelectLayer(clayspace_model::LayerKey(1)))
+                .expect("select");
+
+            assert_eq!(
+                vm.tool_status().get().as_deref(),
+                Some(clayspace_vm::TOOL_SUBSTITUTED)
+            );
+            assert_ne!(
+                vm.tool_status().occurrences(),
+                before,
+                "a swap that happened was not counted as having happened"
+            );
+            swaps += 1;
+        }
+        assert_eq!(swaps, 2);
+    }
+
     /// The other half: a tool both representations carry is not disturbed.
     #[test]
     fn a_tool_the_new_layer_has_is_left_alone() {
