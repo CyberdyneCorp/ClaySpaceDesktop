@@ -34,6 +34,11 @@ use crate::slots::SlotMap;
 /// outweighs the rebuild on the reference scene.
 const MAX_WASTE: f32 = 0.2;
 
+enum LayoutUploadMode {
+    PerBrick,
+    Mapped,
+}
+
 /// One key's contribution to the surface.
 #[derive(Debug, Clone, Default)]
 struct KeyGeometry {
@@ -42,19 +47,21 @@ struct KeyGeometry {
     indices: Vec<u32>,
 }
 
-/// Contiguous upload for a fresh layout. Only live vertices contribute bounds;
-/// gaps preserve each brick's headroom for later isolated patches.
-struct LayoutUpload {
-    vertices: Vec<Vertex>,
-    indices: Vec<u32>,
+/// Borrowed geometry and its destination in a fresh layout. Keeping only
+/// spans avoids allocating and copying full CPU-side upload arrays.
+struct LayoutUpload<'a> {
+    spans: Vec<(crate::slots::Slot, &'a KeyGeometry)>,
+    vertex_count: usize,
+    index_count: usize,
     bounds: Option<([f32; 3], [f32; 3])>,
 }
 
-impl LayoutUpload {
-    fn new(keys: &HashMap<BrickKey, KeyGeometry>, layout: &mut SlotMap) -> Option<Self> {
+impl<'a> LayoutUpload<'a> {
+    fn new(keys: &'a HashMap<BrickKey, KeyGeometry>, layout: &mut SlotMap) -> Option<Self> {
         let mut upload = Self {
-            vertices: Vec::new(),
-            indices: Vec::new(),
+            spans: Vec::with_capacity(keys.len()),
+            vertex_count: 0,
+            index_count: 0,
             bounds: None,
         };
         for (&key, geometry) in keys {
@@ -68,22 +75,42 @@ impl LayoutUpload {
                     geometry.indices.len() as u32,
                 )?
                 .slot;
-            // Only the gaps between live runs need transferring; omit the
-            // unused tail after the last brick. No index references a gap.
-            upload
-                .vertices
-                .resize(slot.vertex_base as usize, bytemuck::Zeroable::zeroed());
-            upload.vertices.extend_from_slice(&geometry.vertices);
-            upload
-                .indices
-                .extend(geometry.indices.iter().map(|i| i + slot.vertex_base));
-            upload.indices.resize(
-                (slot.index_base + slot.index_capacity) as usize,
-                slot.vertex_base,
-            );
+            // The final unused vertex tail does not need transferring.
+            upload.vertex_count = slot.vertex_base as usize + geometry.vertices.len();
+            upload.index_count = (slot.index_base + slot.index_capacity) as usize;
             upload.bounds = union(upload.bounds, Vertex::bounds(&geometry.vertices));
+            upload.spans.push((slot, geometry));
         }
         Some(upload)
+    }
+
+    fn write_vertices(&self, into: &mut [u8]) {
+        assert_eq!(into.len(), self.vertex_count * Vertex::STRIDE);
+        let mut end = 0;
+        for (slot, geometry) in &self.spans {
+            let start = slot.vertex_base as usize * Vertex::STRIDE;
+            into[end..start].fill(0);
+            let bytes = bytemuck::cast_slice(&geometry.vertices);
+            end = start + bytes.len();
+            into[start..end].copy_from_slice(bytes);
+        }
+    }
+
+    fn write_indices(&self, into: &mut [u8]) {
+        assert_eq!(into.len(), self.index_count * 4);
+        for (slot, geometry) in &self.spans {
+            let start = slot.index_base as usize * 4;
+            let end = start + slot.index_capacity as usize * 4;
+            let (live, padding) = into[start..end].split_at_mut(geometry.indices.len() * 4);
+            // A mapped byte view need not have u32 alignment. Write native
+            // bytes, matching the ordinary upload's bytemuck representation.
+            for (bytes, index) in live.chunks_exact_mut(4).zip(&geometry.indices) {
+                bytes.copy_from_slice(&(index + slot.vertex_base).to_ne_bytes());
+            }
+            for bytes in padding.chunks_exact_mut(4) {
+                bytes.copy_from_slice(&slot.vertex_base.to_ne_bytes());
+            }
+        }
     }
 }
 
@@ -425,7 +452,7 @@ impl SurfaceGeometry {
         compact_release_geometry(&mut self.keys);
         self.relayout = true;
         self.dirty = true;
-        self.lay_out_prepared(gpu);
+        self.lay_out_prepared(gpu, LayoutUploadMode::Mapped);
         // A refused layout must retain its debt and dirty geometry.
         if !self.dirty {
             self.needs_settle = false;
@@ -847,11 +874,11 @@ impl SurfaceGeometry {
     /// everything.
     fn lay_out(&mut self, gpu: &Gpu) {
         self.prune_duplicates();
-        self.lay_out_prepared(gpu);
+        self.lay_out_prepared(gpu, LayoutUploadMode::PerBrick);
     }
 
     /// Allocate and upload geometry after its duplicate pass has completed.
-    fn lay_out_prepared(&mut self, gpu: &Gpu) {
+    fn lay_out_prepared(&mut self, gpu: &Gpu, mode: LayoutUploadMode) {
         let vertices_needed = self.vertex_count() + self.keys.len() * 64;
         let indices_needed = self.triangle_count() * 3 + self.keys.len() * 64;
         // Twice the need where the device allows it, so the strokes after a
@@ -879,25 +906,56 @@ impl SurfaceGeometry {
             self.over_budget = true;
             return;
         };
-        let mut layout = SlotMap::new(vertex_slots as u32, index_slots as u32);
-        let Some(upload) = LayoutUpload::new(&self.keys, &mut layout) else {
-            self.over_budget = true;
-            return;
+        let uploaded = match mode {
+            LayoutUploadMode::PerBrick => self.upload_per_brick(gpu, vertex_slots, index_slots),
+            LayoutUploadMode::Mapped => self.upload_compacted(gpu, vertex_slots, index_slots),
         };
-        if !self.mesh.reserve(gpu, vertex_slots, index_slots) {
+        if !uploaded {
             self.over_budget = true;
             return;
         }
         self.over_budget = false;
-        self.layout = layout;
-        self.bounds = upload.bounds;
         self.touched.clear();
-        self.mesh.patch_vertices(gpu, 0, &upload.vertices);
-        self.mesh.patch_indices(gpu, 0, &upload.indices);
         self.mesh.set_index_count(self.layout.index_count());
         self.mesh.set_bounds(self.bounds);
         self.relayout = false;
         self.dirty = false;
+    }
+
+    /// Full rebuilds retain sparse writes: mapped batching regressed their
+    /// whole-action latency despite improving isolated upload CPU time.
+    fn upload_per_brick(&mut self, gpu: &Gpu, vertex_slots: usize, index_slots: usize) -> bool {
+        if !self.mesh.reserve(gpu, vertex_slots, index_slots) {
+            return false;
+        }
+        self.layout = SlotMap::new(vertex_slots as u32, index_slots as u32);
+        self.bounds = None;
+        let keys: Vec<_> = self.keys.keys().copied().collect();
+        for key in keys {
+            let placed = self.patch(gpu, key);
+            debug_assert!(placed, "a fresh layout ran out of room");
+        }
+        true
+    }
+
+    /// Batch retained, compacted geometry without full CPU staging arrays.
+    fn upload_compacted(&mut self, gpu: &Gpu, vertex_slots: usize, index_slots: usize) -> bool {
+        let mut layout = SlotMap::new(vertex_slots as u32, index_slots as u32);
+        let Some(upload) = LayoutUpload::new(&self.keys, &mut layout) else {
+            return false;
+        };
+        if !self.mesh.reserve(gpu, vertex_slots, index_slots) {
+            return false;
+        }
+        self.layout = layout;
+        self.bounds = upload.bounds;
+        self.mesh
+            .patch_vertices_with(gpu, upload.vertex_count, |bytes| {
+                upload.write_vertices(bytes)
+            });
+        self.mesh
+            .patch_indices_with(gpu, upload.index_count, |bytes| upload.write_indices(bytes));
+        true
     }
 
     /// Drops triangles this store holds under more than one key.
@@ -1623,6 +1681,15 @@ mod tests {
         KeyGeometry, Mesh, Vertex, VertexLayout,
     };
 
+    fn layout_buffers(upload: &super::LayoutUpload<'_>) -> (Vec<Vertex>, Vec<u32>) {
+        let mut vertices = vec![bytemuck::Zeroable::zeroed(); upload.vertex_count];
+        let mut indices = vec![u32::MAX; upload.index_count];
+        bytemuck::cast_slice_mut::<Vertex, u8>(&mut vertices).fill(0xa5);
+        upload.write_vertices(bytemuck::cast_slice_mut(&mut vertices));
+        upload.write_indices(bytemuck::cast_slice_mut(&mut indices));
+        (vertices, indices)
+    }
+
     fn layout_fixture() -> HashMap<clayspace_engine::claycore::BrickKey, KeyGeometry> {
         let mut keys = HashMap::new();
         for (key, count) in [(1, 3), (2, 65), (3, 132)] {
@@ -1659,6 +1726,7 @@ mod tests {
         let keys = layout_fixture();
         let mut layout = crate::slots::SlotMap::new(4096, 4096);
         let upload = super::LayoutUpload::new(&keys, &mut layout).unwrap();
+        let (vertices, indices) = layout_buffers(&upload);
         let mut reference = crate::slots::SlotMap::new(4096, 4096);
         for (&key, geometry) in &keys {
             if geometry.indices.is_empty() {
@@ -1676,12 +1744,10 @@ mod tests {
             assert_eq!(layout.get(key), Some(expected));
             let base = expected.vertex_base as usize;
             assert_eq!(
-                bytemuck::cast_slice::<Vertex, u8>(
-                    &upload.vertices[base..base + geometry.vertices.len()]
-                ),
+                bytemuck::cast_slice::<Vertex, u8>(&vertices[base..base + geometry.vertices.len()]),
                 bytemuck::cast_slice::<Vertex, u8>(&geometry.vertices)
             );
-            let span = &upload.indices[expected.index_base as usize
+            let span = &indices[expected.index_base as usize
                 ..(expected.index_base + expected.index_capacity) as usize];
             let rebased: Vec<_> = geometry
                 .indices
@@ -1693,8 +1759,8 @@ mod tests {
                 assert_eq!(triangle, &[expected.vertex_base; 3]);
             }
         }
-        assert_eq!(upload.indices.len(), layout.index_count() as usize);
-        assert!(upload.vertices.len() <= layout.vertex_count() as usize);
+        assert_eq!(upload.index_count, layout.index_count() as usize);
+        assert!(upload.vertex_count <= layout.vertex_count() as usize);
         assert_eq!(
             upload.bounds,
             Some(([10.0, 20.0, 30.0], [141.0, 20.0, 30.0]))
@@ -1727,8 +1793,8 @@ mod tests {
         keys.insert([0, 0, 0], KeyGeometry::default());
         let mut layout = crate::slots::SlotMap::new(1024, 1024);
         let upload = super::LayoutUpload::new(&keys, &mut layout).unwrap();
-        assert!(upload.vertices.is_empty());
-        assert!(upload.indices.is_empty());
+        assert_eq!(upload.vertex_count, 0);
+        assert_eq!(upload.index_count, 0);
         assert_eq!(upload.bounds, None);
         assert_eq!(layout.index_count(), 0);
         assert_eq!(layout.vertex_count(), 0);
@@ -1739,6 +1805,157 @@ mod tests {
         let keys = layout_fixture();
         let mut layout = crate::slots::SlotMap::new(1, 1);
         assert!(super::LayoutUpload::new(&keys, &mut layout).is_none());
+    }
+
+    struct CpuLayout {
+        vertices: Vec<Vertex>,
+        indices: Vec<u32>,
+        bounds: Option<([f32; 3], [f32; 3])>,
+    }
+
+    /// The CPU-array algorithm from the first prototype, retained as an
+    /// independent byte reference and an informational benchmark comparison.
+    fn layout_reference(
+        keys: &HashMap<super::BrickKey, KeyGeometry>,
+        layout: &mut crate::slots::SlotMap,
+    ) -> CpuLayout {
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        let mut bounds = None;
+        for (&key, geometry) in keys {
+            if geometry.indices.is_empty() {
+                continue;
+            }
+            let slot = layout
+                .place(
+                    key,
+                    geometry.vertices.len() as u32,
+                    geometry.indices.len() as u32,
+                )
+                .unwrap()
+                .slot;
+            vertices.resize(slot.vertex_base as usize, bytemuck::Zeroable::zeroed());
+            vertices.extend_from_slice(&geometry.vertices);
+            indices.extend(geometry.indices.iter().map(|i| i + slot.vertex_base));
+            indices.resize(
+                (slot.index_base + slot.index_capacity) as usize,
+                slot.vertex_base,
+            );
+            bounds = super::union(bounds, Vertex::bounds(&geometry.vertices));
+        }
+        CpuLayout {
+            vertices,
+            indices,
+            bounds,
+        }
+    }
+
+    #[test]
+    fn direct_layout_writes_match_cpu_reference_in_unaligned_dirty_storage() {
+        let mut keys = layout_fixture();
+        keys.get_mut(&[2, 0, 0]).unwrap().vertices[0].color[0] = f32::from_bits(0x7fc01234);
+        keys.get_mut(&[3, 0, 0]).unwrap().indices = (0..129).cycle().take(387).collect();
+        let mut layout = crate::slots::SlotMap::new(4096, 4096);
+        let upload = super::LayoutUpload::new(&keys, &mut layout).unwrap();
+        let mut reference_layout = crate::slots::SlotMap::new(4096, 4096);
+        let CpuLayout {
+            vertices,
+            indices,
+            bounds,
+        } = layout_reference(&keys, &mut reference_layout);
+        let mut vertex_bytes = vec![0xa5; vertices.len() * Vertex::STRIDE + 2];
+        let mut index_bytes = vec![0xa5; indices.len() * 4 + 2];
+        let vertex_end = vertex_bytes.len() - 1;
+        let index_end = index_bytes.len() - 1;
+        upload.write_vertices(&mut vertex_bytes[1..vertex_end]);
+        upload.write_indices(&mut index_bytes[1..index_end]);
+        assert_eq!(
+            &vertex_bytes[1..vertex_end],
+            bytemuck::cast_slice::<Vertex, u8>(&vertices)
+        );
+        assert_eq!(
+            &index_bytes[1..index_end],
+            bytemuck::cast_slice::<u32, u8>(&indices)
+        );
+        assert_eq!([vertex_bytes[0], vertex_bytes[vertex_end]], [0xa5; 2]);
+        assert_eq!([index_bytes[0], index_bytes[index_end]], [0xa5; 2]);
+        assert_eq!(upload.bounds, bounds);
+    }
+
+    fn profile_reference_upload(
+        surface: &mut super::SurfaceGeometry,
+        gpu: &clayspace_view::Gpu,
+        arrays: bool,
+    ) {
+        let vertices = ((surface.vertex_count() + surface.keys.len() * 64) * 2).max(1024);
+        let indices = ((surface.triangle_count() * 3 + surface.keys.len() * 64) * 2).max(1024);
+        surface.layout = crate::slots::SlotMap::new(vertices as u32, indices as u32);
+        if arrays {
+            let CpuLayout {
+                vertices: vertex_data,
+                indices: index_data,
+                bounds,
+            } = layout_reference(&surface.keys, &mut surface.layout);
+            assert!(surface.mesh.reserve(gpu, vertices, indices));
+            surface.mesh.patch_vertices(gpu, 0, &vertex_data);
+            surface.mesh.patch_indices(gpu, 0, &index_data);
+            surface.bounds = bounds;
+        } else {
+            assert!(surface.mesh.reserve(gpu, vertices, indices));
+            surface.bounds = None;
+            for key in surface.keys.keys().copied().collect::<Vec<_>>() {
+                assert!(surface.patch(gpu, key));
+            }
+        }
+        surface.mesh.set_index_count(surface.layout.index_count());
+        surface.mesh.set_bounds(surface.bounds);
+    }
+
+    #[test]
+    #[ignore = "informational real-GPU upload timing; run alone in release with a quiet CPU"]
+    fn profile_whole_surface_uploads() {
+        let gpu =
+            pollster::block_on(clayspace_view::Gpu::headless()).expect("GPU for upload benchmark");
+        let policy = clayspace_engine::BackendPolicy::discover(None).unwrap();
+        let mut document = clayspace_engine::ClayDocument::new(policy)
+            .unwrap()
+            .with_starting_form()
+            .unwrap();
+        let mut surface = super::SurfaceGeometry::new(&gpu);
+        surface.sync(&gpu, &mut document).unwrap();
+        surface.prune_duplicates();
+        eprintln!(
+            "UPLOAD_SCENE keys={} vertices={} triangles={}",
+            surface.keys.len(),
+            surface.vertex_count(),
+            surface.triangle_count()
+        );
+        let names = ["per_brick", "cpu_arrays", "direct"];
+        for round in 0..33 {
+            for offset in 0..3 {
+                let variant = (round + offset) % 3;
+                gpu.queue.submit([]);
+                gpu.device.poll(wgpu::Maintain::Wait);
+                gpu.take_uploaded_bytes();
+                let start = std::time::Instant::now();
+                if variant == 2 {
+                    surface.lay_out_prepared(&gpu, super::LayoutUploadMode::Mapped);
+                } else {
+                    profile_reference_upload(&mut surface, &gpu, variant == 1);
+                }
+                let millis = start.elapsed().as_secs_f64() * 1000.0;
+                let bytes = gpu.take_uploaded_bytes();
+                assert!(!surface.over_budget());
+                if round >= 3 {
+                    eprintln!(
+                        "UPLOAD_SAMPLE,{round},{},{millis:.6},{bytes}",
+                        names[variant]
+                    );
+                }
+            }
+        }
+        gpu.queue.submit([]);
+        gpu.device.poll(wgpu::Maintain::Wait);
     }
 
     fn read_mesh_reference(mesh: &Mesh) -> Result<(Vec<Vertex>, Vec<u32>), ClayError> {
