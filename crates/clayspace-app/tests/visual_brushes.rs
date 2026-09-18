@@ -436,12 +436,22 @@ fn every_brush_in_the_shelf_draws_something_worth_looking_at() {
 /// Tools whose cost is **local to the brush**. These are the ones a sculptor
 /// uses continuously, and they have to keep up with a drag.
 ///
-/// Padrão and Camada stamp; Inflar no longer does — it is a radial scale of
-/// the assembled surface — but it belongs here all the same, because what this
-/// list groups is the shape of the cost and not the verb: a dab dirties the
-/// ball under the brush either way, where the tools below it sample a whole
-/// region into a volume and put it back.
-const STAMPING: [ToolKind; 3] = [ToolKind::Padrao, ToolKind::Inflar, ToolKind::Camada];
+/// Padrão and Camada stamp; Inflar and Pinçar no longer do — they are the one
+/// radial scale of the assembled surface, at the two signs — but they belong
+/// here all the same, because what this list groups is the shape of the cost
+/// and not the verb: a dab dirties the ball under the brush either way, where
+/// the tools below it sample a whole region into a volume and put it back.
+///
+/// Pinçar is here from #201, which gave it a field verb. Before that it was
+/// refused on the starting form and never reached this measurement at all, so
+/// leaving it out would have filed the cheaper of the two magnify signs under
+/// bake-and-replace.
+const STAMPING: [ToolKind; 4] = [
+    ToolKind::Padrao,
+    ToolKind::Inflar,
+    ToolKind::Camada,
+    ToolKind::Pincar,
+];
 
 #[test]
 fn no_brush_stalls_the_stroke() {

@@ -6649,9 +6649,14 @@ mod tests {
     /// layer — and an engine failure is not, so they do not share a code.
     #[test]
     fn a_tool_with_no_verb_here_is_refused_as_unavailable() {
+        // Raspar rather than Pinçar, which used to stand here: #201 gave Pinçar
+        // a field verb — `clay_layer_magnify_surface` at a negative strength —
+        // so it is no longer a tool a field has none of. Raspar is: its verbs
+        // are the grid's, the mesh's and the hierarchy's, and it names them in
+        // the refusal, which is what makes it an answerable one.
         let refusal = refusal_for(&ModelError::Unavailable(Unavailable::NoVerbHere {
             active: Representation::Sdf,
-            verbs: clayspace_model::ToolKind::Pincar.verbs(),
+            verbs: clayspace_model::ToolKind::Raspar.verbs(),
             note: None,
         }));
         assert_eq!(refusal.code, RefusalCode::Unavailable);
@@ -6883,10 +6888,10 @@ mod tests {
     fn a_substituted_tool_is_a_remark_and_not_a_refusal() {
         let (refused, notices) = notices_written(
             [(false, None); NOTICE_REFUSAL_CHANNELS],
-            [(true, Some("Padrão no lugar de Pincar")), (false, None)],
+            [(true, Some("Padrão no lugar de Raspar")), (false, None)],
         );
         assert_eq!(refused, None);
-        assert_eq!(notices, vec!["Padrão no lugar de Pincar".to_string()]);
+        assert_eq!(notices, vec!["Padrão no lugar de Raspar".to_string()]);
     }
 
     /// Two remarks written by one command are two sentences, not one.
@@ -6900,7 +6905,7 @@ mod tests {
         let (refused, notices) = notices_written(
             [(false, None); NOTICE_REFUSAL_CHANNELS],
             [
-                (true, Some("Padrão no lugar de Pincar")),
+                (true, Some("Padrão no lugar de Raspar")),
                 (true, Some("a máscara não congelou nada")),
             ],
         );
@@ -6908,7 +6913,7 @@ mod tests {
         assert_eq!(
             notices,
             vec![
-                "Padrão no lugar de Pincar".to_string(),
+                "Padrão no lugar de Raspar".to_string(),
                 "a máscara não congelou nada".to_string(),
             ]
         );

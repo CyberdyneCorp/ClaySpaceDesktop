@@ -1338,7 +1338,7 @@ angle between adjacent vertex normals before and after:
 | verb | accumulating | clamped | Blender |
 |---|---|---|---|
 | Inflar | 5.04x | all three | 1.00x |
-| Pinçar | 9.41x | voxel, mesh | 1.00x |
+| Pinçar | 9.41x | all three | 1.00x |
 | Vinco | 3.71x | 1.34x | 1.00x |
 | Padrão | 1.11x | all three | 1.00x |
 

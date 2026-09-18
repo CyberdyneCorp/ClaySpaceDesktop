@@ -160,9 +160,14 @@ impl ActionSpec {
 /// One argument, with its choices narrowed to the layer in hand.
 ///
 /// A narrowed list carries the layer it was narrowed against and what it left
-/// out, in the wire's own words for both: a client that asked for `pinch` and
+/// out, in the wire's own words for both: a client that asked for `erase` and
 /// no longer sees it is owed the reason, and "it has no verb on a field" is
 /// the reason the shelf gives a sculptor by not drawing the button.
+///
+/// `pinch` was the example here until #201 bound it to
+/// `clay_layer_magnify_surface` at a negative strength, which put it on a
+/// field's shelf; `erase` is the grid's alone and is narrowed away everywhere
+/// else.
 fn argument_json(arg: &Arg, layer: Option<Representation>) -> Value {
     let mut object = Map::new();
     object.insert("name".into(), json!(arg.name));

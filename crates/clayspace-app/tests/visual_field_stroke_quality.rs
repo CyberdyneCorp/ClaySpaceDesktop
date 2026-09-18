@@ -43,15 +43,23 @@ const PULL: f32 = 0.4;
 ///
 /// | tool | ratio |
 /// |------|------:|
-/// | Relaxar | 1.01 |
-/// | Suavizar, Planar, Polir | 1.02 |
+/// | Relaxar, Suavizar | 1.01 |
+/// | Planar, Polir | 1.02 |
+/// | Pinçar | 1.07 |
+/// | Inflar | 1.09 |
 /// | Mover | 1.12 |
 /// | Camada | 1.13 |
-/// | Inflar | 1.15 |
 /// | Puxar, Vinco | 1.18 |
 /// | Mover Topológico | 1.20 |
-/// | Padrão | 1.30 |
+/// | Padrão | 1.29 |
 /// | Argila | 1.31 |
+///
+/// Inflar read 1.15 while it was relief with a wider region and reads 1.09 as
+/// the magnify, and Pinçar is on this table for the first time: #201 gave it
+/// the same entry point at a negative strength, so a field has a thirteenth
+/// brush for this to look at. Both sit among the gentlest marks here, which is
+/// what a radial scale of the assembled surface should leave — it moves the
+/// surface it found rather than combining a new item with it.
 ///
 /// **Mover Topológico read 2.07 on v0.113.0**, which is the defect this file
 /// was written for, and 1.20 here. The repair was one line upstream — the

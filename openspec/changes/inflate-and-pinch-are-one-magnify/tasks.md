@@ -33,3 +33,17 @@
 - [x] 5.1 Move the canonical fixture out of the binary into `clayspace_app::canonical`, and say there which verbs may stand in it: only the ones whose record is the ask itself, since a sunk dab centre and a baked volume are both floats the engine worked out and neither is the same across toolchains.
 - [x] 5.2 Stamp `Argila` where the fixture stamped `Inflar`, so the document still crosses more than one verb.
 - [x] 5.3 `crates/clayspace-app/tests/canonical_document.rs`: every position the fixture stamps is in the saved bytes verbatim — the matrix's property, asked on one machine.
+
+## 6. Everywhere else that knew the old shelf
+
+A field offering a fifteenth brush is a fact several files had written down by
+hand. Swept in one pass rather than one CI run at a time.
+
+- [x] 6.1 `crates/clayspace-app/tests/visual_sdf_symmetry.rs`: Pinçar has a name in the file-name match, so the symmetry sweep measures it instead of panicking on it.
+- [x] 6.2 `crates/clayspace-app/tests/visual_brushes.rs`: Pinçar joins `STAMPING`. The list groups by the shape of the cost, and a magnify dirties the ball under the brush — leaving it out would have filed it as bake-and-replace and given it the loose fence.
+- [x] 6.3 `crates/clayspace-app/tests/visual_field_stroke_quality.rs`: the roughness table carries Pinçar at 1.07, and Inflar reads 1.09 as the magnify where it read 1.15 as relief.
+- [x] 6.4 `crates/clayspace-app/src/main.rs`: the refusal test and the two substitution remarks name Raspar, which a field really has no verb for, rather than Pinçar.
+- [x] 6.5 `crates/clayspace-mcp/src/catalogue/table.rs`: the narrowing's example is `erase`, matching the test that checks it.
+- [x] 6.6 `crates/clayspace-app/tests/agent_end_to_end.rs`: the count of tools with no SDF verb is the current one, with what #127 said kept beside it.
+- [x] 6.7 `README.md`: fifteen have an SDF verb, the SDF shelf's caption lists Pinch, and ClayCore #391 moves out of the things blocked upstream.
+- [x] 6.8 `docs/features.md`: the mesh-accumulation table no longer says Pinçar is voxel and mesh.

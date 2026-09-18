@@ -169,6 +169,10 @@ fn every_sdf_brush_comes_out_on_both_sides() {
             ToolKind::Suavizar => "suavizar",
             ToolKind::Mover => "mover",
             ToolKind::MoverTopologico => "mover-topologico",
+            // New to the field shelf: #201 bound it to
+            // `clay_layer_magnify_surface` at a negative strength, so it has
+            // two sides to compare here for the first time.
+            ToolKind::Pincar => "pincar",
             ToolKind::Planar => "planar",
             ToolKind::Argila => "argila",
             ToolKind::Vinco => "vinco",
