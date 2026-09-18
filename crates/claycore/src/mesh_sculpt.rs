@@ -102,6 +102,26 @@ impl MeshBrush {
         matches!(self, Self::Paint | Self::Smear)
     }
 
+    /// Whether an adaptive surface offers this verb.
+    ///
+    /// **Fifteen of the sixteen.** The one it declines is [`Layer`], and the
+    /// reason is structural rather than an omission: layer deposits up to a
+    /// ceiling measured from where the surface was when the *stroke* began,
+    /// per vertex, and on an adaptive surface half the vertices under the
+    /// brush at the end of a stroke did not exist at the start — a split
+    /// created them — so for those the reference does not exist.
+    ///
+    /// Transcribed from the engine's `dynamic_offers` rather than asked over
+    /// the ABI, which has no entry point for it. That makes this a second copy
+    /// of a rule, so it is pinned by a test in `tests/dynamic.rs` that stamps
+    /// every verb and checks the refusals line up, rather than left to be
+    /// believed.
+    ///
+    /// [`Layer`]: Self::Layer
+    pub fn offered_by_adaptive(self) -> bool {
+        self != Self::Layer
+    }
+
     fn to_raw(self) -> i32 {
         (match self {
             Self::Grab => sys::clay_mesh_brush::CLAY_MESH_BRUSH_GRAB,

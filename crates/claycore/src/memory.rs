@@ -45,14 +45,14 @@
 //! and static data. Expect the operating system to charge the process *more*
 //! than this, and do not read the gap as a leak.
 //!
-//! # What is deliberately not here
+//! # Where the adaptive surface's half of this lives
 //!
 //! `clay_dynamic_sculptor_memory_ledger`, `clay_dynamic_sculptor_trim` and the
-//! two `clay_dynamic_surface_preflight_*` entry points take a handle this
-//! crate does not wrap: there is no adaptive surface in this workspace yet, so
-//! a wrapper for them would be an unconstructible type, or a raw pointer
-//! crossing a safe boundary. They arrive with the adaptive surface, which is
-//! the change that can also run them.
+//! two `clay_dynamic_surface_preflight_*` entry points take handles this
+//! module does not own, so they are wrapped beside those handles in
+//! [`dynamic`](crate::DynamicSurface) and answer in the types declared here.
+//! The vocabulary is the point: a host holding one of each representation gets
+//! one set of roll-ups rather than three reports it has to reconcile.
 
 use std::ptr::NonNull;
 
@@ -814,7 +814,7 @@ impl MeshSculptor {
 /// The five share an estimator upstream and they share a descriptor here for
 /// the same reason: a per-call transcription is a place for one of them to
 /// forget the `struct_size` or the refusal.
-fn preflight(
+pub(crate) fn preflight(
     operation: &'static str,
     call: impl FnOnce(&mut sys::clay_surface_preflight) -> crate::error::RawResult,
 ) -> Result<SurfacePreflight> {

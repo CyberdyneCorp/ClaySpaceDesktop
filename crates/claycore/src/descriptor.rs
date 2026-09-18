@@ -86,6 +86,16 @@ descriptors! {
     sys::clay_chunk_readback,
     sys::clay_maintenance_item,
     sys::clay_resume_stats,
+    sys::clay_dynamic_surface_desc,
+    sys::clay_dynamic_surface_stats,
+    sys::clay_dynamic_topology_desc,
+    sys::clay_dynamic_stamp_report,
+    sys::clay_dynamic_chunk_info,
+    sys::clay_surface_revision,
+    sys::clay_index_quality,
+    sys::clay_sculpt_stage_report,
+    sys::clay_mesh_frame,
+    sys::clay_automask_sources,
 }
 
 #[cfg(test)]
