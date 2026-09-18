@@ -567,6 +567,16 @@ count answers "did it happen again?", and a reader that can only see the
 revision reads the second identical refusal as a command nothing was said
 about. The agent door reads the count.
 
+A refusal therefore has to be written to one of those channels to exist at all.
+The composition root runs a few operations itself rather than dispatching them
+— a repair, a crossing, a rebuild, a pass of the active layer's stack — because
+each carries an answer back rather than a `Result<(), _>`, and those had no
+channel: their refusals went to `eprintln!`, which the options bar cannot draw
+and the door cannot count, so a repair that changed nothing was reported to an
+agent as work that had happened. They share one channel now, and the list of
+channels the door compares is a function with a test on it rather than a list
+inside a method.
+
 Work that outlasts a frame goes to a job runner that never blocks the interface
 thread and discards a result whose generation is behind the current one. A
 stale export writing itself over a newer document is the failure that exists to

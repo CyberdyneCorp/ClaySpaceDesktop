@@ -635,6 +635,44 @@ fn commands_this_viewmodel_does_not_own_are_ignored() {
     assert!(!watcher.take_change(vm.scene()));
 }
 
+/// A refused level operation states its reason rather than being dropped.
+///
+/// The composition root used to run this one as `if
+/// scene.apply_level_op(op).is_ok()`, which reads as "do nothing when it did
+/// not work" and is one character away from "say nothing either". What makes
+/// the silent branch safe is that the reason is on the channel the options bar
+/// draws and the agent door counts before the caller ever sees the `Err` — so
+/// it is checked here, where the guarantee is made, rather than at the call
+/// site that relies on it.
+#[test]
+fn a_refused_level_op_is_not_dropped() {
+    use clayspace_model::MultiresLevelOp;
+
+    let (mut vm, _) = fixture();
+    // The double models no hierarchies, so every level operation is refused in
+    // the model's own sentence.
+    let refused = vm
+        .apply_level_op(MultiresLevelOp::AddLevel)
+        .expect_err("a document with no hierarchy cannot add a level to one");
+
+    assert_eq!(
+        vm.refusal().get().as_deref(),
+        Some(refused.to_string().as_str()),
+        "a refused level operation left nothing for the interface to say"
+    );
+
+    // And asking the same impossible thing again is a second refusal, not a
+    // command nothing was said about: the door tells one from the other by
+    // counting writes to this channel.
+    let before = vm.refusal().occurrences();
+    vm.apply_level_op(MultiresLevelOp::AddLevel)
+        .expect_err("still no hierarchy");
+    assert!(
+        vm.refusal().occurrences() > before,
+        "the second identical refusal was not counted, so it reads as a success"
+    );
+}
+
 /// A pass operation reaches the model, and its refusal reaches the interface.
 ///
 /// The two halves that a control which draws and does nothing would still
