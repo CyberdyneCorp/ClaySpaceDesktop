@@ -139,6 +139,18 @@ pub trait SculptModel {
         true
     }
 
+    /// Whether the next stroke would enter a pass rather than the form under
+    /// them.
+    ///
+    /// A hierarchy's question, and `false` everywhere else — including on a
+    /// hierarchy whose stack is empty or whose selected row is the form.
+    /// Provided rather than required for the reason visibility is: a double
+    /// that models no pass stack says "the form", which is what a layer with
+    /// no stack has.
+    fn active_layer_stroke_lands_in_a_pass(&self) -> bool {
+        false
+    }
+
     /// What the active layer can accept right now, as one value.
     ///
     /// Assembled here so that a call site cannot forget one of the conditions
@@ -149,6 +161,7 @@ pub trait SculptModel {
             editable: self.active_layer_editable(),
             visible: self.active_layer_visible(),
             carries_geometry: self.active_layer_carries_geometry(),
+            stroke_lands_in_a_pass: self.active_layer_stroke_lands_in_a_pass(),
         }
     }
 

@@ -136,6 +136,10 @@ impl SculptModel for SharedDocument {
         self.document.borrow().active_layer_visible()
     }
 
+    fn active_layer_stroke_lands_in_a_pass(&self) -> bool {
+        self.document.borrow().active_layer_stroke_lands_in_a_pass()
+    }
+
     fn apply_operation(
         &mut self,
         operation: clayspace_model::LayerOperation,

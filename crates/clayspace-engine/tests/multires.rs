@@ -1255,6 +1255,278 @@ fn a_field_layer_says_where_passes_live() {
     );
 }
 
+// -- the per-pass eraser -----------------------------------------------------
+//
+// Apagar on a hierarchy is not the grid's verb under the same label. A grid
+// stores occupancy, so erasing there clears cells; a hierarchy stores where
+// each vertex went *per pass*, so erasing here walks the selected pass's
+// displacement back to nothing and leaves the form and every other pass
+// exactly where they were. That last clause is the whole claim, and it is what
+// the sculptor had no way to do before: flatten and smooth both reach the form.
+
+/// Erasing pass two leaves the base and pass one untouched.
+///
+/// **Measured by hiding the pass rather than by a checksum**, and that is not
+/// a shortcut. The ABI carries two hashes and neither answers this question:
+/// `clay_multires_detail_checksum` hashes the base detail alone, and
+/// `clay_multires_sculpt_layer_checksum` hashes every pass's coefficients
+/// together, so it moves whichever pass changed. Hiding the erased pass leaves
+/// exactly base-plus-the-other-pass on screen, and a hidden pass contributes
+/// *exactly* zero rather than nearly zero — which is what makes the comparison
+/// below an equality of vertices rather than a tolerance.
+///
+/// Both halves are asserted, and either alone would pass for the wrong reason:
+/// an erase that did nothing at all would leave everything underneath it
+/// perfectly untouched.
+#[test]
+fn erasing_a_pass_leaves_the_base_alone() {
+    let (mut document, key) = with_a_hierarchy("erase-a-pass", 3);
+
+    // The form under the passes, so that "the base is unchanged" is a claim
+    // about a surface with something on it rather than about a flat sheet.
+    for _ in 0..3 {
+        assert!(
+            dab(&mut document, [0.0, 0.0, 0.0], 1.2),
+            "the form took its dab"
+        );
+    }
+
+    let first = add_pass(&mut document, key, "Rugas");
+    assert!(
+        dab(&mut document, [-0.45, 0.0, -0.45], 0.5),
+        "the first pass took its stroke"
+    );
+    let second = add_pass(&mut document, key, "Poros");
+    assert!(
+        dab(&mut document, [0.45, 0.0, 0.45], 0.5),
+        "the second pass took its stroke"
+    );
+
+    // Everything except the pass about to be erased.
+    let underneath = with_pass_hidden(&mut document, second);
+    let before = drawn(&mut document);
+    let standing = travelled(&underneath, &before);
+    assert!(
+        standing > 1e-3,
+        "the fixture's second pass deposited nothing to erase: {standing}"
+    );
+
+    document.begin_gesture();
+    let outcome = document
+        .apply_stroke(
+            ToolKind::Apagar,
+            BrushSettings {
+                size: 0.8,
+                intensity: 1.0,
+                ..BrushSettings::default()
+            },
+            &[GestureSample {
+                position: [0.45, 0.0, 0.45],
+                pressure: 1.0,
+                time: 0.0,
+            }],
+            [false; 3],
+        )
+        .expect("a pass is selected, so the eraser is offered");
+    document.end_gesture();
+    assert!(
+        outcome.changed,
+        "the erase reached nothing, so the rest of this measures a stroke that \
+         did not happen"
+    );
+
+    let after = drawn(&mut document);
+    let left = travelled(&underneath, &after);
+    assert!(
+        left < standing * 0.9,
+        "the erase did not take the pass toward zero: it stood {standing} \
+         above the surface underneath and stands {left} now"
+    );
+
+    // And the half that is the point: with the erased pass hidden, what is
+    // left is the base and the other pass, vertex for vertex as they were.
+    assert_eq!(
+        with_pass_hidden(&mut document, second),
+        underneath,
+        "the erase reached past the pass it was aimed at. It is an eraser for \
+         one pass — the base and every other pass are supposed to be exactly \
+         where they were, which is the whole reason this verb exists beside \
+         flatten and smooth, both of which reach the form"
+    );
+
+    // The other pass on its own, so the equality above cannot be satisfied by
+    // two errors cancelling in the sum.
+    let first_alone = with_pass_hidden(&mut document, first);
+    assert_ne!(
+        first_alone, underneath,
+        "the fixture's two passes are indistinguishable, so hiding either one \
+         proves nothing about the other"
+    );
+}
+
+/// One erase gesture is one step in the history, and undo puts the pass back.
+///
+/// The pass stack banks the hierarchy's own serialized bytes, so exactness is
+/// what is asserted rather than a tolerance — the same standard
+/// `a_gesture_on_a_hierarchy_is_one_undo_and_it_is_exact` holds the form to.
+#[test]
+fn an_erase_gesture_is_one_undo_step() {
+    let (mut document, key) = with_a_hierarchy("erase-undo", 2);
+    add_pass(&mut document, key, "Poros");
+    let empty = drawn(&mut document);
+    assert!(
+        dab(&mut document, [0.0, 0.0, 0.0], 0.9),
+        "the pass took its stroke"
+    );
+    let deposited = drawn(&mut document);
+
+    document.begin_gesture();
+    for step in 0..4 {
+        let t = step as f32 / 3.0;
+        document
+            .apply_stroke(
+                ToolKind::Apagar,
+                BrushSettings {
+                    size: 0.9,
+                    intensity: 1.0,
+                    ..BrushSettings::default()
+                },
+                &[GestureSample {
+                    position: [(t - 0.5) * 0.4, 0.0, 0.0],
+                    pressure: 1.0,
+                    time: t,
+                }],
+                [false; 3],
+            )
+            .expect("the erase is applied");
+    }
+    document.end_gesture();
+    let erased = drawn(&mut document);
+    assert_ne!(erased, deposited, "the erase moved the surface");
+
+    assert!(document.undo().expect("undo"), "there is something to undo");
+    assert_eq!(
+        drawn(&mut document),
+        deposited,
+        "one undo did not take the whole erase back. Four segments arrive for \
+         one drag, and four undo steps for one gesture is the defect this \
+         asserts against"
+    );
+
+    // The step under it is the stroke that filled the pass, which is what says
+    // the erase banked one step and not none.
+    assert!(document.undo().expect("undo"), "and the stroke beneath it");
+    assert_eq!(
+        drawn(&mut document),
+        empty,
+        "the erase banked no step of its own, so undoing it took back the \
+         stroke that filled the pass instead"
+    );
+}
+
+/// With the form selected rather than a pass, the erase is refused.
+///
+/// Refused rather than quietly redirected, because the redirection is the
+/// dangerous one: the engine's erase walks *the target channel* toward zero,
+/// and with the form selected the target channel is the base detail — so the
+/// same gesture would take the whole surface back toward the pure subdivision.
+/// That operation exists, it is called `restore`, and nothing on the shelf
+/// would have told a sculptor which of the two they were about to get.
+#[test]
+fn erase_without_a_pass_is_refused() {
+    let (mut document, key) = with_a_hierarchy("erase-no-pass", 2);
+    let pass = add_pass(&mut document, key, "Poros");
+    assert!(
+        dab(&mut document, [0.0, 0.0, 0.0], 0.9),
+        "the pass took its stroke"
+    );
+
+    document
+        .apply_multires_sculpt_layer_op(PassOp::SetActive {
+            id: MultiresSculptLayerId::BASE,
+        })
+        .expect("the form is a row a sculptor can select");
+    let standing = drawn(&mut document);
+
+    document.begin_gesture();
+    let refused = document.apply_stroke(
+        ToolKind::Apagar,
+        BrushSettings {
+            size: 0.9,
+            intensity: 1.0,
+            ..BrushSettings::default()
+        },
+        &[GestureSample {
+            position: [0.0, 0.0, 0.0],
+            pressure: 1.0,
+            time: 0.0,
+        }],
+        [false; 3],
+    );
+    document.end_gesture();
+
+    let said = refused
+        .expect_err("the form is not a pass")
+        .to_string()
+        .to_lowercase();
+    assert!(
+        said.contains("pass"),
+        "the refusal has to name what a sculptor must select before erasing: \
+         {said}"
+    );
+    assert_eq!(
+        drawn(&mut document),
+        standing,
+        "a refused erase moved the surface, which is the one thing a refusal \
+         must not do"
+    );
+
+    // And selecting the pass again is all it takes.
+    document
+        .apply_multires_sculpt_layer_op(PassOp::SetActive { id: pass })
+        .expect("select the pass");
+    document.begin_gesture();
+    let outcome = document
+        .apply_stroke(
+            ToolKind::Apagar,
+            BrushSettings {
+                size: 0.9,
+                intensity: 1.0,
+                ..BrushSettings::default()
+            },
+            &[GestureSample {
+                position: [0.0, 0.0, 0.0],
+                pressure: 1.0,
+                time: 0.0,
+            }],
+            [false; 3],
+        )
+        .expect("with the pass selected the eraser is offered");
+    document.end_gesture();
+    assert!(outcome.changed, "and it reaches the pass");
+}
+
+/// The drawn surface with one pass hidden, and the pass put back afterwards.
+///
+/// Hiding is exact — a hidden pass contributes exactly zero — which is what
+/// makes it a measurement rather than an approximation of one.
+fn with_pass_hidden(document: &mut ClayDocument, pass: MultiresSculptLayerId) -> Vec<[f32; 3]> {
+    document
+        .apply_multires_sculpt_layer_op(PassOp::SetVisible {
+            id: pass,
+            visible: false,
+        })
+        .expect("hide the pass");
+    let without = drawn(document);
+    document
+        .apply_multires_sculpt_layer_op(PassOp::SetVisible {
+            id: pass,
+            visible: true,
+        })
+        .expect("and put it back");
+    without
+}
+
 // -- which frequency a smooth acts on ---------------------------------------
 //
 // A hierarchy stores the form and the detail in different arrays, so there are

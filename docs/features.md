@@ -49,7 +49,7 @@ on it, the sixteen mesh brushes less Pintar and Borrar, plus Máscara. See
 | Vinco | `clay_layer_apply_stroke` with incise / `clay_mesh_sculptor_apply_stroke` (CREASE) | SDF, mesh | Pinches a sharp ridge or trough along the stroke. On a field it is `Op::Incise` — "a thin region gives the line", in the engine's words — at 0.6 of the brush, which cuts to the full depth in three fifths of the width. Held, the key raises the ridge it would have cut, which is the inverse the engine names |
 | Pintar | `clay_voxel_paint_brush` / `clay_mesh_sculptor_apply_stroke` (PAINT) | voxel, mesh | Writes colour rather than moving the surface. The colour comes from the swatch in the options bar, which is shown for the two tools that read one |
 | Borrar | `clay_mesh_sculptor_apply_stroke` (SMEAR) | mesh | Drags the surface sideways without carrying it away |
-| Apagar | `clay_voxel_erase_brush` | voxel | Removes cells |
+| Apagar | `clay_voxel_erase_brush` / `clay_multires_sculpt_layer_stroke_erase` | voxel, multires | Removes cells. **On a hierarchy it is a different operation under the same name**: there are no cells to clear, so it takes the *selected pass*'s detail toward zero and leaves the form and every other pass exactly where they are. Refused where the form's row is selected rather than a pass |
 
 **The Engine verb column is checked rather than maintained.** It is written
 out in `ToolKind::verbs`, and two tests in
@@ -1476,6 +1476,27 @@ stroke here follows the selected row.
 went and not what colour it is, so a paint stamp would move nothing, be dropped
 by the write-back, and evaporate with the level cache. Paint the cage before
 subdividing, or bake a level back to a mesh.
+
+**Apagar erases a pass, not the surface.** It is the one label in the tool
+table over two genuinely different operations. A grid stores occupancy, so
+erasing there clears the cells the brush covers; a hierarchy has no cells to
+clear, and what the same intent means is the *selected pass*'s displacement
+walked back toward nothing while the form and every other pass stay exactly
+where they are. The engine's own comment puts it as an eraser for **this** pass
+rather than a flattening brush, and that is the whole reason it is worth
+having: flatten and smooth both reach the form underneath, which is the one
+thing the pass stack exists to keep separate. It is the only tool on the
+hierarchy's shelf that is not also on the mesh's — a mesh has one surface and
+nothing stored beneath it to take back.
+
+**With the form's row selected, Apagar is refused** and the line beside the
+viewport says to select a pass first. Not redirected: the engine's erase walks
+*the target channel* toward zero, and with the form selected that channel is
+the base detail, so the same gesture would take the whole surface back toward
+the pure subdivision. That operation is real — the engine calls it a restore —
+and it is a different one, at a scale an eraser does not suggest. The brush
+stays on the shelf while it is refused, because a tool that vanished when a
+sculptor clicked a row would leave nobody to say why.
 
 ## Voxel layers
 

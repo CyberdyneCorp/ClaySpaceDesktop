@@ -5036,7 +5036,7 @@ impl ClayDocument {
         samples: &[GestureSample],
         symmetry: [bool; 3],
     ) -> Result<EditOutcome, ModelError> {
-        let Some(verb) = mesh_verb(tool) else {
+        let Some(verb) = hierarchy_verb(tool) else {
             return Ok(EditOutcome::NOTHING);
         };
         let index = self.active;
@@ -5138,6 +5138,18 @@ impl ClayDocument {
         } = carried_stroke(verb, brush, samples, preset, alpha, chosen);
         // Read before the sculptor is taken: the lease reads the document.
         let mask = self.active_mask();
+
+        // Erasing is its own entry point too, and unlike the smooth it is
+        // asked by the *tool* rather than by the verb: the verb in the stamp
+        // is `hierarchy_verb`'s filler, which the erase does not read.
+        //
+        // Before the smooth for no reason other than reading order — the two
+        // cannot both be true, since Apagar's only verb here is this one.
+        if tool == ToolKind::Apagar {
+            let moved = Self::erase_a_pass(hierarchy, &stamp, &points, symmetry, mask.as_deref())?;
+            hierarchy.note_gesture_moved(moved);
+            return Ok(moved);
+        }
 
         // Smoothing is its own entry point on a hierarchy, and taking it is
         // the whole difference between this tier and a mesh — see
@@ -5406,6 +5418,72 @@ impl ClayDocument {
                             center: mirror.point([sample[0], sample[1], sample[2]]),
                             // The sample's pressure, since nothing else applies
                             // it once the resolver is out of the path.
+                            strength: stamp.strength * sample[3],
+                            ..*stamp
+                        },
+                        mask,
+                    )
+                    .map_err(ModelError::engine)?
+                    .moved_vertices;
+            }
+        }
+        stroke.commit().map_err(ModelError::engine)?;
+        Ok(moved)
+    }
+
+    /// The selected pass toward zero, under the brush.
+    ///
+    /// The eraser a hierarchy has and no other representation does, and it is
+    /// not the grid's verb wearing the same label. A grid stores occupancy, so
+    /// erasing there is clearing cells; a hierarchy stores where each vertex
+    /// went *per pass*, so erasing here is one pass's displacement walked back
+    /// to nothing while the base and every other pass stand exactly where they
+    /// were. The engine's own comment puts it as "an eraser for THIS pass
+    /// rather than a flattening brush", and the difference is the whole reason
+    /// the verb is worth binding: the alternatives an artist has otherwise —
+    /// flatten, smooth — reach the form as well.
+    ///
+    /// **`WriteDomain::Detail` and never `Automatic`**, and here that is not
+    /// merely the clearer of two spellings the way it is in
+    /// [`ClayDocument::stamp_into_a_pass`]. `Automatic` with no pass selected
+    /// resolves to the form, and an erase against the form is the whole
+    /// surface walked back toward the pure subdivision — a different operation
+    /// (the engine calls it `restore`) at a scale nobody asked for. Detail
+    /// refuses instead, and `clayspace_model::Unavailable::NeedsAPass` is what
+    /// stops a sculptor reaching this in the first place.
+    ///
+    /// Everything [`ClayDocument::stamp_into_a_pass`] says about the
+    /// transaction holds: the channel is fixed when the gesture opens, the
+    /// path is stamped sample by sample because the transaction offers no
+    /// resolver, and the commit is what keeps the work since a drop cancels.
+    fn erase_a_pass(
+        hierarchy: &mut crate::multires::Hierarchy,
+        stamp: &claycore::MeshStamp<'_>,
+        points: &[[f32; 5]],
+        symmetry: [bool; 3],
+        mask: Option<&claycore::MaskField>,
+    ) -> Result<u64, ModelError> {
+        let mut stroke = hierarchy
+            .surface_mut()
+            .sculpt_layer_stroke()
+            .map_err(ModelError::engine)?;
+        stroke
+            .set_write_domain(claycore::WriteDomain::Detail)
+            .map_err(ModelError::engine)?;
+        stroke
+            .begin()
+            .map_err(|refused| ModelError::engine(refused.to_string()))?;
+
+        let mut moved = 0;
+        for mirror in mirrors(symmetry) {
+            for sample in points {
+                moved += stroke
+                    .erase(
+                        claycore::MeshStamp {
+                            direction: mirror.vector(stamp.direction),
+                            center: mirror.point([sample[0], sample[1], sample[2]]),
+                            // The sample's pressure, since nothing else
+                            // applies it once the resolver is out of the path.
                             strength: stamp.strength * sample[3],
                             ..*stamp
                         },
@@ -7820,6 +7898,19 @@ impl SculptModel for ClayDocument {
         self.active_layer().editable()
     }
 
+    /// The hierarchy's own answer, and `false` for every other layer.
+    ///
+    /// Asked of the engine through the held hierarchy rather than read off the
+    /// scene, for the reason `Hierarchy::active_pass` gives: the selected row
+    /// is the engine's state, and a copy of it here would last exactly until
+    /// the next operation that moved it.
+    fn active_layer_stroke_lands_in_a_pass(&self) -> bool {
+        self.active_layer()
+            .multires
+            .as_ref()
+            .is_some_and(crate::multires::Hierarchy::stamps_into_a_pass)
+    }
+
     fn apply_stroke(
         &mut self,
         tool: ToolKind,
@@ -8747,6 +8838,27 @@ fn mesh_verb(tool: ToolKind) -> Option<claycore::MeshBrush> {
         | ToolKind::Apagar
         | ToolKind::MoverTopologico => return None,
     })
+}
+
+/// The same, widened by the one tool a hierarchy has and a mesh does not.
+///
+/// Apagar has no mesh verb — erasing a cell would change a mesh's topology —
+/// and it does have a hierarchy one, because a hierarchy's eraser changes no
+/// topology at all: it walks the selected pass's displacement channel toward
+/// zero. The verb handed back for it is the descriptor's filler rather than
+/// what runs: `clay_multires_sculpt_layer_stroke_erase` *is* the operation and
+/// reads no verb out of the brush it is given, so what matters is that the
+/// stamp carries the radius, the falloff and the strength.
+///
+/// Draw is that filler, chosen because it is the one verb whose descriptor is
+/// built from the brush and nothing else — no direction to derive, no mode, no
+/// colour — so a reader who follows it finds nothing that could be mistaken
+/// for the erase's own behaviour.
+fn hierarchy_verb(tool: ToolKind) -> Option<claycore::MeshBrush> {
+    match tool {
+        ToolKind::Apagar => Some(claycore::MeshBrush::Draw),
+        other => mesh_verb(other),
+    }
 }
 
 /// Kept so the routing type is visible to readers of this module's imports.

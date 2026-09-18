@@ -124,6 +124,20 @@ fn what_one_stroke_called(
     representation: Representation,
 ) -> BTreeSet<&'static str> {
     let mut document = worked(representation);
+    // One pair needs the fixture pointed at a pass rather than at the form
+    // under them, and it is not a convenience: the hierarchy's eraser acts on
+    // the selected pass and refuses the form, so with the default selection
+    // there is no stroke to record. Every other tool on a hierarchy means the
+    // same thing in either row, and the fixture leaves them in the form —
+    // where they call `clay_multires_sculptor_*`, which is what their rows
+    // name.
+    if (tool, representation) == (ToolKind::Apagar, Representation::Multires) {
+        document
+            .apply_multires_sculpt_layer_op(MultiresSculptLayerOp::Add {
+                name: "Poros".to_string(),
+            })
+            .expect("a hierarchy takes a pass");
+    }
     let recording = claycore::trace::Recording::start();
     drag(&mut document, tool, representation);
     let called = recording.calls().into_iter().collect();
@@ -156,6 +170,9 @@ fn every_tool_note_is_proved_here() {
             ToolNote::VoxelPlanarIsTwoSided => "a_grid_flatten_fills_as_well_as_cuts",
             ToolNote::MultiresSmoothChoosesAFrequency => "a_hierarchy_smooth_picks_a_frequency",
             ToolNote::MultiresStoresNoColour => "a_colour_brush_on_a_hierarchy_is_refused_for_real",
+            ToolNote::MultiresEraseTakesThisPassToZero => {
+                "erasing_is_a_different_verb_on_a_grid_and_on_a_hierarchy"
+            }
         };
         assert!(!proof.is_empty(), "a note with no test naming it: {note:?}");
     }
@@ -237,6 +254,37 @@ fn a_colour_brush_on_a_hierarchy_is_refused_for_real() {
         "a hierarchy took a colour brush. It stores where a vertex went and \
          not what colour it is, so the colour would land in the level's \
          rebuildable cache and evaporate — which is worse than a refusal."
+    );
+}
+
+/// Apagar is one label over two operations, and the note is what says so.
+///
+/// Measured as the calls rather than as the surface, because what the note
+/// warns about is precisely that the *operation* differs: a grid's eraser
+/// clears the cells the brush covers, and a hierarchy has no cells to clear —
+/// the same gesture opens the layered transaction and walks the selected
+/// pass's displacement toward zero. A test comparing two surfaces would find
+/// them both lower and conclude the two agreed.
+#[test]
+fn erasing_is_a_different_verb_on_a_grid_and_on_a_hierarchy() {
+    let grid = what_one_stroke_called(ToolKind::Apagar, Representation::Voxel);
+    assert!(
+        grid.contains("clay_voxel_erase_brush"),
+        "a grid's eraser no longer clears cells: {grid:?}"
+    );
+
+    let hierarchy = what_one_stroke_called(ToolKind::Apagar, Representation::Multires);
+    assert!(
+        hierarchy.contains("clay_multires_sculpt_layer_stroke_erase"),
+        "the hierarchy's eraser did not reach the entry point that takes a \
+         pass toward zero: {hierarchy:?}. Without it the note is describing \
+         an operation nobody runs."
+    );
+    assert!(
+        !hierarchy.contains("clay_voxel_erase_brush"),
+        "the hierarchy's eraser reached the grid's verb, so the two columns \
+         are one operation after all and the note is telling an artist about \
+         a difference that is not there"
     );
 }
 
