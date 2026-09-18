@@ -1,0 +1,912 @@
+[
+  {
+    "run": 0,
+    "version": "before",
+    "tool": "mask",
+    "begin": {
+      "backend": "cuda",
+      "label": "begin stroke",
+      "live_session": true,
+      "millis": 6.559746,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 10982672
+    },
+    "continue": {
+      "backend": "cuda",
+      "label": "continue stroke",
+      "live_session": true,
+      "millis": 0.020435,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "end": {
+      "backend": "cuda",
+      "label": "stroke",
+      "live_session": true,
+      "millis": 8.428649,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 10982672
+    }
+  },
+  {
+    "run": 0,
+    "version": "before",
+    "tool": "crease",
+    "begin": {
+      "backend": "cuda",
+      "label": "begin stroke",
+      "live_session": true,
+      "millis": 0.842329,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 93656
+    },
+    "continue": {
+      "backend": "cuda",
+      "label": "continue stroke",
+      "live_session": true,
+      "millis": 0.014407,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "end": {
+      "backend": "cuda",
+      "label": "stroke",
+      "live_session": true,
+      "millis": 13.694873,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 11205088
+    }
+  },
+  {
+    "run": 0,
+    "version": "before",
+    "tool": "clay",
+    "begin": {
+      "backend": "cuda",
+      "label": "begin stroke",
+      "live_session": true,
+      "millis": 2.76181,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 410912
+    },
+    "continue": {
+      "backend": "cuda",
+      "label": "continue stroke",
+      "live_session": true,
+      "millis": 0.020941,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "end": {
+      "backend": "cuda",
+      "label": "stroke",
+      "live_session": true,
+      "millis": 16.817023,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": true,
+      "uploaded_bytes": 11451896
+    }
+  },
+  {
+    "run": 0,
+    "version": "before",
+    "tool": "inflate",
+    "begin": {
+      "backend": "cuda",
+      "label": "begin stroke",
+      "live_session": true,
+      "millis": 2.156936,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 405200
+    },
+    "continue": {
+      "backend": "cuda",
+      "label": "continue stroke",
+      "live_session": true,
+      "millis": 0.034543,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "end": {
+      "backend": "cuda",
+      "label": "stroke",
+      "live_session": true,
+      "millis": 14.011797,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 11428120
+    }
+  },
+  {
+    "run": 0,
+    "version": "before",
+    "tool": "layer",
+    "begin": {
+      "backend": "cuda",
+      "label": "begin stroke",
+      "live_session": true,
+      "millis": 1.025794,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 100152
+    },
+    "continue": {
+      "backend": "cuda",
+      "label": "continue stroke",
+      "live_session": true,
+      "millis": 0.018070000000000003,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "end": {
+      "backend": "cuda",
+      "label": "stroke",
+      "live_session": true,
+      "millis": 12.761913999999999,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 11202616
+    }
+  },
+  {
+    "run": 0,
+    "version": "before",
+    "tool": "standard",
+    "begin": {
+      "backend": "cuda",
+      "label": "begin stroke",
+      "live_session": true,
+      "millis": 1.1849750000000001,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 103560
+    },
+    "continue": {
+      "backend": "cuda",
+      "label": "continue stroke",
+      "live_session": true,
+      "millis": 0.016792,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "end": {
+      "backend": "cuda",
+      "label": "stroke",
+      "live_session": true,
+      "millis": 13.755847,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 11241368
+    }
+  },
+  {
+    "run": 0,
+    "version": "before",
+    "tool": "polish",
+    "begin": {
+      "backend": "cuda",
+      "label": "begin stroke",
+      "live_session": true,
+      "millis": 0.024955,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "continue": {
+      "backend": "cuda",
+      "label": "continue stroke",
+      "live_session": true,
+      "millis": 0.015635,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "end": {
+      "backend": "cuda",
+      "label": "stroke",
+      "live_session": true,
+      "millis": 32.578854,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": true,
+      "uploaded_bytes": 12242128
+    }
+  },
+  {
+    "run": 0,
+    "version": "before",
+    "tool": "planar",
+    "begin": {
+      "backend": "cuda",
+      "label": "begin stroke",
+      "live_session": true,
+      "millis": 0.022381,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "continue": {
+      "backend": "cuda",
+      "label": "continue stroke",
+      "live_session": true,
+      "millis": 0.011274000000000001,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "end": {
+      "backend": "cuda",
+      "label": "stroke",
+      "live_session": true,
+      "millis": 31.488269,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": true,
+      "uploaded_bytes": 12233680
+    }
+  },
+  {
+    "run": 0,
+    "version": "before",
+    "tool": "move-topological",
+    "begin": {
+      "backend": "cuda",
+      "label": "begin stroke",
+      "live_session": true,
+      "millis": 0.021102,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "continue": {
+      "backend": "cuda",
+      "label": "continue stroke",
+      "live_session": true,
+      "millis": 0.013181,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "end": {
+      "backend": "cuda",
+      "label": "stroke",
+      "live_session": true,
+      "millis": 47.958247,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": true,
+      "uploaded_bytes": 12233680
+    }
+  },
+  {
+    "run": 0,
+    "version": "before",
+    "tool": "move",
+    "begin": {
+      "backend": "cuda",
+      "label": "begin stroke",
+      "live_session": true,
+      "millis": 0.018885,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "continue": {
+      "backend": "cuda",
+      "label": "continue stroke",
+      "live_session": true,
+      "millis": 2.5217579999999997,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 579560
+    },
+    "end": {
+      "backend": "cuda",
+      "label": "stroke",
+      "live_session": true,
+      "millis": 36.143626,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": true,
+      "uploaded_bytes": 10982672
+    }
+  },
+  {
+    "run": 0,
+    "version": "before",
+    "tool": "relax",
+    "begin": {
+      "backend": "cuda",
+      "label": "begin stroke",
+      "live_session": true,
+      "millis": 50.770336,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": true,
+      "uploaded_bytes": 10995376
+    },
+    "continue": {
+      "backend": "cuda",
+      "label": "continue stroke",
+      "live_session": true,
+      "millis": 0.025017,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "end": {
+      "backend": "cuda",
+      "label": "stroke",
+      "live_session": true,
+      "millis": 64.515993,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": true,
+      "uploaded_bytes": 10982672
+    }
+  },
+  {
+    "run": 0,
+    "version": "before",
+    "tool": "smooth",
+    "begin": {
+      "backend": "cuda",
+      "label": "begin stroke",
+      "live_session": true,
+      "millis": 50.900578,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": true,
+      "uploaded_bytes": 10995376
+    },
+    "continue": {
+      "backend": "cuda",
+      "label": "continue stroke",
+      "live_session": true,
+      "millis": 0.038358,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "end": {
+      "backend": "cuda",
+      "label": "stroke",
+      "live_session": true,
+      "millis": 58.419575,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": true,
+      "uploaded_bytes": 10982672
+    }
+  },
+  {
+    "run": 0,
+    "version": "before",
+    "tool": "snake-hook",
+    "begin": {
+      "backend": "cuda",
+      "label": "begin stroke",
+      "live_session": true,
+      "millis": 0.020456,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "continue": {
+      "backend": "cuda",
+      "label": "continue stroke",
+      "live_session": true,
+      "millis": 13.857078,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 2565280
+    },
+    "end": {
+      "backend": "cuda",
+      "label": "stroke",
+      "live_session": true,
+      "millis": 24.594887999999997,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": true,
+      "uploaded_bytes": 13654576
+    }
+  },
+  {
+    "run": 0,
+    "version": "fixed",
+    "tool": "mask",
+    "begin": {
+      "backend": "cuda",
+      "label": "begin stroke",
+      "live_session": true,
+      "millis": 6.131721,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 10982672
+    },
+    "continue": {
+      "backend": "cuda",
+      "label": "continue stroke",
+      "live_session": true,
+      "millis": 0.022997999999999998,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "end": {
+      "backend": "cuda",
+      "label": "stroke",
+      "live_session": true,
+      "millis": 7.878726000000001,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 10982672
+    }
+  },
+  {
+    "run": 0,
+    "version": "fixed",
+    "tool": "crease",
+    "begin": {
+      "backend": "cuda",
+      "label": "begin stroke",
+      "live_session": true,
+      "millis": 1.430096,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 93656
+    },
+    "continue": {
+      "backend": "cuda",
+      "label": "continue stroke",
+      "live_session": true,
+      "millis": 0.01418,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "end": {
+      "backend": "cuda",
+      "label": "stroke",
+      "live_session": true,
+      "millis": 14.528675,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 13712728
+    }
+  },
+  {
+    "run": 0,
+    "version": "fixed",
+    "tool": "clay",
+    "begin": {
+      "backend": "cuda",
+      "label": "begin stroke",
+      "live_session": true,
+      "millis": 2.2126889999999997,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 410912
+    },
+    "continue": {
+      "backend": "cuda",
+      "label": "continue stroke",
+      "live_session": true,
+      "millis": 0.01692,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "end": {
+      "backend": "cuda",
+      "label": "stroke",
+      "live_session": true,
+      "millis": 14.39602,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 13971056
+    }
+  },
+  {
+    "run": 0,
+    "version": "fixed",
+    "tool": "inflate",
+    "begin": {
+      "backend": "cuda",
+      "label": "begin stroke",
+      "live_session": true,
+      "millis": 2.173183,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 405200
+    },
+    "continue": {
+      "backend": "cuda",
+      "label": "continue stroke",
+      "live_session": true,
+      "millis": 0.016012,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "end": {
+      "backend": "cuda",
+      "label": "stroke",
+      "live_session": true,
+      "millis": 15.7904,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 13950720
+    }
+  },
+  {
+    "run": 0,
+    "version": "fixed",
+    "tool": "layer",
+    "begin": {
+      "backend": "cuda",
+      "label": "begin stroke",
+      "live_session": true,
+      "millis": 0.89987,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 100152
+    },
+    "continue": {
+      "backend": "cuda",
+      "label": "continue stroke",
+      "live_session": true,
+      "millis": 0.014194,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "end": {
+      "backend": "cuda",
+      "label": "stroke",
+      "live_session": true,
+      "millis": 14.141772,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 13716696
+    }
+  },
+  {
+    "run": 0,
+    "version": "fixed",
+    "tool": "standard",
+    "begin": {
+      "backend": "cuda",
+      "label": "begin stroke",
+      "live_session": true,
+      "millis": 1.1520059999999999,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 103560
+    },
+    "continue": {
+      "backend": "cuda",
+      "label": "continue stroke",
+      "live_session": true,
+      "millis": 0.034767,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "end": {
+      "backend": "cuda",
+      "label": "stroke",
+      "live_session": true,
+      "millis": 14.360875,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 13757448
+    }
+  },
+  {
+    "run": 0,
+    "version": "fixed",
+    "tool": "polish",
+    "begin": {
+      "backend": "cuda",
+      "label": "begin stroke",
+      "live_session": true,
+      "millis": 0.026894,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "continue": {
+      "backend": "cuda",
+      "label": "continue stroke",
+      "live_session": true,
+      "millis": 0.051428999999999996,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "end": {
+      "backend": "cuda",
+      "label": "stroke",
+      "live_session": true,
+      "millis": 33.40643,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": true,
+      "uploaded_bytes": 14735168
+    }
+  },
+  {
+    "run": 0,
+    "version": "fixed",
+    "tool": "planar",
+    "begin": {
+      "backend": "cuda",
+      "label": "begin stroke",
+      "live_session": true,
+      "millis": 0.024411000000000002,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "continue": {
+      "backend": "cuda",
+      "label": "continue stroke",
+      "live_session": true,
+      "millis": 0.011668000000000001,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "end": {
+      "backend": "cuda",
+      "label": "stroke",
+      "live_session": true,
+      "millis": 33.183071,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": true,
+      "uploaded_bytes": 14726720
+    }
+  },
+  {
+    "run": 0,
+    "version": "fixed",
+    "tool": "move-topological",
+    "begin": {
+      "backend": "cuda",
+      "label": "begin stroke",
+      "live_session": true,
+      "millis": 0.022830999999999997,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "continue": {
+      "backend": "cuda",
+      "label": "continue stroke",
+      "live_session": true,
+      "millis": 0.012449,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "end": {
+      "backend": "cuda",
+      "label": "stroke",
+      "live_session": true,
+      "millis": 46.377283,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": true,
+      "uploaded_bytes": 14726720
+    }
+  },
+  {
+    "run": 0,
+    "version": "fixed",
+    "tool": "move",
+    "begin": {
+      "backend": "cuda",
+      "label": "begin stroke",
+      "live_session": true,
+      "millis": 0.02989,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "continue": {
+      "backend": "cuda",
+      "label": "continue stroke",
+      "live_session": true,
+      "millis": 2.952893,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 579560
+    },
+    "end": {
+      "backend": "cuda",
+      "label": "stroke",
+      "live_session": true,
+      "millis": 37.659554,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": true,
+      "uploaded_bytes": 13474832
+    }
+  },
+  {
+    "run": 0,
+    "version": "fixed",
+    "tool": "relax",
+    "begin": {
+      "backend": "cuda",
+      "label": "begin stroke",
+      "live_session": true,
+      "millis": 52.826517,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": true,
+      "uploaded_bytes": 13532456
+    },
+    "continue": {
+      "backend": "cuda",
+      "label": "continue stroke",
+      "live_session": true,
+      "millis": 0.030249,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "end": {
+      "backend": "cuda",
+      "label": "stroke",
+      "live_session": true,
+      "millis": 63.41287,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": true,
+      "uploaded_bytes": 13474832
+    }
+  },
+  {
+    "run": 0,
+    "version": "fixed",
+    "tool": "smooth",
+    "begin": {
+      "backend": "cuda",
+      "label": "begin stroke",
+      "live_session": true,
+      "millis": 53.215113,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": true,
+      "uploaded_bytes": 13532456
+    },
+    "continue": {
+      "backend": "cuda",
+      "label": "continue stroke",
+      "live_session": true,
+      "millis": 0.025057,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "end": {
+      "backend": "cuda",
+      "label": "stroke",
+      "live_session": true,
+      "millis": 60.659484,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": true,
+      "uploaded_bytes": 13474832
+    }
+  },
+  {
+    "run": 0,
+    "version": "fixed",
+    "tool": "snake-hook",
+    "begin": {
+      "backend": "cuda",
+      "label": "begin stroke",
+      "live_session": true,
+      "millis": 0.013754,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 0
+    },
+    "continue": {
+      "backend": "cuda",
+      "label": "continue stroke",
+      "live_session": true,
+      "millis": 12.071252,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": false,
+      "uploaded_bytes": 2565280
+    },
+    "end": {
+      "backend": "cuda",
+      "label": "stroke",
+      "live_session": true,
+      "millis": 22.196582,
+      "note": "a live-session figure: taken with a window open and a person's session in memory. Evidence, not a baseline \u2014 the baselines in benchmarks/ are recorded by the harness under stated conditions and nothing here writes one.",
+      "platform": "linux x86_64",
+      "stalled": true,
+      "uploaded_bytes": 16194736
+    }
+  }
+]

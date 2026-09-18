@@ -210,6 +210,19 @@ pub struct GpuMesh {
     bounds: Option<(Vec3, Vec3)>,
 }
 
+fn write_mapped_buffer(gpu: &Gpu, buffer: &wgpu::Buffer, bytes: u64, fill: impl FnOnce(&mut [u8])) {
+    let Some(size) = wgpu::BufferSize::new(bytes) else {
+        return;
+    };
+    let mut staging = gpu
+        .queue
+        .write_buffer_with(buffer, 0, size)
+        .expect("allocate upload staging buffer");
+    fill(&mut staging);
+    drop(staging);
+    gpu.note_upload(bytes);
+}
+
 impl GpuMesh {
     /// An empty mesh with no allocation yet.
     pub fn new(gpu: &Gpu) -> Self {
@@ -362,6 +375,28 @@ impl GpuMesh {
             bytemuck::cast_slice(indices),
         );
         gpu.note_upload((indices.len() * 4) as u64);
+    }
+
+    /// Fill a prefix of the vertex buffer directly in mapped upload storage.
+    /// The callback must write every byte and must not read previous contents.
+    /// An empty upload does not invoke the callback.
+    pub fn patch_vertices_with(&mut self, gpu: &Gpu, count: usize, fill: impl FnOnce(&mut [u8])) {
+        assert!(
+            count <= self.vertex_capacity,
+            "vertex upload exceeds its buffer"
+        );
+        write_mapped_buffer(gpu, &self.vertices, (count * Vertex::STRIDE) as u64, fill);
+    }
+
+    /// Fill a prefix of the index buffer directly in mapped upload storage.
+    /// The callback must write every byte and must not read previous contents.
+    /// An empty upload does not invoke the callback.
+    pub fn patch_indices_with(&mut self, gpu: &Gpu, count: usize, fill: impl FnOnce(&mut [u8])) {
+        assert!(
+            count <= self.index_capacity,
+            "index upload exceeds its buffer"
+        );
+        write_mapped_buffer(gpu, &self.indices, (count * 4) as u64, fill);
     }
 
     /// How many indices the draw call covers.

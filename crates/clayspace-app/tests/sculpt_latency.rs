@@ -234,3 +234,42 @@ fn compaction_rebuilds_the_surface_without_changing_it() {
         moved * 100.0
     );
 }
+
+#[test]
+fn full_rebuilds_keep_sparse_uploads_while_compaction_batches() {
+    let Some(harness) = Harness::new() else {
+        return;
+    };
+    let mut document = document();
+    let mut geometry = SurfaceGeometry::new(&harness.gpu);
+    geometry.sync(&harness.gpu, &mut document).unwrap();
+    harness.gpu.take_uploaded_bytes();
+    geometry.rebuild(&harness.gpu, &mut document).unwrap();
+    let sparse_bytes = (geometry.vertex_count() * clayspace_view::Vertex::STRIDE) as u64
+        + u64::from(geometry.mesh().index_count()) * 4;
+    assert_eq!(
+        harness.gpu.take_uploaded_bytes(),
+        sparse_bytes,
+        "full rebuilds must not transfer unused vertex gaps"
+    );
+
+    document
+        .apply_stroke(
+            ToolKind::Padrao,
+            BrushSettings::default(),
+            &dab(0),
+            [false; 3],
+        )
+        .unwrap();
+    geometry.sync(&harness.gpu, &mut document).unwrap();
+    harness.gpu.take_uploaded_bytes();
+    geometry
+        .settle_after_edit(&harness.gpu, &mut document)
+        .unwrap();
+    let live_bytes = (geometry.vertex_count() * clayspace_view::Vertex::STRIDE) as u64
+        + u64::from(geometry.mesh().index_count()) * 4;
+    assert!(
+        harness.gpu.take_uploaded_bytes() > live_bytes,
+        "compaction must use the mapped prefix, including inter-brick vertex gaps"
+    );
+}
