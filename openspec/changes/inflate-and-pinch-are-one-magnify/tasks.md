@@ -27,3 +27,9 @@
 - [x] 4.1 `docs/features.md`: the two rows, the count, the measurement behind the strength, what the invert key does, and the mask and warp-accumulation notes. Remove the "SDF Pinçar" gap, which is closed.
 - [x] 4.2 `docs/roadmap.md`: ClayCore #391 is taken up rather than waiting upstream, and the gesture-region note names two callers rather than one.
 - [x] 4.3 `docs/features.md`: the agent surface's example of what a field does not offer is `erase` rather than `pinch`.
+
+## 5. Keep the file the same on both platforms
+
+- [x] 5.1 Move the canonical fixture out of the binary into `clayspace_app::canonical`, and say there which verbs may stand in it: only the ones whose record is the ask itself, since a sunk dab centre and a baked volume are both floats the engine worked out and neither is the same across toolchains.
+- [x] 5.2 Stamp `Argila` where the fixture stamped `Inflar`, so the document still crosses more than one verb.
+- [x] 5.3 `crates/clayspace-app/tests/canonical_document.rs`: every position the fixture stamps is in the saved bytes verbatim — the matrix's property, asked on one machine.

@@ -59,6 +59,17 @@ negative gathers toward. One entry point covers both verbs.
   stroke wraps its dabs in a group, so a pass across the form is one Cmd+Z.
 - **`Padrão` stays on Relief.** The point of the change is that Standard and
   Inflate stop being the same verb.
+- **The canonical document stops stamping Inflar.** Sinking a dab means the
+  file records a point the *field* answered rather than the point the gesture
+  asked for, and the engine "pins no FP flags for its own translation units and
+  makes no cross-build promise" — so that point is not the same float on
+  arm64-macOS as on x86_64-Linux. The byte-identical check authored an Inflar
+  and its digests parted. `Argila` stamps in its place — a second stamping
+  verb, at the same asymmetric position — `clayspace_app::canonical` says which
+  verbs the fixture may hold and why, and a test asserts every position the
+  fixture stamps survives into the bytes verbatim, so the next verb that
+  records what it computed is caught on one machine rather than by two legs of
+  a matrix disagreeing.
 
 ## What this deliberately does not do
 
