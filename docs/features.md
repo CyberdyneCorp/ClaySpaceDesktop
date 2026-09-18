@@ -66,11 +66,13 @@ where the regions one runs, and a grid Padrão and Camada that named a sculpt
 verb where a deposit runs. The guard they replace asserted that the string
 began `clay_`, which none of those five would have failed.
 
-One row is knowingly ahead of the code: the hierarchy's smooth names the call
-that takes a frequency, and no stroke opens it yet
-([#199](https://github.com/CyberdyneCorp/ClaySpaceDesktop/issues/199)). That
-gap is pinned by a test that fails the day it closes, rather than left as a
-silence.
+One row was knowingly ahead of the code until
+[#199](https://github.com/CyberdyneCorp/ClaySpaceDesktop/issues/199) closed the
+gap: the hierarchy's smooth names the call that takes a frequency, and a stroke
+now opens it. What pinned the gap is the measurement that replaced it —
+`FormWithDetail` leaves the pores at their own height *while* the form under
+them moves, and `Form` takes them off — so the row is held to what the note
+promises rather than to the string it names.
 
 **Padrão and Inflar are two marks on a field.** ClayCore's own equivalence
 table binds both to `Op::Relief` — relief moves the accumulated surface along
