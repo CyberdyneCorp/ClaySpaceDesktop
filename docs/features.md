@@ -3534,6 +3534,19 @@ applied again, having done nothing at all. The same refusal in the same words,
 and two different commands refused in the same words, are each their own
 refusal now. The options bar still does not redraw for a repeat.
 
+**A refusal that only reaches stderr is a refusal that was lost.** Reading the
+channels either side of the command is what makes the door's answer the
+interface's answer, and it also means a refusal written anywhere *else* comes
+back as a plain success. About ten command families were written that way — the
+repairs, the deformations, the crossings, a rebuild, a pass of the active
+layer's stack, a hierarchy's levels — because each is run by the composition
+root rather than dispatched to a ViewModel, and none of them had a channel at
+all. `repair close_holes` on an SDF layer answered `touched_document: true` to
+a document it had left byte-identical, and the sentence naming the
+representation went to the log. They now write to one channel of their own,
+which the options bar draws and the door counts, so the reason reaches a
+sculptor and a client by the same route every other refusal takes.
+
 A few commands are real and deliberately not offered, each with its reason in
 the source and in `describe`: the five that open a file panel on the sculptor's
 own screen, and the three that open, shut or answer the agent door — an agent

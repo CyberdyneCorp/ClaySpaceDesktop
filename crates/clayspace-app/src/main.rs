@@ -516,6 +516,24 @@ struct App {
     /// [`Session::apply`] — which is where a refused stroke used to be
     /// reported as a success.
     sculpt_refusal: Option<ModelError>,
+    /// Why the last operation the composition root ran *itself* was refused.
+    ///
+    /// A handful of operations belong to no ViewModel — a repair, a crossing,
+    /// a pass of the active layer's stack, a rebuild — because each has an
+    /// answer to carry back rather than a `Result<(), _>` to dispatch. Their
+    /// refusals went to `eprintln!` and nowhere else, and stderr is not a
+    /// surface: no sculptor is looking at it, and the door, which decides
+    /// whether a command was refused by reading the channels the interface
+    /// would have written, saw nothing written and answered success with
+    /// `touched_document: true`. A repair asked for on an SDF layer, a
+    /// crossing priced past its budget and a second `begin_recording` were all
+    /// reported to an agent as work that had happened.
+    ///
+    /// An `Observable` rather than a plain `Option`, unlike `sculpt_refusal`
+    /// above, because this one has two readers: the options bar draws it, and
+    /// the door counts it. Nothing here is drawn twice for a repeat — see
+    /// `Observable::announce`.
+    operation_refusal: clayspace_vm::Observable<Option<String>>,
     /// When the clock on "an agent acted" was last advanced.
     ///
     /// Here rather than in the ViewModel because that layer has no clock,
@@ -747,6 +765,7 @@ impl App {
             agent_proxy: None,
             agent_gesture: AgentGesture::default(),
             sculpt_refusal: None,
+            operation_refusal: clayspace_vm::Observable::new(None),
             agent_ticked: Instant::now(),
             last_ui: Vec::new(),
             last_ppp: 1.0,
@@ -916,8 +935,9 @@ impl App {
     /// twice, and reading revisions here made the second attempt look like
     /// one nothing was said about, which this reported to the agent as
     /// success.
-    fn notice_occurrences(&self) -> [u64; 5] {
+    fn notice_occurrences(&self) -> [u64; NOTICE_CHANNELS] {
         [
+            self.operation_refusal.occurrences(),
             self.scene.refusal().occurrences(),
             self.objects.notice().occurrences(),
             self.mask.notice().occurrences(),
@@ -926,37 +946,51 @@ impl App {
         ]
     }
 
-    /// What the interface would have shown, of the four channels that carry a
+    /// What the interface would have shown, of the five channels that carry a
     /// refusal and the one that carries a remark.
-    fn notices_since(&self, before: [u64; 5]) -> (Option<String>, Vec<String>) {
+    fn notices_since(&self, before: [u64; NOTICE_CHANNELS]) -> (Option<String>, Vec<String>) {
         let now = self.notice_occurrences();
-        let mut refusal = None;
-        let mut notices = Vec::new();
-        let mut refusing = |moved: bool, said: Option<&String>| {
-            if moved {
-                if let Some(said) = said {
-                    if refusal.is_none() {
-                        refusal = Some(said.clone());
-                    }
-                }
+        let written = |channel: usize| now[channel] != before[channel];
+        notices_written(
+            [
+                (written(0), self.operation_refusal.get().as_deref()),
+                (written(1), self.scene.refusal().get().as_deref()),
+                (written(2), self.objects.notice().get().as_deref()),
+                (written(3), self.mask.notice().get().as_deref()),
+                (written(4), self.document_vm.notice().get().as_deref()),
+            ],
+            (written(5), self.sculpt.tool_status().get().as_deref()),
+        )
+    }
+
+    /// Records what an operation the composition root ran itself answered, and
+    /// hands back what it produced.
+    ///
+    /// `None` is a refusal that has been *stated*, not one that has been lost:
+    /// the reason goes onto the channel the options bar draws from and the
+    /// door compares either side of a command, which is what makes a refused
+    /// repair an error at the door rather than a success that changed nothing.
+    /// It is the only thing a caller here needs to do about a refusal, and the
+    /// reason none of them return one.
+    ///
+    /// Announced rather than set, for the reason every other refusal channel
+    /// announces: asking the same impossible thing twice says the same
+    /// sentence twice, and a reader that can only see the revision reads the
+    /// second one as a command nothing was said about.
+    fn stated<T>(&mut self, outcome: Result<T, ModelError>) -> Option<T> {
+        match outcome {
+            Ok(value) => {
+                // Cleared by the next thing that works, so the line beside the
+                // viewport belongs to the last thing that was asked rather
+                // than to the last thing that failed.
+                self.operation_refusal.set_if_changed(None);
+                Some(value)
             }
-        };
-        refusing(now[0] != before[0], self.scene.refusal().get().as_ref());
-        refusing(now[1] != before[1], self.objects.notice().get().as_ref());
-        refusing(now[2] != before[2], self.mask.notice().get().as_ref());
-        refusing(
-            now[3] != before[3],
-            self.document_vm.notice().get().as_ref(),
-        );
-        // The tool status is a remark rather than a refusal: a substituted
-        // tool did happen, and an agent told "this was refused" would undo
-        // something that worked.
-        if now[4] != before[4] {
-            if let Some(said) = self.sculpt.tool_status().get().as_ref() {
-                notices.push(said.clone());
+            Err(refusal) => {
+                self.operation_refusal.announce(Some(refusal.to_string()));
+                None
             }
         }
-        (refusal, notices)
     }
 
     /// Tells the quality governor what the pointer is doing, and the renderer
@@ -1346,18 +1380,19 @@ impl App {
     /// work.
     fn run_sculpt_layer_op(&mut self, op: clayspace_model::SculptLayerOp) {
         let changes_the_surface = op.changes_the_surface();
-        match self
+        let outcome = self
             .document
-            .with(|document| document.apply_sculpt_layer_op(op))
-        {
-            Ok(()) => {
-                self.scene.refresh();
-                if changes_the_surface {
-                    self.document_vm.touched();
-                    self.sync_geometry();
-                }
+            .with(|document| document.apply_sculpt_layer_op(op));
+        // A pass belongs to no ViewModel, so the refusal it answers with has
+        // nowhere of its own to go: a second `begin_recording` was refused,
+        // printed, and reported to the agent that asked for it as a pass that
+        // had been opened.
+        if self.stated(outcome).is_some() {
+            self.scene.refresh();
+            if changes_the_surface {
+                self.document_vm.touched();
+                self.sync_geometry();
             }
-            Err(e) => eprintln!("o passe foi recusado: {e}"),
         }
         self.request_redraw();
     }
@@ -1376,7 +1411,15 @@ impl App {
     /// changed.
     fn run_multires_level_op(&mut self, op: clayspace_model::MultiresLevelOp) {
         let redraws = op.changes_what_is_drawn();
-        if self.scene.apply_level_op(op).is_ok() {
+        let outcome = self.scene.apply_level_op(op);
+        // Through `stated` rather than dropped by an `.is_ok()`. The scene
+        // ViewModel announces the refusal on its own channel, which both
+        // readers already have, so this is the same sentence twice — and that
+        // is the point: which of the composition root's operations happens to
+        // be owned by a ViewModel is not something the next reader of this
+        // file should have to work out before trusting that a refusal was
+        // stated at all.
+        if self.stated(outcome).is_some() {
             // Marked whatever it moved. Both levels are stored *inside* the
             // hierarchy's serialized bytes, so moving the sculpt level alone
             // changes what a save would write even though it changes nothing
@@ -1405,7 +1448,10 @@ impl App {
     /// representation where the picture is millions of vertices wide.
     fn run_multires_pass_op(&mut self, op: clayspace_model::MultiresSculptLayerOp) {
         let redraws = op.changes_the_surface();
-        if self.scene.apply_sculpt_layer_op(op).is_ok() {
+        let outcome = self.scene.apply_sculpt_layer_op(op);
+        // Stated rather than dropped, for the reason `run_multires_level_op`
+        // states its own.
+        if self.stated(outcome).is_some() {
             // Every one of the eleven changes what a save would write — the
             // names, the order, the strengths and the coefficients are all
             // inside the hierarchy's serialized bytes — so the document is
@@ -4033,21 +4079,22 @@ impl App {
                     .with(|document| document.apply_operation(operation))
             })
         });
-        match outcome {
-            Ok(_) => {
-                // Banked on the history Cmd+Z reads, as an armature edit's is.
-                // A repair recorded its engine entry and pushed nothing here, so
-                // the next Cmd+Z popped the PREVIOUS stroke's count and took the
-                // repair back along with part of that stroke.
-                self.sculpt
-                    .record_external_action(self.engine_undo_depth().saturating_sub(before));
-                self.scene.refresh();
-                self.document_vm.touched();
-                self.sync_geometry();
-                self.sync_mesh_layers();
-                self.sync_mask();
-            }
-            Err(e) => eprintln!("a operação foi recusada: {e}"),
+        // A repair refused on the representation it does not apply to — "this
+        // one is SDF" — is the whole of what the caller gets back, and it used
+        // to be printed and nothing else. The document was left byte-identical
+        // and the answer said the opposite.
+        if self.stated(outcome).is_some() {
+            // Banked on the history Cmd+Z reads, as an armature edit's is.
+            // A repair recorded its engine entry and pushed nothing here, so
+            // the next Cmd+Z popped the PREVIOUS stroke's count and took the
+            // repair back along with part of that stroke.
+            self.sculpt
+                .record_external_action(self.engine_undo_depth().saturating_sub(before));
+            self.scene.refresh();
+            self.document_vm.touched();
+            self.sync_geometry();
+            self.sync_mesh_layers();
+            self.sync_mask();
         }
     }
 
@@ -4071,21 +4118,19 @@ impl App {
         let settings = self.remesh;
         let outcome =
             self.busy(|app| app.timed("remesh layer", |app| app.scene.remesh(key, settings)));
-        match outcome {
-            Ok(outcome) => {
-                self.remesh_outcome = Some(outcome);
-                self.document_vm.touched();
-                // The layer's triangles are new ones. The carried-geometry
-                // path re-reads them from the document, and the statistics and
-                // the mask both follow the same way a repair's do.
-                self.sync_geometry();
-                self.sync_mesh_layers();
-                self.sync_mask();
-            }
-            // Shown by the scene ViewModel's refusal, which the shell already
-            // reads: a rebuild refused for an unusable resolution is the same
-            // kind of answer as a rename refused for an empty name.
-            Err(e) => eprintln!("a malha não pôde ser refeita: {e}"),
+        // Shown by the scene ViewModel's refusal, which the shell already
+        // reads: a rebuild refused for an unusable resolution is the same kind
+        // of answer as a rename refused for an empty name. Stated here too, so
+        // that every operation this file runs answers the same way.
+        if let Some(outcome) = self.stated(outcome) {
+            self.remesh_outcome = Some(outcome);
+            self.document_vm.touched();
+            // The layer's triangles are new ones. The carried-geometry path
+            // re-reads them from the document, and the statistics and the mask
+            // both follow the same way a repair's do.
+            self.sync_geometry();
+            self.sync_mesh_layers();
+            self.sync_mask();
         }
     }
 
@@ -4145,23 +4190,25 @@ impl App {
                 })
             })
         });
-        match outcome {
-            Ok(_) => {
-                // One undo for the whole crossing. The reported depth folds a
-                // crossing's removal and reorder entries into one step, and one
-                // `undo()` takes a whole crossing back, so this banks exactly one.
-                // Measured before the fix: depth 1 after a stroke, still 1 after
-                // the crossing, 0 after one Cmd+Z — which took the crossing and
-                // most of the stroke with it.
-                self.sculpt
-                    .record_external_action(self.engine_undo_depth().saturating_sub(before));
-                self.show_convert = false;
-                self.scene.refresh();
-                self.sculpt.refresh_after_conversion();
-                self.document_vm.touched();
-                self.settle_geometry();
-            }
-            Err(e) => eprintln!("a conversão foi recusada: {e}"),
+        // A crossing is priced before it is attempted and refused over the
+        // budget — "needs 1 658 880 000 cells, past the 512 MB budget" — which
+        // is a sentence a caller acts on by choosing a coarser cell. Printed
+        // alone, the panel stayed open with nothing said and the agent that
+        // asked was told the crossing had happened.
+        if self.stated(outcome).is_some() {
+            // One undo for the whole crossing. The reported depth folds a
+            // crossing's removal and reorder entries into one step, and one
+            // `undo()` takes a whole crossing back, so this banks exactly one.
+            // Measured before the fix: depth 1 after a stroke, still 1 after
+            // the crossing, 0 after one Cmd+Z — which took the crossing and
+            // most of the stroke with it.
+            self.sculpt
+                .record_external_action(self.engine_undo_depth().saturating_sub(before));
+            self.show_convert = false;
+            self.scene.refresh();
+            self.sculpt.refresh_after_conversion();
+            self.document_vm.touched();
+            self.settle_geometry();
         }
     }
 
@@ -4757,8 +4804,12 @@ impl App {
             // An object refusal was the same Observable nobody read: a
             // re-shape, a re-combine, a removal and a refused transform each
             // wrote one and none of them reached the screen.
+            // The operations the composition root runs itself were worse than
+            // an Observable nobody read: they had none at all, and printed to
+            // stderr instead.
             tool_status: tool_status(ToolStatusSources {
                 document: self.document_vm.notice().get().as_deref(),
+                operation: self.operation_refusal.get().as_deref(),
                 reference: self.references.notice().get().as_deref(),
                 mask: self.mask.notice().get().as_deref(),
                 object: self.objects.notice().get().as_deref(),
@@ -5677,6 +5728,12 @@ struct ToolStatusSources<'a> {
     /// be written went to stderr, and the sculptor was left looking at a
     /// document that had failed to save and did not say so.
     document: Option<&'a str>,
+    /// An operation the composition root ran itself and had refused: a repair,
+    /// a crossing, a pass of the active layer's stack, a rebuild. Second
+    /// because it is the answer to the thing that was just asked for; it went
+    /// to stderr, so a refused repair was a button that did nothing and said
+    /// nothing.
+    operation: Option<&'a str>,
     /// A PNG that will not load, which is a sentence naming what is wrong with
     /// *that* file.
     reference: Option<&'a str>,
@@ -5698,11 +5755,46 @@ struct ToolStatusSources<'a> {
 /// document's own beats every other explicit one.
 fn tool_status<'a>(from: ToolStatusSources<'a>) -> Option<&'a str> {
     from.document
+        .or(from.operation)
         .or(from.reference)
         .or(from.mask)
         .or(from.object)
         .or(from.scene)
         .or(from.sculpt)
+}
+
+/// How many channels a refusal or a remark can arrive on.
+const NOTICE_CHANNELS: usize = 6;
+
+/// What the interface would have shown, out of the channels compared either
+/// side of a command.
+///
+/// Free of `App` so the rule it encodes can be held by a test, because the
+/// rule is not obvious from either end: the door decides a command was refused
+/// by reading *these* channels and nothing else, so a refusal written anywhere
+/// else — `eprintln!`, most of all — is one it answers success to. That is how
+/// a repair on an SDF layer, a crossing priced past its budget and a second
+/// `begin_recording` came to be reported to an agent as work that happened.
+///
+/// The first channel written wins, so `refusals` is in the order the answer
+/// belongs to the command: an operation the composition root ran itself is the
+/// most direct answer there is, and a panel's standing notice the least.
+fn notices_written(
+    refusals: [(bool, Option<&str>); NOTICE_CHANNELS - 1],
+    remark: (bool, Option<&str>),
+) -> (Option<String>, Vec<String>) {
+    let refusal = refusals
+        .into_iter()
+        .find_map(|(written, said)| written.then_some(said).flatten())
+        .map(str::to_string);
+    // The tool status is a remark rather than a refusal: a substituted tool
+    // did happen, and an agent told "this was refused" would undo something
+    // that worked.
+    let notices = match remark {
+        (true, Some(said)) => vec![said.to_string()],
+        _ => Vec::new(),
+    };
+    (refusal, notices)
 }
 
 fn next_matcap(current: MatCap) -> MatCap {
@@ -6365,8 +6457,8 @@ mod double_press {
 #[cfg(test)]
 mod tests {
     use super::{
-        gizmo_geometry_update, refusal_for, stroke_needs_a_gesture, tool_status, AgentGesture,
-        GizmoGeometryUpdate, ToolStatusSources,
+        gizmo_geometry_update, notices_written, refusal_for, stroke_needs_a_gesture, tool_status,
+        AgentGesture, GizmoGeometryUpdate, ToolStatusSources,
     };
     use clayspace_mcp::RefusalCode;
     use clayspace_model::{ModelError, Representation, Unavailable};
@@ -6475,6 +6567,7 @@ mod tests {
     fn quiet() -> ToolStatusSources<'static> {
         ToolStatusSources {
             document: None,
+            operation: None,
             reference: None,
             mask: None,
             object: None,
@@ -6532,6 +6625,7 @@ mod tests {
         assert_eq!(
             tool_status(ToolStatusSources {
                 document: Some("save"),
+                operation: Some("operation"),
                 reference: Some("reference"),
                 mask: Some("mask"),
                 object: Some("object"),
@@ -6550,10 +6644,88 @@ mod tests {
         );
     }
 
-    /// Six silences say nothing rather than an empty line.
+    /// Seven silences say nothing rather than an empty line.
     #[test]
     fn nothing_refused_says_nothing() {
         assert_eq!(tool_status(quiet()), None);
+    }
+
+    /// A refused repair, crossing, pass or rebuild reaches the options bar.
+    ///
+    /// The third hole of the same shape, and the largest: about ten command
+    /// families run through the composition root rather than through a
+    /// ViewModel, and every one of them printed its refusal to stderr and had
+    /// no Observable at all. A repair asked for on an SDF layer changed
+    /// nothing and said nothing. Removing `operation` from `tool_status` fails
+    /// here.
+    #[test]
+    fn a_refused_operation_reaches_the_options_bar() {
+        assert_eq!(
+            tool_status(ToolStatusSources {
+                operation: Some("aplica-se a camadas de grade; esta é SDF"),
+                ..quiet()
+            }),
+            Some("aplica-se a camadas de grade; esta é SDF")
+        );
+    }
+
+    /// And it reaches the agent door, which reads no other surface.
+    ///
+    /// The door decides a command was refused by comparing the notice channels
+    /// either side of it. An operation whose refusal went only to stderr was
+    /// therefore answered `isError: false` with `touched_document: true` — an
+    /// agent told a repair, a crossing or a pass had happened to a document
+    /// that was left byte-identical. Dropping the first pair from
+    /// `App::notices_since` fails here.
+    #[test]
+    fn a_refused_operation_reaches_the_agent_door() {
+        let (refused, notices) = notices_written(
+            [
+                (true, Some("a operação foi recusada")),
+                (false, None),
+                (false, None),
+                (false, None),
+                (false, None),
+            ],
+            (false, None),
+        );
+        assert_eq!(refused.as_deref(), Some("a operação foi recusada"));
+        assert!(notices.is_empty());
+    }
+
+    /// A sentence already on screen is not this command's refusal.
+    ///
+    /// The channel holds the last thing said on it for as long as it is shown,
+    /// so what makes a refusal *this* command's is that the channel was
+    /// written between the two readings — not that it holds words.
+    #[test]
+    fn a_sentence_left_over_from_the_last_command_is_not_this_one_s() {
+        let (refused, notices) = notices_written(
+            [
+                (false, Some("a operação foi recusada")),
+                (false, Some("essa camada é uma grade")),
+                (false, None),
+                (false, None),
+                (false, None),
+            ],
+            (false, None),
+        );
+        assert_eq!(refused, None);
+        assert!(notices.is_empty());
+    }
+
+    /// A remark is carried beside the answer rather than as a refusal.
+    ///
+    /// A substituted tool did happen, and an agent told "this was refused"
+    /// would undo something that worked.
+    #[test]
+    fn a_substituted_tool_is_a_remark_and_not_a_refusal() {
+        let (refused, notices) = notices_written(
+            [(false, None); 5],
+            (true, Some("Padrão no lugar de Pincar")),
+        );
+        assert_eq!(refused, None);
+        assert_eq!(notices, vec!["Padrão no lugar de Pincar".to_string()]);
     }
 
     #[test]
