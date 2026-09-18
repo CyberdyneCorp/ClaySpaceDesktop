@@ -49,6 +49,10 @@ mod reader;
 mod remesh;
 mod sculpt;
 mod surface_view;
+/// Only under `test-support`: a sculpting session must not pay for a record it
+/// never reads.
+#[cfg(feature = "test-support")]
+pub mod trace;
 mod voxel;
 
 pub use authoring::{
@@ -84,6 +88,25 @@ pub const HANDOFF_VERSION: (u32, u32) = (
     claycore_sys::CLAY_HANDOFF_VERSION_MAJOR,
     claycore_sys::CLAY_HANDOFF_VERSION_MINOR,
 );
+
+/// Every entry point this build's bindings declare, sorted, as text.
+///
+/// Here because a layer that may not link the engine can still *name* one.
+/// `clayspace-model`'s capability table says which engine verb each tool
+/// invokes, and it says it in a string, since the domain knows of no engine —
+/// so the only thing that can tell a live name from a stale one is this list,
+/// read by something that depends on both. A renamed or withdrawn entry point
+/// is then a failing test on the next pin move rather than a row that quietly
+/// describes a call nobody makes.
+///
+/// Generated from the bindings themselves, so it answers for the ABI this
+/// build links rather than for the header as somebody last read it.
+pub const ENTRY_POINTS: &[&str] = claycore_sys::ENTRY_POINTS;
+
+/// Whether the pinned engine declares an entry point of this name.
+pub fn has_entry_point(name: &str) -> bool {
+    ENTRY_POINTS.binary_search(&name).is_ok()
+}
 pub use document::{
     prim, ArmatureEdit, Document, FormatVersion, GizmoCage, Item, LayerId, NodeId, PointType,
     Primitive, Profile,
@@ -235,5 +258,28 @@ mod tests {
             "linked engine {v} is not the ABI this wrapper was written against \
              ({EXPECTED_ABI}); the submodule pin and EXPECTED_ABI disagree"
         );
+    }
+
+    /// The list is sorted, because [`has_entry_point`] bisects it.
+    ///
+    /// The build script sorts as it deduplicates, so this is an assertion
+    /// about a promise made in another file — which is exactly the kind that
+    /// stops being true quietly. A list that lost its order would not fail:
+    /// it would answer "no such entry point" for a symbol the engine has, and
+    /// the table check above would report a row that is perfectly correct.
+    #[test]
+    fn the_entry_points_are_sorted_and_are_the_engines() {
+        assert!(
+            ENTRY_POINTS.windows(2).all(|pair| pair[0] < pair[1]),
+            "ENTRY_POINTS is not sorted and deduplicated, so a bisection of it \
+             answers for some names and not others"
+        );
+        assert!(
+            ENTRY_POINTS.iter().all(|name| name.starts_with("clay_")),
+            "something that is not an engine entry point reached the list"
+        );
+        // One that cannot go missing without this crate failing to compile.
+        assert!(has_entry_point("clay_document_create"));
+        assert!(!has_entry_point("clay_document_create_"));
     }
 }

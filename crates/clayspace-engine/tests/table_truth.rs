@@ -1,0 +1,547 @@
+//! Whether the capability table describes the application that exists.
+//!
+//! `ToolKind::verbs` is the authority for what each tool does on each
+//! representation: the shelf reads it, the availability rule reads it, the
+//! diagnostics report prints it and the tool notes hang off it. Everything in
+//! `tools.rs`'s own suite checks it **against itself** — that the shelf and the
+//! refusal agree, that every tool reaches somewhere — which is worth having and
+//! is a different question from the one here.
+//!
+//! The question here is whether the rows are *true*. Two ways they can stop
+//! being true, and neither was catchable before:
+//!
+//!   * the name is not a symbol the engine has, because a pin move renamed or
+//!     withdrew it. The guard this replaces asserted the string began `clay_`,
+//!     which passes for a renamed entry point, a removed one, and a verb the
+//!     dispatch does not use;
+//!   * the name is a symbol, and it is not the one that runs. That is the
+//!     multires smooth (#199), and it is the failure that made this file worth
+//!     writing: a row can be plausible, well commented and describe a call
+//!     nobody makes.
+//!
+//! This is the file that has to live here rather than in `clayspace-model`,
+//! because answering either question needs the domain and the engine in scope
+//! at once and the domain may link no engine.
+//!
+//! **Cost.** Every pair is a fixture built and a stroke made, and the mesh
+//! fixture is marched out of a field. It is the same shape `tool_table.rs`
+//! runs and for the same reason: a table walked by hand is a table with a row
+//! nobody walked.
+
+use clayspace_engine::{BackendPolicy, ClayDocument};
+use clayspace_model::{
+    entry_points, every_entry_point, BrushSettings, ConversionSettings, Direction, ExchangeModel,
+    GestureSample, ImportSettings, MultiresLevelOp, Representation, SceneModel, SculptModel,
+    ToolKind, ToolNote,
+};
+use std::collections::BTreeSet;
+
+// -- the names ---------------------------------------------------------------
+
+/// Every verb the table names is a symbol the pinned engine declares.
+///
+/// The bindings rather than the header: what `clay.h` declares and what this
+/// build links are two questions, and the second is the one a row's claim rests
+/// on. `claycore::ENTRY_POINTS` is generated from bindgen's own output for
+/// exactly that reason.
+///
+/// This is what turns an engine rename into a failing test on the pin move that
+/// does it, instead of into a row that goes on describing a call nobody makes.
+#[test]
+fn every_verb_the_table_names_is_a_symbol_the_engine_has() {
+    let mut missing: Vec<&str> = Vec::new();
+    for name in every_entry_point() {
+        if !claycore::has_entry_point(name) {
+            missing.push(name);
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "the capability table names what the pinned engine does not declare: \
+         {}. Either the engine renamed it — correct the row — or the row was \
+         written from a plan rather than from the ABI.",
+        missing.join(", ")
+    );
+}
+
+// -- the calls ---------------------------------------------------------------
+
+/// The pair whose row names a call the application does not yet reach.
+///
+/// One, and it is a known defect with an issue of its own: every hierarchy
+/// smooth goes through the stamp with the plain Laplacian, and
+/// `clay_multires_sculpt_layer_stroke_smooth` — the call that takes a mode, and
+/// the whole reason a hierarchy smooth is worth having — is never opened
+/// (#199). The row is left naming the right call, because the row is right and
+/// the code is wrong.
+///
+/// Pinned here rather than skipped, in the shape this workspace uses for an
+/// upstream defect: the exception is *asserted*, so the day #199 lands is the
+/// day a test says so. Delete this and the assertion below it then.
+const DRIFTED_UNTIL_199: (ToolKind, Representation) =
+    (ToolKind::Suavizar, Representation::Multires);
+
+/// Every offered pair reaches an entry point its row names.
+///
+/// **Why an intersection and not an equality.** The trace records every engine
+/// call a stroke makes, and a stroke makes many that are nobody's verb: it asks
+/// a grid its cell size, a palette its length, a sculptor for a refit. So what
+/// is asserted is that at least one of the calls the row names was among them.
+/// That is enough for the failure this exists to catch — a row naming a call
+/// the dispatch never reaches has an empty intersection, whatever else ran.
+///
+/// A row that names several calls names them because several are reachable: a
+/// field drag opens a transaction where it can and falls back to
+/// `clay_layer_move_surface_regions` where it cannot, and one stroke takes one
+/// of those routes.
+#[test]
+fn every_pair_calls_an_entry_point_its_row_names() {
+    let mut wrong: Vec<String> = Vec::new();
+    for representation in Representation::ALL {
+        for tool in ToolKind::for_representation(representation) {
+            if !strokes(tool) {
+                continue;
+            }
+            let called = what_one_stroke_called(tool, representation);
+            let named: BTreeSet<&str> = entry_points(
+                tool.verb_on(representation)
+                    .expect("the shelf offered it, so the row has a verb"),
+            )
+            .into_iter()
+            .collect();
+            let reached = !called.is_disjoint(&named);
+
+            if (tool, representation) == DRIFTED_UNTIL_199 {
+                assert!(
+                    !reached,
+                    "the hierarchy smooth now reaches {named:?}, so #199 has \
+                     landed. Delete DRIFTED_UNTIL_199 and the arm in \
+                     `every_tool_note_is_proved_here` that pins the same gap."
+                );
+                continue;
+            }
+            if !reached {
+                wrong.push(format!(
+                    "{} on {} names {named:?} and called none of them; it called {called:?}",
+                    tool.label(),
+                    representation.label()
+                ));
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "these rows describe a call the stroke does not make:\n  {}\n\nThe row \
+         is the shelf, the refusal and the diagnostics report. A row that is \
+         not what runs is an interface promising something the engine call \
+         does not keep.",
+        wrong.join("\n  ")
+    );
+}
+
+/// Every engine call one stroke of `tool` makes on a fresh fixture.
+///
+/// The fixture is built *before* the recording starts: building one is
+/// thousands of engine calls and none of them is this tool's.
+fn what_one_stroke_called(
+    tool: ToolKind,
+    representation: Representation,
+) -> BTreeSet<&'static str> {
+    let mut document = worked(representation);
+    let recording = claycore::trace::Recording::start();
+    drag(&mut document, tool, representation);
+    let called = recording.calls().into_iter().collect();
+    drop(recording);
+    called
+}
+
+/// Whether a tool is one this file strokes at all.
+///
+/// Trim is not: its gesture is a shape drawn on the view frame rather than a
+/// stroke across the surface, so `apply_stroke` is not the call it makes.
+/// Máscara is — it paints the world-addressed freeze the other verbs consult,
+/// and `clay_mask_apply_stroke` is a row like any other.
+fn strokes(tool: ToolKind) -> bool {
+    tool.is_stroke_tool()
+}
+
+// -- the notes ---------------------------------------------------------------
+
+/// Each note describes a difference; each difference is measured somewhere.
+///
+/// The `match` is the point. A note added to [`ToolNote`] stops this file
+/// compiling until somebody names the test that proves it — which is the only
+/// thing standing between a note and a sentence the interface tells an artist
+/// because it reads well.
+#[test]
+fn every_tool_note_is_proved_here() {
+    for note in ToolNote::ALL {
+        let proof = match note {
+            ToolNote::VoxelPlanarIsTwoSided => "a_grid_flatten_fills_as_well_as_cuts",
+            // Proved by its absence, until #199. See `DRIFTED_UNTIL_199`.
+            ToolNote::MultiresSmoothChoosesAFrequency => {
+                "a_hierarchy_smooth_does_not_pick_a_frequency_yet"
+            }
+            ToolNote::MultiresStoresNoColour => "a_colour_brush_on_a_hierarchy_is_refused_for_real",
+        };
+        assert!(!proof.is_empty(), "a note with no test naming it: {note:?}");
+    }
+}
+
+/// A grid's flatten fills hollows below the plane as well as cutting above it.
+///
+/// Measured as cells that were **empty and are now occupied**, which is the one
+/// thing a cut-only verb can never produce.
+///
+/// The contrast is the scrape rather than the same tool on a field, and that is
+/// deliberate: both verbs are given the same plane — the engine takes a normal
+/// rather than deriving one, and `stroke_voxel` hands both `+Y` through the
+/// origin — so the only difference left between them is the two-sidedness the
+/// note claims. A comparison against another representation would carry a
+/// different fixture and a different plane with it.
+#[test]
+fn a_grid_flatten_fills_as_well_as_cuts() {
+    let (filled, cut) = what_the_grid_verb_did(ToolKind::Planar);
+    assert!(
+        filled > 0 && cut > 0,
+        "the grid's flatten is two-sided: it filled {filled} cells and cut \
+         {cut}. A run that only cuts is the cut-only verb the other \
+         representations have, and the note is then telling an artist about a \
+         difference that is not there."
+    );
+
+    let (scraped_in, scraped_out) = what_the_grid_verb_did(ToolKind::Raspar);
+    assert!(
+        scraped_out > 0,
+        "the fixture gave the scrape nothing to take off"
+    );
+    assert_eq!(
+        scraped_in, 0,
+        "the scrape filled {scraped_in} cells, so filling is not what \
+         distinguishes the flatten and the note is measuring the fixture"
+    );
+}
+
+/// How much material one stroke of `tool` put back, and how much it took.
+fn what_the_grid_verb_did(tool: ToolKind) -> (usize, usize) {
+    let mut document = worked(Representation::Voxel);
+    let before = occupied(&document);
+    drag(&mut document, tool, Representation::Voxel);
+    let after = occupied(&document);
+    (
+        after.difference(&before).count(),
+        before.difference(&after).count(),
+    )
+}
+
+/// A hierarchy carries no colour, and the refusal is the engine's answer too.
+///
+/// The domain's own suite asserts the shelf does not offer the two colour
+/// brushes on a hierarchy and that the refusal carries the note. What it cannot
+/// say is whether the absence describes anything: this does, by making the same
+/// brush work on a mesh — the route the note sends an artist down — and refuse
+/// on a hierarchy built from that very cage.
+#[test]
+fn a_colour_brush_on_a_hierarchy_is_refused_for_real() {
+    let mut mesh = worked(Representation::Mesh);
+    mesh.apply_stroke(
+        ToolKind::Pintar,
+        painting(),
+        &path_over(Representation::Mesh),
+        [false; 3],
+    )
+    .expect("a mesh layer takes a colour brush, which is where the note sends an artist");
+
+    let (mut hierarchy, _) = with_a_hierarchy();
+    let refused = hierarchy.apply_stroke(
+        ToolKind::Pintar,
+        painting(),
+        &path_over(Representation::Multires),
+        [false; 3],
+    );
+    assert!(
+        refused.is_err(),
+        "a hierarchy took a colour brush. It stores where a vertex went and \
+         not what colour it is, so the colour would land in the level's \
+         rebuildable cache and evaporate — which is worse than a refusal."
+    );
+}
+
+/// The hierarchy smooth does not pick a frequency, and that is #199.
+///
+/// A tripwire, in this workspace's usual shape: it pins a defect so the day it
+/// is fixed is a failing test naming the workaround to delete, rather than a
+/// day nobody notices. When it fires, the note has become true — route the
+/// smooth through `SculptLayerStroke::smooth`, delete this test and
+/// `DRIFTED_UNTIL_199`, and write the measurement #199 asks for in its place:
+/// a `PreserveDetail` smooth leaves the pores and moves the form.
+#[test]
+fn a_hierarchy_smooth_does_not_pick_a_frequency_yet() {
+    let called = what_one_stroke_called(ToolKind::Suavizar, Representation::Multires);
+    assert!(
+        !called.contains("clay_multires_sculpt_layer_stroke_smooth"),
+        "a hierarchy smooth now opens the call that takes a mode, so #199 has \
+         landed and `ToolNote::MultiresSmoothChoosesAFrequency` is true. \
+         Replace this with the measurement: PreserveDetail leaves the detail \
+         and moves the form, Geometry removes it."
+    );
+    assert!(
+        called.contains("clay_multires_sculptor_stamp")
+            || called.contains("clay_multires_sculptor_apply_stroke"),
+        "a hierarchy smooth reached neither the mode-taking call nor the plain \
+         one: {called:?}. Something else changed and this tripwire is now \
+         measuring nothing."
+    );
+}
+
+// -- fixtures ----------------------------------------------------------------
+
+/// How finely the mesh fixture is marched. Coarse: the marching is what a run
+/// of this file costs, and every pair on a mesh builds one.
+const MESH_CELL: f32 = 0.05;
+
+/// Where each fixture is worked, and where every stroke here is made.
+fn over(representation: Representation) -> [f32; 3] {
+    match representation {
+        // The top of the starting sphere, and of the mesh carried off it.
+        Representation::Sdf | Representation::Mesh => [0.0, 0.0, 1.0],
+        // The middle of the slab, and of the flat cage.
+        Representation::Voxel | Representation::Multires => [0.0, 0.0, 0.0],
+    }
+}
+
+/// A form of the given representation, with something in it to sculpt.
+///
+/// The same fixtures `tool_table.rs` builds, and the mesh one is carried off a
+/// **field** rather than off the grid for the reason that file gives: a grid
+/// marches to greedy quads, and the verbs gated on dihedral angle correctly
+/// decline a surface made entirely of right angles.
+fn worked(representation: Representation) -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
+    match representation {
+        Representation::Multires => with_a_hierarchy().0,
+        Representation::Voxel => {
+            let mut document = ClayDocument::new(policy).expect("a document");
+            document
+                .add_voxel_layer("Voxels", 0.04)
+                .expect("add a grid");
+            // A wobbling slab across the plane the planing verbs use, so a
+            // flatten has material above it *and* hollows below it.
+            for step in 0..21 {
+                let t = step as f32 / 20.0;
+                document
+                    .apply_stroke(
+                        ToolKind::Padrao,
+                        BrushSettings {
+                            size: 0.25,
+                            intensity: 0.9,
+                            ..BrushSettings::default()
+                        },
+                        &[GestureSample {
+                            position: [(t - 0.5) * 1.6, (t * 9.0).sin() * 0.08, 0.0],
+                            pressure: 1.0,
+                            time: t,
+                        }],
+                        [false; 3],
+                    )
+                    .expect("deposit");
+            }
+            document
+        }
+        field => {
+            let mut document = ClayDocument::new(policy)
+                .and_then(ClayDocument::with_starting_form)
+                .expect("a document with a starting form");
+            // A ridge across the top, so the planing and smoothing verbs have
+            // something to plane and smooth.
+            for step in 0..7 {
+                let t = step as f32 / 6.0;
+                document
+                    .apply_stroke(
+                        ToolKind::Padrao,
+                        BrushSettings {
+                            size: 0.2,
+                            intensity: 1.0,
+                            ..BrushSettings::default()
+                        },
+                        &[GestureSample {
+                            position: [(t - 0.5) * 0.5, 0.0, 1.0],
+                            pressure: 1.0,
+                            time: t,
+                        }],
+                        [false; 3],
+                    )
+                    .expect("deposit");
+            }
+            if field == Representation::Mesh {
+                document
+                    .convert_layer_in_place(Direction::SdfToMesh, MESH_CELL, 0)
+                    .expect("march the field into triangles");
+                assert_eq!(
+                    document.active_representation(),
+                    Representation::Mesh,
+                    "the conversion did not land"
+                );
+            }
+            document
+        }
+    }
+}
+
+/// A document whose only layer is a hierarchy, two levels over a flat cage.
+///
+/// Built the way `multires.rs` builds one, because it is the only route there
+/// is: a hierarchy arrives through the crossing from a mesh and there is no
+/// call anywhere that makes an empty one.
+fn with_a_hierarchy() -> (ClayDocument, clayspace_model::LayerKey) {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
+    let mut document = ClayDocument::new(policy).expect("a document");
+    let path = scratch();
+    cage_obj(&path, 4, 2.0);
+    document
+        .import_mesh(&path, ImportSettings::default())
+        .expect("import the cage");
+    let _ = std::fs::remove_file(&path);
+
+    let cage = document
+        .scene()
+        .layers
+        .iter()
+        .find(|layer| layer.representation == Representation::Mesh)
+        .map(|layer| layer.key)
+        .expect("the cage is a mesh layer");
+    document.set_active_layer(cage).expect("activate the cage");
+
+    let settings = ConversionSettings::default();
+    let key = document
+        .convert_layer_in_place(Direction::MeshToMultires, settings.cell_size, settings.blur)
+        .expect("a flat quad grid is a cage");
+    for _ in 0..2 {
+        document
+            .apply_multires_level_op(MultiresLevelOp::AddLevel)
+            .expect("subdivide");
+    }
+    (document, key)
+}
+
+/// A path in the temporary directory that no other fixture can be handed.
+///
+/// Unique per call, not per name: the tests in one integration binary are
+/// threads of one process, and a shared name is one test deleting the file
+/// another is loading.
+fn scratch() -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let path = std::env::temp_dir().join(format!(
+        "clayspace-table-truth-{}-{}.obj",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_file(&path);
+    path
+}
+
+/// A flat grid of quads, which is what a Catmull-Clark cage is supposed to be.
+fn cage_obj(path: &std::path::Path, divisions: usize, half: f32) {
+    let mut text = String::new();
+    let step = 2.0 * half / divisions as f32;
+    for z in 0..=divisions {
+        for x in 0..=divisions {
+            text.push_str(&format!(
+                "v {} 0 {}\n",
+                -half + step * x as f32,
+                -half + step * z as f32
+            ));
+        }
+    }
+    let stride = divisions + 1;
+    for z in 0..divisions {
+        for x in 0..divisions {
+            // Wound so the sheet faces +y, which makes a Draw stamp read as a
+            // bump rather than a dent.
+            let a = z * stride + x + 1;
+            text.push_str(&format!(
+                "f {} {} {} {}\n",
+                a,
+                a + stride,
+                a + stride + 1,
+                a + 1
+            ));
+        }
+    }
+    std::fs::write(path, text).expect("write the cage");
+}
+
+/// The stroke every tool is given: a short drag across the material.
+///
+/// One shape for all of them, because the question is which binding the
+/// dispatch reaches rather than whether a particular gesture suits a particular
+/// brush. A refusal is not swallowed: a tool the shelf offers and the dispatch
+/// declines is the failure this file's sibling, `tool_table.rs`, exists for,
+/// and hiding it here would make this one's message misleading.
+fn drag(document: &mut ClayDocument, tool: ToolKind, representation: Representation) {
+    document
+        .apply_stroke(
+            tool,
+            BrushSettings {
+                size: 0.25,
+                intensity: 1.0,
+                ..BrushSettings::default()
+            },
+            &path_over(representation),
+            [false; 3],
+        )
+        .unwrap_or_else(|e| {
+            panic!(
+                "{} on a {} layer: {e}",
+                tool.label(),
+                representation.label()
+            )
+        });
+}
+
+/// The samples of that drag.
+fn path_over(representation: Representation) -> Vec<GestureSample> {
+    let at = over(representation);
+    (0..=8)
+        .map(|step| {
+            let t = step as f32 / 8.0;
+            GestureSample {
+                position: [at[0] + (t - 0.5) * 0.5, at[1], at[2]],
+                pressure: 1.0,
+                time: t,
+            }
+        })
+        .collect()
+}
+
+/// A brush a colour tool will actually write with.
+fn painting() -> BrushSettings {
+    BrushSettings {
+        size: 0.25,
+        intensity: 1.0,
+        ..BrushSettings::default()
+    }
+}
+
+/// Every occupied cell of the grid, so two states can be compared cell by cell.
+fn occupied(document: &ClayDocument) -> BTreeSet<[i32; 3]> {
+    let (_, reader) = document
+        .document()
+        .voxel_reader("Voxels")
+        .expect("the grid reads back");
+    let mut cells = BTreeSet::new();
+    let Some((lo, hi)) = reader.bounds().expect("bounds") else {
+        return cells;
+    };
+    for z in lo[2]..=hi[2] {
+        for y in lo[1]..=hi[1] {
+            for x in lo[0]..=hi[0] {
+                if reader.get([x, y, z]).expect("a cell reads back").is_some() {
+                    cells.insert([x, y, z]);
+                }
+            }
+        }
+    }
+    cells
+}

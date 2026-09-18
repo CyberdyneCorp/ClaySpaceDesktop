@@ -128,6 +128,73 @@ impl Verbs {
     }
 }
 
+/// The engine entry points a row of the table names.
+///
+/// A row is written for a reader — `clay_mesh_sculptor_apply_stroke (DRAW)`
+/// says both which call runs and which brush it carries — so the names in it
+/// have to be picked back out before anything can check them. The rule is the
+/// narrowest one that works: a maximal run of `[A-Za-z0-9_]` beginning
+/// `clay_`. The engine's *constants* are spelled `CLAY_OP_RELIEF` and are
+/// deliberately not entry points; a qualifier in prose — `(cut-only)`,
+/// `(clamped)` — names nothing and yields nothing.
+///
+/// A row that names more than one call spells each of them out in full. It is
+/// tempting to abbreviate a family as `clay_sdf_move_begin/update/commit`, and
+/// that costs exactly what this function exists to prevent: two of the three
+/// names would not be there to check.
+pub fn entry_points(verb: &str) -> Vec<&str> {
+    let symbolic = |ch: char| ch.is_ascii_alphanumeric() || ch == '_';
+    let mut named = Vec::new();
+    let mut token: Option<usize> = None;
+    for (at, ch) in verb.char_indices() {
+        match (symbolic(ch), token) {
+            (true, None) => token = Some(at),
+            (false, Some(from)) => {
+                push_entry_point(&mut named, &verb[from..at]);
+                token = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(from) = token {
+        push_entry_point(&mut named, &verb[from..]);
+    }
+    named
+}
+
+fn push_entry_point<'a>(named: &mut Vec<&'a str>, token: &'a str) {
+    if token.starts_with("clay_") && !named.contains(&token) {
+        named.push(token);
+    }
+}
+
+/// Every engine entry point the whole capability table names, deduplicated.
+///
+/// Both tables: the tools' and [`LayerOperation`]'s. What this is for is the
+/// check the domain cannot make itself — `clayspace-model` may not link the
+/// engine, so a verb here is a string and nothing in this crate can tell a
+/// live symbol from one the engine renamed two releases ago. A crate that
+/// depends on both takes this list and asks the bindings.
+pub fn every_entry_point() -> std::collections::BTreeSet<&'static str> {
+    let mut named = std::collections::BTreeSet::new();
+    let mut rows = Vec::new();
+    for tool in ToolKind::ALL {
+        rows.push(tool.verbs());
+    }
+    for operation in LayerOperation::all() {
+        rows.push(operation.verbs());
+    }
+    for row in rows {
+        for representation in Representation::ALL {
+            let Some(verb) = row.on(representation) else {
+                continue;
+            };
+            named.extend(entry_points(verb));
+        }
+    }
+    named
+}
+
 /// Something done to a layer that a gesture cannot express.
 ///
 /// The design calls this the second verb beside `apply_stroke`. A deformer
@@ -710,22 +777,46 @@ impl ToolKind {
         // representation is an edit to one line and reading what a tool does
         // is one row.
         match self {
+            // The grid's column is the deposit and not a sculpt verb, which is
+            // not the obvious answer and is the one traced: occupancy is
+            // binary, so "displace the surface along its normal" on a grid is
+            // "set the cells the brush covers". The row said
+            // `clay_voxel_sculpt_inflate` and was reading the *shape* of the
+            // tool off its field counterpart rather than off the call.
             Self::Padrao => Verbs {
                 sdf: Some("clay_layer_apply_stroke (CLAY_OP_RELIEF)"),
-                voxel: Some("clay_voxel_sculpt_inflate"),
-                mesh: Some("clay_mesh_sculptor_stamp (DRAW)"),
-                multires: Some("clay_multires_sculptor_stamp (DRAW)"),
+                voxel: Some("clay_voxel_set_brush"),
+                mesh: Some("clay_mesh_sculptor_apply_stroke (DRAW)"),
+                multires: Some("clay_multires_sculptor_apply_stroke (DRAW)"),
             },
             Self::Inflar => Verbs {
                 sdf: Some("clay_layer_apply_stroke (CLAY_OP_RELIEF)"),
                 voxel: Some("clay_voxel_sculpt_inflate"),
-                mesh: Some("clay_mesh_sculptor_stamp (INFLATE)"),
-                multires: Some("clay_multires_sculptor_stamp (INFLATE)"),
+                mesh: Some("clay_mesh_sculptor_apply_stroke (INFLATE)"),
+                multires: Some("clay_multires_sculptor_apply_stroke (INFLATE)"),
             },
+            // `_from` on the field's column, on this row and on the three
+            // planing ones, and it is the engine's own distinction rather
+            // than a spelling: `clay_item_volume_relax` relaxes a volume
+            // somebody already baked, and this samples the document and
+            // relaxes those samples. A baked volume reports a distance only
+            // inside its band, so a facet moving further than the band comes
+            // back placed against the bound — a wrong shape with `CLAY_OK`.
+            // The row named the bake-then-relax pair, which is not the route.
+            //
+            // The hierarchy's column is the one row in this table that names
+            // an entry point the application does not yet reach: every
+            // hierarchy smooth goes through the stamp with `SMOOTH`, which is
+            // the plain Laplacian, and the mode-taking call the row names is
+            // never opened. That is #199, and it is a defect in the *code*
+            // rather than in the row — the whole point of a hierarchy smooth
+            // is the frequency it can pick. It is left standing, and
+            // `table_truth.rs` pins the gap so the day #199 lands is the day a
+            // test says so rather than a day nobody notices.
             Self::Suavizar => Verbs {
-                sdf: Some("clay_item_volume_relax"),
+                sdf: Some("clay_item_volume_relax_from"),
                 voxel: Some("clay_voxel_sculpt_smooth"),
-                mesh: Some("clay_mesh_sculptor_stamp (SMOOTH)"),
+                mesh: Some("clay_mesh_sculptor_apply_stroke (SMOOTH)"),
                 multires: Some("clay_multires_sculpt_layer_stroke_smooth"),
             },
             // The one tool that is the same call on all four, because a
@@ -740,21 +831,36 @@ impl ToolKind {
                 mesh: Some("clay_mask_apply_stroke"),
                 multires: Some("clay_mask_apply_stroke"),
             },
+            // The grid's column is Padrão's, and the clamp has nowhere to
+            // land: a clamped accumulation is a ceiling on how much a stroke
+            // may deposit *over itself*, and a cell is set or it is not. So
+            // the row names the deposit rather than repeating the field's
+            // sentence about a ceiling a grid cannot have.
             Self::Camada => Verbs {
                 sdf: Some("clay_layer_apply_stroke (clamped accumulation)"),
-                voxel: Some("clay_voxel_sculpt_inflate (clamped)"),
-                mesh: Some("clay_mesh_sculptor_stamp (LAYER)"),
-                multires: Some("clay_multires_sculptor_stamp (LAYER)"),
+                voxel: Some("clay_voxel_set_brush"),
+                mesh: Some("clay_mesh_sculptor_apply_stroke (LAYER)"),
+                multires: Some("clay_multires_sculptor_apply_stroke (LAYER)"),
             },
             // Two verbs on a field, and the row names the one that runs.
             // A drag on an editable field layer is a transaction —
             // `clay_sdf_move_begin`, one `update` per pointer event, one
             // `commit` on release — which is what keeps a whole gesture to a
-            // single grab. `clay_layer_move_surface` is the fallback, taken
-            // when no transaction could be opened, and naming only it was
-            // stale for every drag a sculptor actually makes.
+            // single grab. `clay_layer_move_surface_regions` is the fallback,
+            // taken when no transaction could be opened, and naming only it
+            // was stale for every drag a sculptor actually makes. The regions
+            // variant and not the plain one: a drag has to say what it
+            // invalidated, and under a mirror a caller reconstructing that box
+            // gets it wrong.
+            //
+            // All four spelled out rather than abbreviated as
+            // `clay_sdf_move_begin/update/commit`: a name that is not written
+            // in full is a name nothing can look up — see [`entry_points`].
             Self::Mover => Verbs {
-                sdf: Some("clay_sdf_move_begin/update/commit (clay_layer_move_surface when held)"),
+                sdf: Some(
+                    "clay_sdf_move_begin / clay_sdf_move_update / clay_sdf_move_commit \
+                     (clay_layer_move_surface_regions when held)",
+                ),
                 voxel: Some("clay_voxel_sculpt_grab"),
                 mesh: Some("clay_mesh_sculptor_stamp (GRAB)"),
                 multires: Some("clay_multires_sculptor_stamp (GRAB)"),
@@ -776,8 +882,8 @@ impl ToolKind {
             Self::Puxar => Verbs {
                 sdf: Some("clay_item_set_curve_points (snakehook)"),
                 voxel: None,
-                mesh: Some("clay_mesh_sculptor_stamp (SNAKEHOOK)"),
-                multires: Some("clay_multires_sculptor_stamp (SNAKEHOOK)"),
+                mesh: Some("clay_mesh_sculptor_apply_stroke (SNAKEHOOK)"),
+                multires: Some("clay_multires_sculptor_apply_stroke (SNAKEHOOK)"),
             },
             // Two-sided on a grid, cut-only on the other two, and the
             // difference is the engine's rather than a compromise: the voxel
@@ -786,22 +892,22 @@ impl ToolKind {
             // back and reapplying it — voxel math this application does not
             // do. The tooltip says which one a sculptor is holding.
             Self::Planar => Verbs {
-                sdf: Some("clay_item_volume_flatten (cut-only)"),
+                sdf: Some("clay_item_volume_flatten_from (cut-only)"),
                 voxel: Some("clay_voxel_sculpt_flatten (two-sided)"),
-                mesh: Some("clay_mesh_sculptor_stamp (FLATTEN)"),
-                multires: Some("clay_multires_sculptor_stamp (FLATTEN)"),
+                mesh: Some("clay_mesh_sculptor_apply_stroke (FLATTEN)"),
+                multires: Some("clay_multires_sculptor_apply_stroke (FLATTEN)"),
             },
             Self::Polir => Verbs {
-                sdf: Some("clay_item_volume_flatten (cut-only, hPolish)"),
+                sdf: Some("clay_item_volume_flatten_from (cut-only, hPolish)"),
                 voxel: None,
-                mesh: Some("clay_mesh_sculptor_stamp (POLISH)"),
-                multires: Some("clay_multires_sculptor_stamp (POLISH)"),
+                mesh: Some("clay_mesh_sculptor_apply_stroke (POLISH)"),
+                multires: Some("clay_multires_sculptor_apply_stroke (POLISH)"),
             },
             Self::Relaxar => Verbs {
-                sdf: Some("clay_item_volume_relax"),
+                sdf: Some("clay_item_volume_relax_from"),
                 voxel: None,
-                mesh: Some("clay_mesh_sculptor_stamp (RELAX)"),
-                multires: Some("clay_multires_sculptor_stamp (RELAX)"),
+                mesh: Some("clay_mesh_sculptor_apply_stroke (RELAX)"),
+                multires: Some("clay_multires_sculptor_apply_stroke (RELAX)"),
             },
             Self::Trim => Verbs {
                 sdf: Some("clay_cut_create"),
@@ -812,8 +918,8 @@ impl ToolKind {
             Self::Raspar => Verbs {
                 sdf: None,
                 voxel: Some("clay_voxel_sculpt_scrape"),
-                mesh: Some("clay_mesh_sculptor_stamp (SCRAPE)"),
-                multires: Some("clay_multires_sculptor_stamp (SCRAPE)"),
+                mesh: Some("clay_mesh_sculptor_apply_stroke (SCRAPE)"),
+                multires: Some("clay_multires_sculptor_apply_stroke (SCRAPE)"),
             },
             Self::Preencher => Verbs {
                 sdf: None,
@@ -824,8 +930,8 @@ impl ToolKind {
             Self::Pincar => Verbs {
                 sdf: None,
                 voxel: Some("clay_voxel_sculpt_pinch"),
-                mesh: Some("clay_mesh_sculptor_stamp (PINCH)"),
-                multires: Some("clay_multires_sculptor_stamp (PINCH)"),
+                mesh: Some("clay_mesh_sculptor_apply_stroke (PINCH)"),
+                multires: Some("clay_multires_sculptor_apply_stroke (PINCH)"),
             },
             // Relief with buildup, which is what ClayBuildup *is*: the
             // engine's equivalence table maps Clay to relief along the stroke
@@ -834,8 +940,8 @@ impl ToolKind {
             Self::Argila => Verbs {
                 sdf: Some("clay_layer_apply_stroke (CLAY_OP_RELIEF, buildup)"),
                 voxel: None,
-                mesh: Some("clay_mesh_sculptor_stamp (CLAY)"),
-                multires: Some("clay_multires_sculptor_stamp (CLAY)"),
+                mesh: Some("clay_mesh_sculptor_apply_stroke (CLAY)"),
+                multires: Some("clay_multires_sculptor_apply_stroke (CLAY)"),
             },
             // Incise, which the engine describes in the same sentence as the
             // tool: "a thin region gives the line — Crease and DamStandard".
@@ -850,8 +956,8 @@ impl ToolKind {
             Self::Vinco => Verbs {
                 sdf: Some("clay_layer_apply_stroke (CLAY_OP_INCISE)"),
                 voxel: None,
-                mesh: Some("clay_mesh_sculptor_stamp (CREASE)"),
-                multires: Some("clay_multires_sculptor_stamp (CREASE)"),
+                mesh: Some("clay_mesh_sculptor_apply_stroke (CREASE)"),
+                multires: Some("clay_multires_sculptor_apply_stroke (CREASE)"),
             },
             // One tool, two bindings: "put colour here" is the same intent
             // whether the colour lands on a vertex or in a cell.
@@ -874,7 +980,7 @@ impl ToolKind {
             Self::Pintar => Verbs {
                 sdf: None,
                 voxel: Some("clay_voxel_paint_brush"),
-                mesh: Some("clay_mesh_sculptor_stamp (PAINT)"),
+                mesh: Some("clay_mesh_sculptor_apply_stroke (PAINT)"),
                 multires: None,
             },
             Self::Apagar => Verbs {
@@ -890,14 +996,14 @@ impl ToolKind {
             Self::Borrar => Verbs {
                 sdf: None,
                 voxel: None,
-                mesh: Some("clay_mesh_sculptor_stamp (SMEAR)"),
+                mesh: Some("clay_mesh_sculptor_apply_stroke (SMEAR)"),
                 multires: None,
             },
             Self::Nudge => Verbs {
                 sdf: None,
                 voxel: Some("clay_voxel_sculpt_smudge"),
-                mesh: Some("clay_mesh_sculptor_stamp (NUDGE)"),
-                multires: Some("clay_multires_sculptor_stamp (NUDGE)"),
+                mesh: Some("clay_mesh_sculptor_apply_stroke (NUDGE)"),
+                multires: Some("clay_multires_sculptor_apply_stroke (NUDGE)"),
             },
         }
     }
@@ -1486,16 +1592,118 @@ mod tests {
         }
     }
 
+    /// Every row names at least one thing that *could* be an entry point.
+    ///
+    /// This is as far as the domain can go on its own and the limit is worth
+    /// stating, because the assertion that used to be here read
+    /// `verb.starts_with("clay_")` and was taken for the real check: it passes
+    /// for a renamed entry point, for a withdrawn one, and for a verb the
+    /// dispatch does not use. `clayspace-model` links no engine, so a name
+    /// here is text and nothing in this crate can ask whether the symbol
+    /// exists.
+    ///
+    /// The two checks that matter live where both halves are in scope, in
+    /// `clayspace-engine/tests/table_truth.rs`: the name is a symbol the
+    /// pinned bindings declare, and the name is the entry point a stroke on
+    /// that pair actually reaches.
     #[test]
-    fn every_tool_names_an_engine_verb() {
+    fn every_row_of_the_table_names_at_least_one_entry_point() {
         for tool in ToolKind::ALL {
-            let verb = tool.engine_verbs();
-            assert!(
-                verb.starts_with("clay_"),
-                "{} does not name an engine entry point: {verb}",
-                tool.label()
-            );
+            for representation in Representation::ALL {
+                let Some(verb) = tool.verb_on(representation) else {
+                    continue;
+                };
+                assert!(
+                    !entry_points(verb).is_empty(),
+                    "{} on {} names no engine entry point at all: {verb}",
+                    tool.label(),
+                    representation.label()
+                );
+            }
         }
+        for operation in LayerOperation::all() {
+            for representation in Representation::ALL {
+                let Some(verb) = operation.verbs().on(representation) else {
+                    continue;
+                };
+                assert!(
+                    !entry_points(verb).is_empty(),
+                    "{} on {} names no engine entry point at all: {verb}",
+                    operation.label(),
+                    representation.label()
+                );
+            }
+        }
+    }
+
+    /// What the reader picks out of a row, on the three shapes a row takes.
+    ///
+    /// Worth its own test rather than being trusted, because everything
+    /// downstream is only as good as this: a name this misses is a name
+    /// nothing checks, and it would go missing *silently*.
+    #[test]
+    fn a_row_is_read_for_the_calls_it_names_and_nothing_else() {
+        assert_eq!(
+            entry_points("clay_mesh_sculptor_apply_stroke (DRAW)"),
+            vec!["clay_mesh_sculptor_apply_stroke"],
+            "a brush kind in brackets is not a call"
+        );
+        assert_eq!(
+            entry_points("clay_layer_apply_stroke (CLAY_OP_RELIEF)"),
+            vec!["clay_layer_apply_stroke"],
+            "the engine's constants are spelled in capitals and are not calls"
+        );
+        assert_eq!(
+            entry_points("clay_item_volume_flatten_from (cut-only, hPolish)"),
+            vec!["clay_item_volume_flatten_from"],
+            "a qualifier in prose names nothing"
+        );
+        assert_eq!(
+            entry_points(
+                "clay_sdf_move_begin / clay_sdf_move_update / clay_sdf_move_commit \
+                 (clay_layer_move_surface_regions when held)"
+            ),
+            vec![
+                "clay_sdf_move_begin",
+                "clay_sdf_move_update",
+                "clay_sdf_move_commit",
+                "clay_layer_move_surface_regions",
+            ],
+            "a row that names four calls has to yield four"
+        );
+    }
+
+    /// The diagnostics line lists each call once, however many columns name it.
+    ///
+    /// Máscara is the case: one call on all four representations, and a report
+    /// that said so four times would read as four bindings.
+    #[test]
+    fn the_diagnostics_line_names_each_call_once() {
+        assert_eq!(ToolKind::Mascara.engine_verbs(), "clay_mask_apply_stroke");
+        let padrao = ToolKind::Padrao.engine_verbs();
+        assert_eq!(
+            padrao.matches("clay_").count(),
+            4,
+            "Padrão reaches four representations by four different calls: {padrao}"
+        );
+    }
+
+    /// The list the check above this crate reads is the whole table.
+    #[test]
+    fn the_engine_entry_points_are_gathered_from_both_tables() {
+        let named = every_entry_point();
+        assert!(
+            named.contains("clay_mask_apply_stroke"),
+            "the mask's call is in the tools' table"
+        );
+        assert!(
+            named.contains("clay_voxel_repair_fill_voids"),
+            "the operations' table is gathered too, not only the tools'"
+        );
+        assert!(
+            named.iter().all(|name| name.starts_with("clay_")),
+            "something that is not an entry point was gathered: {named:?}"
+        );
     }
 
     #[test]

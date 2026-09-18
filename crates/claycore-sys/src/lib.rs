@@ -17,6 +17,12 @@
 
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
+// The names of everything above, as text. Generated beside the bindings from
+// the bindings, so that a layer which holds an entry point as a *string* — the
+// domain's capability table does, since it may not link the engine — has
+// something to check that string against. See `ENTRY_POINTS`.
+include!(concat!(env!("OUT_DIR"), "/entry_points.rs"));
+
 /// Accelerated backends compiled into this build, comma-separated.
 ///
 /// This is what the build selected, which is not the same question as what the

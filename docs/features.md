@@ -31,8 +31,8 @@ on it, the sixteen mesh brushes less Pintar and Borrar, plus Máscara. See
 |---|---|---|---|
 | Padrão | `clay_layer_apply_stroke` with relief | all three | Displaces the surface along its normal |
 | Inflar | `clay_voxel_sculpt_inflate` / relief, wider and softer | all three | Swells the footprint; a negative amount erodes. On a field it is relief like Padrão — the engine binds both to it — with a region and rim 1.35× the brush and 0.32 of the lift, so it swells where Padrão ridges |
-| Suavizar | `clay_sdf_smooth_*` / `clay_item_volume_relax` / `clay_voxel_sculpt_smooth` | all three | Relaxes the surface. Live on the field side, through a transaction |
-| Mover | `clay_sdf_move_*` / `clay_layer_move_surface` | SDF, mesh | Drags the assembled surface. Buds rather than stretches. Live on the field side, through a transaction |
+| Suavizar | `clay_sdf_smooth_*` / `clay_item_volume_relax_from` / `clay_voxel_sculpt_smooth` | all three | Relaxes the surface. Live on the field side, through a transaction |
+| Mover | `clay_sdf_move_*` / `clay_layer_move_surface_regions` | SDF, mesh | Drags the assembled surface. Buds rather than stretches. Live on the field side, through a transaction |
 | Mover Topológico | `clay_item_volume_move_topological` | SDF | The same drag with its reach measured **along the material** rather than through space, so a part close in space and far along the surface is left behind. It bakes, so it costs more than Mover and is the one to reach for when the cheap drag pulls something it should not |
 | Pinçar | `clay_voxel_sculpt_pinch` | voxel, mesh | Moves surface cells toward the brush centre |
 | Raspar | `clay_voxel_sculpt_scrape` | voxel, mesh | Flattens and smooths from one snapshot |
@@ -42,14 +42,35 @@ on it, the sixteen mesh brushes less Pintar and Borrar, plus Máscara. See
 | Máscara | `clay_mask_apply_stroke` | all three | Freezes a region against every verb. Invert, clear, expand, contract, smooth, bounded complement and extrude are in the Máscaras menu |
 | Puxar | swept-sphere chain on a Catmull-Rom curve | SDF, mesh | Pulls a tendril out, tapering to its tip |
 | Polir | `clay_item_volume_flatten_from`, cut-only | SDF, mesh | hPolish |
-| Relaxar | `clay_item_volume_relax` | SDF, mesh | Relax as a brush |
+| Relaxar | `clay_item_volume_relax_from` | SDF, mesh | Relax as a brush |
 | Nudge | `clay_voxel_sculpt_smudge` | voxel, mesh | Drags the surface skin, leaving the interior |
 | Trim | `clay_cut_create` | SDF | A shape drawn on the frame, cutting through |
-| Argila | `clay_layer_apply_stroke` with relief and buildup / `clay_mesh_sculptor_stamp` (CLAY) | SDF, mesh | Builds up in flat-ish planes, the way clay is added by hand. On a field it is relief with **buildup** accumulation and a denser stroke, which is what separates ClayBuildup from Standard in ZBrush too — a second pass adds where Camada's does not |
-| Vinco | `clay_layer_apply_stroke` with incise / `clay_mesh_sculptor_stamp` (CREASE) | SDF, mesh | Pinches a sharp ridge or trough along the stroke. On a field it is `Op::Incise` — "a thin region gives the line", in the engine's words — at 0.6 of the brush, which cuts to the full depth in three fifths of the width. Held, the key raises the ridge it would have cut, which is the inverse the engine names |
-| Pintar | `clay_voxel_paint_brush` / `clay_mesh_sculptor_stamp` (PAINT) | voxel, mesh | Writes colour rather than moving the surface. The colour comes from the swatch in the options bar, which is shown for the two tools that read one |
-| Borrar | `clay_mesh_sculptor_stamp` (SMEAR) | mesh | Drags the surface sideways without carrying it away |
+| Argila | `clay_layer_apply_stroke` with relief and buildup / `clay_mesh_sculptor_apply_stroke` (CLAY) | SDF, mesh | Builds up in flat-ish planes, the way clay is added by hand. On a field it is relief with **buildup** accumulation and a denser stroke, which is what separates ClayBuildup from Standard in ZBrush too — a second pass adds where Camada's does not |
+| Vinco | `clay_layer_apply_stroke` with incise / `clay_mesh_sculptor_apply_stroke` (CREASE) | SDF, mesh | Pinches a sharp ridge or trough along the stroke. On a field it is `Op::Incise` — "a thin region gives the line", in the engine's words — at 0.6 of the brush, which cuts to the full depth in three fifths of the width. Held, the key raises the ridge it would have cut, which is the inverse the engine names |
+| Pintar | `clay_voxel_paint_brush` / `clay_mesh_sculptor_apply_stroke` (PAINT) | voxel, mesh | Writes colour rather than moving the surface. The colour comes from the swatch in the options bar, which is shown for the two tools that read one |
+| Borrar | `clay_mesh_sculptor_apply_stroke` (SMEAR) | mesh | Drags the surface sideways without carrying it away |
 | Apagar | `clay_voxel_erase_brush` | voxel | Removes cells |
+
+**The Engine verb column is checked rather than maintained.** It is written
+out in `ToolKind::verbs`, and two tests in
+`crates/clayspace-engine/tests/table_truth.rs` hold it to the engine that is
+actually linked. The first asks the generated bindings whether each name is a
+symbol at all, so a pin move that renames or withdraws one fails on the row
+that names it. The second records every entry point a stroke reaches — the
+record is taken in the one place every fallible engine call passes through, so
+it cannot fall out of step — and fails a row whose stroke calls none of what it
+names. Between them they found five rows that had gone quietly wrong: a field
+smooth and a field plane that name the *bake-then-act* pair where the code
+samples the document (`_from`), a field drag that named the plain resolver
+where the regions one runs, and a grid Padrão and Camada that named a sculpt
+verb where a deposit runs. The guard they replace asserted that the string
+began `clay_`, which none of those five would have failed.
+
+One row is knowingly ahead of the code: the hierarchy's smooth names the call
+that takes a frequency, and no stroke opens it yet
+([#199](https://github.com/CyberdyneCorp/ClaySpaceDesktop/issues/199)). That
+gap is pinned by a test that fails the day it closes, rather than left as a
+silence.
 
 **Padrão and Inflar are two marks on a field.** ClayCore's own equivalence
 table binds both to `Op::Relief` — relief moves the accumulated surface along
@@ -229,7 +250,7 @@ difference between a drag that stays interactive and one that decays as it is
 made.
 
 When no transaction can be opened — a mirror that could not be pointed — the
-drag falls to `clay_layer_move_surface`, which takes each segment's **first
+drag falls to `clay_layer_move_surface_regions`, which takes each segment's **first
 sample** as the centre of the grab it writes. That call folds successive grabs
 into one only while the centre and radius repeat exactly, so a segment starting
 where the last one stopped is a new grab every time: six segments, six grabs,
