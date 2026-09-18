@@ -790,6 +790,7 @@ const PT_BR: Strings = Strings {
         "Numa grelha, aplanar é dos dois lados: o material acima do plano sai e as concavidades abaixo dele enchem",
         "Numa hierarquia, suavizar escolhe a frequência: a forma, só o detalhe, ou a forma com o detalhe carregado intacto",
         "Uma hierarquia guarda para onde o vértice foi, não de que cor ele é. Pinte a gaiola antes de subdividir, ou converta um nível em malha",
+        "Numa hierarquia, apagar leva a passagem selecionada a zero: a forma e as outras passagens ficam onde estão. Selecione uma passagem antes",
     ],
     shape_names: [
         "Caixa",
@@ -1363,6 +1364,7 @@ const EN_US: Strings = Strings {
         "On a grid, flatten is two-sided: material above the plane goes and hollows below it fill",
         "On a hierarchy, smooth picks a frequency: the form, the detail alone, or the form with the detail carried through unchanged",
         "A hierarchy stores where a vertex went, not what colour it is. Paint the cage before subdividing, or bake a level back to a mesh",
+        "On a hierarchy, erase takes the selected pass to zero: the form and every other pass stay where they are. Select a pass first",
     ],
     shape_names: [
         "Box",
@@ -1932,6 +1934,7 @@ const ES_419: Strings = Strings {
         "En una rejilla, aplanar es de dos lados: el material sobre el plano se va y los huecos bajo él se rellenan",
         "En una jerarquía, suavizar elige la frecuencia: la forma, solo el detalle, o la forma con el detalle llevado intacto",
         "Una jerarquía guarda adónde fue el vértice, no de qué color es. Pinta la caja antes de subdividir, o hornea un nivel a malla",
+        "En una jerarquía, borrar lleva la pasada seleccionada a cero: la forma y las demás pasadas se quedan donde están. Selecciona una pasada primero",
     ],
     shape_names: [
         "Caja",

@@ -257,8 +257,8 @@ fn every_provided_method_of_every_model_trait_is_forwarded() {
     // document through those and forwarding it would only be a second copy of
     // the same composition. Everything else must be forwarded.
     const DERIVED: [&str; 3] = [
-        // Composes active_representation, _editable, _visible and
-        // _carries_geometry, all forwarded.
+        // Composes active_representation, _editable, _visible,
+        // _carries_geometry and _stroke_lands_in_a_pass, all forwarded.
         "SculptModel::active_layer_state",
         // Composes curve(), forwarded.
         "CurveModel::curve_pivot",

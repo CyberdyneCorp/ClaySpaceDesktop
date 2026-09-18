@@ -32,6 +32,9 @@ struct FakeModel {
     /// Shared for the same reason, so a test can read back what the ViewModel
     /// told the document about which smooth to make.
     smooth_mode: Rc<Cell<clayspace_model::SmoothFrequency>>,
+    /// Which row of a hierarchy takes the next stroke, shared so a test can
+    /// move the selection the way a sculptor clicking the pass stack does.
+    in_a_pass: Rc<Cell<bool>>,
     editable: bool,
     /// What the next stroke reports.
     outcome: EditOutcome,
@@ -45,6 +48,7 @@ impl FakeModel {
             recorded,
             representation: Rc::new(Cell::new(Representation::Sdf)),
             smooth_mode: Rc::new(Cell::new(clayspace_model::SmoothFrequency::default())),
+            in_a_pass: Rc::new(Cell::new(false)),
             editable: true,
             outcome: EditOutcome {
                 changed: true,
@@ -74,6 +78,10 @@ impl SculptModel for FakeModel {
 
     fn active_layer_editable(&self) -> bool {
         self.editable
+    }
+
+    fn active_layer_stroke_lands_in_a_pass(&self) -> bool {
+        self.in_a_pass.get()
     }
 
     fn smooth_mode(&self) -> clayspace_model::SmoothFrequency {
@@ -175,6 +183,19 @@ fn fixture_with_layer_changes() -> (SculptViewModel, Rc<Cell<Representation>>) {
     let model = FakeModel::new(recorded);
     let representation = model.representation.clone();
     (SculptViewModel::new(Box::new(model)), representation)
+}
+
+/// A fixture whose hierarchy row a test can move between the form and a pass.
+fn fixture_with_a_pass_selection() -> (SculptViewModel, Rc<Cell<Representation>>, Rc<Cell<bool>>) {
+    let recorded = Rc::new(RefCell::new(Recorded::default()));
+    let model = FakeModel::new(recorded);
+    let representation = model.representation.clone();
+    let in_a_pass = model.in_a_pass.clone();
+    (
+        SculptViewModel::new(Box::new(model)),
+        representation,
+        in_a_pass,
+    )
 }
 
 /// A fixture that hands back what the document was told to smooth.
@@ -1398,4 +1419,69 @@ fn the_smooth_mode_starts_at_the_one_the_note_promises() {
         "and the document was told, or the bar is the only place the choice \
          exists"
     );
+}
+
+// -- the per-pass eraser -----------------------------------------------------
+
+/// Erase is on a hierarchy's shelf, and it is the selected row that decides
+/// whether it can be used.
+///
+/// Three states rather than two, because the middle one is the regression this
+/// guards: the tool has to be *on the shelf* for a hierarchy at all — it was
+/// bound to the grid alone and a sculptor with a pass stack was never offered
+/// the one verb that takes a pass back — and it has to refuse, with words,
+/// where the form is selected instead. A tool that were simply hidden on the
+/// form would leave nobody to say why it had gone.
+#[test]
+fn erase_is_offered_on_a_hierarchy_with_a_pass() {
+    let (mut vm, representation, in_a_pass) = fixture_with_a_pass_selection();
+    representation.set(Representation::Multires);
+    in_a_pass.set(true);
+
+    vm.dispatch(Command::SelectTool(ToolKind::Apagar))
+        .expect("a hierarchy's shelf carries the eraser");
+    assert!(
+        vm.tool_status().get().is_none(),
+        "with a pass selected there is nothing to explain: {:?}",
+        vm.tool_status().get()
+    );
+    draw(&mut vm, &[[0.0; 3], [0.1, 0.0, 0.0]]).expect("the erase reaches the model");
+
+    // The form under the passes. The tool stays selected — it is the row that
+    // moved, not the layer — and the status line is what carries the reason.
+    in_a_pass.set(false);
+    let refused = draw(&mut vm, &[[0.0; 3], [0.1, 0.0, 0.0]])
+        .expect_err("the form is not a pass, and erasing it is a different verb");
+    assert!(
+        refused.to_string().to_lowercase().contains("pass"),
+        "the refusal has to name what a sculptor must select: {refused}"
+    );
+    assert!(
+        vm.tool_status()
+            .get()
+            .as_deref()
+            .is_some_and(|said| said.to_lowercase().contains("pass")),
+        "and the status line has to say it without a stroke being attempted"
+    );
+}
+
+/// The eraser on the other three representations is untouched.
+///
+/// The pass rule is a hierarchy's, and a grid has no passes at all — an eraser
+/// that started asking a grid which row was selected would have vanished from
+/// the one shelf it has always been on.
+#[test]
+fn a_grid_eraser_asks_about_no_pass() {
+    let (mut vm, representation, in_a_pass) = fixture_with_a_pass_selection();
+    representation.set(Representation::Voxel);
+    in_a_pass.set(false);
+
+    vm.dispatch(Command::SelectTool(ToolKind::Apagar))
+        .expect("the grid's eraser");
+    assert!(
+        vm.tool_status().get().is_none(),
+        "a grid stores cells and not passes: {:?}",
+        vm.tool_status().get()
+    );
+    draw(&mut vm, &[[0.0; 3], [0.1, 0.0, 0.0]]).expect("the erase reaches the model");
 }

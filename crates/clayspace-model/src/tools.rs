@@ -396,16 +396,43 @@ pub struct LayerState {
     /// on an empty row and letting each fail with "no mesh layer named X" is
     /// the shape this exists to prevent.
     pub carries_geometry: bool,
+    /// Whether the next stroke would enter a pass rather than the form under
+    /// them.
+    ///
+    /// A hierarchy's alone: it is the only representation whose stroke has two
+    /// places it could land, and the row the sculptor selected is what decides
+    /// which. Every other representation answers `false` and nothing reads it,
+    /// because a tool gated on a pass has no meaning where there is no stack.
+    ///
+    /// Here rather than in the engine's refusal because a tool that cannot be
+    /// used has to be *unselectable* before it is unusable — the same reason
+    /// visibility and the missing cage are here. Erasing is the one verb that
+    /// needs it: it takes the selected pass toward zero, so on the form there
+    /// is nothing it could mean.
+    pub stroke_lands_in_a_pass: bool,
 }
 
 impl LayerState {
     /// The common case: an ordinary editable, visible layer.
+    ///
+    /// With no pass selected, which is what a layer that is not a hierarchy
+    /// always answers and what a fresh hierarchy answers too — a stack starts
+    /// empty and a stroke lands in the form.
     pub fn editable(representation: Representation) -> Self {
         Self {
             representation,
             editable: true,
             visible: true,
             carries_geometry: true,
+            stroke_lands_in_a_pass: false,
+        }
+    }
+
+    /// The same, with the stroke landing in a selected pass.
+    pub fn in_a_pass(representation: Representation) -> Self {
+        Self {
+            stroke_lands_in_a_pass: true,
+            ..Self::editable(representation)
         }
     }
 }
@@ -582,13 +609,26 @@ pub enum ToolNote {
     /// up, so painting before the hierarchy is built, or baking a level back to
     /// a mesh and painting that, both work.
     MultiresStoresNoColour,
+    /// On a hierarchy, erasing takes the *selected pass* toward zero rather
+    /// than removing material.
+    ///
+    /// The one tool whose meaning changes completely between two of the four
+    /// columns, and the caveat is therefore not a nuance but the whole verb: on
+    /// a grid Apagar clears the cells the brush covers, and on a hierarchy
+    /// there are no cells to clear — the engine's entry point walks the
+    /// selected pass's detail channel toward zero and touches neither the base
+    /// nor any other pass. An artist who reads the grid's meaning onto the
+    /// hierarchy expects the surface to be taken away and gets the pass's own
+    /// deposit fading out instead, which is a surprise worth one sentence.
+    MultiresEraseTakesThisPassToZero,
 }
 
 impl ToolNote {
-    pub const ALL: [ToolNote; 3] = [
+    pub const ALL: [ToolNote; 4] = [
         Self::VoxelPlanarIsTwoSided,
         Self::MultiresSmoothChoosesAFrequency,
         Self::MultiresStoresNoColour,
+        Self::MultiresEraseTakesThisPassToZero,
     ];
 }
 
@@ -628,6 +668,13 @@ pub enum Unavailable {
     /// The layer carries no attribute this tool needs — a mesh with no colour
     /// for a colour brush, say. Produced by the tools that require one.
     MissingAttribute { needs: &'static str },
+    /// The tool writes into a pass and the sculptor has the form selected.
+    ///
+    /// A hierarchy's alone, and not the same refusal as a missing attribute:
+    /// nothing is absent from the layer. The stack may be full of passes; the
+    /// row that takes the stroke is simply the form under them, and this verb
+    /// has nothing to say there.
+    NeedsAPass,
 }
 
 impl std::fmt::Display for Unavailable {
@@ -656,6 +703,9 @@ impl std::fmt::Display for Unavailable {
             Self::LayerHidden => f.write_str("this layer is hidden"),
             Self::MissingAttribute { needs } => {
                 write!(f, "this layer carries no {needs}")
+            }
+            Self::NeedsAPass => {
+                f.write_str("select a pass first; this verb acts on the selected pass alone")
             }
         }
     }
@@ -983,16 +1033,32 @@ impl ToolKind {
                 mesh: Some("clay_mesh_sculptor_apply_stroke (PAINT)"),
                 multires: None,
             },
+            // The one row whose two bindings are not two spellings of one
+            // intent, and the exception is the representation's rather than
+            // the tool's. A grid stores occupancy, so "remove what is here" is
+            // clearing cells. A hierarchy stores *where a vertex went*, per
+            // pass, so there is nothing to clear — what the same intent means
+            // is the selected pass's detail walked toward zero, which the
+            // engine's own comment calls "an eraser for THIS pass rather than
+            // a flattening brush".
+            //
+            // The mesh column stays empty between them, and that is the
+            // boundary rather than an omission: erasing a cell would change a
+            // mesh's topology, and none of the sixteen fixed-topology brushes
+            // may do that. The hierarchy's eraser changes no topology at all —
+            // it writes a displacement channel the mesh tier does not have.
+            //
+            // `ToolNote::MultiresEraseTakesThisPassToZero` is where that is
+            // said to a sculptor, and `Unavailable::NeedsAPass` is what they
+            // are told when the form is selected rather than a pass.
             Self::Apagar => Verbs {
                 sdf: None,
                 voxel: Some("clay_voxel_erase_brush"),
                 mesh: None,
-                // Not to be confused with the hierarchy's two erasers, which
-                // are gestures inside a layered stroke rather than verbs of
-                // their own here yet — see `crate::multires`.
-                multires: None,
+                multires: Some("clay_multires_sculpt_layer_stroke_erase"),
             },
-            // And the other half of the same absence.
+            // And the other half of the colour absence Pintar's comment
+            // explains, two rows up.
             Self::Borrar => Verbs {
                 sdf: None,
                 voxel: None,
@@ -1070,7 +1136,32 @@ impl ToolKind {
                 Representation::Sdf | Representation::Voxel => {}
             }
         }
+        // Last, and after the conditions that are about the layer itself. A
+        // hierarchy with the form selected is in no way broken — it is simply
+        // pointed at the row this verb has nothing to say about — so a locked
+        // or hidden layer must still report the lock or the hiding, which is
+        // what a sculptor has to fix first anyway.
+        if self.needs_a_pass_on(layer.representation) && !layer.stroke_lands_in_a_pass {
+            return Err(Unavailable::NeedsAPass);
+        }
         Ok(())
+    }
+
+    /// Whether this tool acts on the selected pass and so refuses the form.
+    ///
+    /// One pair, and it is the eraser on a hierarchy. The engine's erase walks
+    /// *the target channel* toward zero, and with the form selected the target
+    /// channel is the base detail — so the same gesture would take the whole
+    /// form back toward the pure subdivision. That is a different operation
+    /// with a different name (`restore`), it is destructive at a scale an
+    /// eraser does not suggest, and nothing on the shelf would tell a sculptor
+    /// which of the two they were about to get. The other verbs mean the same
+    /// thing in either row and are offered in both.
+    fn needs_a_pass_on(self, representation: Representation) -> bool {
+        matches!(
+            (self, representation),
+            (Self::Apagar, Representation::Multires)
+        )
     }
 
     /// What differs about this tool on this representation, if anything.
@@ -1081,8 +1172,8 @@ impl ToolKind {
     /// surprise — and where faking agreement would mean doing arithmetic the
     /// engine does not offer.
     ///
-    /// Answers for a pair whether or not the tool is *offered* on it. Two of
-    /// the three notes describe a tool that is there, and one describes one
+    /// Answers for a pair whether or not the tool is *offered* on it. Three of
+    /// the four notes describe a tool that is there, and one describes one
     /// that is not — [`ToolKind::availability`] carries that one into the
     /// refusal, since a tool nobody can select is a tool nobody can hover.
     pub fn note_on(self, representation: Representation) -> Option<ToolNote> {
@@ -1093,6 +1184,9 @@ impl ToolKind {
             }
             (Self::Pintar | Self::Borrar, Representation::Multires) => {
                 Some(ToolNote::MultiresStoresNoColour)
+            }
+            (Self::Apagar, Representation::Multires) => {
+                Some(ToolNote::MultiresEraseTakesThisPassToZero)
             }
             _ => None,
         }
@@ -1808,10 +1902,12 @@ mod tests {
                 }
                 assert_eq!(
                     tool.availability(LayerState {
-                        representation,
                         editable: false,
-                        visible: true,
-                        carries_geometry: true,
+                        // With a pass selected, so that the eraser on a
+                        // hierarchy reports the lock rather than the row it is
+                        // pointed at. A protected layer is what a sculptor has
+                        // to fix first either way.
+                        ..LayerState::in_a_pass(representation)
                     }),
                     Err(Unavailable::LayerProtected),
                     "{} on a protected {} layer",
@@ -1874,6 +1970,16 @@ mod tests {
     /// 1.4. The shelf's list and the availability rule are the same lookup, so
     /// they cannot drift into showing a tool that refuses or hiding one that
     /// would work.
+    ///
+    /// Asked of a layer with **nothing standing in the way**: editable,
+    /// visible, carrying its geometry, and — where the representation offers a
+    /// choice of row — with the row that takes a stroke selected. Every one of
+    /// those is a condition a sculptor can put right in a click, and the shelf
+    /// deliberately does not filter on any of them: a tool that vanished when
+    /// a layer was locked would leave nobody to tell that it was the lock. What
+    /// this holds is the other rule — that the *representation* half of the
+    /// lookup is one lookup, so no tool is listed for a layer whose
+    /// representation has no verb for it.
     #[test]
     fn the_shelf_and_the_availability_rule_agree() {
         for representation in Representation::ALL {
@@ -1881,7 +1987,7 @@ mod tests {
             for tool in ToolKind::ALL {
                 let shown = offered.contains(&tool);
                 let usable = tool
-                    .availability(LayerState::editable(representation))
+                    .availability(LayerState::in_a_pass(representation))
                     .is_ok();
                 assert_eq!(
                     shown,
@@ -1937,18 +2043,21 @@ mod tests {
              Update this count and `docs/features.md` together."
         );
         // And the hierarchy, which is the mesh vocabulary less the two colour
-        // brushes and plus the mask — fourteen brushes and Máscara.
+        // brushes, plus the per-pass eraser, plus the mask — fifteen brushes
+        // and Máscara.
         let multires_brushes = ToolKind::for_representation(Representation::Multires)
             .iter()
             .filter(|t| !t.is_mask_tool())
             .count();
         assert_eq!(
             multires_brushes,
-            ENGINE_MESH_BRUSHES - 2,
+            ENGINE_MESH_BRUSHES - 2 + 1,
             "the hierarchy's vocabulary has moved: {multires_brushes} brushes \
              reach a multires layer, of the engine's {ENGINE_MESH_BRUSHES} — \
              one brush runtime across the representations (ClayCore #419), \
-             less Pintar and Borrar, which have no colour to write. Update \
+             less Pintar and Borrar, which have no colour to write, and plus \
+             Apagar, which is not a mesh brush at all: it takes the selected \
+             pass's detail toward zero through the layered stroke. Update \
              this count and `docs/features.md` together."
         );
         assert_eq!(
@@ -2065,15 +2174,21 @@ mod tests {
     // -- the fourth representation -------------------------------------------
 
     /// The hierarchy's shelf is the mesh's, less the two brushes that write a
-    /// colour and not a position.
+    /// colour and plus the one eraser a stack of passes makes meaningful.
     ///
     /// Asserted as a *difference from the mesh column* rather than as a list of
-    /// fourteen names, because that is the claim the engine actually makes:
+    /// fifteen names, because that is the claim the engine actually makes:
     /// `clay_multires_sculptor_stamp` takes a `clay_mesh_brush_desc` and runs
     /// the fixed sculptor over the level's own mesh, so a verb that arrives on
     /// a mesh layer arrives here on the same day unless something about the
-    /// hierarchy stops it. Writing the fourteen out would pass on the day a
+    /// hierarchy stops it. Writing the fifteen out would pass on the day a
     /// seventeenth mesh brush landed and nobody thought about this column.
+    ///
+    /// Both differences are named, and both are the representation's own.
+    /// A hierarchy stores no colour, so two brushes have nothing to write; a
+    /// hierarchy stores detail in channels that can be taken back one at a
+    /// time, so one verb has something to do that a single-surface mesh has
+    /// not. Neither is a mesh brush that was forgotten.
     #[test]
     fn a_hierarchy_sculpts_with_the_mesh_vocabulary_less_its_colour() {
         let mesh: Vec<ToolKind> = ToolKind::for_representation(Representation::Mesh);
@@ -2090,9 +2205,17 @@ mod tests {
             "the hierarchy's shelf differs from the mesh's by something other \
              than the two colour brushes"
         );
-        assert!(
-            multires.iter().all(|tool| mesh.contains(tool)),
-            "the hierarchy was given a verb the mesh sculptor does not have"
+        let extra: Vec<ToolKind> = multires
+            .iter()
+            .copied()
+            .filter(|tool| !mesh.contains(tool))
+            .collect();
+        assert_eq!(
+            extra,
+            vec![ToolKind::Apagar],
+            "the hierarchy was given a verb the mesh sculptor does not have, \
+             and the per-pass eraser is the only one the representation earns: \
+             it writes a displacement channel a mesh does not store"
         );
         for tool in &multires {
             let verb = tool.verb_on(Representation::Multires).expect("a verb");
@@ -2147,6 +2270,71 @@ mod tests {
                 error.to_string().contains("mesh"),
                 "the refusal must still say where the brush does apply: {error}"
             );
+        }
+    }
+
+    /// The eraser on a hierarchy is offered for a pass and refused for the
+    /// form, and the refusal is its own sentence.
+    ///
+    /// Not [`Unavailable::NoVerbHere`], which would send a sculptor to the
+    /// grid, and not [`Unavailable::MissingAttribute`], which would claim the
+    /// layer is short of something. Nothing is missing: the stack may be full
+    /// of passes and the selected row is simply the form, where walking the
+    /// target channel to zero would take the whole surface back toward the
+    /// pure subdivision rather than lift one deposit.
+    #[test]
+    fn the_hierarchy_eraser_needs_a_pass_and_says_so() {
+        ToolKind::Apagar
+            .availability(LayerState::in_a_pass(Representation::Multires))
+            .expect("with a pass selected, the eraser is what the pass is for");
+
+        let refused = ToolKind::Apagar
+            .availability(LayerState::editable(Representation::Multires))
+            .expect_err("the form is not a pass");
+        assert_eq!(refused, Unavailable::NeedsAPass);
+        let said = refused.to_string();
+        assert!(
+            said.contains("pass"),
+            "the refusal has to name what a sculptor must select: {said}"
+        );
+
+        // And the note, which is the other half: a sculptor who has selected a
+        // pass still has to be told that erasing here is not the grid's verb.
+        assert_eq!(
+            ToolKind::Apagar.note_on(Representation::Multires),
+            Some(ToolNote::MultiresEraseTakesThisPassToZero)
+        );
+        assert_eq!(
+            ToolKind::Apagar.note_on(Representation::Voxel),
+            None,
+            "the grid's eraser means what its name says and needs no caveat"
+        );
+    }
+
+    /// The pass rule reaches exactly one pair.
+    ///
+    /// Written as a walk rather than as a single assertion about Apagar,
+    /// because the failure worth catching is the opposite one: a tool that
+    /// quietly starts refusing the form on a hierarchy, or on a grid where
+    /// there are no passes at all, is a tool that vanished from a shelf for a
+    /// reason nobody stated.
+    #[test]
+    fn only_the_hierarchy_eraser_is_gated_on_a_pass() {
+        for tool in ToolKind::ALL {
+            for representation in Representation::ALL {
+                if !tool.exists_on(representation) {
+                    continue;
+                }
+                let gated = tool.availability(LayerState::editable(representation))
+                    == Err(Unavailable::NeedsAPass);
+                assert_eq!(
+                    gated,
+                    (tool, representation) == (ToolKind::Apagar, Representation::Multires),
+                    "{} on {} is gated on a pass and should not be",
+                    tool.label(),
+                    representation.label()
+                );
+            }
         }
     }
 
@@ -2240,10 +2428,8 @@ mod tests {
     #[test]
     fn a_hierarchy_with_no_cage_yet_says_it_is_waiting_for_one() {
         let waiting = LayerState {
-            representation: Representation::Multires,
-            editable: true,
-            visible: true,
             carries_geometry: false,
+            ..LayerState::editable(Representation::Multires)
         };
         assert_eq!(
             ToolKind::Padrao.availability(waiting),
