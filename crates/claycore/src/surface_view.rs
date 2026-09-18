@@ -79,14 +79,20 @@
 //! should take a view and read [`SurfaceView::chunk_infos_in_order`] once
 //! before it starts, which is what a first frame would have done.
 //!
-//! # What is deliberately not here
+//! # All three representations, through one seam
 //!
-//! `clay_surface_view_from_dynamic` takes a `clay_dynamic_sculptor`, which
-//! this crate does not wrap: there is no adaptive surface in this workspace
-//! yet. A constructor for it would be an unconstructible type or a raw pointer
-//! crossing a safe boundary, and this crate's rule is that a wrapper nobody
-//! runs is a SAFETY comment nobody has checked. It arrives with the adaptive
-//! surface, which is the change that can also run it.
+//! [`SurfaceView::over_mesh`], [`SurfaceView::over_multires`] and
+//! [`SurfaceView::over_dynamic`] are the three, and what differs between them
+//! a caller can see is set out under [`SurfaceKind`]: an adaptive surface's
+//! chunks copy as *unwelded triangles*, because its topology changes under the
+//! stamp being uploaded and there is no stable per-chunk vertex list to weld
+//! against. Read [`ChunkReadback::vertex_count`] rather than assuming either.
+//!
+//! The adaptive constructor is also the one that is worth taking rather than
+//! reaching for the sculptor's own transport: the acknowledgement here retires
+//! chunks *individually and only if they have not changed since the copy*,
+//! while [`DynamicSculptor::clear_dirty`](crate::DynamicSculptor::clear_dirty)
+//! is all or nothing. A host that drains across frames wants the first.
 
 use std::marker::PhantomData;
 use std::ptr::NonNull;
@@ -383,6 +389,25 @@ impl<'a> SurfaceView<'a> {
             "clay_surface_view_from_multires",
         )?;
         Self::from_raw(view, "clay_surface_view_from_multires")
+    }
+
+    /// A view over an adaptive surface, through the sculptor that owns its
+    /// chunk table.
+    ///
+    /// The *sculptor* and not the surface, because the partition and the dirty
+    /// set are the sculptor's: a surface nobody has sculpted has no chunk
+    /// table for a view to report. The borrow is exclusive for the same reason
+    /// [`over_multires`](Self::over_multires)'s is — reading chunks writes to
+    /// the handle on the way.
+    pub fn over_dynamic(sculptor: &'a mut crate::DynamicSculptor<'_>) -> Result<Self> {
+        let mut view = std::ptr::null_mut();
+        // SAFETY: a valid sculptor handle borrowed mutably for the view's
+        // lifetime, and an out-parameter written only on success.
+        check(
+            unsafe { sys::clay_surface_view_from_dynamic(sculptor.as_ptr(), &mut view) },
+            "clay_surface_view_from_dynamic",
+        )?;
+        Self::from_raw(view, "clay_surface_view_from_dynamic")
     }
 
     fn from_raw(raw: *mut sys::clay_surface_view, operation: &'static str) -> Result<Self> {

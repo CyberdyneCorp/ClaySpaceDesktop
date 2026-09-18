@@ -203,6 +203,15 @@ pub struct MaintenanceQueue {
 }
 
 impl MaintenanceQueue {
+    /// The raw handle, for sibling modules in this crate only.
+    ///
+    /// The engine's own convenience requests — `request_index_rebuild` on the
+    /// adaptive sculptor — fill a queue they are handed rather than one of
+    /// their own, so the handle has to cross module lines inside this crate.
+    pub(crate) fn as_ptr(&mut self) -> *mut sys::clay_maintenance_queue {
+        self.raw.as_ptr()
+    }
+
     pub fn new() -> Result<Self> {
         let mut raw = std::ptr::null_mut();
         // SAFETY: a valid out-parameter, written only on success.

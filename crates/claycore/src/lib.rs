@@ -20,7 +20,8 @@
 //!   nobody has checked. `tests/abi_surface.rs` runs the scattered ones the
 //!   application has not reached for; a tier large enough to have vocabulary
 //!   of its own gets a file named after it (`tests/multires.rs`,
-//!   `tests/surface_view.rs`, `tests/maintenance.rs`, `tests/memory.rs`),
+//!   `tests/dynamic.rs`, `tests/surface_view.rs`, `tests/maintenance.rs`,
+//!   `tests/memory.rs`),
 //!   because the assertions there are about what the tier *claims* and not
 //!   only about having been called.
 
@@ -33,6 +34,7 @@ mod consolidate;
 mod cut;
 mod descriptor;
 mod document;
+mod dynamic;
 mod error;
 mod live;
 mod maintenance;
@@ -63,6 +65,12 @@ pub use consolidate::{
     ConsolidationCost, ConsolidationParams, Degradation, FieldReport, RegionMerge,
 };
 pub use cut::{cut, CutFrame, CutOutline, CutShape, TrimSide};
+pub use dynamic::{
+    DetailMode, DynamicChunk, DynamicChunkInfo, DynamicDesc, DynamicError, DynamicRefusal,
+    DynamicSculptor, DynamicStampReport, DynamicStats, DynamicSurface, DynamicTopology,
+    IndexQuality, SculptStage, StageReport, StageTiming, SurfaceRevision, SurfaceValidation,
+    WorldFrame,
+};
 pub use measure::{MeasureParams, SurfaceMeasure};
 
 /// The sculpt-handoff format version this engine writes.
