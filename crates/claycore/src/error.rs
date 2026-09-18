@@ -176,6 +176,12 @@ fn take_last_error() -> Option<String> {
 /// `operation` names the call for the error message; it is a static string so
 /// that constructing an error allocates only the detail it actually has.
 pub(crate) fn check(code: RawResult, operation: &'static str) -> Result<()> {
+    // Every fallible call in this crate passes through here, which is what
+    // makes this the one place a trace can be complete — and what makes the
+    // name it records the same name the call's error would carry. See
+    // [`crate::trace`]; outside a test build there is no trace and no call.
+    #[cfg(feature = "test-support")]
+    crate::trace::note(operation);
     match ErrorKind::from_raw(code) {
         None => Ok(()),
         Some(kind) => Err(ClayError {

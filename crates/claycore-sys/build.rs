@@ -586,6 +586,57 @@ fn generate_bindings(engine: &Path) {
         .expect("bindgen failed to generate bindings for clay.h")
         .write_to_file(out.join("bindings.rs"))
         .expect("failed to write bindings.rs");
+
+    record_entry_points(&out);
+}
+
+/// Writes down the name of every function the bindings declare.
+///
+/// Rust cannot ask at runtime whether a symbol exists — a name that is not in
+/// the bindings is a name that does not compile, and a name held as *text* is
+/// a name nothing checks at all. The capability table in `clayspace-model`
+/// holds its verbs as text, because the domain may not link the engine, so the
+/// only way for anything to check those names is to have the list beside them.
+///
+/// Read back out of the generated file rather than out of the header, and that
+/// is the point: what the header declares and what this build actually offers
+/// are two different questions whenever the allowlist, the target or a feature
+/// changes one of them. The answer here is the second question.
+fn record_entry_points(out: &Path) {
+    let generated =
+        std::fs::read_to_string(out.join("bindings.rs")).expect("read the generated bindings");
+    let names = dedup(declared_functions(&generated));
+
+    let mut text = String::from(
+        "/// Every function the generated bindings declare, sorted.\n\
+         ///\n\
+         /// Written by `build.rs` from `bindings.rs` itself, so it is the ABI\n\
+         /// this build links and not a transcription of the header.\n\
+         pub const ENTRY_POINTS: &[&str] = &[\n",
+    );
+    for name in &names {
+        text.push_str(&format!("    {name:?},\n"));
+    }
+    text.push_str("];\n");
+    std::fs::write(out.join("entry_points.rs"), text).expect("failed to write entry_points.rs");
+
+    assert!(
+        !names.is_empty(),
+        "the bindings declare no functions at all, which means this scan is \
+         reading something other than bindgen's output"
+    );
+}
+
+/// The names in `pub fn name(` declarations, which is how bindgen writes an
+/// `extern "C"` function whatever else it puts around it.
+fn declared_functions(generated: &str) -> Vec<String> {
+    generated
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("pub fn "))
+        .filter_map(|rest| rest.split_once('('))
+        .map(|(name, _)| name.trim().to_string())
+        .filter(|name| name.starts_with("clay_"))
+        .collect()
 }
 
 fn emit_rerun_directives(engine: &Path) {
