@@ -411,6 +411,10 @@ impl MaskModel for SharedDocument {
         self.document.borrow().mask_state()
     }
 
+    fn history_depth(&self) -> usize {
+        self.document.borrow().history_depth()
+    }
+
     fn apply_mask_op(&mut self, op: MaskOp) -> Result<(), ModelError> {
         self.document.borrow_mut().apply_mask_op(op)
     }

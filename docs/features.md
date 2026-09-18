@@ -703,9 +703,33 @@ Two things follow that are worth knowing. A document has no verb for
 *detaching* a mask, so **Limpar empties it and it stays attached** — the panel
 keys on whether anything is frozen rather than on whether a mask exists, and
 "there is no mask" is now only reachable on a subtool nobody has painted one
-on. And a mask edit records on the engine's history, so **one mask gesture is
-one undo**; before, an undo after a mask stroke spent itself on whatever came
-before it.
+on. The agent door answers the same question rather than the other one:
+`state` reports `mask.present` as *whether anything is frozen*, because an
+agent reading `true` after a clear went on believing a region it had just
+released was still protected.
+
+And a mask edit records on the engine's history, so **one mask gesture is one
+undo**. The engine's half of that was never the problem. The history a sculptor
+presses is the sculpting ViewModel's — a stack of how many engine entries each
+action spent, where one Cmd+Z pops one count — and a mask operation pushed
+nothing onto it, so the next undo spent the *previous* command's count on the
+mask's entries and the one after that reached further still. Measured through
+the agent door: a subtool removed, a mask cleared, a region lassoed and a dab,
+then two undos, which walked back seven entries and took two subtools with
+them. Every mask edit now goes through one function that applies it and banks
+what it cost, so an operation added later cannot arrive without an entry; and a
+step through the history says the frozen region may have moved, since the
+engine writes a mask back through a snapshot of its own, past every site that
+would otherwise say so, and the restored region was not being redrawn.
+`mask_undo.rs` drives that seam through the ViewModels, and `undo_ordering.rs`
+takes each operation back against a digest that carries the mask.
+
+**Limpar on a subtool that freezes nothing now costs nothing.** It is offered
+whether or not anything is frozen — pressing it should do the obvious nothing —
+and that nothing used to write a snapshot to the history, bank an entry and
+send 1.78 MB of the layer to be drawn again. It is not a refusal either: the
+mask ends up exactly as it was asked to be, so what comes back is a remark
+saying there was nothing to clear.
 
 **And it now protects against the *operation*, not only against the brush.**
 Those are two different things, and until the ClayCore 0.73.0 pin only the
@@ -887,6 +911,15 @@ Three of these took an amount the interface could not set: `Expandir`,
 extrusion with every default it was born with, so its thickness, rounding and
 edge smoothing were unreachable and every wall the application could build was
 0.08 thick. `mask_operations.rs` measures each entry and each amount.
+
+**The amount applied is the one the command carries.** The menu fills it in
+from the panel before it dispatches, which is what lets the entry spell out
+what it would do, and a caller at the agent door names its own. The ViewModel
+used to write the panel's number over whatever arrived — which served the menu
+nothing, since the menu had already filled it in, and made `steps` a parameter
+the door accepted and ignored: `mask/apply {"op":"expand","steps":4}` expanded
+by one. An amount outside the 1–16 the panel's own control offers is brought
+inside it and said, rather than applied silently.
 
 ### Which brushes have a sign
 

@@ -448,6 +448,12 @@ pub struct HistoryState {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct MaskState {
+    /// Whether anything is frozen on the active subtool.
+    ///
+    /// The question an agent is asking — "will my next stroke be resisted" —
+    /// rather than whether the layer carries a mask field at all. An emptied
+    /// mask stays attached inside the document, so the two answers differ
+    /// exactly after a clear.
     pub present: bool,
     /// The share of the active layer the mask protects, where the engine can
     /// say, and none where it cannot.

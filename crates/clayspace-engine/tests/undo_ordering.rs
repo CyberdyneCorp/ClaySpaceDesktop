@@ -21,8 +21,9 @@
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
-    BrushSettings, Combine, CombineSettings, Direction, GestureSample, LayerKey, ObjectModel,
-    Representation, SceneModel, SculptModel, Shape, ToolKind,
+    BrushSettings, Combine, CombineSettings, Direction, ExtrudeSettings, GestureSample, LayerKey,
+    MaskModel, MaskOp, MaskOutline, ObjectModel, OutlineFrame, OutlineMode, Representation,
+    SceneModel, SculptModel, Shape, ToolKind,
 };
 
 fn document() -> ClayDocument {
@@ -94,6 +95,29 @@ fn dab_on_the_mesh(doc: &mut ClayDocument, x: f32, y: f32) {
 struct Digest {
     layers: Vec<(LayerKey, String, Representation, bool, usize)>,
     carried: Vec<[f32; 3]>,
+    /// What is frozen on the active subtool: whether there is a mask, how many
+    /// cells it holds, and how frozen three points of it are.
+    ///
+    /// Here because a mask edit changes nothing else in this digest — no layer,
+    /// no vertex — so a harness without it would call an operation over the
+    /// mask a command that changed nothing. The three samples are what tells a
+    /// region put back from one merely the same size.
+    mask: (bool, usize, Option<Vec<u32>>),
+}
+
+/// The three places an operation on a mask can be told apart: the middle of
+/// the painted patch, its shoulder, and clay beside it.
+const PROBES: [[f32; 3]; 3] = [[0.0, 0.0, 1.0], [0.28, 0.0, 0.96], [0.40, 0.0, 0.92]];
+
+/// How frozen the probes are, as bits rather than as floats.
+///
+/// A snapshot the engine restores is restored exactly, so the comparison is an
+/// equality — and `f32` carries a `PartialEq` that is not one, which is the
+/// difference between a digest that says "the mask came back" and one that
+/// says "no mask sample was a NaN".
+fn frozen_at(doc: &ClayDocument) -> Option<Vec<u32>> {
+    doc.mask_at(&PROBES)
+        .map(|read| read.iter().map(|value| value.to_bits()).collect())
 }
 
 fn digest(doc: &mut ClayDocument) -> Digest {
@@ -118,9 +142,11 @@ fn digest(doc: &mut ClayDocument) -> Digest {
             )
         })
         .collect();
+    let mask = doc.mask_state();
     Digest {
         layers,
         carried: doc.visible_mesh_geometry().0,
+        mask: (mask.present, mask.painted_cells, frozen_at(doc)),
     }
 }
 
@@ -414,5 +440,161 @@ fn every_command_that_changes_the_document_is_one_step_of_history() {
         doc.history().depth,
         start + 4,
         "a way of looking at the scene was counted as something to take back"
+    );
+}
+
+// -- the mask -----------------------------------------------------------------
+
+/// A dab of the mask brush on the near face of the starting form.
+fn paint_the_mask(doc: &mut ClayDocument) {
+    let at = SculptModel::pick(doc, [0.0, 0.0, 4.0], [0.0, 0.0, -1.0])
+        .expect("the starting form is under the ray");
+    let samples: Vec<GestureSample> = (0..4)
+        .map(|i| GestureSample {
+            position: at,
+            pressure: 1.0,
+            time: i as f32 * 0.1,
+        })
+        .collect();
+    doc.apply_stroke(
+        ToolKind::Mascara,
+        BrushSettings {
+            size: 0.3,
+            intensity: 1.0,
+            ..BrushSettings::default()
+        },
+        &samples,
+        [false; 3],
+    )
+    .expect("paint the mask");
+}
+
+/// A sphere with a patch of its near face frozen.
+fn masked() -> ClayDocument {
+    let mut doc = document();
+    paint_the_mask(&mut doc);
+    doc
+}
+
+/// Looking down -z, so the frame's x and y are the world's.
+fn looking_down_z() -> OutlineFrame {
+    OutlineFrame {
+        origin: [0.0, 0.0, 0.0],
+        right: [1.0, 0.0, 0.0],
+        up: [0.0, 1.0, 0.0],
+        forward: [0.0, 0.0, -1.0],
+        scale: [1.0, 1.0],
+    }
+}
+
+/// Every operation over the mask is one command in and one command out.
+///
+/// Each of the six entries in the Máscaras menu changes the document and
+/// nothing else in the digest — which is why the digest carries the mask.
+/// Before this, an operation on the mask left entries in the history that the
+/// ViewModel above knew nothing about, so the next undo spent the previous
+/// command's count on them and the one after that reached further still: in
+/// the audit, two undos that walked back seven entries and took two subtools
+/// with them.
+#[test]
+fn every_mask_op_is_one_undo_and_restores_the_previous_mask() {
+    let mut doc = masked();
+    for op in [
+        MaskOp::Invert,
+        MaskOp::Expand(2),
+        MaskOp::Contract(2),
+        MaskOp::Smooth(2),
+        MaskOp::InvertWithinBounds,
+        MaskOp::Clear,
+    ] {
+        apply_then_undo_restores_exactly(&mut doc, op.label(), |doc| {
+            doc.apply_mask_op(op).expect("the operation");
+        });
+    }
+}
+
+/// And so is freezing a region by drawing round it.
+#[test]
+fn an_outline_is_one_undo_and_restores_the_previous_mask() {
+    let mut doc = masked();
+    apply_then_undo_restores_exactly(&mut doc, "an outline", |doc| {
+        doc.apply_outline(&MaskOutline {
+            // Beside the painted patch rather than over it, so the gesture
+            // freezes something new and the undo has something to take back.
+            outline: vec![[-0.5, -0.5], [-0.1, -0.5], [-0.1, -0.1], [-0.5, -0.1]],
+            frame: looking_down_z(),
+            mode: OutlineMode::Freeze,
+        })
+        .expect("the outline");
+    });
+}
+
+/// And pulling the frozen patch off as a wall, which leaves a layer behind.
+#[test]
+fn an_extrusion_is_one_undo_and_leaves_no_layer_standing() {
+    let mut doc = masked();
+    apply_then_undo_restores_exactly(&mut doc, "an extrusion", |doc| {
+        doc.extrude_mask(ExtrudeSettings {
+            thickness: 0.2,
+            ..ExtrudeSettings::default()
+        })
+        .expect("the extrusion");
+    });
+}
+
+/// A redo puts the operation back, which is the other half of taking it back.
+#[test]
+fn redo_reapplies_the_mask_op() {
+    let mut doc = masked();
+    let painted = digest(&mut doc);
+    let depth = doc.history().depth;
+
+    doc.apply_mask_op(MaskOp::Invert).expect("invert");
+    let inverted = digest(&mut doc);
+    assert_ne!(inverted, painted, "inverting changed nothing");
+    let cost = doc.history().depth.saturating_sub(depth);
+
+    for _ in 0..cost {
+        assert!(doc.undo().expect("undo"), "the invert was not undoable");
+    }
+    assert_eq!(
+        digest(&mut doc),
+        painted,
+        "the undo did not put the mask back"
+    );
+
+    for _ in 0..cost {
+        assert!(doc.redo().expect("redo"), "the invert did not come forward");
+    }
+    assert_eq!(
+        digest(&mut doc),
+        inverted,
+        "the redo did not put the operation back"
+    );
+}
+
+/// Clearing a mask that freezes nothing costs nothing.
+///
+/// A mask writes a snapshot of its whole chunk map to the history on every
+/// call that reaches it, and the viewport re-samples the surface whenever the
+/// revision moves — measured at 1.78 MB re-uploaded, and an entry banked, for
+/// a clear that had nothing to clear. It is not a refusal either: the mask
+/// ends up exactly as the caller asked for it.
+#[test]
+fn clearing_an_empty_mask_costs_nothing() {
+    let mut doc = document();
+    let depth = doc.history().depth;
+    let revision = doc.mask_revision();
+
+    doc.apply_mask_op(MaskOp::Clear).expect("clearing nothing");
+    assert_eq!(
+        doc.history().depth,
+        depth,
+        "an entry was banked for nothing"
+    );
+    assert_eq!(
+        doc.mask_revision(),
+        revision,
+        "the viewport was sent to re-sample a mask nothing had touched"
     );
 }
