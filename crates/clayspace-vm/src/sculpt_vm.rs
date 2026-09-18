@@ -128,6 +128,24 @@ pub struct SculptViewModel {
     redo_stack: Vec<usize>,
     /// Entries the gesture in progress has produced so far.
     gesture_entries: usize,
+    /// Where the model's history stood when the gesture in progress opened.
+    ///
+    /// Cancelling must take back the open gesture and nothing underneath it,
+    /// and the count above does not say where that line is. It counts one
+    /// entry per applied segment, which is what a field gesture records — but
+    /// a mesh gesture is previewed while it is made and banked as a *single*
+    /// record however many segments drew it. Spending one undo per segment
+    /// there took back the first undo's worth of gesture and then kept going:
+    /// the gestures committed before it, and on a layer that had only just
+    /// been made, the layer itself. Cancel was the most destructive command in
+    /// the mesh path.
+    ///
+    /// The depth the gesture started from is the line, and it is the same line
+    /// whatever the representation chose to write above it — one record or
+    /// twenty. `None` when no gesture is open, which is what makes a cancel
+    /// with nothing to cancel a no-op rather than an undo of whatever came
+    /// last.
+    gesture_floor: Option<usize>,
     /// Entries the call being recorded produced, as counted from the model.
     pending_entries: usize,
     /// Whether the gesture in progress is being shown as it is made.
@@ -178,6 +196,7 @@ impl SculptViewModel {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             gesture_entries: 0,
+            gesture_floor: None,
             live: false,
             pending_entries: 1,
         };
@@ -280,6 +299,7 @@ impl SculptViewModel {
         self.undo_stack.clear();
         self.redo_stack.clear();
         self.gesture_entries = 0;
+        self.gesture_floor = None;
         self.stroke = None;
         self.publish_history();
         self.stats.set(self.model.stats());
@@ -530,6 +550,10 @@ impl SculptViewModel {
                 // Refuse before collecting anything, so an unavailable tool
                 // cannot accumulate a gesture it will never apply.
                 self.ensure_tool_available()?;
+                // Read before anything this gesture does reaches the model:
+                // opening a live gesture points the layer's mirror, and that
+                // is an edit the gesture caused and therefore owes back.
+                self.gesture_floor = Some(self.model.history().depth);
                 // Held for the gesture. The shelf still shows the tool that was
                 // chosen — letting go of the key returns to it — so this is a
                 // substitution rather than a selection.
@@ -575,25 +599,7 @@ impl SculptViewModel {
                 }
             }
             Command::EndStroke => return self.commit_stroke(),
-            Command::CancelStroke => {
-                // A live stroke has already put clay down, so cancelling has
-                // to take it back rather than merely stop. Abandoning it would
-                // leave the sculptor with half a stroke they explicitly said
-                // they did not want.
-                self.stroke = None;
-                // A live gesture wrote nothing, so it is dropped rather than
-                // reverted — and dropped before the revert below, which would
-                // otherwise spend history belonging to whatever came before.
-                if std::mem::take(&mut self.live) {
-                    self.gesture_entries += self.model.discard_live_gesture();
-                }
-                // Closed before the revert, so the preview it was holding is
-                // banked and then taken back with everything else rather than
-                // being left on the surface.
-                self.model.end_gesture();
-                self.modifiers = clayspace_model::StrokeModifiers::default();
-                return self.abandon_gesture();
-            }
+            Command::CancelStroke => return self.cancel_stroke(),
 
             Command::Undo => return self.undo_action(),
             Command::Redo => return self.redo_action(),
@@ -1011,11 +1017,49 @@ impl SculptViewModel {
         Ok(())
     }
 
-    /// Reverts everything the gesture in progress has applied.
-    fn abandon_gesture(&mut self) -> Result<(), ModelError> {
-        let entries = std::mem::take(&mut self.gesture_entries);
+    /// Takes back the gesture in progress, and says that it did.
+    fn cancel_stroke(&mut self) -> Result<(), ModelError> {
+        // Nothing open is nothing to cancel, and it stops here: the model is
+        // not told a gesture ended, because a cancel an agent may safely
+        // repeat must not settle the document a second time, and the revert
+        // below would be spending history belonging to whatever came before.
+        let Some(floor) = self.gesture_floor.take() else {
+            self.report_cancel(false);
+            return Ok(());
+        };
+        // A live stroke has already put clay down, so cancelling has to take
+        // it back rather than merely stop. Abandoning it would leave the
+        // sculptor with half a stroke they explicitly said they did not want.
+        self.stroke = None;
+        // A live gesture wrote nothing, so it is dropped rather than reverted.
+        // What opening it did record — pointing the layer's mirror, which
+        // happens before the transaction begins — sits above the floor, so the
+        // revert below already reaches it and the count handed back here would
+        // only be counting it twice.
+        if std::mem::take(&mut self.live) {
+            let _ = self.model.discard_live_gesture();
+        }
+        // Closed before the revert, so the preview it was holding is banked
+        // and then taken back with everything else rather than being left on
+        // the surface.
+        self.model.end_gesture();
+        self.modifiers = clayspace_model::StrokeModifiers::default();
+        self.abandon_gesture(floor)
+    }
+
+    /// Reverts what the gesture in progress put into the document, down to the
+    /// depth it started from and not one entry further.
+    ///
+    /// `floor` rather than the entries the segments were counted as producing:
+    /// see [`SculptViewModel::gesture_floor`] for why those two numbers are
+    /// not the same on a mesh, and what spending the wrong one destroyed.
+    fn abandon_gesture(&mut self, floor: usize) -> Result<(), ModelError> {
+        // Dropped rather than spent. Whatever the segments were counted as,
+        // the gesture is over and nothing else may bank them.
+        self.gesture_entries = 0;
+        let owed = self.model.history().depth.saturating_sub(floor);
         let mut reverted = 0;
-        for _ in 0..entries {
+        for _ in 0..owed {
             if !self.model.undo()? {
                 break;
             }
@@ -1027,8 +1071,21 @@ impl SculptViewModel {
             self.stats.set(self.model.stats());
             self.pending_remesh.update(|pending| *pending += 1);
         }
+        self.report_cancel(reverted > 0);
         self.publish_history();
         Ok(())
+    }
+
+    /// Says a cancel happened, and whether it had anything to take back.
+    ///
+    /// No tool name: what the sculptor did was cancel, and naming the brush
+    /// they were holding would read as the stroke having landed.
+    fn report_cancel(&mut self, changed: bool) {
+        self.last_action.set(LastAction {
+            tool: None,
+            label: "cancel stroke".to_string(),
+            changed,
+        });
     }
 
     /// Records an undoable action this ViewModel did not perform.
@@ -1052,6 +1109,10 @@ impl SculptViewModel {
 
     /// Banks the gesture's entries as one undoable action.
     fn close_gesture(&mut self) {
+        // The gesture is over, so the depth it was measured from goes with it:
+        // a cancel arriving after the release has nothing of its own left to
+        // take back.
+        self.gesture_floor = None;
         let entries = std::mem::take(&mut self.gesture_entries);
         if entries > 0 {
             self.undo_stack.push(entries);

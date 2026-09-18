@@ -1225,6 +1225,23 @@ so a stroke passing over the same vertex forty times still records where it
 started once, and the gesture is still one undo that puts every vertex back
 exactly.
 
+**And cancelling one takes back that gesture and nothing under it.** That the
+whole gesture is one record is exactly what a cancel used to get wrong. The
+sculpting ViewModel banks a count of engine entries per action and a cancel
+spent the gesture's count, which is one per applied segment — right on a field,
+where every segment *is* an entry, and wrong here by however many segments the
+drag took. The first undo took the gesture back and the rest kept going: the
+gestures committed before it, and on a layer made a moment earlier, the layer
+itself. Measured on a fresh mesh layer, one Esc removed the subtool. The count
+is not what a cancel owes; the document as it stood when the gesture opened is,
+so the ViewModel reads the history depth at the press and reverts down to it,
+never past it — one record or twenty, the line is the same. A cancel with no
+gesture open is now a no-op that says there was nothing to cancel, rather than
+a success that quietly spent the previous command's count.
+`stroke_cancel.rs` commits two mesh gestures, cancels a third and holds the
+geometry digest, the subtool count and the history against what the second one
+left.
+
 **The pointer finds it from the moment it becomes active.** A pick against a
 mesh layer is answered by the mesh sculptor's own raycast, and the sculptor was
 built by the first stroke — but the interface places a stroke where the pick

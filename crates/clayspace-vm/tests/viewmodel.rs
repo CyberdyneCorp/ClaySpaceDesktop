@@ -20,6 +20,13 @@ struct Recorded {
     strokes: Vec<(ToolKind, Vec<GestureSample>, [bool; 3], BrushSettings)>,
     undos: usize,
     redos: usize,
+    /// The shallowest the model's own history ever got.
+    ///
+    /// A cancel that reverts too far shows up here and nowhere else: the
+    /// ViewModel's depth counts actions, and the entries a runaway cancel
+    /// spends are the model's — the gestures committed before it, and the
+    /// layer they were made on.
+    shallowest: Option<usize>,
 }
 
 /// A Model that records its calls and answers however a test needs.
@@ -37,6 +44,18 @@ struct FakeModel {
     outcome: EditOutcome,
     history: HistoryState,
     stats: SceneStats,
+    /// Whether the double banks a gesture the way a mesh layer does.
+    ///
+    /// A mesh gesture is previewed while it is made and banked as *one* record
+    /// when it ends, however many segments drew it; the field path records an
+    /// entry per segment. That difference is the whole of what a cancel has to
+    /// get right, so the double has to be able to be either.
+    banks_the_gesture_whole: bool,
+    /// Whether a gesture is open, for the double that banks one whole.
+    gesture_open: bool,
+    /// How many segments the open gesture previewed, so that ending one that
+    /// previewed nothing banks nothing.
+    gesture_stamps: usize,
 }
 
 impl FakeModel {
@@ -63,7 +82,18 @@ impl FakeModel {
                 objects: 1,
                 detail: clayspace_model::Detail::Full,
             },
+            banks_the_gesture_whole: false,
+            gesture_open: false,
+            gesture_stamps: 0,
         }
+    }
+
+    /// One more thing to take back.
+    fn bank_an_entry(&mut self) {
+        self.history.depth += 1;
+        self.history.can_undo = true;
+        self.history.redo_depth = 0;
+        self.history.can_redo = false;
     }
 }
 
@@ -95,15 +125,33 @@ impl SculptModel for FakeModel {
             .borrow_mut()
             .strokes
             .push((tool, samples.to_vec(), symmetry, brush));
-        if self.outcome.changed {
+        if !self.outcome.changed {
+            return Ok(self.outcome);
+        }
+        if self.banks_the_gesture_whole && self.gesture_open {
+            // Previewed, not banked. The record is pushed once, when the
+            // gesture ends.
+            self.gesture_stamps += 1;
+        } else {
             // An edit that changed something is an entry, which is what the
             // ViewModel counts to know how far an undo has to reach.
-            self.history.depth += 1;
-            self.history.can_undo = true;
-            self.history.redo_depth = 0;
-            self.history.can_redo = false;
+            self.bank_an_entry();
         }
         Ok(self.outcome)
+    }
+
+    fn begin_gesture(&mut self) {
+        self.gesture_open = true;
+        self.gesture_stamps = 0;
+    }
+
+    fn end_gesture(&mut self) {
+        let previewed = std::mem::take(&mut self.gesture_stamps);
+        let banking = self.banks_the_gesture_whole && self.gesture_open && previewed > 0;
+        self.gesture_open = false;
+        if banking {
+            self.bank_an_entry();
+        }
     }
 
     fn pick(&self, _origin: [f32; 3], _direction: [f32; 3]) -> Option<[f32; 3]> {
@@ -123,6 +171,9 @@ impl SculptModel for FakeModel {
         self.history.redo_depth += 1;
         self.history.can_undo = self.history.depth > 0;
         self.history.can_redo = true;
+        let depth = self.history.depth;
+        let mut recorded = self.recorded.borrow_mut();
+        recorded.shallowest = Some(recorded.shallowest.map_or(depth, |seen| seen.min(depth)));
         Ok(true)
     }
 
@@ -188,6 +239,37 @@ fn fixture_with_a_smooth_mode() -> (
     let representation = model.representation.clone();
     let mode = model.smooth_mode.clone();
     (SculptViewModel::new(Box::new(model)), representation, mode)
+}
+
+/// What the double's history already holds before a test does anything: the
+/// layer the sculptor is about to work on. No cancel may ever reach it.
+const THE_LAYER: usize = 1;
+
+/// A ViewModel over a mesh layer that banks a gesture the way the engine does:
+/// one record when the gesture ends, however many segments drew it.
+fn mesh_fixture() -> (SculptViewModel, Rc<RefCell<Recorded>>) {
+    fixture_with(|model| {
+        model.representation.set(Representation::Mesh);
+        model.banks_the_gesture_whole = true;
+    })
+}
+
+/// Opens a gesture and feeds it, without closing it.
+fn open_a_gesture(vm: &mut SculptViewModel, points: &[[f32; 3]]) {
+    let (first, rest) = points.split_first().expect("a gesture needs a point");
+    vm.dispatch(Command::BeginStroke {
+        position: *first,
+        pressure: 1.0,
+        modifiers: Default::default(),
+    })
+    .expect("begin");
+    for point in rest {
+        vm.dispatch(Command::ContinueStroke {
+            position: *point,
+            pressure: 1.0,
+        })
+        .expect("continue");
+    }
 }
 
 fn draw(vm: &mut SculptViewModel, points: &[[f32; 3]]) -> Result<(), ModelError> {
@@ -317,6 +399,167 @@ fn a_cancelled_stroke_is_taken_back_off_the_model() {
     assert!(
         !vm.history().get().can_undo,
         "a cancelled gesture must leave nothing to undo"
+    );
+}
+
+/// Cancelling a mesh gesture takes back that gesture and stops there.
+///
+/// It used to spend one undo per applied segment. That is the count the field
+/// path records, and a mesh gesture is banked as ONE record however many
+/// segments drew it — so the first undo took the gesture back and every one
+/// after it took back whatever was underneath: the gestures already committed,
+/// and on a fresh layer the layer itself. Cancel, the safe way out of a
+/// gesture, was the most destructive command in the mesh path.
+#[test]
+fn cancel_on_a_mesh_reverts_only_the_open_gesture() {
+    let (mut vm, recorded) = mesh_fixture();
+    draw(&mut vm, &[[0.0; 3], [0.1, 0.0, 0.0], [0.2, 0.0, 0.0]]).expect("first gesture");
+    draw(
+        &mut vm,
+        &[[0.0, 0.1, 0.0], [0.1, 0.1, 0.0], [0.2, 0.1, 0.0]],
+    )
+    .expect("second gesture");
+    let committed = vm.history().get().depth;
+    assert_eq!(
+        committed, 2,
+        "the two gestures drawn are two things to undo"
+    );
+    let before = recorded.borrow().strokes.len();
+
+    open_a_gesture(
+        &mut vm,
+        &[[0.0, 0.2, 0.0], [0.1, 0.2, 0.0], [0.2, 0.2, 0.0]],
+    );
+    vm.dispatch(Command::CancelStroke).expect("cancel");
+
+    let seen = recorded.borrow();
+    assert!(
+        seen.strokes.len() > before + 1,
+        "the cancelled gesture reached the model whole, so a per-segment count \
+         could not have been wrong and this proves nothing"
+    );
+    assert_eq!(
+        seen.undos, 1,
+        "a mesh gesture is one record, so cancelling it is one undo"
+    );
+    assert_eq!(
+        seen.shallowest,
+        Some(THE_LAYER + committed),
+        "cancel reached past the gesture it was cancelling"
+    );
+    assert_eq!(
+        vm.history().get().depth,
+        committed,
+        "the committed gestures must still be there to undo"
+    );
+    assert!(
+        !vm.history().get().can_redo,
+        "a cancelled gesture is not an action the sculptor can ask back"
+    );
+}
+
+/// The layer survives its own first gesture being cancelled.
+///
+/// The worst of the runaway: on a layer made a moment ago there is nothing
+/// under the gesture *but* the layer, so the extra undos took it, and the
+/// sculptor was left looking at a document with one fewer subtool than before
+/// they touched it.
+#[test]
+fn cancel_on_a_fresh_mesh_layer_keeps_the_layer() {
+    let (mut vm, recorded) = mesh_fixture();
+    open_a_gesture(&mut vm, &[[0.0; 3], [0.1, 0.0, 0.0], [0.2, 0.0, 0.0]]);
+    vm.dispatch(Command::CancelStroke).expect("cancel");
+
+    let seen = recorded.borrow();
+    assert!(
+        seen.strokes.len() > 1,
+        "the gesture was not segmented, so this proves nothing"
+    );
+    assert_eq!(seen.undos, 1, "the one banked record is the one undo owed");
+    assert_eq!(
+        seen.shallowest,
+        Some(THE_LAYER),
+        "cancel reached past its own gesture and took the layer with it"
+    );
+    assert!(
+        !vm.history().get().can_undo,
+        "a cancelled gesture must leave nothing to undo"
+    );
+}
+
+/// A cancel with nothing open changes nothing, and says so.
+///
+/// An agent may repeat one safely — the interface sends a release whether or
+/// not a press opened anything — so it is not a refusal. What it must not be
+/// is silent success over a document it quietly reverted.
+#[test]
+fn cancel_with_no_gesture_is_a_reported_no_op() {
+    let (mut vm, recorded) = mesh_fixture();
+    draw(&mut vm, &[[0.0; 3], [0.1, 0.0, 0.0], [0.2, 0.0, 0.0]]).expect("gesture");
+    let (strokes, undos) = {
+        let seen = recorded.borrow();
+        (seen.strokes.len(), seen.undos)
+    };
+
+    vm.dispatch(Command::CancelStroke).expect("nothing open");
+    vm.dispatch(Command::CancelStroke)
+        .expect("still nothing open");
+
+    let seen = recorded.borrow();
+    assert_eq!(
+        (seen.strokes.len(), seen.undos),
+        (strokes, undos),
+        "a cancel with nothing open spent history belonging to what came before"
+    );
+    assert_eq!(
+        vm.history().get().depth,
+        1,
+        "the committed gesture must still be there to undo"
+    );
+    let last = vm.last_action().get().clone();
+    assert_eq!(last.label, "cancel stroke");
+    assert!(
+        !last.changed,
+        "a cancel with nothing to cancel reported that it had changed something"
+    );
+    assert!(
+        last.tool.is_none(),
+        "naming a tool reads as a stroke landing"
+    );
+}
+
+/// The field path is unchanged: an entry per segment, and cancel spends each.
+#[test]
+fn cancel_on_a_field_layer_reverts_the_open_gesture() {
+    let (mut vm, recorded) = fixture();
+    // Far enough apart to be worth sending as they are made: a field gesture
+    // that never leaves the brush's footprint arrives as one piece, and one
+    // piece cannot tell a per-segment count from any other.
+    draw(&mut vm, &[[0.0; 3], [0.5, 0.0, 0.0], [1.0, 0.0, 0.0]]).expect("committed gesture");
+    let committed = recorded.borrow().strokes.len();
+
+    open_a_gesture(
+        &mut vm,
+        &[[0.0, 1.0, 0.0], [0.5, 1.0, 0.0], [1.0, 1.0, 0.0]],
+    );
+    vm.dispatch(Command::CancelStroke).expect("cancel");
+
+    let seen = recorded.borrow();
+    let cancelled = seen.strokes.len() - committed;
+    assert!(cancelled > 1, "the cancelled gesture was not segmented");
+    assert_eq!(
+        seen.undos, cancelled,
+        "a field gesture is an entry per segment, and cancel owes every one"
+    );
+    assert_eq!(
+        seen.shallowest,
+        Some(THE_LAYER + committed),
+        "cancel reached past the gesture it was cancelling"
+    );
+    assert_eq!(
+        vm.history().get().depth,
+        1,
+        "the committed gesture must still be there to undo"
     );
 }
 
