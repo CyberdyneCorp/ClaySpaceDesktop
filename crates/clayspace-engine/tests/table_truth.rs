@@ -30,9 +30,10 @@
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{
-    entry_points, every_entry_point, BrushSettings, ConversionSettings, Direction, ExchangeModel,
-    GestureSample, ImportSettings, MultiresLevelOp, MultiresSculptLayerOp, Representation,
-    SceneModel, SculptModel, SmoothFrequency, ToolKind, ToolNote,
+    entry_points, every_entry_point, BrushSettings, Combine, CombineSettings, ConversionSettings,
+    Direction, ExchangeModel, GestureSample, ImportSettings, MultiresLevelOp,
+    MultiresSculptLayerOp, ObjectModel, Representation, SceneModel, SculptModel, Shape,
+    SmoothFrequency, ToolKind, ToolNote,
 };
 use std::collections::BTreeSet;
 
@@ -173,6 +174,7 @@ fn every_tool_note_is_proved_here() {
             ToolNote::MultiresEraseTakesThisPassToZero => {
                 "erasing_is_a_different_verb_on_a_grid_and_on_a_hierarchy"
             }
+            ToolNote::SdfStandardIsAnInflate => "a_field_standard_thickens_a_fin_and_not_a_sphere",
         };
         assert!(!proof.is_empty(), "a note with no test naming it: {note:?}");
     }
@@ -747,4 +749,191 @@ fn occupied(document: &ClayDocument) -> BTreeSet<[i32; 3]> {
         }
     }
     cells
+}
+
+// -- what a field's Standard costs -------------------------------------------
+
+/// The brush both fixtures below are stamped with.
+const STAMP: f32 = 0.3;
+
+/// The fin's half-thickness. It is **thinner than the brush** — 0.10 against a
+/// region of 0.30 — which is the condition the note is about.
+const FIN_HALF_THICKNESS: f32 = 0.05;
+
+/// The fin's half-height, and the sphere's radius: the two fixtures are as
+/// tall as each other, and the sphere is more than three times the brush, so
+/// it is smooth at the brush's scale.
+const FIN_HALF_HEIGHT: f32 = 0.5;
+const SPHERE_RADIUS: f32 = 1.0;
+
+/// How far below the top the flank is read.
+///
+/// The same depth on both, and the difference between what it finds there is
+/// the measurement: on the fin the flank at this depth is 0.07 from the dab's
+/// centre, inside a region of 0.30, and on the sphere the surface at the same
+/// depth has already curved 0.31 away and is outside it. That is not an
+/// artefact of the reading — it *is* the mechanism. A form smooth at the
+/// brush's scale presents nothing sideways-facing under the stamp; a fin
+/// narrower than the brush presents both its flanks.
+const FLANK_BELOW: f32 = 0.05;
+
+/// Clear of the starting form, so a reading of one cannot reach the other.
+const BESIDE: f32 = 3.0;
+
+/// A field's Standard is a relief stroke, and relief is the engine's Inflate.
+///
+/// `every_tool_note_is_proved_here` names this test for
+/// [`ToolNote::SdfStandardIsAnInflate`], and the note is a claim about a
+/// sculptor's surprise rather than about a kernel: a ridge detailed onto a thin
+/// form fattens the form.
+///
+/// **Why the fin and the sphere.** Relief offsets the accumulated field, so
+/// every point of the isosurface moves along the field's own gradient — each
+/// along its own normal. The engine's own Standard preset moves a stamp's
+/// footprint along ONE averaged normal, so the two frames part exactly where
+/// the normals under the stamp do. ClayCore v0.120.0 measured that against
+/// frame-isolated references and named it (#615, #618): 0.000 of the amplitude
+/// from an inflate reference on a sphere, a saddle and a bowl, and 0.568 from
+/// a draw reference on a thin fin, where one stamp thickens the fin by the
+/// whole amplitude and the engine's mesh Draw thickens it by a thirteenth.
+///
+/// This is the same contrast asked in the terms the note puts it to a
+/// sculptor, and answerable without a second engine to compare against: how
+/// much the form **grew sideways** for the height the stamp gave it. A
+/// displacement along one averaged normal — the axis the stamp came down — has
+/// no sideways component at all, so any is the divergence. Measured here:
+///
+///   fixture                          rise     grew sideways
+///   fin, 0.10 thick                 +0.212       +0.166
+///   sphere, radius 1.0              +0.212        0.000
+#[test]
+fn a_field_standard_thickens_a_fin_and_not_a_sphere() {
+    let fin = what_one_stamp_did(
+        Shape::Box,
+        &[FIN_HALF_THICKNESS, 0.4, FIN_HALF_HEIGHT],
+        FIN_HALF_HEIGHT,
+    );
+    let sphere = what_one_stamp_did(Shape::Sphere, &[SPHERE_RADIUS], SPHERE_RADIUS);
+
+    for (fixture, (rise, grew)) in [("the fin", fin), ("the sphere", sphere)] {
+        assert!(
+            rise > STAMP * 0.25,
+            "the stamp barely reached {fixture}: it rose {rise} and grew \
+             {grew} sideways. Neither reading below means anything if the \
+             stroke did not land."
+        );
+    }
+
+    let (rise, grew) = fin;
+    assert!(
+        grew > rise * 0.7,
+        "one stamp on a fin thinner than the brush raised its top by {rise} \
+         and thickened it by only {grew}. The note tells a sculptor that a \
+         feature narrower than the stamp takes the mark on its flanks as well \
+         as on its top — by the whole amplitude — and that is the relief \
+         frame. A fin that keeps its thickness means the field's Standard has \
+         stopped being an Inflate, which is the verb Inflar is bound to."
+    );
+
+    let (rise, grew) = sphere;
+    assert!(
+        grew < rise * 0.1,
+        "one stamp on a sphere raised it by {rise} and spread it sideways by \
+         {grew}, which is not a few percent of the amplitude. The note tells a \
+         sculptor the approximation is harmless on a form smooth at the \
+         brush's scale; a sphere that fattens says the contrast the note draws \
+         is not the one the engine measured."
+    );
+}
+
+/// What one Padrão stamp on the top of `shape` did: how far the top rose, and
+/// how far the flank moved out.
+///
+/// Both read off the field itself rather than off a mesh, by walking a ray to
+/// the sign change. A marched surface would put the cell size between the
+/// measurement and the verb, and the quantity here is a fraction of one stamp.
+fn what_one_stamp_did(shape: Shape, parameters: &[f32], top: f32) -> (f32, f32) {
+    let mut document = with_a(shape, parameters);
+    let centre = [BESIDE, 0.0, 0.0];
+    let flank = [BESIDE, 0.0, top - FLANK_BELOW];
+    let reading = |document: &ClayDocument| {
+        (
+            surface_along(document, centre, 2, top + 1.0),
+            surface_along(document, flank, 0, BESIDE + top + 1.0),
+        )
+    };
+    let (top_before, side_before) = reading(&document);
+
+    document
+        .apply_stroke(
+            ToolKind::Padrao,
+            BrushSettings {
+                size: STAMP,
+                intensity: 1.0,
+                ..BrushSettings::default()
+            },
+            &[GestureSample {
+                position: [BESIDE, 0.0, top_before],
+                pressure: 1.0,
+                time: 0.0,
+            }],
+            [false; 3],
+        )
+        .expect("a field layer takes a Padrão stamp");
+
+    let (top_after, side_after) = reading(&document);
+    (top_after - top_before, side_after - side_before)
+}
+
+/// One shape, standing on its own beside the starting form.
+fn with_a(shape: Shape, parameters: &[f32]) -> ClayDocument {
+    let policy = BackendPolicy::discover(None).expect("discover backends");
+    let mut document = ClayDocument::new(policy)
+        .and_then(ClayDocument::with_starting_form)
+        .expect("a document with a starting form");
+    document
+        .insert_shape_subtool(
+            shape,
+            parameters,
+            [BESIDE, 0.0, 0.0],
+            CombineSettings {
+                op: Combine::Add,
+                ..CombineSettings::default()
+            },
+        )
+        .expect("the fixture is placed as a subtool of its own");
+    document
+}
+
+/// Where the surface crosses the ray that leaves `inside` along `axis`.
+///
+/// Bisection on the sign of the field, which is what makes this a reading of
+/// the verb and not of a mesher: sixty halvings of the interval put the answer
+/// far below any quantity asserted above.
+fn surface_along(document: &ClayDocument, inside: [f32; 3], axis: usize, outside: f32) -> f32 {
+    let at = |t: f32| {
+        let mut point = inside;
+        point[axis] = t;
+        point
+    };
+    let field = |point: [f32; 3]| {
+        document
+            .document()
+            .eval_points(None, &[point])
+            .expect("the field evaluates")[0]
+    };
+    let (mut lo, mut hi) = (inside[axis], outside);
+    assert!(
+        field(at(lo)) < 0.0 && field(at(hi)) > 0.0,
+        "the ray from {inside:?} along axis {axis} does not leave the form"
+    );
+    for _ in 0..60 {
+        let mid = 0.5 * (lo + hi);
+        if field(at(mid)) < 0.0 {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    0.5 * (lo + hi)
 }

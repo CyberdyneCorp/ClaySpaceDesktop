@@ -13,15 +13,12 @@
 //! was given, so the bytes are the same wherever they were authored. Two
 //! families are not like that and are deliberately absent:
 //!
-//! * **Inflar and Pinçar.** They are `clay_layer_magnify_surface`, and the
-//!   stroke sinks each dab's centre half a radius along the field's own
-//!   gradient before the engine records it (`sink_into_the_material`). That
-//!   gradient is `clay_eval_gradients` — an evaluation, not an ask — and the
+//! * **Pinçar.** It is `clay_layer_magnify_surface`, and what the layer keeps
+//!   is a warp of the items the region resolved against — the engine's answer
+//!   about where the surface was, not the centre the gesture asked for. The
 //!   engine "pins no FP flags for its own translation units and makes no
-//!   cross-build promise" (`docs/05-claycore-library.md`). So the centre in
-//!   the file carries whatever arm64-macOS and x86_64-Linux disagree about
-//!   under contraction, and the digests part. Inflar stood here until it
-//!   became a magnify (#201) and that is exactly what happened.
+//!   cross-build promise" (`docs/05-claycore-library.md`), so an evaluated
+//!   quantity is not the same float on arm64-macOS as on x86_64-Linux.
 //! * **Suavizar, Planar, Polir, Relaxar and the topological drag.** They bake
 //!   a resampled volume into the layer, so every sample they write is a
 //!   computed float with the same problem, only more of it.
@@ -30,6 +27,10 @@
 //! surface is cannot record only what it was told — and neither is a reason
 //! to weaken the comparison. It is a reason to compare a document made of
 //! verbs that can.
+//!
+//! **Inflar is one that can.** It is a relief stroke like Padrão, with a wider
+//! region and a shallower lift, and a stroke records the stamp it was asked
+//! for. It stood in this fixture before #201 and stands in it still.
 
 use clayspace_engine::{claycore, BackendPolicy, ClayDocument};
 use clayspace_model::{
@@ -44,10 +45,7 @@ use clayspace_model::{
 const BASE: [(ToolKind, [f32; 3]); 4] = [
     (ToolKind::Padrao, [0.30, 0.10, 0.50]),
     (ToolKind::Padrao, [-0.20, 0.40, 0.45]),
-    // Argila where Inflar used to be: a second stamping verb — relief with
-    // buildup accumulation — at the same asymmetric place, and one whose
-    // record is its parameters. See the module note for why Inflar left.
-    (ToolKind::Argila, [0.15, -0.35, 0.48]),
+    (ToolKind::Inflar, [0.15, -0.35, 0.48]),
     // A drag of one sample, which is no drag: it reaches the baked route and
     // records nothing. Kept because the dispatch is worth crossing, and left
     // out of `RECORDED` for the same reason.

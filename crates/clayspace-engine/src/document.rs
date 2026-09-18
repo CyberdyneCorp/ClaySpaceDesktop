@@ -3344,8 +3344,7 @@ impl ClayDocument {
             | ToolKind::Relaxar
             | ToolKind::Planar
             | ToolKind::Polir => self.baked_stroke(tool, brush, samples, symmetry),
-            // One signed radial scale per dab, which is what Inflate and Pinch
-            // *are* on a field: the same engine verb with the sign flipped.
+            // One radial scale per dab, gathering toward the dab's centre.
             //
             // Not reflected here, unlike the baked verbs above. The engine
             // reflects the region into every image the layer emits and carries
@@ -3354,9 +3353,9 @@ impl ClayDocument {
             // displacement has to be mapped per image — so pointing the mirror
             // is the whole of what symmetry means here, as it is for the live
             // drag.
-            ToolKind::Inflar | ToolKind::Pincar => {
+            ToolKind::Pincar => {
                 self.point_the_mirror(symmetry)?;
-                self.magnify_surface_stroke(tool, brush, samples)
+                self.magnify_surface_stroke(brush, samples)
             }
             // Pulls a lobe out along the path, as items — so the layer
             // mirror does reach it, and pointing the mirror is the whole
@@ -3440,6 +3439,13 @@ impl ClayDocument {
         // the rim. So Inflar takes a wider region with a wider rim and asks
         // for a little less lift — the swell — and Padrão keeps the standard
         // clay mapping, k = rounding = radius: the ridge.
+        //
+        // Which of the two the op is faithful to is settled, and it is not
+        // Padrão: relief offsets the accumulated field, so every point of the
+        // isosurface moves along its own normal, and that is the Inflate frame
+        // (ClayCore v0.120.0, #615 and #618). The profile is the only thing
+        // left to tell them apart, and a sculptor is told where the
+        // approximation shows by `ToolNote::SdfStandardIsAnInflate`.
         let size = brush.sanitized().size;
         let (region, lift) = (size * recipe.reach, recipe.lift);
         let mut stamp = Item::sphere(region).map_err(ModelError::engine)?;
@@ -3579,55 +3585,68 @@ impl ClayDocument {
     /// the protection bleeds visibly into material the sculptor left unpainted.
     const GATE_WIDTH: f32 = Self::VOXEL_SIZE * 4.0;
 
-    /// How much wider than the brush a magnify's region is.
+    /// How much wider than the brush Inflar's region and rim are, against
+    /// Padrão's. Wide enough that the swell reads as a swell beside the
+    /// ridge, not so wide that a stroke reaches things the sculptor did not
+    /// brush.
+    const INFLATE_REACH: f32 = 1.35;
+    /// How much of the standard lift Inflar asks for.
     ///
-    /// Inflate swells the whole footprint where Standard raises a ridge that
-    /// follows the falloff, so it has to reach further than the brush to read
-    /// as the other mark. The number is the one the relief binding used for
-    /// the same reason and is kept: wide enough that the swell reads as a
-    /// swell beside the ridge, not so wide that a stroke reaches things the
-    /// sculptor did not brush.
+    /// Measured rather than chosen, on the starting form with a 0.25 brush,
+    /// as the peak height above the sphere and the footprint area a raycast
+    /// grid finds above it:
     ///
-    /// At the brush's own radius it is *lower* than Padrão and no broader at
-    /// all — measured, 1162 samples of a raycast grid above the resting
-    /// surface against Padrão's 1165 — which is a weaker brush rather than a
-    /// different one.
+    ///   binding                       peak    footprint   height/width
+    ///   Padrão, k = rounding = r     +0.180      1179        0.0053
+    ///   Inflar at 0.8 of the lift    +0.238      1939        0.0054
+    ///   Inflar at 0.32 of the lift   +0.173      1772        0.0041
+    ///
+    /// The middle row is why this is not 0.8: a wider region under buildup
+    /// accumulation lifts each point through more stamps, so the mark came
+    /// out wider *and* taller — the same ridge drawn with a bigger brush,
+    /// which is not what Inflate means. At 0.32 the footprint is half again
+    /// as wide as Padrão's at a fifth less slope: a swell rather than a ridge.
+    ///
+    /// The *frame* is not what separates these two, and the profile is all
+    /// there is left: relief moves each point of the surface along its own
+    /// normal, so it is already the Inflate frame — ClayCore v0.120.0 measured
+    /// it at 0.000 of the amplitude from a frame-isolated inflate reference on
+    /// three smooth fixtures (#615, #618). It is Padrão that is approximated
+    /// by it, and `ToolNote::SdfStandardIsAnInflate` is where a sculptor is
+    /// told so.
+    const INFLATE_LIFT: f32 = 0.32;
+
+    /// How much wider than the brush Pinçar's region is.
+    ///
+    /// A gather has to reach past the brush to have anything to gather: what
+    /// the scale moves is the surface *around* its centre, so a region the
+    /// size of the brush draws the material in from where the sculptor was
+    /// already pointing. The number is the one Inflar's relief profile uses,
+    /// for the same reason and to the same reading, and the measurements in
+    /// [`Self::MAGNIFY_STRENGTH`] were taken at it.
     const MAGNIFY_REACH: f32 = 1.35;
 
-    /// How far into the material Inflar's dabs are sunk. See
-    /// [`Self::magnify_depth`], which is where the number is explained and
-    /// where Pinçar's zero is.
-    const MAGNIFY_DEPTH: f32 = 0.5;
-
-    /// What Inflar and Pinçar scale by at full Intensidade.
+    /// What Pinçar scales by at full Intensidade, negated on the way to the
+    /// engine.
     ///
     /// The engine's strength is dimensionless — the fraction the region is
     /// scaled by about the dab's centre — so there is no world quantity to
-    /// derive it from and it has to be measured against the brush it stands
+    /// derive it from and it has to be measured against the brushes it stands
     /// beside. Measured on the starting form with a 0.25 brush at Intensidade
     /// 0.9, as how far the surface moved at each distance to the side of the
     /// stroke:
     ///
-    ///   aside    Padrão   Inflar   Pinçar
-    ///   0.00    +0.1483  +0.0914  +0.0057
-    ///   0.09    +0.1204  +0.0835  +0.0014
-    ///   0.18    +0.0108  +0.0609  −0.0043
-    ///   0.27     0.0000  +0.0265  −0.0052
-    ///   0.36     0.0000  +0.0001  −0.0001
+    ///   aside    Padrão   Pinçar
+    ///   0.00    +0.1483  +0.0057
+    ///   0.09    +0.1204  +0.0014
+    ///   0.18    +0.0108  −0.0043
+    ///   0.27     0.0000  −0.0052
+    ///   0.36     0.0000  −0.0001
     ///
-    /// Inflar peaks two fifths lower than the ridge and is still moving clay
-    /// where the ridge has been flat for two readings: a swell rather than a
-    /// ridge, which is what Inflate means and what the relief binding could
-    /// not give — #179 measured that one coming out *taller* than Padrão.
-    /// Raising this to 1.0 brings the peak back above Padrão's and is the same
-    /// failure in the new binding.
-    ///
-    /// The same number serves Pinçar, negated, and the middle column is not
-    /// the left one turned over: the two tools differ in where the dab sits as
-    /// well as in the sign. Pinçar's own column is the shape a gather makes —
-    /// the line under the stroke stands proud and the flanks fall away — and
-    /// it is small on purpose, Pinch being a tool that sharpens an edge
-    /// already there rather than one that makes one.
+    /// The right-hand column is the shape a gather makes — the line under the
+    /// stroke stands proud and the flanks fall away — and it is small on
+    /// purpose, Pinch being a tool that sharpens an edge already there rather
+    /// than one that makes one.
     const MAGNIFY_STRENGTH: f32 = 0.5;
 
     /// Argila's footprint and stroke, against Padrão's.
@@ -3763,19 +3782,22 @@ impl ClayDocument {
         }
     }
 
-    /// Inflate and Pinch on a field: one signed radial scale per dab.
+    /// Pinch on a field: one radial scale per dab, gathering toward its centre.
     ///
-    /// The two are one verb. `clay_layer_magnify_surface` takes a **signed**
-    /// strength — positive swells the surface away from the centre, negative
-    /// gathers it toward — so the only thing that separates Inflar from Pinçar
-    /// here is which way the sign points.
+    /// `clay_layer_magnify_surface` takes a **signed** strength — positive
+    /// swells the surface away from the centre, negative gathers it toward —
+    /// and Pinçar is the negative half of it.
     ///
-    /// Why it is not a relief stroke, which is what Inflar used to be: relief
-    /// moves the surface along its own normal, which is exactly what Padrão
-    /// does, so the two brushes were the same verb differing only in footprint
-    /// and lift — and the mark Inflar left measured *taller* than Padrão's,
-    /// where an inflate should be broader and lower (#179). A radial scale is
-    /// the swell itself rather than a ridge shaped to look like one.
+    /// Why the positive half is not Inflar. Relief offsets the accumulated
+    /// field, and offsetting a distance moves every point of the isosurface
+    /// along the field's own gradient: each point along its own normal, which
+    /// is the Inflate frame rather than an approximation of it. ClayCore
+    /// v0.120.0 measured that (#615, #618) — 0.000 of the amplitude from a
+    /// frame-isolated inflate reference on a sphere, a saddle and a bowl — so
+    /// Inflar is already the faithful tool on the relief op, and moving it to
+    /// a radial scale would have replaced an Inflate with something that is
+    /// not one. A scale about a centre is its own mark, and Pinch is the tool
+    /// that mark is.
     ///
     /// Why it is not a per-item `CLAY_DEFORM_MAGNIFY`, which is what a host
     /// reaching for `clay_item_add_deformer` would get: that deformer's centre
@@ -3791,13 +3813,12 @@ impl ClayDocument {
     /// `clay_layer_consolidate` is what gives it back.
     fn magnify_surface_stroke(
         &mut self,
-        tool: ToolKind,
         brush: BrushSettings,
         samples: &[GestureSample],
     ) -> Result<EditOutcome, ModelError> {
         let brush = brush.sanitized();
         let radius = (brush.size * Self::MAGNIFY_REACH).max(1e-3);
-        let strength = Self::magnify_strength(tool, &brush);
+        let strength = Self::magnify_strength(&brush);
         // The engine refuses a strength of zero — a scale by one is not a
         // gesture — and it is right to. Answering "nothing happened" here is
         // the same answer without an error the sculptor would have to read.
@@ -3806,12 +3827,11 @@ impl ClayDocument {
         }
 
         let step = radius * (1.0 - brush.flow).clamp(0.05, 0.9);
-        let mut centres = self.dab_centres(samples, step)?;
+        let centres = self.dab_centres(samples, step)?;
         if centres.is_empty() {
             // Every sample was frozen. Nothing to scale, and nothing to say.
             return Ok(EditOutcome::NOTHING);
         }
-        self.sink_into_the_material(&mut centres, radius * Self::magnify_depth(tool))?;
 
         let params = claycore::MagnifyParams {
             radius,
@@ -3917,89 +3937,29 @@ impl ClayDocument {
         Ok(applied)
     }
 
-    /// Puts each dab's centre *inside* the form rather than on it.
+    /// Which way, and how hard, the scale goes at this brush.
     ///
-    /// Sunk along the field's own gradient rather than along a normal this
-    /// side computes: the engine answers one for the assembled surface, which
-    /// is the surface the gesture is aimed at, and a normal derived from the
-    /// stroke's path would be a guess about a shape the path does not carry.
-    /// A point where the gradient vanishes — a cavity the field has no
-    /// direction at — is left where it is rather than moved by a normalised
-    /// zero.
+    /// Negative upright, because Pinçar gathers, and the magnitude is
+    /// Intensidade — the only slider a scale has to take, the engine's
+    /// strength being dimensionless, so there is no world quantity for the
+    /// radius or the flow to contribute to it.
     ///
-    /// See [`Self::magnify_depth`] for why a depth is wanted at all and why
-    /// only one of the two tools wants one.
-    fn sink_into_the_material(
-        &self,
-        centres: &mut [[f32; 3]],
-        depth: f32,
-    ) -> Result<(), ModelError> {
-        if depth <= 0.0 {
-            return Ok(());
-        }
-        let gradients = self
-            .document
-            .eval_gradients(None, centres)
-            .map_err(ModelError::engine)?;
-        for (centre, gradient) in centres.iter_mut().zip(gradients) {
-            let length = gradient.iter().map(|c| c * c).sum::<f32>().sqrt();
-            if length < 1e-6 {
-                continue;
-            }
-            for axis in 0..3 {
-                centre[axis] -= gradient[axis] / length * depth;
-            }
-        }
-        Ok(())
-    }
-
-    /// How far into the material a tool's dabs are sunk, as a fraction of the
-    /// region's radius.
+    /// **A radial scale fixes its own centre**, and the dab is left standing
+    /// on the surface where the gesture's raycast put it rather than sunk into
+    /// the material. That is what makes the scale a gather: the material comes
+    /// toward a point *on* the surface, so the line under the stroke stands
+    /// proud and the flanks fall away. Sunk, it stops gathering and starts
+    /// deflating uniformly — measured on the starting form with a 0.25 brush,
+    /// +0.011 at the stroke and −0.001 at the rim standing on the surface,
+    /// against −0.078 across the whole mark half a radius under it.
     ///
-    /// **A radial scale fixes its own centre.** The point the region is
-    /// centred on does not move and the points nearest it barely do; what the
-    /// scale moves is the surface *around* the centre, outward or inward. A
-    /// gesture's samples are raycast hits, so left alone every dab is centred
-    /// exactly where the verb has least to say.
-    ///
-    /// That is the wrong place for a swell and the right place for a gather,
-    /// which is why this is a property of the tool and not of the sign.
-    /// Measured on the starting form with a 0.25 brush:
-    ///
-    ///   tool      on the surface   sunk half a radius
-    ///   Inflar        +0.027            +0.091
-    ///   Pinçar   +0.011 / −0.001        −0.078
-    ///
-    /// Inflate wants the second column: a scale about a point *in* the clay
-    /// pushes the surface out all round it, which is a swell. Pinch wants the
-    /// first: a gather about a point *on* the surface draws the material
-    /// toward the stroke, so the line stands proud and the flanks fall away —
-    /// which is what pinching is. Sink a pinch and it stops gathering and
-    /// starts deflating, uniformly, at every reading across the mark.
-    fn magnify_depth(tool: ToolKind) -> f32 {
-        match tool {
-            ToolKind::Pincar => 0.0,
-            _ => Self::MAGNIFY_DEPTH,
-        }
-    }
-
-    /// Which way, and how hard, a magnify scales at this brush.
-    ///
-    /// The sign is the tool and the magnitude is Intensidade, which is the
-    /// only slider a scale has to take: the engine's strength is
-    /// dimensionless, so there is no world quantity for the radius or the
-    /// flow to contribute to it.
-    ///
-    /// The invert key turns the sign over, and what that gives is each tool's
-    /// own opposite rather than the other tool: an inverted Inflar deflates,
-    /// because it keeps the sunk centre a swell is built on, and an inverted
-    /// Pinçar spreads. The same pair the grid's column already names, and the
-    /// same rule the key follows everywhere — the opposite of what the brush
-    /// does.
-    fn magnify_strength(tool: ToolKind, brush: &BrushSettings) -> f32 {
-        let toward = if tool == ToolKind::Pincar { -1.0 } else { 1.0 };
-        let held = if brush.invert { -1.0 } else { 1.0 };
-        toward * held * brush.intensity * Self::MAGNIFY_STRENGTH
+    /// The invert key turns the sign over, which spreads: the material leaves
+    /// the stroke instead of arriving at it. The same pair the grid's column
+    /// already names for this tool, and the same rule the key follows
+    /// everywhere — the opposite of what the brush does.
+    fn magnify_strength(brush: &BrushSettings) -> f32 {
+        let held = if brush.invert { 1.0 } else { -1.0 };
+        held * brush.intensity * Self::MAGNIFY_STRENGTH
     }
 
     /// Every region a magnify stroke can have reached, in world.
@@ -9068,10 +9028,13 @@ fn sdf_recipe(tool: ToolKind) -> Option<SdfRecipe> {
     Some(match tool {
         // The general strokes: the panel shapes them.
         ToolKind::Padrao | ToolKind::Camada => plain,
-        // Inflar has no row here any more. It was relief with a wider region
-        // and a shallower lift — Padrão's verb wearing a different profile —
-        // and it is now `clay_layer_magnify_surface`, which never reaches this
-        // table. See `magnify_surface_stroke`.
+        // Same op, different profile. See `INFLATE_REACH`/`INFLATE_LIFT` for
+        // the measurements behind the two numbers.
+        ToolKind::Inflar => SdfRecipe {
+            reach: ClayDocument::INFLATE_REACH,
+            lift: ClayDocument::INFLATE_LIFT,
+            ..plain
+        },
         // ClayBuildup: relief along the stroke with buildup accumulation,
         // which is exactly what the engine's equivalence table says Clay is.
         // Not a new primitive named Clay — an item shaped like a pat would

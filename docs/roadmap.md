@@ -222,15 +222,15 @@ assumed on both sides. Three entry points build their region from item boxes and
 bypass the fixed path — `clay_layer_place_stamps`, `clay_layer_move_surface` and
 `clay_layer_magnify_surface` — and of those this application drives two:
 `move_surface`, through `ToolKind::Mover`, and `magnify_surface`, through
-`Inflar` and `Pinçar`. `place_stamps` has no caller here at all.
+`Pinçar`. `place_stamps` has no caller here at all.
 `clay_layer_apply_stroke` is *not* among them — it applies each stroke node
 through `apply_edit`, so every brush dab already takes the path that was fixed
 first.
 
-So the live exposure is **three tools, on a drag and on two field brushes**,
-where a region too small shows as the surface tearing behind the pointer rather
-than as a stale patch found later. The magnify's region is the one the engine
-states for it: the dab's own ball with no dilation, once per image the layer's
+So the live exposure is **two tools, on a drag and on one field brush**, where
+a region too small shows as the surface tearing behind the pointer rather than
+as a stale patch found later. The magnify's region is the one the engine states
+for it: the dab's own ball with no dilation, once per image the layer's
 symmetry makes of it.
 
 Recorded here rather than left in the conversation it came from, because the
@@ -475,11 +475,11 @@ from several items, magnifying one pulls its share and leaves the rest behind.
 The drag had an assembled-surface resolver and the scale did not, so `Pinçar`
 reached a grid and a mesh and not a field.
 
-`clay_layer_magnify_surface` is that resolver. `Pinçar` is now on the field's
-shelf at a negative strength and `Inflar` at a positive one — one entry point,
-two verbs — and `Inflar` has stopped being a second profile on Padrão's relief,
-which is what made its mark come out taller than Padrão's
-([#179](https://github.com/CyberdyneCorp/ClaySpaceDesktop/issues/179)). See
+`clay_layer_magnify_surface` is that resolver, and `Pinçar` is now on the
+field's shelf at a negative strength. The positive half stays unbound: `Inflar`
+is relief, and ClayCore v0.120.0 measured relief to *be* the Inflate frame
+(#615, #618), so moving it onto a radial scale would have replaced a faithful
+Inflate with a different mark. See
 [features.md](features.md#sculpting-tools).
 
 **Two limits ClayCore v0.78.0 states about itself are now held as tripwires
@@ -696,9 +696,10 @@ What is still upstream, with the measurement behind each: SDF stroke alphas
 need the stamp resolver to carry the template's deformer chain;
 `clay_item_set_gate` is accepted and inert. The radial scale's own gap is
 closed — `clay_layer_magnify_surface` is the assembled-surface resolver SDF
-Pinçar needed, and both it and Inflar go through it. A voxel DamStandard recipe
-is a decision rather than a gap, and should not be built before somebody has
-looked at what it draws.
+Pinçar needed, and Pinçar goes through it. A faithful SDF Standard is measured
+upstream and deliberately not shipped, at nine times relief's cost for a stroke
+(ClayCore v0.120.0); a voxel DamStandard recipe is a decision rather than a
+gap, and neither should be built before somebody has looked at what it draws.
 
 ### Level of detail, as delivered
 

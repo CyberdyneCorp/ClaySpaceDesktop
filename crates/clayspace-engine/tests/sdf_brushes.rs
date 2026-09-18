@@ -296,7 +296,9 @@ fn a_brush_does_not_mirror_when_it_is_not_asked_to() {
 /// `sdf_named_brushes.rs` measures both directions.
 /// Pinçar is here because the field binds it to a signed radial scale, and a
 /// signed scale turned over spreads — the same pair the grid's column already
-/// names. `sdf_magnify.rs` measures both halves.
+/// names. `sdf_magnify.rs` measures both halves. It is not in the depositing
+/// list below: a gather is neither a deposit nor a cut, and what its inverse
+/// gives is a spread.
 const SIGNED: [ToolKind; 8] = [
     ToolKind::Padrao,
     ToolKind::Inflar,
@@ -314,11 +316,6 @@ fn the_depositing_brushes_take_material_away_when_inverted() {
     let rest = reach(&base, AT);
     for tool in [
         ToolKind::Padrao,
-        // Inflar neither deposits nor cuts on a field any more — it is a
-        // radial scale of the assembled surface — but the reading this test
-        // takes is the same one either way: the swell raises the surface and
-        // the deflate its inverse makes lowers it. `sdf_magnify.rs` measures
-        // what the two are made of.
         ToolKind::Inflar,
         ToolKind::Camada,
         // Argila is relief like the other three, so it inverts to the incise —

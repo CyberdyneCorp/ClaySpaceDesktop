@@ -1,24 +1,33 @@
-//! Inflate and Pinch on a field, which are one engine verb with two signs.
+//! Pinch on a field, which is the engine's radial scale at a negative
+//! strength.
 //!
 //! What this file pins is the change #201 made and the reason it was made.
-//! Before it, `Inflar` and `Padrao` both applied `clay_layer_apply_stroke` in
-//! the Relief family — relief moves the surface along its own normal, which is
-//! what Standard *is* — so the two brushes differed only in footprint and
-//! lift, and the audit measured the consequence: Inflar left a **taller** mark
-//! than Padrão where an inflate should be broader and lower (#179). `Pincar`
-//! had no field verb at all, because a per-item `CLAY_DEFORM_MAGNIFY` gathers
-//! one piece of a smooth-unioned form and leaves the others (ClayCore #391).
+//! Before it, `Pincar` had no field verb at all: a per-item
+//! `CLAY_DEFORM_MAGNIFY` gathers one piece of a smooth-unioned form and leaves
+//! the others (ClayCore #391), and no stroke op is a gather — relief and
+//! incise move the surface along its own normal, which is a different mark.
 //!
-//! `clay_layer_magnify_surface` answers both: a signed radial scale resolved
-//! against every item the region reaches. Positive swells, negative gathers.
+//! `clay_layer_magnify_surface` is the resolver that was missing: a signed
+//! radial scale applied to every item the region reaches. Pinch is its
+//! negative half.
+//!
+//! **The positive half is not Inflar, and the measurement upstream says why.**
+//! Relief offsets the accumulated field, so every point of the isosurface
+//! moves along the field's own gradient — each along its own normal, which is
+//! the Inflate frame. ClayCore v0.120.0 measured a frame-isolated inflate
+//! reference at 0.000 of the amplitude from the relief surface on a sphere, a
+//! saddle and a bowl, against 0.017 / 0.077 / 0.027 for a draw reference
+//! (#615, #618). `Inflar` stays on relief, which is the faithful binding, and
+//! `Padrao` is the one only approximated by it — `table_truth.rs` proves the
+//! note that says so.
 //!
 //! # Read the surface with a pick, and read it where the mark is
 //!
 //! Every measurement here uses [`SculptModel::pick`], as `sdf_brushes.rs`
 //! does, and takes a *profile* across the stroke rather than a single reading
-//! under it. A swell and a ridge can peak at the same height and be different
-//! marks; what separates them is how far the mark reaches for the height it
-//! has, and one reading cannot see that.
+//! under it. A gather and a trench can dip at the same depth and be different
+//! marks; what separates them is what the surface did either side of the
+//! reading, and one reading cannot see that.
 
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{BrushSettings, GestureSample, Representation, SculptModel, ToolKind};
@@ -92,62 +101,7 @@ fn at_rest() -> [f32; 9] {
     std::array::from_fn(|i| reach(&base, [AT[0], ASIDE[i], AT[2]]))
 }
 
-/// How far out the mark still stands proud of the resting surface.
-fn width(marked: &[f32; 9], floor: f32) -> f32 {
-    ASIDE
-        .iter()
-        .zip(marked)
-        .filter(|(_, lift)| lift.abs() > floor)
-        .map(|(aside, _)| *aside)
-        .fold(0.0, f32::max)
-}
-
-// -- the two verbs -----------------------------------------------------------
-
-/// The measurement #179 asked for, the other way round.
-///
-/// The audit measured Inflar leaving a taller mark than Padrão — 75 px against
-/// 50, over six reproductions — which is what binding both to relief gets you.
-/// An inflate swells: it should spend the material it moves on *width* rather
-/// than on height. Both numbers are asserted, because either alone passes for
-/// the wrong reason — a weaker brush is lower and no broader, and a bigger one
-/// is broader and no lower.
-#[test]
-fn sdf_inflate_is_broader_and_lower_than_standard() {
-    let rest = at_rest();
-
-    let mut standard = sphere();
-    stroke(&mut standard, ToolKind::Padrao);
-    let ridge = profile(&standard, &rest);
-
-    let mut inflated = sphere();
-    stroke(&mut inflated, ToolKind::Inflar);
-    let swell = profile(&inflated, &rest);
-
-    // A tenth of a millimetre on a unit form: below this the pick is
-    // measuring its own marcher rather than the clay.
-    const FLOOR: f32 = 1e-3;
-    assert!(
-        swell[0] > FLOOR,
-        "Inflar left no mark at all: {:?}",
-        swell[0]
-    );
-    assert!(
-        swell[0] < ridge[0],
-        "Inflar peaked at {} where Padrão peaked at {}, which is #179 again: \
-         an inflate that is taller than standard is standard with a bigger \
-         brush",
-        swell[0],
-        ridge[0]
-    );
-    let (broad, narrow) = (width(&swell, FLOOR), width(&ridge, FLOOR));
-    assert!(
-        broad > narrow,
-        "Inflar reached {broad} to the side where Padrão reached {narrow}; it \
-         is lower without being broader, which is a weaker brush rather than \
-         a different one"
-    );
-}
+// -- the verb ---------------------------------------------------------------
 
 /// Pinch gathers the surface toward the stroke.
 ///
@@ -176,37 +130,16 @@ fn sdf_pinch_gathers_the_surface() {
     );
 }
 
-/// The invert key gives each tool its own opposite, not the other tool.
+/// The invert key spreads, which is Pinch's own opposite.
 ///
-/// Which is not the obvious answer, and the obvious answer is wrong: these two
-/// are the two signs of one engine verb, so an inverted Inflar looks
-/// arithmetically like a Pinçar — and is not one, because the tools differ in
-/// where the dab sits as well as in the sign. Inflar's dabs are sunk into the
-/// material, which is what makes the scale a swell; keeping that and turning
-/// the sign over gives a **deflate**. Pinçar's dabs sit on the surface, which
-/// is what makes the scale a gather; turning its sign over **spreads**.
-///
-/// The same pair the grid's column already names for these two tools.
+/// Not "the other tool": a positive strength here is not Inflar — Inflar is
+/// relief, which is the engine's own Inflate frame and leaves a different mark
+/// entirely. What turning the sign over gives is the gather run backwards, the
+/// material leaving the stroke instead of arriving at it, which is the pair the
+/// grid's column already names for this tool.
 #[test]
-fn inverting_a_magnify_brush_gives_its_own_opposite() {
+fn inverting_a_pinch_spreads_instead_of_gathering() {
     let rest = at_rest();
-
-    let mut deflated = sphere();
-    stroke_with(
-        &mut deflated,
-        ToolKind::Inflar,
-        BrushSettings {
-            invert: true,
-            ..brush()
-        },
-    );
-    let sunk = profile(&deflated, &rest);
-    assert!(
-        sunk[0] < -1e-3,
-        "an inverted Inflar left the surface at {} under the stroke, so it \
-         did not deflate",
-        sunk[0]
-    );
 
     let mut gathered = sphere();
     stroke(&mut gathered, ToolKind::Pincar);
@@ -278,6 +211,11 @@ fn blended_form() -> ClayDocument {
 /// and leaves the rest, so on a blended form the surface gathers on one side
 /// of the blend and not the other — and nothing errors. A magnify centred on
 /// the blend has to move **both** contributors.
+///
+/// What is asserted is that both moved and moved alike, rather than which way
+/// they went: the defect this exists to catch is one lobe warped and the other
+/// left where it was, which is a difference between the sides whatever the
+/// sign of the strength does to each.
 #[test]
 fn a_magnify_across_a_blend_moves_both_items() {
     let probes: [[f32; 3]; 2] = [[-0.45, 0.0, 0.9], [0.45, 0.0, 0.9]];
@@ -288,7 +226,7 @@ fn a_magnify_across_a_blend_moves_both_items() {
     // One dab, centred between the two items and wide enough to reach both.
     document
         .apply_stroke(
-            ToolKind::Inflar,
+            ToolKind::Pincar,
             BrushSettings {
                 size: 0.7,
                 intensity: 1.0,
@@ -304,10 +242,15 @@ fn a_magnify_across_a_blend_moves_both_items() {
         .expect("the stroke was refused");
 
     let after: Vec<f32> = probes.iter().map(|at| reach(&document, *at)).collect();
-    for (side, (was, now)) in probes.iter().zip(before.iter().zip(after.iter())) {
+    let moved: Vec<f32> = before
+        .iter()
+        .zip(after.iter())
+        .map(|(was, now)| now - was)
+        .collect();
+    for (side, moved) in probes.iter().zip(moved.iter()) {
         assert!(
-            now - was > 1e-3,
-            "the magnify left {side:?} at {now} from {was}; it scaled one \
+            moved.abs() > 1e-3,
+            "the magnify left {side:?} where it was ({moved}); it scaled one \
              contributor of the blend and not the other, which is the defect \
              the surface resolver exists to fix"
         );
@@ -315,10 +258,10 @@ fn a_magnify_across_a_blend_moves_both_items() {
     // And symmetrically, because the two sides are reflections of each other
     // and the gesture is centred between them.
     assert!(
-        (after[0] - after[1]).abs() < 0.01,
-        "the magnify left the two sides of the blend at {} and {}",
-        after[0],
-        after[1]
+        (moved[0] - moved[1]).abs() < 0.01,
+        "the magnify moved the two sides of the blend by {} and {}",
+        moved[0],
+        moved[1]
     );
 }
 
@@ -332,58 +275,56 @@ fn a_magnify_across_a_blend_moves_both_items() {
 /// leave a row of entries in the history panel — one per dab, which is the
 /// implementation showing through.
 ///
-/// Sent the way the interface sends it: neither of these tools opens a live
-/// gesture, so the ViewModel holds the whole stroke and delivers it once when
-/// the pointer comes up.
+/// Sent the way the interface sends it: Pinçar opens no live gesture, so the
+/// ViewModel holds the whole stroke and delivers it once when the pointer
+/// comes up.
 #[test]
 fn a_magnify_gesture_is_one_undo_step() {
-    for tool in [ToolKind::Inflar, ToolKind::Pincar] {
-        let mut document = sphere();
-        // One stroke first, so that the layer's mirror already points where
-        // this gesture wants it. Pointing it is an edit of its own and lands
-        // in the history beside the stroke that asked for it — true of every
-        // field verb, and nothing to do with the grouping measured here.
-        stroke(&mut document, tool);
-        let before = SculptModel::history(&document).depth;
+    let mut document = sphere();
+    // One stroke first, so that the layer's mirror already points where this
+    // gesture wants it. Pointing it is an edit of its own and lands in the
+    // history beside the stroke that asked for it — true of every field verb,
+    // and nothing to do with the grouping measured here.
+    stroke(&mut document, ToolKind::Pincar);
+    let before = SculptModel::history(&document).depth;
 
-        // Long enough to lay down several dabs at this brush's spacing, so
-        // that one entry is a claim about the group rather than about there
-        // having been only one call.
-        let drawn: Vec<GestureSample> = (0..=20)
-            .map(|step| {
-                let t = step as f32 / 20.0;
-                GestureSample {
-                    position: [AT[0] + (t - 0.5) * 0.9, AT[1], AT[2]],
-                    pressure: 1.0,
-                    time: t,
-                }
-            })
-            .collect();
+    // Long enough to lay down several dabs at this brush's spacing, so that
+    // one entry is a claim about the group rather than about there having been
+    // only one call.
+    let drawn: Vec<GestureSample> = (0..=20)
+        .map(|step| {
+            let t = step as f32 / 20.0;
+            GestureSample {
+                position: [AT[0] + (t - 0.5) * 0.9, AT[1], AT[2]],
+                pressure: 1.0,
+                time: t,
+            }
+        })
+        .collect();
 
-        document.begin_gesture();
-        let outcome = document
-            .apply_stroke(tool, brush(), &drawn, [false; 3])
-            .expect("the stroke was refused");
-        document.end_gesture();
-        assert!(outcome.changed, "{tool:?} reported no change");
+    document.begin_gesture();
+    let outcome = document
+        .apply_stroke(ToolKind::Pincar, brush(), &drawn, [false; 3])
+        .expect("the stroke was refused");
+    document.end_gesture();
+    assert!(outcome.changed, "Pinçar reported no change");
 
-        let after = SculptModel::history(&document).depth;
-        assert_eq!(
-            after - before,
-            1,
-            "{tool:?} left {} history entries for one stroke",
-            after - before
-        );
-        assert!(
-            SculptModel::undo(&mut document).expect("undo"),
-            "{tool:?} left nothing to undo"
-        );
-        assert_eq!(
-            SculptModel::history(&document).depth,
-            before,
-            "one undo did not take the whole {tool:?} stroke back"
-        );
-    }
+    let after = SculptModel::history(&document).depth;
+    assert_eq!(
+        after - before,
+        1,
+        "Pinçar left {} history entries for one stroke",
+        after - before
+    );
+    assert!(
+        SculptModel::undo(&mut document).expect("undo"),
+        "Pinçar left nothing to undo"
+    );
+    assert_eq!(
+        SculptModel::history(&document).depth,
+        before,
+        "one undo did not take the whole stroke back"
+    );
 }
 
 // -- the shelf ---------------------------------------------------------------

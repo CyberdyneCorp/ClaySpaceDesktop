@@ -1,12 +1,10 @@
 ## ADDED Requirements
 
-### Requirement: Inflate and Pinch on a field are one signed radial scale
-`Inflar` and `Pinçar` on an SDF layer SHALL both reach the engine's magnify of
-the assembled surface, `Inflar` at a positive strength and `Pinçar` at a
-negative one. Neither SHALL be bound to the relief operation, which is the verb
-`Padrão` is: relief moves the accumulated surface along its own normal, so two
-brushes bound to it are one verb wearing two footprints however the footprints
-are shaped.
+### Requirement: Pinch on a field is a radial scale of the assembled surface
+`Pinçar` on an SDF layer SHALL reach the engine's magnify of the assembled
+surface at a **negative** strength, which gathers the region toward the dab's
+centre. It SHALL NOT be bound to a stroke operation: relief and incise move the
+surface along its own normal, and no shaping of that profile is a gather.
 
 `Pinçar` SHALL be offered on a field. It was absent because the per-item
 magnify gathers one contributor of a smooth union and leaves the rest; the
@@ -15,25 +13,18 @@ reaches, which is what makes the tool possible there at all.
 
 The region's radius SHALL come from the brush size and its easing from the drag
 falloff, a magnify being a region deformation rather than a stamp. The
-magnitude SHALL come from Intensidade, and the radius and magnitude together
-SHALL be chosen so that the swell is **lower at its peak and wider in its
-footprint** than the ridge the same brush draws with `Padrão`. A magnitude that
-makes the swell taller as well as wider is a bigger brush rather than a
-different one, and a radius no larger than the brush's is not wider at all.
+magnitude SHALL come from Intensidade, and the region SHALL be wider than the
+brush, a gather having nothing to gather from within it otherwise.
 
 A radial scale fixes its own centre: the point the region is centred on does
-not move and the points nearest it barely do. A gesture's samples are raycast
-hits, so left alone every dab is centred exactly where the verb has least to
-say. `Inflar`'s dabs SHALL therefore be sunk into the material, along the
-field's own gradient, where a scale has clay all round it to push outward.
-`Pinçar`'s SHALL be left on the surface, because a gather about a point on the
-surface draws the material toward the stroke — which is what pinching is —
-where a sunk gather deflates uniformly instead.
+not move and the points nearest it barely do. The dab SHALL be left standing on
+the surface, where the gesture's raycast put it, because a gather about a point
+on the surface draws the material toward the stroke — which is what pinching is
+— where a gather about a point sunk into the material deflates uniformly
+instead.
 
-The depth is a property of the tool and not of the sign. The invert key SHALL
-therefore give each tool its own opposite rather than the other tool: an
-inverted `Inflar` deflates and an inverted `Pinçar` spreads, which is the pair
-the grid's column already names for these two.
+The invert key SHALL spread: the material leaves the stroke instead of arriving
+at it, which is the pair the grid's column already names for this tool.
 
 A stroke SHALL lay one dab per step of the brush's spacing along the path,
 rather than one per sample: the engine folds frames that share a centre, so a
@@ -53,21 +44,14 @@ before any dab is placed.
 The whole gesture SHALL be one step of the history the sculptor presses,
 however many dabs it laid down.
 
-#### Scenario: Inflate is broader and lower than Standard
-- **WHEN** the same stroke is made on an SDF layer with `Padrão` and with
-  `Inflar`, at the same size and the same intensity
-- **THEN** the swell peaks lower than the ridge and reaches further to the side
-  of the stroke
-
 #### Scenario: Pinch gathers the surface toward the stroke
 - **WHEN** `Pinçar` is stroked across an SDF surface
 - **THEN** the surface under the stroke stands proud and the rim of the
   region falls away, the material having moved toward the stroke
 
-#### Scenario: Inverting a magnify brush gives its own opposite
-- **WHEN** `Inflar` and `Pinçar` are each stroked with the invert modifier held
-- **THEN** the inverted swell hollows the surface under the stroke, and the
-  inverted gather raises it across the whole footprint and nowhere lowers it
+#### Scenario: Inverting the gather spreads
+- **WHEN** `Pinçar` is stroked with the invert modifier held
+- **THEN** the surface rises across the whole footprint and nowhere falls
 
 #### Scenario: A magnify across a blend moves both contributors
 - **WHEN** a magnify is stroked over the join of a form made of two
@@ -83,6 +67,31 @@ however many dabs it laid down.
 - **WHEN** a stroke long enough to lay down several dabs is made and then
   undone once
 - **THEN** the whole stroke is taken back
+
+### Requirement: A field's Standard says what its operation is faithful to
+`Padrão` and `Inflar` on an SDF layer SHALL both remain bound to the relief
+operation, differing in footprint and lift alone. Relief offsets the
+accumulated field, so every point of the isosurface moves along the field's own
+gradient; that is the **Inflate** frame, and the engine's own measurement of it
+against frame-isolated references leaves nothing for a different operation to
+improve on.
+
+Because the same operation is therefore an approximation of Standard, `Padrão`
+on a field SHALL carry a tool note stating the approximation and what decides
+how far off it is: the spread of the normals under the stamp, which is a few
+percent of the amplitude on a form smooth at the brush's scale and the whole
+amplitude on a feature narrower than the stamp. The note SHALL offer the
+remedy, which is a brush smaller than the feature.
+
+The claim the note makes SHALL be held by a measurement rather than by the
+prose, as every tool note's is.
+
+#### Scenario: A thin feature takes the mark on its flanks
+- **WHEN** one `Padrão` stamp is made on the top of a fin thinner than the
+  brush, and on a sphere several times the brush
+- **THEN** the fin grows sideways by nearly as much as its top rose, and the
+  sphere does not, which is the divergence from a displacement along one
+  averaged normal
 
 ## MODIFIED Requirements
 
@@ -107,9 +116,8 @@ Beyond the vocabulary already bound, the declared table SHALL include:
 - **Mover Topológico**, on SDF layers only, through the engine's topological
   move — a drag whose falloff is measured along the material rather than
   through space.
-- **Inflar** and **Pinçar** on SDF layers, through the magnify of the
-  assembled surface: one entry point at a positive strength and at a negative
-  one.
+- **Pinçar** on SDF layers, through the magnify of the assembled surface at a
+  negative strength.
 
 A tool SHALL NOT be offered on a representation whose engine verb this
 application does not reach, and a declared pair SHALL reach a distinct engine
@@ -122,10 +130,8 @@ call rather than falling through to a neighbouring one.
 
 #### Scenario: Padrão and Inflar leave different marks on a field
 - **WHEN** the same stroke is made on an SDF layer with Padrão and with Inflar
-- **THEN** the two surfaces differ, and they differ by verb rather than by
-  footprint: Padrão's mark is a ridge the relief operation displaces along the
-  surface's own normal, Inflar's a broader and lower swell a radial scale
-  spreads
+- **THEN** the two surfaces differ: one operation, two profiles, Padrão's a
+  ridge that follows the falloff and Inflar's a broader and lower swell
 
 #### Scenario: No orphan tools
 - **WHEN** the tool registry is enumerated

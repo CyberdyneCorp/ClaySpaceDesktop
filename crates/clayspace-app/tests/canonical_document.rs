@@ -6,12 +6,16 @@
 //! of a matrix have run, naming two hashes and nothing about which byte moved.
 //!
 //! This is the same property asked on one machine. A verb that computes where
-//! it acts — Inflar sinking its dab centre along `clay_eval_gradients` before
-//! the engine records it, which is what parted the digests on #229 — drops the
-//! position it was *asked* for out of the file. So: every position the fixture
-//! stamps has to be in the bytes verbatim, as the three little-endian floats
-//! it was given. If one is not, the document is carrying something the engine
-//! worked out, and that is the thing the matrix is about to disagree over.
+//! it acts — a magnify resolving its region against the items the engine says
+//! the surface is made of — drops the position it was *asked* for out of the
+//! file and puts an evaluated one there instead. So: every position the
+//! fixture stamps has to be in the bytes verbatim, as the three little-endian
+//! floats it was given. If one is not, the document is carrying something the
+//! engine worked out, and that is the thing the matrix is about to disagree
+//! over.
+//!
+//! `clayspace_app::canonical` is where the fixture and the rule about which
+//! verbs may stand in it live.
 
 #![forbid(unsafe_code)]
 
