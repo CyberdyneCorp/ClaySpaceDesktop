@@ -179,6 +179,10 @@ impl Session for FakeSession {
                 falloff: "suave".into(),
                 symmetry: vec!["x".into()],
                 representation: self.representation.into(),
+                // The double's layer is whatever it was told to be, and the
+                // frequency is a hierarchy's alone.
+                smooth_mode: (self.representation == "hierarchy")
+                    .then(|| "form_with_detail".to_string()),
             });
         }
         if query.camera {

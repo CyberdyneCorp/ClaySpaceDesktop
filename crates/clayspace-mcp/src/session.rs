@@ -419,6 +419,11 @@ pub struct ToolState {
     pub falloff: String,
     pub symmetry: Vec<String>,
     pub representation: String,
+    /// Which frequency a smooth acts on, where that is a choice: `form`,
+    /// `detail_only` or `form_with_detail`. Absent on the three
+    /// representations that store one surface and therefore have one smooth.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub smooth_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

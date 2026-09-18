@@ -339,6 +339,13 @@ pub enum Command {
     /// moves. Pointing one command at the other stack would compile and would
     /// address the wrong pass.
     MultiresSculptLayer(clayspace_model::MultiresSculptLayerOp),
+    /// Which frequency the next smooth on a hierarchy acts on.
+    ///
+    /// Beside the two above because it is the same kind of choice — a property
+    /// of the hierarchy tier that holds until it is changed — and the only one
+    /// of the three that decides what a *stroke* does rather than what the
+    /// stack looks like.
+    SetSmoothMode(clayspace_model::SmoothFrequency),
     /// Whether the deform panel is open.
     ToggleDeform,
     /// What that panel is set to.
@@ -610,8 +617,11 @@ impl Command {
                 // the work would have to choose between the two.
                 | Self::MultiresSculptLayer(_)
                 // Choosing how the *next* edit combines changes nothing yet;
-                // the stroke that follows is the entry.
+                // the stroke that follows is the entry. Choosing which
+                // frequency the next smooth acts on is the same statement
+                // about the same stroke.
                 | Self::SetCombine(_)
+                | Self::SetSmoothMode(_)
                 // The same for the mask panel: dialling how far Expandir
                 // reaches, or how thick an extrusion would be, is not the
                 // operation. Applying one is, and does mark the document.
@@ -885,6 +895,7 @@ impl Command {
             Self::SculptLayer(op) => op.label(),
             Self::MultiresLevel(op) => op.label(),
             Self::MultiresSculptLayer(op) => op.label(),
+            Self::SetSmoothMode(mode) => mode.label(),
             Self::ToggleDeform => "deform panel",
             Self::SetDeform(_) => "deform settings",
             Self::RunDeform => "deform",

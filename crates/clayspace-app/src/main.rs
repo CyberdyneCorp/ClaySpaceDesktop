@@ -4613,6 +4613,8 @@ impl App {
             outline: self.mask.draft().get().as_ref(),
             cut_gesture: *self.cut.gesture().get(),
             cut: self.cut.draft().get().as_ref(),
+            smooth_mode: *self.sculpt.smooth_mode().get(),
+            offers_smooth_mode: self.sculpt.offers_smooth_mode(),
             armature: self.armature_state(),
             recent: self.recent.paths(),
             show_repair: self.show_repair,
@@ -5892,6 +5894,7 @@ impl Session for App {
                 self.sculpt.brush().get(),
                 *self.sculpt.symmetry().get(),
                 self.sculpt.active_representation(),
+                *self.sculpt.smooth_mode().get(),
             ));
         }
         if query.camera {

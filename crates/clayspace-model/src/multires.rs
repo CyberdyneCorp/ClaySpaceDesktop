@@ -492,6 +492,74 @@ impl WriteDomain {
     }
 }
 
+/// Which frequency a smooth on a hierarchy acts on.
+///
+/// Three passes rather than one filter with a cutoff, and the split is
+/// *representational* rather than a taste setting: a hierarchy already stores
+/// the form and the detail in different arrays, so smoothing the positions,
+/// smoothing the coefficients, and smoothing the form with the detail put back
+/// unchanged are three different things to do — not three strengths of one.
+/// [`crate::ToolNote::MultiresSmoothChoosesAFrequency`] is where a sculptor is
+/// told so.
+///
+/// Offered on a hierarchy and nowhere else, which is
+/// [`SmoothFrequency::is_offered_on`]. The other three representations have one
+/// smooth because they store one surface, and a control with one entry is a
+/// control that decides nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SmoothFrequency {
+    /// The positions, pores and all. A plain Laplacian, which is what smoothing
+    /// a mesh does — and therefore what takes the pores off with the lump.
+    ///
+    /// Kept reachable rather than hidden behind the default, because "I want
+    /// the pores gone" is an ordinary thing to want and this is the only mode
+    /// that does it.
+    Form,
+    /// The coefficients in the target channel, leaving the form under them
+    /// where it is. Softens the pores without moving the anatomy.
+    DetailOnly,
+    /// The form, with the detail re-applied unchanged.
+    ///
+    /// The default, and the reason this enum exists: correcting anatomy under
+    /// pores without losing the pores is the operation a hierarchy can do and a
+    /// flat mesh cannot, so it is what a sculptor who has not chosen gets.
+    #[default]
+    FormWithDetail,
+}
+
+impl SmoothFrequency {
+    pub const ALL: [SmoothFrequency; 3] = [Self::Form, Self::DetailOnly, Self::FormWithDetail];
+
+    /// Whether the choice means anything on this representation.
+    pub fn is_offered_on(representation: crate::Representation) -> bool {
+        representation == crate::Representation::Multires
+    }
+
+    /// What the history calls it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Form => "smooth the form",
+            Self::DetailOnly => "smooth the detail",
+            Self::FormWithDetail => "smooth the form under the detail",
+        }
+    }
+
+    /// The word an agent reads it back as, and writes it as.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Form => "form",
+            Self::DetailOnly => "detail_only",
+            Self::FormWithDetail => "form_with_detail",
+        }
+    }
+
+    /// That word back again. `None` for anything else, so a refusal can name
+    /// the three that exist.
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|mode| mode.key() == key)
+    }
+}
+
 /// Something done to a hierarchy's pass stack.
 ///
 /// One enum rather than a method per verb, for the reason

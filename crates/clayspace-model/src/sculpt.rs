@@ -230,6 +230,23 @@ pub trait SculptModel {
         crate::CombineSettings::for_strokes()
     }
 
+    /// Which frequency a smooth on a hierarchy acts on.
+    ///
+    /// Session state for the reason the combine operation is: it is chosen once
+    /// and holds across strokes, and threading it through `apply_stroke` would
+    /// put the same value in every call site whether the tool in hand reads it
+    /// or not. [`crate::SmoothFrequency::is_offered_on`] names who does.
+    ///
+    /// Defaulted so a double that models one representation keeps answering
+    /// what it always did.
+    fn smooth_mode(&self) -> crate::SmoothFrequency {
+        crate::SmoothFrequency::default()
+    }
+
+    fn set_smooth_mode(&mut self, mode: crate::SmoothFrequency) {
+        let _ = mode;
+    }
+
     /// The colour the colour brushes paint with, and the ones before it.
     ///
     /// Session state for the same reason the combine operation is: it is chosen

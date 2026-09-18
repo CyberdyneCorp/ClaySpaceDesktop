@@ -29,6 +29,9 @@ struct FakeModel {
     /// it and a test has to be able to say so after construction — the model
     /// is boxed into the ViewModel and unreachable from outside otherwise.
     representation: Rc<Cell<Representation>>,
+    /// Shared for the same reason, so a test can read back what the ViewModel
+    /// told the document about which smooth to make.
+    smooth_mode: Rc<Cell<clayspace_model::SmoothFrequency>>,
     editable: bool,
     /// What the next stroke reports.
     outcome: EditOutcome,
@@ -41,6 +44,7 @@ impl FakeModel {
         Self {
             recorded,
             representation: Rc::new(Cell::new(Representation::Sdf)),
+            smooth_mode: Rc::new(Cell::new(clayspace_model::SmoothFrequency::default())),
             editable: true,
             outcome: EditOutcome {
                 changed: true,
@@ -70,6 +74,14 @@ impl SculptModel for FakeModel {
 
     fn active_layer_editable(&self) -> bool {
         self.editable
+    }
+
+    fn smooth_mode(&self) -> clayspace_model::SmoothFrequency {
+        self.smooth_mode.get()
+    }
+
+    fn set_smooth_mode(&mut self, mode: clayspace_model::SmoothFrequency) {
+        self.smooth_mode.set(mode);
     }
 
     fn apply_stroke(
@@ -163,6 +175,19 @@ fn fixture_with_layer_changes() -> (SculptViewModel, Rc<Cell<Representation>>) {
     let model = FakeModel::new(recorded);
     let representation = model.representation.clone();
     (SculptViewModel::new(Box::new(model)), representation)
+}
+
+/// A fixture that hands back what the document was told to smooth.
+fn fixture_with_a_smooth_mode() -> (
+    SculptViewModel,
+    Rc<Cell<Representation>>,
+    Rc<Cell<clayspace_model::SmoothFrequency>>,
+) {
+    let recorded = Rc::new(RefCell::new(Recorded::default()));
+    let model = FakeModel::new(recorded);
+    let representation = model.representation.clone();
+    let mode = model.smooth_mode.clone();
+    (SculptViewModel::new(Box::new(model)), representation, mode)
 }
 
 fn draw(vm: &mut SculptViewModel, points: &[[f32; 3]]) -> Result<(), ModelError> {
@@ -1308,5 +1333,69 @@ fn a_short_field_stamping_stroke_still_waits() {
         "a 0.08-unit stamping stroke sent more than the press's own dab before \
          travelling one stamp gap; the replay fast path has reached a verb \
          that does not replay, and every pointer move now costs a re-mesh"
+    );
+}
+
+// -- which frequency a smooth acts on ----------------------------------------
+
+/// Three smooths are a hierarchy's, and the control follows the layer.
+///
+/// Both halves of the question, because they fail differently: the other three
+/// representations store one surface and therefore have one smooth, so a
+/// three-way control over them would decide nothing; and with another tool in
+/// hand there is no smooth to describe at all.
+#[test]
+fn the_smooth_mode_is_offered_only_on_a_hierarchy() {
+    let (mut vm, representation) = fixture_with_layer_changes();
+    vm.dispatch(Command::SelectTool(ToolKind::Suavizar))
+        .expect("the smooth brush");
+    assert!(
+        !vm.offers_smooth_mode(),
+        "a field stores one surface, so its smooth has one frequency"
+    );
+
+    representation.set(Representation::Multires);
+    assert!(
+        vm.offers_smooth_mode(),
+        "a hierarchy stores the form and the detail apart, which is what makes \
+         three smooths three operations rather than three strengths of one"
+    );
+
+    vm.dispatch(Command::SelectTool(ToolKind::Padrao))
+        .expect("the standard brush");
+    assert!(
+        !vm.offers_smooth_mode(),
+        "and a brush that does not smooth has no frequency to pick"
+    );
+}
+
+/// What a sculptor who has not chosen gets, and where the choice lands.
+///
+/// The default is the claim the shelf's own note makes — the form corrected
+/// under the detail, with the detail put back unchanged — and it is asserted
+/// here rather than left to the document, because the bar shows what this
+/// holds and the stroke uses what the document holds.
+#[test]
+fn the_smooth_mode_starts_at_the_one_the_note_promises() {
+    let (mut vm, representation, mode) = fixture_with_a_smooth_mode();
+    representation.set(Representation::Multires);
+    assert_eq!(
+        *vm.smooth_mode().get(),
+        clayspace_model::SmoothFrequency::FormWithDetail
+    );
+
+    vm.dispatch(Command::SetSmoothMode(
+        clayspace_model::SmoothFrequency::Form,
+    ))
+    .expect("the plain Laplacian is still reachable: sometimes the pores go");
+    assert_eq!(
+        *vm.smooth_mode().get(),
+        clayspace_model::SmoothFrequency::Form
+    );
+    assert_eq!(
+        mode.get(),
+        clayspace_model::SmoothFrequency::Form,
+        "and the document was told, or the bar is the only place the choice \
+         exists"
     );
 }

@@ -94,6 +94,13 @@ pub fn options_bar(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Comman
                     bar_rule(ui);
                     cut_gesture_control(ui, state, queue);
                 }
+                // And beside those: which frequency a smooth acts on, which
+                // only a hierarchy has more than one of. The ViewModel decides
+                // whether it is offered — see `ShellState::offers_smooth_mode`.
+                if state.offers_smooth_mode {
+                    bar_rule(ui);
+                    smooth_mode_control(ui, state, queue);
+                }
 
                 ui.add_space(space::SNUG);
                 ui.vertical(|ui| {
@@ -179,6 +186,11 @@ const BAR_RULE_HEIGHT: f32 = 36.0;
 /// and not a promise — Retângulo needs more of it than Rectangle does.
 const GESTURE_WIDTH: f32 = 140.0;
 
+/// How wide the three smooth frequencies sit. Wider than the gestures beside
+/// them because the words are: "Forma com detalhe" is the longest entry on
+/// this bar, and `segmented` grows past a floor rather than cutting one.
+const SMOOTH_MODE_WIDTH: f32 = 220.0;
+
 /// Which gesture the mask brush makes: a drag across the surface, a shape
 /// traced over the form, or a box dragged corner to corner.
 /// Which shape the cut tool's next gesture draws.
@@ -204,6 +216,33 @@ fn cut_gesture_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut Co
             queue.push(Command::SetCutGesture(gesture));
         }
         response.response.on_hover_text(s.hint_cut);
+    });
+}
+
+/// Which frequency a smooth on a hierarchy acts on: the form, the detail
+/// alone, or the form with the detail carried through unchanged.
+///
+/// Three words rather than a strength slider, because the three are different
+/// passes over different arrays and not three settings of one — the hint says
+/// so, since the third is the one a sculptor is usually after and the one no
+/// other representation can offer at any price.
+fn smooth_mode_control(ui: &mut egui::Ui, state: &ShellState<'_>, queue: &mut CommandQueue) {
+    let s = state.strings;
+    ui.vertical(|ui| {
+        ui.set_width(SMOOTH_MODE_WIDTH);
+        group_label(ui, s.label_smooth_mode);
+        let response = ui.scope(|ui| {
+            segmented(
+                ui,
+                &clayspace_model::SmoothFrequency::ALL,
+                |mode| s.smooth_mode_name(mode),
+                state.smooth_mode,
+            )
+        });
+        if let Some(mode) = response.inner {
+            queue.push(Command::SetSmoothMode(mode));
+        }
+        response.response.on_hover_text(s.hint_smooth_mode);
     });
 }
 
