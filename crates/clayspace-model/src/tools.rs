@@ -457,7 +457,8 @@ pub enum ToolKind {
     /// this does not. A modifier that silently changed which algorithm runs
     /// would hide that.
     MoverTopologico,
-    /// Relief on the SDF side; dilation on the voxel side.
+    /// A surface magnify with a positive strength on the SDF side; dilation on
+    /// the voxel side.
     Inflar,
     /// Relax on the SDF side; a majority filter on the voxel side.
     Suavizar,
@@ -839,8 +840,23 @@ impl ToolKind {
                 mesh: Some("clay_mesh_sculptor_apply_stroke (DRAW)"),
                 multires: Some("clay_multires_sculptor_apply_stroke (DRAW)"),
             },
+            // The field's column is the *surface* magnify and not a relief
+            // stroke, and the difference is the whole of why this row moved.
+            // Relief moves the surface along its own normal, which is what
+            // Padrão does — so binding both to it made Standard and Inflate
+            // the same verb differing only in the footprint, and the mark
+            // Inflar left measured *taller* than Padrão's where an inflate
+            // should be broader and lower (#179).
+            //
+            // `clay_layer_magnify_surface` is the swell itself: a signed
+            // radial scale resolved against every item a blended form is made
+            // of, positive here and negative on Pinçar. One entry point and
+            // two verbs — which the row states as two rows, because the sign
+            // is not the only thing that separates them: a swell is centred
+            // *in* the clay and a gather *on* it, and the engine adapter's
+            // `magnify_depth` is where that lives.
             Self::Inflar => Verbs {
-                sdf: Some("clay_layer_apply_stroke (CLAY_OP_RELIEF)"),
+                sdf: Some("clay_layer_magnify_surface (positive strength)"),
                 voxel: Some("clay_voxel_sculpt_inflate"),
                 mesh: Some("clay_mesh_sculptor_apply_stroke (INFLATE)"),
                 multires: Some("clay_multires_sculptor_apply_stroke (INFLATE)"),
@@ -977,8 +993,15 @@ impl ToolKind {
                 mesh: None,
                 multires: None,
             },
+            // The negative half of Inflar's entry point, with the dab left
+            // standing on the surface rather than sunk into it — see Inflar's
+            // row. The field's column was empty because a per-item
+            // `CLAY_DEFORM_MAGNIFY` gathers one piece of a smooth-unioned form
+            // and leaves the rest, so Pinçar could not be a surface brush on a
+            // field at all until the engine grew a resolver for it (ClayCore
+            // #391).
             Self::Pincar => Verbs {
-                sdf: None,
+                sdf: Some("clay_layer_magnify_surface (negative strength)"),
                 voxel: Some("clay_voxel_sculpt_pinch"),
                 mesh: Some("clay_mesh_sculptor_apply_stroke (PINCH)"),
                 multires: Some("clay_multires_sculptor_apply_stroke (PINCH)"),
@@ -2038,7 +2061,7 @@ mod tests {
         // And the field, which `docs/features.md` states as a count too.
         let sdf = ToolKind::for_representation(Representation::Sdf).len();
         assert_eq!(
-            sdf, 14,
+            sdf, 15,
             "the field vocabulary has moved: {sdf} tools reach an SDF layer. \
              Update this count and `docs/features.md` together."
         );

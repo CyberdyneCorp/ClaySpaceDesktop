@@ -48,6 +48,7 @@ descriptors! {
     sys::clay_layer_info,
     sys::clay_mesh_layer_desc,
     sys::clay_move_params,
+    sys::clay_magnify_params,
     sys::clay_relax_params,
     sys::clay_flatten_params,
     sys::clay_topological_move_params,

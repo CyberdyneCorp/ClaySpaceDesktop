@@ -18,7 +18,7 @@ implementation. A tool with no engine counterpart is not offered.
 
 All twenty-one are bound and each is covered by a before-and-after capture in
 `target/visual/`. Which of the representations each one reaches is in the
-Layers column: fourteen have an SDF verb, thirteen a voxel one, and seventeen a
+Layers column: fifteen have an SDF verb, thirteen a voxel one, and seventeen a
 mesh one.
 
 A fourth representation — a subdivision hierarchy — is left out of the Layers
@@ -30,11 +30,11 @@ on it, the sixteen mesh brushes less Pintar and Borrar, plus Máscara. See
 | Tool | Engine verb | Layers | What it does |
 |---|---|---|---|
 | Padrão | `clay_layer_apply_stroke` with relief | all three | Displaces the surface along its normal |
-| Inflar | `clay_voxel_sculpt_inflate` / relief, wider and softer | all three | Swells the footprint; a negative amount erodes. On a field it is relief like Padrão — the engine binds both to it — with a region and rim 1.35× the brush and 0.32 of the lift, so it swells where Padrão ridges |
+| Inflar | `clay_layer_magnify_surface`, positive / `clay_voxel_sculpt_inflate` | all three | Swells the footprint; a negative amount erodes. On a field it is a **signed radial scale of the assembled surface**, not relief: relief moves the surface along its own normal, which is what Padrão does, so binding both to it made one verb of two brushes and left Inflar's mark taller than Padrão's. Measured at Intensidade 0.9 with a 0.25 brush, the swell peaks +0.091 against the ridge's +0.148 and is still moving clay 0.33 to the side where the ridge has been flat since 0.21 — broader and lower, which is what Inflate means |
 | Suavizar | `clay_sdf_smooth_*` / `clay_item_volume_relax_from` / `clay_voxel_sculpt_smooth` | all three | Relaxes the surface. Live on the field side, through a transaction |
 | Mover | `clay_sdf_move_*` / `clay_layer_move_surface_regions` | SDF, mesh | Drags the assembled surface. Buds rather than stretches. Live on the field side, through a transaction |
 | Mover Topológico | `clay_item_volume_move_topological` | SDF | The same drag with its reach measured **along the material** rather than through space, so a part close in space and far along the surface is left behind. It bakes, so it costs more than Mover and is the one to reach for when the cheap drag pulls something it should not |
-| Pinçar | `clay_voxel_sculpt_pinch` | voxel, mesh | Moves surface cells toward the brush centre |
+| Pinçar | `clay_layer_magnify_surface`, negative / `clay_voxel_sculpt_pinch` | all three | Moves the surface toward the brush centre. On a field it is Inflar's entry point at a negative strength, with the dab left **on** the surface rather than sunk into it, which is what makes the scale a gather: the line under the stroke stands proud and the flanks fall away. It resolves against every item of a blended form, which is why it can be a field brush at all — a per-item magnify gathers one contributor of a smooth union and leaves the rest |
 | Raspar | `clay_voxel_sculpt_scrape` | voxel, mesh | Flattens and smooths from one snapshot |
 | Planar | `clay_item_volume_flatten_from`, cut-only / `clay_voxel_sculpt_flatten` | all three | Planes without filling on a field and a mesh, which keeps a facet crisp. **On a grid it is two-sided** — material above the plane goes and hollows below it fill — because that is the verb the grid has; the tooltip says so rather than faking cut-only |
 | Preencher | `clay_voxel_sculpt_fill_cavities` | voxel | Fills narrow pockets |
@@ -74,35 +74,67 @@ now opens it. What pinned the gap is the measurement that replaced it —
 them moves, and `Form` takes them off — so the row is held to what the note
 promises rather than to the string it names.
 
-**Padrão and Inflar are two marks on a field.** ClayCore's own equivalence
-table binds both to `Op::Relief` — relief moves the accumulated surface along
-its own normal, which is what either does — and the application passed the same
-stamp for either, so two brushes on the shelf drew one thing. What tells them
-apart in ZBrush is the profile: Standard raises a ridge that follows the
-falloff, Inflate swells the whole footprint, broader and lower at the rim. So
-Inflar's region and rim are 1.35× the brush and it asks for 0.32 of the lift;
-Padrão keeps the engine's standard clay mapping, k = rounding = radius.
+**Padrão and Inflar are two verbs on a field, and used to be one.** ClayCore's
+equivalence table binds Standard to `Op::Relief` — relief moves the accumulated
+surface along its own normal — and Inflar was bound to the same op with a wider
+region and a shallower lift, so two brushes on the shelf ran one verb wearing
+two profiles. Shaping a ridge cannot make it a swell: the audit measured
+Inflar's mark coming out **taller** than Padrão's, 75 px against 50 over six
+reproductions
+([#179](https://github.com/CyberdyneCorp/ClaySpaceDesktop/issues/179)).
 
-The 0.32 is measured, not chosen. Raycasting a grid at the mark on the starting
-form with a 0.25 brush, as peak height above the sphere and footprint area:
+Inflar is now `clay_layer_magnify_surface` — a signed radial scale of the
+**assembled** surface, resolved against every item the region reaches — and
+Pinçar is the same call at a negative strength. The strength is dimensionless
+and scales with Intensidade, and its region is 1.35× the brush, wide enough
+that the swell reads as one beside the ridge. On the starting form with a 0.25
+brush at Intensidade 0.9, as how far the surface moved at each distance to the
+side of the stroke:
 
-| binding | peak | footprint | height ÷ width |
+| aside | Padrão | Inflar | Pinçar |
 |---|---|---|---|
-| Padrão, k = rounding = r | +0.180 | 1179 | 0.0053 |
-| Inflar at 0.8 of the lift | +0.238 | 1939 | 0.0054 |
-| Inflar at 0.32 of the lift | +0.173 | 1772 | 0.0041 |
+| 0.00 | +0.1483 | +0.0914 | +0.0057 |
+| 0.09 | +0.1204 | +0.0835 | +0.0014 |
+| 0.18 | +0.0108 | +0.0609 | −0.0043 |
+| 0.27 | 0.0000 | +0.0265 | −0.0052 |
+| 0.36 | 0.0000 | +0.0001 | −0.0001 |
 
-The middle row is the trap: a wider region under buildup accumulation lifts each
-point through more stamps, so the first attempt came out wider **and taller** —
-the same ridge drawn with a bigger brush, which is not what Inflate means.
-`visual_sdf_symmetry` asserts the *shape* — half again the footprint at a fifth
-less slope — rather than counting pixels, which a merely bigger mark would pass.
+Inflar peaks two fifths lower than the ridge and is still moving clay where the
+ridge has been flat for two readings: a swell rather than a ridge. Raising the
+strength to 1.0 brings the peak back above Padrão's, which is #179 again in the
+new binding.
 
-They stay closer here than in ZBrush, and that is the engine's design rather
-than a setting: relief is the only op that moves an existing surface along its
-own normal, so both brushes are relief and only the profile can differ. A true
-per-stroke inflate — offsetting the field inside the region — would need a
-verb ClayCore does not expose.
+**A radial scale fixes its own centre**, and that is the one thing about this
+verb worth knowing before using it. The point the region is centred on does not
+move and the points nearest it barely do; what the scale moves is the surface
+*around* the centre. A gesture's samples are raycast hits, so left alone every
+dab is centred exactly where the verb has least to say — measured, +0.027 for
+the swell against the +0.091 above.
+
+So Inflar's dabs are **sunk half a radius into the material**, along the
+field's own gradient, where a scale has clay all round it to push outward.
+Pinçar's are not, and that is not an omission: a gather about a point *on* the
+surface draws the material toward the stroke, which is what pinching is. Sink a
+pinch and it stops gathering and starts deflating, uniformly, at every reading
+across the mark. The depth is a property of the tool and not of the sign, which
+is also why the invert key gives each tool its own opposite rather than the
+other tool: an inverted Inflar deflates and an inverted Pinçar spreads — the
+same pair the grid's column already names for these two.
+
+The gesture is one undo step whatever it laid down. Each dab is one engine
+call and the engine makes each call one step however many items it warped; the
+stroke wraps the dabs in a group, so a pass across the form is one Cmd+Z.
+
+**A dab is a warp, and a warp is not free after it lands.** A magnify is
+recorded on every item it reached and evaluated per sample for as long as it
+is in the edit list, exactly as a Move grab is — so a layer costs more to
+evaluate after a pass of Inflar than before, permanently.
+`clay_layer_consolidate` is what gives that back.
+
+**The mask is honoured by the stroke, not by the engine.** `clay_magnify_params`
+carries no gate, so the frozen samples are dropped from the path before any dab
+is placed — the same rule the snakehook applies, applied where this verb can
+apply it.
 
 **Trim is not a stroke tool.** Its gesture is a shape drawn on the view frame,
 not a drag across the surface, and the interface refuses a stroke for it rather
@@ -349,7 +381,11 @@ would come back mirrored.
 
 On a **field**, through the layer's mirror — `clay_set_layer_mirror` reflects
 the layer's items, so both halves belong to one operation and undo together.
-That covers the brushes that *add* an item: Padrão, Inflar, Camada and Puxar.
+That covers the brushes that *add* an item: Padrão, Camada and Puxar. It also
+covers Inflar and Pinçar, which add none — the engine reflects a magnify's
+region into every image the layer emits and carries the strength across each
+one untouched, so pointing the mirror is the whole of what symmetry means for
+them too.
 
 The five that **rewrite the field** rather than adding an item — Mover,
 Suavizar, Relaxar, Planar and Polir — cannot be reached by the layer's mirror.
@@ -930,7 +966,9 @@ nothing where it has not. That is a rule rather than a gap:
 
 | Brush | Held | Why |
 |---|---|---|
-| Padrão, Inflar, Camada | takes material away | depositing has an opposite |
+| Padrão, Camada | takes material away | depositing has an opposite |
+| Inflar | **deflates** | a swell turned over is a hollow; on a field it is the magnify's strength that changes sign, not the combine operation |
+| Pinçar | **spreads** | a gather turned over is a spread, which is the pair the grid's column already names |
 | Planar, Polir | **fills instead of cutting** | planing is cut-only so it does not fill the dents it reveals; the other half is fill-only, which the engine has had a mode for all along |
 | Suavizar, Relaxar | nothing | an inverted smooth is not a thing either reference offers, and sharpening is a different verb rather than a smooth turned over |
 | Mover, Puxar | nothing | a drag's direction *is* its sign; inverting it is dragging the other way |
@@ -993,6 +1031,10 @@ that representation has:
   Emboss becomes Engrave, Relief becomes Incise. An operation with no opposite
   — Intersect, Replace, a seam — is left as it is rather than quietly becoming
   some other verb.
+- On a **field** Inflar and Pinçar take the sign of the magnify's strength
+  rather than the combine operation, because neither deposits. Turning the key
+  over gives each its own opposite rather than the other tool — a deflate and a
+  spread — because the two differ in where the dab sits as well as in the sign.
 - On a **mesh** the brush descriptor's strength is negated, which is signed for
   every verb that has a sign: Padrão digs, Inflar deflates, Vinco cuts. Note
   that this is the *descriptor's* strength and not the stroke preset's — the
@@ -4070,15 +4112,6 @@ rather than two: `Op::Paint` is a real engine operation, but the brick cache
 meshes the surface with colours off and nothing in the surface path carries a
 colour to the GPU, so what it wrote would not be drawn. The operation stays in
 the vocabulary so the mapping onto the engine is complete.
-
-**SDF Pinçar.** `CLAY_DEFORM_MAGNIFY` is the field's pinch and magnify, one
-signed strength, and it is *per item and local* — the engine says so in the
-same paragraph that warns against wiring Move to `grab`: on a form blended from
-several items, magnifying one pulls its share and leaves the rest behind. The C
-ABI has an assembled-surface resolver for the drag (`clay_layer_move_surface`)
-and none for the radial scale, and reconstructing one host-side would put field
-math in this application. Upstream first, as
-[ClayCore#391](https://github.com/CyberdyneCorp/ClayCore/issues/391).
 
 **Alpha stamps on an SDF stroke.** `clay_layer_apply_stroke` scales its item as
 a template per stamp and the chain hung off it is not resolved into each

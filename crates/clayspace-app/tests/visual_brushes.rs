@@ -433,8 +433,14 @@ fn every_brush_in_the_shelf_draws_something_worth_looking_at() {
     }
 }
 
-/// Tools that stamp along the path. These are the ones a sculptor uses
-/// continuously, and they have to keep up with a drag.
+/// Tools whose cost is **local to the brush**. These are the ones a sculptor
+/// uses continuously, and they have to keep up with a drag.
+///
+/// Padrão and Camada stamp; Inflar no longer does — it is a radial scale of
+/// the assembled surface — but it belongs here all the same, because what this
+/// list groups is the shape of the cost and not the verb: a dab dirties the
+/// ball under the brush either way, where the tools below it sample a whole
+/// region into a volume and put it back.
 const STAMPING: [ToolKind; 3] = [ToolKind::Padrao, ToolKind::Inflar, ToolKind::Camada];
 
 #[test]

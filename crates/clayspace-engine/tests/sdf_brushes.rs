@@ -162,9 +162,10 @@ fn stroke(document: &mut ClayDocument, tool: ToolKind, invert: bool, symmetry: [
 
 /// The brushes that move the surface. Máscara paints the freeze and Trim is a
 /// shape drawn on the view frame, so neither is a stroke that displaces clay.
-const SURFACE_BRUSHES: [ToolKind; 12] = [
+const SURFACE_BRUSHES: [ToolKind; 13] = [
     ToolKind::Padrao,
     ToolKind::Inflar,
+    ToolKind::Pincar,
     ToolKind::Suavizar,
     ToolKind::Mover,
     ToolKind::MoverTopologico,
@@ -293,9 +294,13 @@ fn a_brush_does_not_mirror_when_it_is_not_asked_to() {
 /// relief and the incise are each other's opposite, so building up clay
 /// inverts to cutting in and a crease inverts to the ridge it would have cut.
 /// `sdf_named_brushes.rs` measures both directions.
-const SIGNED: [ToolKind; 7] = [
+/// Pinçar is here because the field binds it to a signed radial scale, and a
+/// signed scale turned over spreads — the same pair the grid's column already
+/// names. `sdf_magnify.rs` measures both halves.
+const SIGNED: [ToolKind; 8] = [
     ToolKind::Padrao,
     ToolKind::Inflar,
+    ToolKind::Pincar,
     ToolKind::Camada,
     ToolKind::Planar,
     ToolKind::Polir,
@@ -309,6 +314,11 @@ fn the_depositing_brushes_take_material_away_when_inverted() {
     let rest = reach(&base, AT);
     for tool in [
         ToolKind::Padrao,
+        // Inflar neither deposits nor cuts on a field any more — it is a
+        // radial scale of the assembled surface — but the reading this test
+        // takes is the same one either way: the swell raises the surface and
+        // the deflate its inverse makes lowers it. `sdf_magnify.rs` measures
+        // what the two are made of.
         ToolKind::Inflar,
         ToolKind::Camada,
         // Argila is relief like the other three, so it inverts to the incise —

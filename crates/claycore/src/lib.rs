@@ -146,7 +146,7 @@ pub use remesh::{
     ResumeStats, SmallComponents, Surface,
 };
 pub use sculpt::{
-    resolve_stroke, FlattenMode, FlattenParams, MoveParams, Region, RelaxParams,
+    resolve_stroke, FlattenMode, FlattenParams, MagnifyParams, MoveParams, Region, RelaxParams,
     TopologicalMoveParams, VolumeParams,
 };
 pub use surface_view::{
