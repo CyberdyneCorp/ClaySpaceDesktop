@@ -1403,6 +1403,13 @@ pub struct ClayDocument {
     /// the same one. See `clayspace_model::colour` for why it is not in
     /// `BrushSettings`.
     colour: clayspace_model::ColourState,
+    /// Which frequency a smooth on a hierarchy acts on.
+    ///
+    /// Beside the combine operation and for the same reason: chosen once and
+    /// held across strokes. One value for the document rather than one per
+    /// hierarchy, because it is a statement about what the *tool* does and a
+    /// sculptor who chose it on one subtool has chosen it.
+    smooth_mode: clayspace_model::SmoothFrequency,
     /// The one alpha stamp loaded, which every brush with `alpha` set uses.
     alpha: Option<Alpha>,
     /// The voxel drag being made, while one is. Opened by the first segment
@@ -1483,6 +1490,7 @@ impl ClayDocument {
             policy,
             combine: CombineSettings::for_strokes(),
             colour: clayspace_model::ColourState::default(),
+            smooth_mode: clayspace_model::SmoothFrequency::default(),
             alpha: None,
             voxel_grab: None,
             recording_pass: false,
@@ -5131,6 +5139,23 @@ impl ClayDocument {
         // Read before the sculptor is taken: the lease reads the document.
         let mask = self.active_mask();
 
+        // Smoothing is its own entry point on a hierarchy, and taking it is
+        // the whole difference between this tier and a mesh — see
+        // [`ClayDocument::smooth_a_hierarchy`]. Asked before the question
+        // below, because it is the answer whether or not a pass is active.
+        if verb == claycore::MeshBrush::Smooth {
+            let moved = Self::smooth_a_hierarchy(
+                hierarchy,
+                self.smooth_mode,
+                &stamp,
+                &points,
+                symmetry,
+                mask.as_deref(),
+            )?;
+            hierarchy.note_gesture_moved(moved);
+            return Ok(moved);
+        }
+
         // Where it lands: the form under the passes, or the pass the sculptor
         // has selected. The two are different entry points and not a flag —
         // see [`ClayDocument::stamp_into_a_pass`].
@@ -5316,6 +5341,80 @@ impl ClayDocument {
         // that record does not cross the ABI — this application's undo holds
         // the hierarchy's serialized bytes instead, taken before the gesture
         // opened.
+        stroke.commit().map_err(ModelError::engine)?;
+        Ok(moved)
+    }
+
+    /// A smooth on a hierarchy, at the frequency the sculptor chose.
+    ///
+    /// The one verb on this tier that is **not** a stamp with a different brush
+    /// in it, and the reason is representational rather than about the tool. A
+    /// hierarchy keeps the form and the detail in different arrays, so there
+    /// are three smooths over it; a stamp carrying `MeshBrush::Smooth` can only
+    /// ask for the first. That stamp is a plain Laplacian over the evaluated
+    /// positions — exactly what a mesh does, pores taken off with the lump —
+    /// and taking it here was what made the shelf's note about picking a
+    /// frequency untrue for every stroke a sculptor made.
+    ///
+    /// So a smooth goes through the layered stroke transaction instead, which
+    /// is where `clay_multires_sculpt_layer_stroke_smooth` lives and which is
+    /// what carries the mode. [`clayspace_model::SmoothFrequency`] is what the
+    /// three are and which one a sculptor gets without choosing.
+    ///
+    /// Everything [`ClayDocument::stamp_into_a_pass`] says about the
+    /// transaction holds here as well: the channel is fixed when the gesture
+    /// opens, the path is stamped sample by sample rather than resolved
+    /// — the transaction offers no resolver — and the commit is what keeps the
+    /// work, since a drop cancels.
+    fn smooth_a_hierarchy(
+        hierarchy: &mut crate::multires::Hierarchy,
+        mode: clayspace_model::SmoothFrequency,
+        stamp: &claycore::MeshStamp<'_>,
+        points: &[[f32; 5]],
+        symmetry: [bool; 3],
+        mask: Option<&claycore::MaskField>,
+    ) -> Result<u64, ModelError> {
+        // The pass where there is one, and the form under them where there is
+        // not. Named rather than left to `Automatic`, which resolves the same
+        // way: the two lines say which channel is meant, and a reader does not
+        // have to reconstruct it from what happens to be selected.
+        let domain = if hierarchy.stamps_into_a_pass() {
+            claycore::WriteDomain::Detail
+        } else {
+            claycore::WriteDomain::Geometry
+        };
+        let mut stroke = hierarchy
+            .surface_mut()
+            .sculpt_layer_stroke()
+            .map_err(ModelError::engine)?;
+        stroke
+            .set_write_domain(domain)
+            .map_err(ModelError::engine)?;
+        stroke
+            .begin()
+            .map_err(|refused| ModelError::engine(refused.to_string()))?;
+
+        let engine_mode = engine_smooth_mode(mode);
+        let mut moved = 0;
+        for mirror in mirrors(symmetry) {
+            for sample in points {
+                moved += stroke
+                    .smooth(
+                        engine_mode,
+                        claycore::MeshStamp {
+                            direction: mirror.vector(stamp.direction),
+                            center: mirror.point([sample[0], sample[1], sample[2]]),
+                            // The sample's pressure, since nothing else applies
+                            // it once the resolver is out of the path.
+                            strength: stamp.strength * sample[3],
+                            ..*stamp
+                        },
+                        mask,
+                    )
+                    .map_err(ModelError::engine)?
+                    .moved_vertices;
+            }
+        }
         stroke.commit().map_err(ModelError::engine)?;
         Ok(moved)
     }
@@ -7786,6 +7885,14 @@ impl SculptModel for ClayDocument {
         self.combine
     }
 
+    fn smooth_mode(&self) -> clayspace_model::SmoothFrequency {
+        self.smooth_mode
+    }
+
+    fn set_smooth_mode(&mut self, mode: clayspace_model::SmoothFrequency) {
+        self.smooth_mode = mode;
+    }
+
     fn set_colour(&mut self, colour: clayspace_model::Colour) {
         self.colour.choose(colour);
     }
@@ -8557,6 +8664,20 @@ fn sdf_recipe(tool: ToolKind) -> Option<SdfRecipe> {
         },
         _ => return None,
     })
+}
+
+/// The domain's smooth frequency as the engine's mode.
+///
+/// Here rather than on `SmoothFrequency` for the reason [`mesh_verb`] is here:
+/// the domain names the three passes and may not depend on the engine, so this
+/// is where the name becomes an argument.
+fn engine_smooth_mode(mode: clayspace_model::SmoothFrequency) -> claycore::SmoothMode {
+    use clayspace_model::SmoothFrequency as Frequency;
+    match mode {
+        Frequency::Form => claycore::SmoothMode::Geometry,
+        Frequency::DetailOnly => claycore::SmoothMode::DetailOnly,
+        Frequency::FormWithDetail => claycore::SmoothMode::PreserveDetail,
+    }
 }
 
 /// Which engine verb a tool invokes on a mesh layer.
@@ -9986,6 +10107,7 @@ impl ClayDocument {
             mask_revision: 0,
             combine: CombineSettings::for_strokes(),
             colour: clayspace_model::ColourState::default(),
+            smooth_mode: clayspace_model::SmoothFrequency::default(),
             alpha: None,
             voxel_grab: None,
             recording_pass: false,

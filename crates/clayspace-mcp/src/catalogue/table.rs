@@ -318,6 +318,9 @@ fn level_ops() -> Vec<&'static str> {
         "remove_highest",
     ]
 }
+fn smooth_modes() -> Vec<&'static str> {
+    vec!["form", "detail_only", "form_with_detail"]
+}
 fn multires_pass_ops() -> Vec<&'static str> {
     vec![
         "add",
@@ -1119,6 +1122,20 @@ pub const TABLE: &[ActionSpec] = &[
             o("to", Kind::Integer, "for move"),
         ],
         example: r#"{"op":"add","name":"rugas"}"#,
+    },
+    ActionSpec {
+        group: "hierarchy",
+        name: "smooth_mode",
+        summary: "Which frequency a smooth on a hierarchy acts on.",
+        arguments: &[r(
+            "mode",
+            Kind::Choice(smooth_modes),
+            "form smooths the positions and takes the detail with them; \
+             detail_only softens the detail and leaves the form; \
+             form_with_detail moves the form and puts the detail back \
+             unchanged, which is what a stroke does without being told",
+        )],
+        example: r#"{"mode":"form_with_detail"}"#,
     },
     // -- document -----------------------------------------------------------
     ActionSpec {

@@ -249,6 +249,9 @@ fn state<'a>(
         outline: None,
         cut_gesture: clayspace_model::CutGesture::Line,
         cut: None,
+        smooth_mode: clayspace_model::SmoothFrequency::default(),
+        // The fixture's layer is a field, where there is one smooth.
+        offers_smooth_mode: false,
         representation: clayspace_model::Representation::Sdf,
         show_shapes: false,
         insert_as: clayspace_model::InsertAs::default(),

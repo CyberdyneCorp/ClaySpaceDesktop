@@ -1424,6 +1424,21 @@ application writes one either: the freeze a sculptor paints is a volume rather
 than a per-vertex weight. So the row carries the badge and the badge does not
 light.
 
+**A smooth picks a frequency.** The one verb here that is not a stamp with a
+different brush in it, and the reason is the representation rather than the
+tool: the form and the detail are different arrays, so there are three smooths
+over a hierarchy rather than one. **Forma** smooths the positions, which is what
+smoothing a mesh does and what takes the pores off with the lump. **Só detalhe**
+softens the detail and leaves the anatomy where it is. **Forma com detalhe**
+corrects the form underneath and puts the detail back unchanged — the operation
+a flat mesh cannot perform at any price, because a mesh has one surface and
+nothing stored beneath it — and it is what a stroke makes when nobody has
+chosen. The three sit on the options bar with the smooth tool in hand and on a
+hierarchy alone; the other representations store one surface, so a control over
+them would decide nothing. Where a pass is selected the smooth is written to
+that pass, and where none is, to the form under them, exactly as every other
+stroke here follows the selected row.
+
 **The two colour brushes are not offered.** A hierarchy stores where a vertex
 went and not what colour it is, so a paint stamp would move nothing, be dropped
 by the write-back, and evaporate with the level cache. Paint the cage before

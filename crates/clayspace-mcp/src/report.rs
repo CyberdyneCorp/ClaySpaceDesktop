@@ -114,6 +114,7 @@ pub fn tool_state(
     brush: &BrushSettings,
     symmetry: [bool; 3],
     representation: Representation,
+    smooth_mode: clayspace_model::SmoothFrequency,
 ) -> ToolState {
     ToolState {
         tool: tool.key().to_string(),
@@ -127,6 +128,12 @@ pub fn tool_state(
             .map(|(axis, _)| axis.to_string())
             .collect(),
         representation: representation_tag(representation).to_string(),
+        // Sent only where it decides something. A frequency reported beside a
+        // field or a mesh would read as a setting an agent could act on, and
+        // the three smooths exist only on a hierarchy — see
+        // `SmoothFrequency::is_offered_on`.
+        smooth_mode: clayspace_model::SmoothFrequency::is_offered_on(representation)
+            .then(|| smooth_mode.key().to_string()),
     }
 }
 
@@ -495,11 +502,31 @@ mod tests {
             &brush,
             [true, false, true],
             Representation::Sdf,
+            clayspace_model::SmoothFrequency::default(),
         );
         assert_eq!(state.tool, "clay");
         assert_eq!(state.falloff, "gaussian");
         assert_eq!(state.symmetry, vec!["x", "z"]);
         assert_eq!(state.representation, "field");
+        assert_eq!(
+            state.smooth_mode, None,
+            "a field has one smooth, so a frequency beside it would be a \
+             setting an agent could act on and nothing would read"
+        );
+    }
+
+    /// And on the one representation that has three of them, the mode is
+    /// there, in the word the action takes back.
+    #[test]
+    fn a_hierarchy_reports_which_frequency_a_smooth_would_act_on() {
+        let state = tool_state(
+            ToolKind::Suavizar,
+            &BrushSettings::default(),
+            [false; 3],
+            Representation::Multires,
+            clayspace_model::SmoothFrequency::DetailOnly,
+        );
+        assert_eq!(state.smooth_mode.as_deref(), Some("detail_only"));
     }
 
     #[test]

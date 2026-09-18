@@ -80,6 +80,14 @@ pub struct SculptViewModel {
     /// session, not one per tool. `ToolKind::writes_colour` names who reads it,
     /// which is also where the swatch is shown.
     colour: Observable<clayspace_model::ColourState>,
+    /// Which frequency a smooth on a hierarchy acts on.
+    ///
+    /// One value for the session, as the two above are, and read from the
+    /// model at construction rather than assumed: the bar shows what this
+    /// holds and the stroke uses what the document holds, and the two starting
+    /// out disagreeing would be a control that lies before anybody has touched
+    /// it.
+    smooth_mode: Observable<clayspace_model::SmoothFrequency>,
     symmetry: Observable<[bool; 3]>,
     view_preset: Observable<ViewPresetKind>,
     grid: Observable<bool>,
@@ -133,6 +141,7 @@ pub struct SculptViewModel {
 impl SculptViewModel {
     pub fn new(model: Box<dyn SculptModel>) -> Self {
         let stats = model.stats();
+        let smooth_mode = model.smooth_mode();
         // Empty, not the model's. The engine's history counts building the
         // starting form, which is not something the user did and must not be
         // something they can undo.
@@ -150,6 +159,7 @@ impl SculptViewModel {
             // before the user has touched anything.
             combine: Observable::new(clayspace_model::CombineSettings::for_strokes()),
             colour: Observable::new(clayspace_model::ColourState::default()),
+            smooth_mode: Observable::new(smooth_mode),
             symmetry: Observable::new([true, false, false]),
             view_preset: Observable::new(ViewPresetKind::Perspective),
             grid: Observable::new(true),
@@ -191,6 +201,22 @@ impl SculptViewModel {
 
     pub fn colour(&self) -> &Observable<clayspace_model::ColourState> {
         &self.colour
+    }
+
+    pub fn smooth_mode(&self) -> &Observable<clayspace_model::SmoothFrequency> {
+        &self.smooth_mode
+    }
+
+    /// Whether the smooth frequency is a choice worth showing right now.
+    ///
+    /// Both halves, and they fail differently. On the other three
+    /// representations there is one smooth and a three-way control would
+    /// decide nothing; with another tool in hand there is no smooth at all.
+    /// The same question the options bar asks before drawing the control and
+    /// the only one that may decide where it appears.
+    pub fn offers_smooth_mode(&self) -> bool {
+        clayspace_model::SmoothFrequency::is_offered_on(self.active_representation())
+            && *self.tool.get() == ToolKind::Suavizar
     }
 
     pub fn symmetry(&self) -> &Observable<[bool; 3]> {
@@ -292,6 +318,11 @@ impl SculptViewModel {
                 let combine = combine.sanitized();
                 if self.combine.set_if_changed(combine) {
                     self.model.set_combine(combine);
+                }
+            }
+            Command::SetSmoothMode(mode) => {
+                if self.smooth_mode.set_if_changed(mode) {
+                    self.model.set_smooth_mode(mode);
                 }
             }
             Command::SetBrushColour(colour) => {

@@ -1254,3 +1254,167 @@ fn a_field_layer_says_where_passes_live() {
         "the refusal has to name the representation a pass belongs to: {said}"
     );
 }
+
+// -- which frequency a smooth acts on ---------------------------------------
+//
+// A hierarchy stores the form and the detail in different arrays, so there are
+// three smooths over one and the shelf says so. The application used to send a
+// stamp carrying `MeshBrush::Smooth` for every one of them, which is a plain
+// Laplacian over the evaluated positions — what a mesh does, and what takes
+// the pores off with the lump. These two measure the difference between the
+// mode that keeps them and the mode that does not, through the document's own
+// stroke rather than through the wrapper.
+
+/// A form bump at the finest level, and pores in a pass over it.
+///
+/// Two documents rather than one, and the second is not a spare: what a smooth
+/// did to the *detail* is the difference between a hierarchy that has the pass
+/// deposit and one that is alike in every other way, which is a subtraction
+/// rather than a guess about which part of one surface was which. Both carry a
+/// pass, so both strokes go into the same write domain and the comparison is
+/// between the modes and nothing else.
+fn a_pored_pair(who: &str) -> (ClayDocument, ClayDocument) {
+    let (mut pored, pored_key) = with_a_hierarchy(&format!("{who}-pored"), 3);
+    let (mut plain, plain_key) = with_a_hierarchy(&format!("{who}-plain"), 3);
+
+    // The form: a bump at the level the brush is bound to, so there is
+    // something with curvature for a smooth to take out. A lump put on the
+    // cage instead comes up through three subdivisions already smooth, and a
+    // test whose form barely moves cannot tell "the form moved" from noise.
+    for document in [&mut pored, &mut plain] {
+        for _ in 0..3 {
+            assert!(dab(document, [0.0, 0.0, 0.0], 1.2), "the form moved");
+        }
+    }
+
+    // The pores: a pass of their own on both, filled on one. A pass is where
+    // the engine keeps detail apart from the form, which is the whole subject
+    // here.
+    add_pass(&mut plain, plain_key, "Poros");
+    add_pass(&mut pored, pored_key, "Poros");
+    assert!(
+        dab(&mut pored, [0.45, 0.0, 0.45], 0.3),
+        "the pores reached the pass"
+    );
+    (pored, plain)
+}
+
+/// Smooths a region of a hierarchy at the stated frequency.
+fn smooth_at(
+    document: &mut ClayDocument,
+    mode: clayspace_model::SmoothFrequency,
+    at: [f32; 3],
+    size: f32,
+) {
+    document.set_smooth_mode(mode);
+    // Four passes over the same place, as the wrapper's own three-mode
+    // comparison takes: one dab of a smooth moves a surface by very little,
+    // and a difference this small is one the tolerances below could not tell
+    // from arithmetic noise.
+    for _ in 0..4 {
+        document.begin_gesture();
+        let outcome = document.apply_stroke(
+            ToolKind::Suavizar,
+            BrushSettings {
+                size,
+                intensity: 1.0,
+                ..BrushSettings::default()
+            },
+            &[GestureSample {
+                position: at,
+                pressure: 1.0,
+                time: 0.0,
+            }],
+            [false; 3],
+        );
+        document.end_gesture();
+        assert!(
+            outcome.expect("the smooth is applied").changed,
+            "the smooth reached the surface"
+        );
+    }
+}
+
+/// How far the tallest vertex of one surface stands from the other's.
+fn detail_between(pored: &mut ClayDocument, plain: &mut ClayDocument) -> f32 {
+    let (here, there) = (drawn(pored), drawn(plain));
+    assert_eq!(
+        here.len(),
+        there.len(),
+        "the two hierarchies are the same subject, so they are the same size"
+    );
+    tallest_difference(&here, &there).1
+}
+
+/// How far the farthest vertex travelled between two pictures of one surface.
+fn travelled(before: &[[f32; 3]], after: &[[f32; 3]]) -> f32 {
+    assert_eq!(before.len(), after.len(), "the same surface, twice");
+    tallest_difference(after, before).1
+}
+
+/// The form moves and the pores ride it, which is the mode the shelf promises.
+///
+/// The assertion that matters is the pair: the detail is measured before and
+/// after and is the same height, *while* the surface under it has visibly
+/// moved. Either half alone would pass for the wrong reason — a smooth that
+/// did nothing at all would keep the detail perfectly.
+#[test]
+fn a_hierarchy_smooth_preserves_detail() {
+    let (mut pored, mut plain) = a_pored_pair("preserve");
+    let before = detail_between(&mut pored, &mut plain);
+    assert!(before > 1e-3, "the fixture deposited pores: {before}");
+    let form_before = drawn(&mut plain);
+
+    for document in [&mut pored, &mut plain] {
+        smooth_at(
+            document,
+            clayspace_model::SmoothFrequency::FormWithDetail,
+            [0.45, 0.0, 0.45],
+            1.2,
+        );
+    }
+
+    let after = detail_between(&mut pored, &mut plain);
+    assert!(
+        (after - before).abs() < before * 0.05,
+        "the pores are still there at their own height — {before} before, \
+         {after} after. This is the one operation a hierarchy can do and a \
+         flat mesh cannot: the detail is stored apart from the form, so the \
+         form can be corrected under it and the detail put back unchanged"
+    );
+
+    let form_moved = travelled(&form_before, &drawn(&mut plain));
+    assert!(
+        form_moved > 1e-3,
+        "and the form underneath did move ({form_moved}); a smooth that \
+         reached nothing would have kept the detail just as well"
+    );
+}
+
+/// And the mode that takes the pores off still takes them off.
+///
+/// The contrast, and the reason `Form` stays reachable rather than being
+/// replaced by the default: "I want the pores gone" is an ordinary thing to
+/// want, and this is the only one of the three that does it.
+#[test]
+fn a_hierarchy_smooth_at_geometry_removes_detail() {
+    let (mut pored, mut plain) = a_pored_pair("geometry");
+    let before = detail_between(&mut pored, &mut plain);
+    assert!(before > 1e-3, "the fixture deposited pores: {before}");
+
+    for document in [&mut pored, &mut plain] {
+        smooth_at(
+            document,
+            clayspace_model::SmoothFrequency::Form,
+            [0.45, 0.0, 0.45],
+            1.2,
+        );
+    }
+
+    let after = detail_between(&mut pored, &mut plain);
+    assert!(
+        after < before * 0.9,
+        "a plain Laplacian over pores removes the pores: {before} before, \
+         {after} after"
+    );
+}

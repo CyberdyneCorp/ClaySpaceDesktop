@@ -181,6 +181,7 @@ pub fn home_of(command: &Command) -> Home {
         SculptLayer(_) => Home::In("passes", "grid"),
         MultiresLevel(_) => Home::In("hierarchy", "level"),
         MultiresSculptLayer(_) => Home::In("hierarchy", "pass"),
+        SetSmoothMode(_) => Home::In("hierarchy", "smooth_mode"),
 
         // -- document -------------------------------------------------------
         NewDocument => Home::In("document", "new"),
@@ -532,6 +533,7 @@ pub fn build(group: &str, action: &str, args: &Args<'_>) -> Result<Command, Refu
         ("passes", "grid") => C::SculptLayer(sculpt_layer_op(args)?),
         ("hierarchy", "level") => C::MultiresLevel(level_op(args)?),
         ("hierarchy", "pass") => C::MultiresSculptLayer(multires_pass_op(args)?),
+        ("hierarchy", "smooth_mode") => C::SetSmoothMode(smooth_mode(args)?),
 
         // -- document -------------------------------------------------------
         ("document", "new") => C::NewDocument,
@@ -908,6 +910,21 @@ fn level_op(args: &Args<'_>) -> Result<MultiresLevelOp, Refusal> {
         1 => MultiresLevelOp::SetDisplayLevel(args.integer("level")? as u32),
         2 => MultiresLevelOp::AddLevel,
         _ => MultiresLevelOp::RemoveHighestLevel,
+    })
+}
+
+/// Which frequency a smooth acts on, by the word the wire uses for it.
+///
+/// The same three words `state` reports the mode back as, which is what lets
+/// an agent read one, act, and set it again without a translation table of its
+/// own.
+fn smooth_mode(args: &Args<'_>) -> Result<clayspace_model::SmoothFrequency, Refusal> {
+    use clayspace_model::SmoothFrequency as Frequency;
+    const MODES: &[(&str, u8)] = &[("form", 0), ("detail_only", 1), ("form_with_detail", 2)];
+    Ok(match args.choice("mode", MODES)? {
+        0 => Frequency::Form,
+        1 => Frequency::DetailOnly,
+        _ => Frequency::FormWithDetail,
     })
 }
 

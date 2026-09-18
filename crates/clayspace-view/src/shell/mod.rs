@@ -118,6 +118,14 @@ pub struct ShellState<'a> {
     pub outline: Option<&'a OutlineDraft>,
     /// Which shape the next cut gesture draws.
     pub cut_gesture: clayspace_model::CutGesture,
+    /// Which frequency the next smooth on a hierarchy acts on, and whether
+    /// that is a choice here at all.
+    ///
+    /// The predicate is the ViewModel's rather than recomputed from the
+    /// representation and the tool in this layer: two answers to one question
+    /// is how a control ends up drawn where the value it sets is ignored.
+    pub smooth_mode: clayspace_model::SmoothFrequency,
+    pub offers_smooth_mode: bool,
     /// The cut being drawn over the viewport, while one is.
     ///
     /// Held apart from `outline` rather than folded into it: a mask outline

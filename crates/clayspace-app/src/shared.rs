@@ -159,6 +159,14 @@ impl SculptModel for SharedDocument {
         self.document.borrow().combine()
     }
 
+    fn smooth_mode(&self) -> clayspace_model::SmoothFrequency {
+        self.document.borrow().smooth_mode()
+    }
+
+    fn set_smooth_mode(&mut self, mode: clayspace_model::SmoothFrequency) {
+        self.document.borrow_mut().set_smooth_mode(mode);
+    }
+
     fn set_colour(&mut self, colour: clayspace_model::Colour) {
         self.document.borrow_mut().set_colour(colour);
     }
