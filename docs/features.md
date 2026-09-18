@@ -3659,7 +3659,7 @@ fails on.
 One choice is answered against the session rather than from the table: the
 tools. A tool with no verb on the layer in hand is not on the sculptor's shelf,
 and `describe tool` leaves it out of the choices for the same reason and from
-the same call the shelf is built from — `pinch`, `scrape`, `fill` and `nudge`
+the same call the shelf is built from — `erase`, `scrape`, `fill` and `nudge`
 have no field verb and are not offered on a field. The answer names the layer
 it was narrowed against and the tools it left out, in the wire's own words:
 `field`, `grid`, `mesh`, `hierarchy`. The schema sent when a client connects

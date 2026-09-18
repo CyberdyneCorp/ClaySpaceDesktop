@@ -20,8 +20,10 @@
 - [x] 3.2 `crates/clayspace-engine/tests/sdf_magnify.rs`: the swell is broader and lower than the ridge, measured in world units; the pinch gathers — the middle rises and the rim falls; inverting a brush gives its own opposite; a magnify across a blend moves both items; a gesture is one undo step; Pinçar is on the field's shelf.
 - [x] 3.3 `crates/clayspace-engine/tests/sdf_brushes.rs`: Pinçar joins the field's surface brushes and its signed ones.
 - [x] 3.4 `crates/clayspace-model`: the field vocabulary is fifteen tools rather than fourteen.
+- [x] 3.5 The two places that used Pinçar as their example of a tool a field has no verb for — `crates/clayspace-engine/tests/voxel_tools.rs` and `describe_offers_only_the_tools_the_layer_has_a_verb_for` — name Apagar instead, whose only verb is the grid's. Both assertions stand; only the example moved.
 
 ## 4. Say so
 
 - [x] 4.1 `docs/features.md`: the two rows, the count, the measurement behind the strength, what the invert key does, and the mask and warp-accumulation notes. Remove the "SDF Pinçar" gap, which is closed.
 - [x] 4.2 `docs/roadmap.md`: ClayCore #391 is taken up rather than waiting upstream, and the gesture-region note names two callers rather than one.
+- [x] 4.3 `docs/features.md`: the agent surface's example of what a field does not offer is `erase` rather than `pinch`.
