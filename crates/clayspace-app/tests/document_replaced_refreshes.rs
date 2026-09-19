@@ -121,7 +121,7 @@ fn every_refreshable_view_model_is_refreshed_when_the_document_is_replaced() {
             continue;
         }
         // Either the plain refresh or a named one — `sculpt` has
-        // `refresh_after_open`, which is its version of the same thing.
+        // `refresh_for_active_layer`, which is its version of the same thing.
         let called = body.contains(&format!("self.{field}.refresh()"))
             || body.contains(&format!("self.{field}.refresh_"));
         if !called {

@@ -506,8 +506,6 @@ impl SculptViewModel {
             // Solo shows a subtool alone without making it the one a brush
             // lands on, so nothing this ViewModel holds follows it.
             | Command::SoloLayer(_)
-            | Command::AddLayer(_)
-            | Command::RemoveLayer(_)
             | Command::BeginRenameLayer(_)
             | Command::EditLayerName(_)
             | Command::CommitRenameLayer
@@ -524,7 +522,21 @@ impl SculptViewModel {
             | Command::FillVoids
             | Command::OptimizeLayer(_)
             | Command::RemeshLayer(_) => {}
-            Command::SelectLayer(_) => self.follow_the_active_layer(),
+            // Everything that moves the sculpt target, and a stack click is
+            // only the most obvious of them. A new layer arrives *active* —
+            // `add_layer` activates it through the same call a click takes —
+            // and removing one hands the target to whatever is left, which
+            // may be a different representation. Both used to be ignored
+            // here, so `layer add {kind:'grid'}` left the brush holding the
+            // field layer's settings: a size of 100 mm on a field is a metre
+            // on a grid, and the first dab came out that wide.
+            //
+            // All three read the document, so the scene ViewModel has to have
+            // acted already. That is why the composition root dispatches to it
+            // first; see `App::dispatch_to_models`.
+            Command::SelectLayer(_) | Command::AddLayer(_) | Command::RemoveLayer(_) => {
+                self.follow_the_active_layer()
+            }
             Command::ToggleSymmetry(axis) => {
                 let index = match axis {
                     Axis::X => 0,
@@ -723,22 +735,26 @@ impl SculptViewModel {
         }
     }
 
-    /// Catches the ViewModel up after a conversion made the new layer active.
+    /// Catches the ViewModel up with whichever layer is active *now*.
     ///
-    /// A crossing changes the active layer's representation without a
-    /// `SelectLayer` passing through here, so the shelf and the brush would
-    /// otherwise still belong to the layer the sculptor converted *from*.
-    pub fn refresh_after_conversion(&mut self) {
-        self.follow_the_active_layer();
-    }
-
-    /// The same, after the whole document underneath was replaced.
+    /// For the callers that move the active layer without a `SelectLayer`
+    /// passing through `dispatch`, and there are three of them:
     ///
-    /// Opening a file changes every per-subtool setting at once and no
-    /// `SelectLayer` announces it, so the symmetry toggles would go on showing
-    /// the closed document's — which, since a layer mirror cannot be read back
-    /// out of a file, is the one thing the options bar must not claim.
-    pub fn refresh_after_open(&mut self) {
+    /// - a crossing, which adds the converted layer and makes it active, so
+    ///   the shelf and the brush would otherwise still belong to the layer
+    ///   the sculptor converted *from*;
+    /// - opening a file, which changes every per-subtool setting at once —
+    ///   and since a layer mirror cannot be read back out of a file, the
+    ///   symmetry toggles claiming the closed document's is the one thing the
+    ///   options bar must not do;
+    /// - starting a rig, which gives the armature a layer of its own *with
+    ///   symmetry off*, because `add_zsphere` places the reflected node
+    ///   itself. Left showing the previous subtool's mirror, the first
+    ///   ZSphere hung a second arm off the first.
+    ///
+    /// One name rather than one per caller: what they have in common is the
+    /// only thing this does.
+    pub fn refresh_for_active_layer(&mut self) {
         self.follow_the_active_layer();
     }
 

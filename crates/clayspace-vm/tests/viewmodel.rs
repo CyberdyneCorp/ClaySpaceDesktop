@@ -42,6 +42,12 @@ struct FakeModel {
     /// Which row of a hierarchy takes the next stroke, shared so a test can
     /// move the selection the way a sculptor clicking the pass stack does.
     in_a_pass: Rc<Cell<bool>>,
+    /// The active subtool's mirror, which the engine keeps per layer.
+    ///
+    /// Shared so a test can move it the way the document does when the layer
+    /// underneath changes — a rig layer arrives with it off, and a subtool
+    /// switched to carries its own.
+    symmetry: Rc<Cell<[bool; 3]>>,
     editable: bool,
     /// What the next stroke reports.
     outcome: EditOutcome,
@@ -68,6 +74,9 @@ impl FakeModel {
             representation: Rc::new(Cell::new(Representation::Sdf)),
             smooth_mode: Rc::new(Cell::new(clayspace_model::SmoothFrequency::default())),
             in_a_pass: Rc::new(Cell::new(false)),
+            // X on, as the document the engine adapter builds has it and as
+            // the ViewModel starts out showing.
+            symmetry: Rc::new(Cell::new([true, false, false])),
             editable: true,
             outcome: EditOutcome {
                 changed: true,
@@ -116,6 +125,15 @@ impl SculptModel for FakeModel {
 
     fn smooth_mode(&self) -> clayspace_model::SmoothFrequency {
         self.smooth_mode.get()
+    }
+
+    fn symmetry(&self) -> [bool; 3] {
+        self.symmetry.get()
+    }
+
+    fn set_symmetry(&mut self, symmetry: [bool; 3]) -> Result<(), ModelError> {
+        self.symmetry.set(symmetry);
+        Ok(())
     }
 
     fn set_smooth_mode(&mut self, mode: clayspace_model::SmoothFrequency) {
@@ -234,6 +252,32 @@ fn fixture_with_layer_changes() -> (SculptViewModel, Rc<Cell<Representation>>) {
     let model = FakeModel::new(recorded);
     let representation = model.representation.clone();
     (SculptViewModel::new(Box::new(model)), representation)
+}
+
+/// A fixture whose whole active subtool a test can move: what it holds, the
+/// mirror it carries, and the record of what a stroke on it was made with.
+///
+/// The representation and the symmetry move *before* the command reaches the
+/// ViewModel, because that is the order the composition root dispatches in —
+/// the scene ViewModel is what shifts the document's active layer, and every
+/// follower reads the document afterwards.
+#[allow(clippy::type_complexity)]
+fn fixture_with_a_moving_layer() -> (
+    SculptViewModel,
+    Rc<Cell<Representation>>,
+    Rc<Cell<[bool; 3]>>,
+    Rc<RefCell<Recorded>>,
+) {
+    let recorded = Rc::new(RefCell::new(Recorded::default()));
+    let model = FakeModel::new(recorded.clone());
+    let representation = model.representation.clone();
+    let symmetry = model.symmetry.clone();
+    (
+        SculptViewModel::new(Box::new(model)),
+        representation,
+        symmetry,
+        recorded,
+    )
 }
 
 /// A fixture whose hierarchy row a test can move between the form and a pass.
@@ -1095,6 +1139,103 @@ mod following_the_active_layer {
             vm.brush().get().size,
             0.4,
             "the SDF layer's size came back as the voxel layer's"
+        );
+    }
+
+    /// A new layer is a switch, because it arrives active.
+    ///
+    /// `add_layer` activates what it made, through the same call a stack click
+    /// takes. This ViewModel used to ignore `AddLayer` outright, so the brush
+    /// went on holding the settings of the subtool the sculptor was on: from a
+    /// session, `layer add {kind:'grid'}` off a field layer at size 100 made
+    /// the first dab on the grid a metre across.
+    #[test]
+    fn a_new_layer_arrives_with_its_own_brush_rather_than_the_previous_ones() {
+        let (mut vm, representation) = fixture_with_layer_changes();
+        vm.dispatch(Command::SelectTool(ToolKind::Suavizar))
+            .expect("smooth is on both");
+        vm.dispatch(Command::SetBrushSize(0.4))
+            .expect("a field-sized brush");
+
+        representation.set(Representation::Voxel);
+        vm.dispatch(Command::AddLayer(Representation::Voxel))
+            .expect("add");
+
+        assert_ne!(
+            vm.brush().get().size,
+            0.4,
+            "the new grid layer inherited the field layer's brush size, so the \
+             first dab on it was made at the previous subtool's scale"
+        );
+    }
+
+    /// The whole point of the switch being atomic: the *next stroke*.
+    ///
+    /// Measured on the stroke the model was handed rather than on what the
+    /// options bar shows, because the two disagreeing is the defect — a size
+    /// shown that is not the size used is exactly what a sculptor reports as
+    /// "it drew far too big".
+    #[test]
+    fn the_first_stroke_after_a_switch_uses_the_new_layers_brush() {
+        let (mut vm, representation, symmetry, recorded) = fixture_with_a_moving_layer();
+        vm.dispatch(Command::SelectTool(ToolKind::Suavizar))
+            .expect("smooth is on both");
+        vm.dispatch(Command::SetBrushSize(0.4))
+            .expect("a field-sized brush");
+
+        // Away to a grid, which keeps its own size, and back.
+        representation.set(Representation::Voxel);
+        vm.dispatch(Command::SelectLayer(clayspace_model::LayerKey(2)))
+            .expect("select");
+        vm.dispatch(Command::SetBrushSize(0.05))
+            .expect("a cell-sized brush");
+
+        representation.set(Representation::Sdf);
+        symmetry.set([false, true, false]);
+        vm.dispatch(Command::SelectLayer(clayspace_model::LayerKey(1)))
+            .expect("select");
+
+        draw(&mut vm, &[[0.0; 3], [0.1, 0.0, 0.0]]).expect("stroke");
+
+        let recorded = recorded.borrow();
+        let (_, _, mirror, brush) = &recorded.strokes[0];
+        assert_eq!(
+            brush.size, 0.4,
+            "the first stroke after the switch was made with the grid's brush"
+        );
+        assert_eq!(
+            *mirror,
+            [false, true, false],
+            "the first stroke after the switch was made with the grid's mirror"
+        );
+    }
+
+    /// A rig layer arrives with its mirror off, and the options bar has to
+    /// know before the first ZSphere is placed.
+    ///
+    /// `begin_armature` gives the armature a layer of its own and turns that
+    /// layer's symmetry off — `add_zsphere` places the reflected node itself,
+    /// so a layer mirror would reflect the placed item as well. No
+    /// `SelectLayer` announces any of it, which is why the composition root
+    /// asks for the refresh by name.
+    #[test]
+    fn a_new_rig_layer_uses_its_own_symmetry() {
+        let (mut vm, _representation, symmetry, recorded) = fixture_with_a_moving_layer();
+        assert_eq!(
+            *vm.symmetry().get(),
+            [true, false, false],
+            "the fixture starts mirrored, or this measures nothing"
+        );
+
+        symmetry.set([false; 3]);
+        vm.refresh_for_active_layer();
+
+        assert_eq!(*vm.symmetry().get(), [false; 3]);
+        draw(&mut vm, &[[0.0; 3], [0.1, 0.0, 0.0]]).expect("stroke");
+        assert_eq!(
+            recorded.borrow().strokes[0].2,
+            [false; 3],
+            "the first stroke on the rig layer came out mirrored"
         );
     }
 }
