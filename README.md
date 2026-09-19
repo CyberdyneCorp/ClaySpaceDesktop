@@ -26,21 +26,41 @@ task, a macOS re-recording that needs a macOS machine.
 [docs/roadmap.md](docs/roadmap.md) carries the milestone table, what the engine
 currently gets wrong, and what that costs.
 
-**The engine pin now stands at v0.116.0.** Nothing had to change to build
-against it — the symbol diff from v0.113.0 is one addition and zero removals,
-and every struct that grew did so behind the `struct_size` this workspace
-already writes. Two defects it carries were ours to feel rather than to fix:
-a topological move discarded the volume's feather, which put a lattice into
-every drag it made on a field, and the live Move door dropped `gesture_id`, so
-two presses at one anchor folded into one and the first pull was lost.
+**The engine pin now stands at v0.120.0.** Nothing had to change to build
+against it — thirteen symbols added, zero removed, and the one struct that grew
+did so behind the `struct_size` this workspace already writes. What it carries
+is two changes that answer differently to a caller who changes nothing and
+recompiles nothing, with no version gate announcing either.
 
-What a sculptor gets arrives before any of this repository's code does. Picking
-on a worked form is roughly **halved** — 39.30 ms to 19.35 ms for 256 raycasts
-at seven Move dabs — and the declared Lipschitz bound is about 1.5x less
-pessimistic, because the engine stopped over-declaring what a deformed brick
-can reach.
+**A mesh grab now reaches the whole drag**, and it does not change a mark made
+here: the change is in the stroke consumers, and this application sends Grab as
+one stamp at the anchor carrying the whole gesture, for the reason those call
+sites spell out — a resolved stroke walks the brush centre along the path, so a
+drag that leaves the surface reaches no material at all.
 
-What it lets this repository *delete* is the more interesting half. The whole
+**A voxel drag's falloff now means the curve it is named after**, and that one
+does. The grid's grab had been passing the falloff where a curve index was
+expected, so the hard edge this application asks for arrived as a linear taper
+and the drag tapered by accident. A falloff is not a coverage control for a
+drag — the grab is an inverse map, so the weight decides the *pull*, and a hard
+one shoves the whole ball rather than drawing a bulge out of it. Measured on
+the pin move, the rim rose 5 cells against the centre's 6 where it had risen 1
+against 4. The drag now asks for the taper by name, and the mark is the one
+that shipped.
+
+The two paragraphs that follow belong to the **v0.113.0** move and are kept
+because they are the largest thing any pin has bought here. v0.120.0 carries no
+measurement of its own on this machine beyond the drag above: its four
+performance changes are each measured against their own merge base upstream,
+they do not multiply, and none of them is a device number.
+
+What that move gave a sculptor arrived before any of this repository's code
+did. Picking on a worked form is roughly **halved** — 39.30 ms to 19.35 ms for
+256 raycasts at seven Move dabs — and the declared Lipschitz bound is about
+1.5x less pessimistic, because the engine stopped over-declaring what a
+deformed brick can reach.
+
+What it let this repository *delete* is the more interesting half. The whole
 field was re-meshed on every stroke release, purely to hide sliver triangles the
 brick mesher emitted; the engine stopped emitting them, so that went — and with
 it a second re-mesh nobody had counted, because a whole-document mesh cannot be
@@ -77,7 +97,7 @@ report says which part of a document a byte belongs to.
 | Visual captures | ~640 PNGs written to `target/visual/` for looking at — **not** golden images; the visual tests assert properties, because a pixel-exact golden fails on every driver |
 | Dab latency | 2.1 ms median, 4.2 ms p95 on the reference scene · budget 50 / 100 |
 | Startup to first document | 11.4 ms |
-| Engine | ClayCore 0.116.0, pinned to the release tag as a submodule |
+| Engine | ClayCore 0.120.0, pinned to the release tag as a submodule |
 | Sculpting tools | 21 across four representations · 14 SDF, 13 voxel, 17 mesh, 15 on a subdivision hierarchy |
 | Languages | English, Português do Brasil, Español latinoamericano |
 
@@ -114,7 +134,7 @@ carries the spread it was reduced from — the sample count, the minimum, the
 median, the 95th percentile and the maximum — so a change landing inside the
 range the baseline's own samples covered is marked as such rather than read as
 movement; and the conditions name the vendored engine's git revision beside its
-version, because two builds can both say 0.116.0 and differ by a commit. A
+version, because two builds can both say 0.120.0 and differ by a commit. A
 comparison across two engine pins is announced above the table rather than
 refused: refusing would leave an upgrade with no instrument at all. The
 twenty-three figures this pin added — the hierarchy's own group, the deferred
@@ -1371,8 +1391,8 @@ just diagnostics   # or: cargo run -p claycore --example diagnostics
 ```
 
 ```
-engine version   : 0.116.0
-expected ABI     : 0.116.0
+engine version   : 0.120.0
+expected ABI     : 0.120.0
 compiled backends: metal
 registered       : cpu, metal
 ```

@@ -102,22 +102,63 @@ fn how_many_differ(a: &Image, b: &Image) -> usize {
         .count()
 }
 
+/// The highest occupied cell in the column at `x`, in world units.
+///
+/// The slab is deposited along a wobble, so where its top stands at a given
+/// `x` is a property of the fixture rather than a number worth spelling out.
+fn top_at(document: &ClayDocument, x: f32) -> f32 {
+    const CELL: f32 = 0.05;
+    let (_, reader) = document
+        .document()
+        .voxel_reader("Voxels")
+        .expect("the grid reads back");
+    let column = (x / CELL).round() as i32;
+    let mut top = 0;
+    for y in -40..40 {
+        if reader
+            .get([column, y, 0])
+            .expect("a cell reads back")
+            .is_some()
+        {
+            top = top.max(y);
+        }
+    }
+    top as f32 * CELL
+}
+
 fn stroke(document: &mut ClayDocument, tool: ToolKind, invert: bool, symmetry: [bool; 3]) {
+    // Mover pulls the slab UPWARD, off its own surface, and both halves of
+    // that matter.
+    //
+    // A drag along the rod's own axis slides solid material into solid
+    // material and barely moves the silhouette, which is all a picture can see
+    // — it showed up before #139 only because the slab was porous and the
+    // holes travelled with it.
+    //
+    // And the press has to land ON the surface. A grab is an inverse map whose
+    // weight falls to the rim, so an anchor at y = 0 puts the slab's own top
+    // half a ball out, where the weight is ~0: those cells sample themselves,
+    // the silhouette does not move, and the drag reaches the screen not at
+    // all. It read as a working drag until ClayCore v0.120.0 only because the
+    // grab was quietly delivering the next falloff's curve, whose support
+    // reached a shade wider. `voxel_grab_taper.rs` records the same fixture
+    // fault and the same cure, and `voxel_brushes.rs` measures the cells.
+    let dragging = matches!(tool, ToolKind::Mover);
+    let from = if dragging {
+        [0.35, top_at(document, 0.35) + 0.05, 0.0]
+    } else {
+        [0.35, 0.0, 0.0]
+    };
+    let travel = if dragging {
+        [0.0, 0.4, 0.0]
+    } else {
+        [0.4, 0.0, 0.0]
+    };
     let samples: Vec<GestureSample> = (0..9)
         .map(|step| {
             let t = step as f32 / 8.0;
-            // Mover pulls the slab SIDEWAYS. A drag along the rod's own axis
-            // slides solid material into solid material and barely moves the
-            // silhouette, which is all a picture can see — it showed up before
-            // #139 only because the slab was porous and the holes travelled
-            // with it. `voxel_brushes.rs` measures the cells either way.
-            let lift = if matches!(tool, ToolKind::Mover) {
-                t * 0.3
-            } else {
-                0.0
-            };
             GestureSample {
-                position: [0.35 + t * 0.4, lift, 0.0],
+                position: std::array::from_fn(|axis| from[axis] + t * travel[axis]),
                 pressure: 1.0,
                 time: t,
             }

@@ -8150,7 +8150,7 @@ impl ClayDocument {
         let params = if params.mask.is_some() {
             params
         } else {
-            solid_footprint(params)
+            dragging_footprint(params)
         };
         let before = grid.change_count().map_err(ModelError::engine)?;
 
@@ -8531,6 +8531,39 @@ fn solid_footprint(params: BrushParams<'_>) -> BrushParams<'_> {
         falloff: Falloff::Constant,
         strength: 1.0,
         ..params
+    }
+}
+
+/// The footprint a grid DRAG writes: solid, and still tapering.
+///
+/// A drag is the one grid verb for which the falloff is not about coverage.
+/// Every other verb spends its weight by dithering, which is why
+/// [`solid_footprint`] flattens the curve to `Constant` — a hard edge is the
+/// only edge binary occupancy can hold. `clay_voxel_sculpt_grab` is an inverse
+/// map instead: each cell in the ball samples from `p - displacement * w`, so
+/// `w` shapes the PULL. At 1 across the ball the neighbourhood translates
+/// rigidly, which is a block being shoved; falling to the rim it draws the
+/// surface into a bulge, which is what a Move brush is for.
+///
+/// Until ClayCore v0.117.0 the two readings could not be told apart, because
+/// `clay_voxel_sculpt_grab` passed the falloff enum where a curve index was
+/// expected and every name delivered the NEXT one's curve: asking for
+/// `Constant` got Linear, and the drag tapered by accident. v0.120.0 makes the
+/// names honest — `Constant` now weights 1 everywhere inside the ball — and
+/// `voxel_grab_taper.rs` fired on the pin move: at brush 0.4 on a 0.05 grid
+/// the rim rose 5 cells against the centre's 6, where it had risen 1 against
+/// 4, and the drag reached the whole ask up to the ball's radius.
+///
+/// So the drag asks for the curve it always wanted rather than the one it was
+/// accidentally given. Measured either side of the pin on that same fixture,
+/// the mark is the one that shipped: the same 1-against-4 taper, and the same
+/// rise of 1, 2, 3 and 4 cells for drags of 0.05, 0.10, 0.20 and 0.40. The one
+/// difference is the 0.80 drag — twice the brush radius, past where the bulge
+/// has already saturated — which rises 5 cells where it rose 6.
+fn dragging_footprint(params: BrushParams<'_>) -> BrushParams<'_> {
+    BrushParams {
+        falloff: Falloff::Linear,
+        ..solid_footprint(params)
     }
 }
 
