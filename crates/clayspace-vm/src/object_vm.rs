@@ -133,7 +133,22 @@ pub struct ObjectViewModel {
     /// which is what makes a wandering drag land where it settles rather than
     /// accumulating.
     drag: Option<(GizmoDrag, Transform)>,
+    /// Where the document's history stood when the drag in flight began.
+    ///
+    /// A drag is one thing the sculptor did — press to release — however many
+    /// frames fed it, so what it cost is measured across the whole gesture
+    /// rather than banked per frame. The same line
+    /// [`crate::SculptViewModel`] takes for a stroke, and for the same reason:
+    /// the engine groups the frames underneath and the count that comes out is
+    /// not the number of calls that went in.
+    ///
+    /// `None` when no drag is open.
+    drag_floor: Option<usize>,
     notice: Observable<Option<String>>,
+    /// What the placed forms and the manipulator have cost the history, one
+    /// count per action, waiting for the ViewModel that owns Cmd+Z to bank
+    /// them. See [`crate::Unbanked`].
+    unbanked: crate::Unbanked,
 }
 
 impl ObjectViewModel {
@@ -156,10 +171,12 @@ impl ObjectViewModel {
             mesh_operands: Observable::new(Vec::new()),
             mesh_cost: Observable::new(None),
             drag: None,
+            drag_floor: None,
             pending: None,
             settling: false,
             placement: None,
             notice: Observable::new(None),
+            unbanked: crate::Unbanked::default(),
         }
     }
 
@@ -205,6 +222,17 @@ impl ObjectViewModel {
     /// whether the press that raised a refusal went on to do something else.
     pub fn clear_notice(&mut self) {
         self.notice.set_if_changed(None);
+    }
+
+    /// What the placed forms and the manipulator have cost the history, one
+    /// count per action.
+    ///
+    /// Taken rather than read, for the reason
+    /// [`crate::MaskViewModel::take_unbanked_actions`] is taken: the ViewModel
+    /// that owns Cmd+Z banks each count as one action, and a count banked
+    /// twice is one undo too many.
+    pub fn take_unbanked_actions(&mut self) -> Vec<usize> {
+        self.unbanked.take()
     }
 
     /// What a ray meets, and why it carries no manipulator when it is not an
@@ -438,7 +466,7 @@ impl ObjectViewModel {
                 let Some(id) = *self.selected.get() else {
                     return;
                 };
-                self.report(|model| model.set_object_shape(id, *shape, values));
+                self.edit(|model| model.set_object_shape(id, *shape, values));
                 self.refresh();
             }
             Command::SetObjectCombine(combine) => {
@@ -449,14 +477,14 @@ impl ObjectViewModel {
                 let Some(id) = *self.selected.get() else {
                     return;
                 };
-                self.report(|model| model.set_object_combine(id, sanitised));
+                self.edit(|model| model.set_object_combine(id, sanitised));
                 self.refresh();
             }
             Command::RemoveObject => {
                 let Some(id) = *self.selected.get() else {
                     return;
                 };
-                self.report(|model| model.remove_object(id));
+                self.edit(|model| model.remove_object(id));
                 self.target.set(None);
                 self.refresh();
             }
@@ -541,29 +569,20 @@ impl ObjectViewModel {
             *self.combine.get(),
         );
         let at = self.placement.unwrap_or([0.0; 3]);
-        match self
-            .model
-            .insert_shape_subtool(shape, &parameters, at, combine)
+        if let Some(inserted) =
+            self.edit(|model| model.insert_shape_subtool(shape, &parameters, at, combine))
         {
-            Ok(inserted) => {
-                self.notice.set_if_changed(None);
-                // The manipulator on the whole subtool rather than on the item
-                // inside it: what arrived is a form to stand somewhere, and the
-                // sculptor's next gesture is aiming it.
-                self.target.set(Some(GizmoTarget::Layer(inserted.layer)));
-            }
-            Err(e) => self.notice.set(Some(e.to_string())),
+            // The manipulator on the whole subtool rather than on the item
+            // inside it: what arrived is a form to stand somewhere, and the
+            // sculptor's next gesture is aiming it.
+            self.target.set(Some(GizmoTarget::Layer(inserted.layer)));
         }
     }
 
     /// An honest copy of a subtool already in the scene.
     fn copy(&mut self, from: clayspace_model::LayerKey) {
-        match self.model.copy_subtool(from, Self::OPERAND_CELL) {
-            Ok(inserted) => {
-                self.notice.set_if_changed(None);
-                self.target.set(Some(GizmoTarget::Layer(inserted.layer)));
-            }
-            Err(e) => self.notice.set(Some(e.to_string())),
+        if let Some(inserted) = self.edit(|model| model.copy_subtool(from, Self::OPERAND_CELL)) {
+            self.target.set(Some(GizmoTarget::Layer(inserted.layer)));
         }
         self.refresh();
     }
@@ -585,18 +604,13 @@ impl ObjectViewModel {
         // A mesh operand where one is chosen, and the picked shape otherwise.
         // The crossing's costs were stated when it was chosen; this is the
         // consent.
-        let placed = match *self.mesh_operand.get() {
-            Some(from) => self
-                .model
-                .place_mesh_object(from, Self::OPERAND_CELL, at, combine),
-            None => self.model.place_object(shape, &parameters, at, combine),
-        };
-        match placed {
-            Ok(id) => {
-                self.notice.set_if_changed(None);
-                self.target.set(Some(GizmoTarget::Object(id)));
-            }
-            Err(e) => self.notice.set(Some(e.to_string())),
+        let operand = *self.mesh_operand.get();
+        let placed = self.edit(|model| match operand {
+            Some(from) => model.place_mesh_object(from, Self::OPERAND_CELL, at, combine),
+            None => model.place_object(shape, &parameters, at, combine),
+        });
+        if let Some(id) = placed {
+            self.target.set(Some(GizmoTarget::Object(id)));
         }
     }
 
@@ -607,6 +621,14 @@ impl ObjectViewModel {
         let Some(at) = self.model.target_transform(target) else {
             return;
         };
+        // Read before the gesture opens anything, so the whole of what the
+        // drag writes falls above the line. A press arriving with a gesture
+        // still open continues that line rather than moving it: the entries
+        // the unclosed one wrote are still owed, and a floor moved past them
+        // would leave them for somebody else's undo to spend.
+        if self.drag_floor.is_none() {
+            self.drag_floor = Some(self.model.history_depth());
+        }
         self.model.begin_target_drag(target);
         self.pending = None;
         self.settling = false;
@@ -636,7 +658,7 @@ impl ObjectViewModel {
         }
 
         let began = std::time::Instant::now();
-        self.report(|model| model.set_target_transform(target, moved));
+        self.edit(|model| model.set_target_transform(target, moved));
         // Measured rather than assumed: whether a live boolean keeps up
         // depends on the form, and a fixed answer would be wrong on half of
         // them.
@@ -652,25 +674,61 @@ impl ObjectViewModel {
         let target = *self.target.get();
         // What the hand asked for, applied once now that it has stopped.
         if let (Some(target), Some(pending)) = (target, self.pending.take()) {
-            self.report(|model| model.set_target_transform(target, pending));
+            self.edit(|model| model.set_target_transform(target, pending));
         }
         self.settling = false;
         if self.drag.take().is_some() {
             self.model.end_target_drag();
         }
+        // The gesture is over, so it is banked: one action from press to
+        // release, measured from the depth the press read rather than counted
+        // from the frames. The engine groups the frames underneath into one
+        // entry, and a count taken per frame would be thirty undos for one
+        // push of an arrow — or, where a frame overran and the document was
+        // left until the release, one undo for a drag that wrote two entries.
+        if let Some(floor) = self.drag_floor.take() {
+            self.unbanked.record(floor, self.model.history_depth());
+        }
         self.refresh();
     }
 
-    /// Carries a refusal to the status area rather than dropping it.
-    fn report(
+    /// Applies one change to what is placed, carries a refusal to the status
+    /// area rather than dropping it, and banks what the change cost as one
+    /// action.
+    ///
+    /// **Every entry point here that writes comes through this**, which is the
+    /// point of it: a command added without a history entry is a defect nobody
+    /// sees until an undo takes back something else. Measured before this
+    /// existed — insert a shape as a subtool, bend it, one undo — the undo
+    /// spent the previous command's count and the subtool left the document.
+    ///
+    /// What the change cost is read from the history either side rather than
+    /// assumed to be one, because inserting a shape as a subtool of its own is
+    /// a layer and an item together and a copy is a bake beside a layer. A
+    /// refusal moves nothing and so banks nothing, without having to say so.
+    ///
+    /// A frame of a manipulator drag is the one write that does not bank here.
+    /// A drag is one thing the sculptor did from press to release, so it is
+    /// measured across the whole gesture in [`ObjectViewModel::end`] — banking
+    /// per frame would be thirty undos for one push of an arrow.
+    fn edit<T>(
         &mut self,
-        act: impl FnOnce(&mut dyn ObjectModel) -> Result<(), clayspace_model::ModelError>,
-    ) {
-        match act(self.model.as_mut()) {
-            Ok(()) => {
+        act: impl FnOnce(&mut dyn ObjectModel) -> Result<T, clayspace_model::ModelError>,
+    ) -> Option<T> {
+        let before = self.model.history_depth();
+        let outcome = act(self.model.as_mut());
+        if self.drag_floor.is_none() {
+            self.unbanked.record(before, self.model.history_depth());
+        }
+        match outcome {
+            Ok(value) => {
                 self.notice.set_if_changed(None);
+                Some(value)
             }
-            Err(e) => self.notice.set(Some(e.to_string())),
+            Err(e) => {
+                self.notice.set(Some(e.to_string()));
+                None
+            }
         }
     }
 }

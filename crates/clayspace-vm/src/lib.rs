@@ -9,6 +9,7 @@
 pub mod agent_vm;
 pub mod armature_vm;
 mod bake_vm;
+mod banked;
 pub mod boolean_vm;
 pub mod command;
 mod conform_vm;
@@ -30,6 +31,7 @@ mod uv_vm;
 
 pub use agent_vm::{AgentAnswer, AgentAsk, AgentGate, AgentViewModel, Door};
 pub use bake_vm::{BakeViewModel, Snapshotter};
+pub use banked::Unbanked;
 pub use command::{Axis, Command, CommandQueue};
 pub use conform_vm::ConformViewModel;
 pub use history_vm::HistoryViewModel;

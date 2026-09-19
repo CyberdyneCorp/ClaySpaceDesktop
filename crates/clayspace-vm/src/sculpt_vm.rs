@@ -126,19 +126,18 @@ pub struct SculptViewModel {
     undo_stack: Vec<usize>,
     /// The same counts for actions that have been undone.
     redo_stack: Vec<usize>,
-    /// Entries the gesture in progress has produced so far.
-    gesture_entries: usize,
     /// Where the model's history stood when the gesture in progress opened.
     ///
-    /// Cancelling must take back the open gesture and nothing underneath it,
-    /// and the count above does not say where that line is. It counts one
-    /// entry per applied segment, which is what a field gesture records — but
-    /// a mesh gesture is previewed while it is made and banked as a *single*
-    /// record however many segments drew it. Spending one undo per segment
-    /// there took back the first undo's worth of gesture and then kept going:
-    /// the gestures committed before it, and on a layer that had only just
-    /// been made, the layer itself. Cancel was the most destructive command in
-    /// the mesh path.
+    /// What a gesture cost is the distance from this line to where the history
+    /// stands when the gesture ends — however it ends. Counting the segments
+    /// instead was the defect: a segment is one entry on a field, and a mesh
+    /// gesture is previewed while it is made and banked as a *single* record
+    /// however many segments drew it. A three-segment mesh gesture therefore
+    /// banked three, and one Cmd+Z after it walked back the gesture and then
+    /// whatever was underneath — the gestures committed before it, and on a
+    /// layer that had only just been made, the layer itself. Cancel spent the
+    /// same wrong number and was the most destructive command in the mesh
+    /// path.
     ///
     /// The depth the gesture started from is the line, and it is the same line
     /// whatever the representation chose to write above it — one record or
@@ -146,13 +145,10 @@ pub struct SculptViewModel {
     /// with nothing to cancel a no-op rather than an undo of whatever came
     /// last.
     gesture_floor: Option<usize>,
-    /// Entries the call being recorded produced, as counted from the model.
-    pending_entries: usize,
     /// Whether the gesture in progress is being shown as it is made.
     ///
-    /// A live gesture writes nothing to the document until it closes, so its
-    /// segments record no history and the count that an undo spends is the
-    /// commit's alone.
+    /// A live gesture writes nothing to the document until it closes, so the
+    /// segments are not held whole and the commit is where the record lands.
     live: bool,
 }
 
@@ -195,10 +191,8 @@ impl SculptViewModel {
             stroke: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
-            gesture_entries: 0,
             gesture_floor: None,
             live: false,
-            pending_entries: 1,
         };
         vm.refresh_tool_status();
         vm
@@ -298,7 +292,6 @@ impl SculptViewModel {
     pub fn forget_history(&mut self) {
         self.undo_stack.clear();
         self.redo_stack.clear();
-        self.gesture_entries = 0;
         self.gesture_floor = None;
         self.stroke = None;
         self.publish_history();
@@ -581,7 +574,6 @@ impl SculptViewModel {
                 // lay the whole gesture down again from its anchor — instead of
                 // stacking segment on segment.
                 self.model.begin_gesture();
-                self.gesture_entries = 0;
                 let mut stroke = ActiveStroke::default();
                 stroke.push(position, pressure);
                 self.stroke = Some(stroke);
@@ -980,16 +972,9 @@ impl SculptViewModel {
         if pending.len() < enough {
             return Ok(());
         }
-        // Counted from the model rather than assumed to be one. A call can
-        // record more than one entry — setting the layer mirror is its own,
-        // and it happens inside the first segment that uses a new symmetry.
-        // Undoing a gesture has to spend every entry it made, or the parts it
-        // misses stay behind.
-        let before = self.model.history().depth;
         let outcome =
             self.model
                 .apply_stroke(tool, self.stroking_brush(), pending, *self.symmetry.get());
-        let recorded = self.model.history().depth.saturating_sub(before);
 
         // Marked applied whether or not the engine accepted them. Re-sending a
         // segment the engine already refused would refuse again every frame,
@@ -997,7 +982,6 @@ impl SculptViewModel {
         if let Some(stroke) = self.stroke.as_mut() {
             stroke.mark_applied();
         }
-        self.pending_entries = recorded;
 
         self.record(tool, outcome?);
         Ok(())
@@ -1024,12 +1008,16 @@ impl SculptViewModel {
         applied.and(closed)
     }
 
-    /// Installs what a live gesture previewed, banking what it recorded.
+    /// Installs what a live gesture previewed.
+    ///
+    /// What it recorded is not counted here. The gesture is measured from the
+    /// depth it opened at, which already includes whatever the commit wrote —
+    /// see [`SculptViewModel::gesture_floor`].
     fn close_live_gesture(&mut self) -> Result<(), ModelError> {
         if !std::mem::take(&mut self.live) {
             return Ok(());
         }
-        self.gesture_entries += self.model.close_live_gesture()?;
+        let _recorded = self.model.close_live_gesture()?;
         Ok(())
     }
 
@@ -1070,9 +1058,6 @@ impl SculptViewModel {
     /// see [`SculptViewModel::gesture_floor`] for why those two numbers are
     /// not the same on a mesh, and what spending the wrong one destroyed.
     fn abandon_gesture(&mut self, floor: usize) -> Result<(), ModelError> {
-        // Dropped rather than spent. Whatever the segments were counted as,
-        // the gesture is over and nothing else may bank them.
-        self.gesture_entries = 0;
         let owed = self.model.history().depth.saturating_sub(floor);
         let mut reverted = 0;
         for _ in 0..owed {
@@ -1124,12 +1109,22 @@ impl SculptViewModel {
     }
 
     /// Banks the gesture's entries as one undoable action.
+    ///
+    /// Measured from the depth the gesture opened at rather than counted from
+    /// the segments, for the reason a cancel is — the two numbers are not the
+    /// same, and see [`SculptViewModel::gesture_floor`] for what spending the
+    /// wrong one destroyed. A gesture that wrote nothing banks nothing, which
+    /// is how a stroke that landed on no clay stops being something to take
+    /// back: what the stroke *wrote* decides it, not where it started, so a
+    /// dab that deposited a blob off the surface is still one entry.
     fn close_gesture(&mut self) {
         // The gesture is over, so the depth it was measured from goes with it:
         // a cancel arriving after the release has nothing of its own left to
         // take back.
-        self.gesture_floor = None;
-        let entries = std::mem::take(&mut self.gesture_entries);
+        let Some(floor) = self.gesture_floor.take() else {
+            return;
+        };
+        let entries = self.model.history().depth.saturating_sub(floor);
         if entries > 0 {
             self.undo_stack.push(entries);
             self.publish_history();
@@ -1161,18 +1156,10 @@ impl SculptViewModel {
         }
         self.pending_remesh
             .update(|pending| *pending += outcome.dirty_bricks);
-        // A live segment writes nothing to the document, so the floor of one
-        // that every other edit needs would invent an entry per dab and an
-        // undo would then spend history the gesture never wrote.
-        let counted = std::mem::replace(&mut self.pending_entries, 1);
-        let entries = if self.live { counted } else { counted.max(1) };
-        if self.stroke.is_some() {
-            // Part of a gesture in progress; it is banked when the gesture
-            // closes so the whole thing undoes together.
-            self.gesture_entries += entries;
-        } else {
-            self.undo_stack.push(entries);
-        }
+        // Nothing is banked here. A segment is part of a gesture in progress,
+        // and what the whole gesture cost is measured when it closes — see
+        // `close_gesture`.
+        //
         // Anything new makes the redone future unreachable, which is what
         // every editor does and what the engine does underneath.
         self.redo_stack.clear();

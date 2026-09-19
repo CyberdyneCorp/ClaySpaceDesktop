@@ -552,6 +552,88 @@ fn cancel_on_a_fresh_mesh_layer_keeps_the_layer() {
     );
 }
 
+/// A *committed* mesh gesture is one undo, not one per segment.
+///
+/// The sibling of the cancel defect, on the other side of the same arithmetic
+/// and found while fixing it: the count banked at the release was one per
+/// applied segment, which is the number a field gesture records and not the
+/// number a mesh one does. So one Cmd+Z after a three-segment mesh gesture
+/// walked the model's history back by three — the gesture, and then whatever
+/// was underneath it. Measured against this double before the fix: the gesture
+/// banked 3 and one undo took the history to 0, which on a fresh layer is the
+/// layer.
+#[test]
+fn a_committed_mesh_gesture_undoes_as_one_record() {
+    let (mut vm, recorded) = mesh_fixture();
+    draw(&mut vm, &[[0.0; 3], [0.1, 0.0, 0.0], [0.2, 0.0, 0.0]]).expect("gesture");
+    assert!(
+        recorded.borrow().strokes.len() > 1,
+        "the gesture was not segmented, so a per-segment count could not have \
+         been wrong and this proves nothing"
+    );
+    assert_eq!(
+        vm.history().get().depth,
+        1,
+        "one gesture is one thing to take back"
+    );
+
+    vm.dispatch(Command::Undo).expect("undo");
+    let seen = recorded.borrow();
+    assert_eq!(
+        seen.undos, 1,
+        "a mesh gesture is one record, so one Cmd+Z is one undo"
+    );
+    assert_eq!(
+        seen.shallowest,
+        Some(THE_LAYER),
+        "the undo reached past the gesture and took the layer with it"
+    );
+}
+
+/// The field path is unchanged by the same measurement: a gesture that records
+/// an entry per segment still costs one Cmd+Z, and that Cmd+Z spends every
+/// entry the gesture made.
+#[test]
+fn a_committed_field_gesture_still_spends_every_entry_it_made() {
+    let (mut vm, recorded) = fixture();
+    draw(&mut vm, &[[0.0; 3], [0.5, 0.0, 0.0], [1.0, 0.0, 0.0]]).expect("gesture");
+    let segments = recorded.borrow().strokes.len();
+    assert!(segments > 1, "the gesture was not segmented");
+    assert_eq!(vm.history().get().depth, 1);
+
+    vm.dispatch(Command::Undo).expect("undo");
+    let seen = recorded.borrow();
+    assert_eq!(
+        seen.undos, segments,
+        "a field gesture is an entry per segment, and one Cmd+Z owes every one"
+    );
+    assert_eq!(seen.shallowest, Some(THE_LAYER));
+}
+
+/// A stroke the document recorded nothing for is nothing to take back.
+///
+/// Decided from what the stroke *wrote* rather than from where it started: a
+/// dab that landed off the surface can still deposit a blob, and that blob is
+/// an edit. What it must not do is bank an entry when the document came out
+/// byte-identical, which left the history offering a "Padrão" to undo that
+/// undid nothing the sculptor could see.
+#[test]
+fn a_gesture_that_wrote_nothing_is_not_something_to_undo() {
+    let (mut vm, _) = fixture_with(|model| {
+        model.outcome = EditOutcome {
+            changed: false,
+            dirty_bricks: 0,
+        };
+    });
+    draw(&mut vm, &[[0.0; 3], [0.5, 0.0, 0.0], [1.0, 0.0, 0.0]]).expect("gesture");
+    assert_eq!(
+        vm.history().get().depth,
+        0,
+        "a stroke that changed nothing was banked as something to take back"
+    );
+    assert!(!vm.history().get().can_undo);
+}
+
 /// A cancel with nothing open changes nothing, and says so.
 ///
 /// An agent may repeat one safely — the interface sends a release whether or

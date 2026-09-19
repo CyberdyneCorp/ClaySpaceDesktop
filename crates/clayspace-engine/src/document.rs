@@ -9245,6 +9245,12 @@ fn hierarchy_verb(tool: ToolKind) -> Option<claycore::MeshBrush> {
 const _: fn(Operation) -> &'static str = Operation::label;
 
 impl SceneModel for ClayDocument {
+    /// The history the interface counts, which is the one these operations
+    /// are banked on. See [`ClayDocument::history_depth`].
+    fn history_depth(&self) -> usize {
+        ClayDocument::history_depth(self)
+    }
+
     fn scene(&self) -> Scene {
         // The tree mirrors the layer list for now: the engine's group
         // structure is reachable through the C ABI but the document here
@@ -11674,6 +11680,12 @@ impl ClayDocument {
 }
 
 impl LatticeModel for ClayDocument {
+    /// The history the interface counts, which is the one these operations
+    /// are banked on. See [`ClayDocument::history_depth`].
+    fn history_depth(&self) -> usize {
+        ClayDocument::history_depth(self)
+    }
+
     fn lattice(&self) -> LatticeState {
         let Some(cage) = self.lattice.as_ref() else {
             return LatticeState::default();
@@ -12228,11 +12240,25 @@ impl ClayDocument {
     }
 }
 
+impl ClayDocument {
+    /// How many things the history holds, as the interface counts them.
+    ///
+    /// The one number every ViewModel that writes to the document measures
+    /// against, whichever interface it reaches the document through: a
+    /// sculptor has one Cmd+Z and does not care which part of the application
+    /// produced the thing they want back. Inherent as well as forwarded by the
+    /// four traits that ask for it, so a caller holding the document itself
+    /// has one unambiguous answer.
+    pub fn history_depth(&self) -> usize {
+        SculptModel::history(self).depth
+    }
+}
+
 impl MaskModel for ClayDocument {
     /// The history the interface counts, which is the one a mask edit is
-    /// banked on. See [`SculptModel::history`].
+    /// banked on. See [`ClayDocument::history_depth`].
     fn history_depth(&self) -> usize {
-        SculptModel::history(self).depth
+        ClayDocument::history_depth(self)
     }
 
     fn mask_state(&self) -> MaskState {
@@ -14382,6 +14408,12 @@ impl ClayDocument {
 }
 
 impl ObjectModel for ClayDocument {
+    /// The history the interface counts, which is the one these operations
+    /// are banked on. See [`ClayDocument::history_depth`].
+    fn history_depth(&self) -> usize {
+        ClayDocument::history_depth(self)
+    }
+
     fn objects(&mut self) -> Vec<clayspace_model::SceneObject> {
         let Ok((key, layer)) = self.layer_for_objects() else {
             return Vec::new();
