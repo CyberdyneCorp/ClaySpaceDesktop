@@ -71,8 +71,7 @@ impl ArmatureModel for FakeRig {
 
     fn resize_zsphere(&mut self, index: NodeIndex, radius: f32) -> Result<(), ModelError> {
         let tree = self.tree.as_mut().ok_or_else(no_rig)?;
-        tree.set_radius(index, radius);
-        Ok(())
+        tree.set_radius(index, radius)
     }
 
     fn reparent_zsphere(
@@ -646,4 +645,52 @@ fn a_sphere_is_put_on_a_link_when_one_is_asked_for() {
     let after = vm.tree().get().clone().expect("a tree").nodes.len();
     assert_eq!(after, before + 1, "nothing was inserted");
     assert_eq!(*vm.selected().get(), Some((after - 1) as NodeIndex));
+}
+
+#[test]
+fn resize_on_a_missing_sphere_is_refused() {
+    // Silence was the expensive answer. Every rig edit rewrites the whole
+    // armature into the document, so a resize of a sphere nobody has still
+    // banked an undo entry — one that changed nothing, and that the next ⌘Z
+    // was then spent on instead of the sculptor's last real edit.
+    let mut vm = rigged();
+    let before = vm.tree().get().clone().expect("a tree");
+
+    vm.resize(7, 0.5);
+
+    assert!(
+        vm.notice().get().is_some(),
+        "a resize of a sphere that is not there said nothing"
+    );
+    assert_eq!(
+        vm.tree().get().clone().expect("a tree"),
+        before,
+        "the refused resize still moved the tree"
+    );
+}
+
+#[test]
+fn reparent_of_a_missing_sphere_is_refused() {
+    // Both ends of it. The parent was already checked; the sphere being hung
+    // fell through every guard and changed nothing, while the rewrite above
+    // it banked an entry all the same.
+    let mut vm = rigged();
+    let before = vm.tree().get().clone().expect("a tree");
+
+    vm.reparent(7, 0);
+    assert!(
+        vm.notice().get().is_some(),
+        "hanging a sphere that is not there said nothing"
+    );
+
+    vm.reparent(1, 7);
+    assert!(
+        vm.notice().get().is_some(),
+        "hanging a sphere from one that is not there said nothing"
+    );
+    assert_eq!(
+        vm.tree().get().clone().expect("a tree"),
+        before,
+        "a refused reparent still moved the tree"
+    );
 }

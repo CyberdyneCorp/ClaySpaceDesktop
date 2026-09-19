@@ -938,6 +938,30 @@ struct Crossing {
     steps: usize,
 }
 
+/// One move of the skin thickness, and the engine entry the rewrite it forced
+/// left behind.
+///
+/// Thickness is not in the document. The engine is handed radii with it
+/// already applied, so changing it rewrites every placed radius — one engine
+/// entry, which undo reverts exactly — while the multiplier itself stays on
+/// this side, where undo cannot reach it. Left at that, a step back over the
+/// rewrite put the *old* radii under the *new* thickness, and
+/// [`ClayDocument::read_armature`] divided one by the other: the thickness
+/// change was not undoable and the tree it left behind was wrong.
+///
+/// So the change is noted against the stamp of the entry it made, the way a
+/// crossing is, and a step over that entry carries the multiplier with it.
+/// Not an [`Undoable`]: the entry is an ordinary engine edit and the engine
+/// takes it back itself. What this adds is the half the engine never had.
+struct SkinChange {
+    /// The stamp on the engine entry the rewrite left, which is what says the
+    /// entry a step just crossed is this change rather than something else.
+    /// See [`ClayDocument::history_seq`].
+    stamp: u64,
+    before: SkinSettings,
+    after: SkinSettings,
+}
+
 /// A layer shown alone, and what the rest looked like before it was.
 ///
 /// The snapshot is the whole of what a release needs: the engine's contract is
@@ -1424,7 +1448,14 @@ pub struct ClayDocument {
     /// Hands out layer keys. Monotone, so a key is never reused for a
     /// different layer after a removal.
     next_key: u64,
+    /// How much the placed radii are scaled by, for the rigs in this document.
     skin: SkinSettings,
+    /// The thickness changes the engine's undo stack still holds, oldest
+    /// first, and the mirror of what has been taken back.
+    ///
+    /// See [`SkinChange`].
+    skin_undo: Vec<SkinChange>,
+    skin_redo: Vec<SkinChange>,
     /// The placed objects, and everything about them the engine will not read
     /// back. See `crate::objects` for why this exists at all.
     objects: Vec<PlacedObject>,
@@ -1537,6 +1568,8 @@ impl ClayDocument {
             mask_revision: 0,
             next_key: 2,
             skin: SkinSettings::default(),
+            skin_undo: Vec::new(),
+            skin_redo: Vec::new(),
             objects: Vec::new(),
             selected_object: None,
             dragging: None,
@@ -2189,10 +2222,12 @@ impl ClayDocument {
     /// The bookkeeping either direction needs: the scene changed shape, and
     /// what the layer covered is stale either way.
     fn after_crossing_history(&mut self) -> Result<bool, ModelError> {
+        let rigged = self.rigged_layers();
         self.reconcile_layers();
         let layer = self.active_layer().id;
         self.refill(layer, &[])?;
-        self.resync_armature();
+        self.resync_armature(&rigged);
+        self.resync_curve();
         Ok(true)
     }
 
@@ -2480,13 +2515,22 @@ impl ClayDocument {
             Some(Undoable::Crossing) => return self.undo_crossing(),
             _ => {}
         }
+        // The entry about to be taken back, noted before it is: a thickness
+        // change is an ordinary engine entry, and this is the only moment
+        // anything can tell which one it is.
+        let crossing = self.engine_top_stamp();
+        let rigged = self.rigged_layers();
         let stepped = self.document.undo_bound().map_err(ModelError::engine)?;
         let moved = stepped.moved;
         self.engine_marks_stepped_back();
         if moved {
             self.reconcile_layers();
             self.refill_what_a_step_reached(stepped.reached)?;
-            self.resync_armature();
+            // Before the rigs are re-read, because what they are read through
+            // is the thickness this restores. See [`SkinChange`].
+            self.step_skin_back(crossing);
+            self.resync_armature(&rigged);
+            self.resync_curve();
             // The engine reverted whatever it reverted and cannot tell the
             // object table it did; the table follows by depth, and so does
             // where each layer stands.
@@ -2513,13 +2557,19 @@ impl ClayDocument {
             Some(Undoable::Crossing) => return self.redo_crossing(),
             _ => {}
         }
+        let rigged = self.rigged_layers();
         let stepped = self.document.redo_bound().map_err(ModelError::engine)?;
         let moved = stepped.moved;
         self.engine_marks_stepped_forward();
         if moved {
             self.reconcile_layers();
             self.refill_what_a_step_reached(stepped.reached)?;
-            self.resync_armature();
+            // The entry just put back is the engine's newest again, so asking
+            // now is asking about the one this step crossed.
+            let crossed = self.engine_top_stamp();
+            self.step_skin_forward(crossed);
+            self.resync_armature(&rigged);
+            self.resync_curve();
             // The engine reverted whatever it reverted and cannot tell the
             // object table it did; the table follows by depth, and so does
             // where each layer stands.
@@ -7374,6 +7424,7 @@ impl ClayDocument {
         self.mesh_redo.clear();
         self.crossing_redo.clear();
         self.visibility_redo.clear();
+        self.skin_redo.clear();
         self.engine_redo_marks.clear();
     }
 
@@ -7388,12 +7439,17 @@ impl ClayDocument {
         let Some(&oldest) = self.engine_undo_marks.first() else {
             self.crossing_undo.clear();
             self.visibility_undo.clear();
+            self.skin_undo.clear();
             return;
         };
         self.crossing_undo
             .retain(|crossing| crossing.stamp >= oldest);
         self.visibility_undo
             .retain(|gesture| gesture.stamps.first().is_some_and(|&first| first >= oldest));
+        // A thickness change is named by an engine entry in the same way, so
+        // it goes when the entry does: the rewrite is no longer reachable, and
+        // the multiplier the document is at now is the one it keeps.
+        self.skin_undo.retain(|change| change.stamp >= oldest);
     }
 
     /// Follows the engine back over the entries a step has just reverted.
@@ -7429,6 +7485,43 @@ impl ClayDocument {
             };
             self.engine_undo_marks.push(mark);
         }
+    }
+
+    /// Puts the skin thickness back when the entry a step has just taken back
+    /// is the rewrite a thickness change forced.
+    ///
+    /// `undone` is the stamp the engine's newest entry carried *before* the
+    /// step, which is the entry the step crossed. See [`SkinChange`].
+    fn step_skin_back(&mut self, undone: u64) {
+        if self
+            .skin_undo
+            .last()
+            .is_none_or(|last| last.stamp != undone)
+        {
+            return;
+        }
+        let Some(change) = self.skin_undo.pop() else {
+            return;
+        };
+        self.skin = change.before;
+        self.skin_redo.push(change);
+    }
+
+    /// The mirror: `crossed` is the stamp the entry a redo has just put back
+    /// carries, which is the engine's newest again.
+    fn step_skin_forward(&mut self, crossed: u64) {
+        if self
+            .skin_redo
+            .last()
+            .is_none_or(|next| next.stamp != crossed)
+        {
+            return;
+        }
+        let Some(change) = self.skin_redo.pop() else {
+            return;
+        };
+        self.skin = change.after;
+        self.skin_undo.push(change);
     }
 
     /// Which history holds the newest thing, asked once.
@@ -8829,6 +8922,15 @@ struct Curve {
     profile: CurveProfile,
     /// The placed sweep, once there are enough points to have one.
     node: Option<claycore::NodeId>,
+    /// The sweep's id while history has the sweep itself taken back.
+    ///
+    /// Undoing past the step that placed it removes the node, and `node` has
+    /// to let go: the next edit would otherwise write a guide into a node the
+    /// document no longer holds. The id is kept here rather than forgotten
+    /// because ClayCore hands the same one back when the step is redone — so
+    /// a curve that forgot it would place a *second* sweep beside the one that
+    /// returned, and the sculptor would be editing one of two identical tubes.
+    undone: Option<claycore::NodeId>,
     /// Control points the engine was last given.
     ///
     /// What lets an appended point dirty the end it added instead of every
@@ -10527,6 +10629,8 @@ impl ClayDocument {
             recording_pass: false,
             next_key,
             skin: SkinSettings::default(),
+            skin_undo: Vec::new(),
+            skin_redo: Vec::new(),
             objects: Vec::new(),
             selected_object: None,
             dragging: None,
@@ -10612,7 +10716,7 @@ impl ClayDocument {
         // second one no longer overwrites the first.
         let mut first_rig = None;
         for (index, id) in ids.into_iter().enumerate() {
-            let Some((node, tree)) = Self::recover_armature(&model.document, id) else {
+            let Some((node, tree)) = Self::recover_armature(&model.document, id, model.skin) else {
                 continue;
             };
             model.layers[index].armature_bounds = Some(Self::armature_bounds(&tree, model.skin));
@@ -11044,6 +11148,7 @@ impl CurveModel for ClayDocument {
             join: CurveJoin::default(),
             profile: CurveProfile::default(),
             node: None,
+            undone: None,
             sent: 0,
         });
     }
@@ -11318,6 +11423,9 @@ impl ClayDocument {
         let sent = guide.len() / 4;
         if let Some(curve) = self.curve.as_mut() {
             curve.node = Some(node);
+            // A sweep placed afresh is the one the curve has now, whatever id
+            // an earlier one of its own was taken back under.
+            curve.undone = None;
             curve.sent = sent;
         }
         self.refill(layer, &[node])
@@ -11533,6 +11641,10 @@ impl ClayDocument {
         let Some(node) = curve.node.take() else {
             return Ok(());
         };
+        // Removing a node is itself journaled, so a step back over this
+        // removal puts the sweep back under the id it had. Remembered for the
+        // same reason a history step remembers it. See [`Curve::undone`].
+        curve.undone = Some(node);
         let key = curve.layer;
         let index = self.index_of(key)?;
         let layer = self.layers[index].id;
@@ -12502,7 +12614,7 @@ impl ArmatureModel for ClayDocument {
         let Some((_, tree)) = self.layers[self.active].armature.as_mut() else {
             return Err(ModelError::engine("não há armadura nesta camada"));
         };
-        tree.set_radius(index, radius);
+        tree.set_radius(index, radius)?;
         self.rewrite_armature()
     }
 
@@ -12558,9 +12670,30 @@ impl ArmatureModel for ClayDocument {
     }
 
     fn set_skin(&mut self, skin: SkinSettings) -> Result<(), ModelError> {
+        let before = self.skin;
         self.skin = skin;
-        if self.active_layer().armature.is_some() {
-            self.rewrite_armature()?;
+        if self.active_layer().armature.is_none() {
+            // Nothing placed to rewrite, so nothing lands in the engine's
+            // history for a step to cross and nothing to note against it.
+            return Ok(());
+        }
+        let depth = self.engine_undo_depth();
+        if let Err(e) = self.rewrite_armature() {
+            // The radii are whatever the failed rewrite left them as, and the
+            // slider saying it moved would be the one claim certainly wrong.
+            self.skin = before;
+            return Err(e);
+        }
+        // Only when the rewrite actually left an entry: a stamp handed out
+        // for an entry that is not there names the next edit instead, and a
+        // step over *that* would move the thickness for it.
+        if self.engine_undo_depth() > depth {
+            let stamp = self.engine_top_stamp();
+            self.skin_undo.push(SkinChange {
+                stamp,
+                before,
+                after: skin,
+            });
         }
         Ok(())
     }
@@ -12657,6 +12790,10 @@ impl ClayDocument {
             return;
         };
         let active_id = self.layers.get(self.active).map(|layer| layer.id);
+        // Read once, because the loop below borrows the document and a rig it
+        // recovers has to be divided by the thickness its radii were written
+        // with. See [`Self::read_armature`].
+        let skin = self.skin;
 
         // Moved out rather than cloned. A surviving layer carries its meshed
         // chunks, which are megabytes on a worked grid, and this runs on every
@@ -12737,7 +12874,7 @@ impl ClayDocument {
                 // is the only part the document can answer for — a mask and a
                 // mirror are host state, and a redone creation starts them
                 // where a fresh layer starts them.
-                armature: Self::recover_armature(&self.document, *id)
+                armature: Self::recover_armature(&self.document, *id, skin)
                     .map(|(node, tree)| (vec![node], tree)),
                 ..Layer::new(*id, key, &name, representation)
             });
@@ -12795,26 +12932,33 @@ impl ClayDocument {
     /// Every layer that carries one, because a document may carry several: a
     /// history step reaches whichever rig its edit belonged to, and re-reading
     /// only the active subtool's would leave the others describing shapes the
-    /// engine no longer holds. Layers that carry none are skipped, so the cost
-    /// is one probe per rig rather than one per layer.
-    fn resync_armature(&mut self) {
-        let rigged: Vec<(usize, LayerId)> = self
+    /// engine no longer holds.
+    ///
+    /// **Every layer, not only the ones that already hold a rig.** Asking only
+    /// the rigged ones cannot answer for a rig coming *back*: undoing past
+    /// `begin_armature` clears the record below, so the layer carries nothing
+    /// for the filter to catch and redoing the creation left the rig in the
+    /// document and invisible here — an editor that refused every further edit
+    /// on a layer whose surface plainly had a skeleton in it. The cost of
+    /// asking the rest is one node enumeration per layer per history step,
+    /// which is a handful of subtools at a sculptor's pace.
+    fn resync_armature(&mut self, rigged_before: &[LayerId]) {
+        let skin = self.skin;
+        let layers: Vec<(usize, LayerId)> = self
             .layers
             .iter()
             .enumerate()
-            .filter(|(_, layer)| layer.armature.is_some())
             .map(|(index, layer)| (index, layer.id))
             .collect();
-        for (index, layer) in rigged {
+        for (index, layer) in layers {
             // Where the rig was before history moved it. Refilling the layer
             // alone is not enough: a rig that shrank leaves surface outside its
             // new bounds, and nothing marks those bricks — the same debt a
             // rewrite pays with `refill_region`.
             let vacated = self.layers[index].armature_bounds;
-            match Self::recover_armature(&self.document, layer) {
+            match Self::recover_armature(&self.document, layer, skin) {
                 Some((node, tree)) => {
-                    self.layers[index].armature_bounds =
-                        Some(Self::armature_bounds(&tree, self.skin));
+                    self.layers[index].armature_bounds = Some(Self::armature_bounds(&tree, skin));
                     self.layers[index].armature = Some((vec![node], tree));
                 }
                 // Undone past the rig's own creation: there is no armature now,
@@ -12832,6 +12976,131 @@ impl ClayDocument {
                 }
             }
         }
+        self.follow_a_returning_rig(rigged_before);
+    }
+
+    /// Puts the sculptor on a rig the step has just brought back.
+    ///
+    /// `armature()` answers for the active subtool alone — deliberately, so
+    /// switching subtools cannot hand the next click someone else's rig. A
+    /// redone `begin_armature` puts its layer back at the end of the stack and
+    /// leaves the selection wherever the undo dropped it, so without this the
+    /// rig returns to the document and out of reach: every further edit
+    /// refused with "there is no armature on this layer", over a surface that
+    /// plainly has a skeleton in it.
+    ///
+    /// Only a rig that *arrived* with the step, which is what `rigged_before`
+    /// is for. A document can hold a rigged subtool and a sculpted one at once,
+    /// and a rule that read "the active layer has no rig and another does"
+    /// would move the selection on every step a sculptor took on the other.
+    ///
+    /// The same rule a reopened document follows, for the same reason.
+    fn follow_a_returning_rig(&mut self, rigged_before: &[LayerId]) {
+        // A step back far enough leaves no layers at all, and `self.active`
+        // then names nothing. Nothing to follow either way.
+        if self
+            .layers
+            .get(self.active)
+            .is_none_or(|layer| layer.armature.is_some())
+        {
+            return;
+        }
+        let returned = self
+            .layers
+            .iter()
+            .position(|layer| layer.armature.is_some() && !rigged_before.contains(&layer.id));
+        if let Some(index) = returned {
+            self.active = index;
+        }
+    }
+
+    /// Which layers carry a rig as things stand, for the step about to move
+    /// them. See [`Self::follow_a_returning_rig`].
+    fn rigged_layers(&self) -> Vec<LayerId> {
+        self.layers
+            .iter()
+            .filter(|layer| layer.armature.is_some())
+            .map(|layer| layer.id)
+            .collect()
+    }
+
+    /// Re-reads the curve in hand from the document after a history step.
+    ///
+    /// The guide is the document's — every control point reaches the engine as
+    /// soon as there are two of them to sweep along — while the list that
+    /// shapes it is held here. Undo moves the first and cannot move the
+    /// second, so without this a taken-back point stayed in the hand: the
+    /// panel offered a point the surface no longer had, and the next point was
+    /// appended past it, which wrote the undone one straight back out.
+    ///
+    /// The same shape as [`Self::resync_armature`] and for the same reason,
+    /// with one difference: there is at most one curve in hand and it names
+    /// its own node, so nothing has to be searched for.
+    fn resync_curve(&mut self) {
+        let Some(curve) = self.curve.as_ref() else {
+            return;
+        };
+        // The sweep's id, whichever side of the step it is on. `None` means
+        // the curve has never had enough points to sweep along, so the
+        // document holds nothing of it and nothing there can contradict the
+        // hand.
+        let Some(node) = curve.node.or(curve.undone) else {
+            return;
+        };
+        let Ok(index) = self.index_of(curve.layer) else {
+            // The step took away the layer the curve was being drawn into.
+            // There is nothing left to shape, and a hand still holding it
+            // would write the next point into a layer that is not there.
+            self.curve = None;
+            return;
+        };
+        let layer = self.layers[index].id;
+        let placed = self
+            .document
+            .layer_nodes(layer)
+            .is_ok_and(|nodes| nodes.contains(&node));
+        // A node that is there but will not answer is left alone rather than
+        // treated as gone: the document has said nothing, and emptying the
+        // hand on silence would throw away work no step took back.
+        let guide = placed
+            .then(|| self.document.stroke_points(layer, node).ok())
+            .flatten()
+            .filter(|points| !points.is_empty());
+        let Some(curve) = self.curve.as_mut() else {
+            return;
+        };
+        match guide {
+            Some(points) => {
+                curve.points = points
+                    .iter()
+                    .map(|point| CurvePoint {
+                        position: [point[0], point[1], point[2]],
+                        radius: point[3],
+                    })
+                    .collect();
+                // What the engine was last given, which is now what it holds.
+                // Left where it was, an append would name the wrong end as the
+                // one it disturbed and refill bricks the change never reached.
+                curve.sent = curve.points.len();
+            }
+            // Undone past the sweep's own creation. The points went with it —
+            // they *are* the guide — so the hand is emptied rather than left
+            // holding a curve the document has never heard of.
+            None if !placed => {
+                curve.points.clear();
+                curve.sent = 0;
+            }
+            None => {}
+        }
+        if placed {
+            curve.node = Some(node);
+            curve.undone = None;
+        } else {
+            curve.node = None;
+            curve.undone = Some(node);
+        }
+        let count = curve.points.len();
+        curve.selection.retain(|at| *at < count);
     }
 
     /// Finds a layer's armature and reads its tree back.
@@ -12843,7 +13112,11 @@ impl ClayDocument {
     /// each id carries, so a hit is certain and only a miss is possible. What
     /// it can miss is a rig placed beyond a long run of removed nodes, which
     /// costs the tree and not the surface.
-    fn recover_armature(document: &Document, layer: LayerId) -> Option<(NodeId, Armature)> {
+    fn recover_armature(
+        document: &Document,
+        layer: LayerId,
+        skin: SkinSettings,
+    ) -> Option<(NodeId, Armature)> {
         // Enumerated since ClayCore 0.30.0 (#91). This used to probe ids
         // upward and give up after sixteen consecutive misses, which is a
         // guess about how long a gap can be: ids are not dense, a removal
@@ -12859,17 +13132,28 @@ impl ClayDocument {
                     .node_prim(layer, *node)
                     .is_ok_and(|prim| prim == claycore::prim::ARMATURE)
             })
-            .find_map(|node| Some((node, Self::read_armature(document, layer, node)?)))
+            .find_map(|node| Some((node, Self::read_armature(document, layer, node, skin)?)))
     }
 
     /// The tree behind a placed armature node.
     ///
     /// Radii are divided by the skin thickness on the way in, because
     /// `place_armature` multiplies by it on the way out — the tree keeps what
-    /// was authored so the thickness slider stays reversible. A document is
-    /// loaded with the default thickness, so this is a division by one today
-    /// and correct if that ever stops being true.
-    fn read_armature(document: &Document, layer: LayerId, node: NodeId) -> Option<Armature> {
+    /// was authored so the thickness slider stays reversible.
+    ///
+    /// **The thickness in hand, never the default.** This used to divide by
+    /// `SkinSettings::default()`, on the grounds that a document is loaded at
+    /// the default — true of a load and false of every history step, which is
+    /// the other caller. A rig read back at thickness 0.5 through a divisor of
+    /// 1 comes back with the thickness baked into its authored radii, and the
+    /// next edit multiplies by 0.5 again: measured, one undo at thickness 0.5
+    /// halved the rig and each cycle halved it once more, with no way back.
+    fn read_armature(
+        document: &Document,
+        layer: LayerId,
+        node: NodeId,
+        skin: SkinSettings,
+    ) -> Option<Armature> {
         let points = document.stroke_points(layer, node).ok()?;
         let parents = document.armature_parents(layer, node).ok()?;
         if points.is_empty() || parents.len() != points.len() {
@@ -12881,7 +13165,6 @@ impl ClayDocument {
         // reading compilation makes, so a short array is padded here the same
         // way it is there.
         let signs = document.armature_signs(layer, node).unwrap_or_default();
-        let skin = SkinSettings::default();
         let nodes = points
             .iter()
             .zip(parents.iter())
@@ -12889,11 +13172,7 @@ impl ClayDocument {
             .map(|(index, (point, parent))| clayspace_model::Zsphere {
                 position: [point[0], point[1], point[2]],
                 negative: signs.get(index).copied().unwrap_or(false),
-                radius: if skin.thickness > 0.0 {
-                    point[3] / skin.thickness
-                } else {
-                    point[3]
-                },
+                radius: skin.authored_radius(point[3]),
                 parent: *parent,
             })
             .collect();

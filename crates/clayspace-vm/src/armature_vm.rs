@@ -123,6 +123,11 @@ impl ArmatureViewModel {
 
     /// Re-reads the tree, for when the document underneath changed.
     pub fn refresh(&mut self) {
+        // The thickness with it, because a history step can move that too: the
+        // rewrite a thickness change forces is one undoable entry, and a
+        // slider left where the sculptor put it would describe a rig the
+        // document no longer has.
+        self.skin.set_if_changed(self.model.skin());
         let tree = self.model.armature();
         // A selection into a tree that has shrunk is worse than none: the next
         // drag would take hold of whatever now sits at that index.

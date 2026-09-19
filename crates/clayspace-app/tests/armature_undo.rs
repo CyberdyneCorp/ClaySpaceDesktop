@@ -10,7 +10,7 @@
 
 use clayspace_app::SharedDocument;
 use clayspace_engine::{BackendPolicy, ClayDocument};
-use clayspace_model::SculptModel;
+use clayspace_model::{SculptModel, SkinSettings};
 use clayspace_vm::{ArmatureViewModel, Command, Grab, SculptViewModel};
 
 struct Rigging {
@@ -72,6 +72,25 @@ impl Rigging {
             .as_ref()
             .map(|t| t.nodes.len())
             .unwrap_or(0)
+    }
+
+    fn radii(&self) -> Vec<f32> {
+        self.armature
+            .tree()
+            .get()
+            .as_ref()
+            .map(|t| t.nodes.iter().map(|node| node.radius).collect())
+            .unwrap_or_default()
+    }
+
+    /// One move of the thickness slider, banked the way the composition root
+    /// banks a rig gesture: the rewrite it forces is the engine's entries, and
+    /// the sculptor made one change.
+    fn thicken(&mut self, thickness: f32) {
+        let before = self.depth();
+        self.armature.set_skin(SkinSettings { thickness });
+        let entries = self.depth().saturating_sub(before);
+        self.sculpt.record_external_action(entries);
     }
 }
 
@@ -230,6 +249,123 @@ fn moving_a_subtree_undoes_as_one_action() {
         back.nodes[2].position[1].abs() < 1e-4,
         "the subtree did not come back with it: {:?}",
         back.nodes[2].position
+    );
+}
+
+#[test]
+fn a_rig_taken_back_past_its_creation_comes_back_editable() {
+    // `a_second_undo_takes_the_rig_itself` covers the way down. This is the
+    // way up, which had no floor under it at all: the rig was cleared off the
+    // layer on the way back and nothing ever looked at that layer again, so
+    // redo left the armature in the document and out of the editor's reach —
+    // an "Armadura" subtool that refused every edit over a surface that
+    // plainly had a skeleton in it.
+    let Some(mut rig) = Rigging::new() else {
+        return;
+    };
+    rig.begin([0.0, 0.0, 0.0]);
+    rig.armature.set_symmetric(false);
+    rig.gesture(Grab::Grow(0), [0.0, 0.0, 0.0], &[[0.6, 0.0, 0.0]]);
+
+    rig.undo();
+    rig.undo();
+    assert_eq!(rig.spheres(), 0, "the rig itself did not come back out");
+
+    rig.redo();
+    rig.redo();
+    assert_eq!(rig.spheres(), 2, "the rig did not come back");
+    assert!(rig.armature.is_rigging(), "it came back unposable");
+
+    // And it takes each of the three edits the audit found refused.
+    rig.armature.add(1, [1.2, 0.0, 0.0], None);
+    assert_eq!(
+        rig.spheres(),
+        3,
+        "{:?}",
+        rig.armature.notice().get().clone()
+    );
+    rig.armature.resize(2, 0.25);
+    rig.armature.reparent(2, 0);
+    assert!(
+        rig.armature.notice().get().is_none(),
+        "{:?}",
+        rig.armature.notice().get().clone()
+    );
+}
+
+#[test]
+fn a_rig_keeps_its_radii_across_undo_at_a_thin_skin() {
+    // The thickness is a multiplier the engine never sees as one: the radii
+    // reach it already scaled. Reading them back divided by the wrong number
+    // baked the thickness into the tree, and every cycle baked it in again —
+    // measured as a rig that halved, halved once more, and could not be
+    // brought back.
+    let Some(mut rig) = Rigging::new() else {
+        return;
+    };
+    rig.begin([0.0, 0.0, 0.0]);
+    rig.armature.set_symmetric(false);
+    rig.gesture(Grab::Grow(0), [0.0, 0.0, 0.0], &[[0.6, 0.0, 0.0]]);
+    rig.thicken(0.5);
+    let authored = rig.radii();
+    assert_eq!(authored.len(), 2);
+
+    for cycle in 0..5 {
+        rig.undo();
+        rig.redo();
+        assert_eq!(rig.radii(), authored, "the radii moved on cycle {cycle}");
+    }
+}
+
+#[test]
+fn moving_the_thickness_is_itself_one_undo() {
+    // It writes every radius in the rig, so it is an edit and has to behave
+    // like one: one step back puts the slider and the radii where they were.
+    let Some(mut rig) = Rigging::new() else {
+        return;
+    };
+    rig.begin([0.0, 0.0, 0.0]);
+    rig.armature.set_symmetric(false);
+    rig.gesture(Grab::Grow(0), [0.0, 0.0, 0.0], &[[0.6, 0.0, 0.0]]);
+    let authored = rig.radii();
+
+    rig.thicken(0.5);
+    rig.undo();
+
+    assert_eq!(
+        rig.armature.skin().get().thickness,
+        1.0,
+        "the slider stayed where the undone change left it"
+    );
+    assert_eq!(rig.radii(), authored, "the tree did not follow the slider");
+    assert_eq!(rig.spheres(), 2, "the undo took the gesture as well");
+}
+
+#[test]
+fn an_edit_on_a_sphere_that_is_not_there_banks_nothing() {
+    // Measured as two entries that did nothing. Both edits rewrite the whole
+    // rig into the document, so accepting an index nobody has meant placing
+    // the tree again unchanged — an undo step for a gesture that never
+    // happened, spent instead of the sculptor's last real one.
+    let Some(mut rig) = Rigging::new() else {
+        return;
+    };
+    rig.begin([0.0, 0.0, 0.0]);
+    rig.armature.set_symmetric(false);
+    rig.gesture(Grab::Grow(0), [0.0, 0.0, 0.0], &[[0.6, 0.0, 0.0]]);
+
+    let settled = rig.depth();
+    rig.armature.resize(7, 0.5);
+    rig.armature.reparent(7, 0);
+
+    assert_eq!(
+        rig.depth(),
+        settled,
+        "an edit on a sphere that is not there still reached the engine"
+    );
+    assert!(
+        rig.armature.notice().get().is_some(),
+        "and it was not refused out loud either"
     );
 }
 
