@@ -455,6 +455,26 @@ pub enum GizmoTarget {
 /// implementation is possible and an accidental one is not: a type that
 /// forgets `place_object` refuses to place rather than silently doing nothing.
 pub trait ObjectModel {
+    /// How many things the history holds, as the interface counts them.
+    ///
+    /// Read either side of everything here that writes, so the ViewModel can
+    /// bank what the write actually cost. The count is not something this side
+    /// may guess at: inserting a shape as a subtool of its own is a layer and
+    /// an item together, a boolean is two bakes and a layer, and a manipulator
+    /// drag is a group that stays one entry however many frames fed it.
+    ///
+    /// Provided rather than required, for the reason every method here is: a
+    /// double that models no objects should not have to answer for a history
+    /// it has none of. A model that *does* place objects owes a real answer —
+    /// zero means "nothing of mine is undoable", and a document that said so
+    /// would have its entries spent on somebody else's count.
+    ///
+    /// The same number [`crate::SculptModel::history`] reports, because it is
+    /// the same history.
+    fn history_depth(&self) -> usize {
+        0
+    }
+
     /// The placed objects in the active layer, in the order it holds them.
     ///
     /// Read from the document each time. `&mut self` because the engine's own

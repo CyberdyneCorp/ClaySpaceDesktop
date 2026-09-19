@@ -46,11 +46,9 @@ pub struct MaskViewModel {
     /// exactly as the caller asked for it, and there was nothing to take back.
     remark: Observable<Option<String>>,
     /// What the mask's own edits have cost the history, one count per edit,
-    /// waiting for the ViewModel that owns Cmd+Z to bank them.
-    ///
-    /// A list rather than a running total: two edits banked as one would be
-    /// one undo where the sculptor made two.
-    unbanked: Vec<usize>,
+    /// waiting for the ViewModel that owns Cmd+Z to bank them. See
+    /// [`crate::Unbanked`].
+    unbanked: crate::Unbanked,
 }
 
 impl MaskViewModel {
@@ -65,7 +63,7 @@ impl MaskViewModel {
             draft: Observable::new(None),
             notice: Observable::new(None),
             remark: Observable::new(None),
-            unbanked: Vec::new(),
+            unbanked: crate::Unbanked::default(),
         }
     }
 
@@ -146,7 +144,7 @@ impl MaskViewModel {
     /// Taken rather than read: the ViewModel that owns Cmd+Z banks each count
     /// as one action, and a count banked twice is one undo too many.
     pub fn take_unbanked_actions(&mut self) -> Vec<usize> {
-        std::mem::take(&mut self.unbanked)
+        self.unbanked.take()
     }
 
     /// Whether an operation would do anything right now.
@@ -194,10 +192,7 @@ impl MaskViewModel {
             }
             Err(e) => self.notice.set(Some(e.to_string())),
         }
-        let spent = self.model.history_depth().saturating_sub(before);
-        if spent > 0 {
-            self.unbanked.push(spent);
-        }
+        self.unbanked.record(before, self.model.history_depth());
         self.refresh();
     }
 

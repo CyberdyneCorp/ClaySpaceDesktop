@@ -22,6 +22,9 @@ pub struct LatticeViewModel {
     divisions: Observable<[i32; 3]>,
     /// The last refusal, for the status area.
     notice: Observable<Option<String>>,
+    /// What bending the form has cost the history, waiting for the ViewModel
+    /// that owns Cmd+Z to bank it. See [`crate::Unbanked`].
+    unbanked: crate::Unbanked,
 }
 
 impl LatticeViewModel {
@@ -32,6 +35,7 @@ impl LatticeViewModel {
             state: Observable::new(state),
             divisions: Observable::new([3, 3, 3]),
             notice: Observable::new(None),
+            unbanked: crate::Unbanked::default(),
         }
     }
 
@@ -45,6 +49,15 @@ impl LatticeViewModel {
 
     pub fn notice(&self) -> &Observable<Option<String>> {
         &self.notice
+    }
+
+    /// What the cage's own edits have cost the history, one count per edit.
+    ///
+    /// Taken rather than read, for the reason
+    /// [`crate::MaskViewModel::take_unbanked_actions`] is taken: the ViewModel
+    /// that owns Cmd+Z banks each count as one action.
+    pub fn take_unbanked_actions(&mut self) -> Vec<usize> {
+        self.unbanked.take()
     }
 
     /// Refreshes from the model, for when something else changed the layer.
@@ -124,12 +137,21 @@ impl LatticeViewModel {
                 self.refresh();
             }
             Command::ApplyLattice => {
+                // Measured either side, because applying is the only thing a
+                // cage does to the document: putting one up and dragging its
+                // points hold a preview beside the document and revert it,
+                // and a cage dragged back to exactly where it started is the
+                // identity and writes nothing at all. Banked here rather than
+                // in the shell so a second way of applying one cannot arrive
+                // without an entry.
+                let before = self.model.history_depth();
                 match self.model.apply_lattice() {
                     Ok(()) => {
                         self.notice.set_if_changed(None);
                     }
                     Err(e) => self.notice.set(Some(e.to_string())),
                 }
+                self.unbanked.record(before, self.model.history_depth());
                 self.refresh();
             }
             // The model takes a standing cage down when the active subtool
@@ -173,6 +195,9 @@ mod tests {
         dragged: Vec<[f32; 3]>,
         applied: usize,
         cancelled: usize,
+        /// What the document's history holds, as the engine's does: a bend is
+        /// one entry, and everything else a cage does writes nothing.
+        entries: usize,
     }
 
     struct FakeCage {
@@ -183,6 +208,10 @@ mod tests {
     impl LatticeModel for FakeCage {
         fn lattice(&self) -> LatticeState {
             self.state.clone()
+        }
+
+        fn history_depth(&self) -> usize {
+            self.recorded.borrow().entries
         }
 
         fn begin_lattice(&mut self, divisions: [i32; 3]) -> Result<(), ModelError> {
@@ -240,7 +269,14 @@ mod tests {
         }
 
         fn apply_lattice(&mut self) -> Result<(), ModelError> {
-            self.recorded.borrow_mut().applied += 1;
+            let mut recorded = self.recorded.borrow_mut();
+            recorded.applied += 1;
+            // Only a cage that moved something writes. An untouched one is the
+            // identity and the document answers the same way.
+            if self.state.touched {
+                recorded.entries += 1;
+            }
+            drop(recorded);
             self.state = LatticeState::default();
             Ok(())
         }
@@ -331,12 +367,71 @@ mod tests {
         assert!(!vm.state().get().active);
     }
 
+    /// The defect this exists for: a bend that banked nothing left the next
+    /// Cmd+Z popping the *previous* command's count and spending it on the
+    /// cage's entry. Measured on a fresh subtool — add, insert, bend, undo —
+    /// the undo took the subtool away.
+    #[test]
+    fn applying_a_lattice_is_one_history_entry() {
+        let (mut vm, _) = fixture();
+        vm.dispatch(&Command::ToggleLattice, Representation::Mesh);
+        vm.dispatch(&Command::SelectLatticePoint(Some(0)), Representation::Mesh);
+        vm.dispatch(
+            &Command::DragLatticePoint([1.0, 0.0, 0.0]),
+            Representation::Mesh,
+        );
+        assert!(
+            vm.take_unbanked_actions().is_empty(),
+            "putting a cage up and dragging it banked something, but a preview \
+             is held beside the document rather than written to it"
+        );
+
+        vm.dispatch(&Command::ApplyLattice, Representation::Mesh);
+        assert_eq!(
+            vm.take_unbanked_actions(),
+            vec![1],
+            "bending the form through the cage was not one thing to take back"
+        );
+        assert!(
+            vm.take_unbanked_actions().is_empty(),
+            "the count was banked twice, which is one undo too many"
+        );
+    }
+
+    #[test]
+    fn a_cage_that_bent_nothing_banks_nothing() {
+        // The identity, which the document answers by writing nothing: there
+        // is no bend to take back, and an entry for one would spend an undo on
+        // a form nobody moved.
+        let (mut vm, _) = fixture();
+        vm.dispatch(&Command::ToggleLattice, Representation::Mesh);
+        vm.dispatch(&Command::ApplyLattice, Representation::Mesh);
+        assert!(vm.take_unbanked_actions().is_empty());
+    }
+
+    #[test]
+    fn taking_a_cage_down_banks_nothing() {
+        // Dropping a cage is abandoning the bend, not making one.
+        let (mut vm, _) = fixture();
+        vm.dispatch(&Command::ToggleLattice, Representation::Mesh);
+        vm.dispatch(&Command::SelectLatticePoint(Some(0)), Representation::Mesh);
+        vm.dispatch(
+            &Command::DragLatticePoint([1.0, 0.0, 0.0]),
+            Representation::Mesh,
+        );
+        vm.dispatch(&Command::ToggleLattice, Representation::Mesh);
+        assert!(vm.take_unbanked_actions().is_empty());
+    }
+
     #[test]
     fn a_grid_is_refused_readably_rather_than_silently() {
         struct NoCage;
         impl LatticeModel for NoCage {
             fn lattice(&self) -> LatticeState {
                 LatticeState::default()
+            }
+            fn history_depth(&self) -> usize {
+                0
             }
             fn begin_lattice(&mut self, _: [i32; 3]) -> Result<(), ModelError> {
                 Err(ModelError::engine("uma camada de voxels não aceita"))

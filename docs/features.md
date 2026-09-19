@@ -1281,10 +1281,10 @@ what it was last given until something marks those bricks dirty.
 Undoing inside the same segment is not tidiness. It is what makes the commit
 legal — a commit re-checks a stamp derived from the layer's **content** and
 refuses a layer that moved underneath it — and it is what keeps the history
-honest, since the ViewModel counts a live segment by the undo depth it left
-behind. A segment that kept its preview would be counted as having written it,
-and cancelling the drag would then spend one undo per segment against history
-the gesture never made.
+honest, since what a gesture cost is measured from the document's own depth at
+the press. A segment that kept its preview would sit in that measurement as
+work the release had not banked, and the gesture would then be worth one undo
+per segment against history it never made.
 
 The mirror is the engine's here and not the application's. `baked_stroke`
 reflects a gesture and runs the verb once per image, because the layer mirror
@@ -1310,22 +1310,27 @@ so a stroke passing over the same vertex forty times still records where it
 started once, and the gesture is still one undo that puts every vertex back
 exactly.
 
-**And cancelling one takes back that gesture and nothing under it.** That the
-whole gesture is one record is exactly what a cancel used to get wrong. The
-sculpting ViewModel banks a count of engine entries per action and a cancel
-spent the gesture's count, which is one per applied segment — right on a field,
-where every segment *is* an entry, and wrong here by however many segments the
-drag took. The first undo took the gesture back and the rest kept going: the
+**And ending one — however it ends — is worth exactly what it wrote.** That the
+whole gesture is one record is what the old arithmetic got wrong in both
+directions. The sculpting ViewModel banks a count of engine entries per action,
+and that count used to be one per applied segment — right on a field, where
+every segment *is* an entry, and wrong here by however many segments the drag
+took. A cancel spent it and reached past the gesture it was cancelling: the
 gestures committed before it, and on a layer made a moment earlier, the layer
-itself. Measured on a fresh mesh layer, one Esc removed the subtool. The count
-is not what a cancel owes; the document as it stood when the gesture opened is,
-so the ViewModel reads the history depth at the press and reverts down to it,
-never past it — one record or twenty, the line is the same. A cancel with no
-gesture open is now a no-op that says there was nothing to cancel, rather than
-a success that quietly spent the previous command's count.
+itself. Measured on a fresh mesh layer, one Esc removed the subtool. A
+*commit* banked it, so one Cmd+Z afterwards walked back three entries for a
+three-segment gesture and did the same thing a step later.
+
+The count is not what a gesture owes; the document as it stood when the gesture
+opened is. So the ViewModel reads the history depth at the press and measures
+against it at the end — reverting down to it on a cancel, banking the distance
+on a release, never past it either way. One record or twenty, the line is the
+same. A cancel with no gesture open is a no-op that says there was nothing to
+cancel, rather than a success that quietly spent the previous command's count.
 `stroke_cancel.rs` commits two mesh gestures, cancels a third and holds the
 geometry digest, the subtool count and the history against what the second one
-left.
+left; the ViewModel suite holds the commit side against a double that banks a
+mesh gesture the way a mesh layer does.
 
 **The pointer finds it from the moment it becomes active.** A pick against a
 mesh layer is answered by the mesh sculptor's own raycast, and the sculptor was
@@ -3847,8 +3852,40 @@ that can destroy work need a consent the file cannot supply.
 - **A new edit ends the redo line**, on this side as well as the engine's. A
   stroke taken back and then built over is not put back by a later redo.
 - A stroke of any length is **one** history entry, mirrored halves included.
+  What the gesture cost is *measured* — the document's history depth at the
+  press against its depth at the release — rather than counted from the
+  segments it was sent in. The two numbers are not the same: a field gesture
+  records an entry per segment and a mesh one is previewed while it is made and
+  banked as a single record however many segments drew it, so the per-segment
+  count made one Cmd+Z after a three-segment mesh gesture walk the history back
+  by three. It took the gesture, and then whatever was under it.
+- **Every command that changes the document banks exactly one thing to take
+  back**, and each banks it where the change is made rather than in the shell,
+  so a command added later cannot arrive without an entry. Applying a cage,
+  running a deformer, a manipulator drag from press to release, inserting a
+  shape, copying a subtool, changing what an object is or how it combines,
+  removing one, adding a subtool, removing one, renaming, reordering,
+  consolidating, rebuilding a mesh's topology and resolving a boolean are one
+  action each. What each cost is read from the history either side rather than
+  assumed to be one entry, because a subtool inserted with a shape in it is a
+  layer and an item together and a boolean is two bakes and a layer.
+
+  None of them used to bank anything. The history a sculptor presses is the
+  sculpting ViewModel's — a stack of how many engine entries each action spent,
+  where one Cmd+Z pops one count — so the next undo popped the *previous*
+  command's count and spent it on entries that were not its own. Measured in
+  the audit: add a subtool, insert a shape into it, put a cage up, bend it,
+  apply, then one undo — which deleted the subtool. Another sequence removed
+  four layers with a single undo. `structural_undo.rs` drives the same seam the
+  composition root does and undoes a scripted session one command at a time,
+  holding each step against the layer set the command it takes back had found.
+- A manipulator drag is **one** entry for the whole gesture, press to release,
+  not one per pointer move — and not two when a frame overruns and the document
+  is left until the release.
 - An edit that changed nothing adds no entry and does not mark the document
-  modified. This matters because the engine documents several verbs as
+  modified. A gesture is judged on what it *wrote* rather than on where it
+  started, which is the only test that works: a dab aimed off the surface can
+  still deposit a blob, and that blob is an edit. This matters because the engine documents several verbs as
   legitimately able to change nothing — a sub-cell drag, a stamp that misses
   every cell — so a successful call is not evidence that anything happened.
 - Changing symmetry costs its own entry, because a layer's mirror is state the

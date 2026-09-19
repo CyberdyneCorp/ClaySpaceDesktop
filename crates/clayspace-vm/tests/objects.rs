@@ -33,6 +33,15 @@ struct Calls {
     combines: Vec<CombineSettings>,
     drags_begun: usize,
     drags_ended: usize,
+    /// What the document's history holds, as the engine's does: one entry per
+    /// write, and a manipulator drag grouped into one however many frames fed
+    /// it.
+    entries: usize,
+    /// Whether a manipulator gesture is open, and whether it has recorded its
+    /// one entry yet. A drag is one thing to take back however many frames fed
+    /// it, which is what the engine's undo group does underneath.
+    group_open: bool,
+    group_wrote: bool,
 }
 
 struct FakeObjects {
@@ -73,6 +82,23 @@ impl FakeObjects {
     fn refusal(&self) -> ModelError {
         ModelError::Engine(self.refuse.unwrap_or("recusado").to_string())
     }
+
+    /// Records what a write cost the history.
+    ///
+    /// Inside an open gesture only the first write records, and it records
+    /// one: the engine groups a drag so that thirty frames are one thing to
+    /// take back.
+    fn wrote(&self, entries: usize) {
+        let mut calls = self.calls.borrow_mut();
+        if calls.group_open {
+            if !calls.group_wrote {
+                calls.group_wrote = true;
+                calls.entries += 1;
+            }
+            return;
+        }
+        calls.entries += entries;
+    }
 }
 
 fn an_object(node: u32, shape: Shape, at: [f32; 3]) -> SceneObject {
@@ -92,6 +118,10 @@ fn an_object(node: u32, shape: Shape, at: [f32; 3]) -> SceneObject {
 }
 
 impl ObjectModel for FakeObjects {
+    fn history_depth(&self) -> usize {
+        self.calls.borrow().entries
+    }
+
     fn objects(&mut self) -> Vec<SceneObject> {
         self.objects.clone()
     }
@@ -118,6 +148,7 @@ impl ObjectModel for FakeObjects {
             .borrow_mut()
             .placed
             .push((shape, parameters.to_vec()));
+        self.wrote(1);
         let node = self.objects.len() as u32 + 1;
         let mut object = an_object(node, shape, at);
         object.combine = combine;
@@ -138,6 +169,9 @@ impl ObjectModel for FakeObjects {
             return Err(self.refusal());
         }
         self.calls.borrow_mut().inserted.push((shape, at));
+        // A layer and the item inside it, which the document records as two
+        // entries and the sculptor asked for once.
+        self.wrote(2);
         // A subtool of its own, so the object it holds belongs to a layer that
         // was not there before. The double numbers them as the document does.
         let layer = LayerKey(self.subtools.borrow().len() as u64 + 2);
@@ -168,6 +202,8 @@ impl ObjectModel for FakeObjects {
             return Err(self.refusal());
         }
         self.calls.borrow_mut().copied.push(from);
+        // A bake beside a layer, as the document records it.
+        self.wrote(2);
         let layer = LayerKey(self.subtools.borrow().len() as u64 + 2);
         self.subtools.borrow_mut().push((layer, "Cópia".into()));
         // No object row: a copy carries a baked volume rather than one of the
@@ -210,6 +246,7 @@ impl ObjectModel for FakeObjects {
             return Err(self.refusal());
         }
         self.calls.borrow_mut().mesh_placed.push(from);
+        self.wrote(1);
         let node = self.objects.len() as u32 + 1;
         let mut object = an_object(node, Shape::Box, at);
         object.source = clayspace_model::ObjectSource::Mesh {
@@ -241,6 +278,7 @@ impl ObjectModel for FakeObjects {
         object.rotation_axis = rotation_axis;
         object.rotation_angle = rotation_angle;
         object.scale = scale;
+        self.wrote(1);
         Ok(())
     }
 
@@ -258,6 +296,7 @@ impl ObjectModel for FakeObjects {
         };
         object.source = clayspace_model::ObjectSource::Shape(shape);
         object.parameters = parameters.to_vec();
+        self.wrote(1);
         Ok(())
     }
 
@@ -273,6 +312,7 @@ impl ObjectModel for FakeObjects {
         if let Some(object) = self.objects.iter_mut().find(|object| object.id == id) {
             object.combine = combine;
         }
+        self.wrote(1);
         Ok(())
     }
 
@@ -281,6 +321,7 @@ impl ObjectModel for FakeObjects {
             return Err(self.refusal());
         }
         self.calls.borrow_mut().removed.push(id);
+        self.wrote(1);
         self.objects.retain(|object| object.id != id);
         if self.selected == Some(id) {
             self.selected = None;
@@ -325,7 +366,12 @@ impl ObjectModel for FakeObjects {
                 transform.rotation_angle,
                 transform.scale,
             ),
-            _ => Ok(()),
+            // A whole subtool and a curve's points carry no row here, but
+            // moving one is still a write the document records.
+            _ => {
+                self.wrote(1);
+                Ok(())
+            }
         }
     }
 
@@ -345,11 +391,16 @@ impl ObjectModel for FakeObjects {
     }
 
     fn begin_target_drag(&mut self, _target: GizmoTarget) {
-        self.calls.borrow_mut().drags_begun += 1;
+        let mut calls = self.calls.borrow_mut();
+        calls.drags_begun += 1;
+        calls.group_open = true;
+        calls.group_wrote = false;
     }
 
     fn end_target_drag(&mut self) {
-        self.calls.borrow_mut().drags_ended += 1;
+        let mut calls = self.calls.borrow_mut();
+        calls.drags_ended += 1;
+        calls.group_open = false;
     }
 }
 
@@ -1236,4 +1287,141 @@ fn choosing_a_brush_leaves_a_selected_objects_manipulator_alone() {
         target,
         "choosing a brush took the manipulator off a selected object"
     );
+}
+
+// -- what each of these costs the history ------------------------------------
+
+/// The history a sculptor presses counts *actions* and remembers how many
+/// engine entries each one spent. A command that banked nothing left the next
+/// Cmd+Z popping the previous command's count and spending it on entries that
+/// were not its own — which is how one undo after inserting a shape took back
+/// the subtool it was inserted into.
+#[test]
+fn inserting_a_shape_is_one_history_entry() {
+    let (mut vm, _) = viewmodel();
+    send(&mut vm, Command::InsertShape);
+    assert_eq!(
+        vm.take_unbanked_actions(),
+        vec![2],
+        "a subtool and the item inside it are one thing the sculptor asked \
+         for, and two entries underneath"
+    );
+    assert!(
+        vm.take_unbanked_actions().is_empty(),
+        "the count was banked twice, which is one undo too many"
+    );
+}
+
+#[test]
+fn placing_a_shape_in_the_active_layer_is_one_history_entry() {
+    let (mut vm, _) = viewmodel();
+    place(&mut vm);
+    assert_eq!(vm.take_unbanked_actions(), vec![1]);
+}
+
+#[test]
+fn copying_a_subtool_is_one_history_entry() {
+    let (mut vm, _) = viewmodel();
+    send(&mut vm, Command::InsertShape);
+    vm.refresh_operands();
+    let from = vm.copyable().get()[0].0;
+    let _ = vm.take_unbanked_actions();
+
+    send(&mut vm, Command::CopySubtool(from));
+    assert_eq!(vm.take_unbanked_actions(), vec![2]);
+}
+
+#[test]
+fn removing_an_object_is_one_history_entry() {
+    let (mut vm, _) = viewmodel();
+    place(&mut vm);
+    let _ = vm.take_unbanked_actions();
+
+    send(&mut vm, Command::RemoveObject);
+    assert_eq!(vm.take_unbanked_actions(), vec![1]);
+}
+
+#[test]
+fn changing_an_objects_shape_or_operation_is_one_history_entry_each() {
+    let (mut vm, _) = viewmodel();
+    place(&mut vm);
+    let _ = vm.take_unbanked_actions();
+
+    send(
+        &mut vm,
+        Command::SetObjectShape(Shape::Cylinder, Shape::Cylinder.defaults()),
+    );
+    send(
+        &mut vm,
+        Command::SetObjectCombine(CombineSettings {
+            op: Combine::Subtract,
+            ..CombineSettings::default()
+        }),
+    );
+    assert_eq!(
+        vm.take_unbanked_actions(),
+        vec![1, 1],
+        "two changes banked as one would be one undo where the sculptor made \
+         two"
+    );
+}
+
+/// The gesture, not the frames. A drag sets a transform on every pointer move
+/// and the engine groups them into one entry; a count taken per frame would be
+/// one undo per sample, and the sculptor pushed the arrow once.
+#[test]
+fn a_transform_drag_is_one_history_entry_for_the_whole_gesture() {
+    let (mut vm, calls) = viewmodel();
+    place(&mut vm);
+    let _ = vm.take_unbanked_actions();
+
+    send(
+        &mut vm,
+        Command::BeginGizmoDrag(GizmoHandle::Centre, [0.0; 3], [0.0, 0.0, 1.0]),
+    );
+    for step in 1..=6 {
+        send(
+            &mut vm,
+            Command::DragGizmo([step as f32 * 0.1, 0.0, 0.0], false),
+        );
+        assert!(
+            vm.take_unbanked_actions().is_empty(),
+            "a frame of a drag was banked on its own, which is one undo per \
+             pointer move"
+        );
+    }
+    send(&mut vm, Command::EndGizmoDrag);
+
+    assert_eq!(calls.borrow().transforms.len(), 6);
+    assert_eq!(
+        vm.take_unbanked_actions(),
+        vec![1],
+        "the drag was not one thing to take back"
+    );
+}
+
+/// A release with no press before it is not a gesture, so it owes nothing.
+#[test]
+fn a_release_with_no_drag_open_banks_nothing() {
+    let (mut vm, _) = viewmodel();
+    place(&mut vm);
+    let _ = vm.take_unbanked_actions();
+
+    send(&mut vm, Command::EndGizmoDrag);
+    assert!(vm.take_unbanked_actions().is_empty());
+}
+
+/// A refusal leaves the document as it was, so there is nothing to take back —
+/// and the ViewModel does not have to say so, because the measurement already
+/// does.
+#[test]
+fn a_refused_insertion_banks_nothing() {
+    let calls = Rc::new(RefCell::new(Calls::default()));
+    let mut model = FakeObjects::new(calls.clone());
+    model.refuse = Some("camada bloqueada");
+    let mut vm = ObjectViewModel::new(Box::new(model));
+
+    send(&mut vm, Command::InsertShape);
+    assert!(vm.notice().get().is_some(), "the refusal went nowhere");
+    assert!(vm.take_unbanked_actions().is_empty());
 }

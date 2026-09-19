@@ -32,6 +32,9 @@ pub struct BooleanViewModel {
     /// Held so the composition root can put the manipulator on it: the result
     /// is a form to stand somewhere, exactly as an inserted one is.
     result: Option<LayerKey>,
+    /// What a resolved boolean has cost the history, waiting for the ViewModel
+    /// that owns Cmd+Z to bank it. See [`crate::Unbanked`].
+    unbanked: crate::Unbanked,
 }
 
 impl BooleanViewModel {
@@ -45,6 +48,7 @@ impl BooleanViewModel {
             cost: Observable::new(None),
             notice: Observable::new(None),
             result: None,
+            unbanked: crate::Unbanked::default(),
         }
     }
 
@@ -77,6 +81,15 @@ impl BooleanViewModel {
     /// it again in the next one.
     pub fn take_result(&mut self) -> Option<LayerKey> {
         self.result.take()
+    }
+
+    /// What a resolved boolean has cost the history, one count per run.
+    ///
+    /// Taken rather than read, for the reason
+    /// [`crate::MaskViewModel::take_unbanked_actions`] is taken: the ViewModel
+    /// that owns Cmd+Z banks each count as one action.
+    pub fn take_unbanked_actions(&mut self) -> Vec<usize> {
+        self.unbanked.take()
     }
 
     /// Whether there is a pair to run at all.
@@ -163,7 +176,15 @@ impl BooleanViewModel {
     /// Runs the boolean the panel is set to. The consent, not the choosing.
     fn run(&mut self) {
         let settings = *self.settings.get();
-        match self.model.run_boolean(settings) {
+        // Measured either side rather than assumed to be one entry: resolving
+        // a boolean is two bakes and a layer underneath, and it is one thing
+        // the sculptor confirmed. Banked here, where the write is, so the next
+        // Cmd+Z spends the boolean's own entries instead of the previous
+        // command's count.
+        let before = self.model.history_depth();
+        let resolved = self.model.run_boolean(settings);
+        self.unbanked.record(before, self.model.history_depth());
+        match resolved {
             Ok(inserted) => {
                 self.notice.set_if_changed(None);
                 self.result = Some(inserted.layer);

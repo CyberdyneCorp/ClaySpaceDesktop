@@ -217,6 +217,18 @@ impl LatticeState {
 pub trait LatticeModel {
     fn lattice(&self) -> LatticeState;
 
+    /// How many things the history holds, as the interface counts them.
+    ///
+    /// Read either side of [`LatticeModel::apply_lattice`] so the ViewModel
+    /// can bank what bending the form actually cost. Putting a cage up and
+    /// dragging its points cost nothing here — the preview is held beside the
+    /// document and reverted rather than recorded — so this is asked around
+    /// the one call that writes.
+    ///
+    /// The same number [`crate::SculptModel::history`] reports, because it is
+    /// the same history a sculptor presses Cmd+Z on.
+    fn history_depth(&self) -> usize;
+
     /// Puts a cage around the active layer, sized to what it contains.
     ///
     /// Replaces one already up: a sculptor who changes the divisions is asking

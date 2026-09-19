@@ -21,6 +21,9 @@ struct Calls {
     moved: Vec<(LayerKey, usize)>,
     /// What was asked of a hierarchy's stack of passes, in order.
     passes: Vec<clayspace_model::MultiresSculptLayerOp>,
+    /// What the document's history holds, as the engine's does: one entry per
+    /// operation that changed the stack, and none for a way of looking at it.
+    entries: usize,
 }
 
 struct FakeScene {
@@ -70,9 +73,18 @@ impl FakeScene {
             None => Ok(()),
         }
     }
+
+    /// Records an entry, as an operation that changed the document does.
+    fn wrote(&self) {
+        self.calls.borrow_mut().entries += 1;
+    }
 }
 
 impl SceneModel for FakeScene {
+    fn history_depth(&self) -> usize {
+        self.calls.borrow().entries
+    }
+
     fn apply_multires_sculpt_layer_op(
         &mut self,
         op: clayspace_model::MultiresSculptLayerOp,
@@ -152,6 +164,7 @@ impl SceneModel for FakeScene {
         if let Some(index) = self.index(key) {
             self.layers[index].protection = protection;
         }
+        self.wrote();
         Ok(())
     }
 
@@ -160,6 +173,7 @@ impl SceneModel for FakeScene {
         if let Some(index) = self.index(key) {
             self.layers[index].name = name.to_string();
         }
+        self.wrote();
         Ok(())
     }
 
@@ -184,6 +198,7 @@ impl SceneModel for FakeScene {
             multires: None,
         });
         self.active = Some(key);
+        self.wrote();
         Ok(key)
     }
 
@@ -194,6 +209,7 @@ impl SceneModel for FakeScene {
         }
         self.calls.borrow_mut().removed.push(key);
         self.layers.retain(|layer| layer.key != key);
+        self.wrote();
         Ok(())
     }
 
@@ -204,6 +220,7 @@ impl SceneModel for FakeScene {
             let layer = self.layers.remove(from);
             self.layers.insert(index.min(self.layers.len()), layer);
         }
+        self.wrote();
         Ok(())
     }
 
@@ -231,7 +248,13 @@ impl SceneModel for FakeScene {
     }
 
     fn consolidate_layer(&mut self, _key: LayerKey) -> Result<(), ModelError> {
-        self.guard()
+        self.guard()?;
+        // Folding a list of nodes away is several entries underneath and one
+        // thing the sculptor asked for, which is the case the count exists to
+        // carry.
+        self.wrote();
+        self.wrote();
+        Ok(())
     }
 
     fn add_mesh_layer(&mut self, name: &str) -> Result<LayerKey, ModelError> {
@@ -715,4 +738,87 @@ fn a_pass_operation_is_forwarded_and_its_refusal_is_stated() {
     })
     .expect("a pass is added");
     assert!(vm.refusal().get().is_none());
+}
+
+// -- what each operation costs the history -----------------------------------
+
+/// The history a sculptor presses counts *actions* and remembers how many
+/// engine entries each one spent. A layer operation that banked nothing left
+/// the next Cmd+Z popping the previous command's count and spending it on the
+/// layer's entries — which is how one undo after a cage took back the subtool
+/// the sculptor had just made.
+#[test]
+fn adding_a_layer_is_one_history_entry() {
+    let (mut vm, _) = fixture();
+    vm.dispatch(&Command::AddLayer(Representation::Sdf))
+        .unwrap();
+    assert_eq!(
+        vm.take_unbanked_actions(),
+        vec![1],
+        "a new subtool was not something to take back"
+    );
+    assert!(
+        vm.take_unbanked_actions().is_empty(),
+        "the count was banked twice, which is one undo too many"
+    );
+}
+
+#[test]
+fn removing_a_layer_is_one_history_entry() {
+    let (mut vm, _) = fixture();
+    vm.dispatch(&Command::RemoveLayer(LayerKey(2))).unwrap();
+    assert_eq!(vm.take_unbanked_actions(), vec![1]);
+}
+
+/// One count, not one per entry. Consolidation folds a whole list of nodes
+/// away underneath, and the sculptor asked for one thing.
+#[test]
+fn consolidating_a_layer_is_one_history_entry() {
+    let (mut vm, _) = fixture();
+    vm.dispatch(&Command::OptimizeLayer(LayerKey(1))).unwrap();
+    assert_eq!(vm.take_unbanked_actions(), vec![2]);
+}
+
+#[test]
+fn renaming_a_layer_is_one_history_entry() {
+    let (mut vm, _) = fixture();
+    vm.rename(LayerKey(1), "Cabeça").unwrap();
+    assert_eq!(vm.take_unbanked_actions(), vec![1]);
+}
+
+#[test]
+fn reordering_a_layer_is_one_history_entry() {
+    // The stack is the evaluation order, so moving a row changes the form.
+    let (mut vm, _) = fixture();
+    vm.reorder(LayerKey(2), 0).unwrap();
+    assert_eq!(vm.take_unbanked_actions(), vec![1]);
+}
+
+/// Ways of *looking* at the scene, which the specification keeps out of the
+/// history: a sculptor whose next undo took back a click on a row would have
+/// to choose between navigating and working.
+#[test]
+fn looking_at_the_scene_is_not_something_to_undo() {
+    let (mut vm, _) = fixture();
+    vm.dispatch(&Command::SelectLayer(LayerKey(2))).unwrap();
+    vm.dispatch(&Command::SetLayerVisible(LayerKey(1), false))
+        .unwrap();
+    vm.dispatch(&Command::SoloLayer(Some(LayerKey(2)))).unwrap();
+    assert!(
+        vm.take_unbanked_actions().is_empty(),
+        "looking at the scene filled the history"
+    );
+}
+
+/// A refusal leaves the document as it was, so there is nothing to take back —
+/// and the ViewModel does not have to say so, because the measurement already
+/// does.
+#[test]
+fn a_refused_layer_operation_banks_nothing() {
+    let (mut vm, _) = fixture_with(|model| model.refuse = Some("camada bloqueada"));
+    assert!(vm
+        .dispatch(&Command::AddLayer(Representation::Sdf))
+        .is_err());
+    assert!(vm.dispatch(&Command::RemoveLayer(LayerKey(2))).is_err());
+    assert!(vm.take_unbanked_actions().is_empty());
 }

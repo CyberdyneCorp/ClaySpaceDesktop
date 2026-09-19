@@ -17,6 +17,10 @@ pub struct SceneViewModel {
     refusal: Observable<Option<String>>,
     /// How many new layers have been created, so each gets a distinct name.
     created: usize,
+    /// What the layer operations have cost the history, one count per
+    /// operation, waiting for the ViewModel that owns Cmd+Z to bank them. See
+    /// [`crate::Unbanked`].
+    unbanked: crate::Unbanked,
 }
 
 impl SceneViewModel {
@@ -27,6 +31,7 @@ impl SceneViewModel {
             scene: Observable::new(scene),
             refusal: Observable::new(None),
             created: 0,
+            unbanked: crate::Unbanked::default(),
         }
     }
 
@@ -37,6 +42,16 @@ impl SceneViewModel {
     /// Why the last operation was refused. `None` means the last one worked.
     pub fn refusal(&self) -> &Observable<Option<String>> {
         &self.refusal
+    }
+
+    /// What the layer operations have cost the history, one count each.
+    ///
+    /// Taken rather than read, for the reason
+    /// [`crate::MaskViewModel::take_unbanked_actions`] is taken: the ViewModel
+    /// that owns Cmd+Z banks each count as one action, and a count banked
+    /// twice is one undo too many.
+    pub fn take_unbanked_actions(&mut self) -> Vec<usize> {
+        self.unbanked.take()
     }
 
     /// Whether the active layer accepts edits, and why not if it does not.
@@ -53,27 +68,46 @@ impl SceneViewModel {
 
     /// Applies a scene command. Commands it does not own are ignored.
     pub fn dispatch(&mut self, command: &Command) -> Result<(), ModelError> {
-        let outcome = match command {
-            Command::SelectLayer(key) => self.model.set_active_layer(*key),
-            Command::SetLayerVisible(key, visible) => self.model.set_layer_visible(*key, *visible),
-            Command::SoloLayer(key) => self.model.set_solo(*key),
+        match command {
+            // Which layer is active, what is drawn and which one is shown
+            // alone are ways of *looking* at the scene rather than edits, and
+            // the specification keeps them out of the history: a sculptor
+            // whose next undo took back a click on a row would have to choose
+            // between navigating and working. They do not go through `edit`.
+            Command::SelectLayer(key) => {
+                let outcome = self.model.set_active_layer(*key);
+                self.finish(outcome)
+            }
+            Command::SetLayerVisible(key, visible) => {
+                let outcome = self.model.set_layer_visible(*key, *visible);
+                self.finish(outcome)
+            }
+            Command::SoloLayer(key) => {
+                let outcome = self.model.set_solo(*key);
+                self.finish(outcome)
+            }
             Command::AddLayer(representation) => {
                 self.created += 1;
                 let name = format!("Camada {}", self.created + 1);
-                self.model.add_layer(&name, *representation).map(|_| ())
+                let representation = *representation;
+                self.edit(move |model| model.add_layer(&name, representation).map(|_| ()))
             }
-            Command::RemoveLayer(key) => self.model.remove_layer(*key),
-            Command::OptimizeLayer(key) => self.model.consolidate_layer(*key),
+            Command::RemoveLayer(key) => {
+                let key = *key;
+                self.edit(move |model| model.remove_layer(key))
+            }
+            Command::OptimizeLayer(key) => {
+                let key = *key;
+                self.edit(move |model| model.consolidate_layer(key))
+            }
             // Dispatched by the composition root rather than here: the outcome
             // is a value the interface shows — what came out, and what the
             // rebuild destroyed on the way — and `dispatch` deals in
             // `Result<(), _>`. See `SceneViewModel::remesh`.
-            Command::RemeshLayer(_) => return Ok(()),
+            Command::RemeshLayer(_) => Ok(()),
             // Not this ViewModel's business.
-            _ => return Ok(()),
-        };
-
-        self.finish(outcome)
+            _ => Ok(()),
+        }
     }
 
     /// Sets a layer's protection.
@@ -82,19 +116,17 @@ impl SceneViewModel {
         key: LayerKey,
         protection: Protection,
     ) -> Result<(), ModelError> {
-        let outcome = self.model.set_layer_protection(key, protection);
-        self.finish(outcome)
+        self.edit(move |model| model.set_layer_protection(key, protection))
     }
 
     pub fn rename(&mut self, key: LayerKey, name: &str) -> Result<(), ModelError> {
-        let outcome = self.model.rename_layer(key, name);
-        self.finish(outcome)
+        let name = name.to_string();
+        self.edit(move |model| model.rename_layer(key, &name))
     }
 
     /// Moves a layer in the stack, which is its evaluation order.
     pub fn reorder(&mut self, key: LayerKey, index: usize) -> Result<(), ModelError> {
-        let outcome = self.model.move_layer(key, index);
-        self.finish(outcome)
+        self.edit(move |model| model.move_layer(key, index))
     }
 
     /// Which layer a ray meets, if it meets one.
@@ -126,7 +158,10 @@ impl SceneViewModel {
         key: LayerKey,
         settings: clayspace_model::RemeshSettings,
     ) -> Result<clayspace_model::RemeshOutcome, ModelError> {
-        match self.model.remesh_layer(key, settings) {
+        let before = self.model.history_depth();
+        let rebuilt = self.model.remesh_layer(key, settings);
+        self.unbanked.record(before, self.model.history_depth());
+        match rebuilt {
             Ok(outcome) => {
                 self.refusal.set_if_changed(None);
                 self.refresh();
@@ -204,6 +239,36 @@ impl SceneViewModel {
     pub fn refresh(&mut self) {
         let scene = self.model.scene();
         self.scene.set_if_changed(scene);
+    }
+
+    /// Applies one layer operation and banks what it cost as one action.
+    ///
+    /// **Every entry point that changes the layer stack comes through here**,
+    /// which is the point of it: an operation added without a history entry is
+    /// a defect nobody sees until an undo takes back something else. Measured
+    /// on a session — add a subtool, insert a shape, bend it through a cage,
+    /// one undo — the undo spent the stroke's count on the layer's entries and
+    /// the subtool left the document.
+    ///
+    /// What it cost is read from the history either side rather than assumed
+    /// to be one: consolidating a layer folds a whole list of nodes away, and
+    /// an operation the engine recorded nothing for banks nothing. A refusal
+    /// is therefore free without having to say so.
+    ///
+    /// The three commands that change only how the scene is *looked at* —
+    /// which layer is active, what is drawn, and which is shown alone — stay
+    /// out, as does a hierarchy's stack of levels and passes: those stay
+    /// adjustable long after the strokes that filled them, and a sculptor
+    /// whose next undo took back a slider rather than the work would have to
+    /// choose between the two.
+    fn edit(
+        &mut self,
+        run: impl FnOnce(&mut dyn SceneModel) -> Result<(), ModelError>,
+    ) -> Result<(), ModelError> {
+        let before = self.model.history_depth();
+        let outcome = run(self.model.as_mut());
+        self.unbanked.record(before, self.model.history_depth());
+        self.finish(outcome)
     }
 
     fn finish(&mut self, outcome: Result<(), ModelError>) -> Result<(), ModelError> {

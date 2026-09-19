@@ -1713,6 +1713,40 @@ impl App {
         self.frame_all();
     }
 
+    /// Hands every ViewModel's unbanked counts to the one that owns Cmd+Z.
+    ///
+    /// A sculptor has one Cmd+Z and does not care which part of the
+    /// application produced the thing they want back, so there is one history:
+    /// the sculpting ViewModel's stack of how many engine entries each action
+    /// spent. A ViewModel that changed the document measures what the change
+    /// cost where the change is made — see `Unbanked` — and this is where the
+    /// counts are collected.
+    ///
+    /// One count per action, taken once: a count banked twice is one undo too
+    /// many, and a ViewModel that banked nothing left the next Cmd+Z popping
+    /// the *previous* command's count and spending it on entries that were not
+    /// its own. That is how one undo after a cage took back the subtool the
+    /// sculptor had just made.
+    ///
+    /// Called after the command has reached the ViewModels, and again beside
+    /// the few operations the composition root runs directly — a rename, a
+    /// rebuild, a reorder, a change of protection — which never pass through
+    /// `dispatch_to_models`.
+    fn bank_edits(&mut self) {
+        let counts = self
+            .scene
+            .take_unbanked_actions()
+            .into_iter()
+            .chain(self.mask.take_unbanked_actions())
+            .chain(self.lattice.take_unbanked_actions())
+            .chain(self.objects.take_unbanked_actions())
+            .chain(self.boolean.take_unbanked_actions())
+            .collect::<Vec<_>>();
+        for entries in counts {
+            self.sculpt.record_external_action(entries);
+        }
+    }
+
     /// The engine's undo depth, which is what a rig edit moves.
     fn engine_undo_depth(&self) -> usize {
         self.document
@@ -4176,6 +4210,10 @@ impl App {
         // of answer as a rename refused for an empty name. Stated here too, so
         // that every operation this file runs answers the same way.
         if let Some(outcome) = self.stated(outcome) {
+            // Banked here because a rebuild does not pass through
+            // `dispatch_to_models`: the outcome is a value the interface
+            // shows, so the composition root runs it directly.
+            self.bank_edits();
             self.remesh_outcome = Some(outcome);
             self.document_vm.touched();
             // The layer's triangles are new ones. The carried-geometry path
@@ -4214,6 +4252,9 @@ impl App {
         };
         match self.scene.rename(key, &draft) {
             Ok(()) => {
+                // As for a rebuild: the rename is run from here rather than
+                // dispatched, so the count is collected from here too.
+                self.bank_edits();
                 self.renaming = None;
                 self.document_vm.touched();
             }
@@ -4416,14 +4457,6 @@ impl App {
             eprintln!("{e}");
         }
         self.mask.dispatch(command);
-        // The mask edits the document, and the history Cmd+Z reads belongs to
-        // the sculpting ViewModel: an edit banked nowhere left the next undo
-        // spending the previous command's count on the mask's own entries. One
-        // count per edit, because two edits banked as one would be one undo
-        // where the sculptor made two. See `MaskViewModel::edit`.
-        for entries in self.mask.take_unbanked_actions() {
-            self.sculpt.record_external_action(entries);
-        }
         // The representation is handed in rather than looked up: a cage's
         // resolution ceiling is the layer's, and the ViewModel may not reach
         // past its own interface to ask.
@@ -4436,6 +4469,12 @@ impl App {
         self.objects
             .dispatch(command, self.sculpt.active_representation());
         self.boolean.dispatch(command);
+        // Every ViewModel that changed the document hands over what the change
+        // cost, and the one that owns Cmd+Z banks each count as one action.
+        // Once, here, rather than beside each dispatch: a command reaches one
+        // of them, and the counts are taken in dispatch order so that one which
+        // somehow reached two is still banked in the order it happened.
+        self.bank_edits();
         // The whole-subtool manipulator lands on what a boolean left, exactly
         // as it lands on an inserted form: what arrived is a form to stand
         // somewhere, and the sculptor's next gesture is aiming it.

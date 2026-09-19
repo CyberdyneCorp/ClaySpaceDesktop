@@ -526,6 +526,19 @@ pub struct LayerCost {
 pub trait SceneModel {
     fn scene(&self) -> Scene;
 
+    /// How many things the history holds, as the interface counts them.
+    ///
+    /// Read either side of a layer operation so the ViewModel can bank what
+    /// that operation actually cost. The count is not something this side may
+    /// guess at: adding a subtool is one entry and consolidating one folds a
+    /// whole list of nodes away, and an operation the engine recorded nothing
+    /// for is nothing to take back.
+    ///
+    /// The same number [`crate::SculptModel::history`] reports, because it is
+    /// the same history — see [`crate::MaskModel::history_depth`], which asks
+    /// it of the mask for the same reason.
+    fn history_depth(&self) -> usize;
+
     fn set_active_layer(&mut self, key: LayerKey) -> Result<(), crate::ModelError>;
     fn set_layer_visible(&mut self, key: LayerKey, visible: bool) -> Result<(), crate::ModelError>;
 

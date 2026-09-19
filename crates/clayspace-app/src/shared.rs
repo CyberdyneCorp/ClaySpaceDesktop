@@ -283,6 +283,10 @@ impl SceneModel for SharedDocument {
         self.document.borrow().scene()
     }
 
+    fn history_depth(&self) -> usize {
+        self.document.borrow().history_depth()
+    }
+
     fn set_active_layer(&mut self, key: LayerKey) -> Result<(), ModelError> {
         self.document.borrow_mut().set_active_layer(key)
     }
@@ -486,6 +490,10 @@ impl LatticeModel for SharedDocument {
         self.document.borrow().lattice()
     }
 
+    fn history_depth(&self) -> usize {
+        self.document.borrow().history_depth()
+    }
+
     fn begin_lattice(&mut self, divisions: [i32; 3]) -> Result<(), ModelError> {
         self.document.borrow_mut().begin_lattice(divisions)
     }
@@ -620,6 +628,10 @@ impl ExchangeModel for SharedDocument {
 use clayspace_model::ObjectModel;
 
 impl ObjectModel for SharedDocument {
+    fn history_depth(&self) -> usize {
+        self.document.borrow().history_depth()
+    }
+
     fn objects(&mut self) -> Vec<clayspace_model::SceneObject> {
         self.document.borrow_mut().objects()
     }
