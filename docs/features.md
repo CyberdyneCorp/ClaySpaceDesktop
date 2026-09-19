@@ -506,6 +506,16 @@ tube behind on every move.
 | Arrastar no vazio | Draws the curve freehand, laying a point every tube-width |
 | Duplo clique na linha | Splits the span under the pointer, and takes the new point in hand |
 
+**The points in hand follow the history.** A control point reaches the engine
+as part of the guide the moment there are two to sweep along, so ⌘Z takes
+points back — and the hand used to keep them, which meant the panel offered a
+point the surface no longer had and the *next* point was appended past it,
+writing the undone one straight back out. The guide is re-read after every
+step. Far enough back and the tube itself goes, and then the curve is left in
+hand and empty rather than abandoned: stepping forward brings the same tube
+back rather than placing a second one beside it, because the node's own id is
+remembered while history has it taken back.
+
 **A drag draws the curve, a click places one point.** Nothing distinguishes
 them but distance: a press opens a stroke, and each time the pointer has
 travelled a tube-width from the last point it lays another. A click never
@@ -2965,7 +2975,26 @@ which is what makes rigging feel like modelling rather than filling in a form.
   fixed at the press rather than re-derived per sample — a plane that follows
   the pointer drifts, and the sphere slides away from the cursor.
 - Skin thickness is a multiplier over the authored radii, so the slider is
-  reversible and never rewrites the rig.
+  reversible and never rewrites the rig. The document holds the radii already
+  scaled, so reading a rig back is a division — by the thickness *in effect*,
+  which is what makes the round trip exact at any setting. Dividing by the
+  default instead returned radii with the thickness baked in, and the next edit
+  scaled them again: at 0.5 a rig halved on every undo and could not be
+  recovered.
+- **Moving the thickness is one step back.** The multiplier is not in the
+  document, so undo reverts the rewrite it forced and cannot revert the slider.
+  The change is noted against the engine entry its rewrite left — the same way
+  a crossing is — and a step over that entry carries the slider with it.
+- **A rig survives undo and redo, past its own creation.** The tree is read
+  back from the document after every step, for every subtool rather than only
+  the ones that already hold a rig: a rig cleared on the way back is exactly
+  the one a redo has to put right, and re-reading only the rigged ones left it
+  in the surface and out of reach. A rig a step brings back takes the sculptor
+  with it, since a rig is offered for the active subtool alone.
+- An edit naming a sphere the rig does not have is refused rather than ignored.
+  Every rig edit rewrites the whole armature, so a resize or a reparent of a
+  sphere nobody has used to place the tree again unchanged — an undo step for a
+  gesture that never happened.
 - **A rig belongs to the subtool that holds its nodes.** A document may carry
   one per subtool: activating a subtool presents its rig as it was left, rigs
   on other subtools are untouched by what you do to this one, and a subtool

@@ -193,10 +193,19 @@ impl Armature {
         }
     }
 
-    pub fn set_radius(&mut self, index: NodeIndex, radius: f32) {
-        if let Some(node) = self.nodes.get_mut(index as usize) {
-            node.radius = radius.max(0.001);
-        }
+    /// Refused rather than ignored for a sphere that is not there.
+    ///
+    /// Silence was the expensive answer: every edit above this rewrites the
+    /// whole rig into the document, so a resize of a sphere nobody has puts an
+    /// entry on the undo stack that changes nothing — and a sculptor who then
+    /// presses ⌘Z spends it on the ghost rather than on their last real edit.
+    pub fn set_radius(&mut self, index: NodeIndex, radius: f32) -> Result<(), ModelError> {
+        let node = self
+            .nodes
+            .get_mut(index as usize)
+            .ok_or_else(|| ModelError::engine("essa esfera não existe"))?;
+        node.radius = radius.max(0.001);
+        Ok(())
     }
 
     /// Hangs `index` off a different parent.
@@ -204,15 +213,20 @@ impl Armature {
     /// Refused rather than silently ignored when it would close a cycle: a
     /// reparent that quietly does nothing is worse than one that says why.
     pub fn reparent(&mut self, index: NodeIndex, new_parent: NodeIndex) -> Result<(), ModelError> {
+        // The sphere being hung, before the parent it is hung from: a
+        // reparent of a sphere that is not there used to fall through every
+        // guard below and change nothing while the rewrite above still banked
+        // an undo entry for it. See [`Self::set_radius`].
+        if self.nodes.get(index as usize).is_none() {
+            return Err(ModelError::engine("essa esfera não existe"));
+        }
         if self.would_cycle(index, new_parent) {
             return Err(ModelError::engine("isso faria a árvore fechar um ciclo"));
         }
         if self.nodes.get(new_parent as usize).is_none() {
             return Err(ModelError::engine("esse pai não existe"));
         }
-        if let Some(node) = self.nodes.get_mut(index as usize) {
-            node.parent = new_parent;
-        }
+        self.nodes[index as usize].parent = new_parent;
         Ok(())
     }
 
@@ -283,9 +297,32 @@ impl Default for SkinSettings {
 }
 
 impl SkinSettings {
+    /// The narrowest and widest a slider may actually reach.
+    ///
+    /// A thickness outside this scales by the bound rather than by itself, so
+    /// a rig cannot be driven to nothing or to a ball.
+    const RANGE: (f32, f32) = (0.05, 4.0);
+
+    /// What the authored radii are actually multiplied by.
+    fn scale(self) -> f32 {
+        self.thickness.clamp(Self::RANGE.0, Self::RANGE.1)
+    }
+
     /// The radius the engine is given for an authored one.
     pub fn radius_for(self, authored: f32) -> f32 {
-        (authored * self.thickness.clamp(0.05, 4.0)).max(0.001)
+        (authored * self.scale()).max(0.001)
+    }
+
+    /// The authored radius behind one the engine was given.
+    ///
+    /// The inverse of [`Self::radius_for`], and it has to be written as one
+    /// rather than as a division by `thickness`: the scale is the *clamped*
+    /// thickness, so dividing by the raw value would not bring the radius
+    /// back for a slider parked at either end. What is not invertible is the
+    /// floor — a radius the multiply pushed up to 0.001 has lost what it was —
+    /// and no rig authors one that small.
+    pub fn authored_radius(self, placed: f32) -> f32 {
+        placed / self.scale()
     }
 }
 
