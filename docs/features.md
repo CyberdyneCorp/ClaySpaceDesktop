@@ -278,6 +278,14 @@ it, where the bar is a quarter of it. So a layer carrying a mask keeps the
 engine's own weighting, dithered edge and all, until a voxel verb can refuse a
 masked cell outright. A fully frozen cell was never at risk either way.
 
+**On a masked grid layer, Borda now means the curve it names.** Until ClayCore
+v0.120.0 the grid's drag passed the falloff where a curve index was expected,
+so every name arrived as the next one's curve — `Dura` tapered linearly,
+`Linear` came out smooth, and a truly hard falloff could not be asked for at
+all. The names are honest now, which is a change a sculptor can see on a masked
+layer: `Dura` pulls rigidly inside the ball where it used to taper. Everywhere
+else the dial does not reach the drag at all, for the reason below.
+
 **A drag reaches about as far as its own radius, on a field and on a grid
 alike.** The engine's grab is an inverse map: every point in the ball samples
 from `p - displacement x w`, where `w` is 1 at the centre and 0 at the rim. A
@@ -292,7 +300,19 @@ each for the same drag:
 | 0.10 | 0.10 | 0.0800 |
 | 0.20 | 0.15 | 0.1333 |
 | 0.40 | 0.20 | 0.2000 |
-| 0.80 | 0.30 | 0.2667 |
+| 0.80 | 0.25 | 0.2667 |
+
+**That `w` is the one thing a drag does not take from Borda.** For every other
+grid verb the falloff decides *coverage*, which binary cells can only spend as
+scattered holes — so a dab is flattened to a hard edge and written solid. For a
+drag it decides the *pull*, and a pull flattened to a hard edge translates the
+whole ball rigidly: a block being shoved rather than clay being drawn.
+Measured on the slab above when ClayCore v0.120.0 made the hard falloff
+genuinely hard, the rim rose 5 cells against the centre's 6, where it had risen
+1 against 4. So an unmasked drag asks for the taper by name rather than
+inheriting the dab's hard edge, and the column above is the same mark it always
+was but for its last row, which fell from 0.30 — a drag of twice the brush's
+radius, long past where the bulge has saturated.
 
 The field keeps climbing toward its radius (0.3702 at a drag of 6.4). The grid
 moves in whole cells, which is the only difference left between the columns.

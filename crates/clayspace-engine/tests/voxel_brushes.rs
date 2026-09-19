@@ -99,12 +99,65 @@ fn cells(document: &ClayDocument) -> usize {
     reader.occupied_count().expect("a count")
 }
 
+/// The highest occupied cell in the column at `x`, in world units.
+///
+/// The slab is deposited along a wobble, so where its top stands at a given
+/// `x` is a property of the fixture rather than a number worth spelling out.
+fn top_at(document: &ClayDocument, x: f32) -> f32 {
+    const CELL: f32 = 0.05;
+    let (_, reader) = document
+        .document()
+        .voxel_reader("Voxels")
+        .expect("the grid reads back");
+    let column = (x / CELL).round() as i32;
+    let mut top = 0;
+    for y in -40..40 {
+        if reader
+            .get([column, y, 0])
+            .expect("a cell reads back")
+            .is_some()
+        {
+            top = top.max(y);
+        }
+    }
+    top as f32 * CELL
+}
+
+/// Where the gesture starts, for tools that reshape what is under the pointer.
+///
+/// Inside the slab, which is where every verb but one wants to be: a scrape,
+/// a pinch, a smooth and a deposit all have material to work on there.
+const ANCHOR: [f32; 3] = [0.35, 0.0, 0.0];
+
 fn stroke(document: &mut ClayDocument, tool: ToolKind, invert: bool, symmetry: [bool; 3]) -> bool {
+    // A drag is the exception, and it is the fixture's business rather than
+    // the brush's. A grab is an inverse map whose weight falls to the rim, so
+    // an anchor buried half a ball inside the slab puts the slab's own surface
+    // exactly where the weight is ~0: those cells sample themselves, the
+    // boundary does not move, and the drag writes nothing. `voxel_grab_taper`
+    // records the same fixture fault and the same cure — a press lands ON the
+    // surface, so that is where a drag here starts, and it pulls straight up
+    // and out rather than sliding along material into material.
+    //
+    // It read as a working drag until the move to ClayCore v0.120.0 only
+    // because the grab was quietly delivering the next falloff's curve, whose
+    // support reached a shade wider. Nothing about the brush changed here.
+    let dragging = tool == ToolKind::Mover;
+    let from = if dragging {
+        [ANCHOR[0], top_at(document, ANCHOR[0]) + 0.05, ANCHOR[2]]
+    } else {
+        ANCHOR
+    };
+    let travel = if dragging {
+        [0.0, 0.4, 0.0]
+    } else {
+        [0.4, 0.0, 0.0]
+    };
     let samples: Vec<GestureSample> = (0..9)
         .map(|step| {
             let t = step as f32 / 8.0;
             GestureSample {
-                position: [0.35 + t * 0.4, 0.0, 0.0],
+                position: std::array::from_fn(|axis| from[axis] + t * travel[axis]),
                 pressure: 1.0,
                 time: t,
             }

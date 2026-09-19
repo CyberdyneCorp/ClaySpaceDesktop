@@ -38,15 +38,15 @@ the document because the container carries the cage and nothing standing on it.
 `memory-that-says-which-part` and `maintenance-between-strokes` are the rest of
 what the v0.78.0 pin made reachable.
 
-Engine pinned at ClayCore **0.78.0**, at the tag rather than at `main` — the
+Engine pinned at ClayCore **0.120.0**, at the tag rather than at `main` — the
 tag is a release, `main` is where they are still working. On the reference
 scene a dab is 2.1 ms median against a 50 ms budget and startup to first
 document is 11.4 ms, recorded against 0.52.2 on Linux x86_64. The twenty-three
-figures this pin added — the hierarchy's own group, the deferred normal flush
-measured against the same stroke without it, and the drain between two strokes
-— have no entry in any baseline and report as `new` until one is recorded. The
-macOS baseline still reads 0.29.1 — 12.2 ms and 15.1 ms there — and nothing
-since has been re-measured on that machine. See *What is slow and why*.
+figures the v0.78.0 pin added — the hierarchy's own group, the deferred normal
+flush measured against the same stroke without it, and the drain between two
+strokes — have no entry in any baseline and report as `new` until one is
+recorded. The macOS baseline still reads 0.29.1 — 12.2 ms and 15.1 ms there —
+and nothing since has been re-measured on that machine. See *What is slow and why*.
 
 ## Milestones
 
