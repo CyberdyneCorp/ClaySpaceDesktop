@@ -8,10 +8,26 @@
 use clayspace_engine::{BackendPolicy, ClayDocument};
 use clayspace_model::{BrushSettings, GestureSample, SculptModel, ToolKind};
 
+/// The four, named once so the two halves cannot drift apart.
+///
+/// Pinçar stood here until `clay_layer_magnify_surface` gave it a field verb
+/// (#201). It still reaches a grid — `voxel_brushes` drives it there, inward
+/// and outward — but a tool a field layer now offers cannot be the example of
+/// one a field layer refuses, and the refusal half is why this list exists.
+/// Apagar replaced it: erase names `clay_voxel_erase_brush` on the grid and
+/// nothing on the other three, so it is absent from a field on its own merits
+/// rather than by leftover.
+const VOXEL_ONLY: [ToolKind; 4] = [
+    ToolKind::Raspar,
+    ToolKind::Apagar,
+    ToolKind::Preencher,
+    ToolKind::Nudge,
+];
+
 /// A voxel layer with material already in it.
 ///
-/// Every one of these tools reshapes what is there — scrape cuts, pinch
-/// gathers, fill closes cavities, smudge drags. On an empty grid each of them
+/// Every one of these tools reshapes what is there — scrape cuts, erase
+/// hollows, fill closes cavities, smudge drags. On an empty grid each of them
 /// is entitled to do nothing, so depositing first is what makes the question
 /// meaningful.
 fn packed() -> ClayDocument {
@@ -110,12 +126,7 @@ fn every_voxel_only_tool_changes_a_voxel_layer() {
     // Each tool gets the ridge as it was made, so one tool's effect cannot
     // explain away another's.
     let mut inert = Vec::new();
-    for tool in [
-        ToolKind::Raspar,
-        ToolKind::Pincar,
-        ToolKind::Preencher,
-        ToolKind::Nudge,
-    ] {
+    for tool in VOXEL_ONLY {
         let mut document = packed();
         assert!(
             tool.availability(clayspace_model::LayerState::editable(
@@ -144,12 +155,7 @@ fn a_voxel_only_tool_still_refuses_an_sdf_layer_by_name() {
     let document = ClayDocument::new(policy)
         .and_then(ClayDocument::with_starting_form)
         .expect("a document with a starting form");
-    for tool in [
-        ToolKind::Raspar,
-        ToolKind::Pincar,
-        ToolKind::Preencher,
-        ToolKind::Nudge,
-    ] {
+    for tool in VOXEL_ONLY {
         let refusal = tool
             .availability(clayspace_model::LayerState::editable(
                 document.active_representation(),

@@ -640,6 +640,171 @@ fn a_move_can_be_previewed_without_applying_it() {
     );
 }
 
+// -- magnify and pinch on the assembled surface -----------------------------
+
+/// A form of two smooth-unioned balls, which is what the surface resolver is
+/// for: a per-item magnify scales one of these and leaves the other.
+fn blended_doc() -> (Document, claycore::LayerId) {
+    let mut doc = Document::new().expect("create document");
+    let layer = doc.add_sdf_layer("Base").expect("add layer");
+    for x in [-0.45f32, 0.45] {
+        let mut ball = Item::sphere(0.5).expect("sphere");
+        ball.set_position([x, 0.0, 0.0]).expect("position");
+        // Smooth-unioned, because that is the form the surface resolver
+        // exists for: two pieces the field joins into one surface.
+        ball.set_op(Op::Add).expect("op");
+        ball.set_blend(claycore::Blend::Quadratic, 0.25)
+            .expect("blend");
+        doc.add_item(layer, &ball).expect("place");
+    }
+    (doc, layer)
+}
+
+/// How far the surface stands above the origin over `x`.
+fn top(doc: &Document, x: f32) -> f32 {
+    let probes: Vec<[f32; 3]> = (0..400).map(|i| [x, 0.0, 0.2 + i as f32 * 0.005]).collect();
+    let field = doc.eval_points(None, &probes).expect("evaluate");
+    probes
+        .iter()
+        .zip(&field)
+        .find(|(_, distance)| **distance > 0.0)
+        .map(|(at, _)| at[2])
+        .expect("the ray left the form")
+}
+
+fn magnify(radius: f32) -> claycore::MagnifyParams {
+    claycore::MagnifyParams { radius, ease: 0 }
+}
+
+#[test]
+fn a_magnify_swells_every_item_of_a_blended_form() {
+    // The defect the entry point exists for (ClayCore #391): a per-item
+    // deformer scales one contributor and the surface gathers on one side of
+    // the blend only.
+    let (base, _) = blended_doc();
+    let before: Vec<f32> = [-0.45f32, 0.45].iter().map(|x| top(&base, *x)).collect();
+
+    let (mut doc, layer) = blended_doc();
+    let applied = doc
+        .magnify_surface(layer, [0.0, 0.0, 0.0], 0.4, magnify(0.8))
+        .expect("magnify surface");
+    assert_eq!(applied, 2, "the magnify warped {applied} of two items");
+
+    let after: Vec<f32> = [-0.45f32, 0.45].iter().map(|x| top(&doc, *x)).collect();
+    for (was, now) in before.iter().zip(&after) {
+        assert!(now > was, "a side of the blend went from {was} to {now}");
+    }
+    assert!(
+        (after[0] - after[1]).abs() < 0.01,
+        "the two sides came out at {} and {}",
+        after[0],
+        after[1]
+    );
+}
+
+#[test]
+fn the_sign_is_magnify_against_pinch() {
+    // One entry point, two verbs. This is the whole of what separates them.
+    let (base, _) = blended_doc();
+    let before = top(&base, 0.0);
+
+    let (mut swelled, layer) = blended_doc();
+    swelled
+        .magnify_surface(layer, [0.0, 0.0, 0.0], 0.4, magnify(0.8))
+        .expect("magnify");
+    let (mut gathered, layer) = blended_doc();
+    gathered
+        .magnify_surface(layer, [0.0, 0.0, 0.0], -0.4, magnify(0.8))
+        .expect("pinch");
+
+    assert!(
+        top(&swelled, 0.0) > before,
+        "a positive strength did not swell the surface"
+    );
+    assert!(
+        top(&gathered, 0.0) < before,
+        "a negative strength did not gather the surface"
+    );
+}
+
+#[test]
+fn the_frames_of_one_magnify_gesture_fold_into_one_warp() {
+    // A live gesture sends a *total* every frame, never an increment, so five
+    // frames ending at -0.4 must leave what one call at -0.4 leaves — and must
+    // leave one warp rather than five. The wrapper passes the strength
+    // straight through, which is what makes that true here.
+    let (mut stepped, layer) = blended_doc();
+    for strength in [-0.08f32, -0.16, -0.24, -0.32, -0.4] {
+        stepped
+            .magnify_surface(layer, [0.0, 0.0, 0.0], strength, magnify(1.2))
+            .expect("a frame of the gesture");
+    }
+    let (mut once, once_layer) = blended_doc();
+    once.magnify_surface(once_layer, [0.0, 0.0, 0.0], -0.4, magnify(1.2))
+        .expect("the whole gesture at once");
+
+    assert_eq!(
+        chain(&stepped, layer),
+        chain(&once, once_layer),
+        "five frames of one gesture left a longer deformer chain than one call"
+    );
+    for x in [-0.45f32, 0.0, 0.45] {
+        assert!(
+            (top(&stepped, x) - top(&once, x)).abs() < 1e-3,
+            "at {x} the stepped gesture left {} and the single call {}",
+            top(&stepped, x),
+            top(&once, x)
+        );
+    }
+}
+
+#[test]
+fn a_magnify_can_be_previewed_without_applying_it() {
+    let (doc, layer) = blended_doc();
+    let probe = [[0.0f32, 0.0, 0.55]];
+    let before = doc.eval_points(None, &probe).expect("evaluate")[0];
+
+    let nodes = doc
+        .magnify_surface_preview(layer, [0.0, 0.0, 0.0], 0.4, magnify(0.8), 16)
+        .expect("preview");
+
+    assert_eq!(nodes.len(), 2, "the preview named {} nodes", nodes.len());
+    assert_eq!(
+        doc.eval_points(None, &probe).expect("evaluate")[0],
+        before,
+        "previewing a magnify must not change the document"
+    );
+
+    let mut doc = doc;
+    let applied = doc
+        .magnify_surface(layer, [0.0, 0.0, 0.0], 0.4, magnify(0.8))
+        .expect("magnify");
+    assert_eq!(
+        applied,
+        nodes.len(),
+        "the preview named {} nodes and the gesture warped {applied} items",
+        nodes.len()
+    );
+}
+
+#[test]
+fn a_magnify_that_is_not_a_gesture_is_refused() {
+    // Stated rather than left to the caller: a strength of zero scales by one
+    // and a radius of zero is not a region, and a chain of no-op deformers is
+    // worse than none.
+    let (mut doc, layer) = blended_doc();
+    assert!(
+        doc.magnify_surface(layer, [0.0, 0.0, 0.0], 0.0, magnify(0.8))
+            .is_err(),
+        "a strength of zero was taken for a gesture"
+    );
+    assert!(
+        doc.magnify_surface(layer, [0.0, 0.0, 0.0], 0.4, magnify(0.0))
+            .is_err(),
+        "a radius of zero was taken for a region"
+    );
+}
+
 // -- concurrent reads -------------------------------------------------------
 
 #[test]

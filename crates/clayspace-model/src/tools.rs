@@ -621,14 +621,41 @@ pub enum ToolNote {
     /// hierarchy expects the surface to be taken away and gets the pass's own
     /// deposit fading out instead, which is a surprise worth one sentence.
     MultiresEraseTakesThisPassToZero,
+    /// A field's Standard is a relief stroke, and relief is an **Inflate**.
+    ///
+    /// The engine's own Standard preset — `clay_brush_frame`'s Draw column —
+    /// displaces a stamp's footprint along **one averaged normal**. Relief
+    /// offsets the accumulated field, and offsetting a distance moves every
+    /// point of the isosurface along the field's own gradient: each point
+    /// along *its own* normal, which is the Inflate column. ClayCore v0.120.0
+    /// measured the two frames against relief and named it (#615, #618): the
+    /// inflate reference sits 0.000 of the amplitude away on a sphere, a
+    /// saddle and a bowl, the draw reference 0.017, 0.077 and 0.027.
+    ///
+    /// Which makes this the one note here about a tool that does what its
+    /// label says *almost* everywhere. What decides how far off it is, is how
+    /// far the normals under the stamp spread: on a form smooth at the brush's
+    /// scale a few percent of the amplitude, and on a feature narrower than
+    /// the brush the whole of it — a fin takes the stamp on its flanks as well
+    /// as its top and comes out thicker, where a Standard would have drawn on
+    /// the top and left the thickness alone.
+    ///
+    /// Worth a sculptor's attention rather than only a maintainer's, because
+    /// the surprise arrives mid-stroke and looks like a brush that is too big:
+    /// a ridge detailed onto a thin form fattens the form. The remedy is the
+    /// one the note names — a brush smaller than the feature — and the faithful
+    /// Standard the engine measured is not shipped, being a per-item warp per
+    /// dab at nine times relief's cost.
+    SdfStandardIsAnInflate,
 }
 
 impl ToolNote {
-    pub const ALL: [ToolNote; 4] = [
+    pub const ALL: [ToolNote; 5] = [
         Self::VoxelPlanarIsTwoSided,
         Self::MultiresSmoothChoosesAFrequency,
         Self::MultiresStoresNoColour,
         Self::MultiresEraseTakesThisPassToZero,
+        Self::SdfStandardIsAnInflate,
     ];
 }
 
@@ -839,6 +866,18 @@ impl ToolKind {
                 mesh: Some("clay_mesh_sculptor_apply_stroke (DRAW)"),
                 multires: Some("clay_multires_sculptor_apply_stroke (DRAW)"),
             },
+            // The field's column is relief, which it shares with Padrão, and
+            // that sharing is the right way round rather than a gap: relief
+            // offsets the accumulated field, and offsetting a distance moves
+            // every point of the isosurface along the field's own gradient —
+            // each point along its own normal, which is the Inflate frame.
+            // ClayCore v0.120.0 measured it (#615, #618): against a
+            // frame-isolated inflate reference relief sits 0.000 of the
+            // amplitude on a sphere, a saddle and a bowl. **Relief is the SDF
+            // Inflate.** It is Padrão that is the approximation here, which is
+            // what `ToolNote::SdfStandardIsAnInflate` tells a sculptor, and
+            // the two rows differ in the footprint because that is the only
+            // thing left for them to differ in.
             Self::Inflar => Verbs {
                 sdf: Some("clay_layer_apply_stroke (CLAY_OP_RELIEF)"),
                 voxel: Some("clay_voxel_sculpt_inflate"),
@@ -977,8 +1016,23 @@ impl ToolKind {
                 mesh: None,
                 multires: None,
             },
+            // The field's column is a signed radial scale of the assembled
+            // surface, taken at a negative strength: the region gathers toward
+            // the dab's centre, which is what pinching is and which no
+            // stroke op spells — relief and incise move the surface along its
+            // own normal, and neither of those is a gather.
+            //
+            // The column was empty until the engine grew a resolver for it
+            // (ClayCore #391): a per-item `CLAY_DEFORM_MAGNIFY` gathers one
+            // piece of a smooth-unioned form and leaves the rest, with nothing
+            // to show for it but a surface that came out wrong.
+            //
+            // The positive half of the same entry point is not on this table.
+            // Inflar does not want it: relief already *is* the Inflate frame
+            // (see that row), and a radial scale about a centre is a different
+            // mark rather than a better one.
             Self::Pincar => Verbs {
-                sdf: None,
+                sdf: Some("clay_layer_magnify_surface (negative strength)"),
                 voxel: Some("clay_voxel_sculpt_pinch"),
                 mesh: Some("clay_mesh_sculptor_apply_stroke (PINCH)"),
                 multires: Some("clay_multires_sculptor_apply_stroke (PINCH)"),
@@ -1172,8 +1226,8 @@ impl ToolKind {
     /// surprise — and where faking agreement would mean doing arithmetic the
     /// engine does not offer.
     ///
-    /// Answers for a pair whether or not the tool is *offered* on it. Three of
-    /// the four notes describe a tool that is there, and one describes one
+    /// Answers for a pair whether or not the tool is *offered* on it. Four of
+    /// the five notes describe a tool that is there, and one describes one
     /// that is not — [`ToolKind::availability`] carries that one into the
     /// refusal, since a tool nobody can select is a tool nobody can hover.
     pub fn note_on(self, representation: Representation) -> Option<ToolNote> {
@@ -1188,6 +1242,7 @@ impl ToolKind {
             (Self::Apagar, Representation::Multires) => {
                 Some(ToolNote::MultiresEraseTakesThisPassToZero)
             }
+            (Self::Padrao, Representation::Sdf) => Some(ToolNote::SdfStandardIsAnInflate),
             _ => None,
         }
     }
@@ -2038,7 +2093,7 @@ mod tests {
         // And the field, which `docs/features.md` states as a count too.
         let sdf = ToolKind::for_representation(Representation::Sdf).len();
         assert_eq!(
-            sdf, 14,
+            sdf, 15,
             "the field vocabulary has moved: {sdf} tools reach an SDF layer. \
              Update this count and `docs/features.md` together."
         );

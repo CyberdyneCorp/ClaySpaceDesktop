@@ -582,7 +582,9 @@ fn an_agent_drives_the_running_application() {
 
     // -- a tool with no verb on this layer is not offered, and refuses ------
     //
-    // Issue #127. Four tools have no SDF verb — `ToolKind::verbs` says so
+    // Issue #127. Six tools have no SDF verb today — erase, scrape, fill,
+    // nudge, paint and smear; four when #127 was written, and pinch was one of
+    // them until #201 gave it a field verb. `ToolKind::verbs` says so
     // outright — so the shelf does not draw them for a field layer. The agent
     // surface offered all twenty-one whatever was open, and then answered
     // `isError: false` with `history_depth: 0` to the begin, the continue and

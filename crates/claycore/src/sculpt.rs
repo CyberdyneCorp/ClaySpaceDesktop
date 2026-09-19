@@ -94,6 +94,40 @@ impl MoveParams {
     }
 }
 
+/// How a magnify or a pinch falls off across its region.
+///
+/// The radial counterpart to [`MoveParams`], and deliberately smaller: there
+/// is no `front_only` because a radial scale has no direction to gate a
+/// half-space on, and no `gesture_id` because the engine folds these frames
+/// on the region itself — a gesture that keeps its centre and radius and grows
+/// its strength replaces its own last frame rather than stacking one warp per
+/// frame.
+#[derive(Debug, Clone, Copy)]
+pub struct MagnifyParams {
+    /// The region's radius in world units. Must be positive.
+    pub radius: f32,
+    /// Falloff curve index across the region; 0 is linear.
+    pub ease: i32,
+}
+
+impl Default for MagnifyParams {
+    fn default() -> Self {
+        Self {
+            radius: 0.25,
+            ease: 0,
+        }
+    }
+}
+
+impl MagnifyParams {
+    pub(crate) fn to_raw(self) -> sys::clay_magnify_params {
+        let mut raw = sys::clay_magnify_params::sized();
+        raw.radius = self.radius;
+        raw.ease = self.ease;
+        raw
+    }
+}
+
 /// A drag whose reach is measured **along the material** — ZBrush's Move
 /// Topological.
 ///
@@ -536,6 +570,104 @@ impl Document {
                 )
             },
             "clay_layer_move_surface_preview",
+        )?;
+        nodes.truncate(count.min(capacity));
+        Ok(nodes.into_iter().map(NodeId).collect())
+    }
+
+    /// Magnifies or **pinches** the assembled surface — one verb for both.
+    ///
+    /// The radial counterpart to [`Self::move_surface`], and it exists for the
+    /// same reason that one does. A `CLAY_DEFORM_MAGNIFY` deformer is per
+    /// *item* and its centre is in that item's local frame, so putting one on
+    /// a picked item of a form that is several smooth-unioned pieces scales
+    /// that piece's field and leaves the others: the surface gathers on one
+    /// side of the blend and not the other, and nothing errors. This resolves
+    /// the region against every item it reaches and puts a warp at the front
+    /// of each chain, which is where a warp has to go to act on the assembled
+    /// shape.
+    ///
+    /// `strength` is **signed** and is the whole difference between the two
+    /// verbs: positive swells the surface away from the centre — Inflate —
+    /// and negative gathers it toward — Pinch. Zero scales by one and is
+    /// refused, as a drag of zero is.
+    ///
+    /// It is a **total** from the start of the gesture, never an increment on
+    /// the last frame, for the reason [`Self::move_surface`] takes a total
+    /// displacement: a chain of increments composes scales each authored
+    /// against a different intermediate surface, and the product is not the
+    /// pinch the artist made. A live gesture calls this every frame with a
+    /// growing strength and the engine replaces its own last frame.
+    ///
+    /// Under a layer mirror the region is reflected into every image the layer
+    /// emits and the strength crosses each one untouched, where a drag's
+    /// displacement has to be mapped per image. The whole gesture is one undo
+    /// step however many items it touched.
+    ///
+    /// Returns how many items took a warp, so a caller can tell "the gesture
+    /// reached nothing" from "the gesture did nothing visible".
+    pub fn magnify_surface(
+        &mut self,
+        layer: LayerId,
+        centre: [f32; 3],
+        strength: f32,
+        params: MagnifyParams,
+    ) -> Result<usize> {
+        let raw = params.to_raw();
+        let mut applied = 0usize;
+        // SAFETY: one three-float input, a sized descriptor, valid handle.
+        check(
+            unsafe {
+                sys::clay_layer_magnify_surface(
+                    self.as_ptr(),
+                    layer.0,
+                    centre.as_ptr(),
+                    strength,
+                    &raw,
+                    &mut applied,
+                )
+            },
+            "clay_layer_magnify_surface",
+        )?;
+        Ok(applied)
+    }
+
+    /// Which nodes a magnify would warp, without warping them.
+    ///
+    /// The same size-query pattern as [`Self::move_surface_preview`], and the
+    /// same purpose: lets a host draw the affected region before the sculptor
+    /// commits to it. Resolving is pure — the document is not touched.
+    pub fn magnify_surface_preview(
+        &self,
+        layer: LayerId,
+        centre: [f32; 3],
+        strength: f32,
+        params: MagnifyParams,
+        capacity: usize,
+    ) -> Result<Vec<NodeId>> {
+        let raw = params.to_raw();
+        let mut nodes = vec![sys::clay_node_id::default(); capacity];
+        let mut count = 0usize;
+        // SAFETY: `nodes` holds `capacity` ids and the engine is told so; a
+        // capacity of zero passes the null buffer the size query wants.
+        check(
+            unsafe {
+                sys::clay_layer_magnify_surface_preview(
+                    self.as_ptr(),
+                    layer.0,
+                    centre.as_ptr(),
+                    strength,
+                    &raw,
+                    if capacity == 0 {
+                        std::ptr::null_mut()
+                    } else {
+                        nodes.as_mut_ptr()
+                    },
+                    capacity,
+                    &mut count,
+                )
+            },
+            "clay_layer_magnify_surface_preview",
         )?;
         nodes.truncate(count.min(capacity));
         Ok(nodes.into_iter().map(NodeId).collect())

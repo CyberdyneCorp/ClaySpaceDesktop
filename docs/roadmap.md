@@ -220,15 +220,18 @@ box while the same stamp issued as a *stroke* did not.
 The **gesture** half of it is narrower than that, and checked rather than
 assumed on both sides. Three entry points build their region from item boxes and
 bypass the fixed path — `clay_layer_place_stamps`, `clay_layer_move_surface` and
-`clay_layer_magnify_surface` — and of those this application drives exactly one:
-`move_surface`, through `ToolKind::Mover`. `place_stamps` has no caller here at
-all, and `magnify_surface` is not even wrapped. `clay_layer_apply_stroke` is
-*not* among them — it applies each stroke node through `apply_edit`, so every
-brush dab already takes the path that was fixed first.
+`clay_layer_magnify_surface` — and of those this application drives two:
+`move_surface`, through `ToolKind::Mover`, and `magnify_surface`, through
+`Pinçar`. `place_stamps` has no caller here at all.
+`clay_layer_apply_stroke` is *not* among them — it applies each stroke node
+through `apply_edit`, so every brush dab already takes the path that was fixed
+first.
 
-So the live exposure is **one tool, on a drag**, where a region too small shows
-as the surface tearing behind the pointer rather than as a stale patch found
-later.
+So the live exposure is **two tools, on a drag and on one field brush**, where
+a region too small shows as the surface tearing behind the pointer rather than
+as a stale patch found later. The magnify's region is the one the engine states
+for it: the dab's own ball with no dilation, once per image the layer's
+symmetry makes of it.
 
 Recorded here rather than left in the conversation it came from, because the
 symptom on this side is stale geometry with nothing to point at, and the first
@@ -464,16 +467,20 @@ and `Document::voxel_layer_masked` hands over a grid and its layer's mask out
 of one borrow. Masks now survive a save and a reopen and record on the engine's
 history. See [features.md](features.md#masking).
 
-[#391](https://github.com/CyberdyneCorp/ClayCore/issues/391) —
-**`clay_layer_move_surface` has no counterpart for the radial scale.** The
-engine's field pinch and magnify is `CLAY_DEFORM_MAGNIFY`, one signed strength,
-and it is per *item* and local — the same paragraph that warns against wiring
-Move to `grab` says so: on a form blended from several items, magnifying one
-pulls its share and leaves the rest behind. The drag has an assembled-surface
-resolver and the scale does not, so `Pinçar` reaches a grid and a mesh and not
-a field. Reconstructing the resolver host-side would put field math in this
-application, which the layering forbids and which the engine's own note asks
-callers not to do.
+[#391](https://github.com/CyberdyneCorp/ClayCore/issues/391) — **closed
+upstream, and taken up here.** The engine's field pinch and magnify was
+`CLAY_DEFORM_MAGNIFY`, one signed strength, per *item* and local — the same
+paragraph that warns against wiring Move to `grab` said so: on a form blended
+from several items, magnifying one pulls its share and leaves the rest behind.
+The drag had an assembled-surface resolver and the scale did not, so `Pinçar`
+reached a grid and a mesh and not a field.
+
+`clay_layer_magnify_surface` is that resolver, and `Pinçar` is now on the
+field's shelf at a negative strength. The positive half stays unbound: `Inflar`
+is relief, and ClayCore v0.120.0 measured relief to *be* the Inflate frame
+(#615, #618), so moving it onto a radial scale would have replaced a faithful
+Inflate with a different mark. See
+[features.md](features.md#sculpting-tools).
 
 **Two limits ClayCore v0.78.0 states about itself are now held as tripwires
 here**, because both bear on work this application is about to do and neither
@@ -685,12 +692,14 @@ stack, where before it wrote into a field beside the document and recorded
 nothing. Nine hundredths of a millisecond, against a fifty-millisecond dab
 budget, for a mask that survives the file and undoes as one gesture.
 
-What is still upstream, with the measurement behind each: SDF Pinçar needs an
-assembled-surface resolver for the radial scale; SDF stroke alphas need the
-stamp resolver to carry the template's deformer chain; `clay_item_set_gate` is
-accepted and inert. A true regional field inflate and a voxel DamStandard
-recipe are both decisions rather than gaps — neither should be built before
-somebody has looked at what it draws.
+What is still upstream, with the measurement behind each: SDF stroke alphas
+need the stamp resolver to carry the template's deformer chain;
+`clay_item_set_gate` is accepted and inert. The radial scale's own gap is
+closed — `clay_layer_magnify_surface` is the assembled-surface resolver SDF
+Pinçar needed, and Pinçar goes through it. A faithful SDF Standard is measured
+upstream and deliberately not shipped, at nine times relief's cost for a stroke
+(ClayCore v0.120.0); a voxel DamStandard recipe is a decision rather than a
+gap, and neither should be built before somebody has looked at what it draws.
 
 ### Level of detail, as delivered
 

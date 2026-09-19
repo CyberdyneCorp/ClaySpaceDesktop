@@ -791,6 +791,7 @@ const PT_BR: Strings = Strings {
         "Numa hierarquia, suavizar escolhe a frequência: a forma, só o detalhe, ou a forma com o detalhe carregado intacto",
         "Uma hierarquia guarda para onde o vértice foi, não de que cor ele é. Pinte a gaiola antes de subdividir, ou converta um nível em malha",
         "Numa hierarquia, apagar leva a passagem selecionada a zero: a forma e as outras passagens ficam onde estão. Selecione uma passagem antes",
+        "Num campo, Padrão é relevo, e relevo é o Inflar do motor: cada ponto sai pela sua própria normal. Numa forma lisa a diferença é de poucos por cento; numa aresta mais fina que o pincel é a amplitude inteira — ela engrossa em vez de receber a marca. Use um pincel menor que o detalhe",
     ],
     shape_names: [
         "Caixa",
@@ -1365,6 +1366,7 @@ const EN_US: Strings = Strings {
         "On a hierarchy, smooth picks a frequency: the form, the detail alone, or the form with the detail carried through unchanged",
         "A hierarchy stores where a vertex went, not what colour it is. Paint the cage before subdividing, or bake a level back to a mesh",
         "On a hierarchy, erase takes the selected pass to zero: the form and every other pass stay where they are. Select a pass first",
+        "On a field, Standard is relief, and relief is the engine's Inflate: every point moves along its own normal. On a smooth form the difference is a few percent; on a feature narrower than the brush it is the whole amplitude — the feature thickens instead of taking the mark. Use a brush smaller than the detail",
     ],
     shape_names: [
         "Box",
@@ -1935,6 +1937,7 @@ const ES_419: Strings = Strings {
         "En una jerarquía, suavizar elige la frecuencia: la forma, solo el detalle, o la forma con el detalle llevado intacto",
         "Una jerarquía guarda adónde fue el vértice, no de qué color es. Pinta la caja antes de subdividir, o hornea un nivel a malla",
         "En una jerarquía, borrar lleva la pasada seleccionada a cero: la forma y las demás pasadas se quedan donde están. Selecciona una pasada primero",
+        "En un campo, Estándar es relieve, y el relieve es el Inflar del motor: cada punto sale por su propia normal. En una forma lisa la diferencia es de un pequeño porcentaje; en un detalle más estrecho que el pincel es la amplitud entera — engorda en vez de recibir la marca. Usa un pincel más pequeño que el detalle",
     ],
     shape_names: [
         "Caja",

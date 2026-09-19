@@ -3344,6 +3344,19 @@ impl ClayDocument {
             | ToolKind::Relaxar
             | ToolKind::Planar
             | ToolKind::Polir => self.baked_stroke(tool, brush, samples, symmetry),
+            // One radial scale per dab, gathering toward the dab's centre.
+            //
+            // Not reflected here, unlike the baked verbs above. The engine
+            // reflects the region into every image the layer emits and carries
+            // the strength across each one untouched — a reflection of a radial
+            // scale is a radial scale of the same strength, where a drag's
+            // displacement has to be mapped per image — so pointing the mirror
+            // is the whole of what symmetry means here, as it is for the live
+            // drag.
+            ToolKind::Pincar => {
+                self.point_the_mirror(symmetry)?;
+                self.magnify_surface_stroke(brush, samples)
+            }
             // Pulls a lobe out along the path, as items — so the layer
             // mirror does reach it, and pointing the mirror is the whole
             // of what symmetry means here.
@@ -3426,6 +3439,13 @@ impl ClayDocument {
         // the rim. So Inflar takes a wider region with a wider rim and asks
         // for a little less lift — the swell — and Padrão keeps the standard
         // clay mapping, k = rounding = radius: the ridge.
+        //
+        // Which of the two the op is faithful to is settled, and it is not
+        // Padrão: relief offsets the accumulated field, so every point of the
+        // isosurface moves along its own normal, and that is the Inflate frame
+        // (ClayCore v0.120.0, #615 and #618). The profile is the only thing
+        // left to tell them apart, and a sculptor is told where the
+        // approximation shows by `ToolNote::SdfStandardIsAnInflate`.
         let size = brush.sanitized().size;
         let (region, lift) = (size * recipe.reach, recipe.lift);
         let mut stamp = Item::sphere(region).map_err(ModelError::engine)?;
@@ -3586,7 +3606,48 @@ impl ClayDocument {
     /// out wider *and* taller — the same ridge drawn with a bigger brush,
     /// which is not what Inflate means. At 0.32 the footprint is half again
     /// as wide as Padrão's at a fifth less slope: a swell rather than a ridge.
+    ///
+    /// The *frame* is not what separates these two, and the profile is all
+    /// there is left: relief moves each point of the surface along its own
+    /// normal, so it is already the Inflate frame — ClayCore v0.120.0 measured
+    /// it at 0.000 of the amplitude from a frame-isolated inflate reference on
+    /// three smooth fixtures (#615, #618). It is Padrão that is approximated
+    /// by it, and `ToolNote::SdfStandardIsAnInflate` is where a sculptor is
+    /// told so.
     const INFLATE_LIFT: f32 = 0.32;
+
+    /// How much wider than the brush Pinçar's region is.
+    ///
+    /// A gather has to reach past the brush to have anything to gather: what
+    /// the scale moves is the surface *around* its centre, so a region the
+    /// size of the brush draws the material in from where the sculptor was
+    /// already pointing. The number is the one Inflar's relief profile uses,
+    /// for the same reason and to the same reading, and the measurements in
+    /// [`Self::MAGNIFY_STRENGTH`] were taken at it.
+    const MAGNIFY_REACH: f32 = 1.35;
+
+    /// What Pinçar scales by at full Intensidade, negated on the way to the
+    /// engine.
+    ///
+    /// The engine's strength is dimensionless — the fraction the region is
+    /// scaled by about the dab's centre — so there is no world quantity to
+    /// derive it from and it has to be measured against the brushes it stands
+    /// beside. Measured on the starting form with a 0.25 brush at Intensidade
+    /// 0.9, as how far the surface moved at each distance to the side of the
+    /// stroke:
+    ///
+    ///   aside    Padrão   Pinçar
+    ///   0.00    +0.1483  +0.0057
+    ///   0.09    +0.1204  +0.0014
+    ///   0.18    +0.0108  −0.0043
+    ///   0.27     0.0000  −0.0052
+    ///   0.36     0.0000  −0.0001
+    ///
+    /// The right-hand column is the shape a gather makes — the line under the
+    /// stroke stands proud and the flanks fall away — and it is small on
+    /// purpose, Pinch being a tool that sharpens an edge already there rather
+    /// than one that makes one.
+    const MAGNIFY_STRENGTH: f32 = 0.5;
 
     /// Argila's footprint and stroke, against Padrão's.
     ///
@@ -3719,6 +3780,223 @@ impl ClayDocument {
             front_only: brush.drag.front_only,
             gesture_id: self.gesture_id,
         }
+    }
+
+    /// Pinch on a field: one radial scale per dab, gathering toward its centre.
+    ///
+    /// `clay_layer_magnify_surface` takes a **signed** strength — positive
+    /// swells the surface away from the centre, negative gathers it toward —
+    /// and Pinçar is the negative half of it.
+    ///
+    /// Why the positive half is not Inflar. Relief offsets the accumulated
+    /// field, and offsetting a distance moves every point of the isosurface
+    /// along the field's own gradient: each point along its own normal, which
+    /// is the Inflate frame rather than an approximation of it. ClayCore
+    /// v0.120.0 measured that (#615, #618) — 0.000 of the amplitude from a
+    /// frame-isolated inflate reference on a sphere, a saddle and a bowl — so
+    /// Inflar is already the faithful tool on the relief op, and moving it to
+    /// a radial scale would have replaced an Inflate with something that is
+    /// not one. A scale about a centre is its own mark, and Pinch is the tool
+    /// that mark is.
+    ///
+    /// Why it is not a per-item `CLAY_DEFORM_MAGNIFY`, which is what a host
+    /// reaching for `clay_item_add_deformer` would get: that deformer's centre
+    /// is in one item's local frame, so on a form smooth-unioned from several
+    /// pieces it scales one piece's field and leaves the others — the surface
+    /// gathers on one side of the blend and not the other, and nothing errors.
+    /// This entry point resolves the region against every item it reaches,
+    /// which is the whole reason it exists (ClayCore #391).
+    ///
+    /// **A dab is a warp, and a warp is not free after it lands.** Each one is
+    /// evaluated per sample for as long as it is in the edit list, exactly as
+    /// a Move grab is, so the dab spacing below is a cost as well as a look.
+    /// `clay_layer_consolidate` is what gives it back.
+    fn magnify_surface_stroke(
+        &mut self,
+        brush: BrushSettings,
+        samples: &[GestureSample],
+    ) -> Result<EditOutcome, ModelError> {
+        let brush = brush.sanitized();
+        let radius = (brush.size * Self::MAGNIFY_REACH).max(1e-3);
+        let strength = Self::magnify_strength(&brush);
+        // The engine refuses a strength of zero — a scale by one is not a
+        // gesture — and it is right to. Answering "nothing happened" here is
+        // the same answer without an error the sculptor would have to read.
+        if strength.abs() < 1e-4 {
+            return Ok(EditOutcome::NOTHING);
+        }
+
+        let step = radius * (1.0 - brush.flow).clamp(0.05, 0.9);
+        let centres = self.dab_centres(samples, step)?;
+        if centres.is_empty() {
+            // Every sample was frozen. Nothing to scale, and nothing to say.
+            return Ok(EditOutcome::NOTHING);
+        }
+
+        let params = claycore::MagnifyParams {
+            radius,
+            // The drag's falloff, which is the only region falloff the brush
+            // panel offers. A magnify is a region deformation like a drag
+            // rather than a stamp, so it is the curve that belongs to it.
+            ease: brush.drag.falloff.ease(),
+        };
+        let applied = self.magnify_each_dab(&centres, strength, params)?;
+        if applied == 0 {
+            // The gesture reached no item — a stroke in empty space. It
+            // succeeded and changed nothing, which is not an edit.
+            return Ok(EditOutcome::NOTHING);
+        }
+
+        let placed = self.active_layer().transform;
+        let mirror = Mirror(self.mirror_for_dirtying(self.active_layer()));
+        let regions = Self::magnify_regions(&centres, radius, mirror, &placed);
+        self.refill_regions(&regions)?;
+        Ok(EditOutcome {
+            changed: true,
+            dirty_bricks: self.dirty.len(),
+        })
+    }
+
+    /// Where along a stroke the dabs go, with the frozen samples dropped.
+    ///
+    /// **The mask is honoured here rather than by the engine**, for the reason
+    /// `snakehook_stroke` honours it here too: a mask reaches an SDF edit
+    /// inside the *stroke* engine, where a stamp in a frozen region emits
+    /// nothing. This verb does not go through the stroke engine —
+    /// `clay_magnify_params` has no gate to take one — so a frozen region
+    /// would be scaled like any other. Dropping the frozen samples is the same
+    /// rule applied where this verb can apply it.
+    ///
+    /// **Walked along the path rather than taken per sample.** A pointer
+    /// resting still emits samples, and the engine folds frames that share a
+    /// centre — so a pile of magnifies at one place is not a stronger dab, it
+    /// is whichever frame happened to be last. `step` is what Fluxo asks for,
+    /// here as on a stamping stroke: more flow, dabs closer together.
+    fn dab_centres(
+        &self,
+        samples: &[GestureSample],
+        step: f32,
+    ) -> Result<Vec<[f32; 3]>, ModelError> {
+        let positions: Vec<[f32; 3]> = samples.iter().map(|sample| sample.position).collect();
+        let frozen = match self.active_mask() {
+            Some(mask) => mask.sample_many(&positions).map_err(ModelError::engine)?,
+            None => vec![0.0; positions.len()],
+        };
+        let mut centres: Vec<[f32; 3]> = Vec::new();
+        for (position, protection) in positions.into_iter().zip(frozen) {
+            let far_enough = centres.last().is_none_or(|last: &[f32; 3]| {
+                let apart: f32 = (0..3)
+                    .map(|axis| (position[axis] - last[axis]).powi(2))
+                    .sum();
+                apart.sqrt() >= step
+            });
+            if far_enough && protection < Self::GATE_THRESHOLD {
+                centres.push(position);
+            }
+        }
+        Ok(centres)
+    }
+
+    /// Applies one magnify per dab as **one** history entry, and reports how
+    /// many items took a warp.
+    ///
+    /// Bracketed because a stroke is one gesture and the sculptor asked for one
+    /// thing. The engine already makes each call one undo step however many
+    /// items it warped; without the group a stroke of a dozen dabs would be a
+    /// dozen steps to take back.
+    fn magnify_each_dab(
+        &mut self,
+        centres: &[[f32; 3]],
+        strength: f32,
+        params: claycore::MagnifyParams,
+    ) -> Result<usize, ModelError> {
+        let layer = self.active_layer().id;
+        self.document
+            .begin_undo_group()
+            .map_err(ModelError::engine)?;
+        let mut applied = 0usize;
+        let mut refused = Ok(());
+        for centre in centres {
+            match self
+                .document
+                .magnify_surface(layer, *centre, strength, params)
+            {
+                Ok(items) => applied += items,
+                Err(error) => {
+                    refused = Err(error);
+                    break;
+                }
+            }
+        }
+        // Closed on the failing path too: a group left open swallows every
+        // edit after it into one undo step, which is worse than the failure
+        // that opened it.
+        let closed = self.document.end_undo_group().map_err(ModelError::engine);
+        refused.map_err(ModelError::engine)?;
+        closed?;
+        Ok(applied)
+    }
+
+    /// Which way, and how hard, the scale goes at this brush.
+    ///
+    /// Negative upright, because Pinçar gathers, and the magnitude is
+    /// Intensidade — the only slider a scale has to take, the engine's
+    /// strength being dimensionless, so there is no world quantity for the
+    /// radius or the flow to contribute to it.
+    ///
+    /// **A radial scale fixes its own centre**, and the dab is left standing
+    /// on the surface where the gesture's raycast put it rather than sunk into
+    /// the material. That is what makes the scale a gather: the material comes
+    /// toward a point *on* the surface, so the line under the stroke stands
+    /// proud and the flanks fall away. Sunk, it stops gathering and starts
+    /// deflating uniformly — measured on the starting form with a 0.25 brush,
+    /// +0.011 at the stroke and −0.001 at the rim standing on the surface,
+    /// against −0.078 across the whole mark half a radius under it.
+    ///
+    /// The invert key turns the sign over, which spreads: the material leaves
+    /// the stroke instead of arriving at it. The same pair the grid's column
+    /// already names for this tool, and the same rule the key follows
+    /// everywhere — the opposite of what the brush does.
+    fn magnify_strength(brush: &BrushSettings) -> f32 {
+        let held = if brush.invert { 1.0 } else { -1.0 };
+        held * brush.intensity * Self::MAGNIFY_STRENGTH
+    }
+
+    /// Every region a magnify stroke can have reached, in world.
+    ///
+    /// The ball around each dab and **no dilation**, which is the engine's own
+    /// rule for this verb where a drag's region has to carry the displacement
+    /// as margin: outside the radius the region weight is zero and the point
+    /// is returned unchanged, so the field cannot differ there. A pinch
+    /// samples from outside the ball — its scale factor exceeds one — but it
+    /// is only ever evaluated inside it, and it is where a deformation is
+    /// evaluated that bounds what changed.
+    ///
+    /// One image per subset of the mirrored axes, the unreflected ball
+    /// included, because the engine aims a warp at every image the layer emits
+    /// and a host invalidating one ball serves the reflected side stale.
+    fn magnify_regions(
+        centres: &[[f32; 3]],
+        radius: f32,
+        mirror: Mirror,
+        transform: &clayspace_model::Transform,
+    ) -> Vec<([f32; 3], [f32; 3])> {
+        let axes: Vec<usize> = (0..3).filter(|axis| mirror.0[*axis]).collect();
+        let mut regions = Vec::with_capacity(centres.len() << axes.len());
+        for centre in centres {
+            for image in 0..(1usize << axes.len()) {
+                let mut at = *centre;
+                for (bit, &axis) in axes.iter().enumerate() {
+                    if image & (1 << bit) != 0 {
+                        at[axis] = -at[axis];
+                    }
+                }
+                let min = std::array::from_fn(|axis| at[axis] - radius);
+                let max = std::array::from_fn(|axis| at[axis] + radius);
+                regions.push(Self::world_bounds(transform, (min, max)));
+            }
+        }
+        regions
     }
 
     /// One segment of a live Move drag.

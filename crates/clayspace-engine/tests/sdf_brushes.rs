@@ -162,9 +162,10 @@ fn stroke(document: &mut ClayDocument, tool: ToolKind, invert: bool, symmetry: [
 
 /// The brushes that move the surface. Máscara paints the freeze and Trim is a
 /// shape drawn on the view frame, so neither is a stroke that displaces clay.
-const SURFACE_BRUSHES: [ToolKind; 12] = [
+const SURFACE_BRUSHES: [ToolKind; 13] = [
     ToolKind::Padrao,
     ToolKind::Inflar,
+    ToolKind::Pincar,
     ToolKind::Suavizar,
     ToolKind::Mover,
     ToolKind::MoverTopologico,
@@ -293,9 +294,15 @@ fn a_brush_does_not_mirror_when_it_is_not_asked_to() {
 /// relief and the incise are each other's opposite, so building up clay
 /// inverts to cutting in and a crease inverts to the ridge it would have cut.
 /// `sdf_named_brushes.rs` measures both directions.
-const SIGNED: [ToolKind; 7] = [
+/// Pinçar is here because the field binds it to a signed radial scale, and a
+/// signed scale turned over spreads — the same pair the grid's column already
+/// names. `sdf_magnify.rs` measures both halves. It is not in the depositing
+/// list below: a gather is neither a deposit nor a cut, and what its inverse
+/// gives is a spread.
+const SIGNED: [ToolKind; 8] = [
     ToolKind::Padrao,
     ToolKind::Inflar,
+    ToolKind::Pincar,
     ToolKind::Camada,
     ToolKind::Planar,
     ToolKind::Polir,

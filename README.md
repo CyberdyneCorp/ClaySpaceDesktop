@@ -299,7 +299,7 @@ counterpart is not offered.
 hierarchies are equals here.** The four stand above the viewport as four cards
 with the crossings beside them, and the tool shelf offers what the *active
 layer* has rather than one list with most of it greyed out. Twenty-one tools
-are bound across the four: fourteen have an SDF verb, thirteen a voxel one,
+are bound across the four: fifteen have an SDF verb, thirteen a voxel one,
 seventeen a mesh one — a mesh layer alone carries the engine's sixteen
 fixed-topology brushes — and fifteen a hierarchy one, which is the mesh list
 less the two colour brushes, because a hierarchy stores where a vertex went and
@@ -310,8 +310,8 @@ left switches between what the active layer can run, each representation's own
 list, and the brushes that have been starred; the row scrolls where the
 vocabulary is longer than the window:
 
-![the SDF shelf: Standard, Inflate, Smooth, Move, Topological Move, Planar,
-Layer, Mask, Snake Hook, Polish, Relax, Trim, Clay,
+![the SDF shelf: Standard, Inflate, Smooth, Move, Topological Move, Pinch,
+Planar, Layer, Mask, Snake Hook, Polish, Relax, Trim, Clay,
 Crease](docs/images/shelf-sdf.png)
 
 ![the voxel shelf: Standard, Inflate, Smooth, Move, Pinch, Scrape, Planar,
@@ -1013,13 +1013,15 @@ display unit is presentation only and changes no geometry.
 Shortcuts are fixed. Bezier handles on a curve, reopening a curve after it is
 applied, colour on a field, and the rest of the domain's vocabulary in more
 than one language are named with their reasons in
-[docs/features.md](docs/features.md#not-built-yet), along with the four things
-that are blocked on the engine and filed upstream — an SDF pinch
-([#391](https://github.com/CyberdyneCorp/ClayCore/issues/391)), alpha stamps on
-an SDF stroke ([#392](https://github.com/CyberdyneCorp/ClayCore/issues/392)), a
-live preview under a voxel drag
+[docs/features.md](docs/features.md#not-built-yet), along with the three things
+that are blocked on the engine and filed upstream — alpha stamps on an SDF
+stroke ([#392](https://github.com/CyberdyneCorp/ClayCore/issues/392)), a live
+preview under a voxel drag
 ([#393](https://github.com/CyberdyneCorp/ClayCore/issues/393)), and a voxel
-crease.
+crease. An SDF pinch was the fourth
+([#391](https://github.com/CyberdyneCorp/ClayCore/issues/391)) and is closed:
+`clay_layer_magnify_surface` is the assembled-surface resolver it wanted, and
+Pinch is on the field's shelf.
 
 Soft-body dynamics and mesh-surface booleans are **deliberately absent** rather
 than pending, with the reasons under *Deliberately absent*. What is offered and

@@ -1555,10 +1555,16 @@ mod tests {
 
     /// The choices an agent is offered are the buttons the shelf draws.
     ///
-    /// Issue #127: four tools — pinch, scrape, fill and nudge — have no verb on
+    /// Issue #127: four tools — erase, scrape, fill and nudge — have no verb on
     /// a field, which `ToolKind::verbs` says outright and the shelf acts on by
     /// not drawing them. This surface offered all twenty-one on every layer, so
     /// an agent chose one of the four, stroked, and was told it had worked.
+    ///
+    /// Pinch was the fourth when #127 was written and is not any more: #201
+    /// bound it to `clay_layer_magnify_surface` at a negative strength, so a
+    /// field offers it and this test would be asserting the opposite of the
+    /// table. Erase stands in its place — `clay_voxel_erase_brush` is its only
+    /// verb, on the grid, so a field has none to offer.
     #[test]
     fn describe_offers_only_the_tools_the_layer_has_a_verb_for() {
         let bench = Bench::with(FakeSession::new().on_a("field"));
@@ -1569,7 +1575,7 @@ mod tests {
 
         assert_eq!(value["layer"], "field");
         assert_eq!(argument["choices_on"], "field");
-        for absent in ["pinch", "scrape", "fill", "nudge"] {
+        for absent in ["erase", "scrape", "fill", "nudge"] {
             assert!(
                 !choices.iter().any(|choice| choice == absent),
                 "{absent} is offered on a field: {choices:?}"
@@ -1582,8 +1588,8 @@ mod tests {
         assert!(choices.iter().any(|choice| choice == "clay"), "{choices:?}");
     }
 
-    /// And narrowing is not deletion: the same four are on a mesh shelf, so
-    /// they are offered there.
+    /// And narrowing is not deletion: scrape, one of the four a field leaves
+    /// out, is on a mesh shelf, so it is offered there.
     #[test]
     fn describe_offers_a_tool_on_a_layer_that_has_a_verb_for_it() {
         let bench = Bench::with(FakeSession::new().on_a("mesh"));
@@ -1592,7 +1598,7 @@ mod tests {
         let choices = argument["choices"].as_array().unwrap();
         assert_eq!(value["layer"], "mesh");
         assert!(
-            choices.iter().any(|choice| choice == "pinch"),
+            choices.iter().any(|choice| choice == "scrape"),
             "{choices:?}"
         );
         assert!(
@@ -1600,7 +1606,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|tool| tool == "pinch"),
+                .any(|tool| tool == "scrape"),
             "{argument}"
         );
     }

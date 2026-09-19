@@ -43,8 +43,9 @@ const PULL: f32 = 0.4;
 ///
 /// | tool | ratio |
 /// |------|------:|
-/// | Relaxar | 1.01 |
-/// | Suavizar, Planar, Polir | 1.02 |
+/// | Relaxar, Suavizar | 1.01 |
+/// | Planar, Polir | 1.02 |
+/// | Pinçar | 1.07 |
 /// | Mover | 1.12 |
 /// | Camada | 1.13 |
 /// | Inflar | 1.15 |
@@ -52,6 +53,15 @@ const PULL: f32 = 0.4;
 /// | Mover Topológico | 1.20 |
 /// | Padrão | 1.30 |
 /// | Argila | 1.31 |
+///
+/// Pinçar is on this table for the first time: #201 gave it a field verb — the
+/// engine's radial scale at a negative strength — so a field has one more mark
+/// for this to look at. It sits among the gentlest marks here, which is
+/// what a scale of the assembled surface should leave: it moves the surface it
+/// found rather than combining a new item with it. Every other reading is the
+/// one this file already had, Inflar included — it is still relief with a wider
+/// region — and Suavizar reads 1.01 beside Relaxar rather than 1.02 beside the
+/// planing pair, which is the row being re-read rather than anything moving.
 ///
 /// **Mover Topológico read 2.07 on v0.113.0**, which is the defect this file
 /// was written for, and 1.20 here. The repair was one line upstream — the
