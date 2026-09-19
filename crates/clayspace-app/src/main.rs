@@ -1671,7 +1671,7 @@ impl App {
         // The shelf, the brush and the symmetry toggles all belong to the
         // active subtool, and the document underneath just became a different
         // one.
-        self.sculpt.refresh_after_open();
+        self.sculpt.refresh_for_active_layer();
         // The cage, the curve and the boolean's operands all describe the
         // document that has just been replaced.
         //
@@ -4259,7 +4259,7 @@ impl App {
                 .record_external_action(self.engine_undo_depth().saturating_sub(before));
             self.show_convert = false;
             self.scene.refresh();
-            self.sculpt.refresh_after_conversion();
+            self.sculpt.refresh_for_active_layer();
             self.document_vm.touched();
             self.settle_geometry();
         }
@@ -4400,7 +4400,24 @@ impl App {
     }
 
     /// Hands the command to every ViewModel that has an interest in it.
+    ///
+    /// **The scene goes first, and that is load-bearing.** It is the only
+    /// ViewModel here that *moves* the active layer; every other one reads it.
+    /// The sculpting ViewModel asks the document which representation is
+    /// active to decide what the shelf offers and which brush settings to
+    /// restore, the cage and the manipulator are handed that representation,
+    /// and the mask is re-read from a document whose active layer has to be
+    /// the new one. Dispatched after any of them, a `SelectLayer` left each
+    /// follower set up for the subtool the sculptor had just *left*: the first
+    /// stroke after every switch was made with the previous subtool's brush,
+    /// tool and mirror — measured once as a new grid layer inheriting a field
+    /// layer's size 100, so the first dab came out a metre across — and the
+    /// next command was the first one to see a consistent document, which is
+    /// why the error was always exactly one switch behind.
     fn dispatch_to_models(&mut self, command: &Command) {
+        if let Err(e) = self.scene.dispatch(command) {
+            eprintln!("{e}");
+        }
         if let Err(e) = self.sculpt.dispatch(command.clone()) {
             // A refusal is not swallowed; the tool status carries the reason
             // to the options bar, and this records it for the log.
@@ -4411,9 +4428,6 @@ impl App {
             // made four tools with no verb on a field look like tools that
             // worked and did nothing.
             self.sculpt_refusal = Some(e);
-        }
-        if let Err(e) = self.scene.dispatch(command) {
-            eprintln!("{e}");
         }
         self.mask.dispatch(command);
         // The mask edits the document, and the history Cmd+Z reads belongs to
@@ -5484,6 +5498,14 @@ impl App {
                     .unwrap_or([0.0; 3]);
                 let before = self.engine_undo_depth();
                 self.armature.begin(at);
+                // A rig gets a layer of its own and `begin_armature` turns
+                // that layer's mirror off — the tree carries both halves
+                // itself, so a layer mirror would reflect the placed node as
+                // well. No `SelectLayer` announces the new layer, so without
+                // this the options bar and the next stroke kept the mirror of
+                // the subtool the sculptor was on and the first ZSphere hung a
+                // second arm off the first.
+                self.sculpt.refresh_for_active_layer();
                 self.rigging = self.armature.is_rigging();
                 self.after_armature_edit(before);
             }

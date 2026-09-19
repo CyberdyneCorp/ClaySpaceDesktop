@@ -212,6 +212,16 @@ rather than resetting silently. Brush settings are held per tool *and* per
 representation: a size that suits a grid's cells is not the size that suits a
 field, so returning to a tool on a layer returns the settings it had there.
 
+**The switch takes effect immediately, not on the command after it.** Choosing
+a subtool is one command, and when it returns the shelf, the brush, the mirror
+and the mask state all describe the subtool chosen — the *first* stroke on it
+is made with its own settings. A new layer counts as a switch for this, because
+it arrives active: adding a grid beside a field does not carry the field's
+brush size onto it. What this rules out is what it used to do — read a subtool
+behind, so that the first dab after every switch was made with the settings of
+the one just left, and a grid added off a field at 100 mm drew its first dab a
+metre across.
+
 Mesh layers carry the largest vocabulary: the engine's sixteen
 fixed-topology brushes, plus Máscara, which writes no vertices and paints the
 world-addressed field the sixteen consult. Some of the sixteen arrive as modes

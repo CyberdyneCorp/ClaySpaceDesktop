@@ -291,6 +291,23 @@ impl MaskViewModel {
             Command::SetExtrudeSettings(settings) => {
                 self.extrude.set_if_changed(settings.sanitized());
             }
+            // A mask belongs to a subtool, so moving the sculpt target moves
+            // which mask there is to report — and a layer arrives with none.
+            //
+            // None of these is an edit: `touches_document` says a switch
+            // changes nothing in the document, which is true and is why the
+            // composition root's refresh after every edit never ran for one.
+            // So `state.mask.present` stayed true on a subtool that has no
+            // mask at all, and went on describing the layer that was left
+            // until the sculptor happened to do something that did touch the
+            // document. Read here, where the command arrives, rather than
+            // added to a list somewhere else that has to remember it.
+            //
+            // The document has already moved by the time this runs: the scene
+            // ViewModel is dispatched to first. See `App::dispatch_to_models`.
+            Command::SelectLayer(_) | Command::AddLayer(_) | Command::RemoveLayer(_) => {
+                self.refresh()
+            }
             Command::ApplyMaskOp(op) => self.apply_op(*op),
             Command::ExtrudeMask(settings) => {
                 let settings = *settings;
